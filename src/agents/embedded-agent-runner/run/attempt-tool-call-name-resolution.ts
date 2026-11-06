@@ -179,13 +179,11 @@ export function resolveToolCallName(
     return trimmed;
   }
 
-  const exact = resolveExactAllowedToolName(trimmed, allowedToolNames);
-  if (exact) {
-    return exact;
-  }
-  const inferredFromName = inferToolNameFromToolCallId(trimmed, allowedToolNames);
-  if (inferredFromName) {
-    return inferredFromName;
+  const resolved =
+    resolveExactAllowedToolName(trimmed, allowedToolNames) ||
+    inferToolNameFromToolCallId(trimmed, allowedToolNames);
+  if (resolved) {
+    return resolved;
   }
 
   if (looksLikeMalformedToolNameCounter(trimmed)) {

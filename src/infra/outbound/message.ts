@@ -1,5 +1,3 @@
-// Outbound message entrypoint resolves channel/target, durable capability
-// requirements, payload plans, gateway fallback, and optional mirroring.
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
@@ -32,10 +30,13 @@ import {
 } from "./deliver.js";
 import type { ConversationDeliveryTarget } from "./delivery-completion.js";
 import {
+  GATEWAY_SEND_RECONCILIATION_TIMEOUT_MS,
+  isUnsettledGatewayRequestTimeout,
+  loadMessageGatewayRuntime,
+  resolveGatewayIdempotencyKey,
   resolveOutboundMessageGatewayOptions,
   type OutboundMessageGatewayOptionsInput,
 } from "./message-gateway-options.js";
-import type { OutboundMirror } from "./mirror.js";
 import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
@@ -49,12 +50,6 @@ const SEND_BUFFER_MEDIA_URL = "buffer://message-send/attachment";
 
 const loadMessageConfigRuntime = createLazyRuntimeModule(
   () => import("./message.config.runtime.js"),
-);
-
-// Keep config/runtime loading lazy so importing message helpers does not
-// bootstrap plugin registries or gateway clients.
-const loadMessageGatewayRuntime = createLazyRuntimeModule(
-  () => import("./message.gateway.runtime.js"),
 );
 
 type MessageSendParams = Pick<
@@ -73,12 +68,19 @@ type MessageSendParams = Pick<
   | "deps"
   | "preparedMessageId"
   | "deliveryIntentId"
+  | "transcriptRoute"
+  | "skipDestinationHistory"
+  | "transcriptExpectedGeneration"
+  | "transcriptProvenance"
+  | "onTranscriptDiagnostic"
+  | "assertTranscriptCurrent"
   | "deliveryCompletion"
   | "reusePendingDeliveryIntent"
   | "deliveryRetryOwner"
   | "completionRetention"
   | "requireUnknownSendReconciliation"
   | "onDeliveryAttempt"
+  | "withDirectAdapterHandoff"
   | "onDeliveryResult"
   | "onPlatformSendDispatch"
   | "assertDirectAdapterHandoff"
@@ -99,6 +101,8 @@ type MessageSendParams = Pick<
     content: string;
     /** Originating session key used for requester-scoped outbound media policy. */
     requesterSessionKey?: string;
+    /** Actual producing turn; requester identity may instead scope media access only. */
+    session?: OutboundSessionContext;
     channel?: string;
     mediaUrl?: string;
     mediaUrls?: string[];
@@ -122,7 +126,6 @@ type MessageSendParams = Pick<
     conversationDeliveryTarget?: ConversationDeliveryTarget;
     /** @internal Runs after queue persistence and before platform I/O. */
     onDeliveryIntent?: (intent: DurableMessageSendIntent) => void;
-    mirror?: OutboundMirror;
     parseMode?: "HTML";
   };
 
@@ -211,20 +214,34 @@ async function callMessageGateway<T>(params: {
     : await params.gateway?.resolveAgentRuntimeIdentityToken?.();
   await params.onPlatformSendDispatch?.();
   assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
-  if (params.gateway?.request) {
-    return await params.gateway.request<T>({
+  const request = async (timeoutMs: number) => {
+    if (params.gateway?.request) {
+      return await params.gateway.request<T>({
+        method: params.method,
+        params: params.params,
+        timeoutMs,
+      });
+    }
+    const { callGatewayLeastPrivilege } = await loadMessageGatewayRuntime();
+    return await callGatewayLeastPrivilege<T>({
+      ...gateway,
       method: params.method,
       params: params.params,
-      timeoutMs: gateway.timeoutMs,
+      timeoutMs,
+      agentRuntimeIdentityToken,
     });
+  };
+  try {
+    return await request(gateway.timeoutMs);
+  } catch (error) {
+    if (params.method !== "send" || !(await isUnsettledGatewayRequestTimeout(error))) {
+      throw error;
+    }
+    // A slow upload can outlive the caller's timer without cancelling the send.
+    // Reattach once with the unchanged idempotency key so the Gateway joins it.
+    assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
+    return await request(Math.max(gateway.timeoutMs, GATEWAY_SEND_RECONCILIATION_TIMEOUT_MS));
   }
-  const { callGatewayLeastPrivilege } = await loadMessageGatewayRuntime();
-  return await callGatewayLeastPrivilege<T>({
-    ...gateway,
-    method: params.method,
-    params: params.params,
-    agentRuntimeIdentityToken,
-  });
 }
 
 async function resolveMessageConfig(cfg?: OpenClawConfig): Promise<OpenClawConfig> {
@@ -235,21 +252,32 @@ async function resolveMessageConfig(cfg?: OpenClawConfig): Promise<OpenClawConfi
   return getRuntimeConfig();
 }
 
-async function resolveGatewayIdempotencyKey(idempotencyKey?: string): Promise<string> {
-  if (idempotencyKey) {
-    return idempotencyKey;
+async function resolveDirectMessageTarget(
+  params: Pick<MessageSendParams, "to" | "accountId">,
+  cfg: OpenClawConfig,
+  channel: ChannelPlugin["id"],
+  plugin: ChannelPlugin,
+) {
+  const target = await resolveOutboundTarget({
+    channel,
+    plugin,
+    to: params.to,
+    cfg,
+    accountId: params.accountId,
+    mode: "explicit",
+  });
+  if (!target.ok) {
+    throw target.error;
   }
-  const { randomIdempotencyKey } = await loadMessageGatewayRuntime();
-  return randomIdempotencyKey();
+  return target;
 }
 
 export async function sendMessage(params: MessageSendParams): Promise<MessageSendResult> {
   const cfg = await resolveMessageConfig(params.cfg);
   const reply = normalizeOutboundReplyFacts({ reply: params.reply, replyToId: params.replyToId });
-  const prepared = params.preparedPlugin
+  const { channel, plugin } = params.preparedPlugin
     ? { channel: params.preparedPlugin.id, plugin: params.preparedPlugin }
     : await resolveMessageChannelSelection({ cfg, channel: params.channel });
-  const { channel, plugin } = prepared;
   const deliveryMode = plugin.outbound?.deliveryMode ?? "direct";
   const mediaSources = [params.mediaUrl, ...(params.mediaUrls ?? [])].filter(
     (source): source is string => Boolean(source),
@@ -273,7 +301,6 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
   const outboundPlan = createOutboundPayloadPlan(outboundPayloads);
   const normalizedPayloads = projectOutboundPayloadPlanForDelivery(outboundPlan);
   const mirrorProjection = projectOutboundPayloadPlanForMirror(outboundPlan);
-  const mirrorText = mirrorProjection.text;
   const mirrorMediaUrls = mirrorProjection.mediaUrls;
   const primaryMediaUrl = mirrorMediaUrls[0] ?? mediaUrl ?? null;
   const baseResult: MessageSendResult = {
@@ -289,29 +316,21 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
   }
 
   if (deliveryMode !== "gateway" || params.gatewayOwnedDelivery === true) {
-    const resolvedTarget = resolveOutboundTarget({
-      channel,
-      plugin,
-      to: params.to,
-      cfg,
-      accountId: params.accountId,
-      mode: "explicit",
-    });
-    if (!resolvedTarget.ok) {
-      throw resolvedTarget.error;
-    }
+    const resolvedTarget = await resolveDirectMessageTarget(params, cfg, channel, plugin);
 
-    const outboundSession = buildOutboundSessionContext({
-      cfg,
-      agentId: params.agentId,
-      sessionKey: params.requesterSessionKey ?? params.mirror?.sessionKey,
-      conversationType: params.conversationType,
-      requesterAccountId: params.requesterAccountId ?? params.accountId,
-      requesterSenderId: params.requesterSenderId,
-      requesterSenderName: params.requesterSenderName,
-      requesterSenderUsername: params.requesterSenderUsername,
-      requesterSenderE164: params.requesterSenderE164,
-    });
+    const outboundSession =
+      params.session ??
+      buildOutboundSessionContext({
+        cfg,
+        agentId: params.agentId,
+        sessionKey: params.requesterSessionKey,
+        conversationType: params.conversationType,
+        requesterAccountId: params.requesterAccountId ?? params.accountId,
+        requesterSenderId: params.requesterSenderId,
+        requesterSenderName: params.requesterSenderName,
+        requesterSenderUsername: params.requesterSenderUsername,
+        requesterSenderE164: params.requesterSenderE164,
+      });
     // Public queuePolicy:"required" is the exact-delivery contract preflighted below.
     // Lower-level queue-required callers must leave this internal opt-in unset.
     const requireUnknownSendReconciliation =
@@ -365,13 +384,20 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
         mediaAccess: params.mediaAccess,
         formatting: params.parseMode ? { parseMode: params.parseMode } : undefined,
         preparedMessageId: params.preparedMessageId,
-        deliveryIntentId: params.deliveryIntentId,
+        deliveryIntentId: params.deliveryIntentId ?? params.idempotencyKey,
         deliveryCompletion: params.deliveryCompletion,
+        transcriptRoute: params.transcriptRoute,
+        skipDestinationHistory: params.skipDestinationHistory,
+        transcriptExpectedGeneration: params.transcriptExpectedGeneration,
+        transcriptProvenance: params.transcriptProvenance,
+        onTranscriptDiagnostic: params.onTranscriptDiagnostic,
+        assertTranscriptCurrent: params.assertTranscriptCurrent,
         reusePendingDeliveryIntent: params.reusePendingDeliveryIntent,
         deliveryRetryOwner: params.deliveryRetryOwner,
         completionRetention: params.completionRetention,
         ...(params.onDeliveryIntent ? { onDeliveryIntent: params.onDeliveryIntent } : {}),
         ...(params.onDeliveryAttempt ? { onDeliveryAttempt: params.onDeliveryAttempt } : {}),
+        withDirectAdapterHandoff: params.withDirectAdapterHandoff,
         ...(params.onDeliveryResult ? { onDeliveryResult: params.onDeliveryResult } : {}),
         ...(params.onPlatformSendDispatch
           ? { onPlatformSendDispatch: params.onPlatformSendDispatch }
@@ -379,14 +405,6 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
         assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
         skipQueue: params.skipQueue,
         ...(params.onDeliveredPayload ? { onDeliveredPayload: params.onDeliveredPayload } : {}),
-        mirror: params.mirror
-          ? {
-              ...params.mirror,
-              text: mirrorText || params.content,
-              mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
-              idempotencyKey: params.mirror.idempotencyKey ?? params.idempotencyKey,
-            }
-          : undefined,
       },
       params.conversationDeliveryTarget,
     );
@@ -458,7 +476,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       forceDocument: params.forceDocument,
       silent: params.silent,
       parseMode: params.parseMode,
-      sessionKey: params.mirror?.sessionKey,
+      sessionKey: params.requesterSessionKey,
       idempotencyKey: await resolveGatewayIdempotencyKey(params.idempotencyKey),
     },
   });
@@ -468,10 +486,9 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
 
 export async function sendPoll(params: MessagePollParams): Promise<MessagePollResult> {
   const cfg = await resolveMessageConfig(params.cfg);
-  const prepared = params.preparedPlugin
+  const { channel, plugin } = params.preparedPlugin
     ? { channel: params.preparedPlugin.id, plugin: params.preparedPlugin }
     : await resolveMessageChannelSelection({ cfg, channel: params.channel });
-  const { channel, plugin } = prepared;
 
   const outbound = plugin.outbound;
   if (!outbound?.sendPoll) {
@@ -508,17 +525,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
   }
 
   if (deliveryMode !== "gateway" || params.gatewayOwnedDelivery === true) {
-    const resolvedTarget = resolveOutboundTarget({
-      channel,
-      plugin,
-      to: params.to,
-      cfg,
-      accountId: params.accountId,
-      mode: "explicit",
-    });
-    if (!resolvedTarget.ok) {
-      throw resolvedTarget.error;
-    }
+    const resolvedTarget = await resolveDirectMessageTarget(params, cfg, channel, plugin);
 
     params.assertDirectAdapterHandoff?.();
     const result = await outbound.sendPoll({

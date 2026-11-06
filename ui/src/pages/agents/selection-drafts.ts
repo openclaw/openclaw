@@ -1,104 +1,158 @@
-import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   retainAgentFileDrafts,
   type AgentFilesState,
   type RetainedAgentFileDrafts,
 } from "./files.ts";
-import { resetIdentityDraft } from "./identity-actions.ts";
-import type { AgentIdentityDraft } from "./panels-overview.ts";
-
-type AgentSelectionDraftHost = AgentFilesState & {
-  agentsSelectedId: string | null;
-  agentFileActive: string | null;
-  identityDraft: AgentIdentityDraft;
-  identitySaving: boolean;
-  identityError: string | null;
-};
+import {
+  resetIdentityDraft,
+  type AgentIdentityDraft,
+  type AgentIdentityOutcome,
+} from "./identity-actions.ts";
 
 type Selection = {
   selectedId: string | null;
-  intentRevision: number;
-  awaitingRoster: boolean;
   profileId: string | null;
 };
 
+export type RetainedIdentitySave = {
+  client: GatewayBrowserClient;
+  snapshot: ApplicationGatewaySnapshot | null;
+  promise: Promise<void>;
+};
+
+type RetainedIdentityWork = {
+  scope: {
+    gateway: ApplicationContext["gateway"];
+    connectionRevision: number;
+    gatewayUrl: string;
+  };
+  profileId: string | null;
+  identities: Map<string, { profileId: string | null; draft: AgentIdentityDraft }>;
+  saves: Map<string, RetainedIdentitySave>;
+};
+
+const retainedIdentityWork = new WeakMap<ApplicationContext, RetainedIdentityWork>();
+
 /** Owns private editor drafts across the selected target's presentation lifetime. */
-export class AgentSelectionDrafts {
-  private readonly files = new Map<string, RetainedAgentFileDrafts>();
-  private profileId: string | null = null;
-  private identity: {
-    agentId: string;
-    profileId: string | null;
-    intentRevision: number;
-    draft: AgentIdentityDraft;
-  } | null = null;
+export function createAgentSelectionDrafts(
+  host: AgentFilesState & {
+    agentsSelectedId: string | null;
+    agentFileActive: string | null;
+    identityDraft: AgentIdentityDraft;
+    identitySaving: boolean;
+    identityOutcome: Promise<AgentIdentityOutcome> | null;
+  },
+  resetSelection: () => void,
+) {
+  const retainedFiles = new Map<string, RetainedAgentFileDrafts>();
+  let lifetime: RetainedIdentityWork | null = null;
+  let ownerProfileId: string | null = null;
 
-  constructor(
-    private readonly host: AgentSelectionDraftHost,
-    private readonly resetSelection: () => void,
-  ) {}
+  function bindContext(context: ApplicationContext): Map<string, RetainedIdentitySave> {
+    const gateway = context.gateway;
+    const scope = {
+      gateway,
+      connectionRevision: gateway.connectionRevision ?? 0,
+      gatewayUrl: gateway.connection?.gatewayUrl ?? "",
+    };
+    let next = retainedIdentityWork.get(context);
+    if (
+      !next ||
+      next.scope.gateway !== scope.gateway ||
+      next.scope.connectionRevision !== scope.connectionRevision ||
+      next.scope.gatewayUrl !== scope.gatewayUrl
+    ) {
+      next = { scope, profileId: null, identities: new Map(), saves: new Map() };
+      retainedIdentityWork.set(context, next);
+    }
+    if (lifetime && lifetime !== next) {
+      resetIdentityDraft(host);
+    }
+    lifetime = next;
+    ownerProfileId = next.profileId;
+    return next.saves;
+  }
 
-  observeGateway(snapshot: Pick<ApplicationGatewaySnapshot, "phase" | "selfUser">) {
+  function retainCurrentIdentity() {
+    if (
+      lifetime &&
+      host.agentsSelectedId &&
+      Object.values(host.identityDraft).some((value) => value !== null)
+    ) {
+      lifetime.identities.set(host.agentsSelectedId, {
+        profileId: ownerProfileId,
+        draft: host.identityDraft,
+      });
+    }
+  }
+
+  function observeGateway(snapshot: Pick<ApplicationGatewaySnapshot, "phase" | "selfUser">) {
     if (snapshot.phase !== "connected") {
       return;
     }
     const profileId = snapshot.selfUser?.id ?? null;
-    if (profileId !== this.profileId) {
-      this.identity = null;
-      resetIdentityDraft(this.host);
-      this.profileId = profileId;
+    if (profileId !== ownerProfileId) {
+      lifetime?.identities.clear();
+      lifetime?.saves.clear();
+      resetIdentityDraft(host);
+      ownerProfileId = profileId;
+      if (lifetime) {
+        lifetime.profileId = profileId;
+      }
     }
   }
 
-  select(selection: Selection) {
-    const { host } = this;
-    const { selectedId, intentRevision, awaitingRoster, profileId } = selection;
-    if (this.identity?.intentRevision !== intentRevision) {
-      this.identity = null;
+  function restoreIdentity(selectedId: string | null, profileId: string | null): boolean {
+    if (!selectedId) {
+      return false;
     }
+    const retained = lifetime?.identities.get(selectedId);
+    if (!retained) {
+      return false;
+    }
+    if (retained.profileId !== profileId) {
+      if (profileId !== null) {
+        lifetime?.identities.delete(selectedId);
+      }
+      return false;
+    }
+    lifetime?.identities.delete(selectedId);
+    host.identityDraft = retained.draft;
+    return true;
+  }
+
+  function select(selection: Selection): boolean {
+    const { selectedId, profileId } = selection;
     if (selectedId === host.agentsSelectedId) {
-      return;
+      return restoreIdentity(selectedId, profileId);
     }
     if (host.agentsSelectedId) {
-      const drafts = retainAgentFileDrafts(host);
-      if (drafts) {
-        this.files.set(host.agentsSelectedId, drafts);
+      const files = retainAgentFileDrafts(host);
+      if (files) {
+        retainedFiles.set(host.agentsSelectedId, files);
       }
-      // Retire the editor with discovery, retaining only its private unsaved draft.
-      this.identity =
-        !selectedId &&
-        awaitingRoster &&
-        Object.values(host.identityDraft).some((value) => value !== null)
-          ? {
-              agentId: host.agentsSelectedId,
-              profileId: this.profileId,
-              intentRevision,
-              draft: host.identityDraft,
-            }
-          : null;
+      retainCurrentIdentity();
     }
     host.agentsSelectedId = selectedId;
-    this.resetSelection();
-    if (selectedId) {
-      const identity = this.identity;
-      this.identity = null;
-      if (identity?.agentId === selectedId && identity.profileId === profileId) {
-        host.identityDraft = identity.draft;
-      }
-    }
-    const files = selectedId ? this.files.get(selectedId) : undefined;
+    resetSelection();
+    const restoredIdentity = restoreIdentity(selectedId, profileId);
+    const files = selectedId ? retainedFiles.get(selectedId) : undefined;
     if (files && selectedId) {
-      this.files.delete(selectedId);
-      host.agentFileDrafts = files.drafts;
-      host.agentFileVersions = files.versions;
+      retainedFiles.delete(selectedId);
+      host.agentFileEditors = files.editors;
       host.agentFileActive = files.active;
       host.agentFileConflict = files.conflict;
       // Loaded bases stay empty: returning must read disk while retaining the draft's ancestry.
     }
+    return restoredIdentity;
   }
 
-  clear() {
-    this.files.clear();
-    this.identity = null;
+  function clear() {
+    retainedFiles.clear();
+    lifetime?.identities.clear();
+    lifetime?.saves.clear();
   }
+  return { bindContext, retainCurrentIdentity, observeGateway, select, clear };
 }

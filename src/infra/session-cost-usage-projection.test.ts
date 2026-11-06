@@ -91,6 +91,56 @@ function createSource(
 }
 
 describe("usage cache projections", () => {
+  it.each(["missing", "truncated"])(
+    "repairs %s bodies despite partition budget deferral",
+    async (mode) => {
+      const file = createFile("corrupt-deferred");
+      const row = createRow(file, [{ timestamp: dayStart, cost: 1 }]);
+      const invalid: string[] = [];
+      const result = await projectSessionCostSummaries({
+        ...createSource(
+          [{ ...row, bodyBytes: mode === "missing" ? 0 : row.blob.byteLength - 1 }],
+          [file],
+        ),
+        deferredPaths: new Set([row.key]),
+        onInvalidBody: (key) => invalid.push(key),
+        files: [file],
+        sessions: [{ sessionFile: file.filePath }],
+        pricingFingerprint,
+      });
+      expect(result).toMatchObject({
+        summaries: [null],
+        staleSessionFiles: [file.sourcePath],
+        cacheStatus: { staleFiles: 1 },
+      });
+      expect(invalid).toEqual([row.key]);
+    },
+  );
+
+  it.each([false, true])(
+    "refreshes a budget-deferred aggregate only when stale=%s",
+    async (stale) => {
+      const file = createFile("deferred");
+      const row = createRow(file, [{ timestamp: dayStart, cost: 1 }]);
+      const result = await projectCostUsageSummary({
+        ...createSource([row], [file]),
+        readEntry: async () => null,
+        files: [stale ? { ...file, size: file.size + 1, mtimeMs: file.mtimeMs + 1 } : file],
+        pricingFingerprint,
+        startMs: dayStart,
+        endMs: dayStart + 86_400_000 - 1,
+        dayBucket: utcDayBucket,
+      });
+      expect(result.cacheStatus).toMatchObject({
+        status: stale ? "stale" : "partial",
+        cachedFiles: 0,
+        pendingFiles: 1,
+        staleFiles: stale ? 1 : 0,
+      });
+      expect(result.totals.totalTokens).toBe(0);
+    },
+  );
+
   it("requests a refresh for rollups computed before pricing availability was preserved", async () => {
     const file = createFile("old-pricing");
     const rows = [createRow(file, [{ timestamp: dayStart, cost: 0 }], 100, 5)];

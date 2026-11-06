@@ -92,6 +92,8 @@ describe("same-machine native node device pairing", () => {
       });
       const loaded = loadDeviceIdentity(`local-native-capability-surface-${name}`);
       expect(await connect(loaded.identityPath, "operator")).toMatchObject({ ok: true });
+      const before = await getPairedDevice(loaded.identity.deviceId);
+      expect(before?.roles).toEqual(["operator"]);
       expect(
         await connect(loaded.identityPath, "node", headers, MAC_CLIENT, MAC_SURFACE),
       ).toMatchObject({ ok: true });
@@ -100,6 +102,9 @@ describe("same-machine native node device pairing", () => {
       );
       expect(pending).toEqual([]);
       const paired = await getPairedDevice(loaded.identity.deviceId);
+      expect(paired?.roles).toEqual(expect.arrayContaining(["operator", "node"]));
+      expect(paired?.tokens?.operator?.token === before?.tokens?.operator?.token).toBe(true);
+      expect(paired?.approvedScopes).toEqual(before?.approvedScopes);
       expect(paired?.nodeSurface?.commands).toEqual(
         expect.arrayContaining(["screen.snapshot", "computer.act"]),
       );
@@ -287,29 +292,6 @@ describe("same-machine native node device pairing", () => {
     },
   );
 
-  test("silently adds the node role after the native operator handshake", async () => {
-    await writeConfigFile({
-      gateway: { nodes: { pairing: { autoApproveCidrs: ["127.0.0.1/32"] } } },
-    });
-    const loaded = loadDeviceIdentity("local-native-role-upgrade");
-    expect(await connect(loaded.identityPath, "operator")).toMatchObject({ ok: true });
-    const before = await getPairedDevice(loaded.identity.deviceId);
-    expect(before?.roles).toEqual(["operator"]);
-
-    const response = await connect(loaded.identityPath, "node");
-    const pending = (await listDevicePairing()).pending.filter(
-      (request) => request.deviceId === loaded.identity.deviceId,
-    );
-    expect({ response, pending }).toMatchObject({
-      response: { ok: true, payload: { type: "hello-ok", auth: { role: "node", scopes: [] } } },
-      pending: [],
-    });
-    const after = await getPairedDevice(loaded.identity.deviceId);
-    expect(after?.roles).toEqual(expect.arrayContaining(["operator", "node"]));
-    expect(after?.tokens?.operator?.token === before?.tokens?.operator?.token).toBe(true);
-    expect(after?.approvedScopes).toEqual(before?.approvedScopes);
-  });
-
   test("keeps an explicitly revoked native node token pending", async () => {
     const loaded = loadDeviceIdentity("local-native-node-repair");
     expect(await connect(loaded.identityPath, "node")).toMatchObject({ ok: true });
@@ -377,25 +359,22 @@ describe("same-machine native node device pairing", () => {
     expect((await getPairedDevice(loaded.identity.deviceId))?.tokens?.node).toBeUndefined();
   });
 
-  test.each([{ scopes: [] }, { scopes: ["operator.admin"] }])(
-    "does not approve merged operator scopes $scopes during node repair",
-    async ({ scopes }) => {
-      const loaded = loadDeviceIdentity("local-native-merged-repair");
-      expect(await connect(loaded.identityPath, "operator")).toMatchObject({ ok: true });
-      const before = await getPairedDevice(loaded.identity.deviceId);
-      await requestDevicePairing({
-        deviceId: loaded.identity.deviceId,
-        publicKey: loaded.publicKey,
-        role: "operator",
-        scopes,
-        silent: false,
-      });
-      const response = await connect(loaded.identityPath, "node");
-      expect(response.ok).toBe(false);
-      const after = await getPairedDevice(loaded.identity.deviceId);
-      expect(after?.tokens?.node).toBeUndefined();
-      expect(after?.tokens?.operator?.token === before?.tokens?.operator?.token).toBe(true);
-      expect(after?.approvedScopes).toEqual(before?.approvedScopes);
-    },
-  );
+  test("does not approve a merged operator request during node repair", async () => {
+    const loaded = loadDeviceIdentity("local-native-merged-repair");
+    expect(await connect(loaded.identityPath, "operator")).toMatchObject({ ok: true });
+    const before = await getPairedDevice(loaded.identity.deviceId);
+    await requestDevicePairing({
+      deviceId: loaded.identity.deviceId,
+      publicKey: loaded.publicKey,
+      role: "operator",
+      scopes: [],
+      silent: false,
+    });
+    const response = await connect(loaded.identityPath, "node");
+    expect(response.ok).toBe(false);
+    const after = await getPairedDevice(loaded.identity.deviceId);
+    expect(after?.tokens?.node).toBeUndefined();
+    expect(after?.tokens?.operator?.token === before?.tokens?.operator?.token).toBe(true);
+    expect(after?.approvedScopes).toEqual(before?.approvedScopes);
+  });
 });

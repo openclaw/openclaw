@@ -1,8 +1,12 @@
+import type { BoardGetParams } from "@openclaw/gateway-protocol";
+
 type SessionHeaderLink = { url: string; label: string };
+// Current hosts pass only BoardGetParams; `session` stays optional so 2026.10.1
+// callers still type-check against today's session-header accessory mount.
 type SessionHeaderLinkContext = {
   signal: AbortSignal;
   presented: boolean;
-  props: { session?: { conversationLink?: SessionHeaderLink } };
+  props: BoardGetParams & { session?: { conversationLink?: SessionHeaderLink } };
 };
 type SessionHeaderLinkMount = (
   container: HTMLElement,
@@ -12,7 +16,13 @@ type SessionHeaderLinkMount = (
   dispose?: () => void;
 } | void;
 
-/** A plugin-owned accessory with the standard header link appearance and direct navigation. */
+/**
+ * A plugin-owned accessory with the standard header link appearance and direct navigation.
+ *
+ * @deprecated Retained only so plugins built against OpenClaw 2026.10.1 still load; hosts no
+ * longer supply `props.session` to session-header accessories, so the link never renders.
+ * Render a custom accessory instead. Removal is tracked by `plugin-sdk-session-header-link`.
+ */
 export function createSessionHeaderLink(
   resolve: (
     session: NonNullable<SessionHeaderLinkContext["props"]["session"]>,

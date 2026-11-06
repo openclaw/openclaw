@@ -58,7 +58,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
   }
   const request = params as AgentRunRequest;
   const principal = captureAgentTurnPrincipal(client);
-  const preflight = prepareAgentRequestPreflight({ request, context, client: principal, io });
+  const preflight = await prepareAgentRequestPreflight({ request, context, client: principal, io });
   if (!preflight) {
     return;
   }

@@ -11,10 +11,12 @@ import {
 } from "../../../../packages/ai/src/providers/openai-chatgpt-responses.js";
 import { createTransportAwareStreamFnForModel } from "../../../../packages/ai/src/transports/provider-transport-stream.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { Context, Model } from "../../../llm/types.js";
 import { issueProviderReviewAcknowledgment } from "../../../sessions/provider-review.js";
 import type { StreamFn } from "../../runtime/index.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { wrapStreamFnWithProviderReviewContinuation } from "./provider-review-continuation.js";
 
 const store = vi.hoisted(() => ({
@@ -41,18 +43,15 @@ vi.mock("../../../config/sessions/provider-review-store.js", () => ({
     return store.entry;
   },
 }));
-const model = {
+const model = makeProviderModelFixture<"openai-chatgpt-responses">({
   id: "test-model",
   name: "Test",
   provider: "openai",
   api: "openai-chatgpt-responses",
   baseUrl: "https://chatgpt.com/backend-api",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 128000,
   maxTokens: 1000,
-} satisfies Model<"openai-chatgpt-responses">;
+}) satisfies Model<"openai-chatgpt-responses">;
 const context: Context = {
   systemPrompt: "Keep existing permissions.",
   messages: [
@@ -90,6 +89,42 @@ const failed = {
     error: { code: "misalignment_policy_violation", message: "Paused" },
   },
 };
+const turnMetadata = { turn_id: "existing-turn", sandbox: "unchanged" };
+const clientMetadata = {
+  existing: "preserved",
+  "x-codex-turn-metadata": JSON.stringify(turnMetadata),
+};
+const userInput = (...texts: string[]) => ({
+  role: "user",
+  content: texts.map((text) => ({ type: "input_text", text })),
+});
+const messageInput = (...texts: string[]) => ({ type: "message", ...userInput(...texts) });
+const reviewedInput = [messageInput("old history"), messageInput(steer)];
+const routes = [
+  { transport: "sse", strategy: "native" },
+  { transport: "websocket", strategy: "native" },
+  { transport: "sse", strategy: "managed" },
+] as const;
+function assertResponsesPayload(
+  payload: unknown,
+): asserts payload is Record<string, unknown> & { input: unknown[] } {
+  if (!isRecord(payload) || !Array.isArray(payload.input)) {
+    throw new Error("Fixture expected Responses input");
+  }
+}
+function acceptanceGate(fail = false) {
+  const entered = createDeferred();
+  const release = createDeferred();
+  store.beforeClear = async () => {
+    entered.resolve();
+    await release.promise;
+    if (fail) {
+      throw new Error("Local review commit failed");
+    }
+  };
+  return { entered: entered.promise, release: release.resolve };
+}
+const expectBlocked = () => expect(store.entry?.providerReview?.id).toBe("review-1");
 
 beforeEach(() => {
   store.beforeClear = undefined;
@@ -194,10 +229,7 @@ async function fixture(
     transport,
     onPayload: (payload: unknown) => ({
       ...(payload as Record<string, unknown>),
-      client_metadata: {
-        existing: "preserved",
-        "x-codex-turn-metadata": JSON.stringify({ turn_id: "existing-turn", sandbox: "unchanged" }),
-      },
+      client_metadata: { ...clientMetadata },
     }),
   };
   return {
@@ -216,11 +248,7 @@ async function fixture(
 }
 
 describe("explicit direct Responses continuation", () => {
-  it.each([
-    { transport: "sse", strategy: "native" },
-    { transport: "websocket", strategy: "native" },
-    { transport: "sse", strategy: "managed" },
-  ] as const)(
+  it.each(routes)(
     "preserves runtime context after the acknowledged turn over $strategy $transport",
     async ({ transport, strategy }) => {
       const f = await fixture(transport, [created, completed], strategy);
@@ -243,16 +271,14 @@ describe("explicit direct Responses continuation", () => {
         {
           ...f.options,
           onPayload: (payload: unknown) => {
-            if (!isRecord(payload) || !Array.isArray(payload.input)) {
-              throw new Error("Fixture expected Responses input");
-            }
+            assertResponsesPayload(payload);
             return {
               ...f.options.onPayload(payload),
               input: payload.input.map((item: unknown) => {
                 if (!isRecord(item)) {
                   throw new Error("Fixture expected a Responses input item");
                 }
-                return { ...item };
+                return Object.assign({}, item);
               }),
             };
           },
@@ -262,18 +288,10 @@ describe("explicit direct Responses continuation", () => {
       expect(result.stopReason).toBe("stop");
       expect(f.requests).toHaveLength(1);
       expect(f.requests[0]?.input).toEqual([
-        { type: "message", role: "user", content: [{ type: "input_text", text: "old history" }] },
-        { type: "message", role: "user", content: [{ type: "input_text", text: steer }] },
-        {
-          type: "message",
-          role: "system",
-          content: [
-            {
-              type: "input_text",
-              text: `OpenClaw runtime context:\n${carrier.content}\nEnd OpenClaw runtime context.`,
-            },
-          ],
-        },
+        ...reviewedInput,
+        messageInput(
+          `OpenClaw runtime context:\n${carrier.content}\nEnd OpenClaw runtime context.`,
+        ),
       ]);
       expect(JSON.stringify(messages)).toBe(before);
       expect(messages.at(-1)).toMatchObject({ role: "user", runtimeContext: {} });
@@ -300,18 +318,8 @@ describe("explicit direct Responses continuation", () => {
     expect(result.stopReason).toBe("stop");
     expect(f.requests).toHaveLength(1);
     expect(f.requests[0]?.input).toEqual([
-      { type: "message", role: "user", content: [{ type: "input_text", text: "old history" }] },
-      { type: "message", role: "user", content: [{ type: "input_text", text: steer }] },
-      {
-        type: "message",
-        role: "system",
-        content: [
-          {
-            type: "input_text",
-            text: "Plugin runtime context\n(image omitted: model does not support images)",
-          },
-        ],
-      },
+      ...reviewedInput,
+      messageInput("Plugin runtime context", "(image omitted: model does not support images)"),
     ]);
     expect(JSON.stringify(messages)).toBe(before);
   });
@@ -331,16 +339,13 @@ describe("explicit direct Responses continuation", () => {
       expect(f.requests).toHaveLength(1);
       const request = f.requests[0]!;
       expect(request.instructions).toBe(context.systemPrompt);
-      expect(request.input).toEqual([
-        { type: "message", role: "user", content: [{ type: "input_text", text: "old history" }] },
-        { type: "message", role: "user", content: [{ type: "input_text", text: steer }] },
-      ]);
+      expect(request.input).toEqual(reviewedInput);
       expect(JSON.stringify(request)).not.toContain("wrapper around continuation");
       const metadata = request.client_metadata as Record<string, string>;
       expect(metadata.existing).toBe("preserved");
-      const turnMetadata = JSON.parse(metadata["x-codex-turn-metadata"]!);
-      expect(turnMetadata).toMatchObject({ turn_id: "existing-turn", sandbox: "unchanged" });
-      expect(JSON.parse(turnMetadata.misalignment_override)).toEqual({
+      const sentMetadata = JSON.parse(metadata["x-codex-turn-metadata"]!);
+      expect(sentMetadata).toMatchObject(turnMetadata);
+      expect(JSON.parse(sentMetadata.misalignment_override)).toEqual({
         timestamp: expect.any(Number),
       });
       expect(metadata).not.toHaveProperty("misalignment_override");
@@ -348,22 +353,12 @@ describe("explicit direct Responses continuation", () => {
         ...context,
         messages: [
           ...context.messages,
-          {
-            role: "toolResult",
-            toolCallId: "tool-1",
-            toolName: "read",
-            content: [{ type: "text", text: "tool result" }],
-            isError: false,
-            timestamp: 3,
-          },
+          makeTextToolResult("tool-1", "read", "tool result", false, 3),
         ],
       };
       await (await f.stream(model, later, f.options)).result();
       expect(f.requests).toHaveLength(2);
-      expect(f.requests[1]?.client_metadata).toEqual({
-        existing: "preserved",
-        "x-codex-turn-metadata": JSON.stringify({ turn_id: "existing-turn", sandbox: "unchanged" }),
-      });
+      expect(f.requests[1]?.client_metadata).toEqual(clientMetadata);
     },
   );
 
@@ -372,7 +367,7 @@ describe("explicit direct Responses continuation", () => {
     async (transport) => {
       const f = await fixture(transport, [failed]);
       expect((await (await f.stream(model, context, f.options)).result()).stopReason).toBe("error");
-      expect(store.entry?.providerReview?.id).toBe("review-1");
+      expectBlocked();
     },
   );
 
@@ -391,7 +386,7 @@ describe("explicit direct Responses continuation", () => {
     ws.onConnect(ws.revoke);
     await (await ws.stream(model, context, ws.options)).result();
     expect(ws.requests).toHaveLength(0);
-    expect(store.entry?.providerReview?.id).toBe("review-1");
+    expectBlocked();
   });
 
   it("blocks automatic websocket redispatch and HTTP fallback after a sent continuation", async () => {
@@ -401,32 +396,23 @@ describe("explicit direct Responses continuation", () => {
     expect((await (await f.stream(model, context, f.options)).result()).stopReason).toBe("error");
     expect(f.requests).toHaveLength(1);
     expect(f.fetchMock).not.toHaveBeenCalled();
-    expect(store.entry?.providerReview?.id).toBe("review-1");
+    expectBlocked();
   });
 
   it("joins acceptance settlement through cancellation without clearing the block", async () => {
     const f = await fixture("sse");
-    const entered = createDeferred();
-    const release = createDeferred();
-    store.beforeClear = async () => {
-      entered.resolve();
-      await release.promise;
-    };
+    const gate = acceptanceGate();
     const controller = new AbortController();
     const stream = await f.stream(model, context, { ...f.options, signal: controller.signal });
     const result = stream.result();
-    await entered.promise;
+    await gate.entered;
     controller.abort();
-    release.resolve();
+    gate.release();
     expect((await result).stopReason).toBe("aborted");
-    expect(store.entry?.providerReview?.id).toBe("review-1");
+    expectBlocked();
   });
 
-  it.each([
-    { transport: "sse", strategy: "native" },
-    { transport: "websocket", strategy: "native" },
-    { transport: "sse", strategy: "managed" },
-  ] as const)(
+  it.each(routes)(
     "withholds queued function calls when $strategy $transport acceptance clearing fails",
     async ({ transport, strategy }) => {
       const call = {
@@ -463,13 +449,7 @@ describe("explicit direct Responses continuation", () => {
         ],
         strategy,
       );
-      const entered = createDeferred();
-      const release = createDeferred();
-      store.beforeClear = async () => {
-        entered.resolve();
-        await release.promise;
-        throw new Error("Local review commit failed");
-      };
+      const gate = acceptanceGate(true);
       const stream = await f.stream(
         model,
         {
@@ -495,12 +475,12 @@ describe("explicit direct Responses continuation", () => {
         }
       })();
       const result = stream.result();
-      await entered.promise;
+      await gate.entered;
       try {
         expect(delivered).not.toContain("toolcall_start");
         expect(executionOpportunity).not.toHaveBeenCalled();
       } finally {
-        release.resolve();
+        gate.release();
       }
       const terminal = await result;
       await drain;
@@ -509,7 +489,7 @@ describe("explicit direct Responses continuation", () => {
       expect(delivered).not.toContain("toolcall_start");
       expect(delivered).not.toContain("toolcall_end");
       expect(executionOpportunity).not.toHaveBeenCalled();
-      expect(store.entry?.providerReview?.id).toBe("review-1");
+      expectBlocked();
       expect(f.requests).toHaveLength(1);
       await expect(f.stream(model, context, f.options)).rejects.toThrow("cannot be retried");
       expect(f.requests).toHaveLength(1);
@@ -525,17 +505,12 @@ describe("explicit direct Responses continuation", () => {
       expect(f.fetchMock).toHaveBeenCalledTimes(1);
       expect(store.entry?.providerReview?.id).toBe(refused ? "review-1" : undefined);
       const request = f.requests[0]!;
-      expect(request.input).toEqual([
-        expect.objectContaining({
-          role: "user",
-          content: [{ type: "input_text", text: "old history" }],
-        }),
-        expect.objectContaining({ role: "user", content: [{ type: "input_text", text: steer }] }),
-      ]);
+      expect(request.input).toEqual(
+        reviewedInput.map(({ role, content }) => expect.objectContaining({ role, content })),
+      );
       const metadata = request.client_metadata as Record<string, string>;
       expect(JSON.parse(metadata["x-codex-turn-metadata"]!)).toMatchObject({
-        turn_id: "existing-turn",
-        sandbox: "unchanged",
+        ...turnMetadata,
         misalignment_override: expect.any(String),
       });
     },
@@ -554,9 +529,7 @@ describe("explicit direct Responses continuation", () => {
     const options = {
       ...f.options,
       onPayload: (payload: unknown) => {
-        if (!isRecord(payload) || !Array.isArray(payload.input)) {
-          throw new Error("Fixture expected a Responses input array");
-        }
+        assertResponsesPayload(payload);
         const prepared = f.options.onPayload(payload);
         return {
           ...prepared,
@@ -574,7 +547,7 @@ describe("explicit direct Responses continuation", () => {
     };
     expect((await (await f.stream(model, context, options)).result()).stopReason).toBe("error");
     expect(f.fetchMock).toHaveBeenCalledTimes(1);
-    expect(store.entry?.providerReview?.id).toBe("review-1");
+    expectBlocked();
   });
 
   it("does not send a native WebSocket request after its transport timeout during admission", async () => {
@@ -601,7 +574,7 @@ describe("explicit direct Responses continuation", () => {
     expect((await stream.result()).stopReason).toBe("error");
     expect(caller.signal.aborted).toBe(false);
     expect(f.requests).toHaveLength(0);
-    expect(store.entry?.providerReview?.id).toBe("review-1");
+    expectBlocked();
   });
 
   it.each(["native", "managed"] as const)(
@@ -609,12 +582,7 @@ describe("explicit direct Responses continuation", () => {
     async (strategy) => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const f = await fixture("sse", [created, completed], strategy);
-      const entered = createDeferred();
-      const release = createDeferred();
-      store.beforeClear = async () => {
-        entered.resolve();
-        await release.promise;
-      };
+      const gate = acceptanceGate();
       const caller = new AbortController();
       const options = { ...f.options, signal: caller.signal, firstEventTimeoutMs: 1000 };
       const stream = await f.stream(model, context, options);
@@ -623,13 +591,13 @@ describe("explicit direct Responses continuation", () => {
         settled = true;
         return message;
       });
-      await entered.promise;
+      await gate.entered;
       await vi.advanceTimersByTimeAsync(1000);
       expect(settled).toBe(false);
       expect(caller.signal.aborted).toBe(false);
-      release.resolve();
+      gate.release();
       expect((await result).stopReason).toBe("error");
-      expect(store.entry?.providerReview?.id).toBe("review-1");
+      expectBlocked();
     },
   );
 
@@ -656,17 +624,12 @@ describe("explicit direct Responses continuation", () => {
       {
         ...f.options,
         onPayload: (payload: unknown) => {
-          if (!isRecord(payload) || !Array.isArray(payload.input)) {
-            throw new Error("Fixture expected Responses input");
-          }
+          assertResponsesPayload(payload);
           if (change === "model") {
             return { ...payload, model: "other-model" };
           }
           if (change.startsWith("extra")) {
-            const extra = [
-              { role: "user", content: [{ type: "input_text", text: "Extra unreviewed input" }] },
-              { role: "user", content: [{ type: "input_text", text: "Trailing input" }] },
-            ];
+            const extra = [userInput("Extra unreviewed input"), userInput("Trailing input")];
             if (change === "extra in-place input") {
               payload.input.push(...extra);
               return undefined;
@@ -676,10 +639,7 @@ describe("explicit direct Responses continuation", () => {
           if (change === "replacement identity") {
             return {
               ...payload,
-              input: [
-                ...payload.input.slice(0, -1),
-                { role: "user", content: [{ type: "input_text", text: steer }] },
-              ],
+              input: [...payload.input.slice(0, -1), userInput(steer)],
             };
           }
           if (change === "reorder") {
@@ -696,10 +656,7 @@ describe("explicit direct Responses continuation", () => {
             if (change === "mutate-carrier") {
               carrier.content[0].text = "Unreviewed input";
             } else {
-              payload.input[payload.input.length - 1] = {
-                role: "user",
-                content: [{ type: "input_text", text: "Unreviewed input" }],
-              };
+              payload.input[payload.input.length - 1] = userInput("Unreviewed input");
             }
           }
           return payload;
@@ -710,62 +667,9 @@ describe("explicit direct Responses continuation", () => {
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toContain(error);
     expect(f.requests).toHaveLength(0);
-    expect(store.entry?.providerReview?.id).toBe("review-1");
+    expectBlocked();
   });
 
-  it.each(["reorder", "replace-carrier", "mutate-carrier"] as const)(
-    "rejects a payload hook that changes the acknowledged turn's tail: %s",
-    async (change) => {
-      const f = await fixture("sse");
-      const messages: Context["messages"] = [
-        ...context.messages,
-        {
-          role: "user",
-          content: "OpenClaw runtime context:\nRuntime context",
-          timestamp: 3,
-          runtimeContext: {},
-        },
-      ];
-      const stream = await f.stream(
-        model,
-        { ...context, messages },
-        {
-          ...f.options,
-          onPayload: (payload: unknown) => {
-            if (!isRecord(payload) || !Array.isArray(payload.input)) {
-              throw new Error("Fixture expected Responses input");
-            }
-            if (change === "reorder") {
-              [payload.input[0], payload.input[1]] = [payload.input[1], payload.input[0]];
-            } else {
-              const carrier = payload.input.at(-1);
-              if (
-                !isRecord(carrier) ||
-                !Array.isArray(carrier.content) ||
-                !isRecord(carrier.content[0])
-              ) {
-                throw new Error("Fixture expected a runtime-context carrier");
-              }
-              if (change === "mutate-carrier") {
-                carrier.content[0].text = "Unreviewed input";
-              } else {
-                payload.input[payload.input.length - 1] = {
-                  role: "user",
-                  content: [{ type: "input_text", text: "Unreviewed input" }],
-                };
-              }
-            }
-            return payload;
-          },
-        },
-      );
-      const result = await stream.result();
-      expect(result.stopReason).toBe("error");
-      expect(result.errorMessage).toContain("changed its next user input");
-      expect(f.requests).toHaveLength(0);
-      expect(store.entry?.providerReview?.id).toBe("review-1");
-    },
-  );
   it("preserves effective settings, tools, and history transforms while keeping the exact steer", async () => {
     const f = await fixture("sse");
     const stream = await f.stream(model, context, {
@@ -797,10 +701,7 @@ describe("explicit direct Responses continuation", () => {
       tools: [{ type: "web_search" }],
       reasoning: { effort: "high" },
       text: { verbosity: "high" },
-      input: [
-        { role: "user", content: [{ type: "input_text", text: "Configured history projection" }] },
-        { role: "user", content: [{ type: "input_text", text: steer }] },
-      ],
+      input: [userInput("Configured history projection"), userInput(steer)],
     });
     expect(store.entry?.providerReview).toBeUndefined();
   });

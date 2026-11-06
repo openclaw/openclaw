@@ -2,6 +2,9 @@ openclaw-plugin-settings-editor {
   display: block;
   min-width: 0;
 }
+openclaw-plugin-settings-groups {
+  display: contents;
+}
 .plugin-editor {
   container-type: inline-size;
 }
@@ -25,7 +28,7 @@ openclaw-plugin-settings-editor {
   align-items: center;
   gap: 12px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 0 12px;
 }
 .plugin-editor__search .settings-input {
@@ -44,7 +47,7 @@ openclaw-plugin-settings-editor {
 }
 .plugin-editor__group {
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   overflow: clip;
   background: var(--card);
 }
@@ -90,11 +93,7 @@ openclaw-plugin-settings-editor {
   background: transparent;
   border: 0;
 }
-.plugin-editor__control .settings-row > .settings-row__control:only-child {
-  width: 100%;
-  max-width: none;
-  min-width: 0;
-}
+.plugin-editor__control .settings-row > .settings-row__control:only-child,
 .plugin-editor__control .settings-input,
 .plugin-editor__control .settings-select {
   width: 100%;
@@ -111,22 +110,21 @@ openclaw-plugin-settings-editor {
   accent-color: var(--accent);
 }
 .plugin-editor__menu {
-  /* The dropdown host uses display: contents; this wrapper owns its position. */
   position: absolute;
   left: 12px;
   top: 20px;
   opacity: 0;
 }
-.plugin-editor__menu button[slot="trigger"] {
-  width: 30px;
-  height: 30px;
+.plugin-editor__menu .oc-menu-trigger {
+  width: 28px;
+  height: 28px;
 }
-.plugin-editor__menu button[slot="trigger"] svg {
+.plugin-editor__menu .oc-menu-trigger svg {
   transform: rotate(90deg);
 }
 .plugin-editor__row:hover .plugin-editor__menu,
 .plugin-editor__row:focus-within .plugin-editor__menu,
-.plugin-editor__menu:has(wa-dropdown[open]) {
+.plugin-editor__menu:has([aria-expanded="true"]) {
   opacity: 1;
 }
 
@@ -225,7 +223,7 @@ openclaw-plugin-settings-editor {
 .plugin-editor__nav a {
   color: var(--muted);
   padding: 8px 10px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   font-size: 13px;
   text-decoration: none;
 }

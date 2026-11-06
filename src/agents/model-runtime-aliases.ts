@@ -6,6 +6,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderModelCatalogId } from "../plugins/provider-model-routes.js";
+import { normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
 import { resolveAgentDir } from "./agent-scope-config.js";
 import { resolveExplicitAuthOrderSelection } from "./auth-profiles/order.js";
 import { getPreparedRuntimeAuthProfileStoreSnapshotCore } from "./auth-profiles/runtime-snapshots.js";
@@ -16,6 +17,7 @@ import {
   listCliRuntimeProviderIds,
   resolveCliRuntimeCanonicalProvider,
   resolveCliRuntimeModelBackendBinding,
+  resolveCliRuntimeProfileAlias,
 } from "./cli-backends.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
@@ -53,17 +55,21 @@ export function isCliRuntimeProvider(
   provider: string,
   params: { config?: OpenClawConfig } = {},
 ): boolean {
-  const normalized = normalizeProviderId(provider);
-  return listCliRuntimeProviderIds({
-    config: params.config,
-    includeSetupRegistry: params.config !== undefined,
-  }).includes(normalized);
+  return (
+    resolveCliRuntimeCanonicalProvider({
+      runtime: provider,
+      config: params.config,
+      includeSetupRegistry: params.config !== undefined,
+    }) !== undefined
+  );
 }
 
 export function isCliRuntimeAlias(runtime: string | undefined): boolean {
   const normalized = normalizeProviderId(runtime ?? "");
   return normalized
-    ? listCliRuntimeModelBackendBindings().some((binding) => binding.runtime === normalized)
+    ? listCliRuntimeModelBackendBindings().some(
+        (binding) => binding.runtime === normalized && binding.provider !== normalized,
+      )
     : false;
 }
 
@@ -137,6 +143,75 @@ export function areRuntimeModelRefsEquivalent(
   );
 }
 
+/** Route a `<cli-runtime>/<model>` row shares with a canonical row config pins to that runtime. */
+export type CliRuntimeTwinRoute = { key: string; runtime: string; alias: boolean };
+
+/**
+ * Resolves an entry's twin route during owner-scoped preparation; model-id equivalence is plugin
+ * policy, so reads must not recompute it. A runtime chosen only by a session override has no
+ * twin: choosing that canonical row can reset to a different configured route.
+ */
+export function resolveCliRuntimeTwinRoute(
+  entry: { provider: string; id: string },
+  scope: {
+    config: OpenClawConfig;
+    agentId: string;
+    cliRuntimeBindings: readonly { provider: string; runtime: string }[];
+  },
+): CliRuntimeTwinRoute | undefined {
+  const provider = normalizeProviderId(entry.provider);
+  const aliasOf = scope.cliRuntimeBindings.find(
+    (binding) => binding.runtime === provider && binding.provider !== provider,
+  )?.provider;
+  const runtime = aliasOf
+    ? provider
+    : normalizeOptionalAgentRuntimeId(
+        resolveModelRuntimePolicy({
+          config: scope.config,
+          agentId: scope.agentId,
+          provider: entry.provider,
+          modelId: entry.id,
+        }).policy?.id,
+      );
+  if (!runtime || !scope.cliRuntimeBindings.some((binding) => binding.runtime === runtime)) {
+    return undefined;
+  }
+  const canonical = aliasOf ?? provider;
+  const modelId =
+    resolveProviderModelCatalogId({ provider: canonical, modelId: entry.id }) ?? entry.id;
+  return { key: `${canonical}/${modelId}\0${runtime}`, runtime, alias: aliasOf !== undefined };
+}
+
+/**
+ * Drops CLI runtime rows whose canonical twin is listed on the same runtime, so one model and
+ * route appear once. An alias stays when a selection policy (the agent's manual policy or a
+ * Gateway role) allows it but not its canonical twin.
+ */
+export function omitCliRuntimeAliasTwins<
+  T extends { provider: string; id: string; agentRuntime?: { id: string } },
+>(
+  rows: readonly { row: T; twin?: CliRuntimeTwinRoute }[],
+  selectionPolicies: readonly { allows: (ref: { provider: string; model: string }) => boolean }[],
+): T[] {
+  const canonicalRows = new Map<string, T>();
+  for (const { row, twin } of rows) {
+    if (twin && !twin.alias && row.agentRuntime?.id === twin.runtime) {
+      canonicalRows.set(twin.key, row);
+    }
+  }
+  return rows.flatMap(({ row, twin }) => {
+    const canonical = twin?.alias ? canonicalRows.get(twin.key) : undefined;
+    const replaced =
+      canonical &&
+      selectionPolicies.every(
+        (policy) =>
+          !policy.allows({ provider: row.provider, model: row.id }) ||
+          policy.allows({ provider: canonical.provider, model: canonical.id }),
+      );
+    return replaced ? [] : [row];
+  });
+}
+
 export function shouldPreferActiveRuntimeAliasAuthLabel(params: {
   runtimeAliasModelEquivalent: boolean;
   selectedAuthLabel?: string;
@@ -184,32 +259,6 @@ function resolveRuntimeAuthProvider(
   });
 }
 
-function resolveProfileRuntimeAlias(
-  params: RuntimeAuthAliasParams & {
-    provider: string;
-    profileProvider: string | undefined;
-  },
-): string | undefined {
-  const provider = normalizeProviderId(params.provider);
-  const profileProvider = normalizeProviderId(params.profileProvider ?? "");
-  if (!provider || !profileProvider) {
-    return undefined;
-  }
-  const providerAuthKey = resolveRuntimeAuthProvider(provider, params);
-  const profileAuthKey = resolveRuntimeAuthProvider(profileProvider, params, true);
-  if (providerAuthKey !== profileAuthKey) {
-    return undefined;
-  }
-  if (profileProvider === provider) {
-    return undefined;
-  }
-  return resolveCliRuntimeModelBackendBinding({
-    config: params.cfg,
-    provider,
-    runtime: profileProvider,
-  })?.runtime;
-}
-
 function resolveCliRuntimeFromAuthProfile(
   params: RuntimeAuthAliasParams & {
     provider: string;
@@ -235,7 +284,7 @@ function resolveCliRuntimeFromAuthProfile(
     );
   if (params.authProfileId?.trim()) {
     const profileId = params.authProfileId.trim();
-    return resolveProfileRuntimeAlias({
+    return resolveCliRuntimeProfileAlias({
       ...params,
       provider: params.provider,
       profileProvider: (configuredProfiles[profileId] ?? store?.profiles[profileId])?.provider,
@@ -259,7 +308,7 @@ function resolveCliRuntimeFromAuthProfile(
     if (profileAuthKey !== providerAuthKey) {
       continue;
     }
-    return resolveProfileRuntimeAlias({
+    return resolveCliRuntimeProfileAlias({
       ...params,
       provider,
       profileProvider: profile.provider,
@@ -289,7 +338,7 @@ function resolveCliRuntimeFromAuthProfile(
   }
   const [profileId] = compatibleProfileIds;
   return profileId
-    ? resolveProfileRuntimeAlias({
+    ? resolveCliRuntimeProfileAlias({
         ...params,
         provider,
         profileProvider: configuredProfiles[profileId]?.provider,
@@ -304,14 +353,17 @@ export function resolveCliRuntimeExecutionProvider(
     modelId?: string;
     authProfileId?: string;
   },
+  configuredRuntimePolicy?: ReturnType<typeof resolveModelRuntimePolicy>,
 ): string | undefined {
   const provider = normalizeProviderId(params.provider);
-  const { policy, matchedProvider } = resolveModelRuntimePolicy({
-    config: params.cfg,
-    provider,
-    modelId: params.modelId,
-    agentId: params.agentId,
-  });
+  const { policy, matchedProvider } =
+    configuredRuntimePolicy ??
+    resolveModelRuntimePolicy({
+      config: params.cfg,
+      provider,
+      modelId: params.modelId,
+      agentId: params.agentId,
+    });
   const runtime = policy?.id?.trim() || undefined;
   if (runtime === "openclaw") {
     return undefined;

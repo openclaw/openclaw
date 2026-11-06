@@ -20,10 +20,7 @@ enum AppIconStyle: String, CaseIterable {
     }
 
     var usesSystemIcon: Bool {
-        if #available(macOS 26, *) {
-            return self == .paper
-        }
-        return false
+        self == .paper
     }
 
     func resourceName(for appearance: AppIconAppearance) -> String {

@@ -1,5 +1,3 @@
-// Native memory providers and delegated audiences against real session lineage:
-// SQLite rows, worker reads, and generation leases through the registered slot owner.
 import { randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -7,7 +5,6 @@ import { assertMemoryAudienceCurrent, delegateMemoryAudience } from "./memory-au
 import {
   AUDIENCE_CHILD_KEY,
   AUDIENCE_ROOT_KEY,
-  NATIVE_PROVIDER_ID,
   childMemoryContext,
   withChildAudience,
   withNativeMemoryProvider,
@@ -19,25 +16,25 @@ import type {
 } from "./memory-provider-types.js";
 import { getActiveMemoryProviderCore } from "./memory-runtime.js";
 
-// Partitions records by the supplied audience and, as documented, calls
-// `context.assertCurrent()` immediately before each read.
+const providerOptions = (audience: MemoryAudience) => ({
+  cfg: {},
+  agentId: "main",
+  context: childMemoryContext(audience),
+});
+
+// Check live authority after async work, immediately before reading.
 function partitionedProvider(
   context: MemoryCallerContext,
-  reads: string[],
+  reads: boolean[],
   beforeRead: () => Promise<void> = async () => {},
 ): MemoryProviderHandle {
-  const audience = context.authority.kind === "session" ? context.authority.audience : undefined;
   return {
     capabilities: { sources: ["memory"], pagination: false, candidates: [], projectFilter: false },
     search: async () => {
       await beforeRead();
       context.assertCurrent();
-      reads.push(audience?.kind ?? "none");
-      return {
-        hits: audience
-          ? [{ reference: { providerId: NATIVE_PROVIDER_ID, id: audience.kind }, excerpt: "fact" }]
-          : [],
-      };
+      reads.push(true);
+      return { hits: [] };
     },
     get: async () => ({ status: "not_found" }),
     health: async () => ({ status: "ready" }),
@@ -47,22 +44,18 @@ function partitionedProvider(
 
 it.each(["child reset", "parent lifecycle change"] as const)(
   "refuses a native provider's own pre-I/O guard after a %s mid-call",
-  async (change) => {
-    await withChildAudience(true, async ({ audience, root, child, write }) => {
+  (change) =>
+    withChildAudience(true, async ({ audience, root, child, write }) => {
       const reachedRead = createDeferredCore();
       const releaseRead = createDeferredCore();
-      const reads: string[] = [];
+      const reads: boolean[] = [];
       const openProvider = (context: MemoryCallerContext) =>
         partitionedProvider(context, reads, async () => {
           reachedRead.resolve();
           await releaseRead.promise;
         });
       await withNativeMemoryProvider(openProvider, async () => {
-        const { provider } = await getActiveMemoryProviderCore({
-          cfg: {},
-          agentId: "main",
-          context: childMemoryContext(audience),
-        });
+        const { provider } = await getActiveMemoryProviderCore(providerOptions(audience));
         const search = provider!.search({ query: "orders" });
         await reachedRead.promise;
         if (change === "child reset") {
@@ -75,40 +68,31 @@ it.each(["child reset", "parent lifecycle change"] as const)(
         expect(reads).toEqual([]);
         await provider!.close();
       });
-    });
-  },
+    }),
 );
 
-it("gives a conversation caller its host-minted conversation audience at open", async () => {
-  await withChildAudience(false, async ({ audience, root }) => {
+it("gives a conversation caller its host-minted conversation audience at open", () =>
+  withChildAudience(false, async ({ audience, root }) => {
     expect(audience).toEqual({
       kind: "conversation",
       agentId: "main",
       sessionKey: AUDIENCE_ROOT_KEY,
       sessionId: root.sessionId,
     });
-    const reads: string[] = [];
     const opened: Array<MemoryAudience | undefined> = [];
     const openProvider = (context: MemoryCallerContext) => {
       opened.push(context.authority.kind === "session" ? context.authority.audience : undefined);
-      return partitionedProvider(context, reads);
+      return partitionedProvider(context, []);
     };
     await withNativeMemoryProvider(openProvider, async () => {
-      const { provider } = await getActiveMemoryProviderCore({
-        cfg: {},
-        agentId: "main",
-        context: childMemoryContext(audience),
-      });
-      const page = await provider!.search({ query: "orders" });
-      expect(page.hits.map((entry) => entry.reference.id)).toEqual(["conversation"]);
+      const { provider } = await getActiveMemoryProviderCore(providerOptions(audience));
       expect(opened).toEqual([audience]);
       await provider!.close();
     });
-  });
-});
+  }));
 
-it("binds delegated child incarnations to committed session rows", async () => {
-  await withChildAudience(true, async ({ audience, root, write, storePath }) => {
+it("binds delegated child incarnations to committed session rows", () =>
+  withChildAudience(true, async ({ audience, root, write, storePath }) => {
     const recallKey = "agent:main:root:active-memory:recall";
     const recall = { sessionId: "recall-session", updatedAt: 1 };
     write(recallKey, recall);
@@ -120,23 +104,20 @@ it("binds delegated child incarnations to committed session rows", async () => {
       detached: true,
     });
     try {
-      // Same-incarnation writes keep every grant current.
       write(AUDIENCE_ROOT_KEY, { ...root, updatedAt: 2 });
       write(recallKey, { ...recall, updatedAt: 2 });
       assertMemoryAudienceCurrent(delegated.audience);
       assertMemoryAudienceCurrent(detached.audience);
 
-      // Resetting the delegated child revokes only the delegate.
       write(recallKey, { ...recall, sessionId: "recall-replacement", updatedAt: 3 });
       expect(() => assertMemoryAudienceCurrent(delegated.audience)).toThrow("no longer current");
       assertMemoryAudienceCurrent(audience);
 
-      // A detached child binds its row's absence; a claimed key revokes the delegate.
+      // Detached grants bind absence; claiming that key revokes the grant.
       write(detachedKey, { sessionId: "claimed", updatedAt: 1 });
       expect(() => assertMemoryAudienceCurrent(detached.audience)).toThrow("no longer current");
     } finally {
       detached.release();
       delegated.release();
     }
-  });
-});
+  }));

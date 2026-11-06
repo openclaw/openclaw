@@ -1,10 +1,9 @@
-/** Model selection, compression preparation, and provider execution for view_image. */
 import { findCapabilityProviderById } from "../../../packages/media-generation-core/src/capability-model-ref.js";
 import { normalizeMediaProviderId } from "../../../packages/media-understanding-common/src/provider-id.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MediaUnderstandingModelConfig } from "../../config/types.tools.js";
-import { DEFAULT_TIMEOUT_SECONDS } from "../../media-understanding/defaults.js";
-import { matchesMediaEntryCapability } from "../../media-understanding/entry-capabilities.js";
+import { MEDIA_CAPABILITY_DEFAULTS } from "../../media-understanding/defaults.constants.js";
+import { matchesImageEntryCapability } from "../../media-understanding/entry-capabilities.js";
 import {
   describeImageWithModel,
   describeImagesWithModel,
@@ -13,8 +12,8 @@ import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
 } from "../../media-understanding/provider-registry.js";
+import type { MediaUnderstandingProvider } from "../../media-understanding/provider-types.js";
 import { resolveTimeoutMs } from "../../media-understanding/resolve.js";
-import type { MediaUnderstandingProvider } from "../../media-understanding/types.js";
 import type { ImageCompressionPolicy } from "../../media/web-media.js";
 import { resolvePluginCapabilityProvider } from "../../plugins/capability-provider-runtime.js";
 import { runWithAsyncWorkResources } from "../../shared/async-work-resources.js";
@@ -49,6 +48,7 @@ export function resolveImageModelConfigForOverride(params: {
 export async function prepareImageCompressionPolicy(params: {
   abortSignal?: AbortSignal;
   cfg?: OpenClawConfig;
+  /** Model references already resolved by the image tool. */
   imageModelConfig?: ImageModelConfig | null;
   modelOverride?: string;
   imageCount: number;
@@ -57,17 +57,8 @@ export async function prepareImageCompressionPolicy(params: {
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   operatorAuthority?: AdmittedRunOperatorAuthority;
 }): Promise<ImageCompressionPolicy> {
-  const overrideConfig = resolveImageModelConfigForOverride({
-    cfg: params.cfg,
-    modelOverride: params.modelOverride,
-  });
-  const configuredImageModelConfig = params.imageModelConfig
-    ? resolveConfiguredImageModelRefs({
-        cfg: params.cfg,
-        imageModelConfig: params.imageModelConfig,
-      })
-    : null;
-  const effectiveImageModelConfig = overrideConfig ?? configuredImageModelConfig;
+  const overrideConfig = resolveImageModelConfigForOverride(params);
+  const effectiveImageModelConfig = overrideConfig ?? params.imageModelConfig;
   const effectiveCfg = effectiveImageModelConfig
     ? applyAgentDefaultModelConfig(params.cfg, "imageModel", effectiveImageModelConfig)
     : params.cfg;
@@ -106,15 +97,10 @@ function matchesImageTimeoutEntry(params: {
 }): boolean {
   const configuredProvider = normalizeMediaProviderId(params.entry.provider ?? "");
   const selectedProvider = normalizeMediaProviderId(params.provider);
-  if (!configuredProvider || configuredProvider !== selectedProvider) {
-    return false;
-  }
   if (
-    !matchesMediaEntryCapability({
-      entry: params.entry,
-      capability: "image",
-      providerRegistry: params.providerRegistry,
-    })
+    !configuredProvider ||
+    configuredProvider !== selectedProvider ||
+    !matchesImageEntryCapability(params)
   ) {
     return false;
   }
@@ -143,12 +129,7 @@ export async function runImagePrompt(params: {
   signal?: AbortSignal;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   assertCurrent?: () => void;
-}): Promise<{
-  text: string;
-  provider: string;
-  model: string;
-  attempts: Array<{ provider: string; model: string; error: string }>;
-}> {
+}) {
   const effectiveCfg = applyAgentDefaultModelConfig(
     params.cfg,
     "imageModel",
@@ -207,7 +188,7 @@ export async function runImagePrompt(params: {
         );
         const timeoutMs = resolveTimeoutMs(
           sharedEntry?.timeoutSeconds ?? providerCfg.tools?.media?.image?.timeoutSeconds,
-          DEFAULT_TIMEOUT_SECONDS.image,
+          MEDIA_CAPABILITY_DEFAULTS.image.timeoutSeconds,
         );
         const imageProvider = getMediaUnderstandingProvider(provider, providerRegistry);
         const request = {

@@ -3,7 +3,7 @@ import { stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { jsonResult as json, type AgentToolResult } from "openclaw/plugin-sdk/tool-results";
+import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
 import { Type, type Static } from "typebox";
 import { resolveZalouserAccountSync } from "./accounts.js";
 import { sendImageZalouser, sendMessageZalouser } from "./send.js";
@@ -99,112 +99,6 @@ function resolveZalouserSendTarget(params: ToolParams, context?: ZalouserToolCon
   };
 }
 
-async function executeZalouserTool(
-  params: ToolParams,
-  signal?: AbortSignal,
-  context?: ZalouserToolContext,
-): Promise<AgentToolResult<unknown>> {
-  try {
-    switch (params.action) {
-      case "send": {
-        const target = resolveZalouserSendTarget(params, context);
-        if (!target.threadId || !params.message) {
-          throw new Error("threadId and message required for send action");
-        }
-        const result = await sendMessageZalouser(target.threadId, params.message, {
-          signal,
-          profile: params.profile,
-          isGroup: target.isGroup,
-        });
-        if (!result.ok) {
-          throw new Error(result.error || "Failed to send message");
-        }
-        return json({ success: true, messageId: result.messageId });
-      }
-
-      case "image": {
-        const target = resolveZalouserSendTarget(params, context);
-        if (!target.threadId) {
-          throw new Error("threadId required for image action");
-        }
-        if (!params.url) {
-          throw new Error("url required for image action");
-        }
-        const result = await sendImageZalouser(target.threadId, params.url, {
-          signal,
-          profile: params.profile,
-          mediaMaxBytes: resolveToolMediaMaxBytes(params.profile, context),
-          caption: params.message,
-          isGroup: target.isGroup,
-        });
-        if (!result.ok) {
-          throw new Error(result.error || "Failed to send image");
-        }
-        return json({ success: true, messageId: result.messageId });
-      }
-
-      case "link": {
-        const target = resolveZalouserSendTarget(params, context);
-        if (!target.threadId || !params.url) {
-          throw new Error("threadId and url required for link action");
-        }
-        const result = await sendZaloLink(target.threadId, params.url, {
-          signal,
-          profile: params.profile,
-          caption: params.message,
-          isGroup: target.isGroup,
-        });
-        if (!result.ok) {
-          throw new Error(result.error || "Failed to send link");
-        }
-        return json({ success: true, messageId: result.messageId });
-      }
-
-      case "friends": {
-        const rows = await listZaloFriendsMatching(params.profile, params.query);
-        return json(rows);
-      }
-
-      case "groups": {
-        const rows = await listZaloGroupsMatching(params.profile, params.query);
-        return json(rows);
-      }
-
-      case "me": {
-        const info = await getZaloUserInfo(params.profile);
-        return json(info ?? { error: "Not authenticated" });
-      }
-
-      case "status": {
-        const authenticated = await checkZaloAuthenticated(params.profile);
-        return json({
-          authenticated,
-          output: authenticated ? "authenticated" : "not authenticated",
-        });
-      }
-
-      default: {
-        params.action satisfies never;
-        throw new Error(
-          `Unknown action: ${String(params.action)}. Valid actions: send, image, link, friends, groups, me, status`,
-        );
-      }
-    }
-  } catch (err) {
-    return json({
-      error: formatErrorMessage(err),
-      ...(isChannelPartialDeliveryError(err)
-        ? {
-            ok: false,
-            deliveryStatus: "partial_failed",
-            sentBeforeError: true,
-            result: err.deliveryResult,
-          }
-        : {}),
-    });
-  }
-}
-
 export function createZalouserTool(context?: ZalouserToolContext): AnyAgentTool {
   return {
     name: "zalouser",
@@ -214,7 +108,87 @@ export function createZalouserTool(context?: ZalouserToolContext): AnyAgentTool 
       "Actions: send (text message), image (send image URL), link (send link), " +
       "friends (list/search friends), groups (list groups), me (profile info), status (auth check).",
     parameters: ZalouserToolSchema,
-    execute: async (_toolCallId, params, signal) =>
-      await executeZalouserTool(params as ToolParams, signal, context),
+    execute: async (_toolCallId, rawParams, signal) => {
+      const params = rawParams as ToolParams;
+      try {
+        switch (params.action) {
+          case "send":
+          case "image":
+          case "link": {
+            const target = resolveZalouserSendTarget(params, context);
+            const content = params.action === "send" ? params.message : params.url;
+            if (!target.threadId || !content) {
+              const required =
+                params.action === "image"
+                  ? target.threadId
+                    ? "url"
+                    : "threadId"
+                  : params.action === "send"
+                    ? "threadId and message"
+                    : "threadId and url";
+              throw new Error(`${required} required for ${params.action} action`);
+            }
+            const send =
+              params.action === "send"
+                ? sendMessageZalouser
+                : params.action === "image"
+                  ? sendImageZalouser
+                  : sendZaloLink;
+            const result = await send(target.threadId, content, {
+              signal,
+              profile: params.profile,
+              ...(params.action === "image"
+                ? { mediaMaxBytes: resolveToolMediaMaxBytes(params.profile, context) }
+                : {}),
+              ...(params.action !== "send" ? { caption: params.message } : {}),
+              isGroup: target.isGroup,
+            });
+            return json({ success: true, messageId: result.messageId });
+          }
+
+          case "friends": {
+            const rows = await listZaloFriendsMatching(params.profile, params.query);
+            return json(rows);
+          }
+
+          case "groups": {
+            const rows = await listZaloGroupsMatching(params.profile, params.query);
+            return json(rows);
+          }
+
+          case "me": {
+            const info = await getZaloUserInfo(params.profile);
+            return json(info ?? { error: "Not authenticated" });
+          }
+
+          case "status": {
+            const authenticated = await checkZaloAuthenticated(params.profile);
+            return json({
+              authenticated,
+              output: authenticated ? "authenticated" : "not authenticated",
+            });
+          }
+
+          default: {
+            params.action satisfies never;
+            throw new Error(
+              `Unknown action: ${String(params.action)}. Valid actions: send, image, link, friends, groups, me, status`,
+            );
+          }
+        }
+      } catch (err) {
+        return json({
+          error: formatErrorMessage(err) || (params.action === "link" ? "Failed to send link" : ""),
+          ...(isChannelPartialDeliveryError(err)
+            ? {
+                ok: false,
+                deliveryStatus: "partial_failed",
+                sentBeforeError: true,
+                result: err.deliveryResult,
+              }
+            : {}),
+        });
+      }
+    },
   } satisfies AnyAgentTool;
 }

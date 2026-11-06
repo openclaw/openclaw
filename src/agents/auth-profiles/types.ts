@@ -38,7 +38,6 @@ export type OAuthCredentials = OAuthCredentialMetadata & {
   email?: string;
 };
 
-/** API-key credential with optional secret reference indirection. */
 export type ApiKeyCredential = SchemaContract<
   Omit<Extract<InlineAuthProfileCredential, { type: "api_key" }>, "key">
 > & {
@@ -77,7 +76,6 @@ export type SavedSetupCredential = {
   pluginId?: string;
 };
 
-/** Credential variants supported by auth profiles. */
 export type AuthProfileCredential = (ApiKeyCredential | TokenCredential | OAuthCredential) & {
   /** Replacement credentials stay unavailable until their verified connection is activated. */
   setup?: SavedSetupCredential;
@@ -104,7 +102,6 @@ export type AuthProfileCooldownClassification = "wham_token_expired" | "wham_acc
 
 /** Profile-wide blocked reason reported by provider usage probes. */
 export type AuthProfileBlockedReason = "subscription_limit";
-/** Source that marked a profile as blocked. */
 export type AuthProfileBlockedSource = "codex_rate_limits" | "wham";
 
 /** Per-profile usage statistics for round-robin and cooldown tracking */
@@ -121,9 +118,12 @@ export type ProfileUsageStats = {
   cooldownModel?: string;
   disabledUntil?: number;
   disabledReason?: AuthProfileFailureReason;
+  /** Counts only locally timed failures; provider timing alone bounds rate limits. */
   errorCount?: number;
-  failureCounts?: Partial<Record<AuthProfileFailureReason, number>>;
+  failureCounts?: Partial<Record<Exclude<AuthProfileFailureReason, "rate_limit">, number>>;
   lastFailureAt?: number;
+  /** Latest provider rate limit since this profile's last successful request. */
+  lastRateLimitAt?: number;
   /** Most recent quota probe or successful provider use. */
   lastProbeAt?: number;
 };
@@ -163,7 +163,6 @@ export type AuthProfileSecretsStore = {
   profiles: Record<string, AuthProfileCredential>;
 };
 
-/** Persisted runtime-state payload with a schema version. */
 export type AuthProfileStateStore = {
   version: number;
 } & AuthProfileState;
@@ -189,8 +188,6 @@ export type AuthProfileCredentialSource = {
 export type RuntimeAuthProfileStore = AuthProfileStore & {
   /** Physical sources of the selected rows; retained only in session read views. */
   runtimeCredentialSources?: Record<string, AuthProfileCredentialSource>;
-  /** Runtime-only built-in CLI winners; internal provenance, never exposed or persisted. */
-  runtimeExternalCliProfileIds?: string[];
   runtimeLocalProfileIds?: string[];
   /** Canonical local OAuth rows may be hidden by shared-store reconciliation. */
   runtimeHasLocalOAuthProfiles?: boolean;
@@ -199,11 +196,8 @@ export type RuntimeAuthProfileStore = AuthProfileStore & {
   runtimeInheritsMainState?: boolean;
 };
 
-/** Result returned by config/store auth profile id repair. */
 export type AuthProfileIdRepairResult = {
   config: OpenClawConfig;
   changes: string[];
   migrated: boolean;
-  fromProfileId?: string;
-  toProfileId?: string;
 };

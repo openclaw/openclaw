@@ -83,6 +83,7 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
   vi.doMock("../../context-engine/init.js", () => ({
     ensureContextEnginesInitialized: vi.fn(),
   }));
+  // mock-isolation: Synthetic context engines keep live registry state outside runner fixtures.
   vi.doMock("../../context-engine/registry.js", () => ({
     hasSameContextEngineInstance: vi.fn(
       (left: ContextEngine, right: ContextEngine) => left === right,
@@ -101,7 +102,7 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
           return { messages, estimatedTokens: 0 };
         },
         async compact() {
-          return { ok: true, compacted: false };
+          return { ok: true, compacted: false, reason: "nothing to compact" };
         },
         async dispose() {},
       };
@@ -114,6 +115,7 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
       () => options?.pluginRegistry ?? createEmptyPluginRegistry(),
     ),
   }));
+  // mock-isolation: Runner orchestration uses synthetic snapshots without booting plugin catalogs or runtime owners.
   vi.doMock("../prepared-model-runtime.js", () => {
     const acquire = async (input: PreparedModelRuntimeInput) => {
       if (!input.readOnly) {
@@ -126,6 +128,7 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
       }
       return {
         snapshot: createEmptyPreparedModelRuntimeSnapshot(input, options?.pluginRegistry),
+        run: <T>(run: () => T): T => run(),
         [Symbol.asyncDispose]: vi.fn(async () => {}),
       };
     };
@@ -180,6 +183,7 @@ export function installEmbeddedRunnerFastRunE2eMocks(
     runAgentHarnessAttempt: (params: EmbeddedRunAttemptParams) =>
       options.runEmbeddedAttempt(params),
   }));
+  // mock-isolation: harness fixtures supply runtime plans without loading live plugin or auth catalogs.
   vi.doMock("../runtime-plan/build.js", () => ({
     buildAgentRuntimePlan: vi.fn(
       (params: {
@@ -226,7 +230,6 @@ export function installEmbeddedRunnerFastRunE2eMocks(
           resolvePolicy: vi.fn(() => undefined),
         },
         delivery: {
-          isSilentPayload: vi.fn(() => false),
           resolveFollowupRoute: vi.fn(() => undefined),
         },
         outcome: {
@@ -334,6 +337,7 @@ export function installEmbeddedRunnerFastRunE2eMocks(
   vi.doMock("../../plugins/provider-external-auth.js", () => ({
     resolveExternalAuthProfilesWithPlugins: vi.fn(() => []),
   }));
+  // mock-isolation: runner fixtures exercise core preparation without loading installed plugins.
   vi.doMock("../../plugins/provider-runtime.js", () => ({
     applyProviderResolvedTransportWithPlugin: vi.fn(() => undefined),
     augmentModelCatalogWithProviderPlugins: vi.fn(async () => []),
@@ -343,6 +347,7 @@ export function installEmbeddedRunnerFastRunE2eMocks(
     normalizeProviderTransportWithPlugin: vi.fn(() => undefined),
     prepareProviderDynamicModel: vi.fn(async () => undefined),
     prepareProviderRuntimeAuth: options.prepareProviderRuntimeAuth ?? vi.fn(async () => undefined),
+    prepareProviderSyntheticAuthWithPlugin: vi.fn(async () => undefined),
     resolveProviderAuthProfileId: vi.fn(() => undefined),
     resolveProviderCapabilitiesWithPlugin: vi.fn(() => undefined),
     resolveProviderDeprecatedAuthProfileIds: vi.fn(() => []),

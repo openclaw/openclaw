@@ -37,11 +37,7 @@ function matchesResult(record: UpdateRunRecord, result: UpdateRunResult): boolea
   const observedBuild = verification.runningBuildId;
   if (
     (record.after.version && observedVersion && record.after.version !== observedVersion) ||
-    (record.after.buildId && observedBuild && record.after.buildId !== observedBuild)
-  ) {
-    return false;
-  }
-  if (
+    (record.after.buildId && observedBuild && record.after.buildId !== observedBuild) ||
     (result.after?.version && observedVersion && result.after.version !== observedVersion) ||
     (result.after?.buildId
       ? observedBuild !== result.after.buildId
@@ -78,7 +74,7 @@ export async function captureUpdateCommandTerminalRecord(
   assertCurrent();
   const identity = readDatabasePathIdentitySync(pathname).key;
   const record = captureCompletedUpdateRun(run.runId, assertCurrent, {
-    env: run.env,
+    ...run,
     path: pathname,
   });
   assertCurrent();

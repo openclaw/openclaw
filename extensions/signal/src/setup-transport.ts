@@ -44,13 +44,6 @@ export type SignalManagedNativeTransport = Extract<
   { kind: "managed-native" }
 >;
 
-function managedTransportOptions(
-  transport: SignalManagedNativeTransport,
-): Omit<SignalManagedNativeTransport, "kind"> {
-  const { kind: _kind, ...options } = transport;
-  return options;
-}
-
 function normalizeTransport(transport: SignalTransportConfig): SignalTransportConfig {
   if (transport.kind === "managed-native") {
     assertSignalSocketTransport(transport);
@@ -63,68 +56,6 @@ function normalizeTransport(transport: SignalTransportConfig): SignalTransportCo
   return { ...transport, url: normalizeSignalTransportUrl(transport.url) };
 }
 
-function assertSignalContainerTransportHasAccount(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  transport: SignalTransportConfig;
-}): void {
-  if (params.transport.kind !== "container" || params.cfg.channels?.signal?.enabled === false) {
-    return;
-  }
-  const account = resolveSignalAccountConfig(params.cfg, normalizeAccountId(params.accountId));
-  if (account.enabled === false || normalizeOptionalString(account.account)) {
-    return;
-  }
-  throw new Error("Signal container transport requires an account number for an enabled account.");
-}
-
-function assertSignalLocalEndpointDoesNotConflictWithManagedSibling(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  transport: SignalTransportConfig;
-}): void {
-  if (params.transport.kind === "managed-native") {
-    return;
-  }
-  const localPort = resolveLocalSignalTransportPort(params.transport.url);
-  if (localPort === undefined) {
-    return;
-  }
-  const targetAccountId = normalizeAccountId(params.accountId);
-  for (const accountId of listSignalAccountIds(params.cfg)) {
-    if (normalizeAccountId(accountId) === targetAccountId) {
-      continue;
-    }
-    const accountEntry = resolveSignalAccountEntry(
-      params.cfg.channels?.signal?.accounts,
-      accountId,
-    );
-    if (accountEntry?.enabled === false) {
-      continue;
-    }
-    const siblingAccount = resolveSignalAccount({
-      cfg: params.cfg,
-      accountId,
-    });
-    // Empty configs expose an implicit default placeholder with managed defaults. Until that
-    // account is configured, its synthetic endpoint does not reserve a port.
-    if (!siblingAccount.configured) {
-      continue;
-    }
-    const siblingTransport = siblingAccount.transport;
-    if (
-      siblingTransport?.kind !== "managed-native" ||
-      siblingTransport.socketPath !== undefined ||
-      siblingTransport.httpPort !== localPort
-    ) {
-      continue;
-    }
-    throw new Error(
-      `Signal ${params.transport.kind} account "${targetAccountId}" uses local port ${localPort}, which conflicts with managed native account "${accountId}". Choose a distinct transport URL.`,
-    );
-  }
-}
-
 export function resolveConfiguredSignalTransport(
   cfg: OpenClawConfig,
   accountId: string,
@@ -135,48 +66,6 @@ export function resolveConfiguredSignalTransport(
     ? (signal?.transport ??
         resolveSignalAccountEntry(signal?.accounts, normalizedAccountId)?.transport)
     : resolveSignalAccountEntry(signal?.accounts, normalizedAccountId)?.transport;
-}
-
-function existingManagedTransportForAlignment(
-  existing: SignalManagedNativeTransport,
-): SignalManagedNativeTransport {
-  // URL-only local HTTP infers its bind; default 8080 is not that endpoint.
-  const preferredUrlPort = preferredManagedNativePortFromConnectionUrl(existing);
-  return preferredUrlPort === undefined ? existing : { ...existing, httpPort: preferredUrlPort };
-}
-
-function alignManagedConnectionUrlAfterBindChange(params: {
-  existing: SignalManagedNativeTransport | undefined;
-  prepared: SignalManagedNativeTransport;
-  httpPort: number;
-  hasUrlOverride: boolean;
-}): SignalManagedNativeTransport {
-  const alignedExisting = params.existing
-    ? existingManagedTransportForAlignment(params.existing)
-    : undefined;
-  if (params.hasUrlOverride || !alignedExisting?.url) {
-    return assignSignalManagedNativePort(params.prepared, params.httpPort);
-  }
-  if (!isSignalManagedNativeConnectionUrlForBind(alignedExisting)) {
-    return assignSignalManagedNativePort(params.prepared, params.httpPort);
-  }
-
-  const connectionUrl = new URL(alignedExisting.url);
-  connectionUrl.port = String(params.httpPort);
-  const alignedPortUrl = normalizeSignalTransportUrl(connectionUrl.toString());
-  const next = { ...params.prepared, url: alignedPortUrl, httpPort: params.httpPort };
-  if (isSignalManagedNativeConnectionUrlForBind(next)) {
-    return next;
-  }
-
-  const bindHost = params.prepared.httpHost ?? DEFAULT_SIGNAL_MANAGED_NATIVE_HOST;
-  const connectionHost =
-    bindHost === "0.0.0.0" ? "127.0.0.1" : bindHost === "::" ? "::1" : bindHost;
-  connectionUrl.hostname = connectionHost.includes(":") ? `[${connectionHost}]` : connectionHost;
-  return {
-    ...next,
-    url: normalizeSignalTransportUrl(connectionUrl.toString()),
-  };
 }
 
 export function prepareSignalManagedNativeTransport(params: {
@@ -272,12 +161,30 @@ export function prepareSignalManagedNativeTransport(params: {
   const httpPort = allocateSignalManagedNativePort({ reservedPorts, preferredPort });
   // A managed connection URL that points at the daemon's bind is one endpoint.
   // Keep its connection endpoint aligned when setup changes or reallocates the bind.
-  return alignManagedConnectionUrlAfterBindChange({
-    existing: existingManaged,
-    prepared,
-    httpPort,
-    hasUrlOverride: params.overrides?.url !== undefined,
-  });
+  if (
+    params.overrides?.url !== undefined ||
+    !existingManaged?.url ||
+    !isSignalManagedNativeConnectionUrlForBind(existingManaged)
+  ) {
+    return assignSignalManagedNativePort(prepared, httpPort);
+  }
+
+  const connectionUrl = new URL(existingManaged.url);
+  connectionUrl.port = String(httpPort);
+  const alignedPortUrl = normalizeSignalTransportUrl(connectionUrl.toString());
+  const next = { ...prepared, url: alignedPortUrl, httpPort };
+  if (isSignalManagedNativeConnectionUrlForBind(next)) {
+    return next;
+  }
+
+  const bindHost = prepared.httpHost ?? DEFAULT_SIGNAL_MANAGED_NATIVE_HOST;
+  const connectionHost =
+    bindHost === "0.0.0.0" ? "127.0.0.1" : bindHost === "::" ? "::1" : bindHost;
+  connectionUrl.hostname = connectionHost.includes(":") ? `[${connectionHost}]` : connectionHost;
+  return {
+    ...next,
+    url: normalizeSignalTransportUrl(connectionUrl.toString()),
+  };
 }
 
 export async function probeSignalTransport(params: {
@@ -295,7 +202,7 @@ export async function probeSignalTransport(params: {
       ? prepareSignalManagedNativeTransport({
           cfg: params.cfg,
           accountId: params.accountId,
-          overrides: managedTransportOptions(params.transport),
+          overrides: params.transport,
         })
       : params.transport;
   const resolved = resolveSignalTransport(transport);
@@ -315,16 +222,62 @@ export function writeSignalAccountTransport(params: {
   transport: SignalTransportConfig;
 }): OpenClawConfig {
   const transport = normalizeTransport(params.transport);
-  assertSignalContainerTransportHasAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    transport,
-  });
-  assertSignalLocalEndpointDoesNotConflictWithManagedSibling({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    transport,
-  });
+  function assertSignalContainerTransportHasAccount(): void {
+    if (transport.kind !== "container" || params.cfg.channels?.signal?.enabled === false) {
+      return;
+    }
+    const account = resolveSignalAccountConfig(params.cfg, normalizeAccountId(params.accountId));
+    if (account.enabled === false || normalizeOptionalString(account.account)) {
+      return;
+    }
+    throw new Error(
+      "Signal container transport requires an account number for an enabled account.",
+    );
+  }
+  assertSignalContainerTransportHasAccount();
+  function assertSignalLocalEndpointDoesNotConflictWithManagedSibling(): void {
+    if (transport.kind === "managed-native") {
+      return;
+    }
+    const localPort = resolveLocalSignalTransportPort(transport.url);
+    if (localPort === undefined) {
+      return;
+    }
+    const targetAccountId = normalizeAccountId(params.accountId);
+    for (const accountId of listSignalAccountIds(params.cfg)) {
+      if (normalizeAccountId(accountId) === targetAccountId) {
+        continue;
+      }
+      const accountEntry = resolveSignalAccountEntry(
+        params.cfg.channels?.signal?.accounts,
+        accountId,
+      );
+      if (accountEntry?.enabled === false) {
+        continue;
+      }
+      const siblingAccount = resolveSignalAccount({
+        cfg: params.cfg,
+        accountId,
+      });
+      // Empty configs expose an implicit default placeholder with managed defaults. Until that
+      // account is configured, its synthetic endpoint does not reserve a port.
+      if (!siblingAccount.configured) {
+        continue;
+      }
+      const siblingTransport = siblingAccount.transport;
+      if (
+        siblingTransport?.kind !== "managed-native" ||
+        siblingTransport.socketPath !== undefined ||
+        siblingTransport.httpPort !== localPort
+      ) {
+        continue;
+      }
+      throw new Error(
+        `Signal ${transport.kind} account "${targetAccountId}" uses local port ${localPort}, which conflicts with managed native account "${accountId}". Choose a distinct transport URL.`,
+      );
+    }
+  }
+  assertSignalLocalEndpointDoesNotConflictWithManagedSibling();
   const next = patchChannelConfigForAccount({
     cfg: params.cfg,
     channel: "signal",

@@ -11,7 +11,14 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type EmbeddedAgentHookRun = Pick<
   EmbeddedRunAttemptParams,
-  "runId" | "sessionId" | "sessionKey" | "workspaceDir" | "trigger" | "memoryAudience" | "sandbox"
+  | "runId"
+  | "jobId"
+  | "sessionId"
+  | "sessionKey"
+  | "workspaceDir"
+  | "trigger"
+  | "memoryAudience"
+  | "sandbox"
 > &
   Parameters<typeof buildAgentHookContextChannelFields>[0] &
   Parameters<typeof buildAgentHookContextIdentityFields>[0];
@@ -26,6 +33,7 @@ export function buildEmbeddedAgentHookContext(
   }
   return {
     runId: run.runId,
+    jobId: run.jobId,
     trace,
     agentId,
     sessionKey: run.sessionKey,

@@ -46,7 +46,7 @@ function resolveTelegramPollThreadSpec(
 export async function sendStickerTelegram(
   to: string,
   fileId: string,
-  opts: TelegramThreadedSendOpts,
+  opts: TelegramThreadedSendOpts & Pick<TelegramSendOpts, "silent">,
 ): Promise<TelegramSendResult> {
   if (!fileId?.trim()) {
     throw new Error("Telegram sticker file_id is required");
@@ -62,10 +62,12 @@ export async function sendStickerTelegram(
         messageThreadId: opts.messageThreadId,
         replyToMessageId: opts.replyToMessageId,
       },
-      request: { kind: "nonIdempotent", useApiErrorLogging: false },
+      useApiErrorLogging: false,
     });
-    const stickerParams =
-      Object.keys(prepared.threadParams).length > 0 ? prepared.threadParams : undefined;
+    const stickerParams = {
+      ...prepared.threadParams,
+      ...(opts.silent === true ? { disable_notification: true } : {}),
+    };
 
     const result = await prepared.request(
       () => api.sendSticker(prepared.chatId, fileId.trim(), stickerParams),
@@ -104,7 +106,6 @@ export async function sendPollTelegram(
         messageThreadId: opts.messageThreadId,
         replyToMessageId: opts.replyToMessageId,
       },
-      request: { kind: "nonIdempotent" },
     });
 
     const normalizedPoll = normalizePollInput(poll, { maxOptions: 12 });

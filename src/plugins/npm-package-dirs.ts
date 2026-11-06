@@ -1,7 +1,7 @@
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { hasErrnoCode } from "../infra/errno.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 
 export async function listNpmPackageDirs(
   npmRoot: string,
@@ -17,10 +17,7 @@ export async function listNpmPackageDirs(
         ? entries.toSorted((left, right) => left.name.localeCompare(right.name))
         : entries;
     } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return [];
-      }
-      throw error;
+      return ignoreMissingPath(error) ?? [];
     }
   };
   const nodeModulesDir = path.join(npmRoot, "node_modules");

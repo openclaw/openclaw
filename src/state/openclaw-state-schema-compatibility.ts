@@ -1,9 +1,9 @@
 import {
-  getCanonicalSqliteNamedIndexContracts,
+  getCanonicalSqliteNamedIndexNames,
   type SqliteSchemaCompatibility,
   type SqliteSchemaIssue,
+  type SqliteTableContractReader,
 } from "../infra/sqlite-schema-contract.js";
-import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import {
   ORDERED_STARTUP_ADDITIVE_STATE_COLUMNS,
   CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS,
@@ -11,14 +11,37 @@ import {
   CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS,
 } from "./openclaw-state-db-additive-columns.js";
 import {
-  FIRST_USE_STATE_INDEXES,
   DOCTOR_OWNED_STATE_TABLES,
-  FIRST_USE_STATE_TABLES,
   LAZY_ADDITIVE_STATE_INDEXES,
   LAZY_ADDITIVE_STATE_TABLES,
 } from "./openclaw-state-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
+// Historical admission facts use the physical names of their predecessor schemas.
+export const STATE_V6_ADDITIVE_TABLES = [
+  ...LAZY_ADDITIVE_STATE_TABLES,
+  "worker_session_tool_operations",
+  "worker_turn_tool_authorities",
+] as const;
+export const STATE_V5_ADDITIVE_TABLES = [
+  "agent_database_leases",
+  "agent_deletion_journal",
+  "claw_cron_refs",
+  "claw_installs",
+  "claw_mcp_server_refs",
+  "claw_package_refs",
+  "claw_workspace_files",
+  "config_machine_state",
+  "cron_job_scratch",
+  "meeting_transcript_sessions",
+  "meeting_transcript_summaries",
+  "meeting_transcript_utterances",
+  "outbound_media_provenance",
+  "worker_environment_credentials",
+  "worker_transcript_commit_heads",
+  "worker_transcript_commits",
+  ...STATE_V6_ADDITIVE_TABLES,
+] as const;
 // Same-version databases may lack additive columns that only a writable open
 // can ensure, while read-only planning must keep accepting the older shape.
 const CLAW_LAZY_ADDITIVE_STATE_COLUMNS = CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS.map(
@@ -47,71 +70,33 @@ const CLAW_STARTUP_ADDITIVE_STATE_TABLE_SET = new Set<string>(CLAW_STARTUP_ADDIT
 const CLAW_READONLY_OPTIONAL_STATE_INDEXES = [
   "idx_meeting_transcript_utterances_id",
   "idx_operator_approvals_source_run_resolved",
-  "idx_task_runs_requester_session_key",
   "idx_worker_session_placements_environment",
 ] as const;
 let openClawStateCanonicalNamedIndexSet: ReadonlySet<string> | undefined;
 
 function getOpenClawStateCanonicalNamedIndexSet(): ReadonlySet<string> {
   openClawStateCanonicalNamedIndexSet ??= new Set(
-    getCanonicalSqliteNamedIndexContracts(OPENCLAW_STATE_SCHEMA_SQL).map((index) => index.name),
+    getCanonicalSqliteNamedIndexNames(OPENCLAW_STATE_SCHEMA_SQL),
   );
   return openClawStateCanonicalNamedIndexSet;
 }
 
-const runtimeSchemaCache = new Map<string, string>();
+export { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-runtime.js";
 
-/** Project canonical SQL to the tables the shared runtime may create during this open. */
-export function getOpenClawStateRuntimeSchema(options: {
-  includeVersionLazyAdditiveTables: boolean;
-  includeAgentDeletionJournal?: boolean;
-}): string {
-  const { includeVersionLazyAdditiveTables, includeAgentDeletionJournal = true } = options;
-  const key = `${includeVersionLazyAdditiveTables}:${includeAgentDeletionJournal}`;
-  const cached = runtimeSchemaCache.get(key);
-  if (cached !== undefined) {
-    return cached;
-  }
-  let schema = OPENCLAW_STATE_SCHEMA_SQL;
-  const omittedTables = [
-    ...(includeVersionLazyAdditiveTables ? FIRST_USE_STATE_TABLES : LAZY_ADDITIVE_STATE_TABLES),
-    ...(includeAgentDeletionJournal ? [] : DOCTOR_OWNED_STATE_TABLES),
-  ];
-  const omittedIndexes = includeVersionLazyAdditiveTables
-    ? FIRST_USE_STATE_INDEXES
-    : LAZY_ADDITIVE_STATE_INDEXES;
-  for (const tableName of omittedTables) {
-    schema = schema.replace(
-      extractSqliteTableSchema(schema, tableName, {
-        errorMessage: `lazy additive state schema block is missing for ${tableName}`,
-      }),
-      "",
-    );
-  }
-  for (const indexName of omittedIndexes) {
-    const plainStart = schema.indexOf(`CREATE INDEX IF NOT EXISTS ${indexName}`);
-    const uniqueStart = schema.indexOf(`CREATE UNIQUE INDEX IF NOT EXISTS ${indexName}`);
-    const start = plainStart >= 0 ? plainStart : uniqueStart;
-    const end = start >= 0 ? schema.indexOf(";", start) : -1;
-    if (start < 0 || end < 0) {
-      throw new Error(`lazy additive state schema index is missing for ${indexName}`);
-    }
-    schema = `${schema.slice(0, start)}${schema.slice(end + 1)}`;
-  }
-  runtimeSchemaCache.set(key, schema);
-  return schema;
-}
+// Retirement preserves existing tables and rows without creating them on fresh installs.
+export const RETAINED_STATE_TABLES = ["fleet_cells"] as const;
 
-export const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
+const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
+  excludedTables: RETAINED_STATE_TABLES,
   allowCompatibleAdditiveColumns: true,
   allowedMissingTables: DOCTOR_OWNED_STATE_TABLES,
   allowedMissingColumns: CLAW_FIRST_USE_ADDITIVE_STATE_COLUMNS,
   allowedColumnDefinitions: {
     "diagnostic_events.sequence": ["sequence INTEGER NOT NULL DEFAULT 0"],
-    "claw_package_refs.package_integrity": [
+    "template_package_refs.package_integrity": [
       "package_integrity TEXT NOT NULL DEFAULT 'sha256:0000000000000000000000000000000000000000000000000000000000000000'",
     ],
-    "claw_package_refs.updated_at_ms": ["updated_at_ms INTEGER NOT NULL DEFAULT 0"],
+    "template_package_refs.updated_at_ms": ["updated_at_ms INTEGER NOT NULL DEFAULT 0"],
     "cron_jobs.enabled": ["enabled INTEGER NOT NULL DEFAULT 1"],
     "cron_jobs.name": ["name TEXT NOT NULL DEFAULT ''"],
     "cron_jobs.payload_kind": ["payload_kind TEXT NOT NULL DEFAULT 'message'"],
@@ -128,6 +113,26 @@ export const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = 
     "worker_session_placements.terminal_at_ms": ["terminal_at_ms INTEGER"],
   },
 };
+
+export const STATE_RUNTIME_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
+  ...STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
+  excludedTables: [...RETAINED_STATE_TABLES, ...LAZY_ADDITIVE_STATE_TABLES],
+  excludedIndexes: LAZY_ADDITIVE_STATE_INDEXES,
+};
+
+/** Both cold admission and bounded upgrade selection require these present-table columns. */
+export function findMissingLazyStateStartupColumn(readTable: SqliteTableContractReader) {
+  for (const { tableName, columnName } of CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
+    if (!STATE_RUNTIME_SCHEMA_COMPATIBILITY.excludedTables?.includes(tableName)) {
+      continue;
+    }
+    const table = readTable(tableName);
+    if (table && !table.columns.some((column) => column.name === columnName)) {
+      return { tableName, columnName };
+    }
+  }
+  return undefined;
+}
 
 export const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
   ...STATE_PERSISTENT_SCHEMA_COMPATIBILITY,

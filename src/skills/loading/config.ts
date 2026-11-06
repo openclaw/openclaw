@@ -44,11 +44,7 @@ export function resolveSkillConfig(
   config: OpenClawConfig | undefined,
   skillKey: string,
 ): SkillConfig | undefined {
-  const entry = config?.skills?.entries?.[skillKey];
-  if (!entry || typeof entry !== "object") {
-    return undefined;
-  }
-  return entry;
+  return config?.skills?.entries?.[skillKey];
 }
 
 /** Returns whether cold startup isolated this exact skill's configured secret. */
@@ -82,19 +78,28 @@ export function isSkillEnvRequirementSatisfied(params: {
 const BUNDLED_SOURCES = new Set(["openclaw-bundled", "openclaw-custodian"]);
 
 export function resolveBundledAllowlist(config?: OpenClawConfig): ReadonlySet<string> | undefined {
-  const normalized = normalizeStringEntries(config?.skills?.allowBundled);
-  return normalized.length > 0 ? new Set(normalized) : undefined;
+  const configured = config?.skills?.allowBundled;
+  return configured === undefined ? undefined : new Set(normalizeStringEntries(configured));
 }
 
 export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: ReadonlySet<string>): boolean {
-  if (!allowlist || allowlist.size === 0) {
+  if (!allowlist || !BUNDLED_SOURCES.has(resolveSkillSource(entry.skill))) {
     return true;
   }
-  if (!BUNDLED_SOURCES.has(resolveSkillSource(entry.skill))) {
-    return true;
-  }
-  const key = resolveSkillKey(entry.skill, entry);
+  const key = resolveSkillKey(entry);
   return allowlist.has(key) || allowlist.has(entry.skill.name);
+}
+
+/** Learned Workshop skills bypass agent allowlists and session toggles; archiving hides them. */
+export function isSkillEntrySelected(
+  entry: SkillEntry,
+  skillFilter: readonly string[] | undefined,
+  skillOverrides: Readonly<Record<string, boolean>> | undefined,
+): boolean {
+  return (
+    resolveSkillSource(entry.skill) === "openclaw-workshop" ||
+    isSessionSkillEnabled(entry.skill.name, skillFilter, skillOverrides, resolveSkillKey(entry))
+  );
 }
 
 export function shouldIncludeSkill(params: {
@@ -106,7 +111,7 @@ export function shouldIncludeSkill(params: {
   platform?: string;
 }): boolean {
   const { entry, config, bundledAllowlist, eligibility } = params;
-  const skillKey = resolveSkillKey(entry.skill, entry);
+  const skillKey = resolveSkillKey(entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
 
   if (skillConfig?.enabled === false) {
@@ -150,7 +155,7 @@ export async function prepareSkillBinaryProbe(
 ) {
   if (runtime) {
     const available = new Set(runtime.bins);
-    return { hasBin: (bin: string) => available.has(bin), needsRetry: () => false };
+    return { hasBin: (bin: string) => available.has(bin) };
   }
   const bins = new Set<string>();
   const bundledAllowlist = resolveBundledAllowlist(opts?.config);
@@ -160,14 +165,7 @@ export async function prepareSkillBinaryProbe(
     return true;
   };
   for (const entry of entries) {
-    if (
-      !isSessionSkillEnabled(
-        entry.skill.name,
-        opts?.skillFilter,
-        opts?.skillOverrides,
-        resolveSkillKey(entry.skill, entry),
-      )
-    ) {
+    if (!isSkillEntrySelected(entry, opts?.skillFilter, opts?.skillOverrides)) {
       continue;
     }
     const requires = entry.metadata?.requires;
@@ -183,25 +181,15 @@ export async function prepareSkillBinaryProbe(
       hasBin: recordBinaryRequirement,
     });
     if (needsBinaries) {
-      for (const bin of entry.metadata?.requires?.bins ?? []) {
-        bins.add(bin);
-      }
-      for (const bin of entry.metadata?.requires?.anyBins ?? []) {
+      for (const bin of resolveSkillRequiredBins(entry)) {
         bins.add(bin);
       }
     }
   }
   const facts = await prepareBinaryAvailability(bins, assertCurrent);
-  let unprepared = false;
-  return {
-    hasBin: (bin: string) => {
-      // Eligibility can change while probing; prepare newly requested facts before publishing.
-      if (!bins.has(bin)) {
-        unprepared = true;
-        return false;
-      }
-      return facts.hasBinary(bin);
-    },
-    needsRetry: () => unprepared || !facts.isCurrent(),
-  };
+  return { hasBin: facts.hasBinary };
+}
+
+export function resolveSkillRequiredBins(entry: SkillEntry): string[] {
+  return (entry.metadata?.requires?.bins ?? []).concat(entry.metadata?.requires?.anyBins ?? []);
 }

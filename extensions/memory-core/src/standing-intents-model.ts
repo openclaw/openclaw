@@ -61,8 +61,8 @@ function normalizeScopeAccountId(accountId: string | undefined): string {
 }
 
 export function normalizeCreatorSender(value: string): string {
-  const creatorSender = value.trim();
-  if (!creatorSender || creatorSender.toLowerCase() === "unknown") {
+  const creatorSender = readKnownCreatorSender(value);
+  if (!creatorSender) {
     throw new Error("creating sender is unavailable for this turn");
   }
   return creatorSender;
@@ -137,10 +137,6 @@ function parseStoredChannelScope(value: string | null): {
   return { scope: "anywhere", identity: null };
 }
 
-function parseStoredSenderScope(value: string | null): string | null {
-  return parseStoredScope(value, 4)?.[3] ?? null;
-}
-
 export function rowToIntent(row: StandingIntentRow): StandingIntent {
   const channelScope = parseStoredChannelScope(row.channel_scope);
   return {
@@ -150,7 +146,7 @@ export function rowToIntent(row: StandingIntentRow): StandingIntent {
     triggerEmbedding: row.trigger_embedding,
     scope: channelScope.scope,
     channelScope: channelScope.identity,
-    senderScope: parseStoredSenderScope(row.sender_scope),
+    senderScope: parseStoredScope(row.sender_scope, 4)?.[3] ?? null,
     creatorSender: readKnownCreatorSender(row.creator_sender),
     status: row.status,
     expiresAt: row.expires_at,
@@ -174,13 +170,37 @@ export function parseStoredTriggerKeywords(value: string): string[] {
   }
 }
 
-export function tokenizeIntentText(text: string): string[] {
-  return text.toLowerCase().match(/[\p{L}\p{N}_-]+/gu) ?? [];
+function tokenizeNormalizedIntentText(text: string): string[] {
+  return text.match(/[\p{L}\p{N}_-]+/gu) ?? [];
+}
+
+/** Scripts written without spaces between words; `unicode61` tokenizes a whole run as one token. */
+const UNSPACED_SCRIPT_TERM =
+  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+
+export function needsLiteralIntentCandidates(promptText: string): boolean {
+  return UNSPACED_SCRIPT_TERM.test(promptText);
+}
+
+/** Unspaced-script terms match literally; other terms retain whole-word boundaries. */
+export function triggerKeywordMatchesPrompt(
+  keyword: string,
+  promptTokens: ReadonlySet<string>,
+  promptText: string,
+): boolean {
+  const terms = tokenizeNormalizedIntentText(keyword.toLowerCase().normalize("NFC"));
+  return (
+    terms.length > 0 &&
+    terms.every((term) =>
+      UNSPACED_SCRIPT_TERM.test(term) ? promptText.includes(term) : promptTokens.has(term),
+    )
+  );
 }
 
 export type StandingIntentMatchInput = {
   promptTokens: string[];
-  ftsQuery: string;
+  promptText: string;
+  ftsQuery: import("openclaw/plugin-sdk/database-engine-worker-runtime").TextQuery;
   channelScopes: string[];
   senderScope?: string;
   nowMs?: number;
@@ -194,26 +214,23 @@ export function prepareStandingIntentMatch(params: {
   senderId?: string;
   nowMs?: number;
 }): StandingIntentMatchInput | undefined {
-  const promptTokens = [...new Set(tokenizeIntentText(params.prompt))];
+  const promptText = params.prompt.toLowerCase().normalize("NFC");
+  const promptTokens = [...new Set(tokenizeNormalizedIntentText(promptText))];
   if (promptTokens.length === 0) {
     return undefined;
   }
   const channel = params.channel?.trim() || undefined;
   const provider = params.provider?.trim().toLowerCase() || undefined;
   const senderId = params.senderId?.trim() || undefined;
-  const channelScopes = new Set<string>();
+  const channelScopes: string[] = [];
   if (provider) {
-    channelScopes.add(
-      encodeStandingIntentChannelScope({
-        scope: "channel",
-        provider,
-        accountId: params.accountId,
-      }),
-    );
-    if (channel) {
-      channelScopes.add(
+    for (const scope of ["channel", "conversation"] as const) {
+      if (scope === "conversation" && !channel) {
+        continue;
+      }
+      channelScopes.push(
         encodeStandingIntentChannelScope({
-          scope: "conversation",
+          scope,
           provider,
           accountId: params.accountId,
           conversationId: channel,
@@ -231,8 +248,9 @@ export function prepareStandingIntentMatch(params: {
       : undefined;
   return {
     promptTokens,
-    ftsQuery: promptTokens.map((token) => `"${token.replaceAll('"', '""')}"`).join(" OR "),
-    channelScopes: [...channelScopes],
+    promptText,
+    ftsQuery: { kind: "any", clauses: promptTokens.map((text) => ({ kind: "phrase", text })) },
+    channelScopes,
     senderScope: storedSenderScope,
     nowMs: params.nowMs,
   };
@@ -244,6 +262,16 @@ export type StandingIntentOperations = {
   sweep: { input: { nowMs?: number }; output: void };
   cancel: { input: { id: string }; output: StandingIntent | null };
   match: { input: StandingIntentMatchInput; output: StandingIntent[] };
+};
+
+export type StandingIntentWorkerOperations = {
+  [Key in keyof StandingIntentOperations]: {
+    input: StandingIntentOperations[Key]["input"];
+    output: {
+      value: StandingIntentOperations[Key]["output"];
+      nextDueAt: number | null;
+    };
+  };
 };
 
 function renderStandingIntentContext(intents: StandingIntent[]): string {

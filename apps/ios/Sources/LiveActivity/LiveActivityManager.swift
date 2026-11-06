@@ -10,11 +10,6 @@ import os
 final class LiveActivityManager {
     static let shared = LiveActivityManager()
 
-    private struct PendingActivityUpdate {
-        var state: OpenClawActivityAttributes.ContentState
-        var staleDate: Date?
-    }
-
     private struct StatusPresentation {
         let status: OpenClawActivityAttributes.ContentState.Status
         let verbatimDetail: String?
@@ -25,23 +20,18 @@ final class LiveActivityManager {
     private let transientStaleSeconds: TimeInterval = 300
     private let hydrationStaleSeconds: TimeInterval = 300
     private let voiceSamplePublishDelay = Duration.milliseconds(500)
-    private let voiceStaleRefreshDelay = Duration.seconds(240)
-    private let toolStaleRefreshDelay = Duration.seconds(240)
+    private let staleRefreshDelay = Duration.seconds(240)
 
     private var arbiter = LiveActivityPresentationArbiter()
     private var currentActivity: Activity<OpenClawActivityAttributes>?
     private var currentState: OpenClawActivityAttributes.ContentState?
     private var currentStaleDate: Date?
-    private var pendingActivityUpdate: PendingActivityUpdate?
+    private var pendingActivityUpdate: ActivityContent<OpenClawActivityAttributes.ContentState>?
     private var activityUpdateTask: Task<Void, Never>?
-    private var activityGeneration: UInt64 = 0
     private var voiceSampleBuffer = LiveActivityVoiceSampleBuffer()
     private var pendingVoiceSample: UInt8?
     private var voiceSampleTask: Task<Void, Never>?
-    private var voiceStaleRefreshTask: Task<Void, Never>?
-    private var voiceStaleRefreshGeneration: UInt64 = 0
-    private var toolStaleRefreshTask: Task<Void, Never>?
-    private var toolStaleRefreshGeneration: UInt64 = 0
+    private var staleRefreshTask: Task<Void, Never>?
     #if DEBUG
     private var voicePreviewActive = false
     #endif
@@ -106,15 +96,13 @@ final class LiveActivityManager {
                 staleAfter: self.transientStaleSeconds,
                 agentName: agentName,
                 sessionKey: sessionKey))
-        self.ensureToolStaleRefreshTask()
+        self.ensureStaleRefreshTask()
         self.reconcile(reason: "tool_started")
     }
 
     func endTool(id: String, sessionKey: String) {
         self.arbiter.endTool(id: id, sessionKey: sessionKey)
-        if self.arbiter.activeToolCount == 0 {
-            self.stopToolStaleRefreshTask()
-        }
+        self.stopStaleRefreshTaskIfIdle()
         self.reconcile(reason: "tool_finished")
     }
 
@@ -158,7 +146,7 @@ final class LiveActivityManager {
             staleAfter: self.transientStaleSeconds,
             agentName: agentName,
             sessionKey: sessionKey))
-        self.ensureVoiceStaleRefreshTask()
+        self.ensureStaleRefreshTask()
         self.reconcile(reason: "voice_changed")
     }
 
@@ -171,8 +159,7 @@ final class LiveActivityManager {
         else { return }
         self.pendingVoiceSample = sample
         guard self.voiceSampleTask == nil else { return }
-        self.voiceSampleTask = Task { [weak self] in
-            guard let self else { return }
+        self.voiceSampleTask = Task {
             try? await Task.sleep(for: self.voiceSamplePublishDelay)
             guard !Task.isCancelled else { return }
             self.voiceSampleTask = nil
@@ -185,8 +172,8 @@ final class LiveActivityManager {
         guard !self.voicePreviewActive else { return }
         #endif
         self.resetVoiceSamples()
-        self.stopVoiceStaleRefreshTask()
         self.arbiter.setVoice(nil)
+        self.stopStaleRefreshTaskIfIdle()
         self.reconcile(reason: "voice_finished")
     }
 
@@ -213,8 +200,7 @@ final class LiveActivityManager {
 
     func endActivity(reason: String) {
         self.arbiter.clearAll()
-        self.stopToolStaleRefreshTask()
-        self.stopVoiceStaleRefreshTask()
+        self.stopStaleRefreshTaskIfIdle()
         self.resetVoiceSamples()
         #if DEBUG
         self.voicePreviewActive = false
@@ -259,18 +245,7 @@ final class LiveActivityManager {
             return
         }
 
-        if let activity = currentActivity {
-            // An inactive activity can still have a suspended update worker. Retire
-            // that generation before replacing it or the new activity never starts one.
-            self.activityGeneration &+= 1
-            self.activityUpdateTask?.cancel()
-            self.activityUpdateTask = nil
-            self.pendingActivityUpdate = nil
-            self.end(activity: activity)
-            self.currentActivity = nil
-            self.currentState = nil
-            self.currentStaleDate = nil
-        }
+        self.endCurrentActivity(reason: "inactive")
         self.startActivity(request)
     }
 
@@ -297,60 +272,26 @@ final class LiveActivityManager {
         self.voiceSampleBuffer.reset()
     }
 
-    /// Active tool calls refresh their bounded deadline while this process owns
-    /// them. Suspension or termination stops the heartbeat so stale work pauses.
-    private func ensureToolStaleRefreshTask() {
-        guard self.toolStaleRefreshTask == nil, self.arbiter.activeToolCount > 0 else { return }
-        self.toolStaleRefreshGeneration &+= 1
-        let generation = self.toolStaleRefreshGeneration
-        self.toolStaleRefreshTask = Task { [weak self] in
+    /// One heartbeat renews both live producers. Suspension or termination stops
+    /// renewal so stale work pauses; ending either producer leaves the other alive.
+    private func ensureStaleRefreshTask() {
+        guard self.staleRefreshTask == nil else { return }
+        self.staleRefreshTask = Task {
             while !Task.isCancelled {
-                guard let self else { return }
-                try? await Task.sleep(for: self.toolStaleRefreshDelay)
-                guard !Task.isCancelled,
-                      generation == self.toolStaleRefreshGeneration,
-                      self.arbiter.activeToolCount > 0
-                else { break }
-                self.arbiter.refreshTools(
-                    staleDate: Date().addingTimeInterval(self.transientStaleSeconds))
-                self.reconcile(reason: "tool_heartbeat")
+                try? await Task.sleep(for: self.staleRefreshDelay)
+                guard !Task.isCancelled else { return }
+                let staleDate = Date().addingTimeInterval(self.transientStaleSeconds)
+                self.arbiter.refreshTools(staleDate: staleDate)
+                self.arbiter.refreshVoice(staleDate: staleDate)
+                self.reconcile(reason: "heartbeat")
             }
-            guard let self, generation == self.toolStaleRefreshGeneration else { return }
-            self.toolStaleRefreshTask = nil
         }
     }
 
-    private func stopToolStaleRefreshTask() {
-        self.toolStaleRefreshGeneration &+= 1
-        self.toolStaleRefreshTask?.cancel()
-        self.toolStaleRefreshTask = nil
-    }
-
-    private func ensureVoiceStaleRefreshTask() {
-        guard self.voiceStaleRefreshTask == nil, self.arbiter.voice != nil else { return }
-        self.voiceStaleRefreshGeneration &+= 1
-        let generation = self.voiceStaleRefreshGeneration
-        self.voiceStaleRefreshTask = Task { [weak self] in
-            while !Task.isCancelled {
-                guard let self else { return }
-                try? await Task.sleep(for: self.voiceStaleRefreshDelay)
-                guard !Task.isCancelled,
-                      generation == self.voiceStaleRefreshGeneration,
-                      self.arbiter.voice != nil
-                else { break }
-                self.arbiter.refreshVoice(
-                    staleDate: Date().addingTimeInterval(self.transientStaleSeconds))
-                self.reconcile(reason: "voice_heartbeat")
-            }
-            guard let self, generation == self.voiceStaleRefreshGeneration else { return }
-            self.voiceStaleRefreshTask = nil
-        }
-    }
-
-    private func stopVoiceStaleRefreshTask() {
-        self.voiceStaleRefreshGeneration &+= 1
-        self.voiceStaleRefreshTask?.cancel()
-        self.voiceStaleRefreshTask = nil
+    private func stopStaleRefreshTaskIfIdle() {
+        guard self.arbiter.activeToolCount == 0, !self.arbiter.hasLiveVoice else { return }
+        self.staleRefreshTask?.cancel()
+        self.staleRefreshTask = nil
     }
 
     private func startActivity(_ request: LiveActivityPresentationRequest) {
@@ -366,7 +307,6 @@ final class LiveActivityManager {
                     sessionKey: request.sessionKey),
                 content: ActivityContent(state: request.state, staleDate: request.staleDate),
                 pushType: nil)
-            self.activityGeneration &+= 1
             self.currentActivity = activity
             self.currentState = request.state
             self.currentStaleDate = request.staleDate
@@ -386,21 +326,16 @@ final class LiveActivityManager {
         guard state != self.currentState || staleDate != self.currentStaleDate else { return }
         self.currentState = state
         self.currentStaleDate = staleDate
-        self.pendingActivityUpdate = PendingActivityUpdate(state: state, staleDate: staleDate)
+        self.pendingActivityUpdate = ActivityContent(state: state, staleDate: staleDate)
         guard self.activityUpdateTask == nil else { return }
-        let generation = self.activityGeneration
-        self.activityUpdateTask = Task { [weak self] in
+        self.activityUpdateTask = Task {
             while !Task.isCancelled {
-                guard let self,
-                      generation == self.activityGeneration,
-                      self.currentActivity?.id == activity.id,
-                      let pending = self.pendingActivityUpdate
-                else { break }
+                guard let pending = self.pendingActivityUpdate else { break }
                 self.pendingActivityUpdate = nil
-                await activity.update(ActivityContent(state: pending.state, staleDate: pending.staleDate))
+                await activity.update(pending)
             }
 
-            guard let self, generation == self.activityGeneration else { return }
+            guard !Task.isCancelled else { return }
             self.activityUpdateTask = nil
         }
     }
@@ -408,7 +343,6 @@ final class LiveActivityManager {
     private func endCurrentActivity(reason: String) {
         guard let activity = currentActivity else { return }
         let startedAt = self.currentState?.startedAt ?? .now
-        self.activityGeneration &+= 1
         self.activityUpdateTask?.cancel()
         self.activityUpdateTask = nil
         self.pendingActivityUpdate = nil
@@ -444,7 +378,6 @@ final class LiveActivityManager {
             return
         }
 
-        self.activityGeneration &+= 1
         self.currentActivity = keeper
         self.currentState = keeper.content.state
         self.currentStaleDate = keeper.content.staleDate
@@ -457,7 +390,7 @@ final class LiveActivityManager {
         case .approvalNeeded, .actionRequired, .attention:
             self.arbiter.setAttention(request)
         case .voiceActive, .voiceListening, .voiceSpeaking:
-            self.arbiter.setVoice(request)
+            self.arbiter.adoptInitialHydratedVoice(request)
         case .toolRunning:
             // A hydrated tool has no invocation ID to balance. Keep it as the
             // lowest-priority fallback until a live producer replaces it.
@@ -486,7 +419,6 @@ final class LiveActivityManager {
         now: Date,
         maximumStartAge: TimeInterval = 300) -> Bool
     {
-        guard status != .idle, status != .disconnected else { return false }
         if let staleDate, staleDate <= now {
             return false
         }

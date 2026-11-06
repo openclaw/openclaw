@@ -1,4 +1,3 @@
-/** Discovery and shutdown of stale OpenClaw launchd updater jobs. */
 import path from "node:path";
 import {
   parseStrictInteger,
@@ -116,19 +115,6 @@ function hasOpenClawUpdateLaunchdMarker(env: Record<string, string | undefined> 
   return env?.OPENCLAW_UPDATE_RUN_HANDOFF?.trim() === "1";
 }
 
-function isOpenClawUpdateCommandPrefix(programArguments: string[], updateIndex: number): boolean {
-  if (updateIndex === 1) {
-    const cliName = path.basename(programArguments[0] ?? "").toLowerCase();
-    return OPENCLAW_DIRECT_CLI_NAMES.has(cliName);
-  }
-  if (updateIndex !== 2) {
-    return false;
-  }
-  const runtimeName = path.basename(programArguments[0] ?? "").toLowerCase();
-  const entryName = path.basename(programArguments[1] ?? "").toLowerCase();
-  return OPENCLAW_NODE_RUNTIME_NAMES.has(runtimeName) && entryName === "openclaw.mjs";
-}
-
 function isOpenClawUpdateProgramArguments(programArguments: string[] | undefined): boolean {
   if (!Array.isArray(programArguments) || programArguments.length === 0) {
     return false;
@@ -137,10 +123,14 @@ function isOpenClawUpdateProgramArguments(programArguments: string[] | undefined
   if (updateIndex < 0 || !programArguments.slice(updateIndex + 1).includes("--yes")) {
     return false;
   }
-  return (
-    isOpenClawUpdateCommandPrefix(programArguments, updateIndex) &&
-    !programArguments.some((arg) => arg.trim() === "gateway")
-  );
+  const executable = path.basename(programArguments[0] ?? "").toLowerCase();
+  const updateCommand =
+    updateIndex === 1
+      ? OPENCLAW_DIRECT_CLI_NAMES.has(executable)
+      : updateIndex === 2 &&
+        OPENCLAW_NODE_RUNTIME_NAMES.has(executable) &&
+        path.basename(programArguments[1] ?? "").toLowerCase() === "openclaw.mjs";
+  return updateCommand && !programArguments.some((arg) => arg.trim() === "gateway");
 }
 
 async function isLaunchdJobConfirmedOpenClawUpdater(params: {

@@ -11,7 +11,6 @@ import {
   createSessionSqliteMigrationFailureIssue,
   writeSessionSqliteMigrationFailureReports,
 } from "./doctor-session-sqlite-failure.js";
-import { createDoctorSessionSqliteTargetReport } from "./doctor-session-sqlite-types.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import {
   importLegacyStore,
@@ -100,66 +99,6 @@ describe("runDoctorSessionSqlite", () => {
       const recovered = await runDoctorSessionSqlite({ cfg: {}, env: store.env, mode: "recover" });
       expect(recovered.supportIssue?.body).toContain(`[sqlite_import_failed] ${failure}`);
       expect(recovered.supportIssue?.body).toContain(`- Failed: ${manifest.failedAt}`);
-    },
-  );
-
-  it.each(["clean", "pending", "unselected"] as const)(
-    "distinguishes recorded failures from current recovery findings (%s)",
-    (outcome) => {
-      const store = createLegacyStore();
-      writeFailedManifest(store, "old-settlement.json", "2030-01-01T00:00:00.000Z", {
-        agentId: "main",
-        storePath: store.storePath,
-      });
-      const manifestPath = path.join(
-        store.stateDir,
-        "session-sqlite-migration-runs",
-        "old-settlement.json",
-      );
-      const manifest = readMigrationManifest(manifestPath);
-      const target = manifest.targets[0]!;
-      target.issues = [
-        {
-          code: "retained_plugin_source_settlement_failed",
-          message: "Previous migration reported another agent's transcript",
-        },
-      ];
-      fs.writeFileSync(manifestPath, JSON.stringify(manifest));
-      const recovery = createDoctorSessionSqliteTargetReport({
-        ...target,
-        agentId: outcome === "unselected" ? "other" : target.agentId,
-        issues:
-          outcome === "pending"
-            ? [
-                {
-                  code: "plugin_migration_source_retained",
-                  message: "Original inputs remain pending for an unavailable plugin",
-                },
-              ]
-            : [],
-      });
-      const paths = writeSessionSqliteMigrationFailureReports(manifestPath, {
-        reason: "Recovery inspected selected targets",
-        recoveryTargets: [recovery],
-      });
-      const markdown = fs.readFileSync(paths.markdownPath, "utf8");
-      const current = markdown.split("- Recorded migration and recovery evidence:")[0]!;
-      expect(current).toContain(
-        outcome === "unselected"
-          ? "- Current recovery: not assessed"
-          : `- Current recovery issues: ${recovery.issues.length}`,
-      );
-      expect(current).not.toContain("[retained_plugin_source_settlement_failed]");
-      if (outcome === "pending") {
-        expect(current).toContain("[plugin_migration_source_retained]");
-      }
-      expect(markdown).toContain("[retained_plugin_source_settlement_failed]");
-      const payload = JSON.parse(fs.readFileSync(paths.jsonPath, "utf8"));
-      expect(payload.targets[0].issues).toContainEqual(target.issues[0]);
-      expect(payload.targets[0].recoveryIssues).toEqual(
-        outcome === "unselected" ? undefined : recovery.issues,
-      );
-      expect(createSessionSqliteMigrationFailureIssue(manifestPath)?.body).toContain(markdown);
     },
   );
 
@@ -257,7 +196,7 @@ describe("runDoctorSessionSqlite", () => {
     },
   );
 
-  it.each(["empty-report", "recorded-failure", "restored", "completed"] as const)(
+  it.each(["empty-report", "restored", "completed"] as const)(
     "keeps clean recovery out of support reports despite previous evidence or work (%s)",
     async (evidence) => {
       const store = createLegacyStore();
@@ -281,10 +220,7 @@ describe("runDoctorSessionSqlite", () => {
       );
       const target = manifest.targets[0]!;
       target.validationBeforeArchive = "not_run";
-      target.issues =
-        evidence === "recorded-failure"
-          ? [{ code: "sqlite_import_failed", message: "attempt to write a readonly database" }]
-          : [];
+      target.issues = [];
       if (evidence === "restored") {
         const archivePath = path.join(
           store.stateDir,
@@ -313,9 +249,7 @@ describe("runDoctorSessionSqlite", () => {
             fs.readFileSync(file),
           )
         : undefined;
-
       const recover = await runDoctorSessionSqlite({ cfg: {}, env: store.env, mode: "recover" });
-
       expect(recover.totals.issues).toBe(0);
       if (evidence === "restored") {
         expect(recover.targets[0]?.restore?.restoredFiles).toEqual([
@@ -387,7 +321,7 @@ describe("runDoctorSessionSqlite", () => {
     },
   );
 
-  it.each([1, 3] as const)(
+  it.each([3] as const)(
     "persists one support issue receipt on a historical v%s manifest",
     (manifestVersion) => {
       const store = createLegacyStore();

@@ -252,6 +252,9 @@ it.each(["import queue", "in-place queue", "cleanup queue", "ledger"] as const)(
         expect(readClaim("ops", opsPath, "agent:ops:chat", state.env)?.events).toEqual(
           original.events,
         );
+        expect(readClaim("ops", opsPath, "agent:ops:chat", state.env)?.entry.owner).toEqual(
+          original.entry.owner,
+        );
         expect(readLedger()).toEqual([expect.objectContaining({ status: "completed" })]);
       } finally {
         race.queued = undefined;

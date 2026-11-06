@@ -141,11 +141,14 @@ Who is admitted, how messages route to sessions, and which chats can write confi
 
   </Tab>
 
-  <Tab title="Sessions and deterministic replies">
+  <Tab title="Sessions and reply routing">
+    <a id="sessions-and-deterministic-replies" />
     - DMs use direct routing; groups use group routing.
     - With default `session.dmScope=main`, iMessage DMs collapse into the agent main session.
     - Group sessions are isolated (`agent:<agentId>:imessage:group:<chat_id>`).
     - Replies route back to iMessage using originating channel/target metadata.
+    - `chat_id`, `chat_guid`, and `chat_identifier` are delivery selectors, not group markers. Outbound session routing resolves the chat through the account's Messages chat list: one-to-one chats use the normalized handle's direct session, and groups use the numeric chat ID. An unresolved selector does not create a guessed session.
+    - Older versions may have created extra group sessions containing delivery mirrors for one-to-one chats. This fix prevents new misclassified mirrors; it preserves existing session history rather than automatically merging or deleting those rows.
 
     Group-ish thread behavior:
 

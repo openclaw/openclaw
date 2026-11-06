@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import type { Transferable } from "node:worker_threads";
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   GitWorktreeEffect,
@@ -12,8 +12,16 @@ import type {
 } from "../agents/worktrees/git-worktree-operations.js";
 import { runGitBytes, runGitBuffered } from "../agents/worktrees/git.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+  readCommandProcessFailure,
+} from "../process/exec-result.js";
 import { withGitProcessOperation, type GitProcessOperation } from "../process/spawn-diagnostics.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { createPendingPromiseTracker } from "../shared/pending-promises.js";
+import type { DiffReadTiming } from "./diff-read-timing.js";
+import { withContentGitSlot } from "./git-content-budget.js";
 import { startGitOperationTiming } from "./git-operation-timing.js";
 import { restoreGitWorkerFailure, serializeGitWorkerFailure } from "./git-worker-context.js";
 import type {
@@ -26,24 +34,32 @@ import type {
 import { GIT_WORKER_HOST_BATCH_LIMIT } from "./git-worker-contract.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
-import { WorkerTaskError, WorkerTaskPool, type WorkerTaskResponse } from "./worker-task-pool.js";
+import {
+  WorkerTaskError,
+  createOwnedWorkerTaskPool,
+  type WorkerTaskResponse,
+} from "./worker-task-pool.js";
 import { ownedWorkerBytes } from "./worker-transfer-bytes.js";
 
-type GitPool = WorkerTaskPool<GitWorkerCommand, GitWorkerReply<GitWorkerResult>>;
-type GitWorkerRuntime = {
-  reads?: GitPool;
-  content?: GitPool;
-  workspace?: GitPool;
-  worktrees?: GitPool;
-  worktreeMaintenance?: GitPool;
-  contentProcesses: number;
-  contentWaiters: Set<() => void>;
+type GitPool = ReturnType<
+  typeof createOwnedWorkerTaskPool<GitWorkerCommand, GitWorkerReply<GitWorkerResult>>
+>;
+const POOL_OWNERS = [
+  "reads",
+  "summary",
+  "content",
+  "workspace",
+  "worktrees",
+  "worktreeMaintenance",
+] as const;
+type GitWorkerRuntime = Partial<Record<(typeof POOL_OWNERS)[number], GitPool>> & {
   pending: Set<Promise<unknown>>;
   closing?: Promise<void>;
 };
 const MAX_PENDING_OPERATIONS = 128;
 const WORKER_PHASE_TIMEOUT_MS = 30 * 60_000;
 const log = createSubsystemLogger("git/worker");
+const operationDiagnostics = channel("openclaw.git.operation");
 const SPAWN_OPERATIONS = {
   "repository.identities": "repository.identities",
   "repository.branches": "repository.branches",
@@ -52,6 +68,7 @@ const SPAWN_OPERATIONS = {
   "checkout.diff": "checkout.diff",
   "checkout.baseline": "checkout.baseline",
   "pull-request.branch-facts": "pull-request.branch-facts",
+  "pull-request.branch-comparison": "pull-request.branch-facts",
   "worktree.snapshot": "worktree.snapshot",
   "worktree.snapshot-verify-exact": "worktree.snapshot",
   "worktree.cleanup-inspection": "worktree.cleanup",
@@ -69,14 +86,20 @@ const SPAWN_OPERATIONS = {
   "workspace.inventory.existing": "workspace.inventory",
   "workspace.inventory.paths": "workspace.inventory",
   "workspace.inventory.staged-directories": "workspace.inventory",
+  "workspace.manifest.local": "workspace.manifest",
   "workspace.manifest.capture": "workspace.manifest",
+  "workspace.manifest.base-refresh": "workspace.manifest",
+  "workspace.manifest.equal": "workspace.manifest",
   "workspace.manifest.snapshot": "workspace.manifest",
+  "workspace.manifest.document": "workspace.manifest",
+  "workspace.manifest.reference": "workspace.manifest",
   "workspace.manifest.parse": "workspace.manifest",
+  "workspace.manifest.paths": "workspace.manifest",
   "workspace.manifest.serialize": "workspace.manifest",
   "workspace.manifest.overlay": "workspace.manifest",
   "workspace.manifest.pair": "workspace.manifest",
   "workspace.manifest.staged": "workspace.manifest",
-  "workspace.manifest.entries": "workspace.manifest",
+  "workspace.manifest.result": "workspace.manifest",
   "workspace.manifest.file": "workspace.manifest",
   "workspace.manifest.nodes": "workspace.manifest",
   "workspace.manifest.stage-input": "workspace.manifest",
@@ -88,23 +111,15 @@ const SPAWN_OPERATIONS = {
 function runtime(): GitWorkerRuntime {
   return resolveGlobalSingleton<GitWorkerRuntime>(
     Symbol.for("openclaw.gitOperations"),
-    () => ({ pending: new Set(), contentProcesses: 0, contentWaiters: new Set() }),
+    () => ({ pending: new Set() }),
     (state) => {
       state.closing ??= (async () => {
-        await Promise.all([
-          state.reads?.close(),
-          state.content?.close(),
-          state.workspace?.close(),
-          state.worktrees?.close(),
-          state.worktreeMaintenance?.close(),
-        ]);
+        await Promise.all(POOL_OWNERS.map((owner) => state[owner]?.close() ?? Promise.resolve()));
         // Worker termination alone does not settle its parent-owned Git processes.
         await Promise.allSettled(state.pending);
-        state.reads = undefined;
-        state.content = undefined;
-        state.workspace = undefined;
-        state.worktrees = undefined;
-        state.worktreeMaintenance = undefined;
+        for (const owner of POOL_OWNERS) {
+          state[owner] = undefined;
+        }
       })().finally(() => {
         state.closing = undefined;
       });
@@ -113,52 +128,20 @@ function runtime(): GitWorkerRuntime {
   );
 }
 
-async function withContentGitSlot<T>(
-  state: GitWorkerRuntime,
-  signal: AbortSignal,
-  run: () => Promise<T>,
-): Promise<T> {
-  signal.throwIfAborted();
-  await new Promise<void>((resolve, reject) => {
-    const start = () => {
-      state.contentWaiters.delete(start);
-      signal.removeEventListener("abort", abort);
-      state.contentProcesses++;
-      resolve();
-    };
-    const abort = () => {
-      state.contentWaiters.delete(start);
-      reject(toErrorObject(signal.reason, "Git read aborted"));
-    };
-    if (state.contentProcesses < 2) {
-      start();
-    } else {
-      state.contentWaiters.add(start);
-      signal.addEventListener("abort", abort, { once: true });
-    }
-  });
-  try {
-    signal.throwIfAborted();
-    return await run();
-  } finally {
-    // A canceled worker can retire before its Git process; keep its slot through cleanup.
-    state.contentProcesses--;
-    state.contentWaiters.values().next().value?.();
-  }
-}
-
 function poolFor(
   state: GitWorkerRuntime,
   command: GitWorkerCommand,
   contentRead: boolean,
+  interactive: boolean,
 ): GitPool {
-  const owner =
-    command.type === "worktree.snapshot" ||
-    command.type === "worktree.cleanup-inspection" ||
-    command.type === "worktree.cleanup-fingerprint" ||
-    command.type === "worktree.eviction-classify" ||
-    command.type === "worktree.eviction-repositories" ||
-    command.type === "worktree.eviction-purge"
+  const owner = interactive
+    ? "summary"
+    : command.type === "worktree.snapshot" ||
+        command.type === "worktree.cleanup-inspection" ||
+        command.type === "worktree.cleanup-fingerprint" ||
+        command.type === "worktree.eviction-classify" ||
+        command.type === "worktree.eviction-repositories" ||
+        command.type === "worktree.eviction-purge"
       ? "worktreeMaintenance"
       : command.type.startsWith("worktree.")
         ? "worktrees"
@@ -170,18 +153,34 @@ function poolFor(
   // Preparation can hold the allocation lease; unrelated maintenance must not block it.
   // Each worktree lane stays serial; host allocation and shared-ref guards still own writes.
   // Metadata likewise stays responsive while diffs or snapshots await slow Git work.
-  return (state[owner] ??= new WorkerTaskPool({
-    workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.gitOperations),
-    maxWorkers:
-      owner === "content" || owner === "workspace"
-        ? Math.max(1, Math.min(2, os.availableParallelism() - 1))
-        : 1,
-    sharedCompute: owner === "workspace",
-    idleTimeoutMs: 30_000,
-  }));
+  // Summary polls and their revision scans share one worker outside the full-content queue.
+  return (state[owner] ??= createOwnedWorkerTaskPool(
+    {
+      workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.gitOperations),
+      workerClass:
+        owner === "summary"
+          ? "singleton"
+          : owner === "reads" || owner === "content"
+            ? "reader"
+            : owner === "workspace"
+              ? "compute"
+              : "writer",
+      // Summary's singleton keeps the reader heap bound; overlay retains three manifests.
+      workerOptions:
+        owner === "summary" || owner === "workspace"
+          ? { resourceLimits: { maxOldGenerationSizeMb: owner === "summary" ? 512 : 1024 } }
+          : undefined,
+      // Discovery refreshes and PR polls can leave readers idle for just over a minute.
+      idleTimeoutMs: owner === "reads" ? 120_000 : undefined,
+      sharedCompute: owner === "workspace",
+    },
+    // Other owners retain checkout observations whose lifetime includes idle expiry.
+    owner === "content" || owner === "workspace" ? { retainOneIdleWorker: true } : undefined,
+  ));
 }
 
 export type GitWorkerOperationOptions = {
+  diffTiming?: DiffReadTiming;
   inputBytes?: number;
   /** Move task-owned inputs at admission and again when the worker receives them. */
   transferList?: (command: GitWorkerCommand) => readonly Transferable[];
@@ -193,6 +192,10 @@ export type GitWorkerOperationOptions = {
     buffered: typeof runGitBuffered;
   };
   onInventoryChunk?: (bytes: Uint8Array, context: { signal: AbortSignal }) => Promise<void>;
+  readWorkspaceManifest?: (
+    knownTreeRoot: string | undefined,
+    context: { signal: AbortSignal },
+  ) => Promise<Uint8Array<ArrayBuffer>>;
   onEffect?: (
     effect: GitWorktreeEffect,
     context: { signal: AbortSignal },
@@ -235,9 +238,9 @@ export async function runGitWorkerOperation<Command extends GitWorkerCommand>(
       ? createHash("sha256")
           .update(
             JSON.stringify(
-              Object.entries(baseEnv).filter(([key]) =>
-                /^(GIT_|HOME$|XDG_CONFIG_HOME$|PATH$|SUDO_UID$)/i.test(key),
-              ),
+              Object.entries(baseEnv)
+                .filter(([key]) => /^(GIT_|HOME$|XDG_CONFIG_HOME$|PATH$|SUDO_UID$)/i.test(key))
+                .toSorted(([left], [right]) => left.localeCompare(right)),
             ),
           )
           .digest("hex")
@@ -246,13 +249,10 @@ export async function runGitWorkerOperation<Command extends GitWorkerCommand>(
     ...options,
     git: options.git ? { text: options.git.text, buffered: options.git.buffered } : undefined,
   });
-  state.pending.add(operation);
-  void operation.then(
-    () => state.pending.delete(operation),
-    () => state.pending.delete(operation),
-  );
   // SAFETY: Private typed workers bind the operation discriminant to this result contract.
-  return operation as Promise<GitWorkerOperations[Command["type"]]["output"]>;
+  return createPendingPromiseTracker(state.pending)(operation) as Promise<
+    GitWorkerOperations[Command["type"]]["output"]
+  >;
 }
 
 async function executeOperation(
@@ -261,69 +261,179 @@ async function executeOperation(
   baseEnv: NodeJS.ProcessEnv,
   options: GitWorkerOperationOptions,
 ): Promise<GitWorkerResult> {
-  const contentRead =
-    command.type === "checkout.diff" ||
-    command.type === "checkout.baseline" ||
-    command.type === "pull-request.branch-facts";
+  const observedAt = operationDiagnostics.hasSubscribers ? performance.now() : undefined;
+  const contentRoot =
+    command.type === "checkout.diff" || command.type === "checkout.baseline"
+      ? command.input.cwd
+      : command.type === "pull-request.branch-facts" ||
+          command.type === "pull-request.branch-comparison"
+        ? command.input.root
+        : undefined;
+  const contentRead = contentRoot !== undefined;
+  const interactive =
+    (command.type === "checkout.diff" && command.input.summaryOnly === true) ||
+    (command.type === "checkout.revision" && command.input.scope === "diff");
+  const snapshot =
+    command.type === "worktree.snapshot" || command.type === "worktree.snapshot-verify-exact";
+  const contentGit = contentRead || snapshot;
+  if (snapshot) {
+    // Missing snapshot objects must preserve the checkout, never start a promisor fetch.
+    baseEnv.GIT_NO_LAZY_FETCH = "1";
+    baseEnv.GIT_ALLOW_PROTOCOL = "";
+  }
   let gitCommandCount = 0;
   let summedGitWallMs = 0;
   let summedGitQueueWaitMs = 0;
-  const timing = contentRead
-    ? startGitOperationTiming("content-read", log, () => ({
-        operation: command.type,
-        gitCommandCount,
-        summedGitWallMs: Math.round(summedGitWallMs),
-        summedGitQueueWaitMs: Math.round(summedGitQueueWaitMs),
-      }))
-    : undefined;
+  let gitStdoutBytes = 0;
+  let gitStderrBytes = 0;
+  let gitTimeoutCount = 0;
+  let workerQueueWaitMs: number | null = null;
+  let slowestGitCommand:
+    | { command: string; diffMode?: string; durationMs: number; termination: string }
+    | undefined;
+  const timing =
+    contentRoot !== undefined
+      ? startGitOperationTiming("content-read", log, () => ({
+          operation: command.type,
+          ...(command.type === "checkout.diff"
+            ? {
+                scope: command.input.scope ?? "all",
+                summaryOnly: command.input.summaryOnly === true,
+              }
+            : {}),
+          checkoutId: createHash("sha256")
+            .update(path.resolve(contentRoot))
+            .digest("hex")
+            .slice(0, 16),
+          checkoutClass:
+            command.type === "pull-request.branch-facts" && command.input.refreshIndex
+              ? "managed"
+              : "unspecified",
+          gitCommandCount,
+          workerQueueWaitMs,
+          summedGitWallMs: Math.round(summedGitWallMs),
+          summedGitQueueWaitMs: Math.round(summedGitQueueWaitMs),
+          gitStdoutBytes,
+          gitStderrBytes,
+          gitTimeoutCount,
+          slowestGitCommand,
+        }))
+      : undefined;
   let firstHostRequest = true;
+  const measure = timing || options.diffTiming;
   let outcome: "returned" | "threw" = "threw";
   const hostWork = new Set<Promise<WorkerTaskResponse>>();
   const temporaryDirectories = new Set<string>();
   const hostErrors = new Map<number, unknown>();
+  let cleanupFailure: Error | undefined;
   let errorSequence = 0;
   const request = async (value: unknown, signal: AbortSignal): Promise<WorkerTaskResponse> => {
     try {
       signal.throwIfAborted();
-      if (!isRecord(value) || typeof value.type !== "string" || !isRecord(value.input)) {
-        throw new Error("Invalid Git worker host request");
-      }
       // SAFETY: Only the registered typed operation worker can send requests on this live channel.
       const effect = value as GitWorkerHostRequest;
       let result: unknown;
       const transferList: Transferable[] = [];
       if (effect.type === "git.text" || effect.type === "git.buffer") {
-        const run =
-          effect.type === "git.text"
-            ? (options.git?.text ?? runGitBytes)
-            : (options.git?.buffered ?? runGitBuffered);
         // The parent owns the operation identity; worker batches cannot relabel their launches.
-        const queuedAt = timing ? performance.now() : 0;
+        const queuedAt = measure ? performance.now() : 0;
         const execute = async () => {
-          const startedAt = timing ? performance.now() : 0;
+          const startedAt = measure ? performance.now() : 0;
+          let termination = "threw";
           if (timing) {
             gitCommandCount++;
             summedGitQueueWaitMs += startedAt - queuedAt;
           }
           try {
-            return await withGitProcessOperation(SPAWN_OPERATIONS[command.type], () =>
-              run(effect.input.cwd, effect.input.args, {
-                ...effect.input.options,
-                operation: SPAWN_OPERATIONS[command.type],
-                baseEnv,
-                signal,
-                beforeRun: options.assertCurrent,
-                killProcessTree: true,
-                lowerPriority: contentRead,
-              }),
+            const output = await withGitProcessOperation(
+              SPAWN_OPERATIONS[command.type],
+              async () => {
+                const runOptions = {
+                  ...effect.input.options,
+                  operation: SPAWN_OPERATIONS[command.type],
+                  baseEnv,
+                  signal,
+                  beforeRun: options.assertCurrent,
+                  killProcessTree: true,
+                  lowerPriority: contentGit,
+                };
+                if (effect.type === "git.text") {
+                  const textOutput = await (options.git?.text ?? runGitBytes)(
+                    effect.input.cwd,
+                    effect.input.args,
+                    runOptions,
+                  );
+                  if (textOutput.cleanup === "uncertain") {
+                    throw new CommandProcessCleanupError();
+                  }
+                  return textOutput;
+                }
+                const bufferedOutput = await (options.git?.buffered ?? runGitBuffered)(
+                  effect.input.cwd,
+                  effect.input.args,
+                  runOptions,
+                );
+                if (
+                  bufferedOutput.error &&
+                  (hasCommandProcessCleanupError(bufferedOutput.error) ||
+                    readCommandProcessFailure(bufferedOutput.error)?.cleanup === "uncertain")
+                ) {
+                  throw bufferedOutput.error;
+                }
+                return bufferedOutput;
+              },
             );
-          } finally {
             if (timing) {
-              summedGitWallMs += performance.now() - startedAt;
+              termination = output.termination;
+              gitStdoutBytes += output.stdout.byteLength;
+              gitStderrBytes += output.stderr.byteLength;
+              gitTimeoutCount += Number(termination === "timeout");
+            }
+            return output;
+          } finally {
+            if (options.diffTiming) {
+              const durations = options.diffTiming.durations;
+              durations["git-wall"] = (durations["git-wall"] ?? 0) + performance.now() - startedAt;
+            }
+            if (timing) {
+              const durationMs = Math.round(performance.now() - startedAt);
+              summedGitWallMs += durationMs;
+              if (!slowestGitCommand || durationMs > slowestGitCommand.durationMs) {
+                const args = effect.input.args;
+                let i = 0;
+                while (i < args.length && args[i]!.startsWith("-")) {
+                  i += args[i] === "-c" || args[i] === "-C" ? 2 : 1;
+                }
+                const name = args[i] ?? "";
+                slowestGitCommand = {
+                  // Only fixed command names may escape; never paths, refs, config, or stderr.
+                  command:
+                    /^(diff|ls-files|rev-parse|rev-list|merge-base|cat-file|symbolic-ref|for-each-ref|version|log|show|hash-object)$/.test(
+                      name,
+                    )
+                      ? name
+                      : "other",
+                  ...(name === "diff"
+                    ? {
+                        diffMode: args.includes("--no-index")
+                          ? "--no-index"
+                          : (args
+                              .slice(i + 1)
+                              .find((arg) =>
+                                /^(--shortstat|--raw|--patch|--name-status)$/.test(arg),
+                              ) ?? "other"),
+                      }
+                    : {}),
+                  durationMs,
+                  termination,
+                };
+              }
             }
           }
         };
-        const output = await (contentRead ? withContentGitSlot(state, signal, execute) : execute());
+        const output = await (contentGit
+          ? withContentGitSlot(execute, signal, interactive)
+          : execute());
         const stdout = ownedWorkerBytes(output.stdout);
         const stderr = ownedWorkerBytes(output.stderr);
         result = { ...output, stdout, stderr };
@@ -338,6 +448,14 @@ async function executeOperation(
         }
         options.assertCurrent?.();
         await options.onInventoryChunk(effect.input.bytes, { signal });
+      } else if (effect.type === "workspace.manifest.read") {
+        if (!options.readWorkspaceManifest) {
+          throw new Error("Workspace manifest has no active read owner");
+        }
+        options.assertCurrent?.();
+        const bytes = await options.readWorkspaceManifest(effect.input.knownTreeRoot, { signal });
+        result = bytes;
+        transferList.push(bytes.buffer);
       } else {
         if (!options.onEffect) {
           throw new Error("Git read operation requested a lifecycle effect");
@@ -351,6 +469,13 @@ async function executeOperation(
         timeoutMs: WORKER_PHASE_TIMEOUT_MS,
       };
     } catch (error) {
+      // Cancellation can discard this reply, even after hostWork forgets the settled batch.
+      if (hasCommandProcessCleanupError(error)) {
+        cleanupFailure ??=
+          error instanceof Error ? error : new CommandProcessCleanupError({ cause: error });
+      } else if (readCommandProcessFailure(error)?.cleanup === "uncertain") {
+        cleanupFailure ??= new CommandProcessCleanupError({ cause: error });
+      }
       const origin = ++errorSequence;
       hostErrors.set(origin, error);
       return {
@@ -360,7 +485,18 @@ async function executeOperation(
     }
   };
   try {
-    const reply = await poolFor(state, command, contentRead).run(command, {
+    const enqueuedAt = measure ? performance.now() : 0;
+    const input = measure
+      ? () => {
+          const elapsedMs = performance.now() - enqueuedAt;
+          workerQueueWaitMs = Math.round(elapsedMs);
+          if (options.diffTiming) {
+            options.diffTiming.durations["worker-queue"] = elapsedMs;
+          }
+          return command;
+        }
+      : command;
+    const reply = await poolFor(state, command, contentRead, interactive).run(input, {
       inputBytes: options.inputBytes,
       transferList: options.transferList,
       signal: options.signal,
@@ -388,12 +524,7 @@ async function executeOperation(
           transferList: [...new Set(replies.flatMap((response) => response.transferList ?? []))],
           timeoutMs: WORKER_PHASE_TIMEOUT_MS,
         }));
-        hostWork.add(pending);
-        void pending.then(
-          () => hostWork.delete(pending),
-          () => hostWork.delete(pending),
-        );
-        return pending;
+        return createPendingPromiseTracker(hostWork)(pending);
       },
     });
     timing?.markPhase();
@@ -405,21 +536,36 @@ async function executeOperation(
     }
     options.signal?.throwIfAborted();
     options.assertCurrent?.();
+    if (options.diffTiming) {
+      options.diffTiming.revisionUnavailableReason = reply.revisionUnavailableReason;
+    }
     outcome = "returned";
     return reply.value;
   } finally {
     let cleanupSucceeded = false;
     try {
       // A cancellation may terminate the worker before its host callback completes.
-      await Promise.allSettled(hostWork);
-      await Promise.all(
-        [...temporaryDirectories].map((directory) =>
-          fs.rm(directory, { recursive: true, force: true }),
-        ),
-      );
+      await Promise.allSettled(hostWork).then(() => {
+        if (cleanupFailure) {
+          // Unconfirmed native work may still use these artifacts; leave them for recovery.
+          throw cleanupFailure;
+        }
+        return Promise.all(
+          [...temporaryDirectories].map((directory) =>
+            fs.rm(directory, { recursive: true, force: true }),
+          ),
+        );
+      });
       cleanupSucceeded = true;
     } finally {
       timing?.finish(cleanupSucceeded ? outcome : "threw");
+      if (observedAt !== undefined) {
+        operationDiagnostics.publish({
+          operation: command.type,
+          outcome: cleanupSucceeded && outcome === "returned" ? "ok" : "error",
+          elapsedMs: performance.now() - observedAt,
+        });
+      }
     }
   }
 }

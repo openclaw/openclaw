@@ -18,6 +18,8 @@ import {
   validateActionsArtifactProducerJob,
 } from "./lib/actions-artifact-archive.mjs";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import { waitForClawHubPublicVersion } from "./lib/clawhub-publication-state.mjs";
+import { validateClawHubRecoveryManifest } from "./plugin-clawhub-recovery.mjs";
 import { verifyReleaseToolingIdentity } from "./release-tooling-identity.mjs";
 import { verifyPublishedClawHubPackage } from "./verify-clawhub-published-artifact.mjs";
 
@@ -36,7 +38,7 @@ function positiveId(value, label) {
   return Number(value);
 }
 
-function requireRun(run, expected) {
+function requireRun(run, expected, statePolicy = "completed-success") {
   const actual = {
     repository: run?.repository?.full_name,
     headRepository: run?.head_repository?.full_name,
@@ -53,13 +55,29 @@ function requireRun(run, expected) {
     repository: REPOSITORY,
     headRepository: REPOSITORY,
     event: "workflow_dispatch",
-    status: "completed",
-    conclusion: "success",
     ...expected,
   })) {
     if (actual[key] !== value) {
       throw new Error(`ClawHub postpublish workflow ${key} mismatch.`);
     }
+  }
+  const successful = actual.status === "completed" && actual.conclusion === "success";
+  const active =
+    ["queued", "pending", "waiting", "in_progress"].includes(actual.status) &&
+    actual.conclusion == null;
+  const sealedTerminal =
+    actual.status === "completed" && ["success", "failure"].includes(actual.conclusion);
+  const recoveryTerminal =
+    actual.status === "completed" &&
+    ["success", "failure", "cancelled"].includes(actual.conclusion);
+  const completed = actual.status === "completed" && typeof actual.conclusion === "string";
+  if (
+    (statePolicy === "completed-success" && !successful) ||
+    (statePolicy === "sealed-producer" && !active && !sealedTerminal) ||
+    (statePolicy === "recovery-producer" && !recoveryTerminal) ||
+    (statePolicy === "completed-any" && !completed)
+  ) {
+    throw new Error("ClawHub postpublish parent state is not authorized.");
   }
 }
 
@@ -109,7 +127,53 @@ async function listRunArtifacts(runId, context) {
   throw new Error("ClawHub postpublish artifact listing is incomplete.");
 }
 
+async function listRunJobs(run, context) {
+  const key = `${run.id}/${run.run_attempt}`;
+  let pending = context.runJobs.get(key);
+  if (!pending) {
+    pending = (async () => {
+      const jobs = [];
+      let total;
+      for (let page = 1; page <= 20; page += 1) {
+        const result = await githubJson(
+          `actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100&page=${page}`,
+          context,
+        );
+        total ??= result.total_count;
+        if (
+          !Number.isSafeInteger(total) ||
+          total < 1 ||
+          total > 2000 ||
+          result.total_count !== total ||
+          !Array.isArray(result.jobs) ||
+          result.jobs.length === 0
+        ) {
+          break;
+        }
+        jobs.push(...result.jobs);
+        if (jobs.length === total) {
+          return { total_count: total, jobs };
+        }
+      }
+      throw new Error("ClawHub dispatch producer job inventory is incomplete.");
+    })();
+    context.runJobs.set(key, pending);
+  }
+  return await pending;
+}
+
 async function downloadArtifact(artifact, run, context, maxArchiveBytes, producer) {
+  const structuredProducer = producer && typeof producer === "object" ? producer : undefined;
+  const producerStepName = typeof producer === "string" ? producer : structuredProducer?.stepName;
+  const producerPolicy = structuredProducer
+    ? (structuredProducer.runStatePolicy ?? "same-run-producer-success")
+    : context.parentStatePolicy === "sealed-producer"
+      ? "same-run-producer-success"
+      : context.parentStatePolicy === "recovery-producer"
+        ? "completed-producer-success"
+        : undefined;
+  const sealedProducer = producerPolicy && producerStepName;
+  const boundProducer = structuredProducer || sealedProducer;
   const expected = {
     artifactId: artifact.id,
     artifactName: artifact.name,
@@ -121,12 +185,17 @@ async function downloadArtifact(artifact, run, context, maxArchiveBytes, produce
     workflowSha: run.head_sha,
     workflowHeadBranch: run.head_branch,
     workflowEvent: "workflow_dispatch",
-    runStatePolicy: producer ? "same-run-producer-success" : "completed-success",
+    runStatePolicy: boundProducer ? producerPolicy : "completed-success",
     workflowPath: run.path.split("@")[0],
-    ...(producer
+    ...(boundProducer
       ? {
-          consumerRunAttempt: producer.consumerRunAttempt,
-          producerJobName: producer.jobName,
+          ...(producerPolicy === "same-run-producer-success"
+            ? {
+                consumerRunAttempt: structuredProducer?.consumerRunAttempt ?? run.run_attempt,
+              }
+            : {}),
+          producerJobName: structuredProducer?.jobName ?? "Publish plugins, then OpenClaw",
+          ...(producerStepName ? { producerStepName } : {}),
         }
       : {}),
   };
@@ -135,8 +204,9 @@ async function downloadArtifact(artifact, run, context, maxArchiveBytes, produce
     workflowRun: { ...run, path: run.path.split("@")[0] },
     expected,
   });
-  if (producer) {
-    validateActionsArtifactProducerJob({ expected, workflowJobs: producer.jobs });
+  if (boundProducer) {
+    const workflowJobs = structuredProducer?.jobs ?? (await listRunJobs(run, context));
+    validateActionsArtifactProducerJob({ expected, workflowJobs });
   }
   await mkdir(context.archiveDir, { recursive: true });
   return await downloadExactActionsArtifactArchive({
@@ -154,33 +224,6 @@ async function downloadArtifact(artifact, run, context, maxArchiveBytes, produce
       workflowSha: run.head_sha,
     },
   });
-}
-
-async function listRunJobs(run, context) {
-  const jobs = [];
-  let total;
-  for (let page = 1; page <= 20; page += 1) {
-    const result = await githubJson(
-      `actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100&page=${page}`,
-      context,
-    );
-    total ??= result.total_count;
-    if (
-      !Number.isSafeInteger(total) ||
-      total < 1 ||
-      total > 2000 ||
-      result.total_count !== total ||
-      !Array.isArray(result.jobs) ||
-      result.jobs.length === 0
-    ) {
-      break;
-    }
-    jobs.push(...result.jobs);
-    if (jobs.length === total) {
-      return { total_count: total, jobs };
-    }
-  }
-  throw new Error("ClawHub dispatch producer job inventory is incomplete.");
 }
 
 function dispatchExecutionTimes(job, step) {
@@ -243,7 +286,11 @@ async function resolveDispatchRecord(parent, expectedParent, artifacts, context)
   for (const artifact of retained) {
     const runAttempt = positiveId(artifact.name.slice(prefix.length), "dispatch producer attempt");
     const run = await githubJson(`actions/runs/${parent.id}/attempts/${runAttempt}`, context);
-    requireRun(run, { ...expectedParent, runAttempt, conclusion: run?.conclusion });
+    requireRun(
+      run,
+      { ...expectedParent, runAttempt, conclusion: run?.conclusion },
+      "completed-any",
+    );
     if (run.path !== parent.path) {
       throw new Error("ClawHub dispatch producer workflow ref mismatch.");
     }
@@ -301,13 +348,17 @@ function identityFromReceipt(receipt) {
 
 export async function verifyClawHubPostpublish({
   event,
+  parent: suppliedParent = event?.workflow_run,
+  parentStatePolicy = "completed-success",
   verifierSha,
   token,
   outputDir,
   fetchImpl = fetch,
   runGh,
+  verifyPublication = true,
+  recoveryManifest = event?.recovery_manifest,
 }) {
-  const trigger = event?.workflow_run;
+  const trigger = suppliedParent;
   const runId = positiveId(trigger?.id, "parent run");
   const runAttempt = positiveId(trigger?.run_attempt, "parent attempt");
   const expectedParent = {
@@ -317,10 +368,16 @@ export async function verifyClawHubPostpublish({
     headSha: trigger?.head_sha,
     ref: trigger?.head_branch,
   };
-  requireRun(trigger, expectedParent);
-  const context = { token, fetchImpl, archiveDir: join(outputDir, "archives") };
+  requireRun(trigger, expectedParent, parentStatePolicy);
+  const context = {
+    token,
+    fetchImpl,
+    archiveDir: join(outputDir, "archives"),
+    parentStatePolicy,
+    runJobs: new Map(),
+  };
   const parent = await githubJson(`actions/runs/${runId}/attempts/${runAttempt}`, context);
-  requireRun(parent, expectedParent);
+  requireRun(parent, expectedParent, parentStatePolicy);
   const artifacts = await listRunArtifacts(runId, context);
   const dispatchRecord = await resolveDispatchRecord(parent, expectedParent, artifacts, context);
   const dispatchRunAttempt = dispatchRecord.run.run_attempt;
@@ -329,7 +386,7 @@ export async function verifyClawHubPostpublish({
     dispatchRecord.run,
     context,
     MAX_RECEIPT_BYTES + 4096,
-    dispatchRecord.producer,
+    dispatchRecord.producer ?? "Upload exact release child dispatch record",
   );
   const dispatchFiles = inspectActionsArtifactZip(dispatchZip, ["dispatch.json"], {
     maxEntryBytes: MAX_RECEIPT_BYTES,
@@ -418,7 +475,7 @@ export async function verifyClawHubPostpublish({
     dispatchRecord.run,
     context,
     MAX_RECEIPT_BYTES + 4096,
-    dispatchRecord.producer,
+    dispatchRecord.producer ?? "Upload immutable ClawHub parent authorization",
   );
   const files = inspectActionsArtifactZip(archiveBytes, ["authorization.json"], {
     maxEntryBytes: MAX_RECEIPT_BYTES,
@@ -427,6 +484,12 @@ export async function verifyClawHubPostpublish({
   const receipt = JSON.parse(
     new TextDecoder("utf-8", { fatal: true }).decode(files.get("authorization.json")),
   );
+  if (
+    ["sealed-producer", "recovery-producer"].includes(parentStatePolicy) &&
+    receipt.authorizationRoute !== "automated-sealed"
+  ) {
+    throw new Error("ClawHub sealed verification requires the automated-sealed route.");
+  }
   const identity = identityFromReceipt(receipt);
   if (
     identity.runId !== String(dispatch.normalClawHubRunId) ||
@@ -446,13 +509,14 @@ export async function verifyClawHubPostpublish({
     throw new Error("ClawHub parent receipt does not bind the triggering run attempt.");
   }
   let child;
+  const completedProducer = parentStatePolicy !== "completed-success";
   const childDeadline = Date.now() + 30 * 60 * 1000;
   for (;;) {
     child = await githubJson(
       `actions/runs/${identity.runId}/attempts/${identity.runAttempt}`,
       context,
     );
-    validateClawHubWorkflowRun(child, identity);
+    validateClawHubWorkflowRun(child, identity, { completedProducer });
     if (child.status === "completed") {
       break;
     }
@@ -463,7 +527,10 @@ export async function verifyClawHubPostpublish({
       setTimeout(resolve, 10_000);
     });
   }
-  validateClawHubWorkflowRun(child, identity, { terminal: true });
+  validateClawHubWorkflowRun(child, identity, {
+    terminal: !completedProducer,
+    completedProducer,
+  });
   const childQualifiedRef = child.path.split("@")[1];
   if (childQualifiedRef !== undefined && childQualifiedRef !== identity.fullRef) {
     throw new Error("Child workflow full ref mismatch.");
@@ -478,10 +545,69 @@ export async function verifyClawHubPostpublish({
     runGhJson: runGh
       ? (path) => JSON.parse(runGh(["api", `repos/${REPOSITORY}/${path}`, "--method", "GET"]))
       : undefined,
+    completedProducer,
   });
   const transactions = downloaded.transactions;
   validateClawHubParentAuthorization(receipt, transactions);
   const childArtifacts = await listRunArtifacts(child.id, context);
+  let originalManifest = recoveryManifest;
+  if (!originalManifest) {
+    const manifestName = `openclaw-clawhub-recovery-manifest-${child.id}-${child.run_attempt}`;
+    const manifests = childArtifacts.filter((artifact) => artifact.name === manifestName);
+    if (
+      manifests.length > 1 ||
+      (manifests.length === 0 && (completedProducer || !verifyPublication))
+    ) {
+      throw new Error("Missing or ambiguous sealed ClawHub original attempt roster.");
+    }
+    if (manifests.length === 1) {
+      const { archiveBytes: manifestArchiveBytes } = await downloadArtifact(
+        manifests[0],
+        child,
+        context,
+        MAX_RECEIPT_BYTES + 4096,
+        {
+          jobName: "Seal exact ClawHub recovery manifest",
+          stepName: "Upload sealed recovery manifest",
+          runStatePolicy: "completed-producer-success",
+        },
+      );
+      const manifestFiles = inspectActionsArtifactZip(
+        manifestArchiveBytes,
+        ["recovery-manifest.json"],
+        {
+          maxEntryBytes: MAX_RECEIPT_BYTES,
+          maxExpandedBytes: MAX_RECEIPT_BYTES,
+        },
+      );
+      originalManifest = JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(
+          manifestFiles.get("recovery-manifest.json"),
+        ),
+      );
+    }
+  }
+  const validatedRecoveryManifest = originalManifest
+    ? validateClawHubRecoveryManifest(originalManifest)
+    : undefined;
+  if (validatedRecoveryManifest) {
+    const recoveryTransactions = validatedRecoveryManifest.packages.map(
+      ({ name, version, inventoryDigest, artifactName, artifactSha256, artifactSize }) => ({
+        name,
+        version,
+        inventoryDigest,
+        artifactName,
+        artifactSha256,
+        artifactSize,
+      }),
+    );
+    if (
+      JSON.stringify(validatedRecoveryManifest.identity) !== JSON.stringify(identity) ||
+      JSON.stringify(recoveryTransactions) !== JSON.stringify(transactions.packages)
+    ) {
+      throw new Error("ClawHub recovery manifest changed the authorized transaction roster.");
+    }
+  }
   const evidence = {
     schemaVersion: 1,
     repository: REPOSITORY,
@@ -497,14 +623,31 @@ export async function verifyClawHubPostpublish({
     receiptArtifactId: receiptArtifact.id,
     receiptArtifactDigest: receiptArtifact.digest,
     packages: [],
+    publicationAttempts: (validatedRecoveryManifest?.packages ?? []).map(
+      ({ name, version, attemptId, publicationStatus }) => ({
+        name,
+        version,
+        attemptId,
+        publicationStatus,
+      }),
+    ),
     complete: false,
   };
   await mkdir(outputDir, { recursive: true });
   const save = () =>
     writeFile(join(outputDir, "evidence.json"), `${JSON.stringify(evidence, null, 2)}\n`);
   await save();
+  if (!verifyPublication && validatedRecoveryManifest) {
+    evidence.outcome = "authorized-recovery-roster";
+    evidence.packages = validatedRecoveryManifest.packages;
+    evidence.complete = true;
+    await save();
+    return evidence;
+  }
+  // One scan worker turn (25 minutes) plus its five-minute scheduled admission.
+  const publicationDeadline = Date.now() + 30 * 60 * 1000;
   // Registry reads carry no GitHub credentials. Each package is checked against
-  // the exact bytes and inventory authorized by the successful parent.
+  // the exact bytes and inventory authorized by the sealed parent.
   for (let index = 0; index < transactions.packages.length; index += 8) {
     const results = await Promise.allSettled(
       transactions.packages.slice(index, index + 8).map(async (entry) => {
@@ -517,6 +660,13 @@ export async function verifyClawHubPostpublish({
           child,
           context,
           130 * 1024 * 1024,
+          completedProducer
+            ? {
+                stepName: "Upload ClawHub package artifact",
+                jobName: `Pack ClawHub package (${entry.name})`,
+                runStatePolicy: "completed-producer-success",
+              }
+            : undefined,
         );
         const packageFiles = inspectActionsArtifactZip(packageZip, 1, {
           maxEntryBytes: 120 * 1024 * 1024,
@@ -560,6 +710,21 @@ export async function verifyClawHubPostpublish({
           : entry.version.includes("-beta.")
             ? "beta"
             : "latest";
+        const original = validatedRecoveryManifest?.packages.find(
+          (item) => item.name === entry.name,
+        );
+        const observed = evidence.publicationAttempts.find((item) => item.name === entry.name);
+        // Historical successful publishers have no attempt roster. Their authenticated
+        // transaction bytes still verify, but cannot authorize waiting on an unknown attempt.
+        if (original) {
+          await waitForClawHubPublicVersion(original, {
+            deadline: publicationDeadline,
+            fetchImpl,
+            onState: (publication) => {
+              observed.publication = publication;
+            },
+          });
+        }
         const verified = await verifyPublishedClawHubPackage({
           expectedArtifactDir: artifactDir,
           packageName: entry.name,
@@ -592,11 +757,32 @@ export async function verifyClawHubPostpublish({
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {
+    const parent = process.env.PARENT_RUN_ID
+      ? {
+          id: Number(process.env.PARENT_RUN_ID),
+          run_attempt: Number(process.env.PARENT_RUN_ATTEMPT),
+          path: PARENT_WORKFLOW,
+          head_branch: process.env.PARENT_REF,
+          head_sha: process.env.PARENT_SHA,
+          event: "workflow_dispatch",
+          status: process.env.PARENT_STATUS,
+          conclusion: process.env.PARENT_CONCLUSION || null,
+          repository: { full_name: REPOSITORY },
+          head_repository: { full_name: REPOSITORY },
+        }
+      : undefined;
     await verifyClawHubPostpublish({
       event: JSON.parse(await readFile(process.env.GITHUB_EVENT_PATH, "utf8")),
+      parent,
+      parentStatePolicy:
+        process.env.PARENT_STATE_POLICY ?? (parent ? "sealed-producer" : "completed-success"),
       verifierSha: process.env.VERIFIER_SHA,
       token: process.env.GH_TOKEN,
       outputDir: join(process.env.RUNNER_TEMP, "clawhub-postpublish"),
+      verifyPublication: process.env.VERIFY_PUBLICATION !== "false",
+      recoveryManifest: process.env.RECOVERY_MANIFEST
+        ? JSON.parse(await readFile(process.env.RECOVERY_MANIFEST, "utf8"))
+        : undefined,
     });
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

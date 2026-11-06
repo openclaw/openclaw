@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createMcpStructuredContentMirrorMatcher } from "../agents/mcp-structured-mirror.js";
 import { boundedJsonUtf8Bytes, jsonUtf8BytesOrInfinity } from "../infra/json-utf8-bytes.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 
@@ -40,15 +41,16 @@ export function boundMcpToolResultPayload(result: {
       payloadTruncated = true;
     }
   }
-  const mirroredStructuredContent = structuredContent
-    ? JSON.stringify(structuredContent, null, 2)
+  const isStructuredMirror = structuredContent
+    ? createMcpStructuredContentMirrorMatcher(structuredContent)
     : undefined;
   const normalizedBlocks = result.content.filter(
     (block): block is McpInvokeContentBlock =>
       isRecord(block) &&
-      (mirroredStructuredContent === undefined ||
+      (isStructuredMirror === undefined ||
         block.type !== "text" ||
-        block.text !== mirroredStructuredContent),
+        typeof block.text !== "string" ||
+        !isStructuredMirror(block.text)),
   );
   const totalTextBytes = normalizedBlocks.reduce<number>(
     (total, block) =>

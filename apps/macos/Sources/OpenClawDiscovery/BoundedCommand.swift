@@ -2,6 +2,20 @@ import Foundation
 import Subprocess
 
 enum BoundedCommand {
+    static func tailscaleStatus(
+        using runCandidate: @Sendable (String) async -> String?) async -> String?
+    {
+        for candidate in [
+            "/usr/local/bin/tailscale",
+            "/opt/homebrew/bin/tailscale",
+            "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+            "tailscale",
+        ] {
+            if let output = await runCandidate(candidate) { return output }
+        }
+        return nil
+    }
+
     static func run(
         path: String,
         arguments: [String],

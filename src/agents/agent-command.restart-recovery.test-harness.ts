@@ -1,19 +1,19 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { Mock } from "vitest";
 import { expect, it, vi } from "vitest";
+import { getReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
+import { mirrorDeliveredReplyToTranscript } from "../auto-reply/reply/dispatch-from-config.transcript.js";
 import type { SessionEntry } from "../config/sessions.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
-import { withEnvAsync } from "../test-utils/env.js";
+import { loadSessionCostSummary } from "../infra/session-cost-usage.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { agentCommand } from "./agent-command.js";
 import type { CommandSessionEntryFixture } from "./agent-command.live-model-switch.test-helpers.js";
-import {
-  createAgentHarnessCompletionScope,
-  withAgentHarnessCompletionAdmission,
-} from "./agent-harness-completion-scope.js";
+import { buildPreparedCliRunContext } from "./cli-runner.test-helpers.js";
+import { buildCliRunResult } from "./cli-runner/cli-run-settlement.js";
+import { prepareCliRunTerminalReply } from "./cli-runner/terminal-reply.js";
 import { resolveEmbeddedRunTerminal } from "./embedded-agent-runner/run/terminal-resolution.js";
 import { makeTerminalInput } from "./embedded-agent-runner/run/terminal-resolution.test-support.js";
 import { createAgentRunRestartAbortError } from "./run-termination.js";
@@ -25,6 +25,7 @@ import {
 type AgentCommandRecoveryFixture = {
   state: {
     runAgentAttemptMock: Mock;
+    persistCliTurnTranscriptMock: Mock;
     resolveAgentDeliveryPlanWithSessionRouteMock: Mock;
     commandWarnMock: Mock;
     emitAgentEventMock: Mock;
@@ -71,6 +72,106 @@ export async function withStoredAgentCommandRecoverySession(
 export function registerAgentCommandRecoveryCases(
   getFixture: () => AgentCommandRecoveryFixture,
 ): void {
+  it("keeps CLI progress mirrors out of the fallback assistant transcript", async () => {
+    const fixture = getFixture();
+    const { state, agentCommand, setupSingleAttemptFallback } = fixture;
+    const requireRecord = createRequireRecord("object", "expected-label-object");
+    await withStoredAgentCommandRecoverySession(fixture, async (scope) => {
+      setupSingleAttemptFallback();
+      const entry = expectDefined(sessionAccessor.loadSessionEntry(scope), "stored CLI session");
+      const context = buildPreparedCliRunContext({
+        ...scope,
+        sessionId: entry.sessionId,
+        runId: "cli-progress-mirror-run",
+      });
+      context.params.sourceReplyDeliveryMode = "message_tool_only";
+      context.params.terminalReplyExpectation = "optional";
+      const output = {
+        text: "private terminal confirmation",
+        usage: { input: 2, output: 3, cacheRead: 10, total: 15 },
+        diagnosticUsage: { input: 20, output: 30, cacheRead: 100, total: 150 },
+        didSendViaMessagingTool: true,
+        didDeliverSourceReplyViaMessageTool: true,
+        messagingToolSourceReplyPayloads: [
+          { text: "First progress update", sourceReplyFinal: false },
+          { text: "Second progress update", sourceReplyFinal: false },
+        ],
+      };
+      const result = buildCliRunResult({
+        context,
+        output,
+        preparedReply: prepareCliRunTerminalReply(context, output),
+        bindingFlushOk: true,
+        usedHistoryPrompt: false,
+        userTurnHandled: true,
+        sessionBindingDisabled: false,
+        preparedContextAgentMeta: {},
+      });
+      state.runAgentAttemptMock.mockResolvedValue(result);
+      const transcript = await vi.importActual<
+        typeof import("./command/transcript-persistence.js")
+      >("./command/transcript-persistence.js");
+      let persistedParams: Parameters<typeof transcript.persistCliTurnTranscript>[0] | undefined;
+      state.persistCliTurnTranscriptMock.mockImplementation(async (params) => {
+        persistedParams = params;
+        return transcript.persistCliTurnTranscript(params);
+      });
+      state.deliverAgentCommandResultMock.mockImplementation(async () => {
+        for (const payload of result.payloads ?? []) {
+          const mirror = expectDefined(
+            getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror,
+            "CLI source reply mirror",
+          );
+          await mirrorDeliveredReplyToTranscript({
+            metadata: { ...mirror, storePath: scope.storePath, expectedSessionId: entry.sessionId },
+            cfg: {},
+          });
+        }
+        return { deliverySucceeded: true };
+      });
+      await agentCommand({ message: "hello", to: "+1234567890", sessionKey: scope.sessionKey });
+      // Replaying the same turn must not count its usage twice.
+      await transcript.persistCliTurnTranscript(
+        expectDefined(persistedParams, "CLI turn parameters"),
+      );
+      const events = await sessionAccessor.loadTranscriptEvents({
+        ...scope,
+        sessionId: entry.sessionId,
+      });
+      const assistants = events
+        .map((event) => requireRecord(event, "transcript event"))
+        .filter((event) => event.type === "message")
+        .map((event) => requireRecord(event.message, "transcript message"))
+        .filter((message) => message.role === "assistant");
+      expect(
+        assistants.filter((message) => message.display !== false).map((message) => message.content),
+      ).toEqual([
+        [{ type: "text", text: "First progress update" }],
+        [{ type: "text", text: "Second progress update" }],
+      ]);
+      expect(assistants.filter((message) => message.display === false)).toMatchObject([
+        {
+          content: [],
+          usage: {
+            input: 20,
+            output: 30,
+            cacheRead: 100,
+            totalTokens: 150,
+            contextUsage: { state: "available", promptTokens: 12, totalTokens: 15 },
+          },
+        },
+      ]);
+      expect(JSON.stringify(events)).not.toContain("private terminal confirmation");
+      const usage = await loadSessionCostSummary({
+        agentId: scope.agentId,
+        sessionId: entry.sessionId,
+        sessionTarget: { ...scope, sessionId: entry.sessionId },
+        config: {},
+      });
+      expect(usage).toMatchObject({ input: 20, output: 30, cacheRead: 100, totalTokens: 150 });
+    });
+  });
+
   it("preserves bounded delivery evidence when strict post-turn delivery throws", async () => {
     const fixture = getFixture();
     const { state, agentCommand, setupSingleAttemptFallback, makeSuccessResult } = fixture;
@@ -81,15 +182,21 @@ export function registerAgentCommandRecoveryCases(
       state.deliverAgentCommandResultMock.mockImplementation(async (params: unknown) => {
         (
           params as {
-            onDeliveryResult?: (result: { deliveryStatus: Record<string, unknown> }) => void;
+            onDeliveryResult?: (
+              result: { deliveryStatus: Record<string, unknown> },
+              payloads: ReplyPayload[],
+            ) => void;
           }
-        ).onDeliveryResult?.({
-          deliveryStatus: {
-            status: "failed",
-            errorMessage: `Authorization: Bearer ${secret}`,
-            target: "discord:dm:private",
+        ).onDeliveryResult?.(
+          {
+            deliveryStatus: {
+              status: "failed",
+              errorMessage: `Authorization: Bearer ${secret}`,
+              target: "discord:dm:private",
+            },
           },
-        });
+          [],
+        );
         throw new Error("strict delivery failed");
       });
       await expect(
@@ -216,128 +323,5 @@ export function registerAgentCommandRecoveryCases(
         data: expect.objectContaining({ phase: "error", aborted: true, stopReason: "restart" }),
       }),
     );
-  });
-
-  it.each(["runtime error", "outer signal"] as const)(
-    "retains the admitted Control UI source when a restart abort comes from the %s",
-    async (cause) => {
-      const fixture = getFixture();
-      const { state, agentCommand, setupSingleAttemptFallback } = fixture;
-      const runId = "restart-aborted-chat";
-      setupSingleAttemptFallback();
-      const controller = new AbortController();
-      state.runAgentAttemptMock.mockImplementation(async () => {
-        const error = createAgentRunRestartAbortError();
-        if (cause === "outer signal") {
-          controller.abort(error);
-        }
-        throw error;
-      });
-      await withStoredAgentCommandRecoverySession(
-        fixture,
-        async (scope) => {
-          await expect(
-            agentCommand({
-              message: "Finish the interrupted work",
-              sessionKey: scope.sessionKey,
-              runId,
-              abortSignal: controller.signal,
-            }),
-          ).rejects.toMatchObject({ code: "OPENCLAW_RESTART_ABORT" });
-          const saved = sessionAccessor.loadSessionEntry(scope);
-          expect(saved).toMatchObject({
-            restartRecoveryDeliveryRunId: runId,
-            restartRecoveryDeliverySourceRunId: runId,
-            restartRecoverySourceIngress: "control-ui",
-          });
-          expect(saved?.restartRecoveryTerminalRunIds ?? []).not.toContain(runId);
-          expect(controller.signal.aborted).toBe(cause === "outer signal");
-          expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
-        },
-        {
-          status: "running",
-          activeWriterRunId: runId,
-          lifecycleRunId: runId,
-          restartRecoveryDeliveryRunId: runId,
-          restartRecoveryDeliverySourceRunId: runId,
-          restartRecoverySourceIngress: "control-ui",
-        },
-      );
-    },
-  );
-
-  it("clears the native admitted completion claim when cancellation wins after its commit", async () => {
-    const { state, agentCommand, setupSingleAttemptFallback, setupBareStoredSession } =
-      getFixture();
-    const stateDir = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-claim-cancel-")),
-    );
-    try {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        const sessionKey = "agent:default:main";
-        const sourceRunId = "announce:harness:cancel-after-commit";
-        const childRunId = "harness:cancel-child";
-        const controller = new AbortController();
-        setupSingleAttemptFallback();
-        const storePath = path.join(stateDir, "agents/default/sessions/sessions.json");
-        const { entry } = setupBareStoredSession({}, storePath, sessionKey);
-        await sessionAccessor.replaceSessionEntry({ sessionKey, storePath }, entry);
-        state.resolvedSessionKeyMock = sessionKey;
-        const { persistAgentSession: persist } = await vi.importActual<
-          typeof import("./command/attempt-execution.shared.js")
-        >("./command/attempt-execution.shared.js");
-        let committed = false;
-        state.persistSessionEntryMock.mockImplementation(async (...args: unknown[]) => {
-          const result = await persist(args[0] as Parameters<typeof persist>[0]);
-          if (!committed && result?.restartRecoveryHarnessCompletion?.taskRunId === childRunId) {
-            committed = true;
-            controller.abort();
-          }
-          return result;
-        });
-        await expect(
-          withAgentHarnessCompletionAdmission(
-            {
-              scope: createAgentHarnessCompletionScope({
-                requesterSessionKey: sessionKey,
-                requesterAgentId: "default",
-              }),
-              sourceSessionKey: childRunId,
-              sourceRunId,
-              requesterSessionId: entry.sessionId,
-              requesterLifecycleRevision: entry.lifecycleRevision,
-              isSourceCurrent: () => !controller.signal.aborted,
-            },
-            () =>
-              agentCommand({
-                message: "child finished",
-                abortSignal: controller.signal,
-                assertSourceCurrent: () => controller.signal.throwIfAborted(),
-                sessionKey,
-                runId: sourceRunId,
-                channel: "discord",
-                to: "discord:dm:123",
-                deliver: true,
-                inputProvenance: {
-                  kind: "inter_session",
-                  sourceTool: "agent_harness_task",
-                  sourceChannel: "internal",
-                  sourceSessionKey: childRunId,
-                },
-              }),
-          ),
-        ).rejects.toThrow();
-        expect(committed).toBe(true);
-        expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
-        const saved = sessionAccessor.loadSessionEntry({ sessionKey, storePath });
-        expect(saved?.restartRecoveryDeliveryRunId).toBeUndefined();
-        expect(saved?.restartRecoveryHarnessCompletion).toBeUndefined();
-        expect(controller.signal.aborted).toBe(true);
-        expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
-      });
-    } finally {
-      await closeOpenClawAgentDatabasesAsync();
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
   });
 }

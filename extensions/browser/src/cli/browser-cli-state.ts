@@ -1,12 +1,15 @@
 import type { Command } from "commander";
+import { inheritOptionFromParent } from "openclaw/plugin-sdk/cli-runtime";
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
-import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import {
+  filterStringRecord,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
   parseBooleanValue,
+  readNonBlankString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { parseBrowserViewportDimension, runBrowserResizeWithOutput } from "./browser-cli-resize.js";
+import { registerBrowserResizeCommand } from "./browser-cli-resize.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
@@ -15,7 +18,13 @@ import {
   runBrowserCliRequest,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
-import { registerBrowserCookiesAndStorageCommands } from "./browser-cli-state.cookies-storage.js";
+
+function resolveTargetId(rawTargetId: unknown, command: Command): string | undefined {
+  return (
+    normalizeOptionalString(rawTargetId) ??
+    normalizeOptionalString(inheritOptionFromParent<string>(command, "targetId"))
+  );
+}
 
 function parseFiniteNumberOption(value: string | undefined, label: string): number | undefined {
   if (value === undefined) {
@@ -23,9 +32,7 @@ function parseFiniteNumberOption(value: string | undefined, label: string): numb
   }
   const parsed = parseStrictFiniteNumber(value);
   if (parsed === undefined) {
-    defaultRuntime.error(danger(`Invalid ${label}: must be a finite number`));
-    defaultRuntime.exit(1);
-    return undefined;
+    throw new Error(`Invalid ${label}: must be a finite number`);
   }
   return parsed;
 }
@@ -34,54 +41,124 @@ export function registerBrowserStateCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
 ) {
-  registerBrowserCookiesAndStorageCommands(browser, parentOpts);
+  const cookies = browser.command("cookies").description("Read/write cookies");
+  const storage = browser.command("storage").description("Read/write localStorage/sessionStorage");
+
+  for (const kind of ["cookies", "local", "session"] as const) {
+    const isCookies = kind === "cookies";
+    const cmd = isCookies ? cookies : storage.command(kind).description(`${kind}Storage commands`);
+    const route = isCookies ? "/cookies" : `/storage/${kind}`;
+    const label = isCookies ? "cookie" : `${kind}Storage`;
+    const read = async (key: string | undefined, opts: { targetId?: string }, command: Command) => {
+      const parent = parentOpts(command);
+      const targetId = resolveTargetId(opts.targetId, command);
+      await runBrowserCliRequest<{ cookies?: unknown[]; values?: Record<string, string> }>({
+        parent,
+        method: "GET",
+        path: route,
+        query: isCookies ? { targetId } : { key: readNonBlankString(key), targetId },
+        errorPolicy: "inline",
+        print: (result) =>
+          defaultRuntime.writeJson(isCookies ? (result.cookies ?? []) : (result.values ?? {})),
+      });
+    };
+    if (isCookies) {
+      cmd
+        .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
+        .action((opts, command) => read(undefined, opts, command));
+    } else {
+      cmd
+        .command("get")
+        .description(`Get ${kind}Storage (all keys or one key)`)
+        .argument("[key]", "Key (optional)")
+        .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
+        .action(read);
+    }
+
+    const set = cmd
+      .command("set")
+      .description(
+        isCookies ? "Set a cookie (requires --url or domain+path)" : `Set a ${kind}Storage key`,
+      )
+      .argument(isCookies ? "<name>" : "<key>", isCookies ? "Cookie name" : "Key")
+      .argument("<value>", isCookies ? "Cookie value" : "Value");
+    if (isCookies) {
+      set.option("--url <url>", "Cookie URL scope (recommended)");
+    }
+    set
+      .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
+      .action(async (key: string, value: string, opts, command) => {
+        const parent = parentOpts(command);
+        const targetId = resolveTargetId(opts.targetId, command);
+        const url = isCookies ? normalizeOptionalString(opts.url) : undefined;
+        if (isCookies && !url) {
+          throw new Error("Missing required --url option for cookies set");
+        }
+        await runBrowserCliRequest({
+          parent,
+          path: `${route}/set`,
+          body: isCookies
+            ? { targetId, cookie: { name: key, value, url } }
+            : { key, value, targetId },
+          errorPolicy: "inline",
+          successMessage: `${label} set: ${key}`,
+        });
+      });
+
+    cmd
+      .command("clear")
+      .description(isCookies ? "Clear all cookies" : `Clear all ${kind}Storage keys`)
+      .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
+      .action(async (opts, command) => {
+        const parent = parentOpts(command);
+        const targetId = resolveTargetId(opts.targetId, command);
+        await runBrowserCliRequest({
+          parent,
+          path: `${route}/clear`,
+          body: { targetId },
+          errorPolicy: "inline",
+          successMessage: `${isCookies ? "cookies" : label} cleared`,
+        });
+      });
+  }
 
   const set = browser.command("set").description("Browser environment settings");
 
-  set
-    .command("viewport")
-    .description("Set viewport size (alias for resize)")
-    .argument("<width>", "Viewport width")
-    .argument("<height>", "Viewport height")
-    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
-    .action(async (widthRaw: string, heightRaw: string, opts, cmd) => {
-      const width = parseBrowserViewportDimension(widthRaw, "width");
-      const height = parseBrowserViewportDimension(heightRaw, "height");
-      if (width === undefined || height === undefined) {
-        return;
-      }
-      await runBrowserResizeWithOutput({
-        parent: parentOpts(cmd),
-        width,
-        height,
-        targetId: opts.targetId,
-        successMessage: `viewport set: ${width}x${height}`,
-      });
-    });
+  registerBrowserResizeCommand(
+    set.command("viewport").description("Set viewport size (alias for resize)"),
+    parentOpts,
+    true,
+  );
 
-  set
-    .command("offline")
-    .description("Toggle offline mode")
-    .argument("<on|off>", "on/off")
-    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
-    .action(async (value: string, opts, cmd) => {
-      const parent = parentOpts(cmd);
-      const offline = parseBooleanValue(value);
-      if (offline === undefined) {
-        defaultRuntime.error(danger("Expected on|off"));
-        defaultRuntime.exit(1);
-        return;
-      }
-      await runBrowserCliRequest({
-        parent,
-        path: "/set/offline",
-        body: {
-          offline,
-          targetId: normalizeOptionalString(opts.targetId),
-        },
-        successMessage: `offline: ${offline}`,
+  const registerParsedSetting = (kind: "offline" | "media") => {
+    const offline = kind === "offline";
+    const choices = offline ? "on|off" : "dark|light|no-preference|none";
+    set
+      .command(kind)
+      .description(offline ? "Toggle offline mode" : "Emulate prefers-color-scheme")
+      .argument(`<${choices}>`, choices.replaceAll("|", "/"))
+      .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
+      .action(async (value: string, opts, cmd) => {
+        const parent = parentOpts(cmd);
+        const parsed = offline ? parseBooleanValue(value) : normalizeOptionalLowercaseString(value);
+        if (
+          parsed === undefined ||
+          (typeof parsed === "string" && !choices.split("|").includes(parsed))
+        ) {
+          throw new Error(`Expected ${choices}`);
+        }
+        await runBrowserCliRequest({
+          parent,
+          path: `/set/${kind}`,
+          body: {
+            [offline ? "offline" : "colorScheme"]: parsed,
+            targetId: normalizeOptionalString(opts.targetId),
+          },
+          successMessage: `${offline ? "offline" : "media colorScheme"}: ${parsed}`,
+        });
       });
-    });
+  };
+  registerParsedSetting("offline");
 
   set
     .command("headers")
@@ -101,12 +178,8 @@ export function registerBrowserStateCommands(
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
           throw new Error("Headers JSON must be a JSON object");
         }
-        const headers: Record<string, string> = {};
-        for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-          if (typeof v === "string") {
-            headers[k] = v;
-          }
-        }
+        const headers = filterStringRecord(parsed) ?? {};
+        Reflect.deleteProperty(headers, "__proto__");
         const profile = parent?.browserProfile;
         const result = await callBrowserRequest(parent, {
           method: "POST",
@@ -161,13 +234,6 @@ export function registerBrowserStateCommands(
         const latitude = parseFiniteNumberOption(latitudeRaw, "latitude");
         const longitude = parseFiniteNumberOption(longitudeRaw, "longitude");
         const accuracy = parseFiniteNumberOption(opts.accuracy, "--accuracy");
-        if (
-          (latitudeRaw !== undefined && latitude === undefined) ||
-          (longitudeRaw !== undefined && longitude === undefined) ||
-          (opts.accuracy !== undefined && accuracy === undefined)
-        ) {
-          return;
-        }
         await runBrowserCliRequest({
           parent,
           path: "/set/geolocation",
@@ -184,31 +250,7 @@ export function registerBrowserStateCommands(
       },
     );
 
-  set
-    .command("media")
-    .description("Emulate prefers-color-scheme")
-    .argument("<dark|light|no-preference|none>", "dark/light/no-preference/none")
-    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
-    .action(async (value: string, opts, cmd) => {
-      const parent = parentOpts(cmd);
-      const v = normalizeOptionalLowercaseString(value);
-      const colorScheme =
-        v === "dark" || v === "light" || v === "no-preference" || v === "none" ? v : null;
-      if (!colorScheme) {
-        defaultRuntime.error(danger("Expected dark|light|no-preference|none"));
-        defaultRuntime.exit(1);
-        return;
-      }
-      await runBrowserCliRequest({
-        parent,
-        path: "/set/media",
-        body: {
-          colorScheme,
-          targetId: normalizeOptionalString(opts.targetId),
-        },
-        successMessage: `media colorScheme: ${colorScheme}`,
-      });
-    });
+  registerParsedSetting("media");
 
   for (const [command, description, parameter, argumentHelp] of [
     ["timezone", "Override timezone (CDP)", "timezoneId", "Timezone ID (e.g. America/New_York)"],

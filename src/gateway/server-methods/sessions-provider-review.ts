@@ -1,8 +1,8 @@
 import {
   ErrorCodes,
-  errorShape,
   validateSessionsProviderReviewContinueParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import {
   issueProviderReviewAcknowledgment,
   readProviderReviewAcknowledgment,
@@ -11,11 +11,12 @@ import {
 } from "../../sessions/provider-review.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import {
-  resolveSessionMutationAuthorization,
-  resolveSessionSharingTarget,
+  resolveSessionSharingTargetAsync,
   SessionMutationAuthorizationChangedError,
 } from "../session-sharing.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
@@ -31,24 +32,31 @@ export const sessionProviderReviewHandlers: GatewayRequestHandlers = {
         client.internal?.syntheticClient ||
         client.internal?.senderAttribution
       ) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "Review and acknowledge the findings in chat."),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "Review and acknowledge the findings in chat.",
         );
         return;
       }
       let acknowledgment: ProviderReviewAcknowledgment | undefined;
       let handedOff = false;
+      let releaseAuthorization: (() => void) | undefined;
       try {
+        if (isIncognitoSessionKey(params.sessionKey)) {
+          throw new Error("Provider review cannot be continued in an incognito session");
+        }
         const authorization = options.sessionMutationAuthorization
           ? { authorization: options.sessionMutationAuthorization, error: null }
-          : resolveSessionMutationAuthorization({
+          : await resolveSessionMutationAuthorizationAsync({
               client,
               method: "sessions.providerReview.continue",
               requestParams: params,
               context,
             });
+        if (!options.sessionMutationAuthorization) {
+          releaseAuthorization = authorization.authorization?.release;
+        }
         if (authorization.error) {
           respond(false, undefined, authorization.error);
           return;
@@ -59,16 +67,16 @@ export const sessionProviderReviewHandlers: GatewayRequestHandlers = {
           respond(false, undefined, requested.error);
           return;
         }
-        const target = resolveSessionSharingTarget({
+        const target = await resolveSessionSharingTargetAsync({
           cfg,
           sessionKey: params.sessionKey,
           agentId: requested.agentId,
         });
         if (!target || target.entry.sessionId !== params.sessionId) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "The session changed; refresh its findings."),
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            "The session changed; refresh its findings.",
           );
           return;
         }
@@ -123,16 +131,14 @@ export const sessionProviderReviewHandlers: GatewayRequestHandlers = {
           respond(false, undefined, error.error);
         } else {
           // Provider findings and continuation text must not become request diagnostics.
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              "Could not continue this chat. Refresh its current findings before trying again.",
-            ),
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            "Could not continue this chat. Refresh its current findings before trying again.",
           );
         }
       } finally {
+        releaseAuthorization?.();
         if (acknowledgment && !handedOff) {
           retireProviderReviewAcknowledgment(acknowledgment);
         }

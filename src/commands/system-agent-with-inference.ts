@@ -8,23 +8,15 @@ import type { BoundVerifySetupInferenceResult } from "../system-agent/setup-infe
 import type { SystemAgentCommandOptions } from "../system-agent/system-agent.js";
 import type { OnboardOptions } from "./onboard-types.js";
 
-function hasInteractiveTty(opts: SystemAgentCommandOptions): boolean {
-  const input = opts.input ?? process.stdin;
-  const output = opts.output ?? process.stdout;
-  return (
-    (input as { isTTY?: boolean }).isTTY === true && (output as { isTTY?: boolean }).isTTY === true
-  );
-}
-
-function isOneShotRequest(opts: SystemAgentCommandOptions): boolean {
-  return Boolean(opts.json || opts.message?.trim() || opts.interactive === false);
-}
-
 function failOneShotExecution(
   opts: SystemAgentCommandOptions,
   runtime: RuntimeEnv,
   error: unknown,
+  oneShot = true,
 ): void {
+  if (!oneShot) {
+    throw error;
+  }
   const message = formatErrorMessage(error);
   if (opts.json) {
     writeRuntimeJson(runtime, { ok: false, error: message });
@@ -54,35 +46,36 @@ export async function runSystemAgentWithInference(
     );
     return;
   }
-  const oneShot = isOneShotRequest(opts);
-  if (!oneShot && !hasInteractiveTty(opts)) {
-    runtime.error("OpenClaw needs an interactive TTY. Use --message for one command.");
-    runtime.exit(1);
-    return;
+  const oneShot = Boolean(opts.json || opts.message?.trim() || opts.interactive === false);
+  if (!oneShot) {
+    const input = opts.input ?? process.stdin;
+    const output = opts.output ?? process.stdout;
+    if (
+      (input as { isTTY?: boolean }).isTTY !== true ||
+      (output as { isTTY?: boolean }).isTTY !== true
+    ) {
+      runtime.error("OpenClaw needs an interactive TTY. Use --message for one command.");
+      runtime.exit(1);
+      return;
+    }
   }
   let inference: BoundVerifySetupInferenceResult;
   try {
+    const { captureRuntimeConfigAsyncReader } = await import("../config/io.js");
+    await captureRuntimeConfigAsyncReader()();
     const { verifySetupInference } = await import("../system-agent/setup-inference.js");
     inference = await withConsoleSubsystemsSuppressed(() =>
       verifySetupInference({ runtime, bindSession: true }),
     );
   } catch (error) {
-    if (!oneShot) {
-      throw error;
-    }
-    failOneShotExecution(opts, runtime, error);
-    return;
+    return failOneShotExecution(opts, runtime, error, oneShot);
   }
   if (inference.ok) {
     const { runSystemAgent } = await import("../system-agent/system-agent.js");
     try {
       await runSystemAgent({ ...opts, verifiedInference: inference.binding }, runtime);
     } catch (error) {
-      if (!oneShot) {
-        throw error;
-      }
-      failOneShotExecution(opts, runtime, error);
-      return;
+      return failOneShotExecution(opts, runtime, error, oneShot);
     }
     if (oneShot) {
       requestExitAfterOneShotOutput(runtime);

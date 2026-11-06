@@ -20,6 +20,13 @@ export async function respond(args, config) {
       env: { ...process.env, PATH: process.env.MOCK_REAL_PATH },
     }).trim();
   const accepted = () => JSON.parse(readFileSync(config.admissionCapturePath, "utf8"));
+  // P is the main tip the helper dispatched from; it differs from the selected
+  // P only when main advanced before the admission POST.
+  const advancedPath = config.admissionCapturePath + ".advanced";
+  const publisherSha = () =>
+    existsSync(advancedPath)
+      ? readFileSync(advancedPath, "utf8").trim().split("\n").at(-1)
+      : config.publisherSha;
   const actor = { id: 91, login: "release-operator", type: "User" };
   const run = (active = false) => ({
     id: 321,
@@ -27,8 +34,7 @@ export async function respond(args, config) {
     workflow_id: 18,
     path,
     event: "workflow_dispatch",
-    head_sha:
-      !active && config.options.admissionWrongRunSha ? config.targetSha : config.publisherSha,
+    head_sha: !active && config.options.admissionWrongRunSha ? config.targetSha : publisherSha(),
     head_branch: accepted().ref,
     display_title:
       "Qualification Admission " + JSON.parse(accepted().inputs.qualification_request).requestId,
@@ -49,13 +55,33 @@ export async function respond(args, config) {
       ?.slice(("repos/" + repository + "/").length);
     if (route?.startsWith("compare/")) {
       const sha = route.slice(8).split("...")[0];
-      if (sha !== config.publisherSha) {
+      if (sha !== publisherSha() && sha !== config.targetSha) {
         throw new Error("Q must not be subjected to P/main ancestry");
       }
-      git(["merge-base", "--is-ancestor", sha, "refs/heads/main"]);
+      let status = "diverged";
+      try {
+        git(["merge-base", "--is-ancestor", sha, "refs/heads/main"]);
+        status = sha === git(["rev-parse", "refs/heads/main"]) ? "identical" : "ahead";
+      } catch {
+        // GitHub reports a non-ancestor comparison as data, not a transport failure.
+      }
       return JSON.stringify({
-        status: sha === git(["rev-parse", "refs/heads/main"]) ? "identical" : "ahead",
+        status,
       });
+    }
+    if (route?.endsWith("/branches-where-head")) {
+      return JSON.stringify(
+        git([
+          "for-each-ref",
+          "--format=%(refname:short)",
+          "--points-at",
+          config.targetSha,
+          "refs/heads",
+        ])
+          .split("\n")
+          .filter(Boolean)
+          .map((name) => ({ name })),
+      );
     }
     if (route?.startsWith("contents/")) {
       const [name, sha] = route.slice(9).split("?ref=");
@@ -77,6 +103,19 @@ export async function respond(args, config) {
     if (route?.startsWith("git/ref/")) {
       const ref = "refs/" + route.slice(8);
       let sha = git(["rev-parse", ref]);
+      const advanced = existsSync(advancedPath)
+        ? readFileSync(advancedPath, "utf8").trim().split("\n").length
+        : 0;
+      if (
+        ref === "refs/heads/main" &&
+        !existsSync(config.admissionCapturePath) &&
+        advanced < (config.options.advanceMainBeforeAdmission ?? 0)
+      ) {
+        // Another merge lands on main between P selection and this read.
+        sha = git(["commit-tree", git(["rev-parse", sha + "^{tree}"]), "-p", sha, "-m", "later"]);
+        git(["update-ref", "refs/heads/main", sha]);
+        writeFileSync(advancedPath, sha + "\n", { flag: "a" });
+      }
       if (
         config.options.admissionMovedRef &&
         ref === "refs/heads/main" &&
@@ -85,14 +124,30 @@ export async function respond(args, config) {
         sha = config.targetSha;
       }
       if (config.options.qualificationMovedRef && ref.startsWith("refs/heads/release-ci/")) {
-        sha = config.publisherSha;
+        sha = publisherSha();
       }
       return JSON.stringify({ ref, object: { type: "commit", sha } });
     }
-    if (route === "collaborators/release-operator/permission") {
+    if (route?.startsWith("collaborators/") && route.endsWith("/permission")) {
+      const permissionActor = decodeURIComponent(route.slice(14, -11));
+      const revokedCandidate =
+        config.options.candidateAuthorityRevoked &&
+        existsSync(config.admissionCapturePath) &&
+        permissionActor === config.options.candidateAuthorityActor;
+      const revokedOperator = config.options.admissionRevokedActor && !active;
       return JSON.stringify({
-        permission: config.options.admissionRevokedActor && !active ? "read" : "write",
-        user: actor,
+        permission: revokedCandidate
+          ? "read"
+          : !existsSync(config.admissionCapturePath)
+            ? "admin"
+            : revokedOperator
+              ? "read"
+              : "write",
+        role_name: revokedCandidate || revokedOperator ? "write" : "maintain",
+        user:
+          permissionActor === actor.login
+            ? actor
+            : { id: 92, login: permissionActor, type: "User" },
       });
     }
     if (route === "actions/runs/321/attempts/1") {
@@ -117,7 +172,7 @@ export async function respond(args, config) {
       expires_at: "2099-01-01T00:00:00Z",
       digest: "sha256:" + createHash("sha256").update(bytes).digest("hex"),
       size_in_bytes: bytes.length,
-      workflow_run: { id: 321, head_sha: config.publisherSha },
+      workflow_run: { id: 321, head_sha: publisherSha() },
     };
     writeFileSync(config.admissionReceiptPath + ".zip", bytes, { flag: "wx" });
     writeFileSync(config.admissionReceiptPath + ".artifact.json", JSON.stringify(metadata), {
@@ -160,7 +215,7 @@ export async function respond(args, config) {
       workflowEvent: "workflow_dispatch",
       workflowHeadBranch: payload.ref,
       workflowFullRef: payload.ref === "main" ? "refs/heads/main" : "refs/tags/" + payload.ref,
-      workflowSha: config.publisherSha,
+      workflowSha: publisherSha(),
     };
     // This executes P only. Immutable Q workflow/policy blobs are returned by Git.
     let receipt;
@@ -180,9 +235,9 @@ export async function respond(args, config) {
     if (config.options.advanceMainAfterAdmission) {
       const next = git([
         "commit-tree",
-        git(["rev-parse", config.publisherSha + "^{tree}"]),
+        git(["rev-parse", publisherSha() + "^{tree}"]),
         "-p",
-        config.publisherSha,
+        publisherSha(),
         "-m",
         "test: later main",
       ]);
@@ -213,7 +268,7 @@ export async function respond(args, config) {
             name: jobName,
             run_id: 321,
             run_attempt: 1,
-            head_sha: config.publisherSha,
+            head_sha: publisherSha(),
             status: "completed",
             conclusion: "success",
             steps: [

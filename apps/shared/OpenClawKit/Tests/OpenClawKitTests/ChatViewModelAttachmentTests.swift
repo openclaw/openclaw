@@ -69,7 +69,9 @@ private actor AttachmentGate {
         self.entered = true
         let waiters = self.arrivalWaiters
         self.arrivalWaiters.removeAll()
-        for waiter in waiters { waiter.resume() }
+        for waiter in waiters {
+            waiter.resume()
+        }
     }
 
     func waitUntilEntered() async {
@@ -175,15 +177,16 @@ private struct AttachmentProcessingTransport: OpenClawChatTransport {
         }
         let transport = self
         return .available(OpenClawChatTransportRouteLease(
-            sendMessage: { sessionKey, message, thinking, idempotencyKey, attachments in
+            sendTargetedMessage: { sessionKey, target, message, thinking, idempotencyKey, attachments in
                 try await transport.sendMessage(
                     sessionKey: sessionKey,
+                    target: target,
                     message: message,
                     thinking: thinking,
                     idempotencyKey: idempotencyKey,
                     attachments: attachments)
             },
-            requestHistory: { sessionKey in
+            requestTargetedHistory: { sessionKey, _ in
                 try await transport.requestHistory(sessionKey: sessionKey)
             }))
     }
@@ -690,7 +693,7 @@ final class ChatViewModelAttachmentTests: XCTestCase {
         XCTAssertTrue(commands.isEmpty)
     }
 
-    func testFailedAttachmentSendWithoutOutboxRestoresDraft() async throws {
+    func testFailedAttachmentSendWithoutOutboxRestoresDraft() async {
         let capture = AttachmentSendCapture()
         let attachmentData = Data("retry-voice-note".utf8)
         let viewModel = await MainActor.run {
@@ -763,7 +766,7 @@ final class ChatViewModelAttachmentTests: XCTestCase {
         XCTAssertEqual(optimisticAudio?.durationSeconds, 21.2)
     }
 
-    func testVoiceNoteSendKeepsCapturedDurationWhenDraftChangesDuringHealthCheck() async throws {
+    func testVoiceNoteSendKeepsCapturedDurationWhenDraftChangesDuringHealthCheck() async {
         let capture = AttachmentSendCapture()
         let healthGate = AttachmentGate()
         let transport = AttachmentProcessingTransport(capture: capture, healthGate: healthGate)

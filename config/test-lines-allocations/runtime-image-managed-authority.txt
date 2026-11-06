@@ -1,0 +1,2 @@
+# Real managed PAT/OAuth image claims, cold checkout, caller retirement and recovery; shared native profile fixture.
+113

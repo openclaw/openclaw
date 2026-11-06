@@ -1,11 +1,14 @@
-import type { ProviderModelRef as ModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
-import type { ReplyTurnParticipants } from "../../auto-reply/reply/reply-run-registry.contracts.js";
-import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import {
+  captureExternalSessionCommitGuard,
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import { registerAgentEventLifecycleRotationHandler } from "../../infra/agent-events.js";
 import {
   getAgentRunLifecycleGeneration,
   type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import type { ReplyTurnParticipants } from "../../sessions/session-controller.contracts.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   assertAdmittedRunOperatorAuthority,
@@ -15,7 +18,12 @@ import {
   type AdmittedRunContext,
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
-import type { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
+import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
+import { requiresOperatorModelExecutionPolicy } from "../operator-access-program.js";
+import {
+  captureGatewayToolReceiptAssertion,
+  type getGatewayToolCallerIdentity,
+} from "../tools/gateway-caller-context.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 
 /** Keep the original run and caller predicates attached to every host capability. */
@@ -39,7 +47,7 @@ export function bindHarnessHostSourceAuthority(params: {
     attempt.admittedRunContext,
     params.delegatedAuthority,
   );
-  const assertAdmitted = composeSessionSourceAssertion([admittedSource], (assertSource) => {
+  const checkAdmitted = (assertSource: () => void) => {
     if (
       !params.isActive() ||
       !admittedSource ||
@@ -55,14 +63,16 @@ export function bindHarnessHostSourceAuthority(params: {
     if (!params.isGatewayCurrent()) {
       throw inactiveError("agent harness host capability is no longer active");
     }
-  });
+  };
+  const assertAdmitted = composeSessionSourceAssertion([admittedSource], checkAdmitted);
   const receipt = sourceCaller?.receiptAuthority;
-  const assertReceipt = Object.assign(() => {
-    if (receipt?.() === false) {
-      throw new Error("agent harness host capability lost its source execution claim");
-    }
-  }, receipt);
-  const assertCaller = composeSessionSourceAssertion([assertReceipt], (assertSource) => {
+  const assertReceipt =
+    receipt &&
+    captureGatewayToolReceiptAssertion(
+      receipt,
+      "agent harness host capability lost its source execution claim",
+    );
+  const checkCaller = (assertSource: () => void) => {
     if (
       (sourceCaller &&
         (sourceCaller.agentId !== attempt.agentId ||
@@ -75,11 +85,44 @@ export function bindHarnessHostSourceAuthority(params: {
       throw new Error("agent harness host capability lost its source execution claim");
     }
     assertSource();
+  };
+  const assertCaller = composeSessionSourceAssertion(
+    [captureExternalSessionCommitGuard(assertReceipt)],
+    checkCaller,
+  );
+  return Object.assign(composeSessionSourceAssertion([assertAdmitted, assertCaller]), {
+    assertScopeCurrent: () => {
+      checkAdmitted(() => admittedSource?.assertScopeCurrent());
+      checkCaller(() => (assertReceipt?.assertScopeCurrent ?? assertReceipt)?.());
+    },
   });
-  return composeSessionSourceAssertion([assertAdmitted, assertCaller]);
 }
 
-/** Native delegation cannot select a person, so its live turn must remain unambiguous. */
+export function bindHarnessSettledTurnCallback(
+  onSettledTurn: EmbeddedRunAttemptParams["onSettledTurn"],
+  assertActive: () => void,
+  signal?: AbortSignal,
+): EmbeddedRunAttemptParams["onSettledTurn"] {
+  if (!onSettledTurn) {
+    return undefined;
+  }
+  const assertCurrent = () => {
+    signal?.throwIfAborted();
+    assertActive();
+  };
+  return async (attempt, captureContext) => {
+    assertCurrent();
+    await onSettledTurn(attempt, async () => {
+      assertCurrent();
+      const context = await captureContext();
+      assertCurrent();
+      return context;
+    });
+    assertCurrent();
+  };
+}
+
+/** Native delegation keeps the incumbent requester and its live turn authority. */
 export function bindHarnessNativeSpawnAuthority(
   participants: ReplyTurnParticipants | undefined,
   assertActive: () => void,
@@ -87,7 +130,7 @@ export function bindHarnessNativeSpawnAuthority(
   return participants
     ? () => {
         assertActive();
-        participants.resolve()?.assertCurrent();
+        participants.resolve(undefined, { allowTurnOwner: () => true });
       }
     : undefined;
 }
@@ -95,7 +138,7 @@ export function bindHarnessNativeSpawnAuthority(
 /** Acquires original-source model authority while the issuing host is active. */
 export function bindHarnessModelExecution(
   admittedRunContext: AdmittedRunContext,
-  model: ModelRef | undefined,
+  model: Parameters<NonNullable<AgentHarnessHostCapabilities["bindModelExecution"]>>[0],
   assertActive: () => void,
 ): ReturnType<NonNullable<AgentHarnessHostCapabilities["bindModelExecution"]>> {
   assertActive();
@@ -169,17 +212,17 @@ export function retainHarnessSource(
     assertCurrent,
     get modelPolicyRequired() {
       assertCurrent();
-      const required = source.modelPolicy !== undefined;
+      const required = requiresOperatorModelExecutionPolicy(source);
       assertCurrent();
       return required;
     },
     get sourceIdentity() {
       assertCurrent();
-      const identity = source.source;
-      assertCurrent();
-      return identity;
+      return source.source;
     },
-    bindModelExecution: (model: ModelRef | undefined) => {
+    bindModelExecution: (
+      model: Parameters<NonNullable<AgentHarnessHostCapabilities["bindModelExecution"]>>[0],
+    ) => {
       assertCurrent();
       const binding = bindOperatorModelExecution(source, model);
       if (!binding) {
@@ -215,7 +258,8 @@ export function retainHarnessSource(
 
 /** Host-only original source; an explicit undefined operator identifies System work. */
 export type AgentHarnessCompactionSourceAuthority = Readonly<{
-  assertActive: () => void;
+  assertActive: SessionSourceAssertion;
+  prepareDispatch?: () => Promise<void>;
   operatorAuthority: AdmittedRunOperatorAuthority | undefined;
 }>;
 

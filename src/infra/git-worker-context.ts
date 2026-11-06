@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { Transferable } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { WorktreeRepositoryError } from "../agents/worktrees/errors.js";
+import { GitCommandTimeoutError } from "./git-exec.js";
 import {
   GIT_WORKER_HOST_BATCH_LIMIT,
   type GitWorkerEffect,
@@ -49,7 +50,9 @@ export function restoreGitWorkerFailure(failure: GitWorkerFailure): Error {
   const error =
     failure.name === "WorktreeRepositoryError"
       ? new WorktreeRepositoryError(failure.message)
-      : new Error(failure.message);
+      : failure.name === "GitCommandTimeoutError"
+        ? new GitCommandTimeoutError(failure.message)
+        : new Error(failure.message);
   error.name = failure.name;
   if (failure.code !== undefined) {
     Object.assign(error, { code: failure.code });

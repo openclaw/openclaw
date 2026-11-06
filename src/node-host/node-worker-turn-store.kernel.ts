@@ -1,19 +1,19 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
-import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import { ensureStatePostgresFragment } from "../state/openclaw-state-db-engine.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 import type { NodeWorkerSupervisorIdentity } from "../worker/node-supervisor-protocol.js";
 import { nodeWorkerTurnMatchesIdentity } from "../worker/node-supervisor-protocol.js";
 import type { NodeWorkerLaunchClaim, NodeWorkerTurnReceipt } from "./node-worker-journal.types.js";
@@ -22,11 +22,9 @@ import {
   type NodeWorkerLaunchReceipt,
   type NodeWorkerTerminalState,
 } from "./node-worker-launch-receipt.js";
-import {
-  readNodeWorkerLaunchReceipt,
-  settleNodeWorkerActiveTurns,
-} from "./node-worker-launch-store.kernel.js";
+import { readNodeWorkerLaunchReceipt } from "./node-worker-launch-store.kernel.js";
 import type { NodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
+import { settleNodeWorkerActiveTurns } from "./node-worker-turn-settlement.worker.js";
 
 type TurnDatabase = Pick<OpenClawStateDatabase, "node_worker_turns">;
 type TurnRow = Selectable<TurnDatabase["node_worker_turns"]>;
@@ -34,25 +32,33 @@ type TurnRow = Selectable<TurnDatabase["node_worker_turns"]>;
 const TERMINAL_RECEIPT_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const TERMINAL_PRUNE_BATCH_LIMIT = 256;
 
-function query(database: DatabaseSync) {
+function query(database: EngineConnection) {
   return getNodeSqliteKysely<TurnDatabase>(database);
 }
 
-const turnSchema = createSqliteSchemaEnsurer(() =>
-  extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "node_worker_turns", {
-    endMarker: "\n  WHERE state = 'running';",
-    errorMessage: "OpenClaw node worker turn schema marker is missing.",
-  }),
+const turnSchema = createSqliteSchemaEnsurer(
+  () =>
+    getOpenClawStateFeatureSchemaSql("node_worker_turns", {
+      endMarker: "\n  WHERE state = 'running';",
+      errorMessage: "OpenClaw node worker turn schema marker is missing.",
+    }),
+  {
+    tables: ["node_worker_turns"],
+    indexes: ["idx_node_worker_turns_terminal_completed", "idx_node_worker_turns_active_owner"],
+  },
 );
 
-function readRow(database: DatabaseSync, turnId: string): TurnRow | undefined {
+function readRow(database: EngineConnection, turnId: string): TurnRow | undefined {
   return executeSqliteQueryTakeFirstSync(
     database,
     query(database).selectFrom("node_worker_turns").selectAll().where("turn_id", "=", turnId),
   );
 }
 
-function readReceipt(database: DatabaseSync, turnId: string): NodeWorkerTurnReceipt | undefined {
+function readReceipt(
+  database: EngineConnection,
+  turnId: string,
+): NodeWorkerTurnReceipt | undefined {
   let turn = readRow(database, turnId);
   if (!turn) {
     return undefined;
@@ -63,8 +69,8 @@ function readReceipt(database: DatabaseSync, turnId: string): NodeWorkerTurnRece
   }
   if (turn.state === "running" && owner.state !== "pending" && owner.state !== "running") {
     // A predecessor can finish the physical journal without knowing about turn receipts.
-    settleNodeWorkerActiveTurns(database, owner);
-    turn = readRow(database, turnId)!;
+    // The active-owner index bounds settlement to this one running turn.
+    turn = settleNodeWorkerActiveTurns(database, owner, undefined, true)!;
   }
   return turnReceiptFromRow(turn, owner);
 }
@@ -103,7 +109,7 @@ function matchesProcess(
   );
 }
 
-function pruneTerminal(database: DatabaseSync, nowMs: number, excludeTurnId: string): void {
+function pruneTerminal(database: EngineConnection, nowMs: number, excludeTurnId: string): void {
   // A warm worker may live indefinitely; its finished turns must not accumulate with it.
   executeSqliteQuerySync(
     database,
@@ -132,26 +138,23 @@ export class NodeWorkerTurnKernel {
     },
   ) {}
 
-  private write<T>(operationLabel: string, operation: (database: DatabaseSync) => T): T {
-    let initialized: DatabaseSync | undefined;
-    const result = runOpenClawStateWriteTransaction(
+  private write<T>(operationLabel: string, operation: (database: EngineConnection) => T): T {
+    return runOpenClawStateWriteTransaction(
       ({ db }) => {
         requestSqliteWorkerOperationAdmission({
           stage: "transaction",
           facts: { kind: "node-worker-journal" },
         });
-        if (turnSchema.ensure(db)) {
-          initialized = db;
+        if (isPostgresSqlConnection(db)) {
+          ensureStatePostgresFragment(db, "node_worker_turns");
+        } else {
+          turnSchema(db);
         }
         return operation(db);
       },
       this.databaseOptions,
       { operationLabel },
     );
-    if (initialized) {
-      turnSchema.recordCommitted(initialized);
-    }
-    return result;
   }
 
   claim(params: {

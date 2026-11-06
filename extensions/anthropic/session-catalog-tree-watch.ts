@@ -6,15 +6,11 @@ import {
   type WatchSubscription,
 } from "openclaw/plugin-sdk/file-access-runtime";
 
-export type DirtyDirectoryWatch = {
-  /** Direct-child names to re-read, or "all" when coverage is uncertain. */
-  takeDirty(): "all" | Set<string>;
-  close(): Promise<void>;
-};
+export type DirtyDirectoryWatch = ReturnType<typeof createDirtyDirectoryWatch>;
 
 const WATCH_RETRY_MS = 5_000;
 
-export function createDirtyDirectoryWatch(directory: string, depth = 2): DirtyDirectoryWatch {
+export function createDirtyDirectoryWatch(directory: string, depth = 2) {
   let subscription: WatchSubscription | undefined;
   let starting: Promise<void> | undefined;
   let dirty: "all" | Set<string> = "all";
@@ -72,7 +68,8 @@ export function createDirtyDirectoryWatch(directory: string, depth = 2): DirtyDi
   };
   start();
   return {
-    takeDirty() {
+    /** Direct-child names to re-read, or "all" when coverage is uncertain. */
+    takeDirty(this: void): "all" | Set<string> {
       const state = subscription?.health().state;
       if (closed || starting || !subscription || state === "unavailable" || state === "closed") {
         if (!closed && !starting && Date.now() >= retryAt) {
@@ -84,7 +81,7 @@ export function createDirtyDirectoryWatch(directory: string, depth = 2): DirtyDi
       dirty = new Set();
       return result;
     },
-    async close() {
+    async close(this: void) {
       closed = true;
       await starting;
       await subscription?.close();

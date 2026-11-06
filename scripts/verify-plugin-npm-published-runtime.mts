@@ -1,6 +1,4 @@
 #!/usr/bin/env node
-// Verifies published plugin npm packages include built runtime entries and
-// metadata expected by OpenClaw.
 
 import { execFileSync, type ExecFileSyncOptionsWithStringEncoding } from "node:child_process";
 import fs from "node:fs";
@@ -222,7 +220,7 @@ export function readPluginNpmCommandOptions(env: NodeJS.ProcessEnv = process.env
   } satisfies ExecFileSyncOptionsWithStringEncoding;
 }
 
-export function runPluginNpmCommand(
+function runPluginNpmCommand(
   args: string[],
   params: { execFileSyncImpl?: ExecFileSyncText; env?: NodeJS.ProcessEnv } = {},
 ) {

@@ -1,5 +1,6 @@
 import { computeBackoff } from "@openclaw/retry";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 
 type RetryTimer = {
@@ -96,9 +97,7 @@ export function consumeChatOutboxRetry(
   }
   clearTimeout(retry.timer);
   state.timers.delete(key);
-  if (itemId || ownerStale) {
-    state.attempts.delete(key);
-  }
+  state.attempts.delete(key);
   return false;
 }
 

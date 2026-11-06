@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OAuthProviderId } from "../../llm/utils/oauth/types.js";
 import { OAUTH_REFRESH_CALL_TIMEOUT_MS } from "../auth-profiles/constants.js";
 import {
@@ -6,6 +7,7 @@ import {
   refreshSerializedOAuthCredential,
 } from "../auth-profiles/oauth-refresh-fence.js";
 import { isOAuthRefreshFence } from "../auth-profiles/oauth-refresh-marker.js";
+import type { OAuthCredential as AuthProfileOAuthCredential } from "../auth-profiles/types.js";
 import { AuthStoragePersistenceError } from "./auth-storage-error.js";
 import {
   canResolveAuthStoragePluginOAuthRefresh,
@@ -14,10 +16,27 @@ import {
 } from "./auth-storage-oauth-registry.js";
 import type {
   AuthCredential,
-  AuthStorageBackend,
   AuthStorageData,
+  LockResult,
   OAuthCredential,
 } from "./auth-storage-types.js";
+
+function mergeResolvedOAuthCredential(
+  credential: AuthProfileOAuthCredential,
+  resolved: Awaited<ReturnType<typeof resolveAuthStoragePluginOAuthCredential>>,
+): { apiKey: string; credential: AuthProfileOAuthCredential } | null {
+  return resolved
+    ? {
+        apiKey: resolved.apiKey,
+        credential: {
+          ...credential,
+          ...resolved.newCredentials,
+          type: "oauth",
+          provider: credential.provider,
+        },
+      }
+    : null;
+}
 
 export function isAuthStorageOAuthRefreshFence(
   provider: string,
@@ -31,11 +50,14 @@ export function isAuthStorageOAuthRefreshFence(
 
 export async function refreshAuthStorageOAuthCredential(params: {
   authStorage: object;
-  storage: AuthStorageBackend;
+  config?: OpenClawConfig;
+  storage: {
+    withLock<T>(fn: (current: string | undefined) => LockResult<T>): T | Promise<T>;
+  };
   providerId: OAuthProviderId;
   parse: (current: string | undefined) => AuthStorageData;
   commit: (data: AuthStorageData) => void;
-}): Promise<{ apiKey: string; newCredentials: OAuthCredential } | null> {
+}): Promise<{ apiKey: string } | null> {
   const provider = getAuthStorageOAuthProviderRegistry(params.authStorage).get(params.providerId);
   const result = await refreshSerializedOAuthCredential({
     backend: params.storage,
@@ -57,10 +79,11 @@ export async function refreshAuthStorageOAuthCredential(params: {
       [params.providerId]: credential,
     }),
     canRefresh: async () =>
-      Boolean(provider) || (await canResolveAuthStoragePluginOAuthRefresh(params.providerId)),
-    commit: (data) => {
+      Boolean(provider) ||
+      (await canResolveAuthStoragePluginOAuthRefresh(params.providerId, params.config)),
+    commit: async (data) => {
       const expected = params.parse(JSON.stringify(data));
-      const current = params.storage.withLock((raw) => {
+      const current = await params.storage.withLock((raw) => {
         const authoritative = params.parse(raw);
         if (!isDeepStrictEqual(authoritative[params.providerId], expected[params.providerId])) {
           throw new AuthStoragePersistenceError(
@@ -84,18 +107,13 @@ export async function refreshAuthStorageOAuthCredential(params: {
             params.providerId,
             oauthCredentials,
           )
-        : await resolveAuthStoragePluginOAuthCredential(params.providerId, credential, true);
-      return refreshed
-        ? {
-            apiKey: refreshed.apiKey,
-            credential: {
-              ...credential,
-              ...refreshed.newCredentials,
-              type: "oauth",
-              provider: credential.provider,
-            },
-          }
-        : null;
+        : await resolveAuthStoragePluginOAuthCredential(
+            params.providerId,
+            credential,
+            true,
+            params.config,
+          );
+      return mergeResolvedOAuthCredential(credential, refreshed);
     },
     resolve: async (credential) => {
       if (provider) {
@@ -105,19 +123,10 @@ export async function refreshAuthStorageOAuthCredential(params: {
         params.providerId,
         credential,
         false,
+        params.config,
       );
-      return resolved
-        ? {
-            apiKey: resolved.apiKey,
-            credential: {
-              ...credential,
-              ...resolved.newCredentials,
-              type: "oauth",
-              provider: credential.provider,
-            },
-          }
-        : null;
+      return mergeResolvedOAuthCredential(credential, resolved);
     },
   });
-  return result ? { apiKey: result.apiKey, newCredentials: result.credential } : null;
+  return result ? { apiKey: result.apiKey } : null;
 }

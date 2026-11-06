@@ -44,6 +44,18 @@ export async function createManagedUpdateRequesterAuthority(
   return captureManagedUpdateRequester(requester, env, (auth) => auth.resolveCommandOwnerAuthority);
 }
 
+/** Reconstruct delegated authority from the source recorded by the original admission. */
+export function createDelegatedUpdateRequesterAuthority(
+  requester: UpdateRequester,
+  runId: string,
+  executor: UpdateRecoveryFence,
+  env?: NodeJS.ProcessEnv,
+): Promise<UpdateRequesterAuthority> {
+  return requester.authorizationSource?.startsWith("profile:")
+    ? createManagedUpdateRequesterContinuationAuthority(requester, { runId, executor }, env)
+    : createManagedUpdateRequesterAuthority(requester, env);
+}
+
 /** Identity facts alone grant no effects; the helper composes them with its native owner. */
 export async function prepareManagedUpdateRequesterIdentity(
   requester: UpdateRequester,
@@ -120,11 +132,13 @@ async function captureManagedUpdateRequester(
         },
         { readCurrentConfigForPolicyCheck },
         { ensureCliPluginRegistryLoaded },
+        { PluginLoadFailureError },
       ] = await Promise.all([
         import("../auto-reply/command-auth.js"),
         // Keep synchronous authority checks on the reader loaded at admission.
         import("../config/io.js"),
         import("../cli/plugin-registry-loader.js"),
+        import("../plugins/loader-shared.js"),
       ]);
       const readCurrentConfig = () =>
         readCurrentConfigForPolicyCheck({
@@ -135,6 +149,12 @@ async function captureManagedUpdateRequester(
         scope: "configured-channels",
         routeLogsToStderr: true,
         config: readCurrentConfig(),
+      }).catch((error: unknown) => {
+        // Post-install Doctor runs these migrations, so their channel plugins cannot load before
+        // its authority check. Owner matching then uses bundled channel metadata (#178291).
+        if (!(error instanceof PluginLoadFailureError && error.onlyPendingStateMigrations)) {
+          throw error;
+        }
       });
       const authority =
         authorizationSource === "configured-owner"

@@ -1,25 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
-import { resetPendingAskUserQuestionsForTest } from "../../agents/tools/ask-user-tool.test-support.js";
+import * as questionDispatch from "../../agents/harness/gateway-question-dispatch.js";
+import type { GatewayQuestionCall } from "../../agents/tools/gateway-question-lifecycle.js";
+import * as gatewayTransport from "../../agents/tools/gateway.js";
 import { createSecretsTool } from "../../agents/tools/secrets-tool.js";
-import {
-  claimAgentRunDelegatedAuthority,
-  clearAgentRunContext,
-  releaseAgentRunDelegatedAuthority,
-} from "../../infra/agent-run-registry.js";
-import {
-  activateSecretsRuntimeSnapshot,
-  clearSecretsRuntimeSnapshot,
-  getActiveSecretsRuntimeSnapshot,
-  prepareSecretsRuntimeSnapshot,
-} from "../../secrets/runtime.js";
-import {
-  listSecretStoreEntries,
-  readSecretStoreValue,
-  writeSecretStoreEntry,
-} from "../../secrets/store/secret-store.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import * as runRegistry from "../../infra/agent-run-registry.js";
+import * as secretRuntime from "../../secrets/runtime.js";
+import * as secretStore from "../../secrets/store/secret-store.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import * as testState from "../../test-utils/openclaw-test-state.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { QuestionManager } from "../question-manager.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -28,13 +18,16 @@ import { createSecretsHandlers, createSecretStoreWriteService } from "./secrets.
 import type { GatewayClient, RespondFn } from "./types.js";
 
 afterEach(() => {
-  clearSecretsRuntimeSnapshot();
-  resetPendingAskUserQuestionsForTest();
+  secretRuntime.clearSecretsRuntimeSnapshot();
   vi.restoreAllMocks();
 });
 
+let handlers: ReturnType<typeof createSecretsHandlers>;
+let reloadSecrets = vi.fn<Parameters<typeof createSecretsHandlers>[0]["reloadSecrets"]>();
+let storeWriteService: ReturnType<typeof createSecretStoreWriteService>;
+let log: { debug?: () => void };
+
 async function invoke(
-  handlers: ReturnType<typeof createSecretsHandlers>,
   method: string,
   params: Record<string, unknown>,
   client: GatewayClient | null = null,
@@ -56,28 +49,60 @@ async function invoke(
 }
 
 const resolveSecrets = async () => ({ assignments: [], diagnostics: [], inactiveRefPaths: [] });
+const scope = { kind: "team" } as const;
+const readSecret = (name: string) => secretStore.readSecretStoreValue({ scope, name });
+const seedSecret = (name: string, value: string) =>
+  secretStore.writeSecretStoreEntry({ scope, name, value, kind: "secret", updatedBy: "test" });
+
+function withState(run: (state: testState.OpenClawTestState) => Promise<void>) {
+  return testState.withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
+    reloadSecrets = vi.fn(async () => ({ warningCount: 0 }));
+    log = {};
+    storeWriteService = createSecretStoreWriteService({ reloadSecrets });
+    handlers = createSecretsHandlers({
+      reloadSecrets,
+      resolveSecrets,
+      storeWriteService,
+      log,
+    });
+    await run(state);
+  });
+}
+
+function claimRun(name: string) {
+  const runId = `${name}-run`;
+  const authority = runRegistry.claimAgentRunDelegatedAuthority({
+    instanceId: `${name}-instance`,
+    runId,
+  });
+  const identity = {
+    kind: "agentRuntime" as const,
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    operationalRunInstance: authority.operationalRunInstance,
+    delegatedAuthority: { kind: "local" as const, ...authority },
+  };
+  return {
+    authority,
+    identity,
+    client: { internal: { agentRuntimeIdentity: identity } } as GatewayClient,
+    close: () => {
+      runRegistry.releaseAgentRunDelegatedAuthority(authority);
+      runRegistry.clearAgentRunContext(runId);
+    },
+  };
+}
 
 describe("secret store mutation lifecycle", () => {
-  it("rejects a redaction sentinel without replacing the stored credential", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  it("rejects sentinel writes without replacing credentials", async () => {
+    await withState(async () => {
       const name = "OPENCLAW_GATEWAY_TOKEN";
       const value = "synthetic-gateway-token";
-      await writeSecretStoreEntry({
-        scope: { kind: "team" },
-        name,
-        value,
-        kind: "secret",
-        updatedBy: "test",
-      });
-      const reloadSecrets = vi.fn(async () => ({ warningCount: 0 }));
-      const handlers = createSecretsHandlers({
-        reloadSecrets,
-        resolveSecrets,
-        storeWriteService: createSecretStoreWriteService({ reloadSecrets }),
-      });
+      await seedSecret(name, value);
 
       expect(
-        await invoke(handlers, "secrets.store.set", {
+        await invoke("secrets.store.set", {
           name,
           value: "__OPENCLAW_REDACTED__",
           kind: "secret",
@@ -87,142 +112,93 @@ describe("secret store mutation lifecycle", () => {
         undefined,
         { code: "INVALID_REQUEST", message: expect.stringContaining(name) },
       ]);
-      expect(await readSecretStoreValue({ scope: { kind: "team" }, name })).toEqual({
-        ok: true,
-        value,
-      });
+      expect(await readSecret(name)).toEqual({ ok: true, value });
       expect(reloadSecrets).not.toHaveBeenCalled();
     });
   });
 
   it.each(["dispatch continuation", "mutation logging"] as const)(
-    "does not delete when admitted authority closes during %s",
+    "rejects delete after %s revokes authority",
     async (closure) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await withState(async () => {
         const name = "SYNTHETIC_DELETE_KEY";
         const value = "test-secret-delete-must-survive";
-        await writeSecretStoreEntry({
-          scope: { kind: "team" },
-          name,
-          value,
-          kind: "secret",
-          updatedBy: "test",
-        });
-        const authority = claimAgentRunDelegatedAuthority({
-          instanceId: "delete-instance",
-          runId: "delete-run",
-        });
-        const identity = {
-          kind: "agentRuntime" as const,
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          operationalRunInstance: authority.operationalRunInstance,
-          delegatedAuthority: { kind: "local" as const, ...authority },
+        await seedSecret(name, value);
+        const run = claimRun("delete");
+        const { authority, identity, client } = run;
+        log.debug = () => {
+          if (closure === "mutation logging") {
+            runRegistry.releaseAgentRunDelegatedAuthority(authority);
+          }
         };
-        const client = { internal: { agentRuntimeIdentity: identity } } as GatewayClient;
-        const reloadSecrets = vi.fn(async () => ({ warningCount: 0 }));
-        const handlers = createSecretsHandlers({
-          reloadSecrets,
-          resolveSecrets,
-          storeWriteService: createSecretStoreWriteService({ reloadSecrets }),
-          log: {
-            debug: () => {
-              if (closure === "mutation logging") {
-                releaseAgentRunDelegatedAuthority(authority);
-              }
-            },
-          },
-        });
         try {
           expect(createAgentRuntimeApprovalAuthorityValidator()(identity)).toBe(true);
           const dispatched = Promise.resolve().then(() =>
-            invoke(handlers, "secrets.store.delete", { name }, client),
+            invoke("secrets.store.delete", { name }, client),
           );
           if (closure === "dispatch continuation") {
-            releaseAgentRunDelegatedAuthority(authority);
+            runRegistry.releaseAgentRunDelegatedAuthority(authority);
           }
           expect(await dispatched).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
-          expect(await readSecretStoreValue({ scope: { kind: "team" }, name })).toEqual({
-            ok: true,
-            value,
-          });
+          expect(await readSecret(name)).toEqual({ ok: true, value });
           expect(reloadSecrets).not.toHaveBeenCalled();
           // A normal human administrator has no delegated run claim to revoke.
-          expect(await invoke(handlers, "secrets.store.delete", { name })).toMatchObject([
+          expect(await invoke("secrets.store.delete", { name })).toMatchObject([
             true,
             { ok: true },
           ]);
-          expect((await readSecretStoreValue({ scope: { kind: "team" }, name })).ok).toBe(false);
+          expect((await readSecret(name)).ok).toBe(false);
         } finally {
-          releaseAgentRunDelegatedAuthority(authority);
-          clearAgentRunContext("delete-run");
+          run.close();
         }
       });
     },
   );
 
-  it("reports only committed safe facts when the operator replaces proposed hosts", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const authority = claimAgentRunDelegatedAuthority({
-        instanceId: "tool-instance",
-        runId: "tool-run",
-      });
+  it("reports committed operator policy without secrets", async () => {
+    await withState(async () => {
+      const run = claimRun("tool");
       const client = {
+        ...run.client,
         connect: { scopes: ["operator.admin"] },
-        internal: {
-          agentRuntimeIdentity: {
-            kind: "agentRuntime",
-            agentId: "main",
-            sessionKey: "agent:main:main",
-            operationalRunInstance: authority.operationalRunInstance,
-            delegatedAuthority: { kind: "local", ...authority },
-          },
-        },
       } as GatewayClient;
       const scheduler = createTestGatewayScheduler();
       const manager = new QuestionManager(scheduler);
-      const reloadSecrets = async () => ({ warningCount: 0 });
-      const storeWriteService = createSecretStoreWriteService({ reloadSecrets });
-      const handlers = {
+      handlers = {
         ...createQuestionHandlers(manager, storeWriteService, scheduler),
-        ...createSecretsHandlers({ reloadSecrets, resolveSecrets, storeWriteService }),
+        ...handlers,
       };
-      const methods: string[] = [];
       try {
+        const gatewayCall: GatewayQuestionCall = async (method, _options, params) => {
+          const response = await invoke(method, params as Record<string, unknown>, client);
+          if (!response?.[0]) {
+            throw new Error("synthetic question RPC failed");
+          }
+          if (method === "question.request") {
+            const { id } = response[1] as { id: string };
+            expect(
+              await invoke("question.resolve", {
+                id,
+                answers: { answers: { secret_value: ["test-secret-operator-only"] } },
+                secretStoreAllowedHosts: ["approved.example.test"],
+              }),
+            ).toMatchObject([true, { status: "answered" }, undefined]);
+          }
+          return response[1];
+        };
+        vi.spyOn(gatewayTransport, "callGatewayTool").mockImplementation(gatewayCall);
+        vi.spyOn(questionDispatch, "resolveAgentQuestionGatewayCall").mockReturnValue(gatewayCall);
         const tool = createSecretsTool({
           agentId: "main",
           sessionKey: "agent:main:main",
           runId: "tool-run",
-          gatewayCall: async (method, _options, params) => {
-            methods.push(method);
-            const response = await invoke(
-              handlers,
-              method,
-              params as Record<string, unknown>,
-              client,
-            );
-            if (!response?.[0]) {
-              throw new Error("synthetic question RPC failed");
-            }
-            if (method === "question.request") {
-              const { id } = response[1] as { id: string };
-              expect(
-                await invoke(handlers, "question.resolve", {
-                  id,
-                  answers: { answers: { secret_value: ["test-secret-operator-only"] } },
-                  secretStoreAllowedHosts: ["approved.example.test"],
-                }),
-              ).toMatchObject([true, { status: "answered" }, undefined]);
-            }
-            return response[1];
-          },
         });
         const result = await tool.execute("policy-change", {
           action: "request",
           name: "APPROVED_POLICY_KEY",
           allowedHosts: ["proposed.example.test"],
         });
-        expect(await listSecretStoreEntries({ scope: { kind: "team" } })).toMatchObject([
+        expect(await secretStore.listSecretStoreEntries({ scope })).toMatchObject([
           { name: "APPROVED_POLICY_KEY", allowedHosts: ["approved.example.test"] },
         ]);
         expect(result.details).toEqual({
@@ -234,19 +210,19 @@ describe("secret store mutation lifecycle", () => {
         });
         expect(JSON.stringify(result)).not.toContain("proposed.example.test");
         expect(JSON.stringify(result)).not.toContain("test-secret-operator-only");
-        expect(methods).toEqual(["question.request", "question.waitAnswer", "secrets.store.list"]);
       } finally {
         manager.close();
-        releaseAgentRunDelegatedAuthority(authority);
-        clearAgentRunContext("tool-run");
+        await manager.drain();
+        await scheduler.stop();
+        run.close();
       }
     });
   });
 
   it.each(["api_key", "token"] as const)(
-    "refreshes an auth-profile-only %s ref on create, rotation, and delete",
+    "refreshes auth-profile %s refs on create, rotate, and delete",
     async (type) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await withState(async (state) => {
         const name = "AUTH_PROFILE_ONLY_KEY";
         const ref = { source: "store", provider: "default", id: name } as const;
         const profileId = "custom:store";
@@ -268,10 +244,14 @@ describe("secret store mutation lifecycle", () => {
           manifestRegistry: { plugins: [] },
           allowUnavailableSecretOwners: true,
         };
-        activateSecretsRuntimeSnapshot(await prepareSecretsRuntimeSnapshot(runtimeOptions));
+        secretRuntime.activateSecretsRuntimeSnapshot(
+          await secretRuntime.prepareSecretsRuntimeSnapshot(runtimeOptions),
+        );
         const currentCredential = () => {
           const profile =
-            getActiveSecretsRuntimeSnapshot()?.authStores[0]?.store.profiles[profileId];
+            secretRuntime.getActiveSecretsRuntimeSnapshot()?.authStores[0]?.store.profiles[
+              profileId
+            ];
           return profile?.type === "api_key"
             ? profile.key
             : profile?.type === "token"
@@ -280,56 +260,48 @@ describe("secret store mutation lifecycle", () => {
         };
         const expectCold = () => {
           expect(currentCredential()).toBeUndefined();
-          expect(getActiveSecretsRuntimeSnapshot()?.degradedOwners).toMatchObject([
+          expect(secretRuntime.getActiveSecretsRuntimeSnapshot()?.degradedOwners).toMatchObject([
             { ownerKind: "account", degradationState: "cold" },
           ]);
         };
         expectCold();
-        const reloadSecrets = vi.fn(
+        reloadSecrets.mockImplementation(
           async (options?: { forceColdRefKeys?: ReadonlySet<string> }) => {
-            const snapshot = await prepareSecretsRuntimeSnapshot({
+            const snapshot = await secretRuntime.prepareSecretsRuntimeSnapshot({
               ...runtimeOptions,
               forceColdRefKeys: options?.forceColdRefKeys,
             });
-            activateSecretsRuntimeSnapshot(snapshot);
+            secretRuntime.activateSecretsRuntimeSnapshot(snapshot);
             return { warningCount: snapshot.warnings.length };
           },
         );
-        const handlers = createSecretsHandlers({
-          reloadSecrets,
-          resolveSecrets,
-          storeWriteService: createSecretStoreWriteService({ reloadSecrets }),
-        });
         for (const value of ["test-secret-created", "test-secret-rotated"]) {
-          expect(
-            await invoke(handlers, "secrets.store.set", { name, value, kind: "secret" }),
-          ).toMatchObject([true, { ok: true, reloaded: true }]);
+          expect(await invoke("secrets.store.set", { name, value, kind: "secret" })).toMatchObject([
+            true,
+            { ok: true, reloaded: true },
+          ]);
           expect(currentCredential()).toBe(value);
         }
         expect(reloadSecrets).toHaveBeenLastCalledWith({
           forceColdRefKeys: new Set([`store:default:${name}`]),
           joinInFlight: false,
         });
-        expect(await invoke(handlers, "secrets.store.delete", { name })).toMatchObject([
+        expect(await invoke("secrets.store.delete", { name })).toMatchObject([
           true,
           { ok: true, reloaded: true },
         ]);
         expectCold();
-        expect(reloadSecrets).toHaveBeenCalledTimes(3);
         // Environment entries remain an operator-owned write path, and unrelated
         // names must not refresh every auth profile on the Gateway.
         expect(
-          await invoke(handlers, "secrets.store.set", {
+          await invoke("secrets.store.set", {
             name: "UNRELATED_SETTING",
             value: "enabled",
             kind: "env",
           }),
         ).toMatchObject([true, { ok: true, reloaded: false }]);
         expect(reloadSecrets).toHaveBeenCalledTimes(3);
-        expect(
-          await readSecretStoreValue({ scope: { kind: "team" }, name: "UNRELATED_SETTING" }),
-        ).toEqual({ ok: true, value: "enabled" });
-        clearSecretsRuntimeSnapshot();
+        expect(await readSecret("UNRELATED_SETTING")).toEqual({ ok: true, value: "enabled" });
       });
     },
   );

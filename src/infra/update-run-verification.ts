@@ -1,4 +1,6 @@
+import { hasUpdateGatewayStopIntent } from "./update-run-gateway-stop.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
+import { upsertStep } from "./update-run-step-upsert.js";
 
 export function isUpdateRunVerificationConfirmed(
   verification: UpdateRunRecord["verification"],
@@ -7,8 +9,8 @@ export function isUpdateRunVerificationConfirmed(
     verification.serviceRunning === true &&
     verification.versionMatch === true &&
     verification.settled === true &&
-    verification.readyz === true &&
-    verification.channelsReady === true &&
+    (verification.coreReady ??
+      (verification.readyz === true && verification.channelsReady === true)) &&
     verification.pluginErrors?.length === 0
   );
 }
@@ -23,9 +25,28 @@ export function recordUpdateRunVerificationRecord(
   if (options.onlyIfRunning && record.status !== "running") {
     return;
   }
+  // Preserve post-stop liveness independently of readiness and a later operator
+  // stop. Pre-handoff snapshots and patches without a running observation do not count.
+  if (verification.serviceRunning === true && hasUpdateGatewayStopIntent(record)) {
+    upsertStep(record, {
+      step: "service-running",
+      status: "completed",
+      endedAtMs: Date.now(),
+    });
+  }
+  // A skipped observer cannot revoke the durable receipt of a delivered notice.
+  let observedVerification = verification;
+  if (record.verification.noticeDelivered === true && verification.noticeDelivered === false) {
+    observedVerification = { ...verification };
+    delete observedVerification.noticeDelivered;
+  }
   record.verification = {
     ...record.verification,
-    ...verification,
+    // A released observer's readiness verdict cannot inherit a newer core proof.
+    ...(verification.readyz !== undefined && verification.coreReady === undefined
+      ? { coreReady: undefined }
+      : {}),
+    ...observedVerification,
     ...(verification.pluginErrors ? { pluginErrors: verification.pluginErrors.slice(-32) } : {}),
   };
   if (record.status === "running" && verification.serviceRunning === false) {

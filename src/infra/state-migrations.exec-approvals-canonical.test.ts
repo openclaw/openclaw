@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { runClientCredentialOperation } from "./client-credential-store.js";
 import { ExecApprovalsMigrationRequiredError } from "./exec-approvals-migration-gate.js";
 import {
   snapshotFromExecApprovalsRow,
@@ -51,6 +52,12 @@ it.each([false, true])(
       }
       const database = openOpenClawStateDatabase({ env });
       writeExecApprovalsConfigRow({ db: database.db, file: { version: 1 }, raw, now: 73 });
+      // Seed the retired layout through SQL; current policy writes reject embedded credentials.
+      database.db
+        .prepare(
+          "UPDATE exec_approvals_config SET raw_json = ?, socket_path = ?, has_socket_token = 1 WHERE config_key = 'current'",
+        )
+        .run(raw, original.socket.path);
       const readRow = () => database.db.prepare("SELECT * FROM exec_approvals_config").get();
       const before = readRow();
       const displayPath = `${database.path}#exec_approvals_config`;
@@ -90,7 +97,7 @@ it.each([false, true])(
       const first = await readExecApprovalsPolicyReadOnlyAsync({ env });
       expect(first.file).toEqual({
         version: 1,
-        socket: original.socket,
+        socket: undefined,
         defaults: original.defaults,
         agents: {
           main: {
@@ -103,6 +110,10 @@ it.each([false, true])(
             mcpTools: original.agents.default.mcpTools,
           },
         },
+      });
+      expect(runClientCredentialOperation(env, { kind: "socket.read" })).toMatchObject({
+        kind: "socket",
+        socket: { socket_path: original.socket.path, socket_token: original.socket.token },
       });
       expect(readRow()).toMatchObject({ updated_at_ms: 73, agent_count: 1, allowlist_count: 3 });
       const canonical = readRow();

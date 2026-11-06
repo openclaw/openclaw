@@ -38,10 +38,6 @@ function decimalStringRational(value: string): DecimalRational | undefined {
   };
 }
 
-function decimalRationalsEqual(left: DecimalRational, right: DecimalRational): boolean {
-  return left.numerator * right.denominator === right.numerator * left.denominator;
-}
-
 export function isConfigFormDecimalNumberString(value: string): boolean {
   return CONFIG_FORM_DECIMAL_NUMBER_RE.test(value.trim());
 }
@@ -70,7 +66,9 @@ export function coerceConfigFormNumberString(
   // comparison so ordinary JSON decimals such as 0.10 keep their old type.
   const matchesRepresentedValue = Number.isInteger(parsed)
     ? authored.numerator === BigInt(parsed) * authored.denominator
-    : decimalSpelling && decimalRationalsEqual(authored, decimalSpelling);
+    : decimalSpelling &&
+      authored.numerator * decimalSpelling.denominator ===
+        decimalSpelling.numerator * authored.denominator;
   if (!matchesRepresentedValue) {
     return value;
   }

@@ -1,8 +1,15 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
+import { recordGoalContinuationSettlement } from "../../auto-reply/reply/goal-continuation-return.js";
 import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import type { CliDeps } from "../../cli/deps.types.js";
-import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../../config/sessions/restart-recovery-types.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../../config/sessions/session-actor-storage-binding.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -11,29 +18,18 @@ import { isSubagentSessionKey } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import {
-  buildRestartRecoveryTerminalDeliveryEvidence,
-  constrainRestartRecoveryDeliveryPayloads,
-  shouldPersistCurrentRunSessionCleanup,
-} from "../agent-command-restart-recovery.js";
-import { normalizeAgentRunTerminalDeliverySnapshot } from "../agent-run-terminal-delivery.js";
-import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
   mergeAgentRunTerminalOutcome,
 } from "../agent-run-terminal-outcome.js";
-import { normalizeAgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
-import { normalizeAgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import { OPENCLAW_AGENT_RUNTIME_ID } from "../agent-runtime-id.js";
-import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import type { AcceptedCompactionSuccessor } from "../embedded-agent-runner/compaction-successor.js";
-import { buildMainSessionRecoverySettlementPatch } from "../main-session-recovery/main-session-recovery-clear.js";
-import { inspectRecoveryLifecycleEvent } from "../main-session-recovery/main-session-recovery-lifecycle.js";
-import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-marker.js";
-import type { AgentRunSessionTarget } from "../run-session-target.types.js";
 import {
-  createAgentRunRestartAbortError,
-  throwAgentRunRestartAbortReason,
-} from "../run-termination.js";
+  advancePendingFinalDeliveryCompletion,
+  persistPendingFinalDeliveryMarker,
+  type PendingFinalDeliverySource,
+} from "../pending-final-delivery-marker.js";
+import { throwAgentRunRestartAbortReason } from "../run-termination.js";
 import type { SessionMaintenanceRequest } from "../session-maintenance/run.js";
 import { persistAssistantTranscriptRepairRecord } from "./assistant-transcript-repair.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
@@ -58,42 +54,8 @@ type EmbeddedAgentAttempt = Awaited<ReturnType<typeof runEmbeddedAgentAttempt>>;
 
 const log = createSubsystemLogger("agents/agent-command");
 
-export function createCompactionSessionIdReporter(
-  sessionId: string,
-  onSessionIdChanged: AgentCommandOpts["onSessionIdChanged"],
-) {
-  let notifiedSessionId = sessionId;
-  let pendingCompactionSessionId: string | undefined;
-  const notifySessionIdChanged = (nextSessionId: string) => {
-    notifiedSessionId = nextSessionId;
-    pendingCompactionSessionId = undefined;
-    onSessionIdChanged?.(nextSessionId);
-  };
-  return {
-    onSessionIdChanged: notifySessionIdChanged,
-    onCompactionCommitted: (nextSessionId: string | undefined) => {
-      if (nextSessionId !== undefined) {
-        pendingCompactionSessionId = nextSessionId;
-      }
-    },
-    reportCommitted: () => {
-      // Compaction can commit before abort or maintenance fails. The command's
-      // finally reports it outside commit bookkeeping so cleanup targets its row.
-      if (
-        pendingCompactionSessionId !== undefined &&
-        pendingCompactionSessionId !== notifiedSessionId
-      ) {
-        try {
-          notifySessionIdChanged(pendingCompactionSessionId);
-        } catch (error) {
-          log.warn(`failed to report settled session identity: ${coerceErrorMessage(error)}`);
-        }
-      }
-    },
-  };
-}
-
 export async function finalizeEmbeddedAgentCommand(params: {
+  admittedDeliverySource?: PendingFinalDeliverySource;
   prepared: PreparedAgentCommandExecution;
   opts: AgentCommandOpts;
   deps: CliDeps;
@@ -108,13 +70,9 @@ export async function finalizeEmbeddedAgentCommand(params: {
     runOwnedSessionId: string;
     sessionReboundDuringRun: boolean;
   };
-  trackInternalModelRunTarget: (target: AgentRunSessionTarget | undefined) => void;
   onSessionOwnershipChanged: (
     ownership: { runOwnedSessionId: string; sessionReboundDuringRun: boolean },
     committedCompactionSessionId?: string,
-  ) => void;
-  onTerminalDeliveryEvidenceChanged: (
-    evidence: RestartRecoveryTerminalDeliveryEvidenceResult,
   ) => void;
 }) {
   const operatorAuthority = params.opts.operatorAuthority;
@@ -135,6 +93,15 @@ export async function finalizeEmbeddedAgentCommand(params: {
     outboundSession,
     runId,
   } = params.prepared;
+  const sessionSource = sessionKey
+    ? captureSessionActorStorageOwner(
+        { agentId: sessionAgentId, storePath, sessionKey },
+        {
+          assertCurrent: () => assertSourceCurrent?.(),
+          authorize() {},
+        },
+      )
+    : undefined;
   const {
     fallbackProvider,
     fallbackModel,
@@ -154,19 +121,12 @@ export async function finalizeEmbeddedAgentCommand(params: {
     lifecycleGeneration,
   } = params.attempt;
   const { skillsSnapshot, runContext } = params.embeddedSessionState;
-  const interruptedForRestart = () =>
-    inspectRecoveryLifecycleEvent({
-      event: { data: { phase: "end", ...terminal.outcome } },
-      abortSignal: deferredLifecycle.signal,
-    }).interrupted;
   const effectiveCwd = cwd ?? workspaceDir;
-  const isHeartbeatLifecycleRun = isHeartbeatLifecycleRunKind(params.opts.bootstrapContextRunKind);
   let sessionEntry = params.sessionEntry;
   // Return the same producer-owned facts published to agent.wait. Payloads and
   // display history cannot reconstruct a yielded or intentionally empty result.
-  const terminalReply = normalizeAgentRunTerminalReplySnapshot(terminal.metadata.terminalReply);
-  const terminalReceipt = normalizeAgentRunTerminalReceipt(terminal.metadata.terminalReceipt);
-  let result = {
+  const { terminalReply, terminalReceipt } = terminal.metadata;
+  const result = {
     ...params.attempt.result,
     meta: {
       ...params.attempt.result.meta,
@@ -181,13 +141,11 @@ export async function finalizeEmbeddedAgentCommand(params: {
   let terminalError: string | undefined;
   let maintenanceRequest: SessionMaintenanceRequest | undefined;
   let { runOwnedSessionId, sessionReboundDuringRun } = params.sessionOwnership;
-  const publishSessionOwnership = (committedCompactionSessionId?: string) => {
-    // Outer restart-recovery cleanup runs even after later delivery failures.
+  const publishSessionOwnership = (committedCompactionSessionId?: string) =>
     params.onSessionOwnershipChanged(
       { runOwnedSessionId, sessionReboundDuringRun },
       committedCompactionSessionId,
     );
-  };
 
   try {
     await fallbackTrajectoryRecorder?.flush();
@@ -197,16 +155,6 @@ export async function finalizeEmbeddedAgentCommand(params: {
     const assistantTranscriptOwned =
       finalVisiblePayload !== undefined &&
       getReplyPayloadMetadata(finalVisiblePayload)?.assistantTranscriptOwned === true;
-    if (params.opts.internalDeliveryMediaUrls !== undefined) {
-      result = {
-        ...result,
-        payloads: constrainRestartRecoveryDeliveryPayloads(
-          result.payloads,
-          params.opts.internalDeliveryMediaUrls,
-          params.opts.internalDeliverySuppressText === true,
-        ),
-      };
-    }
     const resultErrorPayload = result.payloads?.find((payload) => payload.isError === true);
     if (resultErrorPayload) {
       const message =
@@ -215,7 +163,6 @@ export async function finalizeEmbeddedAgentCommand(params: {
           : undefined;
       params.opts.onResultErrorPayload?.(message);
     }
-    params.onTerminalDeliveryEvidenceChanged(buildRestartRecoveryTerminalDeliveryEvidence(result));
 
     const compactionFact = params.attempt.compactionAccounting;
     const effectiveSessionId =
@@ -237,21 +184,16 @@ export async function finalizeEmbeddedAgentCommand(params: {
         result,
         compactionAccounting: compactionFact,
         touchInteraction:
-          params.opts.bootstrapContextRunKind !== "cron" &&
-          !isHeartbeatLifecycleRun &&
-          !params.opts.internalEvents?.length,
-        // Cron output counts as unread-worthy activity; heartbeat and
-        // internal-event turns must not re-flag the session unread.
-        touchActivity: !isHeartbeatLifecycleRun && !params.opts.internalEvents?.length,
+          params.opts.bootstrapContextRunKind !== "cron" && !params.opts.internalEvents?.length,
+        // Cron output counts as unread-worthy activity; internal events do not.
+        touchActivity: !params.opts.internalEvents?.length,
         preserveRuntimeModel:
+          result.meta.providerStarted === false ||
           fallbackExhausted ||
           fallbackProvider !== provider ||
           fallbackModel !== model ||
-          isHeartbeatLifecycleRun ||
           params.preserveUserFacingSessionModelState,
         preserveUserFacingSessionModelState: params.preserveUserFacingSessionModelState,
-        clearRestartRecoveryForceSafeTools:
-          params.opts.forceRestartSafeTools === true && params.opts.deliver !== true,
       });
       sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
     }
@@ -266,6 +208,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
           body,
           transcriptBody,
           inputProvenance: params.opts.inputProvenance,
+          privateCompletion: params.opts.privateCompletion,
           result,
           sessionId: effectiveSessionId,
           sessionKey: internalSessionTarget?.sessionKey ?? sessionKey ?? effectiveSessionId,
@@ -276,6 +219,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
           threadId: params.opts.threadId,
           sessionCwd: effectiveCwd,
           config: cfg,
+          runId,
           skipAssistantTurn: assistantTranscriptOwned,
           skipUserTurn:
             suppressUserTurnPersistence ||
@@ -322,6 +266,8 @@ export async function finalizeEmbeddedAgentCommand(params: {
 
     const payloads = result.payloads ?? [];
     const pendingFinalDeliveryMarker = await persistPendingFinalDeliveryMarker({
+      admittedSource: params.admittedDeliverySource,
+      compactionTransitions: compactionFact?.admissionTransitions,
       assertCurrent: () => {
         assertSourceCurrent?.();
         operatorAuthority?.assertCurrent();
@@ -341,19 +287,34 @@ export async function finalizeEmbeddedAgentCommand(params: {
       runOwnedSessionId,
     });
     sessionEntry = pendingFinalDeliveryMarker.sessionEntry;
+    let deliveryLifecycleRevision = sessionEntry?.lifecycleRevision;
 
     const resolveFreshSessionEntryForDelivery =
       sessionStore && sessionKey && !params.suppressVisibleSessionEffects
         ? async (): Promise<SessionEntry | undefined> => {
-            const { loadSessionEntryReadOnly } = await loadSessionStoreRuntime();
-            const freshEntry = loadSessionEntryReadOnly({
-              agentId: sessionAgentId,
-              storePath,
-              sessionKey,
-              readConsistency: "latest",
-              clone: false,
-            });
-            if (!freshEntry || freshEntry.sessionId !== runOwnedSessionId) {
+            const assertCurrent = () => {
+              assertSourceCurrent?.();
+              operatorAuthority?.assertCurrent();
+              assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+            };
+            assertCurrent();
+            const freshEntry = sessionSource
+              ? readCapturedSessionActorEntry(sessionSource, normalizeStoreSessionKey(sessionKey))
+              : await readSessionEntryReadOnlyInWorker(
+                  {
+                    agentId: sessionAgentId,
+                    storePath,
+                    sessionKey,
+                    readConsistency: "latest",
+                    clone: false,
+                  },
+                  assertCurrent,
+                );
+            if (
+              !freshEntry ||
+              freshEntry.sessionId !== runOwnedSessionId ||
+              freshEntry.lifecycleRevision !== deliveryLifecycleRevision
+            ) {
               return undefined;
             }
             sessionStore[sessionKey] = freshEntry;
@@ -380,7 +341,6 @@ export async function finalizeEmbeddedAgentCommand(params: {
       sessionStore &&
       !params.suppressVisibleSessionEffects &&
       !sessionReboundDuringRun &&
-      !isHeartbeatLifecycleRun &&
       cfg.agents?.defaults?.compaction?.enabled !== false &&
       embeddedMaintenance
         ? {
@@ -430,18 +390,26 @@ export async function finalizeEmbeddedAgentCommand(params: {
         );
       };
       const onCommitted = (accepted: AcceptedCompactionSuccessor) => {
+        advancePendingFinalDeliveryCompletion({
+          payloads,
+          intentId: pendingFinalDeliveryMarker.pendingFinalDeliveryIntentId,
+          transition: accepted.admissionTransition,
+          entry: accepted.entry,
+        });
         sessionEntry = accepted.entry;
         maintenanceLifecycleRevision = accepted.entry.lifecycleRevision;
+        deliveryLifecycleRevision = accepted.entry.lifecycleRevision;
         runOwnedSessionId = accepted.sessionId;
         publishSessionOwnership(
           accepted.previousSessionId === undefined ? undefined : accepted.sessionId,
         );
       };
-      const assertActive = () => {
+      const assertActive = composeSessionSourceAssertion([assertSourceCurrent], (assertSources) => {
+        assertSources();
         if (!authorize()) {
           throw new Error("Command compaction is no longer active");
         }
-      };
+      });
       try {
         if (maintenance.remainingMs() > 0) {
           const { runCliTurnCompactionLifecycle } = await loadCliCompactionRuntime();
@@ -459,6 +427,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
               agentDir,
               provider: agentMeta?.provider ?? provider,
               model: agentMeta?.model ?? model,
+              cliBackendId: result.meta.executionTrace?.winnerProvider,
               skillsSnapshot,
               messageChannel,
               agentAccountId: runContext.accountId,
@@ -507,7 +476,16 @@ export async function finalizeEmbeddedAgentCommand(params: {
       }
     }
 
-    await params.opts.beforeTerminalDelivery?.();
+    await params.opts.beforeTerminalDelivery?.(
+      sessionReboundDuringRun
+        ? undefined
+        : {
+            payloads,
+            sessionId: runOwnedSessionId,
+            lifecycleRevision: sessionEntry?.lifecycleRevision,
+            storePath,
+          },
+    );
     const { deliverAgentCommandResult } = await loadDeliveryRuntime();
     const deliveryParams = {
       cfg,
@@ -518,25 +496,19 @@ export async function finalizeEmbeddedAgentCommand(params: {
       sessionEntry,
       result,
       payloads,
-      assertDeliveryCurrent: () => {
-        params.opts.assertSourceCurrent?.();
+      assertDeliveryCurrent: composeSessionSourceAssertion([assertSourceCurrent], (check) => {
+        check();
         params.opts.abortSignal?.throwIfAborted();
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-      },
+      }),
       onDeliveryResult: (delivered: AgentCommandDeliveryResult) => {
         const deliveryStatus = delivered.deliveryStatus;
-        const terminalDelivery = normalizeAgentRunTerminalDeliverySnapshot(
-          deliveryStatus && {
+        if (deliveryStatus) {
+          terminal.metadata.terminalDelivery = {
             status: deliveryStatus.status,
             resultCount: deliveryStatus.resultCount ?? 0,
-          },
-        );
-        if (terminalDelivery) {
-          terminal.metadata.terminalDelivery = terminalDelivery;
+          };
         }
-        params.onTerminalDeliveryEvidenceChanged(
-          buildRestartRecoveryTerminalDeliveryEvidence(delivered),
-        );
       },
     };
     deliveryResult = await deliverAgentCommandResult(
@@ -555,7 +527,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
       !isSubagentSessionKey(sessionKey) &&
       !params.suppressVisibleSessionEffects &&
       !sessionReboundDuringRun &&
-      !interruptedForRestart()
+      !deferredLifecycle.signal.aborted
     ) {
       const entry =
         (await resolveFreshSessionEntryForDelivery?.()) ?? sessionStore[sessionKey] ?? sessionEntry;
@@ -571,18 +543,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
       const clearOwnedPendingFinal =
         deliveryResult?.deliverySucceeded === true &&
         pendingFinalDeliveryMarker.pendingFinalDeliveryIntentId !== undefined;
-      // Preserve the exact claim snapshot through sibling session writes, then
-      // revalidate its durable owner immediately before committing cleanup.
-      const recoveryClaimEntry =
-        entry.restartRecoveryDeliveryRunId === runId
-          ? entry
-          : sessionEntry?.restartRecoveryDeliveryRunId === runId
-            ? sessionEntry
-            : params.sessionEntry?.restartRecoveryDeliveryRunId === runId
-              ? params.sessionEntry
-              : undefined;
-      const clearsRecoveryCycle = entry.restartRecoveryDeliveryRunId === runId;
-      if (clearOwnedPendingFinal || clearStaleTransportOnly || recoveryClaimEntry) {
+      if (clearOwnedPendingFinal || clearStaleTransportOnly) {
         const now = Date.now();
         sessionEntry = await persistAgentSession({
           agentId: sessionAgentId,
@@ -590,38 +551,15 @@ export async function finalizeEmbeddedAgentCommand(params: {
           sessionKey,
           storePath,
           initialEntry: entry,
-          entry: {
-            ...(clearOwnedPendingFinal || clearStaleTransportOnly
-              ? clearPendingFinalDelivery(entry, now)
-              : { ...entry, updatedAt: now }),
-            ...(recoveryClaimEntry
-              ? buildMainSessionRecoverySettlementPatch({
-                  entry: {
-                    ...recoveryClaimEntry,
-                    restartRecoveryTerminalDeliveryEvidence:
-                      entry.restartRecoveryTerminalDeliveryEvidence,
-                    restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
-                  },
-                  recordTerminalSource: true,
-                  clearRecoveryState: clearsRecoveryCycle,
-                  terminalDeliveryEvidence: buildRestartRecoveryTerminalDeliveryEvidence(
-                    deliveryResult ?? result,
-                  ),
-                  terminalRunId: runId,
-                })
-              : {}),
-          },
+          entry: clearPendingFinalDelivery(entry, now),
           assertCommitAllowed: () => {
-            if (interruptedForRestart()) {
-              throw createAgentRunRestartAbortError();
-            }
+            assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+            deferredLifecycle.signal.throwIfAborted();
           },
           shouldPersist: (current) =>
-            !interruptedForRestart() &&
-            shouldPersistCurrentRunSessionCleanup(current, runOwnedSessionId) &&
-            (!recoveryClaimEntry ||
-              current?.restartRecoveryDeliveryRunId === runId ||
-              (!clearsRecoveryCycle && current?.restartRecoveryDeliveryRunId === undefined)) &&
+            !deferredLifecycle.signal.aborted &&
+            current?.sessionId === runOwnedSessionId &&
+            current.lifecycleRevision === entry.lifecycleRevision &&
             (!clearOwnedPendingFinal ||
               current?.pendingFinalDelivery?.intentId ===
                 pendingFinalDeliveryMarker.pendingFinalDeliveryIntentId) &&
@@ -660,6 +598,16 @@ export async function finalizeEmbeddedAgentCommand(params: {
         }),
       )
     : terminal.outcome;
+  recordGoalContinuationSettlement({
+    runId,
+    sessionKey,
+    result,
+    succeeded:
+      result.meta.agentMeta?.agentHarnessId === OPENCLAW_AGENT_RUNTIME_ID &&
+      !hasResultError &&
+      classifyAgentRunTerminalOutcome(outcome) === "success" &&
+      (params.opts.deliver !== true || deliveryResult?.deliverySucceeded === true),
+  });
   return {
     maintenance:
       classifyAgentRunTerminalOutcome(outcome) === "success" &&

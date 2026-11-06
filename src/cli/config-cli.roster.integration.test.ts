@@ -8,6 +8,7 @@ import { resolveLegacyInheritedAuthAgentId } from "../agents/legacy-inherited-au
 import { readConfigFileSnapshot } from "../config/config.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 import { formatCliCommand } from "./command-format.js";
 import { useConfigCliIntegrationHarness } from "./config-cli.integration.test-harness.js";
 
@@ -21,7 +22,6 @@ const {
 
 const read = (file: string) => fs.readFileSync(file, "utf8");
 const load = (file: string) => JSON5.parse(read(file));
-const run = (...args: string[]) => invoke(["config", ...args]);
 const set = (...args: string[]) => invoke(["config", "set", ...args]);
 const reject = (result: Promise<unknown>) =>
   expect(result).rejects.toMatchObject({ name: "ExitError", code: 1 });
@@ -95,24 +95,6 @@ describe("config cli roster integration", () => {
   const changedList = Object.entries(changedEntries).map(([id, entry]) =>
     Object.assign({ id }, entry),
   );
-  it("persists an indexed roster edit after a read-only preview", async () => {
-    const agents = {
-      ownership: "explicit",
-      entries: originalEntries,
-    };
-    const raw = `${JSON.stringify({ agents })}\n`;
-    await withConfig(raw, async ({ configPath }) => {
-      const args = ["set", "agents.list[0].name", "changed-main"];
-      await run(...args, "--dry-run");
-      expect(read(configPath)).toBe(raw);
-      await run(...args);
-      const after = load(configPath);
-      expect(after.agents.entries).toEqual(changedEntries);
-      expect(after.agents).not.toHaveProperty("list");
-      expect(errors).toEqual([]);
-    });
-  });
-
   it("requires Doctor before editing a persisted legacy roster", async () => {
     const raw = JSON.stringify({
       agents: {
@@ -408,31 +390,28 @@ describe("config cli roster integration", () => {
   });
 
   it.each([
-    { name: "entry recreated", removed: { main: null }, main: { name: "changed-main" } },
+    { name: "recreated", removed: { main: null, worker: null }, main: { name: "changed-main" } },
     { name: "leaf remains deleted", removed: { main: { name: null } }, main: {} },
   ])("honors mixed patch ordering when $name", async ({ removed, main }) => {
     const raw = JSON.stringify({ agents: { ownership: "explicit", entries: originalEntries } });
     await withConfig(raw, async ({ configPath, tempDir }) => {
       const patchPath = path.join(tempDir, "patch.json");
-      fs.writeFileSync(
-        patchPath,
-        JSON.stringify({
-          agents: {
-            entries: removed,
-            list: [
-              { id: "main", ...main },
-              { id: "worker", name: "original-worker" },
-            ],
-          },
-        }),
-      );
+      writeFixtureJsonSync(patchPath, {
+        agents: {
+          entries: removed,
+          list: [
+            { id: "main", ...main },
+            { id: "worker" in removed ? "replacement" : "worker", name: "original-worker" },
+          ],
+        },
+      });
       const args = ["config", "patch", "--file", patchPath];
       await invoke([...args, "--dry-run"]);
       expect(read(configPath)).toBe(raw);
       await invoke(args);
       expect(load(configPath).agents.entries).toEqual({
         main,
-        worker: originalEntries.worker,
+        ["worker" in removed ? "replacement" : "worker"]: originalEntries.worker,
       });
     });
   });
@@ -500,7 +479,7 @@ describe("config cli roster integration", () => {
     await withConfig(raw, async ({ configPath, tempDir }) => {
       const patchPath = path.join(tempDir, "replacement.json");
       if ("patch" in scenario) {
-        fs.writeFileSync(patchPath, JSON.stringify(scenario.patch));
+        writeFixtureJsonSync(patchPath, scenario.patch);
       }
       const args =
         "patch" in scenario
@@ -521,7 +500,7 @@ describe("config cli roster integration", () => {
         await reject(set(modelPath, "missing-roster-provider/missing-model"));
         expect(read(configPath)).toBe(raw);
         expect(errors.join("\n")).toContain(
-          'Cannot set model reference "<configured model reference>" at agents.entries.main.model',
+          'Cannot set model reference "missing-roster-provider/missing-model" at agents.entries.main.model: Unknown model: missing-roster-provider/missing-model.',
         );
         expect(errors.join("\n")).toContain(formatCliCommand("openclaw models list"));
       });
@@ -612,10 +591,10 @@ describe("config cli roster integration", () => {
       expect(after.agents).toMatchObject({
         ownership: "explicit",
         defaults: {
-          heartbeat: { agentId: ownerId },
           systemAgent: { agentId: ownerId },
         },
       });
+      expect(after.agents.defaults).not.toHaveProperty("heartbeat");
       expect(after.agents.entries).toEqual({
         [ownerId]: { name: "original-owner", workspace },
         work: { name: "new-worker" },

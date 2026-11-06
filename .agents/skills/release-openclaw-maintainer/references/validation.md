@@ -7,15 +7,37 @@ waived by success on another surface.
 
 ## Older updater checks
 
-Before freezing a release, refresh `scripts/lib/update-compat-inventory.json`
-from every release in the supported upgrade window. Verify each downloaded npm
-tarball against its published `dist.integrity` before extraction, then run
-`pnpm update:compat:gen --release '<unpacked-dir>=<verified-integrity>'`, repeating
-`--release` for every supported version. Generation replaces the recorded set:
+`scripts/lib/update-compat-inventory.json` is test-fixture maintenance, not a
+packaging or publish gate: npm preflight, prepack, `release-check`, and
+`release:prep` never consult live npm dist-tags, so another release moving
+`latest` or `beta` cannot invalidate a validated candidate. Refresh it on
+`main` (stable closeout or a normal PR) from every release in the supported
+upgrade window with `pnpm update:compat:gen --registry-release <version>`,
+repeating `--registry-release` for every supported version. This mode downloads
+the exact registry tarball URL, verifies its published `dist.integrity`, and
+unpacks it without npm installation or freshness policy. For an already
+downloaded and verified artifact, use
+`--release '<unpacked-dir>=<verified-integrity>'`; both input modes may be mixed.
+Generation replaces the recorded set:
 keep empty entries, drop expired versions and their historical corrections, and
-never hand-edit recorded origins. Run `pnpm update:compat:check`; both npm
-`latest` and `beta` must be covered. Repeat the generation arguments with
-`--check` for an offline regeneration check.
+never hand-edit recorded origins. Build the candidate with `pnpm build`, then run
+`pnpm update:compat:check`: it validates every recorded bridge against that
+checkout's `dist` without modifying build output, then reports npm
+`latest`/`beta`/`extended-stable` coverage. Repeat the generation arguments with
+`--check` to validate regeneration and bridgeability for an explicitly selected
+window without live dist-tag coverage. It is offline only when every input uses
+local `--release`; `--registry-release` checks fetch and verify the registry
+artifact again.
+
+A dist-tag is a source to assess, not proof that this candidate can bridge its
+updater. Schema-incompatible tags are accounted as unsupported. Even matching
+schemas can have a newer updater ABI: an extended-stable release built from a
+newer line may reference exports absent from the candidate. Do not add such an
+entry merely to satisfy tag coverage, rewrite its recorded origins, or skip the
+bridge check. Keep the supported, bridgeable window explicit and report the
+uncovered tagged version and bridge failure in release evidence; the coverage
+report remains incomplete until a compatible target or a qualified bridge exists.
+This does not certify updates from the omitted version.
 
 Run every recorded `update-first-hop-compat*` lane and the upgrade survivor lane
 from the oldest supported release. Native Windows proof must invoke the old
@@ -68,10 +90,14 @@ non-root-skip mode, not permission to skip install proof. Published correction
 versions must prove upgrade from their base stable package. Postpublish use:
 
 ```bash
-OPENCLAW_NPM_EXPECTED_WORKFLOW_REF=refs/tags/release-publish/<tooling-sha12>-<epoch> \
-OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA=<tooling-sha> \
 node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 ```
+
+Without `OPENCLAW_NPM_EXPECTED_WORKFLOW_REF`/`_SHA`, the verifier derives the
+publish tooling from the attested `release-publish/*` tag and accepts it only
+when GitHub still has that exact lightweight tag at the attested commit and the
+commit is reachable from `main` (requires `gh` auth). Set both variables only to
+pin an explicit identity; a partial override is rejected.
 
 Run it from a checkout of the Release SHA once the registry lists the version
 (see [regular release](regular-release.md#publish-and-verify)).
@@ -112,16 +138,18 @@ also defers Package Acceptance Telegram, broad live/E2E, QA-live and Parallels.
 Package Telegram deferral applies to beta-profile `main` too, but it does not
 qualify for `npm-beta-v1`.
 
-FRV `normalCi` Windows Node shards and all other selected failures block. Decide
+FRV `normalCi` Windows Node shards and all other hard-gate failures block. Decide
 blocker or flake for every failure,
 rerun flakes on the same Release SHA at most twice, and file a fix-in-parallel
-issue/PR on `main`. Do not re-cut, change tooling, or start another FRV solely
-to clear a flake; the selected job must still pass before publication. See the
+issue/PR on `main`. Do not re-cut solely to clear a flake. Every unwaived selected
+job must pass, and FRV itself must conclude success before publication. See the
 [CI skill](../../release-openclaw-ci/SKILL.md#publication-requirements).
 Native platform publication remains independent and follows its own gates.
 All-group cross-OS qualification requires all nine Linux/Windows/macOS
 install/upgrade pairs. Focused recovery may select individual lanes but does
-not itself qualify publication. No lane or soak waiver can bypass failures.
+not itself qualify publication. Exact live-provider/Telegram failures may use
+only the [checked-in release-tooling policy](../../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers),
+evaluated within FRV. Hard gates and soak cannot be waived.
 
 ## Postpublish confidence
 
@@ -170,10 +198,16 @@ claiming those objectives as measured guarantees.
 Selected validation tests block the npm/ClawHub decision on failure. Native
 publication retains independent artifact and updater gates.
 
-Local proof is targeted: never mirror Full Release Validation locally. Run a
-lane locally only after it failed in CI, to separate flake from defect, bounded
-to 15 minutes per lane; a lane that needs longer reruns in CI through its
-focused `rerun_group`. Individual npm install/update phases cap at 300 seconds.
+Local proof is targeted: never mirror Full Release Validation locally or put
+redundant local suites ahead of remote dispatch. Follow the
+[FRV wall-time loop](../../release-openclaw-ci/SKILL.md#keep-frv-off-the-idle-path):
+after required preflight and known non-flake repairs, start remote FRV while
+useful local checks run concurrently. Favor checks that answer a concrete
+question or validate a repair, and reuse equivalent exact-SHA evidence.
+Local diagnosis or regression checks need not wait for a remote failure;
+avoid making optional extra confidence a prerequisite for dispatch. Bound local
+lane diagnosis to 15 minutes; a lane that needs longer reruns in CI through its focused
+`rerun_group`. Individual npm install/update phases cap at 300 seconds.
 On timeout, inspect the affected lane instead of leaving it running. Serialize
 build/package mutations before VM packing so a concurrent build cannot remove
 `dist`; avoid load-induced noise.

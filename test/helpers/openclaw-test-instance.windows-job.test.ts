@@ -26,8 +26,7 @@ it("finalizes the native Job even when the Gateway and all output already closed
   const gateway = spawn("fixture", [], { stdio: ["ignore", "pipe", "pipe"] });
   const taskkill = vi.fn();
   await expect(
-    testing.stopGatewayProcess(gateway, Date.now() + 500, 250, {
-      platform: "win32",
+    testing.stopWindowsGatewayProcess(gateway, Date.now() + 500, 250, {
       runTaskkill: taskkill,
     }),
   ).resolves.toBe(true);

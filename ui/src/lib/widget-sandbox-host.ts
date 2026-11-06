@@ -55,6 +55,10 @@ export class WidgetSandboxHost {
     return this.documentLoaded;
   }
 
+  get rendered(): boolean {
+    return this.loaded && this.renderId === null;
+  }
+
   update(options: WidgetSandboxHostOptions): void {
     const sandboxChanged =
       this.options.frame !== options.frame || this.options.sandboxUrl !== options.sandboxUrl;
@@ -142,13 +146,11 @@ export class WidgetSandboxHost {
   }
 
   private clearReadyTimeout(): void {
-    if (this.slowTimer !== null) {
-      window.clearTimeout(this.slowTimer);
-      this.slowTimer = null;
-    }
-    if (this.readyTimer !== null) {
-      window.clearTimeout(this.readyTimer);
-      this.readyTimer = null;
+    for (const key of ["slowTimer", "readyTimer"] as const) {
+      if (this[key] !== null) {
+        window.clearTimeout(this[key]);
+        this[key] = null;
+      }
     }
   }
 
@@ -223,12 +225,7 @@ export class WidgetSandboxHost {
 
   private async loadDocument(): Promise<void> {
     const { loadDocument } = this.options;
-    if (
-      this.loaded ||
-      this.pendingDocument !== null ||
-      this.activeLoad !== null ||
-      !this.frame.contentWindow
-    ) {
+    if (this.loaded || this.pendingDocument !== null || this.activeLoad !== null) {
       return;
     }
     const controller = new AbortController();

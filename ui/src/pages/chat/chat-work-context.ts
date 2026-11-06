@@ -1,4 +1,5 @@
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
+import { registerListener } from "../../../../src/shared/listeners.js";
 import { isSessionRouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
@@ -49,9 +50,7 @@ export function publishChatWorkContext(
 }
 
 export function subscribeChatWorkContext(context: object, listener: () => void): () => void {
-  const { listeners } = contextStore(context);
-  listeners.add(listener);
-  return () => listeners.delete(listener);
+  return registerListener(contextStore(context).listeners, listener);
 }
 
 export function buildHomeWorkContext(

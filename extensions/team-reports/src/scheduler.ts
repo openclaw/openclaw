@@ -10,7 +10,9 @@ import type { Person, PeriodDescriptor, SourceStatus } from "./types.js";
 
 const STOP_TIMEOUT_MS = 30_000;
 const STARTUP_GRACE_MS = 5 * 60_000;
+const DEFERRED_RETRY_MS = 60_000;
 type RunKind = "closed-day" | "intraday" | "manual";
+type ScheduleWhen = { atMs: number } | { delayMs: number };
 type ActiveRun = { id: string; controller: AbortController; done: Promise<void> };
 export type TeamReportsHealth = Awaited<ReturnType<TeamReportsScheduler["health"]>>;
 
@@ -49,7 +51,7 @@ export class TeamReportsScheduler {
   private accepting = false;
   private active?: ActiveRun;
   private stopPromise?: Promise<void>;
-  private catchUp = true;
+  private catchUpDay?: PeriodDescriptor;
   private due: { closedDay?: number; intraday?: number } = {};
   private deferred = new Set<"closed-day" | "intraday">();
   private roster: Person[];
@@ -73,8 +75,13 @@ export class TeamReportsScheduler {
       throw new Error("Team Reports scheduler cannot be started again");
     }
     this.accepting = true;
+    // Keep manual generation and stored-report readers available without arming collection.
+    if (!this.options.config.schedule.enabled) {
+      return;
+    }
     const now = Date.now();
     const notBefore = now + STARTUP_GRACE_MS;
+    this.catchUpDay = describePeriod("day", now - DAY_MS);
     try {
       this.armClosedDay(now, notBefore);
       this.armIntraday(notBefore);
@@ -95,6 +102,7 @@ export class TeamReportsScheduler {
   async status() {
     return {
       running: this.accepting,
+      scheduleEnabled: this.options.config.schedule.enabled,
       activeRunId: this.active?.id,
       nextDue: { ...this.due },
       runs: await this.options.store.listRuns(),
@@ -166,13 +174,13 @@ export class TeamReportsScheduler {
     }
   }
 
-  private schedule(id: string, atMs: number, callback: () => void | Promise<void>): void {
+  private schedule(id: string, when: ScheduleWhen, callback: () => void | Promise<void>): void {
     if (this.options.context.scheduler.signal.aborted) {
       return;
     }
     this.options.context.scheduler.schedule({
       id,
-      atMs,
+      ...when,
       run: async () => {
         try {
           await callback();
@@ -187,7 +195,7 @@ export class TeamReportsScheduler {
     const scheduled = nextClosedDayDue(afterMs, this.options.config.schedule);
     const due = Math.max(scheduled, notBeforeMs);
     this.due.closedDay = due;
-    this.schedule("closed-day", due, async () => {
+    this.schedule("closed-day", { atMs: due }, async () => {
       await this.tick("closed-day");
       if (!this.accepting) {
         return;
@@ -199,7 +207,7 @@ export class TeamReportsScheduler {
   private armIntraday(afterMs = Date.now()): void {
     this.due.intraday = nextIntradayDue(afterMs, this.options.config.schedule.intradayEveryHours);
     if (this.due.intraday !== undefined) {
-      this.schedule("intraday", this.due.intraday, async () => {
+      this.schedule("intraday", { atMs: this.due.intraday }, async () => {
         await this.tick("intraday");
         if (this.accepting) {
           this.armIntraday();
@@ -215,7 +223,9 @@ export class TeamReportsScheduler {
     if (this.active) {
       if (!this.deferred.has(kind)) {
         this.deferred.add(kind);
-        this.schedule(`deferred:${kind}`, Date.now() + 60_000, () => {
+        // A retry is a duration, not a wall-clock instant: the host anchors delayMs on its
+        // elapsed clock, so a backward wall-clock correction cannot postpone the retry.
+        this.schedule(`deferred:${kind}`, { delayMs: DEFERRED_RETRY_MS }, () => {
           this.deferred.delete(kind);
           return this.tick(kind);
         });
@@ -223,15 +233,18 @@ export class TeamReportsScheduler {
       return;
     }
     // Recover yesterday in the first scheduled run, using the worker's accepted-day reuse.
-    const catchUp = this.catchUp;
-    this.catchUp = false;
-    const runKind = catchUp ? "closed-day" : kind;
+    const catchUpDay = this.catchUpDay;
+    this.catchUpDay = undefined;
+    const runKind = catchUpDay ? "closed-day" : kind;
     const now = Date.now();
     const days =
       runKind === "closed-day"
         ? [describePeriod("day", now - DAY_MS), describePeriod("day", now)]
         : [describePeriod("day", now)];
-    await this.begin(runKind, days, catchUp);
+    if (catchUpDay && !days.some((day) => day.key === catchUpDay.key)) {
+      days.unshift(catchUpDay);
+    }
+    await this.begin(runKind, days, catchUpDay !== undefined);
   }
 
   private async begin(

@@ -1,3 +1,4 @@
+import { terminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { DEFAULT_MODEL_ALIASES } from "../../config/defaults.js";
 import { logConfigUpdated } from "../../config/logging.js";
@@ -8,6 +9,7 @@ import { loadModelsConfig } from "./load-config.js";
 import {
   ensureFlagCompatibility,
   resolveModelTarget,
+  requireKnownModelProvider,
   upsertCanonicalModelConfigEntry,
   updateConfig,
 } from "./shared.js";
@@ -35,7 +37,7 @@ export async function modelsAliasesListCommand(
   }
   if (opts.plain) {
     for (const [alias, target] of aliasEntries) {
-      writeRuntimeStdout(runtime, `${alias} ${target}`);
+      writeRuntimeStdout(runtime, terminalText`${alias} ${target}`);
     }
     return;
   }
@@ -46,7 +48,7 @@ export async function modelsAliasesListCommand(
     return;
   }
   for (const [alias, target] of aliasEntries) {
-    runtime.log(`- ${alias} -> ${target}`);
+    runtime.log(terminalText`- ${alias} -> ${target}`);
   }
 }
 
@@ -58,10 +60,16 @@ export async function modelsAliasesAddCommand(
   const alias = normalizeAlias(aliasRaw);
   const normalizedAlias = alias.toLowerCase();
   let target = modelRaw;
+  let warning: string | undefined;
   await updateConfig(
     (cfgLocal, context) => {
       // Alias resolution must share the snapshot whose hash fences this write.
       const resolved = resolveModelTarget({ raw: modelRaw, cfg: context.runtimeConfig });
+      warning = requireKnownModelProvider(
+        context.runtimeConfig,
+        resolved,
+        context.providerRegistryAvailable,
+      ).warning;
       const nextModels = { ...cfgLocal.agents?.defaults?.models };
       const modelKey = upsertCanonicalModelConfigEntry(nextModels, resolved, context);
       target = modelKey;
@@ -81,8 +89,11 @@ export async function modelsAliasesAddCommand(
     (_cfg, context) => [resolveModelTarget({ raw: modelRaw, cfg: context.runtimeConfig })],
   );
 
+  if (warning) {
+    runtime.error?.(terminalText`${warning}`);
+  }
   logConfigUpdated(runtime);
-  runtime.log(`Alias ${alias} -> ${target}`);
+  runtime.log(terminalText`Alias ${alias} -> ${target}`);
 }
 
 export async function modelsAliasesRemoveCommand(aliasRaw: string, runtime: RuntimeEnv) {

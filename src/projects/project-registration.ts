@@ -1,8 +1,9 @@
 import path from "node:path";
+import { runGit } from "../agents/worktrees/git.js";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { ProjectCheckoutError, resolveProjectCheckout } from "./project-checkout.js";
-import type { ProjectRegistryInsert, ProjectRegistryRecord } from "./project-registry.types.js";
+import type { ProjectRegistryRecord } from "./project-registry.types.js";
 
 type ProjectRegistrationInput = {
   path: string;
@@ -11,22 +12,20 @@ type ProjectRegistrationInput = {
   source: "registered" | "cloned";
 };
 
-type PreparedProjectRegistration = {
-  requestedPath: string;
-  project: ProjectRegistryInsert;
-};
+type PreparedProjectRegistration = Awaited<ReturnType<typeof prepareProjectRegistration>>;
 
-export async function prepareProjectRegistration(
-  input: ProjectRegistrationInput,
-): Promise<PreparedProjectRegistration> {
+export async function prepareProjectRegistration(input: ProjectRegistrationInput) {
   const { path: requestedPath, name, originUrl, source } = input;
   const checkout = await resolveProjectCheckout(requestedPath);
+  const origin = await runGit(checkout.repoRoot, ["config", "--get", "remote.origin.url"], {
+    operation: "project.checkout",
+  });
   return {
     requestedPath,
     project: {
       displayName: name?.trim() || path.basename(checkout.repoRoot) || "Project",
       repoRoot: checkout.repoRoot,
-      originUrl: originUrl ?? checkout.originUrl,
+      originUrl: originUrl ?? (origin.code === 0 ? origin.stdout.trim() || undefined : undefined),
       source,
     },
   };

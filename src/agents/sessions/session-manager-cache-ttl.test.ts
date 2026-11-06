@@ -1,18 +1,12 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, expect, it } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
-import {
-  replaceTranscriptEventsSync,
-  upsertSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { seedUnindexedTranscriptForTest } from "../../config/sessions/session-accessor.sqlite-import.test-support.js";
+import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-} from "../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { serializeCacheTtlToolResultProjections } from "../embedded-agent-runner/cache-ttl-checkpoint.js";
 import {
   createToolResultPromptProjectionState,
@@ -23,26 +17,15 @@ import {
   truncateOversizedToolResultsInMessages,
 } from "../embedded-agent-runner/tool-result-truncation.js";
 import type { AgentMessage } from "../runtime/index.js";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
+import { sessionScope } from "./session-manager-fixtures.test-support.js";
 import { SessionManager } from "./session-manager.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    for (const dir of tempDirs.dirs) {
-      await closeOpenClawAgentDatabasesAsync(dir);
-      closeOpenClawAgentDatabasesForTest(dir);
-    }
-    cleanup();
-  }),
-);
+const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-cache-ttl-");
 
 async function createSessionScope(sessionId: string) {
-  const dir = tempDirs.make("openclaw-session-cache-ttl-");
-  const scope = {
-    agentId: "main",
-    sessionId,
-    sessionKey: `agent:main:${sessionId}`,
-    storePath: path.join(dir, "sessions.json"),
-  };
+  const dir = tempDirs.make();
+  const scope = sessionScope(path.join(dir, "sessions.json"), sessionId);
   await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
   return { dir, scope };
 }
@@ -272,6 +255,53 @@ it.each(["delta", "checkpoint"] as const)(
     }
   },
 );
+
+it("reconstructs cold forks from pre-compaction projections without crossing a branch or reset", async () => {
+  const { prepareEmbeddedSessionForkContext } =
+    await import("../embedded-agent-runner/session-fork-context.js");
+  const fixture = await seedProjection("cold-fork-projections");
+  await fixture.source.appendCompactionAsync(
+    "Earlier work summarized.",
+    fixture.retainedId,
+    10_000,
+  );
+  const model = makeProviderModelFixture({
+    provider: "openai",
+    id: "gpt-4o",
+    api: "openai-completions",
+    baseUrl: "https://api.openai.com/v1",
+  });
+  const fork = () =>
+    prepareEmbeddedSessionForkContext({
+      target: fixture.scope,
+      sessionFile: fixture.scope.sessionKey,
+      model,
+      workspaceDir: fixture.dir,
+      agentDir: fixture.dir,
+      agentId: fixture.scope.agentId,
+      config: { plugins: { enabled: false }, agents: { defaults: { workspace: fixture.dir } } },
+      assertCurrent() {},
+    });
+  const lastToolContent = async () =>
+    (await fork()).messages.findLast((message) => message.role === "toolResult")?.content;
+
+  // Both the checkpoint and its delta precede compaction and are absent from model messages.
+  if (fixture.expected.role !== "toolResult") {
+    throw new Error("Missing projected fixture tool result");
+  }
+  const compactedContent = await lastToolContent();
+  expect(compactedContent).toEqual(fixture.expected.content);
+  expect(JSON.stringify(compactedContent).length).toBeLessThan(1_100);
+
+  // The sibling branch ends before the delta that first projected this same canonical result.
+  await fixture.source.branchAsync(fixture.retainedId);
+  await fixture.source.appendMessageAsync(makeUserMessage("Review the selected branch", 2));
+  expect(await lastToolContent()).toEqual(tool("retained").content);
+
+  await fixture.source.appendResetBoundaryAsync("new");
+  await fixture.source.appendMessageAsync(tool("retained"));
+  expect(await lastToolContent()).toEqual(tool("retained").content);
+});
 
 it.each(["async", "sync"] as const)(
   "preserves checkpoint metadata in %s detached views",

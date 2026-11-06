@@ -1,20 +1,13 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const builtinManager = vi.hoisted(() => ({
-  search: vi.fn(async () => []),
-  readFile: vi.fn(async () => ({ status: "ok" as const, text: "", path: "MEMORY.md" })),
-  status: vi.fn(() => ({ backend: "builtin" as const, provider: "openai" })),
-  probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
-  probeVectorAvailability: vi.fn(async () => true),
-}));
+const builtinManager = vi.hoisted(() => ({}));
 const memoryIndexGet = vi.hoisted(() => vi.fn(async () => builtinManager));
-const closeAllMemoryIndexManagers = vi.hoisted(() => vi.fn(async () => {}));
 const closeMemoryIndexManagersForAgent = vi.hoisted(() => vi.fn(async () => {}));
 
+// mock-isolation: keep index/database workers isolated while testing acquisition errors and cleanup routing.
 vi.mock("../../manager-runtime.js", () => ({
   MemoryIndexManager: { get: memoryIndexGet },
-  closeAllMemoryIndexManagers,
   closeMemoryIndexManagersForAgent,
 }));
 
@@ -24,16 +17,23 @@ describe("builtin memory search manager", () => {
   beforeEach(() => {
     memoryIndexGet.mockClear();
     memoryIndexGet.mockResolvedValue(builtinManager);
-    closeAllMemoryIndexManagers.mockClear();
     closeMemoryIndexManagersForAgent.mockClear();
   });
 
-  it("returns the builtin initialization error", async () => {
-    memoryIndexGet.mockRejectedValueOnce(new Error("index unavailable"));
+  it("preserves the builtin initialization error code", async () => {
+    memoryIndexGet.mockRejectedValueOnce(
+      Object.assign(new Error("index unavailable"), {
+        code: "SQLITE_READONLY_WORKER_SCOPE_CLOSED",
+      }),
+    );
 
     await expect(
       getMemorySearchManager({ cfg: {} as OpenClawConfig, agentId: "main" }),
-    ).resolves.toMatchObject({ manager: null, error: "index unavailable" });
+    ).resolves.toMatchObject({
+      manager: null,
+      error: "index unavailable",
+      code: "SQLITE_READONLY_WORKER_SCOPE_CLOSED",
+    });
   });
 
   it("normalizes the agent id before scoped cleanup", async () => {

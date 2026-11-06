@@ -103,8 +103,7 @@ public enum TalkDirectiveParser {
             return TalkDirectiveParseResult(directive: nil, stripped: text, unknownKeys: [])
         }
 
-        guard let data = head.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard let json = try? JSONSerialization.jsonObject(with: Data(head.utf8)) as? [String: Any]
         else {
             return TalkDirectiveParseResult(directive: nil, stripped: text, unknownKeys: [])
         }

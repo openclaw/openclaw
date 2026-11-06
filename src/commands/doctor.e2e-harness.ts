@@ -80,7 +80,7 @@ const {
   serviceUninstall,
   uninstallLegacyGatewayServices,
 } = createDoctorServiceMocks();
-export { callGateway, serviceIsLoaded, serviceRestart };
+export { callGateway };
 
 export const autoMigrateLegacyStateDir = vi.fn().mockResolvedValue({
   migrated: false,
@@ -157,9 +157,16 @@ function createLegacyStateMigrationDetectionResult(params?: {
       hasLegacy: false,
     },
     deviceIdentity: {
-      sourcePath: "/tmp/state/identity/device.json",
-      claimPath: "/tmp/state/identity/device.json.doctor-importing",
-      nativeClaimPath: "/tmp/state/identity/device.json.native-importing",
+      sources: [
+        {
+          identityKey: "primary",
+          sourcePath: "/tmp/state/identity/device.json",
+          claimPath: "/tmp/state/identity/device.json.doctor-importing",
+          nativeClaimPath: "/tmp/state/identity/device.json.native-importing",
+          hasLegacy: false,
+          hasInvalidCanonical: false,
+        },
+      ],
       hasLegacy: false,
       hasInvalidCanonical: false,
     },
@@ -351,7 +358,8 @@ vi.mock("../gateway/call.js", async () => {
   };
 });
 
-vi.mock("../process/exec.js", () => ({
+vi.mock("../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/exec.js")>()),
   runExec,
   runCommandWithTimeout,
 }));
@@ -405,12 +413,15 @@ vi.mock("../flows/doctor-tool-schema-runtime.js", () => ({
   collectRuntimeToolSchemaFindings: vi.fn().mockResolvedValue([]),
 }));
 
+// Physical-store inspection has its own suites; these fixtures exercise command/config routing.
+vi.mock("./doctor-database-engine.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-database-engine.js")>()),
+  noteDatabaseEngines: vi.fn().mockResolvedValue([]),
+}));
+
+// mock-isolation: Doctor fixtures isolate host browser probes; the real browser owner has its production-path permission proof.
 vi.mock("./doctor-browser.js", () => ({
-  maybeRepairOwnedChromeExtensionNativeHosts: vi.fn().mockResolvedValue({
-    changes: [],
-    warnings: [],
-  }),
-  noteChromeMcpBrowserReadiness: vi.fn().mockResolvedValue(undefined),
+  collectBrowserReadinessFindings: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("./doctor-memory-recall.js", () => ({
@@ -422,13 +433,16 @@ vi.mock("./doctor-memory-search.js", () => ({
   noteMemorySearchHealth,
 }));
 
-vi.mock("../plugins/doctor-contract-registry.js", () => ({
+// mock-isolation: Isolate config repair discovery; recovery inventory remains real.
+vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/doctor-contract-registry.js")>()),
   withDeferredPluginDoctorMigrations: (_pluginIds: readonly string[], run: () => unknown) => run(),
   applyPluginDoctorCompatibilityMigrations: (config: unknown) => ({
     config,
     changes: [],
   }),
   collectDoctorConfigRepairPluginIds: () => [],
+  resolvePluginDoctorProviderRenames: () => [],
   listPluginDoctorLegacyConfigRules,
 }));
 

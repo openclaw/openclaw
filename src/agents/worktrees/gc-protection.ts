@@ -20,37 +20,46 @@ export async function autoRemovalProtectionReason(
     getConfig: () => OpenClawConfig;
     signal?: AbortSignal;
     beforeRun?: () => void;
+    now: number;
     deferrals: WorktreeCleanupDeferrals;
   },
   policy: WorktreeCleanupOwnerPolicy = {},
 ): Promise<string | undefined> {
   if (
     record.ownerId !== undefined &&
-    policy.shouldProtectOwner?.(record.ownerKind, record.ownerId) === true
+    policy.readOwnerState?.(record.ownerKind, record.ownerId) === "active"
   ) {
     return "owner is active";
   }
   if (hasLiveLease(record.id)) {
     return "run lease is active";
   }
-  const revision = worktreeGcRevision(record);
-  const previous = context.deferrals.get(record.id);
-  const fingerprint =
-    record.gcProtection || !previous
-      ? await runGitWorkerOperation(
-          { type: "worktree.cleanup-fingerprint", input: { checkoutPath: record.path } },
-          { signal: context.signal, assertCurrent: context.beforeRun },
-        )
-      : previous.fingerprint;
-  context.deferrals.set(record.id, { revision, fingerprint });
-  if (record.gcProtection) {
-    if (
-      !policy.retryDeferred &&
-      (!previous || (previous.revision === revision && previous.fingerprint === fingerprint))
-    ) {
+  if (record.gcRetry) {
+    // Do not walk or fingerprint a checkout whose last attempt exhausted its budget.
+    // The registry revision invalidates this receipt when its owner changes.
+    if (!policy.retryDeferred && context.now < record.gcRetry.retryAt) {
       return record.gcProtection;
     }
-    await deferWorktreeGcRecord(context.env, record, null, context.beforeRun);
+  } else {
+    const revision = worktreeGcRevision(record);
+    const previous = context.deferrals.get(record.id);
+    const fingerprint =
+      record.gcProtection || !previous
+        ? await runGitWorkerOperation(
+            { type: "worktree.cleanup-fingerprint", input: { checkoutPath: record.path } },
+            { signal: context.signal, assertCurrent: context.beforeRun },
+          )
+        : previous.fingerprint;
+    context.deferrals.set(record.id, { revision, fingerprint });
+    if (record.gcProtection) {
+      if (
+        !policy.retryDeferred &&
+        (!previous || (previous.revision === revision && previous.fingerprint === fingerprint))
+      ) {
+        return record.gcProtection;
+      }
+      await deferWorktreeGcRecord(context.env, record, null, context.beforeRun);
+    }
   }
   const protection = await prefilter(record);
   if (protection !== undefined) {

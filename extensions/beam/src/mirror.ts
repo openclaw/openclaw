@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import type { OpenClawPluginServiceV2 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { SessionCatalogTranscriptItem } from "openclaw/plugin-sdk/session-catalog";
 import {
   listActiveSessionCatalogs,
@@ -17,6 +17,7 @@ import {
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asFiniteNumber, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { clampNumber, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import {
   BEAM_MAX_BODY_BYTES,
   BEAM_MAX_ITEM_CHARS,
@@ -93,9 +94,17 @@ export function parseBeamMirrorConfig(config: ReturnType<PluginRuntime["config"]
   ) {
     return `${MIRROR_CONFIG_PATH}.catalogs must explicitly list the catalog ids to mirror`;
   }
+  // The Gateway materializes refs to strings and leaves unavailable refs as objects.
+  // null means configured but unavailable; undefined keeps tokenless receivers supported.
+  const token =
+    mirror.token === undefined
+      ? undefined
+      : typeof mirror.token === "string" && mirror.token.trim()
+        ? mirror.token.trim()
+        : null;
   return {
     endpoint,
-    ...(mirror.token !== undefined ? { token: mirror.token } : {}),
+    token,
     catalogs: mirror.catalogs.map((id) => id.trim().toLowerCase()),
     pollSeconds: clampNumber(asFiniteNumber(mirror.pollSeconds) ?? DEFAULT_POLL_SECONDS, 10, 3_600),
     activeWindowMinutes: clampNumber(
@@ -116,13 +125,9 @@ export function beamMirrorId(catalogId: string, hostId: string, threadId: string
 /**
  * Reduce newest-first catalog items to chronological Beam uploads. Only user/agent
  * message text crosses the wire; reasoning, tool calls, tool results, and raw
- * payloads collapse into compact counts. Redact credentials before clipping so
- * the character boundary cannot hide the suffix needed to recognize a secret.
+ * payloads collapse into compact counts.
  */
-export function buildBeamMirrorItems(items: readonly SessionCatalogTranscriptItem[]): {
-  items: BeamTranscriptItem[];
-  truncated: boolean;
-} {
+function buildBeamMirrorItems(items: readonly SessionCatalogTranscriptItem[]) {
   const out: BeamTranscriptItem[] = [];
   const dropped = new Map<string, number>();
   let truncated = items.some((item) => item.truncated);
@@ -142,9 +147,8 @@ export function buildBeamMirrorItems(items: readonly SessionCatalogTranscriptIte
     const text = item.text?.trim();
     if ((item.type === "userMessage" || item.type === "agentMessage") && text) {
       flush();
-      const redacted = redactToolPayloadText(text);
-      const clipped = truncateUtf16Safe(redacted, BEAM_MAX_ITEM_CHARS);
-      truncated ||= clipped.length < redacted.length;
+      const clipped = truncateUtf16Safe(text, BEAM_MAX_ITEM_CHARS);
+      truncated ||= clipped.length < text.length;
       out.push({ type: item.type, text: clipped });
       continue;
     }
@@ -156,7 +160,7 @@ export function buildBeamMirrorItems(items: readonly SessionCatalogTranscriptIte
 }
 
 /** Drop oldest items until the payload fits the receiver's item and byte caps. */
-export function fitBeamMirrorUpload(upload: BeamUpload): BeamUpload {
+function fitBeamMirrorUpload(upload: BeamUpload): BeamUpload {
   const items = upload.items.slice(-BEAM_MAX_ITEMS);
   const fitted: BeamUpload = { ...upload, items };
   let bytes = Buffer.byteLength(JSON.stringify(fitted), "utf8");
@@ -206,24 +210,16 @@ type TrackedMirrorSession = {
   candidate: BeamMirrorCandidate;
   fingerprint: string;
   expiresAt: number;
-};
-
-type BeamMirrorRunner = {
-  tick: () => Promise<void>;
+  retired?: true;
 };
 
 export function createBeamMirrorRunner(params: {
   runtime: { config: Pick<PluginRuntime["config"], "current"> };
   logger: { warn: (message: string) => void; info: (message: string) => void };
-  env?: NodeJS.ProcessEnv;
-  fetchFn?: typeof fetch;
   now?: () => number;
-  listCatalogs?: () => ActiveSessionCatalog[];
   signal: AbortSignal;
-}): BeamMirrorRunner {
-  const env = params.env ?? process.env;
+}) {
   const now = params.now ?? Date.now;
-  const listCatalogs = params.listCatalogs ?? listActiveSessionCatalogs;
   const tracked = new Map<string, TrackedMirrorSession>();
   const { signal } = params;
   let lastWarnAt = 0;
@@ -234,22 +230,8 @@ export function createBeamMirrorRunner(params: {
 
   // Catalog work cannot be cancelled, so detach its late result after stop.
   // Guarded transport cleanup remains joined to the active scan in upload().
-  const raceCatalog = async <T>(operation: Promise<T>): Promise<T> => {
-    let rejectAbort: (error: Error) => void;
-    const aborted = new Promise<never>((_, reject) => {
-      rejectAbort = reject;
-    });
-    const abort = () => rejectAbort(stopError);
-    signal.addEventListener("abort", abort, { once: true });
-    try {
-      if (signal.aborted) {
-        abort();
-      }
-      return await Promise.race([operation, aborted]);
-    } finally {
-      signal.removeEventListener("abort", abort);
-    }
-  };
+  const raceCatalog = <T>(operation: Promise<T>): Promise<T> =>
+    racePromiseWithAbortSignal(operation, signal, () => stopError);
 
   // Retry state keeps a bounded sender-owned superset until the receiver's TTL.
   // The extra capacity prevents independent clocks from dropping a live row.
@@ -257,21 +239,17 @@ export function createBeamMirrorRunner(params: {
     key: string,
     candidate: BeamMirrorCandidate,
     fingerprint: string,
+    retired = false,
   ) => {
-    tracked.set(key, { candidate, fingerprint, expiresAt: now() + BEAM_RETENTION_MS });
-    if (tracked.size <= MIRROR_RETRY_CAP) {
-      return;
-    }
-    // Never discard the upload just accepted by the receiver, even after a clock rollback.
-    let oldest: [string, TrackedMirrorSession] | undefined;
-    for (const item of tracked) {
-      if (item[0] !== key && (!oldest || item[1].expiresAt < oldest[1].expiresAt)) {
-        oldest = item;
-      }
-    }
-    if (oldest) {
-      tracked.delete(oldest[0]);
-    }
+    tracked.delete(key);
+    tracked.set(key, {
+      candidate,
+      fingerprint,
+      expiresAt: now() + BEAM_RETENTION_MS,
+      ...(retired ? { retired: true } : {}),
+    });
+    // At capacity, retry order is best effort; retain the just-acknowledged upload.
+    pruneMapToMaxSize(tracked, MIRROR_RETRY_CAP);
   };
 
   const warnThrottled = (message: string) => {
@@ -281,16 +259,26 @@ export function createBeamMirrorRunner(params: {
     }
   };
 
-  const upload = async (token: string | undefined, payload: BeamUpload): Promise<boolean> => {
+  const upload = async (payload: BeamUpload): Promise<boolean | "retired"> => {
     if (signal.aborted || redirectBlocked) {
       return false;
     }
+    // Catalog reads may outlive a secret reload. Use the current credential at dispatch.
+    const current = parseBeamMirrorConfig(params.runtime.config.current());
+    if (
+      !current ||
+      typeof current === "string" ||
+      current.token === null ||
+      current.endpoint !== endpoint
+    ) {
+      return false;
+    }
+    const token = current.token;
 
     let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
     try {
       guarded = await fetchWithSsrFGuard({
         url: endpoint,
-        fetchImpl: params.fetchFn,
         timeoutMs: MIRROR_UPLOAD_TIMEOUT_MS,
         signal,
         policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(endpoint),
@@ -325,6 +313,29 @@ export function createBeamMirrorRunner(params: {
     const { response, release } = guarded;
     try {
       signal.throwIfAborted();
+      if (response.status === 409) {
+        const receipt: unknown = JSON.parse(
+          (
+            await readResponseWithLimit(response, 4096, {
+              signal,
+              timeoutMs: MIRROR_UPLOAD_TIMEOUT_MS,
+            })
+          ).toString("utf8"),
+        );
+        if (
+          isRecord(receipt) &&
+          receipt.beamId === payload.beamId &&
+          isRecord(receipt.handoff) &&
+          receipt.handoff.owner === "gateway" &&
+          typeof receipt.handoff.id === "string" &&
+          /^[a-f0-9]{32}$/.test(receipt.handoff.id)
+        ) {
+          params.logger.info(
+            "Beam source retired at the receiver; continue its logical conversation in Team.",
+          );
+          return "retired";
+        }
+      }
       if (!response.ok) {
         warnThrottled(`beam mirror upload failed (${response.status}) for ${payload.source}`);
       }
@@ -361,7 +372,7 @@ export function createBeamMirrorRunner(params: {
       version: 1,
       beamId: beamMirrorId(candidate.catalogId, candidate.hostId, candidate.threadId),
       source: candidate.catalogId,
-      title: truncateUtf16Safe(redactToolPayloadText(candidate.title), 160),
+      title: truncateUtf16Safe(candidate.title, 160),
       updatedAt: new Date(candidate.recencyAt || now()).toISOString(),
       completed,
       ...(sourceModel ? { sourceModel } : {}),
@@ -398,26 +409,14 @@ export function createBeamMirrorRunner(params: {
         warnThrottled(`beam mirror disabled: ${String(error)}`);
         return;
       }
-      let token: string | undefined;
-      if (mirror.token !== undefined) {
-        const resolved = await resolveConfiguredSecretInputString({
-          // The resolver only reads; the plugin runtime exposes a DeepReadonly view.
-          config: config as OpenClawConfig,
-          env,
-          value: mirror.token,
-          path: MIRROR_TOKEN_PATH,
-        });
-        signal.throwIfAborted();
-        if (!resolved.value) {
-          warnThrottled(
-            `beam mirror token unresolved${resolved.unresolvedRefReason ? `: ${resolved.unresolvedRefReason}` : ""}`,
-          );
-          return;
-        }
-        token = resolved.value;
+      if (mirror.token === null) {
+        warnThrottled(
+          `beam mirror paused: ${MIRROR_TOKEN_PATH} credential unavailable; restore it and run openclaw secrets reload`,
+        );
+        return;
       }
       const activeSinceMs = now() - mirror.activeWindowMinutes * 60_000;
-      const catalogs = listCatalogs().filter(
+      const catalogs = listActiveSessionCatalogs().filter(
         (catalog) =>
           // Never mirror the local beam receiver back out: a two-gateway pair
           // would otherwise re-mirror each other's rows forever.
@@ -474,6 +473,10 @@ export function createBeamMirrorRunner(params: {
       for (const candidate of selected) {
         signal.throwIfAborted();
         const key = mirrorCandidateKey(candidate);
+        const trackedSource = tracked.get(key);
+        if (trackedSource?.retired && trackedSource.expiresAt > now()) {
+          continue;
+        }
         const catalog = catalogById.get(candidate.catalogId);
         if (!catalog) {
           continue;
@@ -485,10 +488,10 @@ export function createBeamMirrorRunner(params: {
           if (tracked.get(key)?.fingerprint === fingerprint) {
             continue;
           }
-          const uploaded = await upload(token, payload);
+          const uploaded = await upload(payload);
           signal.throwIfAborted();
           if (uploaded) {
-            trackSuccessfulUpload(key, candidate, fingerprint);
+            trackSuccessfulUpload(key, candidate, fingerprint, uploaded === "retired");
           }
         } catch (error) {
           signal.throwIfAborted();
@@ -501,6 +504,12 @@ export function createBeamMirrorRunner(params: {
       const terminalEntries: Array<[string, TrackedMirrorSession]> = [];
       for (const [key, entry] of tracked) {
         signal.throwIfAborted();
+        if (entry.retired) {
+          if (entry.expiresAt <= tickNow) {
+            tracked.delete(key);
+          }
+          continue;
+        }
         const candidate = observed.get(key);
         // A listed idle row is conclusive even on a partial page. Only an absent
         // row requires a complete scan, so active overflow never becomes terminal.
@@ -525,7 +534,7 @@ export function createBeamMirrorRunner(params: {
           try {
             const payload = await buildUpload(agentId, catalog, entry.candidate, true);
             signal.throwIfAborted();
-            uploaded = await upload(token, payload);
+            uploaded = (await upload(payload)) !== false;
             signal.throwIfAborted();
           } catch {
             signal.throwIfAborted();
@@ -573,9 +582,15 @@ export function createBeamMirrorService(params: {
         everyMs: mirror.pollSeconds * 1_000,
         run: () => active.tick(),
       });
-      ctx.logger.info(
-        `beam mirror active: ${mirror.catalogs.join(", ")} -> ${new URL(mirror.endpoint).origin}`,
-      );
+      if (mirror.token === null) {
+        ctx.logger.warn(
+          `beam mirror paused: ${MIRROR_TOKEN_PATH} credential unavailable; restore it and run openclaw secrets reload`,
+        );
+      } else {
+        ctx.logger.info(
+          `beam mirror active: ${mirror.catalogs.join(", ")} -> ${new URL(mirror.endpoint).origin}`,
+        );
+      }
     },
   };
 }

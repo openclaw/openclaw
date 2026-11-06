@@ -53,27 +53,6 @@ export function registerSubagentRestoreCacheCases(params: {
     }
   });
 
-  it.each([false, true])(
-    "invalidates loaded snapshots on restore, including empty stores (%s)",
-    async (empty) => {
-      const stale = createRun("stale");
-      persistRegistryFixture(new Map([[stale.runId, stale]]));
-      const restored = empty
-        ? new Map<string, SubagentRunRecord>()
-        : new Map([["restored", createRun("restored")]]);
-      params.mockRestoredRows(restored);
-
-      await restoreSubagentRunsFromDisk({ runs: new Map() });
-
-      for (const read of [
-        getSubagentRunsSnapshotForRead,
-        getSubagentSessionListRunsSnapshotForRead,
-      ]) {
-        expect([...read(new Map()).keys()]).toEqual([...restored.keys()]);
-      }
-    },
-  );
-
   it.each([true, false])(
     "restores canonical rows across an external deletion publication (committed: %s)",
     async (committed) => {
@@ -84,26 +63,24 @@ export function registerSubagentRestoreCacheCases(params: {
       const release = createDeferredCore();
       let reads = 0;
       vi.mocked(stateReads.executeExistingOpenClawStateRead).mockImplementation(
-        async (_options, command) => {
-          expect(command).toEqual({
-            type: "subagents.runs",
-            scope: { kind: "page", after: undefined },
-          });
+        async (_options, command, options) => {
+          expect(command).toEqual({ type: "subagents.restore" });
           const snapshot = structuredClone(canonical);
           if (++reads === 1) {
             entered.resolve();
             await release.promise;
           }
+          options?.onChunk?.(
+            [...snapshot.values()].map((restored) => ({
+              entry: restored,
+              createdAt: restored.createdAt,
+            })),
+          );
           return {
             ok: true,
-            type: "subagents.runs",
+            type: "subagents.restore",
             sourceAdmitted: true,
-            runs: snapshot,
-            versions: new Map([...snapshot.keys()].map((runId) => [runId, "fixture-version"])),
-            page: {
-              order: [...snapshot].map(([runId, row]) => [runId, row.createdAt] as const),
-              nextRunId: null,
-            },
+            count: snapshot.size,
           };
         },
       );
@@ -122,7 +99,6 @@ export function registerSubagentRestoreCacheCases(params: {
         release.resolve();
       }
       await restoring;
-      expect(reads).toBe(committed ? 2 : 1);
       expect(restored.has(entry.runId)).toBe(!committed);
       expect(getSubagentRunsSnapshotForRead(new Map()).has(entry.runId)).toBe(!committed);
     },

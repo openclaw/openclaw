@@ -1,0 +1,202 @@
+/* A full-viewport top-layer surface holding the backdrop and the bottom-anchored panel. */
+.oc-popover.oc-sheet {
+  --oc-popover-padding: 0;
+
+  position: fixed;
+  position-anchor: auto;
+  position-area: none;
+  inset: 0 !important;
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: none;
+  margin: 0;
+  overflow: hidden;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.oc-popover.oc-sheet:popover-open {
+  opacity: 1;
+  scale: 1;
+}
+
+.oc-sheet__backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: var(--overlay-modal-backdrop);
+  touch-action: none;
+  animation: fade-in var(--motion-sheet);
+}
+
+/* Anchored to the shell canvas, like the sidebar's sheets, so it rides above the keyboard. */
+.oc-sheet__panel {
+  position: absolute;
+  inset: auto var(--safe-area-right) calc(100% - var(--shell-canvas-height)) var(--safe-area-left);
+  display: flex;
+  flex-direction: column;
+  max-height: calc(var(--shell-canvas-height) - var(--safe-area-top) - var(--space-7));
+  padding-block-end: var(--shell-safe-area-bottom);
+  border-radius: var(--overlay-modal-radius) var(--overlay-modal-radius) 0 0;
+  background: var(--popover);
+  box-shadow: var(--overlay-shadow);
+  animation: oc-sheet-in var(--motion-sheet);
+}
+
+.oc-sheet__grabber {
+  position: relative;
+  flex: none;
+  align-self: center;
+  width: 36px;
+  height: 4px;
+  margin-block: 8px 2px;
+  border-radius: var(--radius-full);
+  background: var(--border-strong);
+  /* The grabber swipes the sheet down; its touch target extends past the pill. */
+  touch-action: none;
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: -12px -64px;
+  }
+}
+
+/* Equal tracks either side keep the title on the sheet's center. */
+.oc-sheet__header {
+  display: grid;
+  flex: none;
+  grid-template-columns: 32px minmax(0, 1fr) 32px;
+  align-items: center;
+  min-height: 44px;
+  padding-inline: var(--space-3);
+}
+
+.oc-sheet__title {
+  grid-column: 2;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-md);
+  font-weight: var(--control-ui-font-weight-semibold);
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Page-level touch sizing on bare buttons must not move the X between sheets. */
+.oc-popover.oc-sheet .oc-sheet__close {
+  display: inline-flex;
+  grid-column: 3;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: var(--cursor-action);
+}
+
+.oc-sheet__close svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* One rhythm for every sheet's form. Real inputs sit on iOS's 16px floor, so the rest of the
+   sheet matches it instead of going below it. */
+.oc-sheet__body {
+  --settings-control-height: 40px;
+
+  min-height: 0;
+  padding: var(--space-2) var(--space-4) var(--space-4);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.oc-popover.oc-sheet .oc-sheet__body :is(input, select, textarea) {
+  font-size: 16px;
+}
+
+.oc-popover.oc-sheet .oc-sheet__body .btn {
+  justify-content: center;
+  width: 100%;
+  height: var(--settings-control-height);
+  min-height: var(--settings-control-height);
+  font-size: var(--control-ui-text-md);
+}
+
+/* The calendar reads like a select's chevron: same color, stroke, size and inset. */
+.oc-sheet__body input[type="date"] {
+  padding-inline-end: 10px;
+}
+
+.oc-sheet__body input[type="date"]::-webkit-calendar-picker-indicator {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  background: var(--text-tertiary);
+  opacity: 1;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 2v4'/%3E%3Cpath d='M16 2v4'/%3E%3Crect width='18' height='18' x='3' y='4' rx='2'/%3E%3Cpath d='M3 10h18'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+
+/* A customizable select can't ellipsize its own label, so a long value would push the chevron out. */
+@media not (forced-colors: active) {
+  .oc-sheet__body .field select:not([multiple], [size]) {
+    display: block;
+    overflow: hidden;
+    padding-inline-end: 32px;
+    appearance: none;
+    background-image: none;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .oc-sheet__body .field:has(> select) {
+    position: relative;
+  }
+
+  .oc-sheet__body .field:has(> select)::after {
+    position: absolute;
+    inset-inline-end: 11px;
+    bottom: 12px;
+    width: 16px;
+    height: 16px;
+    background: var(--text-tertiary);
+    content: "";
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")
+      center / contain no-repeat;
+    pointer-events: none;
+  }
+}
+
+@keyframes oc-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .oc-sheet__backdrop,
+  .oc-sheet__panel {
+    animation: none;
+  }
+}
+
+@supports (corner-shape: superellipse(1.5)) {
+  .oc-sheet__panel {
+    corner-shape: superellipse(1.5);
+  }
+}

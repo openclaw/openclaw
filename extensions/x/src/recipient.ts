@@ -6,6 +6,7 @@ export async function resolveXRecipient(options: {
   users?: XUser[];
   userId: string;
   signal?: AbortSignal;
+  allowQuote?: boolean;
 }): Promise<XPostEnvelope | undefined> {
   let post = typeof options.post === "string" ? undefined : options.post;
   if (post?.author_id === options.userId) {
@@ -35,6 +36,9 @@ export async function resolveXRecipient(options: {
     if (recipient.id === options.userId) {
       return { post, users };
     }
+  }
+  if (options.allowQuote === false) {
+    return undefined;
   }
   const quoteIds =
     post.referenced_tweets

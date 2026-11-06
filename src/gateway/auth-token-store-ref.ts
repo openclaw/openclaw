@@ -1,4 +1,3 @@
-/** Store-backed SecretRef provisioning for gateway auth tokens setup generates itself. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { randomToken } from "../commands/random-token.js";
 import type { SecretRef } from "../config/types.secrets.js";
@@ -13,9 +12,6 @@ import {
 const GATEWAY_AUTH_TOKEN_STORE_NAME = "OPENCLAW_GATEWAY_TOKEN";
 
 const GATEWAY_AUTH_TOKEN_STORE_SCOPE = { kind: "team" } as const;
-
-/** Minimal config shape needed to pick the store provider alias. */
-type GatewayTokenStoreRefConfig = Parameters<typeof resolveDefaultSecretProviderAlias>[0];
 
 async function readStoredGatewayToken(): Promise<string | undefined> {
   const existing = await readSecretStoreValue({
@@ -37,7 +33,7 @@ async function readStoredGatewayToken(): Promise<string | undefined> {
  * picked up by the next run.
  */
 export async function provisionGatewayTokenStoreRef(params: {
-  config: GatewayTokenStoreRefConfig;
+  config: Parameters<typeof resolveDefaultSecretProviderAlias>[0];
   token?: string;
 }): Promise<{ ref: SecretRef; token: string }> {
   const stored = params.token ? undefined : await readStoredGatewayToken();

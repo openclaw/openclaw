@@ -1,12 +1,15 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 
-export type MatrixResolvedStringField =
-  | "homeserver"
-  | "userId"
-  | "accessToken"
-  | "password"
-  | "deviceId"
-  | "deviceName";
+export const MATRIX_CONFIG_STRING_FIELDS = [
+  "homeserver",
+  "userId",
+  "accessToken",
+  "password",
+  "deviceId",
+  "deviceName",
+] as const;
+
+export type MatrixResolvedStringField = (typeof MATRIX_CONFIG_STRING_FIELDS)[number];
 
 export type MatrixResolvedStringValues = Record<MatrixResolvedStringField, string>;
 
@@ -23,13 +26,6 @@ function resolveMatrixStringSourceValue(value: string | undefined): string {
   return typeof value === "string" ? value : "";
 }
 
-function shouldAllowBaseAuthFallback(accountId: string, field: MatrixResolvedStringField): boolean {
-  return (
-    normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID ||
-    !MATRIX_DEFAULT_ACCOUNT_AUTH_ONLY_FIELDS.has(field)
-  );
-}
-
 export function resolveMatrixAccountStringValues(params: {
   accountId: string;
   account?: MatrixStringSourceMap;
@@ -37,21 +33,14 @@ export function resolveMatrixAccountStringValues(params: {
   channel?: MatrixStringSourceMap;
   globalEnv?: MatrixStringSourceMap;
 }): MatrixResolvedStringValues {
-  const fields: MatrixResolvedStringField[] = [
-    "homeserver",
-    "userId",
-    "accessToken",
-    "password",
-    "deviceId",
-    "deviceName",
-  ];
   const resolved = {} as MatrixResolvedStringValues;
+  const isDefaultAccount = normalizeAccountId(params.accountId) === DEFAULT_ACCOUNT_ID;
 
-  for (const field of fields) {
+  for (const field of MATRIX_CONFIG_STRING_FIELDS) {
     resolved[field] =
       resolveMatrixStringSourceValue(params.account?.[field]) ||
       resolveMatrixStringSourceValue(params.scopedEnv?.[field]) ||
-      (shouldAllowBaseAuthFallback(params.accountId, field)
+      (isDefaultAccount || !MATRIX_DEFAULT_ACCOUNT_AUTH_ONLY_FIELDS.has(field)
         ? resolveMatrixStringSourceValue(params.channel?.[field]) ||
           resolveMatrixStringSourceValue(params.globalEnv?.[field])
         : "");

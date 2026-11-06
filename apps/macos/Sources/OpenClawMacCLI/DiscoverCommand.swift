@@ -35,25 +35,11 @@ struct DiscoveryOptions {
 }
 
 struct DiscoveryOutput: Encodable {
-    struct Gateway: Encodable {
-        var displayName: String
-        var lanHost: String?
-        var tailnetDns: String?
-        var sshPort: Int
-        var gatewayPort: Int?
-        var gatewayTls: Bool
-        var gatewayDirectReachable: Bool
-        var cliPath: String?
-        var stableID: String
-        var debugID: String
-        var isLocal: Bool
-    }
-
     var status: String
     var timeoutMs: Int
     var includeLocal: Bool
     var count: Int
-    var gateways: [Gateway]
+    var gateways: [GatewayDiscoveryModel.DiscoveredGateway]
 }
 
 func runDiscover(_ args: [String]) async {
@@ -100,20 +86,7 @@ func runDiscover(_ args: [String]) async {
             timeoutMs: opts.timeoutMs,
             includeLocal: opts.includeLocal,
             count: gateways.count,
-            gateways: gateways.map {
-                DiscoveryOutput.Gateway(
-                    displayName: $0.displayName,
-                    lanHost: $0.lanHost,
-                    tailnetDns: $0.tailnetDns,
-                    sshPort: $0.sshPort,
-                    gatewayPort: $0.gatewayPort,
-                    gatewayTls: $0.gatewayTls,
-                    gatewayDirectReachable: $0.gatewayDirectReachable,
-                    cliPath: $0.cliPath,
-                    stableID: $0.stableID,
-                    debugID: $0.debugID,
-                    isLocal: $0.isLocal)
-            })
+            gateways: gateways)
         printCLIJSON(payload, fallback: "{\"error\":\"failed to encode JSON\"}")
         return
     }

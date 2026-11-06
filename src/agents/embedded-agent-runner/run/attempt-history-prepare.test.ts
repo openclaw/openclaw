@@ -1,9 +1,21 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import * as crypto from "node:crypto";
+import { assert, beforeEach, expect, it, vi } from "vitest";
+import { model } from "../../../../packages/agent-core/src/agent-loop.test-support.js";
+import { createAssistantOutput } from "../../../../packages/ai/src/transports/assistant-output.js";
+import { convertResponsesMessages } from "../../../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
+import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { sessionManagerReadInitialContext } from "../../sessions/session-manager-current-turn.js";
+import { SessionManager } from "../../sessions/session-manager.js";
 import { SettingsManager } from "../../sessions/settings-manager.js";
+import { createPromptCacheRequestObserver } from "../prompt-cache-request-observer.js";
+import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { prepareEmbeddedAttemptHistory } from "./attempt-history-prepare.js";
+
+// mock-isolation: Count repeated history hashing while preserving native digests.
+vi.mock("node:crypto", { spy: true });
 
 const mocks = vi.hoisted(() => ({
   readEntry:
@@ -74,13 +86,18 @@ function createFixture() {
         },
         boundary: {},
         sessionManager: {},
+        toolResultPromptProjectionState: createToolResultPromptProjectionState(),
         transcriptPolicy: {},
         transport: {},
         state: { systemPromptText: "System prompt" },
       },
       toolCatalog: { toolSearchRunPlan: {} },
     },
-    setup: { sessionAgentId: "main", effectiveWorkspace: "/tmp/s11-hierarchy" },
+    setup: {
+      sessionAgentId: "main",
+      effectiveWorkspace: "/tmp/s11-hierarchy",
+      prepStages: createStageTimingTracker(() => 0),
+    },
   } as Parameters<typeof prepareEmbeddedAttemptHistory>[0];
   const controller = new AbortController();
   const assertActive = () => controller.signal.throwIfAborted();
@@ -110,6 +127,106 @@ beforeEach(() => {
   vi.resetAllMocks();
 });
 
+it("publishes restored assistant history without rehashing it on later model requests", async () => {
+  const fixture = createFixture();
+  mocks.readEntry.mockResolvedValue(undefined);
+  const restored = createAssistantOutput(model);
+  restored.content = [
+    {
+      type: "toolCall",
+      id: "call_restored",
+      name: "lookup",
+      arguments: { nested: { key: "saved" } },
+    },
+  ];
+  fixture.messages.push(restored);
+  const wire = (message: typeof restored) =>
+    JSON.stringify(convertResponsesMessages(model, { messages: [message] }, new Set()));
+  const before = wire(restored);
+  await prepareEmbeddedAttemptHistory(fixture.input, fixture.assertActive);
+  const published = fixture.agent.state.messages.find((message) => message.role === "assistant");
+  assert(published?.role === "assistant");
+  expect(wire(published)).toBe(before);
+  const observer = createPromptCacheRequestObserver(
+    { sessionId: "restored-history", streamStrategy: "test" },
+    () => {},
+  );
+  await observer.onModelRequest(model, { messages: [published] });
+  for (let turn = 0; turn < 3; turn++) {
+    vi.mocked(crypto.hash).mockClear();
+    await observer.onModelRequest(model, { messages: [published] });
+    expect(crypto.hash).not.toHaveBeenCalled();
+  }
+});
+
+it("does not walk admitted history while sealing a new shallow-frozen reply", async () => {
+  const fixture = createFixture();
+  mocks.readEntry.mockResolvedValue(undefined);
+  const prefix = createAssistantOutput(model);
+  prefix.content = [{ type: "toolCall", id: "old", name: "read", arguments: { path: "old" } }];
+  const manager = SessionManager.inMemory();
+  await manager.appendMessageAsync(prefix);
+  const retained = await manager[sessionManagerReadInitialContext]();
+  const tail = Object.freeze({ ...prefix, content: [{ type: "text" as const, text: "new" }] });
+  fixture.messages.push(...retained.messages, tail);
+  const ownKeys = vi.spyOn(Reflect, "ownKeys");
+  await prepareEmbeddedAttemptHistory(fixture.input, fixture.assertActive);
+  const prefixWalks = ownKeys.mock.calls.filter(([value]) => value === prefix).length;
+  ownKeys.mockRestore();
+  expect(prefixWalks).toBe(0);
+  expect(fixture.agent.state.messages.at(-2)).toBe(prefix);
+  expect(fixture.agent.state.messages.at(-1)).toBe(tail);
+  expect(Reflect.set(prefix.content[0]!, "name", "changed")).toBe(false);
+  expect(() => tail.content.push({ type: "text", text: "changed" })).toThrow(TypeError);
+  expect(Reflect.set(tail.content[0]!, "text", "changed")).toBe(false);
+});
+
+it.each([
+  [
+    false,
+    `[SYSTEM HANDOFF] The previous model is no longer active and a fallback model is now active.
+Review the current state below and continue the conversation from where the previous model left off.
+
+CURRENT STATE SUMMARY:
+Delegate the remaining work`,
+  ],
+  [
+    true,
+    `[SYSTEM HANDOFF] The previous model is no longer active and a fallback model is now active.
+You are the new LEADER (Orchestrator). Do not perform tasks already delegated to subordinates.
+
+ACTIVE SUBORDINATE UNITS:
+- Subagent child-session (orchestrator): done
+- Subagent worker-2 (leaf): running
+
+CURRENT STATE SUMMARY:
+Delegate the remaining work
+
+INSTRUCTIONS:
+1. Review the state and subordinate reports.
+2. Provide strategic guidance and commands to subordinates.
+3. Do not repeat work already performed by subordinates.`,
+  ],
+] as const)("publishes the complete recovery briefing with team=%s", async (team, expected) => {
+  const fixture = createFixture();
+  mocks.readSummaries.mockResolvedValue(
+    team
+      ? [
+          ...fixture.summaries,
+          {
+            sessionKey: "agent:main:subagent:worker-2",
+            entry: { sessionId: "worker-2", updatedAt: 1, spawnedBy: fixture.entry.sessionId },
+          },
+        ]
+      : [],
+  );
+  await prepareEmbeddedAttemptHistory(fixture.input, fixture.assertActive);
+  expect(fixture.agent.state.messages.at(-1)).toMatchObject({
+    role: "user",
+    content: expected,
+  });
+});
+
 it("awaits descriptive worker rows before publishing the recovery briefing", async () => {
   const fixture = createFixture();
   const entered = createDeferred();
@@ -131,8 +248,7 @@ it("awaits descriptive worker rows before publishing the recovery briefing", asy
   expect(fixture.agent.state.messages.at(-1)).toMatchObject({
     content: expect.not.stringContaining("unrelated"),
   });
-  const [, update, options] = mocks.updateEntry.mock.calls[0]!;
-  expect(options?.assertCommitAllowed).toBe(fixture.assertActive);
+  const [, update] = mocks.updateEntry.mock.calls[0]!;
   expect(await update(fixture.entry, {})).toMatchObject({ quotaSuspension: { state: "active" } });
   expect(await update({ ...fixture.entry, sessionId: "replacement" }, {})).toBeNull();
 });

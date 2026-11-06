@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { getBoundLegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
 import {
   peekSessionMcpRuntimeManager,
   releaseSessionMcpRuntime,
@@ -10,7 +11,6 @@ import {
 import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.js";
 import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "./agent-bundle-mcp-runtime-shared.js";
 import type {
-  McpToolCatalog,
   RequesterScopedMcpRuntimeHandle,
   SessionMcpConfigReload,
   SessionMcpRuntime,
@@ -96,6 +96,14 @@ export function peekSessionMcpRuntime(params: {
   });
 }
 
+/** Captures only currently registered MCP runtimes; invoking it never selects a successor. */
+export function captureSessionMcpRuntimeRetirement(params: {
+  sessionId?: string;
+  sessionKey?: string;
+}): ReturnType<SessionMcpRuntimeManager["captureSessionRetirement"]> {
+  return peekSessionMcpRuntimeManager()?.captureSessionRetirement(params);
+}
+
 export async function retireSessionMcpRuntime(params: {
   sessionId?: string | null;
   reason: string;
@@ -163,8 +171,4 @@ export async function disposeAllSessionMcpRuntimes(): Promise<void> {
   } else {
     resetMcpStartupBackoff();
   }
-}
-
-export function getSessionMcpRuntimeManagerForTesting(): SessionMcpRuntimeManager {
-  return getSessionMcpRuntimeManager();
 }

@@ -1,5 +1,3 @@
-@import "./carapace-control-ui.css";
-
 /* Plugins and Skills presentation layered on the settings design language:
  * art tiles, row messages, catalog details, and install/consent dialogs.
  * Structural layout comes from .settings-page/.settings-row. */
@@ -9,42 +7,8 @@
   font-size: 26px;
 }
 
-.content-header.hub-page-header.plugins-hub-header {
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas:
-    "title actions"
-    "tabs tabs";
-  align-items: end;
-  row-gap: var(--space-2);
-  width: 100%;
-  max-width: 1120px;
-  max-height: none;
-  margin-inline: auto;
-  padding-inline: var(--settings-header-inline-padding, var(--space-4));
-}
-
-.content-header.plugins-hub-header .hub-page-header__tabs {
-  grid-area: tabs;
-  justify-self: start;
+.plugins-hub-header .hub-tabs--sub .hub-tab {
   padding-block: var(--space-2);
-}
-
-.plugins-hub-header .hub-tabs--sub wa-tab.hub-tab::part(base) {
-  padding-block: var(--space-2);
-}
-
-.content-header.plugins-hub-header .hub-page-header__title {
-  grid-area: title;
-  justify-self: start;
-}
-
-.content-header.plugins-hub-header .hub-page-header__actions {
-  grid-area: actions;
-}
-
-.plugins-hub-header + .settings-workspace {
-  /* The settings page already contributes the lower half of the tab rhythm. */
-  margin-top: 0;
 }
 
 .plugins-hub-header__secondary {
@@ -54,6 +18,26 @@
 @media (max-width: 768px) {
   .plugins-hub-header .page-title {
     font-size: 22px;
+  }
+}
+
+/* The settings gear shares the tabs row instead of spending a row of its own. */
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .content-header.hub-page-header--stacked.plugins-hub-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "title title"
+      "tabs actions";
+    align-items: center;
+    column-gap: var(--space-2);
+  }
+
+  .plugins-hub-header .hub-page-header__tabs {
+    min-width: 0;
+  }
+
+  .plugins-hub-header .hub-tabs {
+    box-shadow: none;
   }
 }
 
@@ -72,7 +56,7 @@
   display: grid;
   place-items: center;
   overflow: hidden;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
 }
 
 .installed-plugins-card__art {
@@ -116,7 +100,11 @@
   gap: 6px;
 }
 
-.plugin-card-title-row :is(h2, h3) {
+.plugin-card-title-row :is(h2, h3),
+.plugin-catalog-card__head > .installed-plugins-card__head,
+.plugin-catalog-detail__heading,
+.plugin-catalog-detail__readme-section,
+.plugin-catalog-detail__panel {
   min-width: 0;
 }
 
@@ -147,19 +135,27 @@
   text-underline-offset: 2px;
 }
 
-.installed-plugins-card__summary {
+.installed-plugins-card__summary,
+.plugin-capabilities .settings-row__desc {
   display: -webkit-box;
-  min-height: calc(2 * 1.4em);
-  margin: 0;
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
-  line-height: 1.4;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
 
+/* A clamped line stays inside its row; the preview holds the full text. */
+.plugin-capabilities .settings-row__desc {
+  overflow: hidden;
+}
+
+.installed-plugins-card__summary {
+  min-height: calc(2 * 1.4em);
+  margin: 0;
+  line-height: 1.4;
+}
+
 .plugins-hub-header .plugins-hub-header__secondary.btn.btn--icon {
-  box-sizing: border-box;
   flex: 0 0 34px;
   width: 34px;
   min-width: 34px;
@@ -197,16 +193,20 @@
   width: 100%;
 }
 
-.plugin-catalog-search > span {
+.plugin-catalog-search > span,
+.plugins-settings-search > span[aria-hidden="true"] {
   position: absolute;
   top: 50%;
-  left: 11px;
-  z-index: 1;
   display: inline-flex;
   width: 16px;
   color: var(--muted);
   pointer-events: none;
   transform: translateY(-50%);
+}
+
+.plugin-catalog-search > span {
+  left: 11px;
+  z-index: 1;
 }
 
 .plugin-catalog-search input {
@@ -215,9 +215,9 @@
   padding-left: 34px;
 }
 
-.plugin-catalog-results__empty {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+/* The field radius runs tighter than the control radius in square themes. */
+.plugin-catalog-search input.settings-input {
+  border-radius: max(var(--field-radius), var(--radius-md));
 }
 
 .plugin-catalog-chips {
@@ -296,7 +296,8 @@
   contain-intrinsic-block-size: auto 280px;
 }
 
-.plugin-catalog-section__header {
+.plugin-catalog-section__header,
+.plugins-settings-error {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -330,11 +331,15 @@
   gap: var(--space-3);
 }
 
+.plugin-catalog-window-item {
+  display: grid;
+  min-width: 0;
+}
+
 .plugin-catalog-card {
   position: relative;
   min-width: 0;
   display: grid;
-  grid-template-rows: auto auto;
   align-content: start;
   gap: var(--space-2);
   padding: var(--space-3);
@@ -346,6 +351,12 @@
     border-color var(--duration-fast) ease,
     box-shadow var(--duration-fast) ease,
     transform var(--duration-fast) ease;
+}
+
+.plugin-catalog-card__content {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-2);
 }
 
 .plugin-catalog-card:hover {
@@ -367,14 +378,6 @@
 }
 
 .plugin-catalog-card__head {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-.plugin-catalog-card__head > .installed-plugins-card__head {
   min-width: 0;
 }
 
@@ -382,8 +385,10 @@
   position: relative;
   z-index: 3;
   display: flex;
-  min-height: 30px;
+  height: 1lh;
+  flex: 0 0 auto;
   align-items: center;
+  margin-inline-start: auto;
 }
 
 .plugin-catalog-card__install,
@@ -396,7 +401,7 @@
    two summary lines), so the loaded cards land exactly where the placeholders were. */
 .plugin-catalog-card--skeleton {
   /* Lighter than the default skeleton fill: eight cards of solid bars read as a wall. */
-  --skeleton-base: color-mix(in srgb, var(--bg-muted) 55%, var(--bg-elevated));
+  --skeleton-base: color-mix(in srgb, var(--muted) 8%, transparent);
 
   pointer-events: none;
 }
@@ -404,7 +409,7 @@
 .plugin-catalog-card__skeleton-art {
   width: 40px;
   height: 40px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
 }
 
 .plugin-catalog-card__skeleton-title,
@@ -468,6 +473,30 @@
     overflow-x: auto;
     flex-wrap: nowrap;
     padding-bottom: 2px;
+    scrollbar-width: none;
+  }
+
+  .plugin-catalog-chips::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* A chip that runs past the row fades out, so it reads as more to scroll to. */
+  .plugin-catalog-chips[data-scrollable="true"][data-at-end="false"] {
+    mask-image: linear-gradient(to right, black calc(100% - 32px), transparent);
+  }
+
+  .plugin-catalog-chips[data-scrollable="true"][data-at-start="false"] {
+    mask-image: linear-gradient(to right, transparent, black 32px);
+  }
+
+  .plugin-catalog-chips[data-scrollable="true"][data-at-start="false"][data-at-end="false"] {
+    mask-image: linear-gradient(
+      to right,
+      transparent,
+      black 32px,
+      black calc(100% - 32px),
+      transparent
+    );
   }
 
   .plugin-catalog-grid {
@@ -486,44 +515,16 @@
   flex-wrap: wrap;
 }
 
-/* Toolbars mixing labelled fields with buttons share one control-row baseline. */
-.plugins-toolbar--fields {
-  align-items: flex-end;
-}
-
-.plugins-toolbar--fields > .plugins-toolbar__hint {
-  display: inline-flex;
-  align-items: center;
-  min-height: var(--settings-control-height);
-}
-
-.plugins-toolbar--fields > .settings-segmented,
 .plugins-toolbar--fields > .btn {
-  box-sizing: border-box;
   height: var(--settings-control-height);
 }
 
-.plugins-toolbar--fields > .settings-segmented {
-  --wa-form-control-height: calc(var(--settings-control-height) - 6px);
+.skill-library-search {
+  display: contents;
 }
 
-.plugins-toolbar__hint {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  white-space: nowrap;
-}
-
-/* Labelled control in a toolbar (label text over a settings input/select). */
-.plugins-field {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-}
-
-.plugins-field > span {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  font-weight: 500;
+.skill-library-search__action {
+  display: none;
 }
 
 .skills-toolbar__search {
@@ -531,8 +532,31 @@
   min-width: 180px;
 }
 
-/* <details> shell keeps the settings-section look while restoring the native
- * expand/collapse the pre-migration skill groups had (cfg-object pattern). */
+/* The placeholder names the field; the label stays for assistive technology. */
+:is(.skills-toolbar__search, .skill-library-search > .field) > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.skills-toolbar__search > input {
+  width: 100%;
+}
+
+.skill-row-status {
+  display: inline-flex;
+}
+
+/* Selects size to the chosen option; a floor keeps the search edge from moving. */
+.plugins-toolbar > .skills-toolbar__status {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 160px;
+}
+
 .skills-group__summary {
   align-items: center;
   cursor: var(--cursor-action);
@@ -576,24 +600,6 @@
 
 .plugins-item--clickable:hover {
   background: var(--bg-hover);
-}
-
-/* Keyboard-accessible detail opener: the row text is a real button so the
-   row's primary action is focusable instead of a div click handler. */
-.plugins-item__detail-button {
-  border: 0;
-  border-radius: var(--radius-sm);
-  padding: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: var(--cursor-action);
-}
-
-.plugins-item__detail-button:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .clawhub-skill-icon {
@@ -654,12 +660,6 @@
   font-weight: 400;
 }
 
-/* Item titles/subheadings are semantic <h3>s for AT heading navigation; the
- * shared classes own the look, so only the UA heading margin needs a reset. */
-h3.settings-row__title {
-  margin: 0;
-}
-
 .plugins-tile {
   background: var(--bg-elevated);
 }
@@ -685,11 +685,7 @@ h3.settings-row__title {
 .plugins-tile--fallback svg {
   width: 21px;
   height: 21px;
-  fill: none;
-  stroke: currentColor;
   stroke-width: 1.6px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .plugins-row-message {
@@ -697,16 +693,11 @@ h3.settings-row__title {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  border-radius: var(--radius-md);
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-/* Row-local message: full-width line under the row's text + controls. */
-.plugin-catalog-card > .plugins-row-message {
+.plugin-catalog-card__content > .plugins-row-message {
   position: relative;
   z-index: 3;
 }
@@ -715,9 +706,36 @@ h3.settings-row__title {
   flex: 1 1 100%;
 }
 
-.plugins-row-message--error {
-  background: var(--danger-subtle);
-  color: var(--danger);
+.plugin-catalog-detail__panel > .plugins-row-message {
+  margin-bottom: var(--space-4);
+}
+
+.plugins-row-message--info {
+  display: block;
+  padding: var(--space-2) 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.45;
+  white-space: normal;
+}
+
+.plugins-row-message--info a {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.plugin-compatibility-apis {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+}
+
+.plugin-compatibility-apis dd {
+  margin: var(--space-1) 0 0;
 }
 
 .plugins-row-message--warning {
@@ -753,26 +771,21 @@ h3.settings-row__title {
   letter-spacing: -0.02em;
 }
 
-.plugins-consent {
-  display: grid;
-  max-height: min(85vh, 860px);
-  gap: var(--space-4);
-  overflow-y: auto;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-xl);
-  padding: var(--space-5);
-  background: var(--popover);
-  box-shadow: var(--shadow-xl);
+/* Art beside the name, with version and meta aligned under it; close keeps the shell's spot. */
+.oc-dialog__header.plugins-consent__header {
+  grid-template-columns: auto minmax(0, 1fr) var(--overlay-modal-close-size);
+  column-gap: var(--space-3);
+  padding-block-start: var(--overlay-modal-padding);
 }
 
-.plugins-consent__header {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
+.plugins-consent__header > .oc-dialog__close {
+  align-self: start;
+  margin-block-start: calc(12px - var(--overlay-modal-padding));
 }
 
-.plugins-consent__header > div {
+.plugins-consent__identity {
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .plugins-consent__section {
@@ -798,10 +811,6 @@ h3.settings-row__title {
 .plugins-consent__hint {
   display: block;
   font-size: var(--control-ui-text-xs);
-}
-
-.plugins-consent__rows {
-  border-top: 1px solid var(--border);
 }
 
 .plugins-consent__items {
@@ -833,31 +842,12 @@ h3.settings-row__title {
   color: var(--muted);
 }
 
-.plugins-consent__error,
-.plugins-consent__actions {
+.plugins-consent__error {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-}
-
-.plugins-consent__error {
   color: var(--danger);
-}
-
-.plugins-consent__actions {
-  justify-content: flex-end;
-}
-
-/* The inventory header is already inside the padded settings page. Its page
-   owner must override the outer-header inset regardless of lazy stylesheet order. */
-openclaw-plugins-page
-  .settings-page.oc-app-surface:has(> .plugins-settings-content)
-  > .content-header--settings {
-  width: 100%;
-  max-width: none;
-  margin-inline: 0;
-  padding-inline: 0;
 }
 
 .plugins-settings-content {
@@ -871,7 +861,6 @@ openclaw-plugins-page
   width: max-content;
   max-width: 100%;
   align-self: flex-start;
-  --track-color: transparent;
   --indicator-color: transparent;
 }
 
@@ -882,17 +871,12 @@ openclaw-plugins-page
 }
 
 .plugins-settings-search > span[aria-hidden="true"] {
-  position: absolute;
-  top: 50%;
   left: var(--space-3);
-  display: inline-flex;
-  width: 16px;
-  color: var(--muted);
-  transform: translateY(-50%);
-  pointer-events: none;
 }
 
-.plugins-settings-search > span[aria-hidden="true"] svg {
+.plugins-settings-search > span[aria-hidden="true"] svg,
+.plugin-catalog-detail__back svg,
+.plugin-catalog-detail__actions svg {
   width: 16px;
   height: 16px;
 }
@@ -900,6 +884,49 @@ openclaw-plugins-page
 .plugins-settings-search .settings-input {
   width: 100%;
   padding-left: calc(var(--space-3) + 24px);
+  border-radius: max(var(--field-radius), var(--radius-md));
+}
+
+.plugins-settings-row {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 40px;
+}
+
+.plugins-settings-row__status {
+  display: flex;
+}
+
+/* On a phone the description keeps its width; the status reads below it. */
+@media (max-width: 640px) {
+  .settings-row.plugins-settings-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    row-gap: var(--space-2);
+    align-items: center;
+  }
+
+  .plugins-settings-row > :first-child {
+    grid-row: 1 / span 2;
+    align-self: start;
+  }
+
+  .plugins-settings-row > .settings-row__control {
+    display: contents;
+  }
+
+  .plugins-settings-row > .settings-row__text,
+  .plugins-settings-row__status {
+    grid-column: 2;
+  }
+
+  .plugins-settings-row .settings-row__chevron {
+    grid-row: 1 / span 2;
+    grid-column: 3;
+  }
+
+  .plugins-settings-row > .plugins-row-message {
+    grid-column: 1 / -1;
+  }
 }
 
 .plugins-settings-row__link {
@@ -910,6 +937,13 @@ openclaw-plugins-page
   color: inherit;
   text-align: left;
   text-decoration: none;
+}
+
+/* The phone header's Back already goes up a level. The settings editor keeps its
+   breadcrumb: nothing else there names the plugin. */
+.shell--settings.shell--floating-header
+  :is(.plugin-catalog-detail > .plugins-settings-breadcrumb, .plugins-settings-back) {
+  display: none;
 }
 
 .plugins-settings-breadcrumb {
@@ -932,6 +966,10 @@ openclaw-plugins-page
   white-space: nowrap;
 }
 
+.plugins-settings-breadcrumb__parent {
+  flex: none;
+}
+
 .plugins-settings-breadcrumb__parent:hover {
   color: var(--text);
 }
@@ -946,18 +984,16 @@ openclaw-plugins-page
   height: 13px;
 }
 
-.plugins-settings-error {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
 .plugin-catalog-detail {
   container-type: inline-size;
   display: grid;
-  gap: 28px;
+  gap: var(--space-7);
   min-width: 0;
+}
+
+/* The breadcrumb belongs to the hero, so it sits closer to it than the hero sits to the body. */
+.plugin-catalog-detail > .plugins-settings-breadcrumb {
+  margin-bottom: calc(var(--space-4) - var(--space-7));
 }
 
 .plugin-catalog-detail__content {
@@ -987,11 +1023,6 @@ openclaw-plugins-page
   color: var(--text-strong);
 }
 
-.plugin-catalog-detail__back svg {
-  width: 16px;
-  height: 16px;
-}
-
 .plugin-catalog-detail__hero {
   display: grid;
   grid-template-columns: 112px minmax(0, 1fr);
@@ -1005,7 +1036,7 @@ openclaw-plugins-page
   width: 112px;
   height: 112px;
   overflow: hidden;
-  border-radius: 20px;
+  border-radius: var(--radius-xl);
   background: var(--bg-elevated);
   color: var(--accent);
 }
@@ -1022,8 +1053,8 @@ openclaw-plugins-page
 .plugin-catalog-detail__actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 18px;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
 }
 .plugin-catalog-detail__actions .btn {
   min-height: 30px;
@@ -1038,15 +1069,6 @@ openclaw-plugins-page
   min-width: var(--settings-control-height);
   padding: 0;
 }
-.plugin-catalog-detail__actions svg {
-  width: 16px;
-  height: 16px;
-}
-
-.plugin-catalog-detail__heading {
-  min-width: 0;
-}
-
 .plugin-catalog-detail__title-row {
   display: flex;
   align-items: flex-start;
@@ -1067,7 +1089,7 @@ openclaw-plugins-page
 
 .plugin-catalog-detail__summary {
   max-width: 720px;
-  margin: var(--space-3) 0 0;
+  margin: var(--space-2) 0 0;
   color: var(--muted);
   font-size: var(--control-ui-text-lg);
   line-height: 1.5;
@@ -1077,8 +1099,8 @@ openclaw-plugins-page
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-3);
-  margin-top: var(--space-3);
+  gap: var(--space-2);
+  margin-top: var(--space-2);
   font-size: var(--control-ui-text-lg);
   line-height: 1.4;
 }
@@ -1106,40 +1128,57 @@ openclaw-plugins-page
   grid-area: sidebar;
   display: grid;
   align-content: start;
+  gap: var(--space-6);
   min-width: 0;
   font-size: var(--control-ui-text-sm);
 }
+/* Facts stay in view beside a long list of tools, when the window is tall enough to hold them. */
+@media (min-height: 640px) {
+  .plugin-catalog-detail__sidebar {
+    position: sticky;
+    top: var(--space-6);
+  }
+}
 .plugin-metadata__facts,
 .plugin-metadata__section,
+.plugin-metadata__links,
 .plugin-catalog-detail__security {
   margin: 0;
-  padding: 16px 0;
-  border: 0;
-  border-bottom: 1px solid var(--border);
-}
-.plugin-catalog-detail__sidebar > :first-child {
-  padding-top: 0;
-}
-.plugin-catalog-detail__sidebar > :last-child {
-  border-bottom: 0;
+  padding: 0;
 }
 .plugin-metadata__facts {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  gap: var(--space-2);
 }
-.plugin-metadata__facts dt,
+/* A value too long for its row, such as a prerelease version, moves under its label whole. */
+.plugin-metadata__facts > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--space-3);
+  min-width: 0;
+}
+/* Group labels use the shared section title, so the rail reads like the sections beside it. */
 .plugin-metadata__section h2,
 .plugin-catalog-detail__security h2 {
-  margin: 0 0 8px;
+  margin: 0;
+}
+.plugin-metadata__facts dt {
+  flex: none;
+  margin: 0;
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
-  font-weight: 600;
 }
 .plugin-metadata__facts dd {
-  margin: 0;
-  font-weight: 600;
+  min-width: 0;
+  margin: 0 0 0 auto;
+  color: var(--text-strong);
+  font-weight: 500;
+  text-align: end;
   overflow-wrap: anywhere;
+}
+.plugin-metadata__section h2 {
+  margin-bottom: var(--space-2);
 }
 .plugin-metadata__categories {
   display: flex;
@@ -1147,29 +1186,32 @@ openclaw-plugins-page
   gap: 6px;
   text-transform: capitalize;
 }
-.plugin-metadata__section a {
-  color: var(--text-strong);
-  text-decoration: none;
+.plugin-metadata__links {
+  display: grid;
+  gap: var(--space-2);
+  list-style: none;
 }
-.plugin-metadata__section a:hover {
+.plugin-metadata__links a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  color: var(--text-strong);
+  font-weight: 500;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.plugin-metadata__links a:hover {
   text-decoration: underline;
 }
-.plugin-metadata__section a:focus-visible {
+.plugin-metadata__links a:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
-.plugin-metadata__section svg {
-  width: 16px;
-  height: 16px;
-  flex: 0 0 16px;
-  vertical-align: middle;
-}
-.plugin-metadata__repository {
-  display: flex;
-  align-items: start;
-  gap: 7px;
-  font-weight: 600;
-  overflow-wrap: anywhere;
+.plugin-metadata__links svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
 }
 .plugin-catalog-detail__security {
   display: block;
@@ -1180,6 +1222,7 @@ openclaw-plugins-page
   display: flex;
   align-items: center;
   gap: 6px;
+  margin-bottom: var(--space-1);
 }
 .plugin-catalog-detail__security h2 > span {
   display: inline-flex;
@@ -1189,11 +1232,16 @@ openclaw-plugins-page
   height: 1em;
 }
 .plugin-catalog-detail__security-score {
+  /* The hover fill bleeds past the label and bars so neither sits flush with its edge. */
+  --plugin-security-score-bleed: 8px;
+
   display: grid;
   grid-template-columns: 1fr repeat(3, 26px);
   align-items: center;
   gap: 6px;
-  padding: 8px 0;
+  margin-inline: calc(-1 * var(--plugin-security-score-bleed));
+  padding: 6px var(--plugin-security-score-bleed);
+  border-radius: var(--radius-md);
 }
 .plugin-catalog-detail__security-score strong {
   font-size: var(--control-ui-text-sm);
@@ -1218,64 +1266,14 @@ openclaw-plugins-page
 }
 
 .plugin-capabilities {
-  margin-bottom: 28px;
+  margin-bottom: var(--space-8);
 }
-.plugin-capabilities h2,
 .plugin-catalog-detail__readme-section > h2 {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 0 12px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--border);
-  font-size: var(--control-ui-text-lg);
+  margin-bottom: var(--space-3);
 }
-.plugin-capabilities h2 {
-  margin-bottom: 0;
-}
-.plugin-capabilities h2 > span {
-  display: inline-grid;
-  place-items: center;
-  min-width: 24px;
-  height: 24px;
-  padding-inline: 4px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-full);
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  font-weight: 400;
-}
-.plugin-capability {
-  padding: 4px 0;
-  border-bottom: 1px solid var(--border);
-}
-.plugin-capability > button,
-.plugin-capability__disclosure > summary,
-.plugin-capability__static {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  width: 100%;
-  padding: 12px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text);
-  text-align: left;
-  font: inherit;
-}
-.plugin-capability > button,
-.plugin-capability__disclosure > summary {
-  cursor: var(--cursor-action);
-}
-.plugin-capability > button:hover,
-.plugin-capability__disclosure > summary:hover {
-  background: var(--bg-elevated);
-}
-.plugin-capability > button:focus-visible,
-.plugin-capability__disclosure > summary:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+/* Headings stay left on a phone, where the shared header stacks and centers its copy. */
+.plugin-capabilities .settings-section__header.oc-settings-section-header {
+  align-items: stretch;
 }
 .plugin-capability__disclosure > summary {
   list-style: none;
@@ -1283,26 +1281,26 @@ openclaw-plugins-page
 .plugin-capability__disclosure > summary::-webkit-details-marker {
   display: none;
 }
-.plugin-capability__chevron {
-  display: inline-flex;
-}
-.plugin-capability__disclosure[open] .plugin-capability__chevron {
+.plugin-capability__disclosure[open] .settings-row__chevron {
   transform: rotate(90deg);
 }
 .plugin-capability__details {
-  padding: 0 12px 12px;
+  padding: 0 var(--space-4) var(--space-4);
   overflow-wrap: anywhere;
   font-size: var(--control-ui-text-sm);
 }
 .plugin-capability__details p {
-  margin: 12px 0 0;
+  margin: 0;
   color: var(--muted);
 }
 .plugin-mcp-details {
   display: grid;
   grid-template-columns: minmax(112px, 1fr) minmax(0, 3fr);
   gap: 8px 16px;
-  margin: 12px 0 0;
+  margin: 0;
+}
+.plugin-mcp-details + p {
+  margin-top: var(--space-3);
 }
 .plugin-mcp-details dt {
   color: var(--muted);
@@ -1310,6 +1308,7 @@ openclaw-plugins-page
 .plugin-mcp-details dd {
   margin: 0;
 }
+/* Each section keeps its own icon, in main's box, size and accent color. */
 .plugin-capability__icon {
   display: grid;
   place-items: center;
@@ -1317,84 +1316,53 @@ openclaw-plugins-page
   width: 36px;
   height: 36px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   color: var(--accent);
 }
-.plugin-capability svg {
+.plugin-capability__icon svg {
   width: 18px;
   height: 18px;
   flex-shrink: 0;
 }
-.plugin-capability__copy {
-  flex: 1;
-  min-width: 0;
-  display: grid;
-  gap: 4px;
+/* With the icon in the row, the shared narrow rule would drop the actions under the
+   icon; keep them at the row end and stack status over the button, as main did. */
+@media (max-width: 640px) {
+  .plugin-capabilities .settings-row:has(> .plugin-capability__icon) {
+    flex-wrap: nowrap;
+  }
+  .plugin-capabilities .settings-row:has(> .plugin-capability__icon) > .settings-row__control {
+    width: auto;
+    max-width: 50%;
+    justify-content: flex-end;
+  }
 }
-.plugin-capability__copy strong {
-  overflow-wrap: anywhere;
-  font-size: var(--control-ui-text-sm);
-}
-.plugin-capability__copy > span {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.5;
-}
-.plugin-catalog-detail__readme-section {
-  min-width: 0;
+@media (max-width: 560px) {
+  .plugin-capabilities .settings-row:has(> .plugin-capability__icon) > .settings-row__control {
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+  }
 }
 .plugin-tool-dialog {
   --openclaw-modal-width: 760px;
 }
-.plugin-tool-preview {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  width: 100%;
-  max-height: var(--openclaw-modal-height-limit, calc(100dvh - 48px));
-  padding: 24px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--bg);
-}
-.plugin-tool-preview header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-}
-.plugin-tool-preview h2 {
-  margin: 0;
-  font-size: var(--control-ui-text-lg);
-}
-.plugin-tool-preview__body {
-  overflow: auto;
-  min-height: 0;
-}
 .plugin-tool-preview p {
-  margin: 20px 0 0;
+  margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   line-height: 1.6;
 }
-.plugin-tool-preview__parameters {
-  margin-top: 20px;
+.plugin-tool-preview__parameters + p {
+  margin-block-start: var(--space-2);
 }
 .plugin-tool-preview__parameters h3 {
   margin: 0 0 12px;
-  font-size: var(--control-ui-text-base);
+  font-size: var(--control-ui-text-md);
 }
 .plugin-tool-preview__parameters dl {
   display: grid;
   gap: 12px;
   margin: 0;
-}
-.plugin-tool-preview__parameters dl > div {
-  padding: 12px 0;
-  border-top: 1px solid var(--border);
 }
 .plugin-tool-preview__parameters dt {
   display: flex;
@@ -1412,14 +1380,26 @@ openclaw-plugins-page
   line-height: 1.5;
 }
 @container (max-width: 768px) {
+  /* One column: facts come after what the plugin adds and before its README. */
   .plugin-catalog-detail__content {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: "main" "sidebar";
-    gap: 24px;
+    grid-template-areas: none;
+    gap: var(--space-7);
+  }
+  .plugin-catalog-detail__content > .plugin-catalog-detail__main {
+    display: contents;
+  }
+  .plugin-catalog-detail__content > .plugin-catalog-detail__sidebar {
+    grid-area: auto;
+    position: static;
+    order: 1;
+  }
+  .plugin-catalog-detail__main > .plugin-catalog-detail__readme-section {
+    order: 2;
   }
   .plugin-catalog-detail__hero {
     grid-template-columns: 80px minmax(0, 1fr);
-    gap: 16px;
+    gap: var(--space-4);
   }
   .plugin-catalog-detail__icon,
   .plugin-catalog-detail__icon > span {
@@ -1427,9 +1407,39 @@ openclaw-plugins-page
     height: 80px;
   }
 }
-@container (max-width: 400px) {
+/* A phone keeps the art beside the name, and gives the summary and actions the full width. */
+@container (max-width: 480px) {
   .plugin-catalog-detail__hero {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: 64px minmax(0, 1fr);
+    align-items: center;
+    gap: 0 var(--space-3);
+  }
+  .plugin-catalog-detail__icon,
+  .plugin-catalog-detail__icon > span {
+    grid-row: 1;
+    width: 64px;
+    height: 64px;
+    border-radius: var(--radius-lg);
+  }
+  .plugin-catalog-detail__heading {
+    display: contents;
+  }
+  .plugin-catalog-detail__name {
+    grid-column: 2;
+    grid-row: 1;
+    min-width: 0;
+  }
+  .plugin-catalog-detail__publisher {
+    margin-top: var(--space-1);
+    font-size: var(--control-ui-text-md);
+  }
+  .plugin-catalog-detail__summary,
+  .plugin-catalog-detail__actions {
+    grid-column: 1 / -1;
+  }
+  .plugin-catalog-detail__summary {
+    margin-top: var(--space-4);
+    font-size: var(--control-ui-text-md);
   }
 }
 
@@ -1472,10 +1482,6 @@ openclaw-plugins-page
   min-width: 0;
 }
 
-.plugin-catalog-detail__panel {
-  min-width: 0;
-}
-
 .plugin-catalog-detail__panel:empty {
   display: none;
 }
@@ -1487,6 +1493,10 @@ openclaw-plugins-page
 .plugin-catalog-detail__readme {
   max-width: 820px;
   overflow-wrap: anywhere;
+}
+
+.plugin-catalog-detail__readme :is(h1, h2, h3) {
+  border-bottom: 0;
 }
 
 .plugin-catalog-detail__empty {
@@ -1504,29 +1514,39 @@ openclaw-plugins-page
 }
 
 @media (max-width: 640px) {
-  .settings-page.oc-app-surface:has(> .plugins-settings-content) {
-    padding-top: 0;
-  }
-
   openclaw-skills-page .plugins-toolbar--fields {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: end;
   }
 
-  openclaw-skills-page .plugins-toolbar--fields > :is(.settings-segmented, .plugins-field) {
-    grid-column: 1 / -1;
-    width: 100%;
+  openclaw-skills-page .skills-toolbar__search {
     min-width: 0;
   }
 
-  openclaw-skills-page .plugins-toolbar--fields > .settings-segmented {
-    height: auto;
+  /* Search keeps its room; the status select takes the next line. */
+  openclaw-skills-page .plugins-toolbar > .skills-toolbar__status {
+    grid-row: 2;
+    grid-column: 1 / -1;
+    width: 100%;
   }
 
-  openclaw-skills-page .plugins-toolbar__hint {
-    white-space: normal;
-    overflow-wrap: anywhere;
+  /* Views stay on one line in every theme, however wide its font. */
+  openclaw-skills-page .skill-library-toolbar__views > .settings-segmented {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  openclaw-skills-page .skill-library-toolbar__views > .settings-segmented::-webkit-scrollbar {
+    display: none;
+  }
+
+  openclaw-skills-page
+    .skill-library-toolbar__views
+    > .settings-segmented
+    > .settings-segmented__btn {
+    flex: 0 0 auto;
   }
 
   openclaw-skills-page .plugins-toolbar:has(> .field) {
@@ -1539,13 +1559,76 @@ openclaw-plugins-page
     max-width: 100%;
     white-space: normal;
   }
+
+  /* Every library tab keeps one rhythm under the tabs; groups stay apart. */
+  openclaw-skills-page .settings-page:has(> .skill-library-toolbar__actions) {
+    gap: var(--space-3);
+  }
+
+  openclaw-skills-page .settings-page:has(> .skill-library-toolbar__actions) > p.muted {
+    margin: 0;
+  }
+
+  openclaw-skills-page
+    .settings-page:has(> .skill-library-toolbar__actions)
+    > .skills-group
+    + .skills-group {
+    margin-top: var(--space-4);
+  }
+
+  openclaw-skills-page :is(.skill-library-toolbar__actions, .skill-library-toolbar__refresh) {
+    display: none;
+  }
+
+  openclaw-skills-page .skill-library-search {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  openclaw-skills-page .skill-library-search > .field {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  openclaw-skills-page .skill-library-search input {
+    min-width: 0;
+    text-overflow: ellipsis;
+  }
+
+  openclaw-skills-page .skill-library-search__action,
+  .topnav-shell__page-actions .skill-library-search__action {
+    display: inline-flex;
+    flex: none;
+  }
+
+  openclaw-skills-page .btn.skill-library-search__icon {
+    width: var(--settings-control-height);
+    height: var(--settings-control-height);
+    padding: 0;
+  }
+
+  /* Refresh sits beside the page menu here, not at the end of the row. */
+  openclaw-skills-page .skill-library-search__action .btn.refresh-button {
+    justify-content: center;
+  }
+
+  openclaw-skills-page .skill-library-search__icon > .oc-menu-item__label {
+    display: contents;
+  }
+
+  openclaw-skills-page .skill-library-search__icon svg {
+    display: block;
+    width: 14px;
+    height: 14px;
+  }
+
+  openclaw-skills-page .plugins-toolbar--fields:has(> .skill-library-search__action) {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
 }
 
 @media (max-width: 560px) {
-  .plugins-toolbar--fields > .settings-segmented {
-    height: auto;
-  }
-
   .plugins-row-message {
     align-items: stretch;
     flex-direction: column;
@@ -1564,20 +1647,11 @@ openclaw-plugins-page
 }
 .plugin-metadata__loading {
   display: grid;
-  gap: 20px;
-  padding-bottom: 24px;
-  border-bottom: 1px solid var(--border);
+  gap: var(--space-3);
 }
 .plugin-metadata__loading > :last-child {
   width: 100%;
   height: 20px;
-}
-
-.plugin-capability__trailing {
-  display: flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 12px;
 }
 
 .plugin-connection-status {
@@ -1594,10 +1668,184 @@ openclaw-plugins-page
   color: var(--ok);
 }
 
-@media (max-width: 560px) {
-  .plugin-capability__trailing {
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 6px;
+/* A phone has no hover to reveal the status tooltip, so the state is spelled out. */
+.plugin-catalog-card__status-label {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .plugin-catalog-card__status-label {
+    display: inline;
   }
+}
+
+/* Recommended plugin prompts and their inline composer reference. */
+.plugin-recommended-prompts {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  min-height: clamp(0px, 20vw, 250px);
+  padding: 24px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+}
+
+/* Transparent artwork leaves the active canvas visible in every theme. The
+   intensity masks retain the grain while a quiet tint follows the live primary. */
+.plugin-recommended-prompts__art {
+  position: absolute;
+  inset: 0;
+  isolation: isolate;
+  pointer-events: none;
+  opacity: 0.18;
+}
+
+.plugin-recommended-prompts__art > span {
+  position: absolute;
+  inset: 0;
+  mix-blend-mode: screen;
+  mask: var(--plugin-prompt-mask) 38% 50% / cover no-repeat;
+}
+
+.plugin-recommended-prompts__art > [data-channel="r"] {
+  --plugin-prompt-mask: url("../assets/plugin-prompts-ember-r.png");
+
+  background: rgb(from var(--primary) r 0 0);
+}
+
+.plugin-recommended-prompts__art > [data-channel="g"] {
+  --plugin-prompt-mask: url("../assets/plugin-prompts-ember-g.png");
+
+  background: rgb(from var(--primary) 0 g 0);
+}
+
+.plugin-recommended-prompts__art > [data-channel="b"] {
+  --plugin-prompt-mask: url("../assets/plugin-prompts-ember-b.png");
+
+  background: rgb(from var(--primary) 0 0 b);
+}
+
+.plugin-recommended-prompts__list {
+  position: relative;
+  display: grid;
+  gap: 12px;
+  width: min(100%, 680px);
+}
+
+.plugin-recommended-prompts__list > button.btn.plugin-recommended-prompts__prompt {
+  --btn-bg: var(--card);
+  --btn-bg-hover: var(--bg-hover);
+
+  gap: 12px;
+  width: 100%;
+  padding: 12px 16px;
+  color: var(--card-foreground);
+  font: inherit;
+  text-align: start;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.plugin-recommended-prompts__prompt:focus-visible {
+  outline: var(--control-ui-focus-ring);
+  outline-offset: 3px;
+}
+
+.plugin-recommended-prompts__text {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.plugin-prompt-mention {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+}
+
+.plugin-prompt-mention__icon {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  overflow: hidden;
+  border-radius: 4px;
+  vertical-align: middle;
+}
+
+.plugin-prompt-mention__icon :is(img, svg) {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.plugin-recommended-prompts__prompt .plugin-prompt-mention {
+  color: var(--link);
+}
+
+.plugin-recommended-prompts__action {
+  display: grid;
+  flex: 0 0 30px;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  background: var(--surface-hover);
+  border-radius: 50%;
+}
+
+/* Reference mode preserves the raw @id glyph widths, so native caret and wrapping
+   remain aligned with the advisory composer overlay. */
+.plugin-prompt-mention--reference {
+  display: inline;
+  background: var(--accent-subtle);
+  border-radius: 3px;
+}
+
+.plugin-prompt-mention--reference .plugin-prompt-mention__mark {
+  position: relative;
+}
+
+.plugin-prompt-mention--reference .plugin-prompt-mention__at {
+  visibility: hidden;
+}
+
+.plugin-prompt-mention--reference .plugin-prompt-mention__icon {
+  position: absolute;
+  inset-inline-start: 0;
+  top: 50%;
+  width: 100%;
+  height: 1em;
+  transform: translateY(-50%);
+}
+
+.agent-chat__composer-prediction.agent-chat__plugin-draft-overlay {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  max-height: none;
+  padding-inline: calc(
+      var(--chat-composer-editor-inset-inline) - var(--chat-composer-editor-scroll-inset)
+    )
+    var(--chat-composer-editor-inset-inline);
+  color: var(--text-strong);
+}
+
+.agent-chat__composer-combobox
+  > textarea:has(~ .agent-chat__plugin-draft-overlay):not(
+    [data-composer-overflow],
+    [data-composing]
+  ) {
+  color: transparent;
+  caret-color: var(--text-strong);
+}
+
+.agent-chat__composer-combobox
+  > textarea:is([data-composer-overflow], [data-composing])
+  ~ .agent-chat__plugin-draft-overlay {
+  display: none;
 }

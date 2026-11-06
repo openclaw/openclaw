@@ -7,11 +7,12 @@ import * as registryRead from "../agents/subagents/registry/subagent-registry-re
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import {
   deleteSessionEntryLifecycle,
+  replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
@@ -149,7 +150,7 @@ it("keeps prepared lineage current across publications and store lifetimes witho
           ...(kind === "archived" ? { archivedAt: 1 } : {}),
           ...(incognito ? { incognito: true as const } : {}),
         };
-        replaceSessionEntrySync(scope, stored);
+        await replaceSessionEntry(scope, stored);
         await projection.ensureMaterialized();
         const eventKey = incognito
           ? sessionKey.replace("agent:main:", "AGENT:MAIN:")
@@ -159,7 +160,7 @@ it("keeps prepared lineage current across publications and store lifetimes witho
         const harness = createLineageHarness(projection, eventKey);
         harnesses.push(harness);
         await harness.expectLineage(parent);
-        replaceSessionEntrySync(scope, {
+        await replaceSessionEntry(scope, {
           ...stored,
           sessionId: `replacement-${kind}`,
           updatedAt: 2,
@@ -167,11 +168,10 @@ it("keeps prepared lineage current across publications and store lifetimes witho
         });
         await harness.expectLineage("agent:main:new-parent");
         if (incognito) {
-          expect(
-            closeOpenClawAgentDatabaseByPath(
-              resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-            ),
-          ).toBe(true);
+          memorySessionActorOwners.closeDatabase({
+            agentId: "main",
+            path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+          });
           await harness.expectLineage(undefined);
         }
       }

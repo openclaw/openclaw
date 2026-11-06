@@ -7,6 +7,10 @@ export function createPluginModelRuntimeMock(
 ): Pick<PluginRuntime, "decisions" | "modelConfig" | "modelAuth" | "llm"> {
   return {
     decisions: {
+      evaluateV2: vi.fn(async () => ({
+        status: "unavailable" as const,
+        reason: "disabled" as const,
+      })),
       evaluate: vi.fn(async () => ({
         status: "unavailable" as const,
         reason: "disabled" as const,
@@ -26,6 +30,9 @@ export function createPluginModelRuntimeMock(
         version: 1,
         profiles: {},
       })),
+      ensureAuthProfileStoreAsync: vi.fn<PluginRuntime["modelAuth"]["ensureAuthProfileStoreAsync"]>(
+        async () => ({ version: 1, profiles: {} }),
+      ),
       resolveAuthProfileOrder: vi.fn<PluginRuntime["modelAuth"]["resolveAuthProfileOrder"]>(
         () => [],
       ),
@@ -35,6 +42,9 @@ export function createPluginModelRuntimeMock(
       isProviderApiKeyConfigured: vi.fn<PluginRuntime["modelAuth"]["isProviderApiKeyConfigured"]>(
         () => false,
       ),
+      isProviderApiKeyConfiguredAsync: vi.fn<
+        PluginRuntime["modelAuth"]["isProviderApiKeyConfiguredAsync"]
+      >(async () => false),
       getApiKeyForModel: vi.fn<PluginRuntime["modelAuth"]["getApiKeyForModel"]>(),
       getRuntimeAuthForModel: vi.fn<PluginRuntime["modelAuth"]["getRuntimeAuthForModel"]>(),
       resolveApiKeyForProvider: vi.fn<PluginRuntime["modelAuth"]["resolveApiKeyForProvider"]>(),

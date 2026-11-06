@@ -16,6 +16,7 @@ import type {
   MigrationItem,
   MigrationPlan,
 } from "../plugins/types.js";
+import { mapNestedStrings } from "../shared/map-nested-strings.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db-disposal.js";
 import {
   registerOpenClawAgentDatabase,
@@ -47,7 +48,6 @@ import {
   type PromotionComponent,
   type PromotionJournal,
   type SetupMigrationPromotionContinuation,
-  type SetupMigrationPromotionResume,
 } from "./setup.migration-promotion.js";
 import { SetupMigrationTargetChangedError } from "./setup.migration-snapshot.js";
 
@@ -58,36 +58,6 @@ export type {
 } from "./setup.migration-promotion.js";
 
 const DEFERRED_REASON = "deferred until durable onboarding promotion";
-
-type SetupMigrationStagePaths = {
-  stateDir: string;
-  workspaceDir: string;
-  agentDir: string;
-  reportDir: string;
-};
-
-type SetupMigrationStage = {
-  staged: SetupMigrationStagePaths;
-  configRuntime: MigrationConfigRuntime;
-  inferenceConfigTarget: SetupInferenceConfigTarget;
-  getStagedConfig: () => OpenClawConfig;
-  replaceStagedConfig: (config: OpenClawConfig) => void;
-  projectPlanToStage: (plan: MigrationPlan) => MigrationPlan;
-  projectResultToFinal: (result: MigrationApplyResult) => MigrationApplyResult;
-  promote: (params: {
-    expectedConfig: OpenClawConfig;
-    continuation: Omit<
-      SetupMigrationPromotionContinuation,
-      "stagedReportDir" | "stagedRoots" | "workspaceDir"
-    >;
-    readConfigFile: () => Promise<OpenClawConfig>;
-    commitConfigFile: (
-      config: OpenClawConfig,
-      expectedConfig: OpenClawConfig,
-    ) => Promise<OpenClawConfig>;
-  }) => Promise<{ config: OpenClawConfig; resume: SetupMigrationPromotionResume }>;
-  cleanup: () => Promise<void>;
-};
 
 async function makePrivateStageNear(target: string, label: string): Promise<string> {
   const parent = path.dirname(path.resolve(target));
@@ -107,21 +77,6 @@ function projectPath(value: string, mappings: ReadonlyArray<readonly [string, st
   return mapping ? `${mapping[1]}${value.slice(mapping[0].length)}` : value;
 }
 
-function projectValue(value: unknown, mappings: ReadonlyArray<readonly [string, string]>): unknown {
-  if (typeof value === "string") {
-    return projectPath(value, mappings);
-  }
-  if (Array.isArray(value)) {
-    return value.map((entry) => projectValue(entry, mappings));
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [key, projectValue(entry, mappings)]),
-  );
-}
-
 function projectPlanTargets(
   plan: MigrationPlan,
   mappings: ReadonlyArray<readonly [string, string]>,
@@ -134,7 +89,11 @@ function projectPlanTargets(
       ...(item.target ? { target: projectPath(item.target, mappings) } : {}),
     })),
     ...(plan.metadata
-      ? { metadata: projectValue(plan.metadata, mappings) as Record<string, unknown> }
+      ? {
+          metadata: mapNestedStrings(plan.metadata, (value) =>
+            projectPath(value, mappings),
+          ) as Record<string, unknown>,
+        }
       : {}),
   };
 }
@@ -196,7 +155,7 @@ export async function createSetupMigrationStage(params: {
   workspaceDir: string;
   reportDir: string;
   targetConfig: OpenClawConfig;
-}): Promise<SetupMigrationStage> {
+}) {
   const agentId = resolveDefaultAgentId(params.targetConfig);
   const finalEnv = { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
   const finalAgentDir = resolveAgentDir(params.targetConfig, agentId, finalEnv);
@@ -210,41 +169,29 @@ export async function createSetupMigrationStage(params: {
     path.basename(params.reportDir),
   );
   const stageEnv = { ...process.env, OPENCLAW_STATE_DIR: stagedStateDir };
-  let currentStagedConfig: OpenClawConfig = {
-    ...structuredClone(params.targetConfig),
-    agents: {
-      ...structuredClone(params.targetConfig.agents),
-      defaults: {
-        ...structuredClone(params.targetConfig.agents?.defaults),
-        workspace: stagedWorkspaceDir,
-      },
-    },
-  };
-  const finalPaths: SetupMigrationStagePaths = {
-    stateDir: params.stateDir,
-    workspaceDir: params.workspaceDir,
-    agentDir: finalAgentDir,
-    reportDir: params.reportDir,
-  };
-  const stagedPaths: SetupMigrationStagePaths = {
+  let currentStagedConfig = structuredClone(params.targetConfig);
+  currentStagedConfig.agents ??= {};
+  currentStagedConfig.agents.defaults ??= {};
+  currentStagedConfig.agents.defaults.workspace = stagedWorkspaceDir;
+  const stagedPaths = {
     stateDir: stagedStateDir,
     workspaceDir: stagedWorkspaceDir,
     agentDir: stagedAgentDir,
     reportDir: stagedReportDir,
   };
   const toStage = [
-    [finalPaths.workspaceDir, stagedPaths.workspaceDir],
-    [finalPaths.agentDir, stagedPaths.agentDir],
-    [finalPaths.stateDir, stagedPaths.stateDir],
-    [finalPaths.reportDir, stagedPaths.reportDir],
+    [params.workspaceDir, stagedWorkspaceDir],
+    [finalAgentDir, stagedAgentDir],
+    [params.stateDir, stagedStateDir],
+    [params.reportDir, stagedReportDir],
   ] as const;
   const toFinal = toStage.map(([finalPath, stagedPath]) => [stagedPath, finalPath] as const);
   const projectConfigToFinal = (config: OpenClawConfig) =>
-    projectValue(config, toFinal) as OpenClawConfig;
+    mapNestedStrings(config, (value) => projectPath(value, toFinal)) as OpenClawConfig;
   let finalConfig = structuredClone(params.targetConfig);
   const getStagedConfig = () => structuredClone(currentStagedConfig);
   const replaceStagedConfig = (config: OpenClawConfig) => {
-    finalConfig = structuredClone(projectConfigToFinal(config));
+    finalConfig = projectConfigToFinal(config);
     currentStagedConfig = structuredClone(config);
   };
   const mutateConfigFile = async (
@@ -322,9 +269,29 @@ export async function createSetupMigrationStage(params: {
     inferenceConfigTarget,
     getStagedConfig,
     replaceStagedConfig,
-    projectPlanToStage: (plan) => projectPlanTargets(plan, toStage),
-    projectResultToFinal: (result) => projectValue(result, toFinal) as MigrationApplyResult,
-    async promote({ expectedConfig, continuation, readConfigFile, commitConfigFile }) {
+    projectPlanToStage: (plan: MigrationPlan) => projectPlanTargets(plan, toStage),
+    projectResultToFinal: (result: MigrationApplyResult) =>
+      mapNestedStrings(result, (value) => projectPath(value, toFinal)) as MigrationApplyResult,
+    async promote(
+      this: void,
+      {
+        expectedConfig,
+        continuation,
+        readConfigFile,
+        commitConfigFile,
+      }: {
+        expectedConfig: OpenClawConfig;
+        continuation: Omit<
+          SetupMigrationPromotionContinuation,
+          "stagedReportDir" | "stagedRoots" | "workspaceDir"
+        >;
+        readConfigFile: () => Promise<OpenClawConfig>;
+        commitConfigFile: (
+          config: OpenClawConfig,
+          expectedConfig: OpenClawConfig,
+        ) => Promise<OpenClawConfig>;
+      },
+    ) {
       await disposeDatabases();
       // Bootstrap owns this state-local lock tree; it is not provider output and must not be promoted.
       const gatewayLockDir = resolveGatewayLockDir(stagedStateDir);
@@ -479,7 +446,7 @@ export async function createSetupMigrationStage(params: {
         );
       }
     },
-    async cleanup() {
+    async cleanup(this: void) {
       if (retainForRecovery) {
         return;
       }

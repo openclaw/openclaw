@@ -1,22 +1,20 @@
+import { wrapCurrentPluginInstance } from "../plugins/plugin-instance-scope.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import {
   buildRealtimeVoiceAgentControlSpeechMessage,
   REALTIME_VOICE_AGENT_CONTROL_FAILURE_MESSAGE,
 } from "./agent-run-control-shared.js";
+import type { RealtimeVoiceBridgeCreateRequest } from "./provider-contexts.js";
 import type { InternalRealtimeVoiceProviderCapabilities } from "./provider-internal.js";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCallbacks,
-  RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceAudioClearReason,
   RealtimeVoiceBargeInOptions,
   RealtimeVoiceToolCallEvent,
 } from "./provider-types.js";
 import { resolveRealtimeVoiceBargeIn } from "./realtime-session-policy.js";
 
-/**
- * Transport-facing audio target used by realtime voice bridge sessions.
- */
 export type RealtimeVoiceAudioSink = {
   isOpen?: () => boolean;
   sendAudio: RealtimeVoiceBridgeCallbacks["onAudio"];
@@ -44,9 +42,6 @@ export type RealtimeVoiceBridgeSession = Pick<
   triggerGreeting(instructions?: string): void;
 };
 
-/**
- * Provider bridge inputs plus transport callbacks for one realtime voice session.
- */
 export type RealtimeVoiceBridgeSessionParams = Omit<
   RealtimeVoiceBridgeCreateRequest,
   "onAudio" | "onClearAudio" | "onMark" | "getPlaybackState" | "onToolCall" | "onReady"
@@ -68,9 +63,6 @@ export type RealtimeVoiceBridgeSessionParams = Omit<
 
 type RealtimeVoiceSessionPhase = "admitting" | "provider-terminal" | "closing" | "disposed";
 
-/**
- * Creates a realtime voice bridge session and wires provider events to the configured audio sink.
- */
 export function createRealtimeVoiceBridgeSession(
   params: RealtimeVoiceBridgeSessionParams,
 ): RealtimeVoiceBridgeSession {
@@ -211,16 +203,8 @@ export function createRealtimeVoiceBridgeSession(
       // An error callback is the terminal boundary for provider callback failures.
     }
   };
-  const bridge = params.provider.createBridge({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    providerConfig: params.providerConfig,
-    audioFormat: params.audioFormat,
-    instructions: params.instructions,
-    language: params.language,
-    autoRespondToAudio: params.autoRespondToAudio,
-    interruptResponseOnInputAudio: params.interruptResponseOnInputAudio,
-    tools: params.tools,
+  const bridgeCallbacks: RealtimeVoiceBridgeCallbacks &
+    Pick<RealtimeVoiceBridgeCreateRequest, "runAgentConsult"> = {
     ...(runAgentConsult
       ? {
           runAgentConsult: async (request) => {
@@ -362,6 +346,20 @@ export function createRealtimeVoiceBridgeSession(
       closeReported = true;
       params.onClose?.(reason);
     },
+  };
+  // Only callbacks re-enter the transport plugin. Request data stays plain because providers
+  // pass it to core config and worker boundaries, which structured-clone it.
+  const bridge = params.provider.createBridge({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    providerConfig: params.providerConfig,
+    audioFormat: params.audioFormat,
+    instructions: params.instructions,
+    language: params.language,
+    autoRespondToAudio: params.autoRespondToAudio,
+    interruptResponseOnInputAudio: params.interruptResponseOnInputAudio,
+    tools: params.tools,
+    ...wrapCurrentPluginInstance(bridgeCallbacks),
   });
   bridgeRef.current = bridge;
 

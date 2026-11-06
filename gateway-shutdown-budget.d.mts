@@ -12,4 +12,5 @@ export function isRespawnedByLauncher(env: NodeJS.ProcessEnv): boolean;
 export function resolveLauncherStopTimeoutMs(params: {
   platform: NodeJS.Platform;
   foreground: boolean;
+  update?: boolean;
 }): number;

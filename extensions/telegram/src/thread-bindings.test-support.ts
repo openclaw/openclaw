@@ -1,11 +1,7 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  createPluginStateKeyedStoreForTests,
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import * as stateRuntime from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, vi } from "vitest";
 import { setTelegramRuntime } from "./runtime.js";
@@ -20,18 +16,24 @@ import { createTelegramThreadBindingManager } from "./thread-bindings.js";
 
 const acpHost = vi.hoisted(() => ({
   read: vi.fn(),
+  classify:
+    vi.fn<
+      typeof import("openclaw/plugin-sdk/thread-bindings-session-runtime").resolveThreadBindingTargetKind
+    >(),
 }));
 
-vi.mock("openclaw/plugin-sdk/acp-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
-    "openclaw/plugin-sdk/acp-runtime",
-  );
-  acpHost.read.mockImplementation(actual.readAcpSessionEntry);
-  return {
-    ...actual,
-    readAcpSessionEntry: acpHost.read,
-  };
+// Cleanup owns its public ACP reader independently of target classification.
+vi.mock("openclaw/plugin-sdk/acp-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/acp-runtime")>();
+  acpHost.read.mockImplementation(actual.readAcpSessionEntryAsync);
+  return { ...actual, readAcpSessionEntryAsync: acpHost.read };
 });
+
+// Adapter-isolation cases override this operation, not the classifier's private reader.
+vi.mock("openclaw/plugin-sdk/thread-bindings-session-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/thread-bindings-session-runtime")>()),
+  resolveThreadBindingTargetKind: acpHost.classify,
+}));
 
 export { acpHost };
 
@@ -41,61 +43,57 @@ export const TELEGRAM_THREAD_BINDINGS_TEST_CFG: OpenClawConfig = {
 
 export function useTelegramThreadBindingsFixture() {
   let state: OpenClawTestState;
-  let store: PluginStateKeyedStore<TelegramThreadBindingRecord>;
+  let store: PluginStateKeyedStore<TelegramThreadBindingRecord, 2>;
   const managers = new Set<Awaited<ReturnType<typeof createTelegramThreadBindingManager>>>();
-  const stopManagers = async () => {
+  const installStore = (
+    next: PluginStateKeyedStore<TelegramThreadBindingRecord, 2>,
+    allowLegacySync = false,
+  ) => {
+    store = next;
+    const runtime = createPluginRuntimeMock();
+    runtime.state.openSyncKeyedStore = <T>(
+      options: Parameters<TelegramRuntime["state"]["openSyncKeyedStore"]>[0],
+    ) => {
+      if (!allowLegacySync) {
+        throw new Error("Bundled bindings must not execute host SQLite");
+      }
+      return stateRuntime.createPluginStateSyncKeyedStoreForTests<T>("telegram", options);
+    };
+    // SAFETY: This fixture serves only the thread-binding namespace and its canonical record type.
+    runtime.state.openKeyedStoreV2 = (() => store) as TelegramRuntime["state"]["openKeyedStoreV2"];
+    setTelegramRuntime(runtime);
+  };
+  beforeEach(async () => {
+    acpHost.read.mockReset();
+    acpHost.classify.mockReset();
+    const bindings = await vi.importActual<
+      typeof import("openclaw/plugin-sdk/thread-bindings-session-runtime")
+    >("openclaw/plugin-sdk/thread-bindings-session-runtime");
+    acpHost.classify.mockImplementation(bindings.resolveThreadBindingTargetKind);
+    const acpRuntime = await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
+      "openclaw/plugin-sdk/acp-runtime",
+    );
+    acpHost.read.mockImplementation(acpRuntime.readAcpSessionEntryAsync);
+    state = await createOpenClawTestState({ layout: "state-only", prefix: "telegram-bindings-" });
+    installStore(
+      stateRuntime.createPluginStateKeyedStoreV2ForTests(
+        "telegram",
+        {
+          namespace: TELEGRAM_THREAD_BINDINGS_NAMESPACE,
+          maxEntries: TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES,
+        },
+        { assertCurrent() {} },
+      ),
+    );
+  });
+  afterEach(async () => {
+    vi.useRealTimers();
     for (const manager of managers) {
       await manager.stop();
     }
     managers.clear();
-  };
-  const installStore = (
-    next: PluginStateKeyedStore<TelegramThreadBindingRecord>,
-    allowLegacySync = false,
-  ) => {
-    store = next;
-    setTelegramRuntime(
-      createPluginRuntimeMock({
-        state: {
-          openSyncKeyedStore: <T>(
-            options: Parameters<TelegramRuntime["state"]["openSyncKeyedStore"]>[0],
-          ) => {
-            if (!allowLegacySync) {
-              throw new Error("Bundled bindings must not execute host SQLite");
-            }
-            return createPluginStateSyncKeyedStoreForTests<T>("telegram", options);
-          },
-          // SAFETY: This fixture serves only the thread-binding namespace and its canonical record type.
-          openKeyedStore: (() => store) as TelegramRuntime["state"]["openKeyedStore"],
-        },
-      }),
-    );
-  };
-  beforeEach(async () => {
-    acpHost.read.mockReset();
-    const acpRuntime = await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
-      "openclaw/plugin-sdk/acp-runtime",
-    );
-    acpHost.read.mockImplementation(acpRuntime.readAcpSessionEntry);
-    await stopManagers();
-    state = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "openclaw-telegram-bindings-",
-    });
-    resetPluginStateStoreForTests({ closeDatabase: false });
-    installStore(
-      createPluginStateKeyedStoreForTests("telegram", {
-        namespace: TELEGRAM_THREAD_BINDINGS_NAMESPACE,
-        maxEntries: TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES,
-      }),
-    );
-    await store.clear();
-  });
-  afterEach(async () => {
-    vi.useRealTimers();
-    await stopManagers();
     clearTelegramRuntimeForTest();
-    resetPluginStateStoreForTests();
+    stateRuntime.resetPluginStateStoreForTests();
     await state.cleanup();
   });
   return {
@@ -105,7 +103,9 @@ export function useTelegramThreadBindingsFixture() {
     installStore,
     storedBindings: async () => (await store.entries()).map((entry) => entry.value),
     createManager: async (
-      params: Omit<Parameters<typeof createTelegramThreadBindingManager>[0], "cfg">,
+      params: Omit<Parameters<typeof createTelegramThreadBindingManager>[0], "cfg"> & {
+        cfg?: OpenClawConfig;
+      },
     ) => {
       const manager = await createTelegramThreadBindingManager({
         cfg: TELEGRAM_THREAD_BINDINGS_TEST_CFG,

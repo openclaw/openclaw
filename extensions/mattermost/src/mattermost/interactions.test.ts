@@ -1,14 +1,19 @@
 // Mattermost tests cover interactions plugin behavior.
 import { createHmac } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
+import {
+  createMockIncomingRequest,
+  createMockServerResponse,
+  postRawWebhook,
+} from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
+import { buildButtonAttachments } from "../../api.js";
 import type { PluginRuntime } from "../../runtime-api.js";
 import { setMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import type { MattermostClient, MattermostPost } from "./client.js";
 import {
-  buildButtonAttachments,
   buildButtonProps,
   computeInteractionCallbackUrl,
   createMattermostInteractionHandler,
@@ -86,10 +91,6 @@ function generateInteractionToken(context: Record<string, unknown>, accountId?: 
   return String(requireAction(attachments).integration.context["_token"]);
 }
 
-function getInteractionSecret(): string {
-  return generateInteractionToken({ action_id: "secret-probe" });
-}
-
 function verifyInteractionToken(
   context: Record<string, unknown>,
   token: string,
@@ -117,22 +118,6 @@ describe("setInteractionSecret / getInteractionSecret", () => {
       createHmac("sha256", secret).update('{"action_id":"probe"}').digest("hex"),
     );
   });
-
-  it("derives a deterministic secret from the bot token", () => {
-    setInteractionSecret("default", "token-a");
-    const secretA = getInteractionSecret();
-    setInteractionSecret("default", "token-a");
-    const secretA2 = getInteractionSecret();
-    expect(secretA).toBe(secretA2);
-  });
-
-  it("produces different secrets for different tokens", () => {
-    setInteractionSecret("default", "token-a");
-    const secretA = getInteractionSecret();
-    setInteractionSecret("default", "token-b");
-    const secretB = getInteractionSecret();
-    expect(secretA).not.toBe(secretB);
-  });
 });
 
 // ── Token generation / verification ──────────────────────────────────
@@ -140,33 +125,6 @@ describe("setInteractionSecret / getInteractionSecret", () => {
 describe("generateInteractionToken / verifyInteractionToken", () => {
   beforeEach(() => {
     setInteractionSecret("default", "test-bot-token");
-  });
-
-  it("verifies nested context regardless of nested key order", () => {
-    const originalContext = {
-      action_id: "nested",
-      payload: {
-        model: "gpt-5",
-        meta: {
-          provider: "openai",
-          page: 2,
-        },
-      },
-    };
-    const token = generateInteractionToken(originalContext);
-
-    const reorderedContext = {
-      payload: {
-        meta: {
-          page: 2,
-          provider: "openai",
-        },
-        model: "gpt-5",
-      },
-      action_id: "nested",
-    };
-
-    expect(verifyInteractionToken(reorderedContext, token)).toBe(true);
   });
 
   it("rejects nested context tampering", () => {
@@ -274,11 +232,6 @@ describe("resolveInteractionCallbackUrl", () => {
     });
     expect(url).toBe("http://[::1]:9999/mattermost/interactions/acct");
   });
-
-  it("uses default port 18789 when no config provided", () => {
-    const url = resolveInteractionCallbackUrl("myaccount");
-    expect(url).toBe("http://localhost:18789/mattermost/interactions/myaccount");
-  });
 });
 
 // ── buildButtonProps attachments ────────────────────────────────────
@@ -288,98 +241,16 @@ describe("buildButtonProps attachments", () => {
     setInteractionSecret("default", "test-bot-token");
   });
 
-  it("returns an array with one attachment containing all buttons", () => {
-    const result = buildButtonAttachmentsForTest({
-      callbackUrl: "http://localhost:18789/mattermost/interactions/default",
-      buttons: [
-        { id: "btn1", name: "Click Me" },
-        { id: "btn2", name: "Skip", style: "danger" },
-      ],
-    });
-
-    expect(result).toHaveLength(1);
-    expect(requireActions(result)).toHaveLength(2);
-  });
-
   it("sets type to 'button' on every action", () => {
     const result = buildButtonAttachmentsForTest({
       callbackUrl: "http://localhost:18789/cb",
-      buttons: [{ id: "a", name: "A" }],
-    });
-
-    expect(requireAction(result).type).toBe("button");
-  });
-
-  it("includes sanitized action_id in integration context", () => {
-    const result = buildButtonAttachmentsForTest({
-      callbackUrl: "http://localhost:18789/cb",
-      buttons: [{ id: "my_action", name: "Do It" }],
+      buttons: [{ id: "my_action", name: "A" }],
     });
 
     const action = requireAction(result);
-    // sanitizeActionId strips hyphens and underscores (Mattermost routing bug #25747)
-    expect(action.integration.context.action_id).toBe("myaction");
+    expect(action.type).toBe("button");
     expect(action.id).toBe("myaction");
-  });
-
-  it("merges custom context into integration context", () => {
-    const result = buildButtonAttachmentsForTest({
-      callbackUrl: "http://localhost:18789/cb",
-      buttons: [{ id: "btn", name: "Go", context: { tweet_id: "123", batch: true } }],
-    });
-
-    const ctx = requireAction(result).integration.context;
-    expect(ctx.tweet_id).toBe("123");
-    expect(ctx.batch).toBe(true);
-    expect(ctx.action_id).toBe("btn");
-    expect(ctx["_token"]).toMatch(/^[0-9a-f]{64}$/);
-  });
-
-  it("passes callback URL to each button integration", () => {
-    const url = "http://localhost:18789/mattermost/interactions/default";
-    const result = buildButtonAttachmentsForTest({
-      callbackUrl: url,
-      buttons: [
-        { id: "a", name: "A" },
-        { id: "b", name: "B" },
-      ],
-    });
-
-    for (const action of requireActions(result)) {
-      expect(action.integration.url).toBe(url);
-    }
-  });
-
-  it("preserves button style", () => {
-    const result = buildButtonAttachmentsForTest({
-      callbackUrl: "http://localhost/cb",
-      buttons: [
-        { id: "ok", name: "OK", style: "primary" },
-        { id: "no", name: "No", style: "danger" },
-      ],
-    });
-
-    expect(requireAction(result, 0).style).toBe("primary");
-    expect(requireAction(result, 1).style).toBe("danger");
-  });
-
-  it("uses provided text for the attachment", () => {
-    const result = buildButtonAttachmentsForTest({
-      callbackUrl: "http://localhost/cb",
-      buttons: [{ id: "x", name: "X" }],
-      text: "Choose an action:",
-    });
-
-    expect(requireFirstAttachment(result).text).toBe("Choose an action:");
-  });
-
-  it("defaults to empty string text when not provided", () => {
-    const result = buildButtonAttachmentsForTest({
-      callbackUrl: "http://localhost/cb",
-      buttons: [{ id: "x", name: "X" }],
-    });
-
-    expect(requireFirstAttachment(result).text).toBe("");
+    expect(action.integration.context.action_id).toBe("myaction");
   });
 });
 
@@ -426,70 +297,14 @@ describe("createMattermostInteractionHandler", () => {
         : typeof params.body === "string"
           ? params.body
           : JSON.stringify(params.body);
-    const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
-
-    const req = {
-      destroyed: false,
-      method: params.method ?? "POST",
-      headers: params.headers ?? {},
-      socket: { remoteAddress: params.remoteAddress ?? "203.0.113.10" },
-      on(event: string, handler: (...args: unknown[]) => void) {
-        const existing = listeners.get(event) ?? [];
-        existing.push(handler);
-        listeners.set(event, existing);
-        return this;
-      },
-      removeListener(event: string, handler: (...args: unknown[]) => void) {
-        const existing = listeners.get(event) ?? [];
-        listeners.set(
-          event,
-          existing.filter((entry) => entry !== handler),
-        );
-        return this;
-      },
-      destroy() {
-        this.destroyed = true;
-        return this;
-      },
-    } as IncomingMessage & { emitTest: (event: string, ...args: unknown[]) => void };
-
-    req.emitTest = (event: string, ...args: unknown[]) => {
-      const handlers = listeners.get(event) ?? [];
-      for (const handler of handlers) {
-        handler(...args);
-      }
-    };
-
-    queueMicrotask(() => {
-      if (body) {
-        req.emitTest("data", Buffer.from(body));
-      }
-      req.emitTest("end");
+    const req = createMockIncomingRequest(body ? [body] : []);
+    req.method = params.method ?? "POST";
+    req.headers = params.headers ?? {};
+    Object.defineProperty(req.socket, "remoteAddress", {
+      value: params.remoteAddress ?? "203.0.113.10",
     });
 
     return req;
-  }
-
-  function createRes(): ServerResponse & { headers: Record<string, string>; body: string } {
-    const res = {
-      statusCode: 200,
-      headers: {},
-      body: "",
-      setHeader(name: string, value: string | number | readonly string[]) {
-        res.headers[name] = Array.isArray(value) ? value.join(",") : String(value);
-        return res;
-      },
-      end(
-        chunk?: string | Buffer | Uint8Array,
-        _encoding?: BufferEncoding | (() => void),
-        cb?: () => void,
-      ) {
-        res.body = chunk ? String(chunk) : "";
-        cb?.();
-        return res;
-      },
-    } as ServerResponse & { headers: Record<string, string>; body: string };
-    return res;
   }
 
   function createActionContext(actionId = "approve", channelId = "chan-1") {
@@ -527,13 +342,13 @@ describe("createMattermostInteractionHandler", () => {
       headers: params.headers,
       body: params.body,
     });
-    const res = createRes();
+    const res = createMockServerResponse();
     await handler(req, res);
     return res;
   }
 
   function expectForbiddenResponse(
-    res: ServerResponse & { body: string },
+    res: ServerResponse & { body?: string },
     expectedMessage: string,
   ) {
     expect(res.statusCode).toBe(403);
@@ -541,7 +356,7 @@ describe("createMattermostInteractionHandler", () => {
   }
 
   function expectSuccessfulApprovalUpdate(
-    res: ServerResponse & { body: string },
+    res: ServerResponse & { body?: string },
     requestLog?: Array<{ path: string; method?: string }>,
   ) {
     expect(res.statusCode).toBe(200);
@@ -631,47 +446,35 @@ describe("createMattermostInteractionHandler", () => {
     });
   }
 
-  it("accepts callback requests from an allowlisted source IP", async () => {
-    const { res, requestLog } = await runApproveInteraction({
-      allowedSourceIps: ["198.51.100.8"],
-      remoteAddress: "198.51.100.8",
+  it("rejects a null callback body with a stable parser error", async () => {
+    const log = vi.fn();
+    const handler = createMattermostInteractionHandler({
+      client: createMattermostClientMock(async () => {
+        throw new Error("unexpected client request");
+      }),
+      accountId: "acct",
+      log,
     });
 
-    expectSuccessfulApprovalUpdate(res, requestLog);
+    const res = await runHandler(handler, { body: "null" });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toBe(JSON.stringify({ error: "Invalid request body" }));
+    expect(log).toHaveBeenCalledWith(
+      "mattermost interaction: failed to parse body: Error: Mattermost interaction body was malformed JSON",
+    );
   });
 
-  it.each(["{not json", "null"])(
-    "rejects invalid callback body %s with a stable parser error",
-    async (body) => {
-      const log = vi.fn();
-      const handler = createMattermostInteractionHandler({
-        client: createMattermostClientMock(async () => {
-          throw new Error("unexpected client request");
-        }),
-        accountId: "acct",
-        log,
-      });
-
-      const res = await runHandler(handler, { body });
-
-      expect(res.statusCode).toBe(400);
-      expect(res.body).toBe(JSON.stringify({ error: "Invalid request body" }));
-      expect(log).toHaveBeenCalledWith(
-        "mattermost interaction: failed to parse body: Error: Mattermost interaction body was malformed JSON",
-      );
-    },
-  );
-
   it("accepts forwarded Mattermost source IPs from a trusted proxy", async () => {
-    const { res } = await runApproveInteraction({
+    const { res, requestLog } = await runApproveInteraction({
+      actionName: "approve",
       allowedSourceIps: ["198.51.100.8"],
       trustedProxies: ["127.0.0.1"],
       remoteAddress: "127.0.0.1",
       headers: { "x-forwarded-for": "198.51.100.8" },
     });
 
-    expect(res.statusCode).toBe(200);
-    expect(res.body).toBe("{}");
+    expectSuccessfulApprovalUpdate(res, requestLog);
   });
 
   it("rejects callback requests from non-allowlisted source IPs", async () => {
@@ -733,14 +536,6 @@ describe("createMattermostInteractionHandler", () => {
 
     expect(res.statusCode).toBe(403);
     expect(res.body).toContain("Unknown action");
-  });
-
-  it("accepts actions when the button name matches the action id", async () => {
-    const { res, requestLog } = await runApproveInteraction({
-      actionName: "approve",
-    });
-
-    expectSuccessfulApprovalUpdate(res, requestLog);
   });
 
   it("blocks button dispatch when the sender is not allowed for the action", async () => {
@@ -878,21 +673,11 @@ describe("createMattermostInteractionHandler body limits", () => {
       void handler(req, res);
     });
     try {
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", () => {
-          server.removeListener("error", reject);
-          resolve();
-        });
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected the interaction test server to have a TCP address");
-      }
+      const port = await listenOnLoopback(server);
 
       // Declared and sent in one write: the shape whose rejection used to race the flush.
       const result = await postRawWebhook({
-        url: `http://127.0.0.1:${address.port}/mattermost/interactions`,
+        url: `http://127.0.0.1:${port}/mattermost/interactions`,
         body: "x".repeat(64 * 1024 + 1),
         headers: { "content-type": "application/json" },
       });

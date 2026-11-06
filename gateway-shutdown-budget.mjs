@@ -41,7 +41,10 @@ export const resolveShutdownReserveMs = (shutdownTimeoutMs) => {
 // here rather than in the launcher so both use the same escalation policy.
 const RESPAWN_SIGNAL_EXIT_GRACE_MS = 1_000;
 export const RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS = 1_000;
-export const RESPAWN_SIGNAL_HARD_EXIT_GRACE_MS = 1_000;
+const RESPAWN_SIGNAL_HARD_EXIT_GRACE_MS = 1_000;
+// An interrupted update joins its commands, releases checkout ownership and can
+// recover an activation within its 30-minute step budget. This caps only a hung update.
+const UPDATE_SIGNAL_EXIT_GRACE_MS = 35 * 60_000;
 
 // Every runRespawnedChild call site stamps one of these. The compile-cache
 // marker is also used by a different respawner, but that one refuses foreground
@@ -58,9 +61,10 @@ export const isRespawnedByLauncher = (env) =>
 
 // New launchers use the shared service policy. A serving Gateway separately
 // retains the shorter deadline of an unidentified, already-running old launcher.
-export const resolveLauncherStopTimeoutMs = ({ platform, foreground }) => {
-  const signalExitGraceMs =
-    platform !== "win32" && foreground
+export const resolveLauncherStopTimeoutMs = ({ platform, foreground, update = false }) => {
+  const signalExitGraceMs = update
+    ? UPDATE_SIGNAL_EXIT_GRACE_MS
+    : platform !== "win32" && foreground
       ? GATEWAY_SERVICE_STOP_TIMEOUT_MS -
         RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS -
         RESPAWN_SIGNAL_HARD_EXIT_GRACE_MS

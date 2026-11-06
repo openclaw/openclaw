@@ -1,286 +1,377 @@
-/* One tile/body/controls grid for every inventory and pairing row. */
+/* A device is one row: who it is and how it is, with the rest on demand. */
 .device-entry {
-  --device-tile-size: 38px;
-  display: grid;
-  grid-template-columns: var(--device-tile-size) minmax(0, 1fr) auto;
-  align-items: start;
+  --device-fact-label: 9rem;
+  min-width: 0;
+}
+
+.device-entry__summary {
+  list-style: none;
+}
+
+.device-entry__summary::-webkit-details-marker {
+  display: none;
+}
+
+.device-entry[open] > .device-entry__summary .settings-row__chevron svg {
+  transform: rotate(180deg);
+}
+
+/* Alerts follow the description on one line and wrap as a whole when they must. */
+.device-entry__line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--space-3);
+}
+
+.device-entry__alerts {
+  display: contents;
+}
+
+.device-entry__alerts .settings-status {
+  align-items: baseline;
+  white-space: normal;
+}
+
+/* A separator leads its part in the gap; at a line start it falls outside and clips away. */
+.device-entry__meta {
+  display: flex;
+  flex-wrap: wrap;
+  --device-part-gap: 1.75ch;
+  column-gap: var(--device-part-gap);
+  min-width: 0;
+  overflow-x: clip;
+}
+
+.device-entry__part {
+  position: relative;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.device-entry__part::before {
+  position: absolute;
+  inset-inline-start: calc(-1 * var(--device-part-gap));
+  inline-size: var(--device-part-gap);
+  text-align: center;
+  content: "·";
+}
+
+.device-fact__line {
+  display: block;
+}
+
+/* With no description the heading shares a line with its actions, at every width. */
+.settings-section__header.settings-section__header:has(.device-entry__pair) {
+  flex-flow: row wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-5);
+
+  .settings-section__copy {
+    flex: 0 1 auto;
+  }
+
+  .settings-section__actions {
+    width: auto;
+    margin-inline-start: auto;
+  }
 }
 
 .device-entry__body {
   display: grid;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-.device-entry > .settings-row__control {
-  max-width: 300px;
-  flex-wrap: wrap;
-}
-
-.device-entry__tile {
-  width: var(--device-tile-size);
-  height: var(--device-tile-size);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border);
-  background: var(--bg-elevated);
-  color: var(--muted);
-}
-
-.device-entry__tile-icon {
-  display: flex;
-}
-
-.device-entry__tile-icon svg {
-  width: 18px;
-  height: 18px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.device-entry__heading {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
-.device-entry__status {
-  display: inline-flex;
-  padding: 1px var(--space-2);
-  border-radius: var(--radius-full);
-  background: var(--bg-hover);
-}
-
-/* Tracks cap at 160px so meters align across rows, but shrink together when a
-   wide controls column narrows the body above the 640px rung. */
-.device-resources {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 160px));
   gap: var(--space-4);
-  margin-top: var(--space-1);
+  padding: var(--space-1) var(--space-4) var(--space-5);
 }
 
-.device-resource {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  min-width: 0;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-variant-numeric: tabular-nums;
-}
-
-.device-resource--load {
-  grid-column: 1;
-}
-
-.device-resource--memory {
-  grid-column: 2;
-}
-
-.device-resource--disk {
-  grid-column: 3;
-}
-
-.device-resource .session-context-meter {
-  width: 100%;
-  height: 4px;
-}
-
-.device-capabilities,
-.device-entry__scopes {
+.device-entry__actions {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-1);
-}
-
-.device-capabilities {
-  margin-top: var(--space-1);
-}
-
-.device-capability {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  padding: 2px var(--space-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  overflow-wrap: anywhere;
-}
-
-.device-capability__icon {
-  display: inline-flex;
-  flex: none;
-}
-
-.device-capability svg {
-  width: 13px;
-  height: 13px;
-  flex: none;
-}
-
-.device-capability--disabled {
-  border-style: dashed;
-  background: transparent;
-}
-
-.device-capability--scope {
-  background: var(--bg-hover);
-}
-
-/* Details spans body and controls; narrow layouts use the full row width. */
-.device-entry__details {
-  grid-column: 2 / -1;
-  font-size: var(--control-ui-text-sm);
-}
-
-.device-entry__details > summary,
-.device-group__dups > summary {
-  color: var(--muted);
-  user-select: none;
-  cursor: var(--cursor-action);
-}
-
-.device-entry__details > summary:hover,
-.device-group__dups > summary:hover {
-  color: var(--text);
+  gap: var(--space-2);
 }
 
 .device-entry__facts {
   display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: var(--space-3) var(--space-4);
-  margin: var(--space-3) 0 0;
-  padding: var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg);
+  grid-template-columns: var(--device-fact-label) minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--space-2) var(--space-3);
+  margin: 0;
 }
 
-.device-entry__facts dd {
-  min-width: 0;
-  margin: 0;
-  text-align: start;
+.device-fact {
+  display: contents;
+}
+
+.device-fact > dt {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
   overflow-wrap: anywhere;
 }
 
-.device-entry__tokens {
-  overflow-x: auto;
+.device-fact > dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
-.device-token-table {
-  min-width: 480px;
-  width: 100%;
-  overflow-wrap: normal;
-  border-collapse: collapse;
-  color: var(--muted);
+.device-fact--mono > dd {
+  font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
 }
 
-.device-token-table th,
-.device-token-table td {
-  padding: var(--space-2);
-  text-align: start;
-  vertical-align: top;
+/* Value and meter share one line, so meters line up down the facts. */
+.device-meter {
+  display: grid;
+  grid-template-columns: minmax(0, 9rem) minmax(0, 10rem);
+  align-items: center;
+  gap: var(--space-3);
+  font-variant-numeric: tabular-nums;
 }
 
-.device-token-table th {
-  padding-top: 0;
-  font-weight: 500;
+.device-meter .session-context-meter {
+  width: 100%;
+  height: 4px;
 }
 
-.device-token-table td {
-  border-top: 1px solid var(--border);
+.device-resource__note {
+  display: block;
+  color: var(--muted);
 }
 
-.device-token-table :is(th, td):last-child {
-  text-align: end;
-}
-
-.device-entry__token-actions {
+.device-fact__id {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
   gap: var(--space-2);
 }
 
-.device-entry__menu-trigger {
-  display: inline-flex;
+.device-fact__id > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A quiet icon that fits the line, so an id row is as tall as its neighbours. */
+.device-entry .btn.chat-copy-btn {
+  flex: none;
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+  min-height: 26px;
+  margin-block: -4px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+}
+
+.device-entry .btn.chat-copy-btn:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  background: var(--surface-hover);
+}
+
+.device-tokens {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.device-token {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
 }
 
-/* Indent the duplicate tiles to the primary row's body column. */
+.device-token__text {
+  display: flex;
+  flex: 1 1 14rem;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.device-token__actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
 .device-group__dups {
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-  padding-left: calc(38px + var(--space-4));
+  display: grid;
+  gap: var(--space-1);
 }
 
-.device-group__dups + .settings-row {
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+.device-group__dups .device-entry__summary,
+.device-group__dups .device-entry__body {
+  padding-inline: 0;
 }
 
-.device-group__dups > summary {
-  padding: var(--space-2) var(--space-4);
+.device-group__dups .device-entry__body {
+  padding-block-end: var(--space-2);
+}
+
+/* A request reads top to bottom: who and why, the decision, then what it asks for. */
+.device-entry--pending {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.device-entry--pending > .settings-row__control {
+  max-width: none;
+}
+
+.device-entry--pending > .device-entry__facts {
+  flex: 1 0 100%;
+}
+
+/* An open scope hangs off its title, a step quieter, so it's clear where the scope ends. */
+.device-policy__fields,
+.device-allowlist {
+  margin-inline-start: calc(var(--list-row-icon-size) + var(--space-2));
+}
+
+.device-policy__fields .settings-row {
+  padding-inline: 0;
+  padding-block: var(--space-2);
+}
+
+:is(.device-policy__fields, .device-allowlist) .settings-row__title {
+  color: var(--text);
   font-size: var(--control-ui-text-sm);
+  font-weight: 400;
+}
+
+.device-allowlist {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.device-allowlist--inactive .device-allowlist__entry {
+  opacity: 0.55;
+}
+
+.device-allowlist--inactive .device-allowlist__entry:focus-within {
+  opacity: 1;
+}
+
+.device-allowlist--inactive .device-allowlist__entry:hover {
+  opacity: 1;
+}
+
+.device-policy__error {
+  display: block;
+}
+
+.device-allowlist__entry {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.device-allowlist__line {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+
+textarea.device-allowlist__input.settings-input {
+  flex: 1 1 auto;
+  min-height: 36px;
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+  resize: none;
+  field-sizing: content;
+}
+
+.device-allowlist__entry .device-entry__part:nth-child(n + 2) {
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+}
+
+/* Save stays in reach down a long allowlist: content fades into it instead of meeting a
+   line, and its cover keeps content from showing through the scroller's bottom padding. */
+.settings-group:has(> .device-policy__save) {
+  overflow: clip;
+}
+
+.device-policy__save {
+  position: sticky;
+  z-index: 1;
+  inset-block-end: 0;
+  background-color: oklch(from var(--card) l c h / 1);
+}
+
+.device-policy__save::after {
+  position: absolute;
+  inset-inline: 0;
+  inset-block-start: 100%;
+  height: 5rem;
+  background-color: inherit;
+  content: "";
+  pointer-events: none;
+}
+
+.device-policy__save::before {
+  position: absolute;
+  inset-inline: 0;
+  inset-block-end: 100%;
+  height: var(--space-4);
+  background: linear-gradient(to top, oklch(from var(--card) l c h / 1), transparent);
+  content: "";
+  pointer-events: none;
+}
+
+.device-policy__action .settings-status {
+  align-items: baseline;
+  white-space: normal;
 }
 
 @media (max-width: 640px) {
   .device-entry {
-    grid-template-columns: var(--device-tile-size) minmax(0, 1fr);
+    --device-fact-label: 6.75rem;
   }
 
-  .device-entry > .settings-row__control {
-    grid-column: 2;
-    width: 100%;
-    max-width: none;
+  .device-entry--pending > .settings-row__control {
     justify-content: flex-start;
   }
 
-  .device-resources {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: var(--space-2);
+  .device-meter {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
 
-  .device-entry__details {
+  /* Width is scarce here: enough to show the parent, and the fields keep the rest. */
+  .device-policy__fields,
+  .device-allowlist {
+    margin-inline-start: var(--space-3);
+  }
+
+  textarea.device-allowlist__input.settings-input {
+    padding-block: 6px;
+  }
+
+  .settings-row.device-policy__action,
+  .device-policy__fields .settings-row:has(.settings-toggle),
+  openclaw-devices-page .settings-row:has(> .settings-row__control > .settings-row__value) {
+    flex-wrap: nowrap;
+  }
+
+  .settings-row.device-policy__action > .settings-row__control,
+  .device-policy__fields .settings-row:has(.settings-toggle) > .settings-row__control,
+  openclaw-devices-page .settings-row > .settings-row__control:has(> .settings-row__value) {
+    flex: none;
+    width: auto;
+  }
+
+  /* Token rows need the width their actions take; the label sits above them. */
+  .device-fact--wide > dt,
+  .device-fact--wide > dd {
     grid-column: 1 / -1;
   }
 
-  .device-entry__facts {
-    grid-template-columns: minmax(0, 1fr);
-    gap: var(--space-2);
-  }
-
-  .device-token-table.settings-table--stacked {
-    min-width: 0;
-  }
-
-  .device-entry__token-actions {
-    flex-direction: column;
-  }
-
-  .device-token-table.settings-table--stacked td:last-child {
-    text-align: start;
-  }
-
-  .device-group__dups {
-    padding-left: 0;
-  }
-}
-
-@media (max-width: 640px), (pointer: coarse) {
-  .device-entry__details > summary,
-  .device-group__dups > summary,
-  .device-entry__menu-trigger {
-    min-height: 44px;
-    min-width: 44px;
+  .device-fact--wide > dd {
+    margin-block-start: calc(-1 * var(--space-1));
   }
 }

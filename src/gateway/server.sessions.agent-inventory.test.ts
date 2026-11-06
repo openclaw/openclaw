@@ -1,6 +1,5 @@
 /** Real tool → Gateway handler → resident session rows; no provider or turn execution. */
-import { monitorEventLoopDelay, performance } from "node:perf_hooks";
-import { StatementSync } from "node:sqlite";
+import assert from "node:assert/strict";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, test, vi } from "vitest";
@@ -26,8 +25,7 @@ const SELECTED_PROJECT = "inventory-project";
 const SELECTED_WORKSPACE = "/synthetic/inventory/task";
 const SELECTED_GROUP = "Inventory review";
 
-// The larger lane is opt-in so the normal regression stays bounded. Both report
-// actual durations/counters, never assert a host-dependent millisecond threshold.
+// The larger lane is opt-in so the normal regression stays bounded.
 const inventorySizes =
   process.env.OPENCLAW_SESSION_INVENTORY_PERF === "1" ? [3_474, 34_740] : [3_474];
 
@@ -71,24 +69,24 @@ test.each(inventorySizes)(
       ...current,
       tools: { ...current.tools, sessions: { ...current.tools?.sessions, visibility: "all" } },
     };
-    const backfilled = observeSessionRowBackfill(Object.keys(entries));
+    const backfilled = observeSessionRowBackfill(expectedKeys);
     const projection = await createSessionRowProjection({ cfg });
+    await projection.ensureMaterialized();
+    for (const key of expectedKeys) {
+      projection.describe({ agentId: "main", key });
+    }
     await backfilled;
     await projection.ensureMaterialized();
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
     const callGateway: AgentToolGatewayRequestCaller = async <T>(
       request: Parameters<AgentToolGatewayRequestCaller>[0],
     ) => {
-      if (!isRecord(request.params)) {
-        throw new Error("Expected structured Gateway request params");
-      }
+      assert(isRecord(request.params), "Expected structured Gateway request params");
       requests.push({ method: request.method, params: request.params });
       const response = await directSessionReq<T>(request.method, request.params, {
         context: { getRuntimeConfig: () => cfg, ...bindSessionRowProjection({}, () => projection) },
       });
-      if (!response.ok) {
-        throw new Error(response.error?.message ?? "Gateway inventory request failed");
-      }
+      assert(response.ok, response.error?.message ?? "Gateway inventory request failed");
       return expectDefined(response.payload, "Gateway inventory payload");
     };
     const tool = createSessionsListTool({
@@ -97,25 +95,13 @@ test.each(inventorySizes)(
       requesterProfileId: selected.id,
       callGateway,
     });
-    const sql = {
-      all: vi.spyOn(StatementSync.prototype, "all"),
-      get: vi.spyOn(StatementSync.prototype, "get"),
-      iterate: vi.spyOn(StatementSync.prototype, "iterate"),
-      run: vi.spyOn(StatementSync.prototype, "run"),
-    };
-    const materialization = {
-      list: vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly"),
-      fullLookup: vi.spyOn(sessionAccessor, "listSessionEntriesCore"),
-      exactBatch: vi.spyOn(sessionAccessor, "loadExactSessionEntryCandidatesReadOnlyBatch"),
-    };
+    const fullLookup = vi.spyOn(sessionAccessor, "listSessionEntriesCore");
     const transcripts = [
       vi.spyOn(sessionAccessor, "readSessionTranscriptWatermark"),
       vi.spyOn(sessionAccessor, "readSessionTranscriptMessageEventPage"),
       vi.spyOn(sessionAccessor, "loadTranscriptEvents"),
     ];
-    const eventLoop = monitorEventLoopDelay({ resolution: 10 });
-    eventLoop.enable();
-    const warmDurations: number[] = [];
+    const spies = [fullLookup, ...transcripts];
     const sampleCount = process.env.OPENCLAW_SESSION_INVENTORY_PERF === "1" ? 20 : 2;
     const phases = [
       "first",
@@ -125,24 +111,15 @@ test.each(inventorySizes)(
       // The warmed Gateway serves this inventory from its resident metadata.
       for (const phase of phases) {
         requests.length = 0;
-        for (const spy of [
-          ...Object.values(sql),
-          ...Object.values(materialization),
-          ...transcripts,
-        ]) {
+        for (const spy of spies) {
           spy.mockClear();
         }
-        const startedAt = performance.now();
         const result = await tool.execute(`inventory-${phase}`, {
           relationship: "owned",
           projectId: SELECTED_PROJECT,
           workspaceDir: SELECTED_WORKSPACE,
           group: SELECTED_GROUP,
         });
-        const elapsedMs = performance.now() - startedAt;
-        if (phase !== "first") {
-          warmDurations.push(elapsedMs);
-        }
         const details = result.details;
         expect(requests).toHaveLength(1);
         expect(requests[0]).toMatchObject({
@@ -157,66 +134,29 @@ test.each(inventorySizes)(
           },
         });
         expect(details).toMatchObject({ count: MATCH_COUNT, hasMore: false });
-        if (!isRecord(details) || !Array.isArray(details.sessions)) {
-          throw new Error("Expected sessions_list details with sessions");
-        }
+        assert(
+          isRecord(details) && Array.isArray(details.sessions),
+          "Expected sessions_list details with sessions",
+        );
         const returnedKeys = details.sessions.map((row: unknown) => {
-          if (!isRecord(row)) {
-            throw new Error("Expected inventory row");
-          }
+          assert(isRecord(row), "Expected inventory row");
           expect(row).toMatchObject({
             owner: { actor: { id: selected.id } },
             group: SELECTED_GROUP,
           });
-          expect(row).not.toHaveProperty("messages");
-          expect(row).not.toHaveProperty("derivedTitle");
-          expect(row).not.toHaveProperty("lastMessagePreview");
+          for (const field of ["messages", "derivedTitle", "lastMessagePreview"]) {
+            expect(row).not.toHaveProperty(field);
+          }
           return row.key;
         });
         expect(returnedKeys).toEqual(expectedKeys);
-        for (const transcript of transcripts) {
-          expect(transcript).not.toHaveBeenCalled();
+        for (const spy of spies) {
+          expect(spy).not.toHaveBeenCalled();
         }
-        expect(materialization.fullLookup).not.toHaveBeenCalled();
-        console.info(
-          "session-inventory-boundary",
-          JSON.stringify({
-            rows: rowCount,
-            matches: MATCH_COUNT,
-            phase,
-            elapsedMs,
-            gatewayRequests: requests.length,
-            responseBytes: Buffer.byteLength(JSON.stringify(details, null, 2)),
-            rssBytes: process.memoryUsage().rss,
-            processPeakRssBytes: process.resourceUsage().maxRSS * 1024,
-            sqlCalls: Object.fromEntries(
-              Object.entries(sql).map(([name, spy]) => [name, spy.mock.calls.length]),
-            ),
-            materializationCalls: Object.fromEntries(
-              Object.entries(materialization).map(([name, spy]) => [name, spy.mock.calls.length]),
-            ),
-          }),
-        );
       }
-      const sorted = warmDurations.toSorted((left, right) => left - right);
-      console.info(
-        "session-inventory-summary",
-        JSON.stringify({
-          rows: rowCount,
-          samples: sorted.length,
-          warmP50Ms: sorted[Math.ceil(sorted.length * 0.5) - 1],
-          warmP95Ms: sorted[Math.ceil(sorted.length * 0.95) - 1],
-          eventLoopMaxMs: eventLoop.count > 0 ? eventLoop.max / 1e6 : null,
-        }),
-      );
     } finally {
       projection.dispose();
-      eventLoop.disable();
-      for (const spy of [
-        ...Object.values(sql),
-        ...Object.values(materialization),
-        ...transcripts,
-      ]) {
+      for (const spy of spies) {
         spy.mockRestore();
       }
     }

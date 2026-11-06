@@ -1,3 +1,4 @@
+import type { ModelCatalogContextWindowOption } from "@openclaw/model-catalog-core/model-catalog-types";
 import type {
   Api,
   AssistantMessageEventStreamContract,
@@ -9,9 +10,10 @@ import type {
   OAuthProviderInterface,
   OAuthLoginCallbacks as ProviderOAuthLoginCallbacks,
 } from "../../plugin-sdk/provider-oauth-runtime.js";
+import type { ProviderAuthMode } from "./model-registry-schema.js";
 
 /** Shared fields accepted by extension and registry provider registration. */
-export interface ProviderConfigBase {
+interface ProviderConfigBase {
   /** Display name for the provider in UI. */
   name?: string;
   /** Base URL for the API endpoint. Required when defining models. */
@@ -20,20 +22,17 @@ export interface ProviderConfigBase {
   apiKey?: string;
   /** API type. Required at provider or model level when defining models. */
   api?: Api;
-  /** Optional streamSimple handler for custom APIs. */
   streamSimple?: (
     model: Model,
     context: Context,
     options?: SimpleStreamOptions,
   ) => AssistantMessageEventStreamContract;
-  /** Custom headers to include in requests. */
   headers?: Record<string, string>;
   /** If true, adds Authorization: Bearer header with the resolved API key. */
   authHeader?: boolean;
 }
 
-/** Configuration for a model within a provider. */
-export interface ProviderModelConfig
+interface ProviderModelConfig
   extends
     Pick<
       Model,
@@ -43,21 +42,21 @@ export interface ProviderModelConfig
       | "thinkingLevelMap"
       | "input"
       | "maxTokens"
-      | "headers"
+      | "parameterCount"
+      | "family"
       | "compat"
     >,
     Partial<Pick<Model, "api" | "baseUrl">> {
   /** Cost per token (for tracking, can be 0). */
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  /** Authored catalog headers remain strings; deletion sentinels are request-time only. */
+  headers?: Record<string, string>;
   /** Maximum context window size in tokens. */
   contextWindow: number;
 }
 
 export interface OAuthLoginCallbacks extends ProviderOAuthLoginCallbacks {}
 
-// Provider Registration Types
-
-/** Configuration for registering a provider via api.registerProvider(). */
 export interface ProviderConfig extends ProviderConfigBase {
   /** Models to register. If provided, replaces all existing models for this provider. */
   models?: ProviderModelConfig[];
@@ -66,4 +65,18 @@ export interface ProviderConfig extends ProviderConfigBase {
     /** Display name for the provider in login UI. */
     name: string;
   };
+}
+
+export interface ProviderConfigInput extends ProviderConfigBase {
+  auth?: ProviderAuthMode;
+  /** OAuth provider for /login support */
+  oauth?: Omit<OAuthProviderInterface, "id">;
+  models?: Array<
+    ProviderModelConfig & {
+      contextTokens?: number;
+      contextWindows?: ModelCatalogContextWindowOption[];
+      contextWindowDefault?: string;
+      params?: Record<string, unknown>;
+    }
+  >;
 }

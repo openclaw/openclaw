@@ -8,7 +8,7 @@ title: "Channel routing"
 # Channels & routing
 
 OpenClaw routes replies **back to the channel where a message came from**. The
-model does not choose a channel; routing is deterministic and controlled by the
+model does not choose a channel; routing follows fixed rules controlled by the
 host configuration. Under the default DM scope, direct messages from every
 channel converge on the agent's [main session](/concepts/main-session).
 
@@ -32,6 +32,10 @@ Plugin send receipts that report failure, suppression, or dry run leave the
 conversation's stored route and delivery transcript unchanged. Confirmed partial
 sends can establish a route, but requested content is not mirrored as fully
 delivered.
+
+Conversation recency tracks inbound initialization, observed routes, and address changes. Session-only
+bookkeeping, such as usage or delivery-custody updates, preserves the existing
+conversation association and does not refresh its `lastSeenAt` timestamp.
 
 ## Session key shapes (examples)
 
@@ -209,6 +213,18 @@ session entries.
 WebChat attaches to the **selected agent** and defaults to the agent's main
 session. Because of this, WebChat lets you see cross-channel context for that
 agent in one place.
+
+A WebChat turn and its background completions stay in WebChat unless an external
+route is explicitly selected. The session's saved external route is retained for
+callers that intentionally use it; it does not override the current turn's origin.
+Internally triggered media tasks can use a WebChat channel sentinel without an
+interactive WebChat origin; their media admission still pins the saved external
+route.
+
+An outbound `send` request can set `sessionKey` to mirror delivered output into
+a different transcript. This does not rebind that transcript's delivery route:
+the resolved destination conversation owns the saved route, including when
+channel routing intentionally selects a shared main session.
 
 ## Reply context
 

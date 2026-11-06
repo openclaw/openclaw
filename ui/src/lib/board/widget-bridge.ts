@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { hasNativeExternalLink, postNativeExternalLink } from "../../app/native-link-routing.ts";
 import { dispatchWidgetPrompt } from "../../components/mcp-app-security.ts";
 import { openExternalUrlSafe } from "../open-external-url.ts";
 
@@ -19,6 +20,19 @@ const STATE_COALESCE_WINDOW_MS = 5_000;
 const STATE_RATE_WINDOW_MS = 60_000;
 const STATE_RATE_MAX_ATTEMPTS = 12;
 
+// Spends the page's transient activation the way an opened popup does. WebKit's
+// consume-user-activation clears it in every frame, so the widget frame needs
+// new input before the next open. A detached text input has no picker to show,
+// and showPicker() throws when no activation is left to spend.
+function consumeUserActivation(): boolean {
+  try {
+    document.createElement("input").showPicker();
+  } catch {
+    return false;
+  }
+  return !navigator.userActivation.isActive;
+}
+
 export function isBoardWidgetBridgeRequest(value: unknown): value is BoardWidgetBridgeRequest {
   if (!value || typeof value !== "object") {
     return false;
@@ -34,13 +48,6 @@ export function isBoardWidgetBridgeRequest(value: unknown): value is BoardWidget
   );
 }
 
-function assertWidgetRequestRecord(value: unknown): Record<string, unknown> {
-  if (!isRecord(value)) {
-    throw new Error("widget host request params are invalid");
-  }
-  return value;
-}
-
 function requiredString(params: Record<string, unknown>, key: string): string {
   const value = params[key];
   if (typeof value !== "string" || value.length === 0) {
@@ -49,33 +56,29 @@ function requiredString(params: Record<string, unknown>, key: string): string {
   return value;
 }
 
-export class BoardWidgetBridgeController {
-  private frame: HTMLIFrameElement;
-  private ticket: string;
-  private readonly client: BoardWidgetBridgeGatewayClient;
-  private readonly rateKey: string;
-  private readonly confirmPrompt: (text: string) => boolean | Promise<boolean>;
+/** Transport admission, ticket identity, and in-flight coalescing stay synchronous. */
+export class BoardWidgetBridgeOwner {
   private readonly recentStatePayloads = new Map<string, number>();
   private readonly pendingStates = new Map<string, Promise<unknown>>();
   private stateAttemptTimes: number[] = [];
 
-  constructor(options: {
-    frame: HTMLIFrameElement;
-    ticket: string;
-    client: BoardWidgetBridgeGatewayClient;
-    rateKey: string;
-    confirmPrompt: (text: string) => boolean | Promise<boolean>;
-  }) {
-    this.frame = options.frame;
-    this.ticket = options.ticket;
-    this.client = options.client;
-    this.rateKey = options.rateKey;
-    this.confirmPrompt = options.confirmPrompt;
+  constructor(
+    private readonly options: {
+      frame: HTMLIFrameElement;
+      ticket: string;
+      client: BoardWidgetBridgeGatewayClient;
+      rateKey: string;
+      confirmPrompt: (text: string) => boolean | Promise<boolean>;
+      /** Whether this widget's own sandbox frame holds live user activation. */
+      widgetActivated: () => Promise<boolean>;
+    },
+  ) {
+    this.options = { ...options };
   }
 
   updateIdentity(frame: HTMLIFrameElement, ticket: string): void {
-    this.frame = frame;
-    this.ticket = ticket;
+    this.options.frame = frame;
+    this.options.ticket = ticket;
   }
 
   private async emitState(payload: unknown): Promise<unknown> {
@@ -107,7 +110,8 @@ export class BoardWidgetBridgeController {
       throw new Error("widget state emission rate limit exceeded");
     }
     this.stateAttemptTimes.push(nowMs);
-    const request = this.client.request("board.event", { ticket: this.ticket, payload });
+    const { client, ticket } = this.options;
+    const request = client.request("board.event", { ticket, payload });
     this.pendingStates.set(serialized, request);
     try {
       const result = await request;
@@ -124,24 +128,46 @@ export class BoardWidgetBridgeController {
     request: BoardWidgetBridgeRequest,
     options: { promptUserActivated?: boolean; isCurrent?: () => boolean } = {},
   ): Promise<unknown> {
-    if (request.ticket !== this.ticket) {
+    if (request.ticket !== this.options.ticket) {
       throw new Error("widget view ticket does not match the active frame");
     }
-    const params = assertWidgetRequestRecord(request.params);
+    const params = request.params;
+    if (!isRecord(params)) {
+      throw new Error("widget host request params are invalid");
+    }
     switch (request.method) {
       // Opening a link the user clicked is navigation, not a granted capability,
-      // so this stays outside the tool-grant checks. Opening goes through the
+      // so this stays outside the tool-grant checks. Native hosts take it through
+      // their link owner, because WebKit's popup blocker scopes the click's
+      // gesture to its own task and refuses window.open in this MessagePort task,
+      // although transient user activation survives the hop. Browsers use the
       // Control UI's openExternalUrlSafe owner, which applies noopener/noreferrer
       // regardless of the `rel` a widget wrote. The absolute-http(s) gate here is
-      // deliberately narrower than that shared policy: widget-supplied links must
-      // not reach `blob:`, which the general external-link path allows.
+      // deliberately narrower than both: widget-supplied links must not reach
+      // `blob:`, which the general external-link path allows.
       case "host.open": {
         const url = requiredString(params, "url");
-        if (!/^https?:\/\//i.test(url)) {
+        if (!/^https?:\/\//i.test(url) || !URL.canParse(url)) {
           throw new Error("widget link url is invalid");
         }
-        if (!openExternalUrlSafe(url)) {
-          throw new Error("widget link could not be opened");
+        // Native refusal is terminal; only bridge absence selects the browser.
+        if (hasNativeExternalLink()) {
+          // Both the dashboard and this widget must hold live activation. The
+          // widget-specific query excludes input elsewhere; consumption makes
+          // each gesture single-use, even though native posting skips WebKit's
+          // popup blocker.
+          const activated =
+            navigator.userActivation?.isActive && (await this.options.widgetActivated());
+          // Retirement or reconnect during the query revokes this request.
+          if (options.isCurrent?.() === false) {
+            throw new Error("widget link request is no longer current");
+          }
+          if (!activated || !consumeUserActivation() || !postNativeExternalLink(url)) {
+            throw new Error("widget link could not be opened");
+          }
+        } else {
+          // noopener may return null even after opening; it is not a failure receipt.
+          openExternalUrlSafe(url);
         }
         return { ok: true };
       }
@@ -150,17 +176,17 @@ export class BoardWidgetBridgeController {
           throw new Error("widget prompt requires active user interaction");
         }
         const text = requiredString(params, "text");
-        const authorization = (await this.client.request("board.prompt.authorize", {
-          ticket: this.ticket,
+        const authorization = (await this.options.client.request("board.prompt.authorize", {
+          ticket: this.options.ticket,
         })) as { confirmationRequired?: boolean };
         if (options.isCurrent?.() === false) {
           throw new Error("widget prompt request is no longer current");
         }
         const accepted = await dispatchWidgetPrompt(
-          this.frame,
+          this.options.frame,
           text,
-          this.rateKey,
-          authorization.confirmationRequired === false ? undefined : this.confirmPrompt,
+          this.options.rateKey,
+          authorization.confirmationRequired === false ? undefined : this.options.confirmPrompt,
           options.isCurrent,
         );
         if (!accepted) {
@@ -170,33 +196,27 @@ export class BoardWidgetBridgeController {
       }
       case "state.emit":
         return await this.emitState(params.payload);
-      case "data.read": {
-        const bindingId = requiredString(params, "bindingId");
-        const bindingParams = params.params;
-        if (bindingParams !== undefined && !isRecord(bindingParams)) {
-          throw new Error("widget data binding params are invalid");
-        }
-        return await this.client.request("board.data.read", {
-          ticket: this.ticket,
-          bindingId,
-          ...(bindingParams ? { params: bindingParams } : {}),
-        });
-      }
+      case "data.query":
+      case "data.read":
       case "action.run": {
-        const action = requiredString(params, "action");
-        const actionParams = params.params;
-        if (actionParams !== undefined && !isRecord(actionParams)) {
-          throw new Error("widget action params are invalid");
+        const read = request.method !== "action.run";
+        const key = request.method === "data.query" ? "queryName" : read ? "bindingId" : "action";
+        const target = requiredString(params, key);
+        const callParams = key === "queryName" ? undefined : params.params;
+        if (callParams !== undefined && !isRecord(callParams)) {
+          throw new Error(
+            read ? "widget data binding params are invalid" : "widget action params are invalid",
+          );
         }
-        return await this.client.request("board.action", {
-          ticket: this.ticket,
-          action,
-          params: actionParams ?? {},
+        return await this.options.client.request(read ? "board.data.read" : "board.action", {
+          ticket: this.options.ticket,
+          [key]: target,
+          ...(read && callParams === undefined ? {} : { params: callParams ?? {} }),
         });
       }
       case "cron.trigger":
-        return await this.client.request("board.action", {
-          ticket: this.ticket,
+        return await this.options.client.request("board.action", {
+          ticket: this.options.ticket,
           action: "cron.trigger",
           jobId: requiredString(params, "jobId"),
         });

@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import type { OutboundDeliveryFormattingOptions } from "../../infra/outbound/formatting.js";
@@ -48,11 +48,12 @@ export async function sendChannelOutboundMessage(
   opts: RuntimeSendOpts = {},
 ) {
   const outbound = await loadChannelOutboundAdapter(channelId);
+  const cfg = opts.cfg ?? (await captureRuntimeConfigAsyncReader()());
   const threadId = opts.messageThreadId ?? opts.threadId ?? opts.threadTs ?? undefined;
   const replyToId = resolveRuntimeReplyToId(opts);
   // Build context lazily so text/media/block branches share identical delivery metadata.
   const buildContext = () => ({
-    cfg: opts.cfg ?? getRuntimeConfig(),
+    cfg,
     to,
     text,
     mediaUrl: opts.mediaUrl,

@@ -1,16 +1,19 @@
-import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import {
   invokeNativeHookRelayBridge,
   isNativeHookRelayBridgeStaleRegistrationError,
   renderNativeHookRelayUnavailableResponse,
 } from "../agents/harness/native-hook-relay-client.js";
+import { NATIVE_HOOK_INEXACT_NUMBER_PATHS_FIELD } from "../agents/harness/native-hook-relay-constants.js";
+import { invokeRemoteNativeHookRelay } from "../agents/harness/native-hook-relay-remote-client.js";
 import type { NativeHookRelayProcessResponse } from "../agents/harness/native-hook-relay-types.js";
+import { isJsonObject } from "../agents/harness/native-hook-relay-utils.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 
 const MAX_NATIVE_HOOK_STDIN_BYTES = 1024 * 1024;
+const MAX_INEXACT_NUMBER_PATHS_LENGTH = 64 * 1024;
 
 /** User-facing flags for the native hook relay command. */
 export type NativeHookRelayCliOptions = Partial<
@@ -21,6 +24,7 @@ const NATIVE_HOOK_RELAY_VALUE_FLAGS = {
   "--provider": "provider",
   "--relay-id": "relayId",
   "--state-db": "stateDb",
+  "--remote-credential": "remoteCredential",
   "--generation": "generation",
   "--event": "event",
   "--pre-tool-use-unavailable": "preToolUseUnavailable",
@@ -38,10 +42,6 @@ class NativeHookRelayDeadlineError extends Error {
 
 /** Parse and run the internal native relay directly from the process argument vector. */
 export async function runNativeHookRelayCliFromArgv(argv: string[]): Promise<number> {
-  return await runNativeHookRelayCli(parseNativeHookRelayCliOptions(argv));
-}
-
-function parseNativeHookRelayCliOptions(argv: string[]): NativeHookRelayCliOptions {
   const relayIndex = argv.findIndex((arg, index) => arg === "relay" && argv[index - 1] === "hooks");
   if (relayIndex < 0) {
     throw new Error("native hook relay command path is required");
@@ -61,7 +61,7 @@ function parseNativeHookRelayCliOptions(argv: string[]): NativeHookRelayCliOptio
     }
     opts[key] = value;
   }
-  return opts;
+  return await runNativeHookRelayCli(opts);
 }
 
 /** Run one native hook relay invocation from stdin JSON to stdout/stderr response streams. */
@@ -102,7 +102,12 @@ export async function runNativeHookRelayCli(opts: NativeHookRelayCliOptions): Pr
     let rawPayload: unknown;
     try {
       const rawInput = await readStreamText(stdin, MAX_NATIVE_HOOK_STDIN_BYTES, deadline);
-      rawPayload = rawInput.trim() ? JSON.parse(rawInput) : null;
+      if (!rawInput.trim()) {
+        rawPayload = null;
+      } else {
+        rawPayload =
+          event === "pre_tool_use" ? parsePreToolUseStdin(rawInput) : JSON.parse(rawInput);
+      }
     } catch (error) {
       if (isNativeHookRelayDeadlineError(error)) {
         return timedOut(error);
@@ -112,36 +117,46 @@ export async function runNativeHookRelayCli(opts: NativeHookRelayCliOptions): Pr
     }
 
     try {
-      const remainingMs = remainingNativeHookRelayDeadlineMs(deadline);
-      const response = await withNativeHookRelayDeadline(
-        deadline,
-        invokeNativeHookRelayBridge({
-          provider,
-          relayId,
-          stateDbPath: opts.stateDb?.trim() || undefined,
-          generation,
-          event,
-          rawPayload,
-          registrationTimeoutMs: Math.min(100, remainingMs),
-          timeoutMs: remainingMs,
-        }),
-      );
-      return writeResponse(response);
-    } catch (error) {
-      if (isNativeHookRelayDeadlineError(error)) {
-        return timedOut(error);
+      const remoteCredential = opts.remoteCredential;
+      if (remoteCredential) {
+        // Dedicated mode never falls back to local storage or operator credentials.
+        return writeResponse(
+          await withNativeHookRelayDeadline(deadline, () =>
+            invokeRemoteNativeHookRelay(
+              remoteCredential,
+              { provider, relayId, generation, event, rawPayload },
+              deadline.signal,
+            ),
+          ),
+        );
       }
-      if (isNativeHookRelayBridgeStaleRegistrationError(error)) {
-        writeText(stderr, formatRelayCliError("native hook relay unavailable", error));
-        return unavailable();
+      try {
+        const remainingMs = remainingNativeHookRelayDeadlineMs(deadline);
+        const response = await withNativeHookRelayDeadline(deadline, () =>
+          invokeNativeHookRelayBridge({
+            signal: deadline.signal,
+            provider,
+            relayId,
+            stateDbPath: opts.stateDb?.trim() || undefined,
+            generation,
+            event,
+            rawPayload,
+            registrationTimeoutMs: Math.min(100, remainingMs),
+            timeoutMs: remainingMs,
+          }),
+        );
+        return writeResponse(response);
+      } catch (error) {
+        if (
+          isNativeHookRelayDeadlineError(error) ||
+          isNativeHookRelayBridgeStaleRegistrationError(error)
+        ) {
+          throw error;
+        }
+        // Fall through to the gateway path for embedded/local gateway cases and
+        // older registrations that predate the direct relay bridge.
       }
-      // Fall through to the gateway path for embedded/local gateway cases and
-      // older registrations that predate the direct relay bridge.
-    }
-
-    try {
-      const response = await withNativeHookRelayDeadline(
-        deadline,
+      const response = await withNativeHookRelayDeadline(deadline, () =>
         callGatewayLazy<NativeHookRelayProcessResponse>({
           method: "nativeHook.invoke",
           params: { provider, relayId, generation, event, rawPayload },
@@ -161,6 +176,47 @@ export async function runNativeHookRelayCli(opts: NativeHookRelayCliOptions): Pr
   } finally {
     deadline.dispose();
   }
+}
+
+/**
+ * Codex forwards the model's number text verbatim, and JSON.parse is the first
+ * lossy step. Only here can a rewrite still learn which tool arguments would
+ * change if it re-serialized them.
+ */
+function parsePreToolUseStdin(rawInput: string): unknown {
+  const inexactKeys = new Map<object, Set<string>>();
+  const payload: unknown = JSON.parse(
+    rawInput,
+    function (this: object, key, value: unknown, context?: { source?: string }) {
+      if (typeof value === "number" && context?.source !== JSON.stringify(value)) {
+        inexactKeys.set(this, (inexactKeys.get(this) ?? new Set()).add(key));
+      }
+      return value;
+    },
+  );
+  if (!isJsonObject(payload)) {
+    return payload;
+  }
+  const paths: string[][] = [];
+  const collectPaths = (value: unknown, path: string[]) => {
+    if (value === null || typeof value !== "object") {
+      return;
+    }
+    for (const [key, child] of Object.entries(value)) {
+      if (inexactKeys.get(value)?.has(key)) {
+        paths.push([...path, key]);
+      } else {
+        collectPaths(child, [...path, key]);
+      }
+    }
+  };
+  collectPaths(payload.tool_input, []);
+  const serializedPaths = JSON.stringify(paths);
+  return {
+    ...payload,
+    [NATIVE_HOOK_INEXACT_NUMBER_PATHS_FIELD]:
+      serializedPaths.length <= MAX_INEXACT_NUMBER_PATHS_LENGTH ? serializedPaths : null,
+  };
 }
 
 async function callGatewayLazy<T = Record<string, unknown>>(opts: CallGatewayOptions): Promise<T> {
@@ -222,7 +278,10 @@ function formatRelayCliError(prefix: string, error: unknown): string {
 
 function createNativeHookRelayDeadline(timeoutMs: number) {
   const controller = new AbortController();
-  const timer = setSafeTimeout(() => controller.abort(), timeoutMs);
+  const timer = setSafeTimeout(
+    () => controller.abort(new NativeHookRelayDeadlineError(timeoutMs)),
+    timeoutMs,
+  );
   timer.unref?.();
   return {
     expiresAtMs: performance.now() + timeoutMs,
@@ -246,25 +305,18 @@ function remainingNativeHookRelayDeadlineMs(deadline: NativeHookRelayDeadline): 
 
 async function withNativeHookRelayDeadline<T>(
   deadline: NativeHookRelayDeadline,
-  promise: Promise<T>,
+  run: () => Promise<T>,
 ): Promise<T> {
-  if (deadline.expiresAtMs <= performance.now()) {
-    // Startup may spend the deadline before handing back its already-running promise.
-    void promise.catch(() => undefined);
-    throw new NativeHookRelayDeadlineError(deadline.timeoutMs);
+  remainingNativeHookRelayDeadlineMs(deadline);
+  try {
+    // The deadline aborts the actual transport. Join its socket/worker cleanup
+    // before emitting a response; a losing Promise.race branch is still live work.
+    const result = await run();
+    remainingNativeHookRelayDeadlineMs(deadline);
+    return result;
+  } catch (error) {
+    // Promise reactions may precede an overdue timer after an event-loop stall.
+    remainingNativeHookRelayDeadlineMs(deadline);
+    throw error;
   }
-  return await racePromiseWithAbortSignal(
-    promise.then(
-      (value) => {
-        // Promise reactions can run before an overdue timer after an event-loop stall.
-        remainingNativeHookRelayDeadlineMs(deadline);
-        return value;
-      },
-      (error: unknown) => {
-        throw error instanceof Error ? error : new Error(String(error));
-      },
-    ),
-    deadline.signal,
-    () => new NativeHookRelayDeadlineError(deadline.timeoutMs),
-  );
 }

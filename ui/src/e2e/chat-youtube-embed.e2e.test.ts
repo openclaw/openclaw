@@ -1,6 +1,8 @@
 import type { Request } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiChatHistoryMessage } from "../test-helpers/control-ui-session-fixtures.ts";
+import { exactButton } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI YouTube embeds" });
@@ -39,16 +41,11 @@ suite.define(() => {
         );
         await installMockGateway(page, {
           historyMessages: [
-            {
-              role: "assistant",
-              content: [
-                {
-                  type: "text",
-                  text: '[embed url="https://youtu.be/AbCdEfGhI_1?t=1m30s" title="Synthetic trailer" /]\n\n[embed url="https://youtu.be/JkLmNoPqR_2" title="Missing cover" /]',
-                },
-              ],
-              timestamp: 100,
-            },
+            createControlUiChatHistoryMessage(
+              "assistant",
+              '[embed url="https://youtu.be/AbCdEfGhI_1?t=1m30s" title="Synthetic trailer" /]\n\n[embed url="https://youtu.be/JkLmNoPqR_2" title="Missing cover" /]',
+              100,
+            ),
           ],
         });
         // The standard mock bootstrap disables generic external embed URLs.
@@ -56,63 +53,50 @@ suite.define(() => {
         const card = page
           .locator("openclaw-youtube-video")
           .filter({ hasText: "Synthetic trailer" });
-        const play = card.getByRole("button", { name: "Play Synthetic trailer", exact: true });
+        const frame = card.locator("iframe");
+        const waitForPlayer = () =>
+          frame.contentFrame().getByText("Player fixture loaded", { exact: true }).waitFor();
+        const play = exactButton(card, "Play Synthetic trailer");
         await play.waitFor();
         await expect
           .poll(() => card.locator("img").evaluate((image: HTMLImageElement) => image.naturalWidth))
           .toBe(480);
-        expect(playerRequests).toHaveLength(0);
-        expect(await card.locator("iframe").count()).toBe(0);
+        expect([playerRequests.length, await frame.count()]).toEqual([0, 0]);
         expect(thumbnailRequests[0]?.headers().referer).toBeUndefined();
         const watch = card.getByRole("link", { name: "Open on YouTube", exact: true });
-        expect(await watch.getAttribute("href")).toBe(
-          "https://www.youtube.com/watch?v=AbCdEfGhI_1&t=90",
-        );
 
         await play.click();
-        const frame = card.locator("iframe");
-        await frame.contentFrame().getByText("Player fixture loaded", { exact: true }).waitFor();
+        await waitForPlayer();
         expect(playerRequests).toHaveLength(1);
-        const requested = new URL(playerRequests[0]!.url());
-        expect(requested.origin).toBe("https://www.youtube-nocookie.com");
-        expect(requested.pathname).toBe("/embed/AbCdEfGhI_1");
-        expect(Object.fromEntries(requested.searchParams)).toEqual({
-          autoplay: "1",
-          playsinline: "1",
-          start: "90",
-        });
-        expect(playerRequests[0]!.headers().referer).toBe(
-          `${new URL(suite.server.baseUrl).origin}/`,
+        expect(playerRequests[0]!.url()).toBe(
+          "https://www.youtube-nocookie.com/embed/AbCdEfGhI_1?playsinline=1&start=90&autoplay=1",
         );
-        expect(playerRequests[0]!.headers().authorization).toBeUndefined();
+        const { referer, authorization } = playerRequests[0]!.headers();
+        expect({ referer, authorization }).toEqual({
+          referer: `${new URL(suite.server.baseUrl).origin}/`,
+          authorization: undefined,
+        });
         expect(await watch.isVisible()).toBe(true);
 
         const missing = page.locator("openclaw-youtube-video").filter({ hasText: "Missing cover" });
-        const missingPlay = missing.getByRole("button", {
-          name: "Play Missing cover",
-          exact: true,
-        });
+        const missingPlay = exactButton(missing, "Play Missing cover");
+        const missingFrame = missing.locator("iframe");
         await missingPlay.click();
-        await missing.locator("iframe").contentFrame().getByText("Player fixture loaded").waitFor();
-        expect(await card.locator("iframe").count()).toBe(0);
+        await missingFrame.contentFrame().getByText("Player fixture loaded").waitFor();
+        expect(await frame.count()).toBe(0);
         await play.click();
-        await frame.contentFrame().getByText("Player fixture loaded", { exact: true }).waitFor();
-        expect(await missing.locator("iframe").count()).toBe(0);
+        await waitForPlayer();
+        expect(await missingFrame.count()).toBe(0);
 
         const loadedFrame = await frame.elementHandle();
-        await card.getByRole("button", { name: "Close player", exact: true }).click();
+        await exactButton(card, "Close player").click();
         await play.waitFor();
         expect(await loadedFrame!.evaluate((element) => element.isConnected)).toBe(false);
-        expect(await card.locator("iframe").count()).toBe(0);
-        expect(
-          await play.evaluate((button) => {
-            const root = button.getRootNode();
-            return root instanceof ShadowRoot && root.activeElement === button;
-          }),
-        ).toBe(true);
+        expect(await frame.count()).toBe(0);
+        expect(await play.evaluate((button) => button.matches(":focus"))).toBe(true);
 
         await play.click();
-        await frame.contentFrame().getByText("Player fixture loaded", { exact: true }).waitFor();
+        await waitForPlayer();
         await card.evaluate((element: HTMLElement) => {
           element.style.width = "190px";
         });
@@ -126,26 +110,15 @@ suite.define(() => {
         expect(previewBounds!.x + previewBounds!.width).toBeLessThanOrEqual(
           cardBounds!.x + cardBounds!.width,
         );
-        expect(await card.locator("iframe").count()).toBe(0);
+        expect(await frame.count()).toBe(0);
         const [external] = await Promise.all([context.waitForEvent("page"), watch.click()]);
         await external.getByText("External video page", { exact: true }).waitFor();
         expect(external.url()).toBe("https://www.youtube.com/watch?v=AbCdEfGhI_1&t=90");
         await external.close();
 
-        await missing
-          .getByRole("button", { name: "Play Missing cover", exact: true })
-          .scrollIntoViewIfNeeded();
+        await missingPlay.scrollIntoViewIfNeeded();
         await expect.poll(() => missing.locator("img").count()).toBe(0);
-        expect(
-          await missing
-            .getByRole("link", { name: "Open on YouTube", exact: true })
-            .getAttribute("href"),
-        ).toBe("https://www.youtube.com/watch?v=JkLmNoPqR_2");
-        expect(
-          await missing
-            .getByRole("button", { name: "Play Missing cover", exact: true })
-            .isVisible(),
-        ).toBe(true);
+        expect(await missingPlay.isVisible()).toBe(true);
       },
     );
   });

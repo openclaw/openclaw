@@ -9,7 +9,6 @@ import {
   type MemoryReference,
 } from "openclaw/plugin-sdk/memory-host-search";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../api.js";
 import {
   memoryReferenceLookup,
@@ -53,12 +52,6 @@ export function normalizeLookupKey(value: string): string {
   return normalized.endsWith(".md") ? normalized : normalized.replace(/\/+$/, "");
 }
 
-function buildLookupCandidates(lookup: string): string[] {
-  const normalized = normalizeLookupKey(lookup);
-  const withExtension = normalized.endsWith(".md") ? normalized : `${normalized}.md`;
-  return uniqueStrings([normalized, withExtension]);
-}
-
 export function shouldEnforceSessionVisibility(params: {
   agentId?: string;
   agentSessionKey?: string;
@@ -69,12 +62,6 @@ export function shouldEnforceSessionVisibility(params: {
     Boolean(params.agentSessionKey?.trim()) ||
     Boolean(params.agentId?.trim())
   );
-}
-
-// Keep these path shapes aligned with source: "sessions" hits in session-search-visibility and session-transcript-hit.
-function isSessionMemoryPath(relPath: string): boolean {
-  const normalized = relPath.replace(/\\/g, "/");
-  return normalized.startsWith("sessions/");
 }
 
 async function resolveActiveMemoryManager(params: {
@@ -119,6 +106,7 @@ export type SharedMemorySearchParams = {
   sandboxed?: boolean;
   conversationRecall?: ConversationRecallContext;
   memoryContext?: MemoryCallerContext;
+  signal?: AbortSignal;
   query: string;
 };
 
@@ -174,6 +162,7 @@ export async function searchSharedMemory<M extends string>(
   let rawMemoryResults = sharedMemoryManager
     ? await sharedMemoryManager.search(params.query, {
         maxResults: options.maxResults,
+        ...(params.signal ? { signal: params.signal } : {}),
         ...(options.protectedSessionRecall
           ? { sources: ["sessions" as const], sessionKey: params.agentSessionKey }
           : {}),
@@ -267,62 +256,38 @@ export async function readSharedMemoryPage(
     throw buildMemoryManagerContractError("readFile");
   }
 
-  const lookupCandidates = buildLookupCandidates(params.lookup);
-  const visibleSessionPaths =
+  const normalized = normalizeLookupKey(params.lookup);
+  const relPath = normalized.endsWith(".md") ? normalized : `${normalized}.md`;
+  if (
     params.appConfig &&
     shouldEnforceSessionVisibility(params) &&
-    lookupCandidates.some((relPath) => isSessionMemoryPath(relPath))
-      ? new Set(
-          (
-            await filterMemorySearchHitsBySessionVisibility({
-              cfg: params.appConfig,
-              agentId: params.agentId,
-              requesterSessionKey: params.agentSessionKey,
-              sandboxed: params.sandboxed === true,
-              conversationRecall: params.conversationRecall,
-              trustedAgentScope: !params.agentSessionKey && Boolean(params.agentId?.trim()),
-              hits: lookupCandidates
-                .filter((relPath) => isSessionMemoryPath(relPath))
-                .map((relPath) => ({
-                  path: relPath,
-                  startLine: 1,
-                  endLine: 1,
-                  score: 0,
-                  snippet: "",
-                  source: "sessions" as const,
-                })),
-            })
-          ).map((hit) => hit.path),
-        )
-      : null;
-
-  for (const relPath of lookupCandidates) {
-    // Raw session candidates still need visibility checks; memory readers accept Markdown only.
-    if (
-      !relPath.endsWith(".md") ||
-      (visibleSessionPaths && isSessionMemoryPath(relPath) && !visibleSessionPaths.has(relPath))
-    ) {
-      continue;
-    }
-
-    const result = await manager.readFile({
-      relPath,
-      from: fromLine,
-      lines: lineCount,
+    relPath.startsWith("sessions/")
+  ) {
+    const visible = await filterMemorySearchHitsBySessionVisibility({
+      cfg: params.appConfig,
+      agentId: params.agentId,
+      requesterSessionKey: params.agentSessionKey,
+      sandboxed: params.sandboxed === true,
+      conversationRecall: params.conversationRecall,
+      trustedAgentScope: !params.agentSessionKey && Boolean(params.agentId?.trim()),
+      hits: [
+        { path: relPath, startLine: 1, endLine: 1, score: 0, snippet: "", source: "sessions" },
+      ],
     });
-    if (result.status === "not_found") {
-      continue;
+    if (visible.length === 0) {
+      return null;
     }
-    return {
-      corpus: "memory",
-      path: result.path,
-      title: buildMemorySearchTitle(result.path),
-      kind: "memory",
-      content: result.text,
-      fromLine,
-      lineCount,
-    };
   }
-
-  return null;
+  const result = await manager.readFile({ relPath, from: fromLine, lines: lineCount });
+  return result.status === "not_found"
+    ? null
+    : {
+        corpus: "memory",
+        path: result.path,
+        title: buildMemorySearchTitle(result.path),
+        kind: "memory",
+        content: result.text,
+        fromLine,
+        lineCount,
+      };
 }

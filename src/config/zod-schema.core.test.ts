@@ -13,12 +13,14 @@ describe("config schema regressions", () => {
     expect(MarkdownConfigSchema.parse({ tables: "block" })).toEqual({ tables: "block" });
   });
 
-  it("accepts valid cron.sessionRetention durations", () => {
-    expect(OpenClawSchema.safeParse({ cron: { sessionRetention: "1h30m" } }).success).toBe(true);
-  });
+  it("accepts string-array media provider options", () => {
+    const providerOptions = { deepgram: { keyterm: ["OpenClaw", "Deepgram"] } };
+    const media = {
+      audio: { providerOptions },
+      models: [{ provider: "deepgram", model: "nova-3", providerOptions }],
+    };
 
-  it("leaves skipMissedJobs unset when omitted", () => {
-    expect(OpenClawSchema.parse({ cron: {} }).cron?.skipMissedJobs).toBeUndefined();
+    expect(OpenClawSchema.parse({ tools: { media } }).tools?.media).toEqual(media);
   });
 
   it("rejects invalid cron.sessionRetention durations", () => {
@@ -43,6 +45,15 @@ describe("config schema regressions", () => {
     ).toBe(false);
   });
 
+  it("round-trips the Templates Labs visibility setting", () => {
+    for (const templates of [true, false]) {
+      expect(
+        OpenClawSchema.parse({ gateway: { controlUi: { experimental: { templates } } } }).gateway
+          ?.controlUi?.experimental?.templates,
+      ).toBe(templates);
+    }
+  });
+
   it("projects schema-owned field documentation into the public schema and UI hints", () => {
     const response = computeBaseConfigSchemaResponse({ generatedAt: "desktop-metadata" });
     expect(response.schema).toHaveProperty(
@@ -52,6 +63,10 @@ describe("config schema regressions", () => {
     expect(response.uiHints["desktop.host.passwordFile"]).toMatchObject({
       label: "Local VNC Password File",
       help: "Absolute path to the VNC password file. Omit on macOS to enter account credentials when opening the desktop viewer.",
+    });
+    expect(response.uiHints["gateway.controlUi.experimental.templates"]).toMatchObject({
+      label: "Templates",
+      help: expect.stringContaining("default: false"),
     });
   });
 });

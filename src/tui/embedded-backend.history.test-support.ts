@@ -1,4 +1,5 @@
 import { expect, it, vi, type Mock } from "vitest";
+import * as sessionRuntimeOwnership from "../agents/harness/session-runtime-ownership.js";
 import type { EmbeddedTuiBackend } from "./embedded-backend.js";
 
 export function registerEmbeddedHistoryProjectionTests(params: {
@@ -8,12 +9,30 @@ export function registerEmbeddedHistoryProjectionTests(params: {
   present: Mock;
   withPreparedExactRows: Mock;
   buildSessionRow: Mock;
+  readAcpMetadata: Mock<
+    typeof import("../acp/runtime/session-meta-readonly.js").readAcpSessionMetaForEntries
+  >;
 }) {
-  it("validates and presents history metadata within its prepared read frame", async () => {
+  async function loadHistory(opts: Parameters<EmbeddedTuiBackend["loadHistory"]>[0]) {
+    const backend = params.createBackend();
+    backend.start();
+    try {
+      return await backend.loadHistory(opts);
+    } finally {
+      await backend.stop();
+    }
+  }
+
+  it("presents captured history and the selected agent's verbose default within its read frame", async () => {
     const entry = { sessionId: "captured-session", lifecycleRevision: "captured-revision" };
     const target = { key: "global", agentId: "work", storePath: "/tmp/physical.sqlite" };
     params.loadSessionEntry.mockReturnValue({
-      cfg: {},
+      cfg: {
+        agents: {
+          defaults: { verboseDefault: "off" },
+          entries: { main: {}, work: { verboseDefault: "full" } },
+        },
+      },
       agentId: target.agentId,
       canonicalKey: target.key,
       storePath: "/tmp/logical.sqlite",
@@ -26,39 +45,28 @@ export function registerEmbeddedHistoryProjectionTests(params: {
         expect(active, "history identity must be validated before the read expires").toBe(true);
         return entry;
       },
-      target,
     };
     const describe = vi.fn(() => row);
     const present = vi.fn((current: typeof row) => {
       expect(active, "history metadata must be presented before the read expires").toBe(true);
-      expect(current).toBe(row);
       return { key: target.key, sessionId: current.entry.sessionId };
     });
     params.withPreparedExactRows.mockImplementationOnce(async (queries, consume) => {
       expect(queries({})).toEqual([target]);
       active = true;
       try {
-        return { kind: "complete", value: consume({ describe, present }) };
+        return consume({ describe, present });
       } finally {
         active = false;
       }
     });
-    const backend = params.createBackend();
-    backend.start();
-    try {
-      const result = await backend.loadHistory({ sessionKey: "global", agentId: "work" });
-      expect(result).toMatchObject({
-        sessionId: entry.sessionId,
-        sessionInfo: { key: target.key, sessionId: entry.sessionId },
-      });
-      expect(describe).toHaveBeenCalledExactlyOnceWith(target);
-      expect(present).toHaveBeenCalledExactlyOnceWith(row);
-      expect(params.present).not.toHaveBeenCalled();
-      expect(params.buildSessionRow).not.toHaveBeenCalled();
-      expect(active).toBe(false);
-    } finally {
-      await backend.stop();
-    }
+    expect(await loadHistory({ sessionKey: "global", agentId: "work" })).toMatchObject({
+      sessionId: entry.sessionId,
+      verboseLevel: "full",
+      sessionInfo: { key: target.key, sessionId: entry.sessionId },
+    });
+    expect(describe).toHaveBeenCalledExactlyOnceWith(target);
+    expect(params.present).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -69,21 +77,95 @@ export function registerEmbeddedHistoryProjectionTests(params: {
       cfg: {},
       agentId: "main",
       canonicalKey: "agent:main:main",
-      storePath: "/tmp/main.sqlite",
       entry: { sessionId: "previous-session", lifecycleRevision: "previous-revision" },
     });
-    params.describe.mockReturnValue({
-      entry: currentEntry,
-      target: { key: "agent:main:main" },
+    params.describe.mockReturnValue({ entry: currentEntry });
+    const result = await loadHistory({ sessionKey: "agent:main:main" });
+    expect(result.sessionId).toBe("previous-session");
+    expect(result.sessionInfo).toBeUndefined();
+    expect(params.present).not.toHaveBeenCalled();
+  });
+
+  it("joins private ownership reads before reporting a metadata failure", async () => {
+    const entry = { sessionId: "private-session", incognito: true };
+    const key = "agent:main:dashboard:private";
+    params.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      agentId: "main",
+      canonicalKey: key,
+      storePath: "/tmp/private.sqlite",
+      store: { [key]: entry },
+      entry,
+    });
+    const metadata = Promise.withResolvers<Awaited<ReturnType<typeof params.readAcpMetadata>>>();
+    const ownership =
+      Promise.withResolvers<
+        Awaited<ReturnType<typeof sessionRuntimeOwnership.readSessionRuntimeOwnershipAsync>>
+      >();
+    params.readAcpMetadata.mockReturnValueOnce(metadata.promise);
+    const readOwnership = vi
+      .spyOn(sessionRuntimeOwnership, "readSessionRuntimeOwnershipAsync")
+      .mockReturnValueOnce(ownership.promise);
+    const backend = params.createBackend();
+    backend.start();
+    let settled = false;
+    const reading = backend.loadHistory({ sessionKey: key }).then(
+      () => {
+        settled = true;
+        return undefined;
+      },
+      (error: unknown) => {
+        settled = true;
+        return error;
+      },
+    );
+    const failure = new Error("private metadata retired");
+    try {
+      await vi.waitFor(() => expect(params.readAcpMetadata).toHaveBeenCalled());
+      await vi.waitFor(() => expect(readOwnership).toHaveBeenCalled());
+      metadata.reject(failure);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+      expect(params.buildSessionRow).not.toHaveBeenCalled();
+      ownership.resolve(undefined);
+      expect(await reading).toBe(failure);
+      expect(params.present).not.toHaveBeenCalled();
+    } finally {
+      metadata.resolve([null]);
+      ownership.resolve(undefined);
+      await reading;
+      readOwnership.mockRestore();
+      await backend.stop();
+    }
+  });
+
+  it("preserves incognito history metadata without adding the row to the resident projection", async () => {
+    const entry = { sessionId: "private-session", incognito: true };
+    const key = "agent:main:dashboard:private";
+    params.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      agentId: "main",
+      canonicalKey: key,
+      storePath: "/tmp/private.sqlite",
+      store: { [key]: entry },
+      entry,
     });
     const backend = params.createBackend();
     backend.start();
     try {
-      const result = await backend.loadHistory({ sessionKey: "agent:main:main" });
-      expect(result.sessionId).toBe("previous-session");
-      expect(result.sessionInfo).toBeUndefined();
+      await expect(backend.loadHistory({ sessionKey: key })).resolves.toMatchObject({
+        sessionId: entry.sessionId,
+        sessionInfo: { key, sessionId: entry.sessionId },
+      });
+      expect(params.buildSessionRow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          key,
+          entry,
+          storePath: "/tmp/private.sqlite",
+          lightweightListRow: true,
+        }),
+      );
       expect(params.present).not.toHaveBeenCalled();
-      expect(params.buildSessionRow).not.toHaveBeenCalled();
     } finally {
       await backend.stop();
     }

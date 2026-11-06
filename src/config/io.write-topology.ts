@@ -17,11 +17,13 @@ import type {
   ConfigWriteOptions,
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "./io.types.js";
+import { createConfigValidationFailedError } from "./io.write-errors.js";
 import { prepareConfigWriteValues } from "./io.write-prepare.js";
-import { findLegacyConfigRuleIssues } from "./legacy.js";
 import { resolveLegacyAgentRosterOwner } from "./legacy.roster.js";
+import { findLegacyConfigRuleIssues } from "./legacy.shared.js";
+import { findSkillWorkshopPolicyWriteRefusal } from "./skill-workshop-plugin-migration.js";
 import type { OpenClawConfig } from "./types.js";
-import { materializeLegacyAgentOwnershipForActiveChannelsResult } from "./validation.js";
+import { materializeLegacyAgentOwnershipForActiveChannelsResultAsync } from "./validation.js";
 
 function cloneConfigPathParents(
   source: Record<string, unknown>,
@@ -50,7 +52,7 @@ function cloneConfigPathParents(
 
 // Validation and commits share ownership preparation. The committing writer owns
 // cron safety rechecks, runtime refresh, and persistence; Doctor owns cron repair.
-export function prepareConfigWriteTopology(
+export async function prepareConfigWriteTopology(
   params: ReadConfigFileSnapshotWithPluginMetadataResult & {
     nextConfig: OpenClawConfig;
     options: Pick<
@@ -77,6 +79,19 @@ export function prepareConfigWriteTopology(
     explicitSetPaths: options.explicitSetPaths,
     explicitSetValueSource: options.explicitSetValueSource,
   });
+  const workshopPolicyRefusal = findSkillWorkshopPolicyWriteRefusal({
+    previousConfig: snapshot.authoredConfig ?? snapshot.sourceConfig,
+    nextConfig: values.authoredConfig,
+    writesPlugins:
+      [...(options.explicitSetPaths ?? []), ...unsetPaths].some((path) => path[0] === "plugins") ||
+      !isDeepStrictEqual(
+        (snapshot.authoredConfig ?? snapshot.sourceConfig).plugins,
+        values.authoredConfig.plugins,
+      ),
+  });
+  if (workshopPolicyRefusal) {
+    throw createConfigValidationFailedError([{ path: "plugins", message: workshopPolicyRefusal }]);
+  }
   const sourceRosterIssues = findLegacyConfigRuleIssues(
     snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig,
     LEGACY_AGENT_ROSTER_RULES,
@@ -95,9 +110,7 @@ export function prepareConfigWriteTopology(
   const nextAgentIds = new Set(nextEntries.map((entry) => normalizeAgentId(entry.id)));
   const previousSoleAgentId = tryResolveDefaultAgentId(snapshot.config);
   const entersMultiAgent = previousEntries.length <= 1 && nextEntries.length > 1;
-  const previousSoleRemains = Boolean(
-    previousSoleAgentId && nextAgentIds.has(normalizeAgentId(previousSoleAgentId)),
-  );
+  const previousSoleRemains = Boolean(previousSoleAgentId && nextAgentIds.has(previousSoleAgentId));
   const writesOwnershipTopology =
     options.persistCanonicalAgentRoster === true ||
     !isDeepStrictEqual(previousEntries, nextEntries) ||
@@ -153,7 +166,7 @@ export function prepareConfigWriteTopology(
     (entersMultiAgent && previousSoleRemains ? previousSoleAgentId : undefined) ??
     retainedFleetOwner;
   const ownershipMaterialization = ownerAgentId
-    ? materializeLegacyAgentOwnershipForActiveChannelsResult(
+    ? await materializeLegacyAgentOwnershipForActiveChannelsResultAsync(
         nextConfig,
         ownerAgentId,
         env,
@@ -187,8 +200,8 @@ export function prepareConfigWriteTopology(
         defaults: {
           ...nextConfig.agents?.defaults,
           sessionStore: {
-            ...(isRecord(nextSessionStoreConfig) ? nextSessionStoreConfig : {}),
-            agentId: normalizeAgentId(previousSoleAgentId),
+            ...nextSessionStoreConfig,
+            agentId: previousSoleAgentId,
           },
         },
       },

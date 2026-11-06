@@ -8,6 +8,7 @@ import { isRecord } from "./lib/record-shared.mjs";
 import {
   resolveChangedCiTsgoInputs,
   selectTsgoCoreTestStripe,
+  TSGO_ROOT_TEST_SHARDS,
 } from "./lib/tsgo-core-test-shards.mts";
 
 type CheckRow = {
@@ -21,6 +22,8 @@ type CheckRow = {
 type StripeRow = {
   stripe: number;
   lint_selection_json?: string;
+  shared_central_lint_selection_json?: string;
+  requires_sdk_declarations?: true;
   type_graph_names_json?: string;
   root_type_stripe?: string;
 };
@@ -75,10 +78,11 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
   const production = graphs.filter(({ name }) => ["core", "ui", "extensions"].includes(name));
   const coreTests = graphs.filter(({ name }) => name.startsWith("core-test-"));
   const hosted = ["github", "hybrid"].includes(input.runnerProfile);
+  const rootNames = ["test-root", ...TSGO_ROOT_TEST_SHARDS.map(({ name }) => name)];
   const otherOrder =
     !hosted && !input.changedCoreTestPaths
-      ? ["extensions-test", "test-root", "scripts"]
-      : ["extensions-test", "scripts", "test-root"];
+      ? ["extensions-test", ...rootNames, "scripts"]
+      : ["extensions-test", "scripts", ...rootNames];
   let other = otherOrder.flatMap((name) => graphs.filter((graph) => graph.name === name));
   if (production.length + coreTests.length + other.length !== graphs.length) {
     throw new Error("Every selected compiler graph must have a CI execution owner");
@@ -121,12 +125,31 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
   if (
     !input.preserveFullChecks &&
     coreRows.length >= 4 &&
-    other.some(({ name }) => name === "test-root")
+    other.some(({ name }) => rootNames.includes(name))
   ) {
+    const fullRoot = other.some(({ name }) => name === "test-root");
     for (const [index, row] of coreRows.slice(-4).entries()) {
-      row.root_type_stripe = `${index + 1}/4`;
+      if (fullRoot || other.some(({ name }) => name === TSGO_ROOT_TEST_SHARDS[index]!.name)) {
+        row.root_type_stripe = `${index + 1}/4`;
+      }
     }
-    other = other.filter(({ name }) => name !== "test-root");
+    other = other.filter(({ name }) => !rootNames.includes(name));
+  }
+  // Pair singleton selections within the existing two-compiler worker budget.
+  // Full stripes and root partitions keep their own timeout/memory boundaries.
+  if (hosted && typePlan?.mode === "changed") {
+    const singletons = coreRows.filter(
+      (row) => !row.root_type_stripe && JSON.parse(row.type_graph_names_json!).length === 1,
+    );
+    for (let index = 1; index < singletons.length; index += 2) {
+      const first = singletons[index - 1]!;
+      const second = singletons[index]!;
+      first.type_graph_names_json = JSON.stringify([
+        ...JSON.parse(first.type_graph_names_json!),
+        ...JSON.parse(second.type_graph_names_json!),
+      ]);
+      coreRows.splice(coreRows.indexOf(second), 1);
+    }
   }
   const checkRows = input.checkMatrix.include.flatMap((row) => {
     if (input.preserveFullChecks) {
@@ -285,6 +308,7 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
           {
             ...template,
             lint_selection_json: JSON.stringify(withExtensions(selected, extensionStripes)),
+            ...(extensionStripes.length > 0 ? { requires_sdk_declarations: true as const } : {}),
           },
         ];
       });
@@ -300,12 +324,54 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
       centralLintSelection = JSON.stringify(withExtensions(central, selectedStripes));
     }
   }
+  // Full hybrid stripe 1 already has the same 16-class setup. Keep larger central
+  // owners separate, and retain a check row for the existing required gate.
+  const firstCoreLint = coreLint.find((row) => row.stripe === 1);
+  const centralLintIndex = checkRows.findIndex((row) => row.task === "lint");
+  if (
+    input.runnerProfile === "hybrid" &&
+    input.preserveFullChecks &&
+    coreLint.length === 2 &&
+    coreLint.some((row) => row.stripe === 2) &&
+    coreLint.every((row) => !row.lint_selection_json) &&
+    firstCoreLint &&
+    centralLintIndex >= 0 &&
+    centralLintSelection &&
+    checkRows.some((row) => row.task !== "lint")
+  ) {
+    const { createChangedCheckPlan } = await import("./check-changed.mts");
+    const commands = createChangedCheckPlan(detectChangedLanes(input.changedPaths), {
+      lintOnly: true,
+      lintSelection: JSON.parse(centralLintSelection),
+      lintThreads: 1,
+    }).commands;
+    const scriptsArgs = [
+      "--import",
+      "./scripts/tsx.mjs",
+      "scripts/run-oxlint-shards.mts",
+      "--only=scripts",
+      "--threads=1",
+    ];
+    if (
+      commands.length > 0 &&
+      commands.every(
+        ({ bin, args }) =>
+          (!bin && args[0] === "format:check") ||
+          (bin === "node" &&
+            args.length === scriptsArgs.length &&
+            args.every((arg, index) => arg === scriptsArgs[index])),
+      )
+    ) {
+      firstCoreLint.shared_central_lint_selection_json = centralLintSelection;
+      checkRows.splice(centralLintIndex, 1);
+    }
+  }
   const checkJobCount =
     checkRows.length +
     (hosted ? coreRows.length + coreLint.length : 0) +
     (input.runnerProfile === "hybrid" ? extensionLint.length : 0);
   if (checkJobCount > 400) {
-    throw new Error("Check planning exceeds the observer's 400-job inventory bound");
+    throw new Error("Check planning exceeds the 400-job inventory bound");
   }
   if (typePlan) {
     console.log(
@@ -313,7 +379,6 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
     );
   }
   return {
-    check_job_count: checkJobCount,
     check_matrix: { include: checkRows },
     core_type_matrix: { include: coreRows },
     lint_core_matrix: { include: coreLint },

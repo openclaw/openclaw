@@ -64,10 +64,9 @@ it("keeps concurrent compiler input identity stable when lint retires its config
       before = snapshot();
       before.signature("tsconfig.json", [], ["source.ts"]);
     }
-    const captured = before;
-    expect(() =>
-      snapshot().seal("tsconfig.json", [], ["source.ts"], captured, Date.now()),
-    ).not.toThrow();
+    expect(snapshot().signature("tsconfig.json", [], ["source.ts"])).toBe(
+      before.signature("tsconfig.json", [], ["source.ts"]),
+    );
     expect(compilerBlocked).toBe(true);
   } finally {
     await compiler.release();

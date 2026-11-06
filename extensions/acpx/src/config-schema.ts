@@ -5,7 +5,15 @@
 import { z } from "zod";
 import type { AcpxAgentCommand } from "./command-line.js";
 
-export const ACPX_NATIVE_AGENT_IDS = ["opencode", "qwen", "pi", "kilocode", "copilot"] as const;
+export const ACPX_NATIVE_AGENT_IDS = [
+  "opencode",
+  "qwen",
+  "pi",
+  "kilocode",
+  "copilot",
+  "grok-build",
+  "qoder",
+] as const;
 export type AcpxNativeAgentId = (typeof ACPX_NATIVE_AGENT_IDS)[number];
 export const AcpxNativeAgentsSchema = z
   .strictObject({
@@ -14,6 +22,8 @@ export const AcpxNativeAgentsSchema = z
     pi: z.boolean().optional(),
     kilocode: z.boolean().optional(),
     copilot: z.boolean().optional(),
+    "grok-build": z.boolean().optional(),
+    qoder: z.boolean().optional(),
   })
   .optional();
 
@@ -41,12 +51,25 @@ export type ResolvedAcpxPluginConfig = {
   pluginToolsMcpBridge: boolean;
   openClawToolsMcpBridge: boolean;
   timeoutSeconds?: number;
+  agentProcessEnvAllow?: string[];
+  agentProcessEnvBlock?: string[];
   mcpServers: Record<string, McpServerConfig>;
   agents: Record<string, AcpxAgentCommand>;
 };
 
 const nonEmptyTrimmedString = (message: string) =>
   z.string({ error: message }).trim().min(1, { error: message });
+
+// Mirrors acpx's name contract (non-empty, no '=' or NUL) and also rejects
+// whitespace, which only appears in config through typos.
+const envNameListSchema = (option: string) => {
+  const message = `${option} must be an array of environment variable names`;
+  const name = z
+    .string({ error: message })
+    .regex(/^[^=\s]+$/, { error: message })
+    .refine((value) => !value.includes("\0"), { error: message });
+  return z.array(name, { error: message }).optional();
+};
 
 const McpServerConfigSchema = z.object({
   command: nonEmptyTrimmedString("command must be a non-empty string").describe(
@@ -90,6 +113,8 @@ export const AcpxPluginConfigSchema = z.strictObject({
     .number({ error: "timeoutSeconds must be a number >= 0.001" })
     .min(0.001, { error: "timeoutSeconds must be a number >= 0.001" })
     .default(DEFAULT_ACPX_TIMEOUT_SECONDS),
+  agentProcessEnvAllow: envNameListSchema("agentProcessEnvAllow"),
+  agentProcessEnvBlock: envNameListSchema("agentProcessEnvBlock"),
   piSessionCatalog: z
     .strictObject({
       enabled: z.boolean({ error: "piSessionCatalog.enabled must be a boolean" }).default(true),

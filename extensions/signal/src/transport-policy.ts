@@ -1,4 +1,3 @@
-// Signal transport policy centralizes local endpoint collision handling.
 import type { SignalTransportConfig } from "./account-types.js";
 import { normalizeSignalTransportUrl } from "./transport-url.js";
 
@@ -98,10 +97,9 @@ export function resolveLocalSignalTransportPort(baseUrl: string): number | undef
 }
 
 /**
- * When managed-native has a local connection URL but no explicit httpPort, prefer
- * binding the daemon to that URL's port so the client and autoStart daemon agree.
- * Returns undefined when the URL is an independent endpoint, so allocation can
- * still reassign binds.
+ * Prefer a connection URL port only when that URL already addresses the daemon bind.
+ * A saved root-path URL on another port is a proxy in front of the default bind, so
+ * its port is not copied onto httpPort before the check.
  */
 export function preferredManagedNativePortFromConnectionUrl(
   transport: SignalTransportConfig,
@@ -109,12 +107,11 @@ export function preferredManagedNativePortFromConnectionUrl(
   if (transport.kind !== "managed-native" || transport.httpPort !== undefined || !transport.url) {
     return undefined;
   }
-  const localPort = resolveLocalSignalTransportPort(transport.url);
-  if (localPort === undefined || !isValidSignalManagedNativePort(localPort)) {
+  if (!isSignalManagedNativeConnectionUrlForBind(transport)) {
     return undefined;
   }
-  const candidate: SignalManagedNativeTransport = { ...transport, httpPort: localPort };
-  if (!isSignalManagedNativeConnectionUrlForBind(candidate)) {
+  const localPort = resolveLocalSignalTransportPort(transport.url);
+  if (localPort === undefined || !isValidSignalManagedNativePort(localPort)) {
     return undefined;
   }
   return localPort;
@@ -202,8 +199,7 @@ export function assignSignalManagedNativePort(
     throw new Error("Signal managed native port must be an integer between 1 and 65535.");
   }
   const connectionUrlValue = transport.url;
-  // A URL-only local HTTP endpoint is the provisional bind. Fallback allocation
-  // still rewrites that URL onto the port that was actually assigned.
+  // Rewrite only a URL that already addresses this daemon bind. A proxy URL stays put.
   const preferredUrlPort = preferredManagedNativePortFromConnectionUrl(transport);
   const alignmentProbe: SignalManagedNativeTransport =
     preferredUrlPort === undefined ? transport : { ...transport, httpPort: preferredUrlPort };

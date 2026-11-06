@@ -28,7 +28,9 @@
     "additionalProperties": false,
     "properties": {}
   },
-  "controlUi": {
-    "entry": "dist/control-ui/3a09f002ca855736bcd54d5be13daf0419b17603a8198258d3a401a6534344b5/index.js"
-  }
+  "recommendedPrompts": [
+    "Help me plan Slack access for this agent and the channels I choose.",
+    "Summarize decisions and open questions in a Slack thread without replying.",
+    "Draft a reply to a Slack message or thread for my review without sending it."
+  ]
 }

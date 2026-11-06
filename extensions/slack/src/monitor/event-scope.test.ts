@@ -1,25 +1,31 @@
 import { WebClient } from "@slack/web-api";
-import { describe, expect, it } from "vitest";
-import { resolveSlackListenerEventScope } from "./event-scope.js";
+import { describe, expect, it, vi } from "vitest";
+import { resolveSlackMonitorEventScope } from "./event-scope.js";
 
 const identity = { kind: "enterprise", apiAppId: "A123", enterpriseId: "E123" } as const;
 const client = new WebClient("listener-token");
+const context = { isEnterpriseInstall: true, enterpriseId: "E123", teamId: "T111" };
+type ScopeParams = Parameters<typeof resolveSlackMonitorEventScope>[0];
+function resolveScope(overrides: Partial<ScopeParams> = {}) {
+  return resolveSlackMonitorEventScope({
+    ctx: { installationIdentity: identity, app: {} },
+    body: { api_app_id: "A123" },
+    context,
+    client,
+    ...overrides,
+  });
+}
 
-describe("resolveSlackListenerEventScope", () => {
+describe("resolveSlackMonitorEventScope", () => {
   it.each(["T111", "workspace/Mixed Case"])(
     "preserves authorized workspace %s in the same org",
     (teamId) => {
       const listenerClient = new WebClient(`listener-token-${teamId.toLowerCase()}`);
-      const result = resolveSlackListenerEventScope({
-        identity,
-        body: { api_app_id: "A123" },
-        context: { isEnterpriseInstall: true, enterpriseId: "E123", teamId },
+      const result = resolveScope({
+        context: { ...context, teamId },
         client: listenerClient,
       });
-      expect(result).toMatchObject({
-        teamId,
-        client: listenerClient,
-      });
+      expect(result).toMatchObject({ teamId, client: listenerClient });
       expect(result?.client).toBe(listenerClient);
       expect(result?.writeClient).toBeInstanceOf(WebClient);
       expect(result?.writeClient).not.toBe(listenerClient);
@@ -27,16 +33,7 @@ describe("resolveSlackListenerEventScope", () => {
   );
 
   it("accepts a Bolt-authenticated payload that does not carry api_app_id", () => {
-    const result = resolveSlackListenerEventScope({
-      identity,
-      body: {},
-      context: { isEnterpriseInstall: true, enterpriseId: "E123", teamId: "T111" },
-      client,
-    });
-    expect(result).toMatchObject({
-      teamId: "T111",
-      client,
-    });
+    expect(resolveScope({ body: {} })).toMatchObject({ teamId: "T111", client });
   });
 
   it("relies on WebClient team scoping instead of adding team_id to method payloads", async () => {
@@ -64,27 +61,15 @@ describe("resolveSlackListenerEventScope", () => {
     ["missing team", { context: { teamId: undefined } }, "missing_team_id"],
     ["missing client", { client: undefined }, "missing_listener_client"],
   ] as const)("rejects %s", (_label, override, reason) => {
-    const baseContext = {
-      isEnterpriseInstall: true,
-      enterpriseId: "E123",
-      teamId: "T111",
-    };
-    let droppedReason: string | undefined;
-    const result = resolveSlackListenerEventScope({
-      identity,
-      body: { api_app_id: "A123" },
-      client,
-      ...override,
-      context: {
-        ...baseContext,
-        ...("context" in override ? override.context : {}),
-      },
-      onDrop: (value) => {
-        droppedReason = value;
-      },
-    });
-    expect(result).toBeNull();
-    expect(droppedReason).toBe(reason);
+    const onDrop = vi.fn();
+    expect(
+      resolveScope({
+        ...override,
+        onDrop,
+        context: { ...context, ...("context" in override ? override.context : {}) },
+      }),
+    ).toBeNull();
+    expect(onDrop).toHaveBeenLastCalledWith(reason);
   });
 
   it("rejects enterprise events for workspace and degraded accounts", () => {
@@ -92,19 +77,14 @@ describe("resolveSlackListenerEventScope", () => {
       { kind: "workspace", apiAppId: "A123", teamId: "T111" } as const,
       { kind: "degraded", reason: "auth_test_failed" } as const,
     ]) {
-      let droppedReason: string | undefined;
+      const onDrop = vi.fn();
       expect(
-        resolveSlackListenerEventScope({
-          identity: workspaceIdentity,
-          body: { api_app_id: "A123" },
-          context: { isEnterpriseInstall: true, enterpriseId: "E123", teamId: "T111" },
-          client,
-          onDrop: (value) => {
-            droppedReason = value;
-          },
+        resolveScope({
+          ctx: { installationIdentity: workspaceIdentity, app: {} },
+          onDrop,
         }),
       ).toBeNull();
-      expect(droppedReason).toBe("enterprise_event_for_workspace_account");
+      expect(onDrop).toHaveBeenLastCalledWith("enterprise_event_for_workspace_account");
     }
   });
 });

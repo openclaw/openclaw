@@ -67,14 +67,12 @@ function buildSessionIdentity(params: {
   };
 }
 
-/** Resolve normalized ACP identity from persisted session metadata. */
 export function resolveSessionIdentityFromMeta(
   meta: SessionAcpMeta | undefined,
 ): SessionAcpIdentity | undefined {
   return normalizeIdentity(meta?.identity);
 }
 
-/** Return true when an identity has a backend or agent session id. */
 export function identityHasStableSessionId(identity: SessionAcpIdentity | undefined): boolean {
   return Boolean(identity?.acpxSessionId || identity?.agentSessionId);
 }
@@ -86,7 +84,6 @@ export function resolveRuntimeResumeSessionId(
   return normalizeText(identity?.agentSessionId) ?? normalizeText(identity?.acpxSessionId);
 }
 
-/** Return true when identity is absent or still pending. */
 export function isSessionIdentityPending(identity: SessionAcpIdentity | undefined): boolean {
   return !identity || identity.state === "pending";
 }
@@ -166,7 +163,6 @@ export function createIdentityFromEnsure(params: {
   });
 }
 
-/** Create an identity from a runtime event handle. */
 export function createIdentityFromHandleEvent(params: {
   handle: AcpRuntimeHandle;
   now: number;
@@ -180,7 +176,6 @@ export function createIdentityFromHandleEvent(params: {
   });
 }
 
-/** Create an identity from runtime status output. */
 export function createIdentityFromStatus(params: {
   status: AcpRuntimeStatus | undefined;
   now: number;
@@ -205,7 +200,6 @@ export function createIdentityFromStatus(params: {
   });
 }
 
-/** Convert ACP identity ids into runtime handle resume identifiers. */
 export function resolveRuntimeHandleIdentifiersFromIdentity(
   identity: SessionAcpIdentity | undefined,
 ): { backendSessionId?: string; agentSessionId?: string } {

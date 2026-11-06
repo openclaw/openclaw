@@ -1,10 +1,8 @@
 #!/usr/bin/env node
-// Test Env Mutation Report script supports OpenClaw repository automation.
-
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { isCodeFile, isTestRelatedFile, listRepoFilesSync } from "./check-file-utils.js";
 import { renderFindingGroups } from "./lib/grouped-findings.js";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";

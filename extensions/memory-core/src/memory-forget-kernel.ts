@@ -1,5 +1,8 @@
-import type { DatabaseSync } from "node:sqlite";
-import { readMemoryEntryOriginsInDatabase } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
+import {
+  isPostgresSqlConnection,
+  readMemoryEntryOriginsInDatabase,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -13,9 +16,10 @@ import {
   type MemoryForgetLineageResult,
 } from "./memory-entry-origins-task.js";
 import type { ForgetDatabase } from "./memory-forget-index-task.js";
+import { advanceMemoryIndexRevision } from "./memory-index-revision.worker.js";
 import { recordMemorySessionTombstonesInDatabase } from "./memory-session-tombstones.js";
 
-function checkLineage(db: DatabaseSync, input: MemoryForgetLineage): MemoryForgetLineageResult {
+function checkLineage(db: EngineConnection, input: MemoryForgetLineage): MemoryForgetLineageResult {
   const origins = tableExists(db, "memory_entry_origins")
     ? readMemoryEntryOriginsInDatabase(db, { agentId: input.agentId })
     : [];
@@ -30,7 +34,7 @@ function checkLineage(db: DatabaseSync, input: MemoryForgetLineage): MemoryForge
 
 /** The binding owns this transaction and its commit grant. */
 export function markMemoryForgotten(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: MemoryForgetLineage,
 ): MemoryForgetLineageResult {
   const lineage = checkLineage(db, input);
@@ -39,20 +43,14 @@ export function markMemoryForgotten(
   }
   const recorded = recordMemorySessionTombstonesInDatabase(db, input);
   if (recorded === 0) {
-    executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<ForgetDatabase>(db)
-        .updateTable("memory_index_state")
-        .set((expression) => ({ revision: expression("revision", "+", 1) }))
-        .where("id", "=", 1),
-    );
+    advanceMemoryIndexRevision(db);
   }
   return lineage;
 }
 
 /** The earlier tombstone commit survives any failure of this separate purge. */
 export function purgeForgottenMemory(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: MemoryEntryOriginOperations["forget.purge"]["input"],
 ): MemoryForgetLineageResult {
   const lineage = checkLineage(db, input);
@@ -61,7 +59,9 @@ export function purgeForgottenMemory(
   }
   const kysely = getNodeSqliteKysely<ForgetDatabase>(db);
   if (input.chunkIds.length > 0) {
-    if (input.hasVectorTable) {
+    // PostgreSQL owns generated text and vector FK projections; deleting the
+    // source below removes both within this same owner transaction.
+    if (input.hasVectorTable && !isPostgresSqlConnection(db)) {
       executeSqliteQuerySync(
         db,
         kysely.deleteFrom("memory_index_chunks_vec").where("id", "in", input.chunkIds),
@@ -69,12 +69,21 @@ export function purgeForgottenMemory(
     }
     executeSqliteQuerySync(
       db,
-      kysely.deleteFrom("memory_index_chunks").where("id", "in", input.chunkIds),
+      kysely
+        .deleteFrom("memory_index_chunks")
+        .where(
+          "id",
+          "in",
+          isPostgresSqlConnection(db) ? sqliteStringSet(input.chunkIds) : input.chunkIds,
+        ),
     );
   }
   deleteMemoryIndexSources(db, input.sources);
   if (tableExists(db, "memory_embedding_cache")) {
     executeSqliteQuerySync(db, kysely.deleteFrom("memory_embedding_cache"));
+  }
+  if (input.chunkIds.length > 0 || input.sources.length > 0) {
+    advanceMemoryIndexRevision(db);
   }
   return lineage;
 }
@@ -83,7 +92,7 @@ type MemoryIndexSource = { path: string; source: string };
 
 // The forget owner supplies its selected rows and retains the purge transaction.
 function deleteMemoryIndexSources(
-  database: DatabaseSync,
+  database: EngineConnection,
   sources: readonly MemoryIndexSource[],
 ): void {
   const db = getNodeSqliteKysely<{ memory_index_sources: MemoryIndexSource }>(database);
