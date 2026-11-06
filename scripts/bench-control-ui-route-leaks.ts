@@ -675,11 +675,7 @@ function censusReady({ id, sessionKey }: { id: CensusRoute; sessionKey: string }
     return (
       text('[data-provider-id="codex"]', "MEMORY.md") &&
       !present(".memory-import__loading") &&
-      [
-        ...document.querySelectorAll<HTMLButtonElement>(
-          '[data-test-id="memory-import-page"] button',
-        ),
-      ].some((node) => node.textContent?.trim() === "Refresh" && !node.disabled)
+      present('[data-test-id="memory-import-page"] button[aria-label="Refresh"]:not(:disabled)')
     );
   }
   if (id === "debug") {
@@ -767,11 +763,10 @@ function routeTarget(id: ProbeRoute, sessionKey: string): RouteTarget {
     notifications: "openclaw-config-page .settings-section .settings-row__control .settings-status",
     secrets:
       "openclaw-secrets-page .secrets-store__table tbody tr, openclaw-secrets-page .secrets-store__empty, openclaw-secrets-page .settings-section .settings-empty",
-    approvals:
-      "openclaw-approvals-page .approval-history-table[aria-busy=false] .data-table-empty-state",
+    approvals: "openclaw-approvals-page .settings-empty",
     search: 'openclaw-search-page select[aria-label="Search provider"]:not(:disabled)',
     labs: "openclaw-labs-page .settings-section input[role=switch]:not(:disabled)",
-    about: "openclaw-about-page .about-hero__links a",
+    about: "openclaw-about-page nav a.about-link",
     memory: ".memory-page__panel :is(a.memory-page__link,button:not(:disabled))",
     devices:
       "openclaw-devices-page .device-entry, openclaw-devices-page .settings-section .settings-empty",
@@ -1930,15 +1925,12 @@ try {
                   const approvalsSettled =
                     routeId !== "approvals" ||
                     (document
-                      .querySelector(
-                        ".approval-history-table[aria-busy=false] .data-table-empty-state",
-                      )
-                      ?.textContent?.trim() ===
-                      "No resolved approvals in the rolling 30-day window." &&
-                      document
-                        .querySelector(".standing-grants-table .data-table-empty-state")
-                        ?.textContent?.trim() ===
-                        "No standing grants. Answer an automation approval with Always allow to mint one.");
+                      .getElementById("approval-history-title")
+                      ?.closest(".settings-section")
+                      ?.querySelector(".settings-empty")
+                      ?.textContent?.trim() === "No resolved approvals in the last 30 days." &&
+                      document.querySelector(".standing-grants-empty")?.textContent?.trim() ===
+                        "No standing grants yet. Choose Always allow on an automation approval to create one.");
                   // SAFETY: Every measured page receives this fixture before navigation.
                   const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
                   const enabled = (candidateSelector: string) =>
