@@ -13,8 +13,11 @@ import {
 import { createConfigIO } from "./io.factory.js";
 import { withTempHome } from "./test-helpers.js";
 
-const { runRegisteredConfigCommand: run, withConfigFileHarness: withConfig } =
-  useConfigCliIntegrationHarness();
+const {
+  runRegisteredConfigCommand: run,
+  withConfigFileHarness: withConfig,
+  registeredRuntimeErrors: errors,
+} = useConfigCliIntegrationHarness();
 const set = (key: string, value: string) => run(["config", "set", key, value]);
 const loggingRoot = '{"gateway":{"mode":"local"},"logging":{"$include":"logging.json"}}\n';
 const withLoggingConfig = (body: Parameters<typeof withConfig>[2]) =>
@@ -68,6 +71,46 @@ const createSnapshot = (
   });
 
 describe("config backup rotation", () => {
+  it.each(["root", "include"] as const)(
+    "refuses malformed UTF-8 in the %s before consuming recovery backups",
+    async (owner) => {
+      await withConfig("openclaw-config-utf8-", "{}", async ({ configPath, tempDir }) => {
+        const profile = { name: "Legal 中文 日本語 한글 😀 �", workspace: tempDir };
+        const config = {
+          gateway: { mode: "local", port: 19000 },
+          agents: { entries: { main: owner === "root" ? profile : { $include: "agent.json" } } },
+        };
+        const rootRaw = JSON.stringify(config);
+        await fs.writeFile(configPath, rootRaw);
+        const target = owner === "root" ? configPath : path.join(tempDir, "agent.json");
+        const valid = Buffer.from(`\uFEFF${JSON.stringify(owner === "root" ? config : profile)}\n`);
+        const damaged = Buffer.from(valid);
+        damaged[damaged.indexOf("Legal")] = 0xff;
+        await fs.writeFile(target, damaged);
+        const backup = Buffer.from("retained recovery point\n");
+        await fs.writeFile(`${target}.bak`, backup);
+        const key = owner === "root" ? "gateway.port" : "agents.entries.main.workspace";
+        const value = owner === "root" ? "19001" : path.join(tempDir, "next-workspace");
+
+        await expect(set(key, value)).rejects.toMatchObject({ name: "ExitError", code: 1 });
+        expect(errors.join("\n")).toContain("valid UTF-8");
+        await expect(fs.readFile(target)).resolves.toEqual(damaged);
+        await expect(fs.readFile(`${target}.bak`)).resolves.toEqual(backup);
+        await expectPathMissing(`${target}.bak.1`);
+
+        await fs.writeFile(target, valid);
+        await set(key, value);
+        const saved = JSON.parse(await fs.readFile(target, "utf8"));
+        expect(owner === "root" ? saved.agents.entries.main.name : saved.name).toBe(profile.name);
+        await expect(fs.readFile(`${target}.bak`)).resolves.toEqual(valid);
+        await expect(fs.readFile(`${target}.bak.1`)).resolves.toEqual(backup);
+        if (owner === "include") {
+          await expectFile(configPath, rootRaw);
+        }
+      });
+    },
+  );
+
   it("openclaw config set keeps five recovery points and preserves manual and pre-update backups", async () => {
     const original = '{"gateway":{"mode":"local","port":19000}}\n';
     await withConfig("openclaw-config-backup-ring-", original, async ({ configPath }) => {

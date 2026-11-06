@@ -72,6 +72,26 @@ it("refuses an unreadable config even when size-drop writes are allowed", async 
   expectPreserved(f);
 });
 
+it("retains explicit destructive-write authority over malformed source encoding", async () => {
+  const f = fixture({ agents: { entries: { main: { name: "original" } } } });
+  const damaged = Buffer.from(f.liveBytes);
+  damaged[damaged.indexOf("original")] = 0xff;
+  fsNode.writeFileSync(f.configPath, damaged);
+  const io = createConfigIO({
+    configPath: f.configPath,
+    homedir: () => f.home,
+    env: { HOME: f.home, OPENCLAW_STATE_DIR: f.stateDir },
+    observe: false,
+    logger: { error: () => {}, warn: () => {} },
+  });
+
+  await io.writeConfigFile(
+    { gateway: { mode: "local", port: 19876 } },
+    { allowDestructiveWrite: true },
+  );
+  expect(JSON.parse(fsNode.readFileSync(f.configPath, "utf8")).gateway.port).toBe(19876);
+});
+
 it.skipIf(process.platform === "win32")(
   "rejects exported writes before re-reading an unreadable base snapshot",
   async () => {
