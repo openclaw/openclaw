@@ -187,11 +187,11 @@ describe("Browser panel", () => {
     expect(document.activeElement).toBe(input);
 
     failure.reject(new Error("Refresh connection interrupted"));
-    await waitForSolid(() => expect(reload?.getAttribute("aria-busy")).toBe("false"));
+    await waitForSolid(() => expect(reload?.getAttribute("aria-busy")).toBeNull());
 
     expect(panel.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
     expect(panel.querySelector(".bp-shot")).toBe(preview);
-    expect(reload?.getAttribute("aria-busy")).toBe("false");
+    expect(reload?.getAttribute("aria-busy")).toBeNull();
     expect(panel.querySelector('[role="alert"]')?.textContent).toContain(
       "Refresh connection interrupted",
     );
