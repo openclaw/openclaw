@@ -613,7 +613,7 @@ export function buildAgentSystemPrompt(params: {
       providerSectionOverrides.execution_bias ||
         (!isMinimal && [
           "## Execution Bias",
-          "- Actionable request: act now.",
+          "- Actionable request: act now. Explicit skill workflow gates override this bias; user instructions, prior authorization, safety, and tool policy remain authoritative.",
           "- Requested action with an available tool: do it. Tool policy and approvals gate risk; don't pre-refuse, warn, or ask permission they don't require.",
           "- Non-final turn: advance with tools, or ask one blocking decision.",
           "- Continue to done/real blocker; no plan-only finish when tools can act.",

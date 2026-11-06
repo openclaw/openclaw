@@ -11,6 +11,7 @@ import {
   type PluginToolMcpMeta,
 } from "../plugins/tool-metadata.js";
 import { sanitizeModelSpecialTokens } from "../security/external-content.js";
+import type { McpCatalogTool, McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
 import { releaseSessionMcpRuntime } from "./agent-bundle-mcp-manager-cleanup.js";
 import {
   buildSafeToolName,
@@ -25,9 +26,7 @@ import {
 import { mergeMcpConnectCatalog } from "./agent-bundle-mcp-requester-connect.js";
 import type {
   BundleMcpToolRuntime,
-  McpCatalogTool,
   McpAppRequesterIdentity,
-  McpToolCatalog,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
 import {
@@ -42,6 +41,7 @@ import {
 } from "./mcp-content.js";
 import { prepareMcpAppFormUpload } from "./mcp-form-resource-upload.js";
 import { captureMcpFormRequester } from "./mcp-form-tool-approval.js";
+import { isAppOnlyMcpTool } from "./mcp-metadata.js";
 import { createMcpToolFilter, mcpCatalogToolFilterScope } from "./mcp-tool-filter.js";
 import {
   buildMcpAppCanvasPayload,
@@ -55,10 +55,6 @@ import { toToolSearchJsonSafe } from "./tool-search-json.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const MAX_MCP_SERVER_INSTRUCTIONS_CHARS = 2_000;
-
-function isAppOnlyTool(tool: McpCatalogTool): boolean {
-  return tool.uiVisibility !== undefined && !tool.uiVisibility.includes("model");
-}
 
 function toJsonAgentToolResult(params: {
   serverName: string;
@@ -165,14 +161,14 @@ export function buildBundleMcpToolsFromCatalog(params: {
     ...tools.map((tool) => tool.name),
   ]);
   const catalogTools = appOnlyInventory
-    ? params.catalog.tools.filter(isAppOnlyTool)
+    ? params.catalog.tools.filter(isAppOnlyMcpTool)
     : sessionDeniedOnly
       ? (params.catalog.sessionDeniedTools ?? [])
       : params.catalog.tools;
   const sortedCatalogTools = catalogTools.toSorted(compareMcpCatalogTools);
 
   for (const tool of sortedCatalogTools) {
-    const appOnly = isAppOnlyTool(tool);
+    const appOnly = isAppOnlyMcpTool(tool);
     if (appOnly && !appOnlyInventory) {
       continue;
     }
@@ -597,7 +593,7 @@ export async function materializeBundleMcpToolsForRun(params: {
       ...(reservedToolNames ?? []),
       ...tools.map((tool) => tool.name),
     ]);
-    const appOnlyTools = materializedCatalog.tools.filter(isAppOnlyTool).toSorted((a, b) => {
+    const appOnlyTools = materializedCatalog.tools.filter(isAppOnlyMcpTool).toSorted((a, b) => {
       const serverOrder = a.safeServerName.localeCompare(b.safeServerName);
       return serverOrder || a.toolName.localeCompare(b.toolName);
     });

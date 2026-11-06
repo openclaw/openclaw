@@ -9,23 +9,27 @@ import {
 
 type SearchMatch = { row: ChatModelSearchRow; rank: number };
 
+const normalizeSearch = (value: string) => value.toLocaleLowerCase().normalize("NFC");
+
 function modelMatchRank(row: ChatModelSearchRow, query: string): number | null {
-  if (row.name.startsWith(query)) {
+  const name = normalizeSearch(row.name);
+  if (name.startsWith(query)) {
     return 0;
   }
-  if (row.name.includes(query)) {
+  if (name.includes(query)) {
     return 1;
   }
-  if (row.keywords?.includes(query)) {
+  if (row.keywords && normalizeSearch(row.keywords).includes(query)) {
     return 2;
   }
-  if (row.providerLabel.startsWith(query)) {
+  const providerLabel = normalizeSearch(row.providerLabel);
+  if (providerLabel.startsWith(query)) {
     return 3;
   }
-  if (row.providerLabel.includes(query)) {
+  if (providerLabel.includes(query)) {
     return 4;
   }
-  return row.reference.toLocaleLowerCase().includes(query) ? 5 : null;
+  return normalizeSearch(row.reference).includes(query) ? 5 : null;
 }
 
 /** The retained lazy panel owns ranking and disclosure; input/shortcut admission stays eager. */
@@ -66,7 +70,7 @@ export function createChatModelSearchView(
     disclosure.groups[provider]?.open ?? disclosure.active === provider;
   const matches = createMemo(
     () => {
-      const term = query().trim().toLocaleLowerCase();
+      const term = normalizeSearch(query().trim());
       const buckets: ChatModelSearchRow[][] = [[], [], [], [], [], []];
       for (const row of read().rows) {
         const score = term
@@ -232,10 +236,6 @@ export function handleModelSearchKeydown(event: KeyboardEvent): void {
   if (next) {
     view.highlight(next.row.key);
     view.reveal(next.row.key);
-    onSettled(() => {
-      // Chromium returns a promise; settlement callbacks must not return it as cleanup.
-      state.rows.get(next.row.key)?.scrollIntoView?.({ block: "nearest" });
-    });
   }
 }
 

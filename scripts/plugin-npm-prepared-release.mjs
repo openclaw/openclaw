@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import {
   downloadActionsArtifactArchive,
   inspectActionsArtifactZipWithPolicy,
@@ -156,6 +157,116 @@ export function validatePreparedNpmArtifactDescriptor(value, expected) {
     },
     producer,
   );
+}
+
+// P consumes Q's bytes as data. Neither a caller-supplied Q SHA nor a matching
+// artifact name grants authority: the original successful FRV attempt owns it.
+export async function authenticatePreparedNpmArtifact(params) {
+  const { repository, sourceSha, workflowSha, artifact } = params;
+  if (!params.fullReleaseValidationRunId && !params.fullReleaseValidationRunAttempt) {
+    return {
+      artifact: validatePreparedNpmArtifactDescriptor(artifact, params),
+      workflowSha,
+      publisherPolicySha256: params.publisherPolicySha256,
+      revalidateAuthority: undefined,
+    };
+  }
+  requireValue(
+    [params.fullReleaseValidationRunId, params.fullReleaseValidationRunAttempt].every(
+      (value) => /^[1-9][0-9]*$/u.test(String(value)) && Number.isSafeInteger(Number(value)),
+    ),
+    "Prepared npm adoption requires the exact FRV run and attempt.",
+  );
+  const { createReleaseEvidenceClient } = await import("./release-ci-summary.mjs");
+  const { authenticateFullReleaseValidationEvidence } =
+    await import("./validate-full-release-validation-evidence.mjs");
+  const client = params.evidenceClient ?? createReleaseEvidenceClient(repository);
+  const runId = String(params.fullReleaseValidationRunId);
+  const runAttempt = Number(params.fullReleaseValidationRunAttempt);
+  const { manifest } = await client.loadManifest(runId, runAttempt);
+  const selected = manifest.sourceAdmission?.publicationSelection;
+  // The child checks the npm operation it actually performs; the parent also
+  // supplies its complete selection (including route and optional Windows).
+  if (selected) {
+    const names = (params.plugins ?? "")
+      .split(/[,\s]+/u)
+      .filter(Boolean)
+      .toSorted();
+    requireValue(
+      selected.pluginPublishScope === params.selectionMode &&
+        (selected.npmDistTag === "extended-stable" ? "extended-stable" : "default") ===
+          params.npmDistTag &&
+        isDeepStrictEqual(
+          [...selected.plugins].toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+          names,
+        ),
+      "Prepared npm adoption differs from the admitted publication selection.",
+    );
+  }
+  const authenticated = await authenticateFullReleaseValidationEvidence(
+    {
+      run: await client.getRunAttempt(runId, runAttempt),
+      manifest,
+      expectedRepository: repository,
+      expectedRunId: runId,
+      expectedRunAttempt: runAttempt,
+      expectedTargetSha: sourceSha,
+      expectedReleaseTag: params.releaseTag ?? `v${manifest.sourceAdmission?.projection?.version}`,
+      expectedTrustedWorkflowFullRef: params.workflowFullRef,
+      expectedTrustedWorkflowSha: workflowSha,
+      expectedPublicationSelection: params.publicationSelection ?? selected,
+      verifierSourceSha: workflowSha,
+      verifierSourceContent: readFileSync(new URL("./release-ci-summary.mjs", import.meta.url)),
+      isTrustedMainAncestor:
+        params.isTrustedMainAncestor ??
+        ((sha) => {
+          const comparison = client.compareCommits(sha, "main");
+          return (
+            ["ahead", "identical"].includes(comparison.status) &&
+            comparison.merge_base_commit?.sha === sha
+          );
+        }),
+    },
+    client,
+  );
+  const current = authenticated.evidence.current;
+  const producerSha = current.manifest.workflowSha;
+  if (producerSha !== workflowSha) {
+    requireValue(
+      producerSha === sourceSha &&
+        current.workflowRefProof === "candidate-owned-admission-v1" &&
+        typeof authenticated.revalidateAuthority === "function",
+      "Prepared npm Q != P adoption requires live candidate-owned qualification.",
+    );
+  }
+  const descriptor = validatePreparedNpmArtifactDescriptor(
+    current.manifest.publicationArtifacts?.pluginNpm,
+    { repository, sourceSha, workflowSha: producerSha },
+  );
+  if (artifact) {
+    requireValue(
+      isDeepStrictEqual(
+        validatePreparedNpmArtifactDescriptor(artifact, {
+          repository,
+          sourceSha,
+          workflowSha: producerSha,
+        }),
+        descriptor,
+      ),
+      "Prepared npm artifact differs from the authenticated FRV descriptor.",
+    );
+  }
+  const publisherPolicySha256 =
+    producerSha === workflowSha && params.publisherPolicySha256
+      ? params.publisherPolicySha256
+      : sha256(client.getWorkflowSource(producerSha, WORKFLOW_PATH));
+  authenticated.revalidateAuthority?.();
+  return {
+    artifact: descriptor,
+    workflowSha: producerSha,
+    publisherPolicySha256,
+    revalidateAuthority: authenticated.revalidateAuthority,
+  };
 }
 
 function sourcePackageRoster(sourceRoot, npmDistTag, selectedNames) {
@@ -591,9 +702,9 @@ async function main(argv) {
   }
   const common = {
     repository: process.env.GITHUB_REPOSITORY,
-    workflowSha: process.env.GITHUB_SHA,
+    workflowSha: process.env.GITHUB_WORKFLOW_SHA ?? process.env.GITHUB_SHA,
     sourceSha: options["--source-sha"],
-    npmDistTag: options["--npm-dist-tag"] ?? "default",
+    npmDistTag: options["--npm-dist-tag"] ?? process.env.PREPARED_NPM_DIST_TAG ?? "default",
     selectionMode: options["--selection-mode"],
     plugins: options["--plugins"] ?? "",
     publisherPolicySha256: options["--policy-file"]
@@ -601,7 +712,25 @@ async function main(argv) {
       : undefined,
     token: process.env.GH_TOKEN,
   };
-  if (command === "seal") {
+  let adoption;
+  if (["load", "consume", "authorize"].includes(command)) {
+    adoption = await authenticatePreparedNpmArtifact({
+      ...common,
+      selectionMode: common.selectionMode ?? process.env.PREPARED_NPM_SELECTION_MODE,
+      plugins: options["--plugins"] ?? process.env.PREPARED_NPM_PLUGINS ?? "",
+      artifact: JSON.parse(options["--artifact"] ?? process.env.PREPARED_NPM_ARTIFACT),
+      workflowFullRef: process.env.GITHUB_REF,
+      fullReleaseValidationRunId: process.env.PREPARED_NPM_FRV_RUN_ID,
+      fullReleaseValidationRunAttempt: process.env.PREPARED_NPM_FRV_RUN_ATTEMPT,
+    });
+    Object.assign(common, {
+      workflowSha: adoption.workflowSha,
+      publisherPolicySha256: adoption.publisherPolicySha256,
+    });
+  }
+  if (command === "authorize") {
+    adoption.revalidateAuthority?.();
+  } else if (command === "seal") {
     const producer = {
       repository: common.repository,
       runId: Number(process.env.GITHUB_RUN_ID),
@@ -631,9 +760,10 @@ async function main(argv) {
     const manifest = await downloadPreparedNpmRelease({
       ...common,
       sourceRoot: options["--source-root"] ?? process.cwd(),
-      artifact: JSON.parse(options["--artifact"]),
+      artifact: adoption.artifact,
       archivePath: options["--archive-path"],
     });
+    adoption.revalidateAuthority?.();
     writeFileSync(options["--output"], JSON.stringify(manifest));
     outputValues(options["--github-output"], {
       has_candidates: true,
@@ -644,14 +774,20 @@ async function main(argv) {
       all_matrix: JSON.stringify(manifest.packages),
     });
   } else if (command === "consume") {
+    const entry = JSON.parse(options["--package"]);
+    requireValue(
+      isDeepStrictEqual(normalizeProducer(entry.artifact), normalizeProducer(adoption.artifact)),
+      "Prepared npm package differs from the admitted manifest producer.",
+    );
     const result = await consumePreparedNpmPackage({
       ...common,
-      package: JSON.parse(options["--package"]),
+      package: entry,
       sourcePackageJson: options["--source-package-json"],
       cacheDir: options["--cache-dir"],
       outputDir: options["--output-dir"],
       verificationOutput: options["--verification-output"],
     });
+    adoption.revalidateAuthority?.();
     outputValues(options["--github-output"], {
       package_name: result.manifest.package.name,
       package_version: result.manifest.package.version,
@@ -697,7 +833,7 @@ async function main(argv) {
     );
   } else {
     throw new Error(
-      "Usage: plugin-npm-prepared-release.mjs <seal|load|consume|registry> [options]",
+      "Usage: plugin-npm-prepared-release.mjs <seal|load|consume|authorize|registry> [options]",
     );
   }
 }

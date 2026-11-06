@@ -1,11 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import { captureSqliteSchemaFacts } from "../infra/sqlite-schema-admission.js";
+import { replaceSqliteTableDefinition } from "../infra/sqlite-schema-catalog.js";
 import { parseSqliteTableDefinition } from "../infra/sqlite-schema-contract-assembly.js";
-import {
-  extractSqliteTableSchema,
-  normalizeSqlWhitespace,
-  quoteSqliteIdentifier,
-} from "../infra/sqlite-schema-sql.js";
+import { extractSqliteTableSchema, normalizeSqlWhitespace } from "../infra/sqlite-schema-sql.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 
 /** Historical schema witnesses keep the pre-navigation payload constraint. */
@@ -32,7 +29,7 @@ export function agentColdNavigationPostgresMigration(schema: string): string {
     ALTER TABLE "transcript_events" ADD CONSTRAINT "transcript_events_check" ${constraint.trim().replace(/,$/u, "")};`;
 }
 
-/** The schema owner holds the transaction with FK enforcement disabled for this table rebuild. */
+/** The schema owner holds the migration transaction and exclusive maintenance custody. */
 export function migrateAgentColdNavigationInTransaction(database: DatabaseSync): void {
   const table = "transcript_events";
   const schema = captureSqliteSchemaFacts(database);
@@ -56,25 +53,13 @@ export function migrateAgentColdNavigationInTransaction(database: DatabaseSync):
   if (!definition.includes(oldCheck)) {
     throw new Error("Cold navigation migration cannot identify the prior payload constraint");
   }
-  const temporary = "transcript_events_cold_navigation_migration";
-  const columns = [...parseSqliteTableDefinition(source, table).columns.keys()]
-    .map(quoteSqliteIdentifier)
-    .join(", ");
+  // Match the stored SQL produced by the original CREATE/copy/RENAME migration.
   const target = definition
     .replace(
       /^CREATE TABLE (?:IF NOT EXISTS )?(?:"transcript_events"|transcript_events)/u,
-      `CREATE TABLE ${temporary}`,
+      'CREATE TABLE "transcript_events"',
     )
     .replace(oldCheck, nextCheck);
-  // sqlite-allow-raw: Structural migration preserves native rowids and the admitted table definition.
-  database.exec(`${target};
-    INSERT INTO ${temporary} (rowid, ${columns}) SELECT rowid, ${columns} FROM transcript_events;
-    DROP TABLE transcript_events;
-    ALTER TABLE ${temporary} RENAME TO transcript_events;`);
-  for (const object of [...schema.indexDefinitions.values(), ...schema.triggers.values()]) {
-    if (object.table === table && typeof object.sql === "string") {
-      // sqlite-allow-raw: Replay only the admitted table's own index/trigger definitions.
-      database.exec(object.sql);
-    }
-  }
+  // Every existing row satisfies the stricter old CHECK; only the catalog needs changing.
+  replaceSqliteTableDefinition(database, table, target);
 }

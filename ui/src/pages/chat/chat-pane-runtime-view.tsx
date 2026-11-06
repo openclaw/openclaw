@@ -16,6 +16,7 @@ import {
   availableLinkPreviewReaders,
 } from "../../app/link-reader-routing.ts";
 import { nativeGatewaysCapability } from "../../app/native-gateways.runtime.ts";
+import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { isChatControlCommand } from "../../lib/chat/commands.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
@@ -40,6 +41,9 @@ import { installChatComposerPickerDismissal } from "./components/chat-picker-ove
 import { sessionWorkspaceForHost } from "./components/chat-session-workspace-state.ts";
 import { activeQueuedMessageEdit, subscribeQueuedMessageEdit } from "./queued-message-edit.ts";
 import { notifyRenderLifecycleForTest } from "./render-lifecycle.ts";
+import { readChatSessionSnapshot } from "./session-message-cache.ts";
+import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
+import { waitForPrewarmedChatSnapshot } from "./session-snapshot-store.ts";
 
 const ChatComposerCapabilityDialogs = lazy(() => import("./chat-composer-capability-host.tsx"), {
   export: "ChatComposerCapabilityDialogs",
@@ -118,7 +122,27 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
   };
 
   onSettled(() => {
-    setReady(true);
+    const gateway = runtime.context.gateway;
+    const pendingSnapshot = waitForPrewarmedChatSnapshot(
+      resolveChatSnapshotKey(
+        {
+          settings: gateway.connection,
+          client: gateway.snapshot.client,
+          hello: gateway.snapshot.hello,
+          agentsList: runtime.context.agents.state.agentsList,
+        },
+        { sessionKey: runtime.sessionKey },
+      ),
+    );
+    if (pendingSnapshot) {
+      void pendingSnapshot.then(() => {
+        if (!disposed) {
+          setReady(true);
+        }
+      });
+    } else {
+      setReady(true);
+    }
   });
   onCleanup(() => {
     disposed = true;
@@ -178,6 +202,13 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     const theme = projectTheme(context.theme);
     // Startup attaches one host for this mounted pane's lifetime.
     const state = runtime.state;
+    // Snapshot admission is fixed for this pane; live refill must not turn a cold load warm.
+    const initialCachedSession = Boolean(
+      state &&
+      readChatSessionSnapshot(state.chatMessagesBySession, state, {
+        sessionKey: state.sessionKey,
+      }),
+    );
     const realtime = createMemo(() => {
       const owner = runtime.state?.realtimeTalk;
       return (
@@ -339,6 +370,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     // Importing its renderer here makes the optional runtime a required boot dependency.
     return (
       <openclaw-link-reader-hovercard-provider
+        data-cached-session={initialCachedSession ? "true" : "false"}
         prop:client={
           gateway.read().snapshot.phase === "connected" ? gateway.read().snapshot.client : null
         }
@@ -381,7 +413,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
   }
 
   return (
-    <Show when={ready()}>
+    <Show when={ready()} fallback={<LoadingState route composer={runtime.ownsRouteComposer} />}>
       <MountedPane />
     </Show>
   );

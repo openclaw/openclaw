@@ -12,7 +12,6 @@ describe("shared native contract fixture CI scope", () => {
       runAndroid: true,
       runWindows: false,
       runSkillsPython: false,
-      runChangedSmoke: false,
       runControlUiI18n: false,
       runUiTests: false,
     });

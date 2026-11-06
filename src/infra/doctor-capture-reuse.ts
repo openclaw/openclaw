@@ -9,7 +9,7 @@ import {
 import { createConfigIO } from "../config/io.factory.js";
 import { resolveConfigPath } from "../config/paths.js";
 import type { PluginDoctorMigrationBackupWarning } from "../plugins/doctor-contract-module.js";
-import { preparePluginDoctorMigrationBackupResources } from "../plugins/doctor-contract-registry.js";
+import { preparePluginDoctorMigrationBackupResources } from "../plugins/doctor-contract-preparation.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import {
   withArtifactPreservingStateReads,
@@ -88,6 +88,19 @@ export async function findReusableDoctorCapture(
       const source = await safeRoot(directory, { symlinks: "reject", hardlinks: "reject" });
       const raw = await source.readText("manifest.json", { maxBytes: 8 * 1024 * 1024 });
       const preview = parseUpdateRecoveryBackupManifest(raw);
+      // This is only an early rejection. A chosen capture still goes through
+      // the verified reader and current-source comparison below.
+      if (
+        preview.runId !== path.basename(directory) ||
+        preview.generation?.kind !== "baseline" ||
+        preview.installRoot !== path.resolve(params.installRoot) ||
+        preview.stateDir !== params.stateDir ||
+        preview.configPath !== canonicalEntryPath(resolveConfigPath(params.env)) ||
+        preview.excludedRoots.length > 0 ||
+        (preview.warnings?.length ?? 0) > 0
+      ) {
+        return undefined;
+      }
       if (preview.entries.length > MAX_REUSE_ENTRIES) {
         return undefined;
       }
@@ -200,6 +213,7 @@ async function compareCurrentSources(
         env: params.env,
         warnings,
         requireLocalResources: true,
+        assertCurrent: check,
         signal: params.signal,
       }),
     { env: params.env, signal: params.signal },

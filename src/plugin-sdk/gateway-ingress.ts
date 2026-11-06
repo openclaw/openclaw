@@ -10,6 +10,7 @@ export type {
   GatewayIngressMessage,
   GatewayIngressPrincipal,
   GatewayIngressPrincipalOptionsV1,
+  GatewayIngressPrincipalRecovery,
   GatewayIngressPrincipalBindingV1,
   GatewayIngressRequestOptionsV1,
   GatewayIngressSocketV1,

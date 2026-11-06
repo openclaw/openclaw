@@ -1,6 +1,10 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { onSettled, Repeat, Show } from "solid-js";
-import { bootComposerElement, settleBootComposer } from "../../app/boot-composer.ts";
+import {
+  bootComposerElement,
+  settleBootComposer,
+  snapshotBootComposerScroll,
+} from "../../app/boot-composer.ts";
 import { beginNativeWindowDrag } from "../../app/native-window-drag.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 
@@ -8,7 +12,12 @@ import { t } from "../../lib/reactive/i18n.ts";
 // composer slot, so typing continues across frames until the chat pane adopts it.
 function BootComposer() {
   const textarea = bootComposerElement();
-  onSettled(settleBootComposer);
+  // JSX moves the existing node before the old frame's cleanup can capture it.
+  snapshotBootComposerScroll();
+  onSettled(() => {
+    settleBootComposer();
+    return snapshotBootComposerScroll;
+  });
   return (
     <div
       class={["loading-skeleton__composer", { skeleton: !textarea }]}

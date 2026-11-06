@@ -641,14 +641,18 @@ async function closeGatewayResources(
                 await measureCloseStep("incognito-sessions", () =>
                   memorySessionActorOwners.reset(),
                 );
-                // Owned process trees get their normal TERM window before shared state retires.
-                await measureCloseStep(
+                const supervisorFailure = await measureCloseStep(
                   "process-supervisor",
-                  shutdownProcessSupervisor,
+                  () => shutdownProcessSupervisor().catch((error: unknown) => ({ error })),
                   GRACEFUL_CANCEL_TIMEOUT_MS + 1_000,
                 );
+                // A settled failure has joined owned runs; failed out-of-process trees own
+                // their own connections and leases. Pending cleanup still retains our handles.
                 // Releasing agent leases still writes shared state; keep its owner alive until then.
                 await measureCloseStep("agent-databases", closeOpenClawAgentDatabasesAsync);
+                if (supervisorFailure) {
+                  throw supervisorFailure.error;
+                }
                 await measureCloseStep("debug-proxy", () =>
                   finalizeActiveDebugProxyCaptures().catch(recordResourceCleanupFailure),
                 );

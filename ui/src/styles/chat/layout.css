@@ -243,6 +243,13 @@ openclaw-pending-session-create {
   color: var(--muted);
 }
 
+/* Search ranges only span .chat-text; keep browser-find colors without making
+   unrelated UI elements participate in highlight matching. */
+.chat-text::highlight(openclaw-chat-search) {
+  background-color: Mark;
+  color: MarkText;
+}
+
 .chat-workspace-conflict-notice,
 .chat-cloud-disk-space-notice {
   flex: 0 0 auto;
@@ -324,7 +331,8 @@ openclaw-pending-session-create {
   corner-shape: superellipse(1.5);
 }
 
-:is(.chat-composer-neighbor-card, .session-suggestion) {
+.chat-composer-neighbor-card,
+.session-suggestion {
   padding: 10px 12px;
 }
 
@@ -432,6 +440,12 @@ openclaw-pending-session-create {
   max-width: min(34rem, calc(100% - 104px));
   transform: translateX(-50%);
   pointer-events: none;
+}
+
+/* Clear the floating connection indicator without extending the bounded gutter. */
+.sidebar-region:has(> .sidebar-region__header .chat-pane__connection)
+  :is(.chat-gutter-stack, .chat-main__conversation-column > .chat-topbar-notices) {
+  padding-top: 38px;
 }
 
 .chat-topbar-notices:empty {
@@ -621,8 +635,8 @@ openclaw-pending-session-create {
 }
 
 .chat-virtual-block {
-  /* The outer extent owns scroll height. This positioned row window must not
-     contribute a second changing box when saved rows become live rows. */
+  /* Keep the row window in local coordinates, even near a long transcript's
+     tail. The outer extent owns scroll height; parked rows have no layout. */
   contain: size;
   position: absolute;
   top: 0;
@@ -631,21 +645,15 @@ openclaw-pending-session-create {
 }
 
 /* Browser flow preserves adjacency even when smooth scrolling skips a row's
-   measurement. flow-root includes child margins in each measured row. */
+   measurement. flow-root includes child margins in each measured row.
+   The virtualizer bounds mounted rows, so overscan rows always lay out: a
+   skipped (content-visibility: auto) row kept its estimate until it reached
+   the viewport, then pushed the messages being read as it rendered. */
 .chat-virtual-row {
   position: relative;
   display: flow-root;
   width: 100%;
-  content-visibility: auto;
-}
-
-@media (min-width: 769px) {
-  .chat-virtual-row {
-    /* The virtualizer bounds mounted rows. Wide rows pay for WebKit's automatic
-       content skipping; compact rows retain it for steadier frame delivery. */
-    content-visibility: visible;
-    contain: content;
-  }
+  contain: content;
 }
 
 /* Small notice rows must enter at their real height, not the virtual estimate. */
@@ -661,7 +669,7 @@ openclaw-pending-session-create {
 }
 
 /* Message jumps need real mounted-row sizes before their target settles. */
-.chat-thread-inner[data-measuring-rows] .chat-virtual-row {
+.chat-thread-inner[data-measuring-rows] .chat-virtual-row:not([data-prepared-row]) {
   content-visibility: visible;
   contain: none;
 }
@@ -726,7 +734,6 @@ openclaw-pending-session-create {
 
 /* Included in the transcript virtualizer's header margin; keep this height exact. */
 .chat-pending-inputs--history {
-  box-sizing: border-box;
   overflow: hidden;
   height: 44px;
   flex-wrap: nowrap;
@@ -957,7 +964,6 @@ openclaw-pending-session-create {
   color: inherit;
   list-style: none;
   user-select: none;
-  animation: fade-in 0.2s var(--ease-out);
   transition:
     color 150ms ease-out,
     background 150ms ease-out;
@@ -1355,6 +1361,10 @@ openclaw-chat-video-player {
   background: var(--primary-hover);
 }
 
+.chat-audio-player__toggle:active {
+  background: var(--primary-active);
+}
+
 .chat-audio-player__toggle:focus-visible,
 .chat-audio-player__volume:focus-visible {
   outline: 2px solid var(--ring);
@@ -1554,10 +1564,10 @@ openclaw-chat-video-player {
   position: fixed;
   z-index: 9999;
   padding: var(--menu-padding);
-  border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
+  background: var(--menu-surface);
+  box-shadow: var(--menu-shadow);
+  backdrop-filter: var(--menu-backdrop);
 }
 
 .chat-reply-context-menu {
@@ -1577,9 +1587,9 @@ openclaw-chat-video-player {
 }
 
 .chat-reply-context-menu button {
-  gap: 8px;
+  gap: 6px;
   width: 100%;
-  padding: 8px 12px;
+  padding: 5px 8px;
   text-align: left;
 }
 
@@ -1742,7 +1752,7 @@ openclaw-chat-video-player {
   padding: 14px 16px 17px;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
-  border-radius: 16px;
+  border-radius: var(--radius-xl);
   background: var(--task-suggestion-card-bg);
   user-select: text;
   box-shadow:
@@ -1807,7 +1817,7 @@ openclaw-chat-video-player {
 .task-suggestion__position {
   flex: 0 0 auto;
   padding: 2px 6px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--task-suggestion-path-bg);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0;
@@ -1826,7 +1836,7 @@ openclaw-chat-video-player {
   padding: 0;
   place-items: center;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
   cursor: var(--cursor-action);
@@ -1961,7 +1971,7 @@ openclaw-chat-video-player {
   margin-top: -5px;
   padding: 12px 13px;
   overflow: auto;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: var(--task-suggestion-prompt-bg);
 }
 
@@ -1980,7 +1990,7 @@ openclaw-chat-video-player {
   min-width: 0;
   padding: 8px 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--panel);
   color: var(--text);
   font: inherit;
@@ -2211,7 +2221,7 @@ button.chat-pr__diff {
   gap: 5px;
   padding: 1px 8px;
   border: 1px solid color-mix(in srgb, currentColor 27%, transparent);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, currentColor 12%, transparent);
   cursor: var(--cursor-action);
   font-size: 12px;
@@ -2256,7 +2266,7 @@ button.chat-pr__diff {
   overscroll-behavior: contain;
   padding: 12px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--menu-radius);
   background: var(--panel);
   box-shadow: var(--shadow-md);
   color: var(--text);
@@ -2393,7 +2403,7 @@ button.chat-pr__diff {
   flex: 0 0 auto;
   padding: 4px 8px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text);
   cursor: var(--cursor-action);
@@ -2931,7 +2941,7 @@ openclaw-chat-ci-details {
   max-width: min(100%, 780px);
   padding: 8px 10px;
   border: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--bg) 82%, transparent);
 }
 

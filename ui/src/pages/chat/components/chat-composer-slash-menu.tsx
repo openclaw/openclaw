@@ -5,7 +5,6 @@ import {
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
-import { warmWhenIdle } from "../../../lib/idle-warmup.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 import { ComposerMenu, ComposerMenuLoadingRows } from "./chat-composer-menu.tsx";
@@ -25,7 +24,6 @@ const SlashMenuOptions = lazy(() => import("./chat-composer-slash-menu-options.t
 const SlashArgumentOptions = lazy(() => import("./chat-composer-slash-menu-options.tsx"), {
   export: "SlashArgumentOptions",
 });
-warmWhenIdle(SlashMenuOptions.preload, SlashArgumentOptions.preload);
 
 export function SlashMenu(props: { menu: SlashMenuState; host: SlashMenuHost; draft: string }) {
   const state = () => props.menu.state;

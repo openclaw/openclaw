@@ -529,18 +529,6 @@ jobs:
             Write-Warning "Failed to apply Defender exclusions, continuing. $($_.Exception.Message)"
           }
 
-      - &windows_node
-        name: Setup Node.js
-        if: ${{ inputs.run_windows_ci || inputs.installed_startup_package != '' || inputs.run_private_node_provisioning || inputs.windows_ci_replay != '' }}
-        shell: bash
-        env:
-          NODE_OPTIONS: ${{ inputs.windows_ci_replay != '' && '--max-old-space-size=8192' || env.NODE_OPTIONS }}
-          REQUESTED_NODE_VERSION: ${{ inputs.windows_ci_replay != '' && env.OPENCLAW_WINDOWS_REPLAY_NODE_VERSION || inputs.installed_startup_package != '' && inputs.startup_node_version || '24.22.1' }}
-        run: |
-          set -euo pipefail
-          source .github/actions/setup-pnpm-store-cache/ensure-node.sh
-          openclaw_ensure_node "$REQUESTED_NODE_VERSION"
-
       - &windows_pnpm
         name: Setup pnpm
         id: setup_pnpm
@@ -975,7 +963,6 @@ jobs:
 
       - *windows_checkout
       - *windows_defender
-      - *windows_node
       - *windows_pnpm
       - *windows_versions
       - *windows_node_path

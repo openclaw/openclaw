@@ -19,6 +19,13 @@ export function sessionMutationForbiddenError(
   return new SessionMutationAuthorizationChangedError(errorShape(ErrorCodes.FORBIDDEN, message));
 }
 
+/** Read-only consumers may retry with fresh workspace authority; mutations must not replay. */
+export class SessionFileWorkspaceChangedError extends SessionMutationAuthorizationChangedError {
+  constructor() {
+    super(errorShape(ErrorCodes.FORBIDDEN, "Session workspace changed during file access"));
+  }
+}
+
 export class SessionSharingProfileFactsChangedError extends SessionMutationAuthorizationChangedError {
   readonly readSource: () => OpenClawStateDatabaseOptions;
 

@@ -3,7 +3,7 @@ import { withCoreCanvasNodeCapability } from "../canvas/constants.js";
 import { validateConfiguredBindings } from "../channels/plugins/configured-binding-registry.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugin-metadata.js";
-import { prepareDecisionProviderReload } from "../decisions/runtime.js";
+import { prepareDecisionProviderReload } from "../decisions/provider-reload.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { prepareGatewayPluginMetadataSnapshotPublication } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-gateway.types.js";
@@ -107,6 +107,7 @@ export async function reloadGatewayPlugins(
   let previousStopStarted = false;
   let previousHooksStopped = false;
   let previousCleanupFailed = false;
+  let runtimeRestorationFailed = false;
   let overlap = false;
   let candidateServices: PluginServicesHandle | undefined;
   let loaded: Awaited<ReturnType<typeof PluginBootstrap.prepareGatewayPluginLoad>> | undefined;
@@ -230,7 +231,7 @@ export async function reloadGatewayPlugins(
           pluginLookUpTable: lookup,
           pluginMetadataSnapshot: nextMetadata,
           replacePluginIds,
-          expectedSourceDigests: params.pluginLifecycle?.expectedSourceDigests,
+          pluginLifecycle: params.pluginLifecycle,
           prepareRegistrationFailureCleanup: prepareRegistrationFailureCleanup(params.nextConfig),
           env: params.env,
         };
@@ -693,6 +694,7 @@ export async function reloadGatewayPlugins(
             try {
               await rollbackConfigEffects?.();
             } catch (rollbackError) {
+              runtimeRestorationFailed = true;
               facts.restored = false;
               onCleanupFailure("Plugin runtime rollback could not republish the model runtime")(
                 rollbackError,
@@ -712,6 +714,7 @@ export async function reloadGatewayPlugins(
             pluginIds: [...changedPluginIds].toSorted(),
             phase: facts.phase,
             committed: facts.committed,
+            ...(runtimeRestorationFailed ? { runtimeRestorationFailed: true } : {}),
           },
           { cause: failure },
         );

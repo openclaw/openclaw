@@ -518,12 +518,11 @@ export function publicConfigIssueMessage(issue: { path: string; message: string 
     return issue.message;
   }
   if (/^(?:Unrecognized keys?: |unrecognized key )/u.test(issue.message)) {
+    // Retired schema keys are public vocabulary; naming them tells the user which repair runs.
     const retired =
-      issue.path === "skills.workshop" &&
-      /^(?:Unrecognized key: "approvalPolicy"|unrecognized key approvalPolicy)$/u.test(
-        issue.message,
-      );
-    return `unrecognized key ${retired ? "approvalPolicy" : "<key>"}`;
+      issue.path === "skills" &&
+      /^(?:Unrecognized key: "workshop"|unrecognized key workshop)$/u.test(issue.message);
+    return `unrecognized key ${retired ? "workshop" : "<key>"}`;
   }
   return "Invalid configuration field";
 }

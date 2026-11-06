@@ -59,15 +59,6 @@ export async function hydrateCommitObjects(
     if (!remote) {
       throw missingObjectsError(commit, missing.length);
     }
-    // A promisor remote does not make missing locally authored objects promised.
-    await requireGit(
-      repoRoot,
-      ["rev-list", "--objects", "--quiet", "--missing=allow-promisor", "--max-count=1", commit],
-      {
-        ...options,
-        env: { ...options.env, GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
-      },
-    );
     // Hydrate once under the checkout budget; objectsize must never fetch one blob at a time.
     // Shared commits do not prove that their promised blobs are present.
     // --refetch hints auto-maintenance to repack (gc.autoPackLimit=1); that repack must

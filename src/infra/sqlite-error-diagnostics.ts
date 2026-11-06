@@ -57,10 +57,13 @@ export function isStateDatabaseAdmissionClosedError(error: unknown): boolean {
 /** These outcomes must leave tool execution without becoming model-visible tool errors. */
 export function isLocalStorageOutcomeError(error: unknown): boolean {
   // Presentation can select a primary failure, but every uncertain write still fences continuation.
-  if (hasSqliteWorkerOutcomeUnknown(error) || isStateDatabaseAdmissionClosedError(error)) {
+  if (hasSqliteWorkerOutcomeUnknown(error)) {
     return true;
   }
   try {
+    if (isStateDatabaseAdmissionClosedError(error)) {
+      return true;
+    }
     const failure = classifyGatewayStorageFailure(error);
     return failure === "session_actor_reconciliation" || failure === "57014";
   } catch {
@@ -273,6 +276,12 @@ export function formatSqliteReadOnlyInspectionFailure(error: unknown): string {
 
 export function formatSqliteErrorCodeSuffix(error: unknown): string {
   return readSqliteErrorDetails(error).suffix;
+}
+
+export function readSqliteInspectionOperation(
+  error: unknown,
+): SqliteInspectionOperation | undefined {
+  return readSqliteErrorDetails(error).operation;
 }
 
 function readSqliteErrorDetails(error: unknown) {

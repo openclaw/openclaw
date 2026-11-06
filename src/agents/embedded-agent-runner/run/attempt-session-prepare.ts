@@ -55,7 +55,10 @@ import {
   type SystemPromptUpdatePreparation,
 } from "./attempt-permission-prompt.js";
 import { buildAfterTurnRuntimeContext } from "./attempt-prompt-helpers.js";
-import type { EmbeddedAttemptSessionPreparationInput } from "./attempt-session-prepare-input.js";
+import type {
+  EmbeddedAttemptSessionPreparationInput,
+  SessionBoundaryAttempt,
+} from "./attempt-session-prepare-input.js";
 import { openSessionAfterProjectionRecovery } from "./attempt-session-projection-recovery.js";
 import { resolveExistingAttemptTranscriptState } from "./attempt-transcript-helpers.js";
 import type { EmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
@@ -274,21 +277,6 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   };
 }
 
-type SessionBoundaryAttempt = Pick<
-  EmbeddedRunAttemptParams,
-  | "config"
-  | "inputProvenance"
-  | "onUserMessagePersistenceInvalidated"
-  | "operation"
-  | "prompt"
-  | "promptCacheKey"
-  | "sessionId"
-  | "sessionKey"
-  | "skipPreparedUserTurnMessage"
-  | "suppressNextUserMessagePersistence"
-  | "userTurnTranscriptRecorder"
->;
-
 type CurrentUserTimestampOverride = NonNullable<LlmBoundaryOptions["currentUserTimestampOverride"]>;
 
 export async function prepareEmbeddedAttemptSessionBoundary(input: {
@@ -357,6 +345,8 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
           sessionManager,
           prompt: attempt.prompt,
           preserveLeaf: attempt.skipPreparedUserTurnMessage === true,
+          currentTurnPersisted: attempt.userTurnTranscriptRecorder?.hasPersisted() === true,
+          currentUserIdempotencyKey: currentUserTurnMessage?.idempotencyKey,
         });
         const reconciledCurrentUser = reconcilePrePersistedCurrentUserTurn({
           activeSession,
@@ -587,10 +577,9 @@ export async function prepareEmbeddedAttemptSessionManager(
       ? await openSessionAfterProjectionRecovery({
           open: openSessionManager,
           target: input.sessionTarget,
-          timeoutMs: attempt.timeoutMs,
+          attempt,
           signal: openSignal,
           assertCurrent: input.assertCurrent,
-          replyOperation: attempt.replyOperation,
         })
       : undefined;
   const unguardedSessionManager =

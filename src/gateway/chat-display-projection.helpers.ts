@@ -153,7 +153,7 @@ export function truncateChatHistoryText(
   }
   const prefix = truncateUtf16Safe(text, limit);
   return {
-    text: preserveExactPrefix ? prefix : `${prefix}\n...(truncated)...`,
+    text: preserveExactPrefix || !prefix.trim() ? prefix : `${prefix}\n...(truncated)...`,
     truncated: true,
   };
 }

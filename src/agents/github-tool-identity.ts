@@ -547,6 +547,7 @@ export async function prepareGitHubPublicationOptionsIdentity(
   }
   return {
     source: prepared.source,
+    host: prepared.host,
     account: prepared.account,
     ...(stale || nativeStale ? { stale: true as const } : {}),
   };

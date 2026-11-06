@@ -160,8 +160,16 @@ describe("tree row snapshots", () => {
       }
     }
     expect(outcomes).toEqual([
-      [settledChild, { ...settledParent, activitySummary: summary }, settledGrandparent],
-      [settledChild, { ...settledParent, activitySummary: summary }, settledGrandparent],
+      [
+        settledChild,
+        { ...settledParent, activitySummary: summary, totalTokensFresh: false },
+        { ...settledGrandparent, totalTokensFresh: false },
+      ],
+      [
+        settledChild,
+        { ...settledParent, activitySummary: summary, totalTokensFresh: false },
+        { ...settledGrandparent, totalTokensFresh: false },
+      ],
     ]);
   });
 

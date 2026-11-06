@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { writeSync } from "node:fs";
 import fs from "node:fs/promises";
 import { Session } from "node:inspector/promises";
 import path from "node:path";
@@ -12,7 +11,7 @@ import { createSyntheticSourceInfo } from "../../src/skills/loading/skill-contra
 import { prepareSkillResourceDelivery } from "../../src/skills/runtime/resources.js";
 import type { SkillSnapshot } from "../../src/skills/types.js";
 import { startGatewayBenchDiagnostics } from "../lib/gateway-bench-diagnostics.ts";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 // Metadata-shaped synthetic trees, never copies of operator instructions or scripts.
@@ -42,11 +41,6 @@ assert(["delivery", "transfer"].includes(values.mode));
 assert(["ascii", "unicode", "binary"].includes(values.content));
 const directory = path.resolve(values["state-dir"]);
 const profilePath = path.join(directory, "skill-resource-profile");
-const marker = (phase: string) =>
-  writeSync(
-    1,
-    `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-  );
 const workspace = path.join(directory, "workspace");
 const operations = Number(values.operations);
 const concurrency = Number(values.concurrency);
@@ -172,11 +166,11 @@ for (const item of retained) {
 }
 retained = [];
 if (values["gc-log"]) {
-  marker("identify-start");
+  writeGatewayGcTraceMarker("identify-start", profilePath);
 }
 globalThis.gc?.();
 if (values["gc-log"]) {
-  marker("identify-stop");
+  writeGatewayGcTraceMarker("identify-stop", profilePath);
 }
 await delay(25);
 globalThis.gc?.();
@@ -274,7 +268,7 @@ if (values.allocations) {
 }
 const stopDiagnostics = startGatewayBenchDiagnostics();
 if (values["gc-log"]) {
-  marker("heap-start");
+  writeGatewayGcTraceMarker("heap-start", profilePath);
 }
 const cpuStart = process.cpuUsage();
 const start = performance.now();
@@ -284,7 +278,7 @@ for (let count = 0; count < operations; count += concurrency) {
 const elapsedMs = performance.now() - start;
 const cpu = process.cpuUsage(cpuStart);
 if (values["gc-log"]) {
-  marker("heap-stop");
+  writeGatewayGcTraceMarker("heap-stop", profilePath);
 }
 const diagnostics = stopDiagnostics();
 let allocationBytes: number | null = null;

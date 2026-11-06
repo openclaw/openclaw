@@ -10,6 +10,7 @@ import { currentDisplayRuntimeConfig } from "../lib/config/config-state-model.ts
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
+import { markdownTemplatePackage } from "./markdown-template-links.ts";
 import {
   markdownInlineChildren,
   replaceMarkdownTextMatches,
@@ -105,7 +106,15 @@ export function installMarkdownSessionLinks(markdownParser: MarkdownIt): void {
           continue;
         }
         if (token.type === "link_open") {
-          decorate(token, String(token.attrGet("href") ?? ""));
+          const href = String(token.attrGet("href") ?? "");
+          const template = markdownTemplatePackage(href);
+          if (template) {
+            token.attrJoin("class", "markdown-template-link");
+            token.attrSet("data-template-package", template);
+            token.attrSet("aria-haspopup", "dialog");
+          } else {
+            decorate(token, href);
+          }
           linkDepth++;
         } else if (token.type === "link_close") {
           linkDepth--;

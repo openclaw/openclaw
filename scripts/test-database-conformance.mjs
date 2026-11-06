@@ -3,7 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { parseArgs } from "node:util";
+import { parseArgs, promisify } from "node:util";
 import { listDirectoryTreeStrictSync } from "../src/infra/directory-walk.ts";
 import {
   assignPostgresConformanceShards,
@@ -58,10 +58,12 @@ let targets = explicitTargets
   : [
       "extensions/workboard",
       "extensions/logbook/src/postgres-store.test.ts",
+      "extensions/logbook/src/store-transport.postgres.test.ts",
       "extensions/clickclack/src/discussions/revoked-channel-store.postgres.test.ts",
       "extensions/imessage/src/monitor/recovery-cursor.postgres.test.ts",
       "extensions/matrix/src/matrix/account-state.postgres.test.ts",
       "extensions/team-reports/src/postgres-store.test.ts",
+      "extensions/team-reports/src/store-recovery.postgres.test.ts",
       "src/infra/postgres-sync",
       ...listDirectoryTreeStrictSync(
         fileURLToPath(new URL("../src/infra/database-engine/", import.meta.url)),
@@ -70,20 +72,31 @@ let targets = explicitTargets
         .filter((file) => file.endsWith(".test.ts"))
         .map((file) => `src/infra/database-engine/${file.replaceAll("\\", "/")}`)
         .toSorted(),
+      "src/agents/agent-deletion-recovery-hold.postgres.test.ts",
+      "src/agents/worktrees/capacity.postgres.test.ts",
+      "src/commands/database-prepare-state.postgres.test.ts",
+      "src/commands/doctor/cron/legacy-repair.postgres.test.ts",
       "src/commands/doctor-database-diagnostics.postgres.test.ts",
+      "src/commands/doctor/auth-alias-migration.postgres.test.ts",
       "src/commands/startup-client-credentials.postgres.test.ts",
+      "src/config/sessions/session-cold-storage-selection.postgres.test.ts",
       "src/config/sessions/session-accessor.sqlite-lifecycle-artifacts.postgres.test.ts",
+      "src/config/sessions/session-accessor.sqlite-maintenance-age.postgres.test.ts",
       "src/config/sessions/session-accessor.sqlite-read-hold.postgres.test.ts",
       "src/config/sessions/session-turn-resident.postgres.test.ts",
       "src/config/sessions/session-turn-commit.postgres.test.ts",
       "src/infra/client-credential-migration.postgres.test.ts",
+      "src/infra/client-credential-startup.gateway.postgres.test.ts",
       "src/infra/state-migrations.plugin-doctor-context.postgres.test.ts",
       "src/infra/gateway-lock-recovery.postgres.test.ts",
       "src/infra/exec-approvals-native.test.ts",
       "src/infra/client-credential-update.test.ts",
       "src/infra/update-candidate-state.postgres.test.ts",
+      "src/infra/update-managed-service-handoff-engine.test.ts",
       "src/snapshot/postgres-generation.postgres.test.ts",
       "src/state/openclaw-state-db.postgres.test.ts",
+      "src/state/openclaw-state-db-open.postgres.test.ts",
+      "src/state/openclaw-agent-creation-operations-migration.postgres.test.ts",
       "src/state/openclaw-agent-db.postgres.test.ts",
       "src/state/openclaw-agent-doctor-media.postgres.test.ts",
       "src/state/openclaw-agent-db-engine.postgres.test.ts",
@@ -98,6 +111,7 @@ let targets = explicitTargets
       "extensions/memory-core/src/standing-intents.postgres.test.ts",
       "extensions/memory-core/src/memory-forget.postgres.test.ts",
       "src/gateway/server-database-engine.postgres.test.ts",
+      "src/gateway/server-handoff-sentinel.socket.postgres.test.ts",
       "src/transcripts/meeting-chronology.postgres.test.ts",
     ];
 if (shardCount) {
@@ -124,7 +138,9 @@ if (shardCount) {
   targets = targets.filter((target) => selected.has(target));
 }
 if (values.list) {
-  console.log(JSON.stringify(explicitTargets ? forwarded : [...targets, ...forwarded], null, 2));
+  await promisify(process.stdout.write.bind(process.stdout))(
+    `${JSON.stringify(explicitTargets ? forwarded : [...targets, ...forwarded], null, 2)}\n`,
+  );
   process.exit(0);
 }
 

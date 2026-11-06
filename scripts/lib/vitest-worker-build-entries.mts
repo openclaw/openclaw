@@ -226,6 +226,7 @@ export const preservedModuleBuildSources = [
   "src/cli/update-finalization-output.test-support.ts",
   "src/cli/program/register.maintenance.ts",
   "src/cli/one-shot-exit.ts",
+  "src/cli/cron-cli.ts",
   "src/cli/runtime-cleanup-scope.ts",
   "src/cli/runtime-cleanup.ts",
   "src/state/openclaw-state-db-cache.ts",
@@ -263,6 +264,7 @@ export const preservedModuleBuildSources = [
 
 // Source-relative script readers retain their exact input bytes in the prepared layout.
 export const preservedModuleBuildAssets = [
+  "scripts/e2e/lib/kitchen-sink-plugin/npm-version.txt",
   "test/fixtures/acp/owner-agent.mjs",
   "scripts/e2e/lib/upgrade-survivor/config-recipe/agents.json",
   "scripts/e2e/lib/upgrade-survivor/config-recipe/channels-discord.json",
@@ -283,6 +285,7 @@ export const preservedModuleBuildAssets = [
   "scripts/e2e/lib/upgrade-survivor/config-recipe/tools-tool-search.json",
   "scripts/e2e/parallels/parallels-exec.py",
   ".github/workflows/plugin-npm-release.yml",
+  "scripts/plugin-npm-release-admission.py",
   "scripts/lib/vitest-worker-bootstrap.mts",
   "scripts/lib/vitest-worker-descriptor.mts",
 ];

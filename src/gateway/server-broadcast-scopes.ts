@@ -35,6 +35,8 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "chat.side_result": [SESSION_READ_SCOPE],
   cron: [READ_SCOPE],
   "cron.inventory.changed": [READ_SCOPE],
+  "worktrees.branches.changed": [WRITE_SCOPE],
+  "projects.checkoutOptions.changed": [SESSION_READ_SCOPE],
   health: [],
   "exec.approval.requested": [APPROVALS_SCOPE],
   "exec.approval.resolved": [APPROVALS_SCOPE],
@@ -46,11 +48,11 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "openclaw.approval.requested": [APPROVALS_SCOPE],
   "openclaw.approval.resolved": [APPROVALS_SCOPE],
   // The frame cadence itself exposes person activity; match system-presence access.
-  presence: [READ_SCOPE],
+  presence: [SESSION_READ_SCOPE],
   shutdown: [],
   "gateway.suspension": [],
   tick: [],
-  "talk.event": [READ_SCOPE],
+  "talk.event": [READ_SCOPE, SESSION_READ_SCOPE],
   "talk.mode": [TALK_SCOPE],
   "talk.voice.change": [TALK_SCOPE],
   task: [READ_SCOPE],
@@ -116,6 +118,15 @@ export function isPlainEventPayload(payload: unknown): payload is Record<string,
   return (prototype === null || prototype === Object.prototype) && !("toJSON" in payload);
 }
 
+/** Realtime Talk stays operator-only; session readers receive only targeted dictation. */
+export function isTargetedTranscriptionEvent(payload: unknown, targeted: boolean): boolean {
+  return (
+    targeted &&
+    isPlainEventPayload(payload) &&
+    typeof Object.getOwnPropertyDescriptor(payload, "transcriptionSessionId")?.value === "string"
+  );
+}
+
 export function isSessionReadInvalidation(
   event: string,
   payload: unknown,
@@ -136,6 +147,18 @@ export function isSessionReadInvalidation(
           "value" in field &&
           ((key === "gatewayInstanceId" && typeof field.value === "string") ||
             (key === "revision" && Number.isSafeInteger(field.value) && field.value >= 0)),
+      )
+    );
+  }
+  if (event === "projects.checkoutOptions.changed") {
+    return (
+      targeted &&
+      Object.hasOwn(payload, "projectId") &&
+      fields.every(
+        ([key, field]) =>
+          "value" in field &&
+          ((key === "projectId" && typeof field.value === "string") ||
+            (key === "agentId" && (field.value === undefined || typeof field.value === "string"))),
       )
     );
   }
@@ -208,6 +231,8 @@ export function hasEventScope(
         (scope) =>
           operatorScopeSatisfied(scope, scopes) &&
           (scope !== SESSION_READ_SCOPE ||
+            // Presence carries no session content; its recipient projection filters rows.
+            event === "presence" ||
             operatorScopeSatisfied(READ_SCOPE, scopes) ||
             hasSessionReadContext?.() === true),
       ) ||

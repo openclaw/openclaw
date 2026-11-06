@@ -1,6 +1,5 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { racePromiseWithAbortSignal } from "@openclaw/retry";
 import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -26,6 +25,7 @@ export type PluginDoctorMigrationResourceCollectionParams = {
   warnings: PluginDoctorMigrationBackupWarning[];
   requireLocalResources?: boolean;
   manifestRegistry?: PluginManifestRegistry;
+  assertCurrent?: () => void;
   signal?: AbortSignal;
 };
 
@@ -33,6 +33,7 @@ export type PluginDoctorMigrationResourceCollectionParams = {
 export async function preparePluginDoctorMigrationResources(
   entries: readonly { pluginId: string; migration: PluginDoctorStateMigration }[],
   params: PluginDoctorMigrationResourceCollectionParams,
+  assertPreparationCurrent?: () => void,
 ) {
   const rehearsalRoot = resolveUpdateRehearsalRoot(params.env);
   const resources = new Map<string, PluginDoctorMigrationBackupResource>();
@@ -40,13 +41,14 @@ export async function preparePluginDoctorMigrationResources(
   const pluginResources = new Map<string, Set<string>>();
   for (const { pluginId, migration } of entries) {
     params.signal?.throwIfAborted();
+    params.assertCurrent?.();
+    assertPreparationCurrent?.();
     const notice = sqliteOnlyMigrationNotice(migration, params.config);
     if (notice) {
       notices.push(notice);
       continue;
     }
-    const collectBackupResources = migration.collectBackupResources;
-    if (collectBackupResources === undefined) {
+    if (migration.collectBackupResources === undefined) {
       if (!params.warnings.some((warning) => warning.pluginId === pluginId)) {
         params.warnings.push({
           kind: "undeclared-migration-resources",
@@ -56,31 +58,18 @@ export async function preparePluginDoctorMigrationResources(
       }
       continue;
     }
-    if (typeof collectBackupResources !== "function") {
-      throw new Error(`Invalid collectBackupResources from ${pluginId}/${migration.id}`);
-    }
-    // Inventory is read-only by contract. Stop observing a hung callback on
-    // cancellation, then let the enclosing snapshot owner close its readers.
-    // Never race a migration or the capture's filesystem writes this way.
-    const resolved: unknown = await racePromiseWithAbortSignal(
-      async () =>
-        collectBackupResources.call(migration, {
-          config: params.config,
-          env: params.env,
-          stateDir: params.stateDir,
-          serviceWorkspaceDir:
-            tryResolveConfiguredAgentWorkspaceDir(params.config, params.env) ??
-            resolveDefaultAgentWorkspaceDir(params.env),
-          ...(params.requireLocalResources ? { requireLocalResources: true } : {}),
-        }),
-      params.signal,
-      (signal) =>
-        new Error(
-          `Migration backup inventory cancelled for ${pluginId}/${migration.id}: ${signal.reason instanceof Error ? signal.reason.message : String(signal.reason)}`,
-          { cause: signal.reason },
-        ),
-    );
+    const resolved: unknown = await migration.collectBackupResources({
+      config: params.config,
+      env: params.env,
+      stateDir: params.stateDir,
+      serviceWorkspaceDir:
+        tryResolveConfiguredAgentWorkspaceDir(params.config, params.env) ??
+        resolveDefaultAgentWorkspaceDir(params.env),
+      ...(params.requireLocalResources ? { requireLocalResources: true } : {}),
+    });
     params.signal?.throwIfAborted();
+    params.assertCurrent?.();
+    assertPreparationCurrent?.();
     if (!Array.isArray(resolved)) {
       throw new Error(`Invalid migration backup inventory from ${pluginId}/${migration.id}`);
     }
@@ -121,6 +110,9 @@ export async function preparePluginDoctorMigrationResources(
     .filter((resource) => selectedPaths.has(resource.path))
     .toSorted((left, right) => left.path.localeCompare(right.path));
   const assertCurrent = () => {
+    // Collected facts outlive the preparation scope; caller and path authority remain live.
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     if (!rehearsalRoot) {
       return;
     }

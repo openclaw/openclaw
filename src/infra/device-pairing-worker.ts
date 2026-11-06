@@ -216,7 +216,7 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
         }
       }
     }
-  });
+  }, captured.type);
   const onAuthorityRefused = options.onAuthorityRefused;
   return onAuthorityRefused
     ? operation.catch((error: unknown) => {
@@ -241,6 +241,6 @@ export async function withCurrentDevicePairingSnapshot<T>(
     }
     const action = prepare(paired);
     return { value: action?.start() };
-  });
+  }, "devicePairing.list");
   return begun.value;
 }

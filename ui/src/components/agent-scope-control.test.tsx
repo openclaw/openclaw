@@ -5,6 +5,7 @@ import { expect, it, vi } from "vitest";
 import type { GatewayAgentRow } from "../api/types.ts";
 import type { AgentSelectionCapability } from "../app/agent-selection.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { AgentScopeControl } from "./agent-scope-control.tsx";
 import type { AgentSelectElement } from "./agent-select.tsx";
 
@@ -65,6 +66,10 @@ it.each([true, false])("routes selection with allowAll=%s", async (allowAll) => 
   });
   expect(values(select)).toEqual(allowAll ? ["", "main", "retired", "writer"] : ["main", "writer"]);
   if (allowAll) {
+    select?.querySelector<HTMLButtonElement>(".agent-select__trigger")!.click();
+    await waitForSolid(() =>
+      expect(select?.querySelector(".identity-avatar__text")).not.toBeNull(),
+    );
     expect(select?.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe("🦞");
     select?.onSelect("retired");
     select?.onSelect("");
@@ -136,6 +141,10 @@ it("skips unchanged scope inputs while keeping roster and selection changes live
   await update({
     agents: [{ id: "main", name: "Zebra", identity: { emoji: "🐙" } }, configuredAgents[1]!],
   });
+  select.querySelector<HTMLButtonElement>(".agent-select__trigger")!.click();
+  await waitForSolid(() =>
+    expect(select.querySelector('[value="main"] .identity-avatar__text')).not.toBeNull(),
+  );
   expect(
     select.querySelector('[value="main"] .identity-avatar__text')?.getAttribute("data-avatar"),
   ).toBe("🐙");

@@ -35,13 +35,7 @@ function sessionPage(face: BoardFace) {
     loader: (context: ApplicationContext, options) => {
       // Subscription acquisition owns errors and retries after this speculative load.
       void preloadSessionMessageSubscriptions().catch(() => undefined);
-      if (face === "dashboard") {
-        // Start both presentation boundaries together; their lazy views own load errors.
-        void import("./components/chat-sidebar-region.runtime.tsx").catch(() => undefined);
-        void import("../../components/board/board-view.tsx").catch(() => undefined);
-      }
-      const creation = context.chatSubmissions.creation;
-      if (creation && !creation.admitted) {
+      if (context.chatSubmissions.creating) {
         const mainKey = resolveUiConfiguredMainKey({
           agentsList: context.agents.state.agentsList,
           hello: context.gateway.snapshot.hello,
@@ -58,11 +52,12 @@ function sessionPage(face: BoardFace) {
             : target?.kind === "literal"
               ? target.sessionKey
               : undefined;
-        if (target?.namespace === face && sessionKey === creation.sessionKey) {
+        const creation = sessionKey ? context.chatSubmissions.creationFor(sessionKey) : undefined;
+        if (target?.namespace === face && creation && !creation.admitted) {
           options.signal.throwIfAborted();
           const result = {
             kind: "session" as const,
-            sessionKey,
+            sessionKey: creation.sessionKey,
             agentId: target.agentId,
             ...sessionRouteHints(options.location),
             face,
@@ -82,7 +77,19 @@ function sessionPage(face: BoardFace) {
         module.loadSessionPage(context, face, options),
       );
     },
-    component: () => import("./route-entry.ts"),
+    component: () => {
+      const entry = import("./route-entry.ts");
+      if (face === "dashboard") {
+        // Each rendered boundary owns readiness and errors; preparation never holds the route.
+        void import("./chat-pane-sidebar-view.tsx")
+          .then(({ ChatSidebarRegion }) => ChatSidebarRegion.preload())
+          .catch(() => undefined);
+        void import("./board-session-surface.tsx")
+          .then(({ BoardView }) => BoardView.preload())
+          .catch(() => undefined);
+      }
+      return entry;
+    },
   });
 }
 

@@ -4,7 +4,7 @@ import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { expectFocused, sidebarSession } from "./sidebar-contract.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "Persistent New conversation" });
+const suite = createControlUiE2eSuite({ name: "Persistent New session" });
 suite.define(() => {
   it("keeps creation first across views and collapse, then opens the same agent from the mobile drawer", async () => {
     await suite.withPage(
@@ -26,7 +26,7 @@ suite.define(() => {
           .filter({ hasText: "Design review" })
           .waitFor();
         const rail = page.locator("openclaw-app-sidebar .sidebar-rail");
-        const create = rail.getByRole("link", { name: "New conversation", exact: true });
+        const create = rail.getByRole("link", { name: "New session", exact: true });
         await create.waitFor();
         const initial = await create.boundingBox();
         const avatar = rail.locator(".sidebar-agent-card__main");

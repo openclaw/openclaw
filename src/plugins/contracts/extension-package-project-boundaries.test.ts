@@ -50,6 +50,8 @@ const MEMORY_HOST_SDK_EXPORTS = (
   .split(" ")
   .map((name) => `./${name}`);
 const MEMORY_CORE_BRIDGES = [
+  "embeddings-remote-client",
+  "embeddings-remote-provider",
   "embeddings.types",
   "error-utils",
   ..."agent auth config io kysely memory network paths session sqlite workspace"

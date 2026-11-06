@@ -7,6 +7,8 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/help
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { sessionManagerReadInitialContext } from "../../sessions/session-manager-current-turn.js";
+import { SessionManager } from "../../sessions/session-manager.js";
 import { SettingsManager } from "../../sessions/settings-manager.js";
 import { createPromptCacheRequestObserver } from "../prompt-cache-request-observer.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
@@ -155,6 +157,28 @@ it("publishes restored assistant history without rehashing it on later model req
     await observer.onModelRequest(model, { messages: [published] });
     expect(crypto.hash).not.toHaveBeenCalled();
   }
+});
+
+it("does not walk admitted history while sealing a new shallow-frozen reply", async () => {
+  const fixture = createFixture();
+  mocks.readEntry.mockResolvedValue(undefined);
+  const prefix = createAssistantOutput(model);
+  prefix.content = [{ type: "toolCall", id: "old", name: "read", arguments: { path: "old" } }];
+  const manager = SessionManager.inMemory();
+  await manager.appendMessageAsync(prefix);
+  const retained = await manager[sessionManagerReadInitialContext]();
+  const tail = Object.freeze({ ...prefix, content: [{ type: "text" as const, text: "new" }] });
+  fixture.messages.push(...retained.messages, tail);
+  const ownKeys = vi.spyOn(Reflect, "ownKeys");
+  await prepareEmbeddedAttemptHistory(fixture.input, fixture.assertActive);
+  const prefixWalks = ownKeys.mock.calls.filter(([value]) => value === prefix).length;
+  ownKeys.mockRestore();
+  expect(prefixWalks).toBe(0);
+  expect(fixture.agent.state.messages.at(-2)).toBe(prefix);
+  expect(fixture.agent.state.messages.at(-1)).toBe(tail);
+  expect(Reflect.set(prefix.content[0]!, "name", "changed")).toBe(false);
+  expect(() => tail.content.push({ type: "text", text: "changed" })).toThrow(TypeError);
+  expect(Reflect.set(tail.content[0]!, "text", "changed")).toBe(false);
 });
 
 it.each([

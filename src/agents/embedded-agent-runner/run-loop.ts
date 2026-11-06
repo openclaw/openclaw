@@ -56,12 +56,10 @@ import {
   requestSettledTurnFinalizationContext,
 } from "./run/settled-turn-finalization.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./run/terminal-outcome.js";
-import {
-  createTerminalToolPresentationTracker,
-  resolveEmbeddedRunTerminal,
-} from "./run/terminal-resolution.js";
+import { resolveEmbeddedRunTerminal } from "./run/terminal-resolution.js";
 import { createEmbeddedRunTerminalRetryState } from "./run/terminal-retry-state.js";
 import { resolveEmbeddedRunTerminalTimeout } from "./run/terminal-timeout.js";
+import { createTerminalToolPresentationTracker } from "./run/terminal-tool-presentation.js";
 import { createAgentTurnTaintState } from "./run/turn-taint-state.js";
 import type { EmbeddedAgentRunResult, TraceAttempt } from "./types.js";
 import { createUsageAccumulator } from "./usage-accumulator.js";
@@ -88,6 +86,7 @@ export async function runPreparedEmbeddedLoop(
       prepareEmbeddedRunRuntime({
         ...input,
         assertCurrent: input.laneController.throwIfAborted,
+        getAuthDeadline: input.laneController.getExecutionDeadline,
         hookContext: preReplyGeneration?.assertCurrent
           ? withClaimingHookAdmission(
               { ...hookCtx },

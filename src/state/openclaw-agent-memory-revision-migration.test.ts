@@ -16,9 +16,8 @@ const scope = [
   "memory_index_chunks",
   "memory_index_sources",
   "schema_meta",
+  "session_creation_operations",
   "session_transcript_cold_archive_chunks",
-  "sqlite_stat1",
-  "sqlite_stat4",
   "transcript_events",
 ];
 

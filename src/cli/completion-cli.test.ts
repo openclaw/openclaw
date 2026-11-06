@@ -20,6 +20,13 @@ import {
 import { registerModelsCli } from "./models-cli.js";
 
 const powershell = new PowerShellCompletionRunner();
+const powerShellQuotedChoices = [
+  ["Jane's", "Jane''s"],
+  ["Jane‘s", "Jane‘‘s"],
+  ["Jane’s", "Jane’’s"],
+  ["Jane‚s", "Jane‚‚s"],
+  ["Jane‛s", "Jane‛‛s"],
+] as const;
 const itUnix = it.skipIf(process.platform === "win32");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterAll(() => powershell.close());
@@ -330,6 +337,37 @@ ${cases
       ),
     ).toEqual(["'a*literal'"]);
   });
+
+  it.each(powerShellQuotedChoices)(
+    "escapes PowerShell literals containing %s",
+    (value, escaped) => {
+      const program = choiceProgram([value]);
+      program.command("group").command(value).alias(`alias-${value}`).option("--json");
+      const script = getCompletionScript("powershell", program);
+      expect(script).toContain(`@('${escaped}')`);
+      for (const name of [escaped, `alias-${escaped}`]) {
+        expect(script).toContain(`'group ${name}' {`);
+        expect(script).toContain(`if ($commandPath -eq 'group ${name}')`);
+      }
+    },
+  );
+
+  itWithPowerShell.each(powerShellQuotedChoices)(
+    "completes PowerShell choices and command paths containing %s",
+    async (value, escaped) => {
+      const program = choiceProgram([value]);
+      program.command("group").command(value).alias(`alias-${value}`).option("--json");
+      expect(await powershell.complete(program, "openclaw --value Ja")).toEqual([`'${escaped}'`]);
+      expect(await powershell.complete(program, "openclaw --value=Ja")).toEqual([
+        `--value='${escaped}'`,
+      ]);
+      for (const name of [escaped, `alias-${escaped}`]) {
+        expect(await powershell.complete(program, `openclaw group '${name}' --j`)).toEqual([
+          "--json",
+        ]);
+      }
+    },
+  );
 
   itWithFish.each([
     ["openclaw gateway -t=secret status -", createCompletionProgram, ["--json"]],

@@ -295,7 +295,7 @@ export async function startSkillLibraryWireProvider() {
         const { draft, updatedContent } = scenario;
         const observation = authorOutputs.get(authorMarker) ?? {};
         authorOutputs.set(authorMarker, observation);
-        let workshop = body.tools?.find((tool) => tool.name === "skill_workshop");
+        let workshop = body.tools?.find((tool) => tool.name === "skill_library");
         let catalogId: string | undefined;
         const advertisedCall = (callId: string, name: string, args: unknown) => {
           const tool = body.tools?.find((candidate) => candidate.name === name);
@@ -312,7 +312,7 @@ export async function startSkillLibraryWireProvider() {
           const describeId = `${authorMarker}_describe_workshop`;
           const described = output(describeId);
           if (described === undefined) {
-            advertisedCall(describeId, "tool_describe", { id: "skill_workshop" });
+            advertisedCall(describeId, "tool_describe", { id: "skill_library" });
             return;
           }
           const descriptor = JSON.parse(described) as {
@@ -320,8 +320,8 @@ export async function startSkillLibraryWireProvider() {
             name: string;
             parameters: TSchema;
           };
-          if (descriptor.name !== "skill_workshop" || !descriptor.id || !descriptor.parameters) {
-            throw new Error("Tool discovery did not return the personal Workshop schema");
+          if (descriptor.name !== "skill_library" || !descriptor.id || !descriptor.parameters) {
+            throw new Error("Tool discovery did not return the skill_library schema");
           }
           workshop = descriptor;
           catalogId = descriptor.id;
@@ -329,11 +329,11 @@ export async function startSkillLibraryWireProvider() {
         }
         const invoke = (callId: string, args: unknown) => {
           if (!workshop.parameters || !Value.Check(workshop.parameters, args)) {
-            throw new Error("Workshop schema does not accept the requested action");
+            throw new Error("skill_library schema does not accept the requested action");
           }
           advertisedCall(
             callId,
-            catalogId ? "dispatch_action" : "skill_workshop",
+            catalogId ? "dispatch_action" : "skill_library",
             catalogId ? { id: catalogId, args } : args,
           );
         };

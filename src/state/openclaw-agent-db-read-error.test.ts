@@ -63,13 +63,11 @@ it.each([false, true])(
           expect.objectContaining({
             ...unavailable,
             cause: expect.objectContaining({
-              message: expect.stringMatching(
-                freshOnly ? coldCause : /no such table: session_canonical_validation_pending/u,
-              ),
+              message: expect.stringMatching(coldCause),
             }),
           }),
         );
-        expect(operation).toHaveBeenCalledTimes(freshOnly ? 0 : 1);
+        expect(operation).not.toHaveBeenCalled();
         expect(readDb === owner.db).toBe(!freshOnly);
         expect(readDb.isOpen).toBe(!freshOnly);
         expect(owner.db.isOpen).toBe(true);
@@ -80,7 +78,7 @@ it.each([false, true])(
             cause: expect.objectContaining({ message: expect.stringMatching(coldCause) }),
           }),
         );
-        expect(operation).toHaveBeenCalledTimes(freshOnly ? 0 : 1);
+        expect(operation).not.toHaveBeenCalled();
         expect(readDb.isOpen).toBe(false);
       } finally {
         open.mockRestore();

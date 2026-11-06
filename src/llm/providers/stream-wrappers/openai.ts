@@ -1,3 +1,4 @@
+import { markModelPayloadObserver } from "@openclaw/ai/internal/model-request-body";
 import {
   codeModeToolSurfaceObserver,
   type CodeModeToolSurfaceObservation,
@@ -580,28 +581,31 @@ export function createCodexNativeWebSearchWrapper(
         ...options,
         openclawCodeModeToolSurface: true,
         openclawCodeModeAllowedHostedToolTypes: allowedHostedToolTypes,
-        onPayload: wrapProviderPayloadHook(
-          (payload) => originalOnPayload?.(payload, model),
-          (payload, result) =>
-            filterCodeModePayloadHookResult(
-              payload,
-              result,
-              codeModeVisibleToolNames,
-              allowedHostedToolTypes,
-              observeToolSurface,
-            ),
-          (payload) => {
-            if (activation?.state === "native_active") {
-              patchCodexNativeWebSearchPayload({ payload, config: params.config });
-            }
-            filterCodeModePayloadHookResult(
-              payload,
-              undefined,
-              codeModeVisibleToolNames,
-              allowedHostedToolTypes,
-              collectToolSurface,
-            );
-          },
+        onPayload: markModelPayloadObserver(
+          wrapProviderPayloadHook(
+            (payload) => originalOnPayload?.(payload, model),
+            (payload, result) =>
+              filterCodeModePayloadHookResult(
+                payload,
+                result,
+                codeModeVisibleToolNames,
+                allowedHostedToolTypes,
+                observeToolSurface,
+              ),
+            (payload) => {
+              if (activation?.state === "native_active") {
+                patchCodexNativeWebSearchPayload({ payload, config: params.config });
+              }
+              filterCodeModePayloadHookResult(
+                payload,
+                undefined,
+                codeModeVisibleToolNames,
+                allowedHostedToolTypes,
+                collectToolSurface,
+              );
+            },
+          ),
+          originalOnPayload,
         ),
       };
       if (observeToolSurface && !existingToolSurfaceObserver) {

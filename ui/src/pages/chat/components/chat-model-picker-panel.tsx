@@ -285,8 +285,26 @@ export function ChatModelPickerPanel(panel: {
         .map(({ row }) => row.key) ?? [],
   );
   const renderRow = window.renderRow;
-  const mounted = (entries: readonly ModelPickerOption[]) =>
-    entries.filter((entry) => window.has(modelPickerOptionKey(entry)));
+  const mounted = (entries: readonly ModelPickerOption[]) => {
+    if (!entries.length) {
+      return [];
+    }
+    const keys = window.keys();
+    if (entries.length <= keys.length) {
+      return entries.filter((entry) => window.has(modelPickerOptionKey(entry)));
+    }
+    const indexes = state().optionIndex;
+    // Each lead/more list is a contiguous slice of the prepared catalog order.
+    const first = indexes.get(modelPickerOptionKey(entries[0]!))!;
+    const end = first + entries.length;
+    return keys
+      .flatMap((key) => {
+        const index = indexes.get(key);
+        return index !== undefined && index >= first && index < end ? [index] : [];
+      })
+      .toSorted((left, right) => left - right)
+      .map((index) => entries[index - first]!);
+  };
   const selectModel = (entry: ModelPickerOption, event: MouseEvent) => {
     event.stopPropagation();
     // Resetting a pin does not require the inherited model to be available.

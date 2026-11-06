@@ -19,7 +19,11 @@ import { createUpdateRunRecordFixture } from "./update-run-record.test-support.j
 import { assertUpdateRecoveryAdmission } from "./update-run-recovery-admission.js";
 
 vi.mock("./update-run-reader.js", () => ({ listUpdateRunsAsync: vi.fn() }));
-vi.mock("./update-run-recovery-admission.js", () => ({ assertUpdateRecoveryAdmission: vi.fn() }));
+vi.mock("./update-run-recovery-admission.js", async (original) => ({
+  ...(await original<typeof import("./update-run-recovery-admission.js")>()),
+  assertUpdateRecoveryAdmission: vi.fn(),
+  inspectPluginCohortRecoveryAdmission: vi.fn(async () => undefined),
+}));
 
 const dirs = useStateDatabaseTempDirs();
 let root: string;
@@ -161,6 +165,12 @@ describe("managed handoff repair facts", () => {
       expect((await readFacts()).timeoutMs).toBe(expected);
     },
   );
+
+  it("identifies a child lease's own run after adoption dropped its dead updater", async () => {
+    history.mockResolvedValue([run(lease.owner, {})]);
+
+    await expectFacts(lease.owner, [lease.key]);
+  });
 
   it.each(["missing", "conflicting"])("refuses %s original run identity", async (identity) => {
     if (identity === "conflicting") {

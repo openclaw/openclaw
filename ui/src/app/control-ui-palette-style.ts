@@ -6,7 +6,7 @@ export function controlUiPaletteStyle(root: HTMLElement): string {
         (property) =>
           property !== "--shell-viewport-height" &&
           property !== "--shell-safe-area-bottom" &&
-          property !== "--control-ui-system-chrome-background" &&
+          property !== "background-color" &&
           property !== "--link" &&
           property !== "--link-on-tint" &&
           !/^--oc-(assistant|terminal|browser|link-reader|desktop)-reserve-(bottom|right)$/u.test(

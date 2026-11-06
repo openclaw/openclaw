@@ -9,6 +9,7 @@ import {
   resolveExistingSqliteFileUri,
   supportsNodeSqliteExtensionLoading,
 } from "../infra/node-sqlite.js";
+import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
 import {
   isPostgresSqlConnection,
   sqlPublicationAnchor,
@@ -31,7 +32,6 @@ import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamatio
 import {
   configureSqliteConnectionPragmas,
   configureSqlitePreSchemaPragmas,
-  registerSqliteCacheExitClose,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
 import { SqliteWorkerOpenRefusedError } from "../infra/sqlite-worker-contract.js";
@@ -369,9 +369,7 @@ function* openOpenClawAgentDatabaseSteps(
     let isValidatedReopen = Boolean(getOpenClawAgentDatabaseValidation(validationDatabase));
     // Lease history governs first admission; it cannot expire this process's checked file.
     const reuseAdmittedIntegrity =
-      isValidatedReopen ||
-      reuseIntegrity ||
-      (pending?.workerPrepared === true && !integrityRevoked);
+      reuseIntegrity || (pending?.workerPrepared === true && !integrityRevoked);
     let reusedSchema = false;
     let walMaintenance: SqliteWalMaintenance;
     try {
@@ -574,8 +572,12 @@ function* openOpenClawAgentDatabaseSteps(
           agentId,
           path: pathname,
           env: options.env,
-          // A temporary QUICK repair handle must not publish FULL runtime admission.
-          admittedDb: integrityCheck === "quick" ? undefined : selected,
+          // Bounded admission retains process proof without minting a FULL receipt or seal.
+          // Temporary QUICK repair handles still cannot publish runtime admission.
+          admittedDb:
+            integrityCheck === "quick" && diagnostics.integrityGateOutcome !== "pending"
+              ? undefined
+              : selected,
         },
         registrationObserver,
       );
@@ -585,7 +587,7 @@ function* openOpenClawAgentDatabaseSteps(
     cache.terminal.clear(pathname);
     // Safety net for processes that end without an orderly close: agent DBs have
     // no shutdown owner like the ACP/gateway state DB closes. Closing unregisters.
-    cache.unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
+    cache.unregisterExitClose ??= registerProcessExitCleanup(closeOpenClawAgentDatabases);
     finishPhase("registration");
     registerAgentDatabaseHandle(database, leaseId, leaseEnvironment);
     assertCurrent(database);
@@ -656,7 +658,7 @@ function* openOpenClawAgentDatabaseSteps(
       getOpenClawDatabaseMaintenanceScope()?.own(retainedDatabase.db, "agent-handles", () =>
         closeMaintenanceAgentDatabase(retainedDatabase),
       );
-      cache.unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
+      cache.unregisterExitClose ??= registerProcessExitCleanup(closeOpenClawAgentDatabases);
     } else if (!deferLeaseRelease) {
       const closeOutcome = error instanceof SqliteWorkerOpenRefusedError ? "read-only" : undefined;
       try {

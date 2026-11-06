@@ -118,6 +118,26 @@ function normalizeSpokenText(value: string): string | null {
   return normalized.length > 0 ? normalized : null;
 }
 
+const SPOKEN_CONTROL_CHARS = new RegExp(String.raw`[\u0000-\u001f]+`, "g");
+// Consume escape pairs together so a valid escaped backslash is never repaired twice.
+const JSON_ESCAPE_SEQUENCE = new RegExp(String.raw`\\(u[0-9a-fA-F]{4}|["\\/bfnrt]|[\s\S]?)`, "g");
+const VALID_JSON_ESCAPE_BODY = new RegExp(String.raw`^(?:u[0-9a-fA-F]{4}|["\\/bfnrt])$`);
+const SPOKEN_FIELD_DECLARATIONS = new RegExp(String.raw`"spoken"\s*:`, "gi");
+const INLINE_SPOKEN_FIELD = new RegExp(String.raw`"spoken"\s*:\s*"((?:[^"\\]|\\.)*)"`, "gi");
+
+function decodeInlineSpokenSegment(rawSegment: string): string | null {
+  // Literal control characters cannot appear in JSON strings; speech folds whitespace anyway.
+  const folded = rawSegment.replace(SPOKEN_CONTROL_CHARS, " ");
+  return (
+    safeParseJson<string>(`"${folded}"`) ??
+    safeParseJson<string>(
+      `"${folded.replace(JSON_ESCAPE_SEQUENCE, (sequence, body: string) =>
+        VALID_JSON_ESCAPE_BODY.test(body) ? sequence : body,
+      )}"`,
+    )
+  );
+}
+
 function tryParseSpokenJson(text: string): string | null {
   const candidates: string[] = [];
   const trimmed = text.trim();
@@ -145,13 +165,25 @@ function tryParseSpokenJson(text: string): string | null {
     return normalizeSpokenText(parsed.spoken) ?? "";
   }
 
-  const inlineSpokenMatch = trimmed.match(/"spoken"\s*:\s*"((?:[^"\\]|\\.)*)"/i);
-  if (!inlineSpokenMatch) {
+  const declaredSpokenFields = (trimmed.match(SPOKEN_FIELD_DECLARATIONS) ?? []).length;
+  if (declaredSpokenFields === 0) {
     return null;
   }
-
-  const decoded = safeParseJson<string>(`"${inlineSpokenMatch[1] ?? ""}"`);
-  return decoded === null ? null : (normalizeSpokenText(decoded) ?? "");
+  const segments: string[] = [];
+  let scannedSpokenFields = 0;
+  for (const match of trimmed.matchAll(INLINE_SPOKEN_FIELD)) {
+    scannedSpokenFields += 1;
+    const decoded = decodeInlineSpokenSegment(match[1] ?? "");
+    if (decoded === null) {
+      return null;
+    }
+    const normalized = normalizeSpokenText(decoded);
+    if (normalized) {
+      segments.push(normalized);
+    }
+  }
+  // Never let a later valid block conceal an unscannable earlier field.
+  return scannedSpokenFields === declaredSpokenFields ? segments.join(" ") : null;
 }
 
 function isLikelyMetaReasoningParagraph(paragraph: string): boolean {

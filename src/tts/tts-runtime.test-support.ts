@@ -100,7 +100,6 @@ vi.mock("../plugins/capability-provider-runtime.js", async () => {
 installSpeechProviders([createMockSpeechProvider("mock", { label: "Mock" })]);
 
 export const {
-  testApi,
   buildTtsSystemPromptHint,
   getTtsPersona,
   getTtsProviderAsync,
@@ -123,14 +122,6 @@ export {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-
-export const nativeVoiceNoteChannels = [
-  "discord",
-  "feishu",
-  "matrix",
-  "telegram",
-  "whatsapp",
-] as const;
 
 export function createMockSpeechProvider(
   id = "mock",
