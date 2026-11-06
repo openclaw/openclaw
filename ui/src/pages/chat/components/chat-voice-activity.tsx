@@ -4,6 +4,7 @@ import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-compo
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createMediaQuerySource } from "../../../lib/reactive/platform.ts";
 import type { ComposerDictationOwner } from "../composer-dictation.ts";
+import { isRealtimeTalkMicrophoneIssueMessage } from "../talk/input.ts";
 import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
 import { createMicrophoneMeter, type MicrophoneMeterStatus } from "../talk/microphone-meter.ts";
 import type { RealtimeTalkStatus } from "../talk/session.ts";
@@ -127,6 +128,8 @@ export function MicrophoneActivity(props: {
 export function ChatVoiceStatus(props: {
   status?: RealtimeTalkStatus;
   detail?: string | null;
+  /** Defaults to warning for microphone access problems and danger otherwise. */
+  tone?: "danger" | "warning";
   onDismissError?: () => void;
   onUseSystemDefaultMicrophone?: () => Promise<void>;
 }) {
@@ -136,7 +139,12 @@ export function ChatVoiceStatus(props: {
       fallback={
         <Show when={props.status === "error" && props.detail}>
           <InlineAlert
-            tone="danger"
+            tone={
+              props.tone ??
+              (props.detail && isRealtimeTalkMicrophoneIssueMessage(props.detail)
+                ? "warning"
+                : "danger")
+            }
             class="agent-chat__composer-alert"
             onDismiss={props.onDismissError}
             dismissLabel={t("chat.composer.dismissVoiceInputError")}

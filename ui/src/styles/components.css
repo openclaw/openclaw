@@ -1463,7 +1463,6 @@ openclaw-tooltip:last-child > .btn.refresh-button {
   display: none;
 }
 
-
 .callout__dismiss {
   width: 28px;
   height: 28px;
@@ -1488,6 +1487,14 @@ openclaw-tooltip:last-child > .btn.refresh-button {
   width: 16px;
   height: 16px;
   stroke-width: 1.8;
+}
+
+/* Filled tones are fill and text only; untoned notes keep the neutral border. */
+.callout.danger,
+.callout.warn,
+.callout.info,
+.callout.success {
+  border-color: transparent;
 }
 
 .callout.danger,
