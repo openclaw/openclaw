@@ -1,2 +1,0 @@
-# Cover pending and malformed raw results, including durable ledger reasons.
-11
