@@ -1017,7 +1017,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       }
     },
   );
-
   // Strings preview, [text] blocks, [text, n] blocks of message n, [text, true] error finals. null
   // idles, true holds, false rejects. Numbers close invisibly: 0 fails recovery, 1 succeeds, 3
   // throws. 2 starts a message. Chunks end after a digit. Static sends in failing reject (false) or
@@ -1093,6 +1092,12 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["old indent", [2, "A    X", ["A", 1], null, 2, "    XY", ["    X", 1]], ["A    X", "    XY"]],
     ["open indent", [2, "A    X", ["A", 1], 2, "    XY", ["    X", 1]], ["A    X\n\n    XY"]],
     ["old twin", [2, "X.", ["X.", 1], null, 2, "Y.", ["X.", 1], null], ["X.", "Y.X."]],
+    ["tail", [2, "A. B. X.", ["A.", 1], 2, "X. Y.", ["B.", 1], ["X.", 1]], ["A. B. X.\n\nX. Y.B."]],
+    ["open gap", [2, "A. X.", ["A.", 1], 2, 2, "X. Y.", ["X.", 1]], ["A. X.\n\nX. Y."]],
+    ["open first", [2, "A. X.", 2, "X. Y.", ["A.", 1], ["X.", 1]], ["A. X.\n\nX. Y.A."]],
+    ["open twin", [2, "A. X.", ["A.", 1], 2, ["X.", 1], "X. Y.", ["X.", 1]], ["A. X.\n\nX. Y.X."]],
+    ["pair", [2, "A. B. X.", ["A.", 1], 2, "B. X.", ["B.", 1], ["X.", 1]], ["A. B. X.\n\nB. X."]],
+    ["used", [2, "X.", null, 2, "X. Y.", ["X.", 1], ["X.", 2]], ["X.", "X. Y.", "X."]],
   ] as const)("streams %s", async (name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();
@@ -1531,7 +1536,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
-
   it("shares rejected-final recovery with media-delayed owners", async () => {
     sendStructuredCardFeishuMock.mockResolvedValueOnce({ messageId: "om-recovery" });
     const { options, firstMedia, secondMedia, firstPending, secondPending } =
@@ -1557,7 +1561,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
     expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
   });
-
   it("retains every accepted voice upload fallback when a later fallback fails", async () => {
     sendMediaFeishuMock
       .mockRejectedValueOnce(new Error("first upload failed"))
@@ -1587,7 +1590,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
     expect(sendMessageFeishuMock).toHaveBeenCalledTimes(3);
   });
-
   it("does not leak local media paths in the upload failure fallback", async () => {
     const mediaPath = path.join(os.tmpdir(), "openclaw-feishu-reply-local-voice.mp3");
     sendMediaFeishuMock.mockRejectedValueOnce(new Error("media failed"));
@@ -1654,7 +1656,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expect(closed).toContain(final);
     },
   );
-
   it("uses streaming cards for thread replies and keeps topic metadata", async () => {
     const { options } = createDispatcherHarness({
       replyToMessageId: "om_msg",
@@ -1833,7 +1834,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances).toHaveLength(2);
     expectClosed("```md\nsecond\n```", 1);
   });
-
   it("backs off streaming retries after start() throws (HTTP 400)", async () => {
     const errorMock = vi.fn();
     let shouldFailStart = true;
