@@ -444,6 +444,8 @@ export type PluginRegistryParams = {
   coreGatewayHandlers?: GatewayRequestHandlers;
   coreGatewayMethodNames?: readonly string[];
   runtime: PluginRuntime;
+  /** Private host binding; provider-only registries never materialize channel admission. */
+  createHostChannelInboundRuntime?: typeof import("./runtime/runtime-channel-admission.js").createHostChannelInboundRuntime;
   /** Synchronous factory binding supplied by loaders or direct registry composition roots. */
   resolveCapabilityCatalogContext?: () => import("./capability-catalog-context.types.js").PluginCapabilityCatalogHostContext;
   /** Process-owner policy for registering catalogs that may fall back to HOME. */

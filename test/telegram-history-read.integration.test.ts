@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   createPluginRecord,
-  createPluginRegistry,
+  createPluginTestRegistry,
   createPluginRuntimeMock,
   resetPluginRuntimeStateForTest,
   type PluginRecord,
@@ -150,7 +150,7 @@ beforeEach(async () => {
   setRuntimeConfigSnapshot(cfg, cfg);
   sessionCurrent = true;
   afterStoreRead = undefined;
-  const owner = createPluginRegistry({
+  const owner = createPluginTestRegistry({
     runtime: createPluginRuntimeMock(),
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     activateGlobalSideEffects: false,

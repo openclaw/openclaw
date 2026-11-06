@@ -166,7 +166,7 @@ describe("Matrix reaction ownership", () => {
 
   it("rejects an already-running reaction after its runtime is revoked", async () => {
     const cfg = { channels: { matrix: { dm: { allowFrom: ["*"] } } } };
-    const builder = plugins.createPluginRegistry({
+    const builder = plugins.createPluginTestRegistry({
       logger: { info() {}, warn() {}, error() {}, debug() {} },
       runtime: plugins.createPluginRuntimeMock({ system: { enqueueSystemEvent } }),
       activateGlobalSideEffects: false,

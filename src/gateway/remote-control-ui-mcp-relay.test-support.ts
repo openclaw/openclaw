@@ -16,7 +16,7 @@ import type {
   GatewayControlUiIngressOpenOptionsV2,
   GatewayControlUiIngressV2,
 } from "../plugins/gateway-ingress.types.js";
-import { createLazyPluginRuntime } from "../plugins/loader-module-runtime.js";
+import { createLazyPluginRuntimeOwner } from "../plugins/loader-module-runtime.js";
 import type { OpenClawPluginDefinition } from "../plugins/plugin-definition.types.js";
 import type { OpenClawPluginServiceContextV2, OpenClawPluginServiceV2 } from "../plugins/types.js";
 import {
@@ -199,7 +199,7 @@ export async function expectMcpRelayPrincipalAuthority(params: {
         assert(caller, "Missing admitted relay consent caller");
         const clock = createGatewaySchedulerClock(Date.now());
         const scheduler = createTestPluginServiceScheduler(createTestGatewayScheduler(clock.clock));
-        const runtime = createLazyPluginRuntime({});
+        const runtime = createLazyPluginRuntimeOwner({}).runtime;
         runtime.state.openKeyedStoreV2 = createPluginStateRuntimeStores("mcp-relay", () =>
           scheduler.signal.throwIfAborted(),
         ).openKeyedStoreV2;

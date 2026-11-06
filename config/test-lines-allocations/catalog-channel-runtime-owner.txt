@@ -1,0 +1,3 @@
+98
+# Cover lazy channel admission, exact runtime ownership, async retirement, and the source-test SDK composition boundary.
+# Existing loader and channel regressions share their fixtures; runtime mocks receive the same private owner binding.

@@ -5,7 +5,7 @@ import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createPluginRecord,
-  createPluginRegistry,
+  createPluginTestRegistry,
   createPluginRuntimeMock,
   disposePluginRegistryInstances,
   setActivePluginRegistry,
@@ -41,7 +41,7 @@ it.each(["allowed", "disposed", "disabled", "accepted-disposed"] as const)(
     await attachSqliteSessionTarget(params, storePath, params.sessionId);
     (params.config ??= {}).session = { ...params.config?.session, store: storePath };
     const loadPlugin = () => {
-      const builder = createPluginRegistry({
+      const builder = createPluginTestRegistry({
         runtime: createPluginRuntimeMock({ config: { current: () => params.config ?? {} } }),
         logger: { info() {}, warn() {}, error() {}, debug() {} },
       });

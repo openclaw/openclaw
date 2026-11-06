@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createPluginRecord,
-  createPluginRegistry,
+  createPluginTestRegistry,
   createPluginRuntimeMock,
   disposePluginRegistryInstances,
   initializeGlobalHookRunner,
@@ -95,7 +95,7 @@ it.each([
       ...(bindings ? { bindings } : {}),
     };
     installMatrixMonitorTestRuntime({ cfg, stateDir: state.stateDir });
-    const builder = createPluginRegistry({
+    const builder = createPluginTestRegistry({
       logger: { info() {}, warn() {}, error() {}, debug() {} },
       runtime: createPluginRuntimeMock(),
       activateGlobalSideEffects: false,

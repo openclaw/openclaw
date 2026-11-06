@@ -37,6 +37,9 @@ import { createRuntimeMedia } from "./runtime-media.js";
 import { subscribeRuntimeSessionChanges } from "./session-changes.js";
 import type { PluginRuntimeFactory, PluginRuntime } from "./types.js";
 
+// Private host composition export, resolved through the same native entry as the runtime.
+export { createHostChannelInboundRuntime } from "./runtime-channel-admission.js";
+
 const loadTtsRuntime = createLazyRuntimeModule(() => import("../../tts/tts.js"));
 const loadTtsRequestRuntime = createLazyRuntimeModule(() => import("../../tts/tts-request.js"));
 const loadMediaUnderstandingRuntime = createLazyRuntimeModule(

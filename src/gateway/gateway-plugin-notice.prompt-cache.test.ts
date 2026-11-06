@@ -8,7 +8,7 @@ import {
   snapshotProviderPrefix,
 } from "../../scripts/e2e/lib/anthropic-cache/prefix-stability.mts";
 import * as nativeModule from "../plugins/native-module-require.js";
-import { createPluginRuntime } from "../plugins/runtime/index.js";
+import { createHostChannelInboundRuntime, createPluginRuntime } from "../plugins/runtime/index.js";
 import * as sdkAlias from "../plugins/sdk-alias.js";
 import { createChatFixture, sendChatAndWait } from "./gateway-chat-fixture.test-support.js";
 
@@ -88,7 +88,7 @@ beforeAll(async () => {
   const nativeLoad = nativeModule.tryNativeRequireModule;
   vi.spyOn(nativeModule, "tryNativeRequireModule").mockImplementation((modulePath, options) =>
     modulePath === resolveRuntime.mock.results.at(-1)?.value?.resolvedPath
-      ? { ok: true, moduleExport: { createPluginRuntime } }
+      ? { ok: true, moduleExport: { createPluginRuntime, createHostChannelInboundRuntime } }
       : nativeLoad(modulePath, options),
   );
   await fixture.start();

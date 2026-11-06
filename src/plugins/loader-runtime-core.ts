@@ -18,7 +18,7 @@ import {
 import {
   createDeferredGatewayNodesRuntime,
   createDeferredGatewaySubagentRuntime,
-  createLazyPluginRuntime,
+  createLazyPluginRuntimeOwner,
   createPluginModuleLoader,
 } from "./loader-module-runtime.js";
 import {
@@ -280,14 +280,14 @@ export function* loadOpenClawPluginsSteps(
     const borrowedNodes = context.borrowedGatewayRuntime
       ? createDeferredGatewayNodesRuntime(context.borrowedGatewayRuntime)
       : undefined;
-    const runtime =
+    const runtimeOwner =
       options.mode === "cli-metadata"
-        ? createUnavailableRuntime("cli-metadata")
+        ? { runtime: createUnavailableRuntime("cli-metadata") }
         : overrides?.runtime
           ? // Restricted discovery must not initialize full host services.
             // SAFETY: bundled-capability-runtime uses this base only for uncached, non-activating registration.
-            (overrides.runtime as PluginRuntime)
-          : createLazyPluginRuntime({
+            { runtime: overrides.runtime as PluginRuntime }
+          : createLazyPluginRuntimeOwner({
               inspectionResources,
               devSourceRoot: context.devSourceRoot,
               pluginSdkResolution: options.pluginSdkResolution,
@@ -308,7 +308,7 @@ export function* loadOpenClawPluginsSteps(
       nativeBindings.capabilityCatalogContext;
     registryBuilder = createPluginRegistry({
       logger,
-      runtime,
+      ...runtimeOwner,
       resolveCapabilityCatalogContext:
         createCapabilityCatalogContextResolver(capabilityCatalogContext),
       allowProcessHomeSessionCatalogs: options.allowProcessHomeSessionCatalogs ?? true,

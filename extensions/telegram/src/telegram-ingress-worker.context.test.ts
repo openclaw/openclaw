@@ -2,7 +2,7 @@ import { setImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import {
   createPluginRecord,
-  createPluginRegistry,
+  createPluginTestRegistry,
   createPluginRuntimeMock,
   disposePluginRegistryInstances,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -27,7 +27,7 @@ it("keeps immediate and deferred offset writes with each Worker's construction o
   signal,
 }) => {
   function createOwner(id: string) {
-    const { registry, createApi } = createPluginRegistry({
+    const { registry, createApi } = createPluginTestRegistry({
       logger: { info() {}, warn() {}, error() {}, debug() {} },
       runtime: createPluginRuntimeMock(),
     });

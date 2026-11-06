@@ -29,6 +29,7 @@ import {
   getGatewayContextResolver,
 } from "./runtime/gateway-request-scope.js";
 import { createRuntimeBase } from "./runtime/runtime-base.js";
+import type { createHostChannelInboundRuntime } from "./runtime/runtime-channel-admission.js";
 import type {
   CreatePluginRuntimeOptions,
   PluginRuntimeFactory,
@@ -313,17 +314,23 @@ function formatPluginRuntimeModuleResolutionError(params: {
   ].join("; ");
 }
 
-/** Lazily materializes the broad plugin runtime only when registration reads it. */
-export function createLazyPluginRuntime(params: {
+type PluginRuntimeOwner = {
+  runtime: PluginRuntime;
+  createHostChannelInboundRuntime: typeof createHostChannelInboundRuntime;
+};
+
+/** Keep private host factories with the same lazy owner as the public runtime. */
+export function createLazyPluginRuntimeOwner(params: {
   devSourceRoot?: string | null;
   pluginSdkResolution?: PluginSdkResolutionPreference;
   runtimeOptions?: CreatePluginRuntimeOptions;
   inspectionResources?: PluginRegistryInspectionResources;
-}): PluginRuntime {
+}): PluginRuntimeOwner {
   // Inspections own their cache through physical disposal; raw runtime views retain theirs.
   const cache = params.inspectionResources ? new WeakRef(getPluginCache()) : getPluginCache();
   type RuntimeModule = {
     createPluginRuntime?: PluginRuntimeFactory;
+    createHostChannelInboundRuntime?: typeof createHostChannelInboundRuntime;
   };
   const resolveRuntimeModule = (): RuntimeModule => {
     const resolution = resolvePluginRuntimeModulePathWithDiagnostics({
@@ -358,27 +365,33 @@ export function createLazyPluginRuntime(params: {
   };
 
   const base = createRuntimeBase();
-  let resolvedRuntime: PluginRuntime | null = null;
-  const resolveRuntime = (): PluginRuntime => {
-    if (resolvedRuntime) {
-      return resolvedRuntime;
+  let resolvedOwner: PluginRuntimeOwner | null = null;
+  const resolveRuntimeOwner = (): PluginRuntimeOwner => {
+    if (resolvedOwner) {
+      return resolvedOwner;
     }
     const owner = cache instanceof WeakRef ? cache.deref() : cache;
     if (!owner) {
       throw new PluginInventoryRetiredError();
     }
-    resolvedRuntime = withPluginCache(owner, () => {
-      const { createPluginRuntime } = resolveRuntimeModule();
+    resolvedOwner = withPluginCache(owner, () => {
+      const { createPluginRuntime, createHostChannelInboundRuntime } = resolveRuntimeModule();
       if (typeof createPluginRuntime !== "function") {
         throw new Error("Plugin runtime module missing createPluginRuntime export");
       }
-      return createPluginRuntime(params.runtimeOptions, base);
+      if (typeof createHostChannelInboundRuntime !== "function") {
+        throw new Error("Plugin runtime module missing createHostChannelInboundRuntime export");
+      }
+      return {
+        runtime: createPluginRuntime(params.runtimeOptions, base),
+        createHostChannelInboundRuntime,
+      };
     });
-    return resolvedRuntime;
+    return resolvedOwner;
   };
   const getRuntimeProperty = (prop: PropertyKey, ...receiver: [] | [unknown]): unknown => {
     // Prepared metadata and host facades must not initialize broad runtime services.
-    if (!resolvedRuntime) {
+    if (!resolvedOwner) {
       if (
         prop === "gateway" ||
         prop === "hooks" ||
@@ -406,13 +419,13 @@ export function createLazyPluginRuntime(params: {
       }
     }
     return receiver.length === 0
-      ? Reflect.get(resolveRuntime(), prop)
-      : Reflect.get(resolveRuntime(), prop, receiver[0]);
+      ? Reflect.get(resolveRuntimeOwner().runtime, prop)
+      : Reflect.get(resolveRuntimeOwner().runtime, prop, receiver[0]);
   };
   const resolveLazyRuntimeDescriptor = (prop: PropertyKey): PropertyDescriptor | undefined => {
     // Once loaded, assignment through the proxy must see the owner's real descriptor.
-    if (resolvedRuntime || !Object.hasOwn(LAZY_RUNTIME_PROPERTIES, prop)) {
-      return Reflect.getOwnPropertyDescriptor(resolveRuntime() as object, prop);
+    if (resolvedOwner || !Object.hasOwn(LAZY_RUNTIME_PROPERTIES, prop)) {
+      return Reflect.getOwnPropertyDescriptor(resolveRuntimeOwner().runtime as object, prop);
     }
     const descriptor: PropertyDescriptor = {
       configurable: true,
@@ -424,7 +437,7 @@ export function createLazyPluginRuntime(params: {
     // Host and policy facets retain their getter-only contract before loading too.
     if (prop !== "modelAuth" && prop !== "modelConfig" && prop !== "llm") {
       descriptor.set = (value: unknown) => {
-        Reflect.set(resolveRuntime() as object, prop, value);
+        Reflect.set(resolveRuntimeOwner().runtime as object, prop, value);
       };
     }
     return descriptor;
@@ -437,7 +450,7 @@ export function createLazyPluginRuntime(params: {
         : getRuntimeProperty(prop, receiver),
     set(target, prop, value, receiver) {
       return Reflect.set(
-        Object.hasOwn(target, prop) ? target : resolveRuntime(),
+        Object.hasOwn(target, prop) ? target : resolveRuntimeOwner().runtime,
         prop,
         value,
         receiver,
@@ -447,7 +460,7 @@ export function createLazyPluginRuntime(params: {
       return (
         Object.hasOwn(target, prop) ||
         Object.hasOwn(LAZY_RUNTIME_PROPERTIES, prop) ||
-        Reflect.has(resolveRuntime(), prop)
+        Reflect.has(resolveRuntimeOwner().runtime, prop)
       );
     },
     ownKeys(target) {
@@ -461,16 +474,19 @@ export function createLazyPluginRuntime(params: {
     },
     defineProperty(target, prop, attributes) {
       return Reflect.defineProperty(
-        preparingOwner || Object.hasOwn(target, prop) ? target : resolveRuntime(),
+        preparingOwner || Object.hasOwn(target, prop) ? target : resolveRuntimeOwner().runtime,
         prop,
         attributes,
       );
     },
     deleteProperty(target, prop) {
-      return Reflect.deleteProperty(Object.hasOwn(target, prop) ? target : resolveRuntime(), prop);
+      return Reflect.deleteProperty(
+        Object.hasOwn(target, prop) ? target : resolveRuntimeOwner().runtime,
+        prop,
+      );
     },
     getPrototypeOf() {
-      return Reflect.getPrototypeOf(resolveRuntime() as object);
+      return Reflect.getPrototypeOf(resolveRuntimeOwner().runtime as object);
     },
   });
   // Reserve this proxy's private owner slot without initializing its broad runtime.
@@ -484,7 +500,11 @@ export function createLazyPluginRuntime(params: {
   if (subagent && typeof subagent === "object") {
     bindGatewayContextResolver(runtime, getGatewayContextResolver(subagent));
   }
-  return runtime;
+  return {
+    runtime,
+    createHostChannelInboundRuntime: (...args) =>
+      resolveRuntimeOwner().createHostChannelInboundRuntime(...args),
+  };
 }
 
 function kindIncludes(kind: unknown, target: string): boolean {

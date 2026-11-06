@@ -15,7 +15,7 @@ import { AsyncWorkScope } from "openclaw/plugin-sdk/concurrency-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
-  createPluginRegistry,
+  createPluginTestRegistry,
   createPluginRecord,
   createPluginRuntimeMock,
   getActivePluginRegistry,
@@ -163,7 +163,7 @@ async function withAuthRefreshHarness(
       async () => {
         const previousRegistry = getActivePluginRegistry();
         const manifests = loadPluginManifestRegistryCore({ workspaceDir: stateDir });
-        const registration = createPluginRegistry({
+        const registration = createPluginTestRegistry({
           runtime: createPluginRuntimeMock(),
           logger: { info() {}, warn() {}, error() {}, debug() {} },
           activateGlobalSideEffects: false,

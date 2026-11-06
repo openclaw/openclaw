@@ -281,14 +281,14 @@ it("keeps authorized resume execution available while native discovery is disabl
 
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(tempDir, "openclaw.json"));
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
-  const { createPluginRegistry, createPluginRecord } =
+  const { createPluginTestRegistry, createPluginRecord } =
     await import("openclaw/plugin-sdk/plugin-test-runtime");
   const config = {
     plugins: {
       entries: { codex: { enabled: true, config: { sessionCatalog: { enabled: false } } } },
     },
   };
-  const registry = createPluginRegistry({
+  const registry = createPluginTestRegistry({
     runtime: createPluginRuntimeMock({ config: { current: () => config } }),
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     activateGlobalSideEffects: false,

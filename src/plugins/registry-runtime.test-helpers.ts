@@ -1,4 +1,5 @@
 import { createPluginRegistry } from "./registry.js";
+import { createHostChannelInboundRuntime } from "./runtime/runtime-channel-admission.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 export function createTestPluginRegistry(
@@ -12,6 +13,7 @@ export function createTestPluginRegistry(
       debug() {},
     },
     runtime,
+    createHostChannelInboundRuntime,
     activateGlobalSideEffects: false,
   });
 }

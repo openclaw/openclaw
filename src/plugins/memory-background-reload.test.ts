@@ -15,7 +15,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
-  createLazyPluginRuntime,
+  createLazyPluginRuntimeOwner,
   createPluginModuleLoader,
   runPluginRegisterSyncInRegistry,
 } from "./loader-module-runtime.js";
@@ -135,7 +135,7 @@ async function openManager(
 function registryHost() {
   return createPluginRegistry({
     logger,
-    runtime: createLazyPluginRuntime(loaderOptions),
+    runtime: createLazyPluginRuntimeOwner(loaderOptions).runtime,
     activateGlobalSideEffects: false,
   });
 }

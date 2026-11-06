@@ -48,7 +48,7 @@ import {
 import { createPluginRegistry } from "../plugins/registry.js";
 import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
-import { createPluginRuntime } from "../plugins/runtime/index.js";
+import { createHostChannelInboundRuntime, createPluginRuntime } from "../plugins/runtime/index.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { createPluginServiceScheduler } from "../plugins/service-scheduler.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
@@ -332,7 +332,12 @@ describe("X publication production-owner composition", () => {
       error: reportMonitorFailure,
       debug() {},
     };
-    const builder = createPluginRegistry({ logger, runtime, activateGlobalSideEffects: false });
+    const builder = createPluginRegistry({
+      logger,
+      runtime,
+      createHostChannelInboundRuntime,
+      activateGlobalSideEffects: false,
+    });
     const record = createPluginRecord({ id: "x", origin: "bundled" });
     const api = builder.createApi(record, { config: cfg(), registrationMode: "full" });
     api.registerChannel({ plugin: xPlugin });

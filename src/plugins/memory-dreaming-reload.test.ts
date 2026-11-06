@@ -10,7 +10,7 @@ import { createTestPluginServiceScheduler } from "../plugin-sdk/plugin-test-api.
 import { createDeferredCore } from "../shared/deferred.js";
 import { createHookRunner } from "./hooks.js";
 import {
-  createLazyPluginRuntime,
+  createLazyPluginRuntimeOwner,
   createPluginModuleLoader,
   runPluginRegisterSyncInRegistry,
 } from "./loader-module-runtime.js";
@@ -81,7 +81,8 @@ it("keeps successor sweeps and diary publication owned after another registratio
     } satisfies PluginRuntime["subagent"];
     const host = createPluginRegistry({
       logger,
-      runtime: createLazyPluginRuntime({ ...loaderOptions, runtimeOptions: { subagent } }),
+      runtime: createLazyPluginRuntimeOwner({ ...loaderOptions, runtimeOptions: { subagent } })
+        .runtime,
       activateGlobalSideEffects: false,
     });
     const record = createPluginRecord({

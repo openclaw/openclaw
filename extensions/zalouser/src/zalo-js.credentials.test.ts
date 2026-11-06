@@ -16,7 +16,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   createPluginRecord,
-  createPluginRegistry,
+  createPluginTestRegistry,
   createPluginRuntimeMock,
   disposePluginRegistryInstances,
   createPluginSetupWizardConfigure,
@@ -342,7 +342,7 @@ describe("zalouser credential persistence", () => {
   it("keeps a retired QR result from replacing the current registration's saved credentials", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const register = () => {
-      const builder = createPluginRegistry({
+      const builder = createPluginTestRegistry({
         runtime: createPluginRuntimeMock(),
         logger: { info() {}, warn() {}, error() {}, debug() {} },
         activateGlobalSideEffects: false,

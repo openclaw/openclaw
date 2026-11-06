@@ -23,7 +23,7 @@ import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPluginRuntimeCapabilityLease } from "./capability-lease.js";
-import { createLazyPluginRuntime } from "./loader-module-runtime.js";
+import { createLazyPluginRuntimeOwner } from "./loader-module-runtime.js";
 import * as nativeModuleRequire from "./native-module-require.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
@@ -82,7 +82,8 @@ async function startFixture(
   if (gateway !== "absent") {
     bindPluginRegistryRuntime(
       registry,
-      createLazyPluginRuntime(gateway === "bound" ? { runtimeOptions: { subagent } } : {}),
+      createLazyPluginRuntimeOwner(gateway === "bound" ? { runtimeOptions: { subagent } } : {})
+        .runtime,
     );
   }
   markPluginRegistryActive(registry);

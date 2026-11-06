@@ -30,7 +30,7 @@ import {
 import * as nativeModule from "../native-module-require.js";
 import { revokePluginRecord } from "../registry-lifecycle.js";
 import * as sdkAlias from "../sdk-alias.js";
-import { createPluginRuntime } from "./index.js";
+import { createHostChannelInboundRuntime, createPluginRuntime } from "./index.js";
 import type { PluginRuntime } from "./types.js";
 
 const PLUGIN_ID = "notice-proof";
@@ -97,7 +97,7 @@ beforeEach(() => {
   const nativeLoad = nativeModule.tryNativeRequireModule;
   vi.spyOn(nativeModule, "tryNativeRequireModule").mockImplementation((modulePath, options) =>
     modulePath === resolveRuntime.mock.results.at(-1)?.value?.resolvedPath
-      ? { ok: true, moduleExport: { createPluginRuntime } }
+      ? { ok: true, moduleExport: { createPluginRuntime, createHostChannelInboundRuntime } }
       : nativeLoad(modulePath, options),
   );
   const config: OpenClawConfig = {

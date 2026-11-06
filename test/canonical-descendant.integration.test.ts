@@ -6,7 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import * as fileAccessRuntime from "openclaw/plugin-sdk/file-access-runtime";
 import {
   createPluginRuntimeMock,
-  createPluginRegistry,
+  createPluginTestRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCanonicalForkFixtureForTest } from "../extensions/codex/test-api.js";
@@ -421,7 +421,7 @@ async function withFixture(
         },
       };
       setRuntimeConfigSnapshot(config);
-      const { registry, createApi } = createPluginRegistry({
+      const { registry, createApi } = createPluginTestRegistry({
         runtime,
         logger: { info() {}, warn() {}, error() {} },
         resolveCapabilityCatalogContext: resolvePluginCapabilityCatalogContext,

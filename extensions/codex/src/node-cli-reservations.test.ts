@@ -6,7 +6,7 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   createPluginRecord,
-  createPluginRegistry,
+  createPluginTestRegistry,
   createPluginRuntimeMock,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
@@ -98,7 +98,7 @@ async function createRegisteredResume() {
     nodes: { invoke },
   });
   const logger = { info() {}, warn() {}, error() {}, debug() {} };
-  const registry = createPluginRegistry({
+  const registry = createPluginTestRegistry({
     runtime,
     logger,
     activateGlobalSideEffects: false,

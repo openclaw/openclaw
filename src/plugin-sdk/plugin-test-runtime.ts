@@ -8,6 +8,9 @@ import type {
 } from "../agents/isolated-completion.adapter.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
+import type { PluginRegistryParams } from "../plugins/registry-types.js";
+import { createPluginRegistry } from "../plugins/registry.js";
+import { createHostChannelInboundRuntime } from "../plugins/runtime/runtime-channel-admission.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
 
@@ -301,11 +304,14 @@ export async function runInHarnessToolAuthorityForTest<
 }
 
 export { setDefaultChannelPluginRegistryForTests } from "../commands/channel-test-registry.js";
-export {
-  createEmptyPluginRegistry,
-  createPluginRegistry,
-  type PluginRecord,
-} from "../plugins/registry.js";
+export { createEmptyPluginRegistry, type PluginRecord } from "../plugins/registry.js";
+
+/** Test hosts supply admission without requiring callers to know private loader bindings. */
+export function createPluginTestRegistry(
+  params: Omit<PluginRegistryParams, "createHostChannelInboundRuntime">,
+) {
+  return createPluginRegistry({ ...params, createHostChannelInboundRuntime });
+}
 export {
   getPluginRegistrationContracts,
   resolveProviderContractProvidersForPluginIds,

@@ -2,7 +2,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createNonExitingRuntimeEnv,
   createPluginRecord,
-  createPluginRegistry,
+  createPluginTestRegistry,
   createPluginRuntimeMock,
   disposePluginRegistryInstances,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -51,7 +51,7 @@ import {
 } from "./zalo-js.js";
 
 function register(version: string) {
-  const builder = createPluginRegistry({
+  const builder = createPluginTestRegistry({
     runtime: createPluginRuntimeMock({ version }),
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     activateGlobalSideEffects: false,

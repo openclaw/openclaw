@@ -9,7 +9,7 @@ import type {
   GatewayControlUiIngressOpenOptionsV2,
   GatewayControlUiIngressV2,
 } from "./gateway-ingress.types.js";
-import { createLazyPluginRuntime } from "./loader-module-runtime.js";
+import { createLazyPluginRuntimeOwner } from "./loader-module-runtime.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { markPluginRegistryActive, revokePluginRecord } from "./registry-lifecycle.js";
 import { bindPluginRegistryRuntime } from "./registry-runtime-binding.js";
@@ -40,7 +40,10 @@ async function fixture(recordOptions: Partial<PluginRecord> = {}) {
   context.resolveGatewayContext = resolveContext;
   const subagent = {} as PluginRuntime["subagent"];
   bindGatewayContextResolver(subagent, resolveContext);
-  bindPluginRegistryRuntime(registry, createLazyPluginRuntime({ runtimeOptions: { subagent } }));
+  bindPluginRegistryRuntime(
+    registry,
+    createLazyPluginRuntimeOwner({ runtimeOptions: { subagent } }).runtime,
+  );
   const token = "synthetic-test-token";
   bindGatewayControlUiIngressHost(resolveContext, {
     controlUiBasePath: "",
