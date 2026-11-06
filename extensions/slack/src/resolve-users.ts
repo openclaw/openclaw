@@ -30,7 +30,12 @@ export type SlackUserResolution = {
   note?: string;
 };
 
-function parseSlackUserInput(raw: string): { id?: string; name?: string; email?: string } {
+function parseSlackUserInput(raw: string): {
+  id?: string;
+  name?: string;
+  canonicalName?: string;
+  email?: string;
+} {
   const trimmed = raw.trim();
   const mention = trimmed.match(/^<@([A-Z0-9]+)>$/i);
   if (mention) {
@@ -43,9 +48,15 @@ function parseSlackUserInput(raw: string): { id?: string; name?: string; email?:
   if (trimmed.includes("@") && !trimmed.startsWith("@")) {
     return { email: normalizeLowercaseStringOrEmpty(trimmed) };
   }
-  // Canonical forms compare equal against profile names below.
-  const name = normalizeLowercaseStringOrEmpty(trimmed.replace(/^@/, "")).normalize("NFC");
-  return name ? { name } : {};
+  const name = normalizeLowercaseStringOrEmpty(trimmed.replace(/^@/, ""));
+  if (!name) {
+    return {};
+  }
+  // Exact (lowercased) spelling is the primary comparison, preserving the
+  // pre-existing principal selection; canonical form is a fallback only when no
+  // exact match exists, so a canonically-equal different spelling can never
+  // displace an exact-name match.
+  return { name, canonicalName: name.normalize("NFC") };
 }
 
 async function listSlackUsers(client: WebClient): Promise<SlackUserLookup[]> {
@@ -102,18 +113,30 @@ export async function resolveSlackUserAllowlist(params: {
     if (workspace) {
       return workspace;
     }
-    const matches = users.filter((user) =>
+    const exactMatches = users.filter((user) =>
       parsed.id
         ? user.id === parsed.id
         : parsed.email
           ? user.email === parsed.email
           : parsed.name
             ? [user.name, user.displayName, user.realName].some(
-                // Canonical forms compare equal here; Slack keeps original spellings.
-                (value) => normalizeLowercaseStringOrEmpty(value).normalize("NFC") === parsed.name,
+                (value) => normalizeLowercaseStringOrEmpty(value) === parsed.name,
               )
             : false,
     );
+    // Exact spelling wins; canonical form only fills in when no exact match exists,
+    // so a canonically-equivalent different spelling never displaces an exact-name
+    // principal (see security review P1).
+    const matches =
+      exactMatches.length > 0 || !parsed.canonicalName
+        ? exactMatches
+        : users.filter((user) =>
+            [user.name, user.displayName, user.realName].some(
+              // Canonical forms compare equal here; Slack keeps original spellings.
+              (value) =>
+                normalizeLowercaseStringOrEmpty(value).normalize("NFC") === parsed.canonicalName,
+            ),
+          );
     // Every candidate already matches the same id, email, or name. Only account
     // health ranks candidates; equal scores retain Slack's directory order.
     const match = parsed.id

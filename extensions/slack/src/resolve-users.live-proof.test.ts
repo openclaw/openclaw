@@ -1,10 +1,13 @@
 // Shipped-entry-point proof: real resolveSlackUserAllowlist over a local Slack
 // users.list fixture (SLACK_API_URL), exercising the production WebClient path.
-import { buildAllowlistResolutionSummary, mergeAllowlist } from "openclaw/plugin-sdk/allow-from";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SlackMonitorContext } from "./monitor/context.js";
 import { authorizeSlackDirectMessage } from "./monitor/dm-auth.js";
+import { createMonitorTestContext } from "./monitor/monitor-context.test-support.js";
 import { resolveSlackUserAllowlist } from "./resolve-users.js";
 
 const NFD = "Rene\u0301e"; // decomposed
@@ -18,6 +21,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
 
@@ -94,6 +98,43 @@ it.each([
   },
 );
 
+it("keeps exact-name matches ahead of canonically-equivalent directory entries", async () => {
+  // U_OTHER (NFD display name) precedes U_INTENDED (NFC display name) in the
+  // directory. Exact-name matching must select U_INTENDED even though U_OTHER
+  // is canonically equivalent: NFC normalization is a fallback only and never
+  // displaces the configured principal with a different Slack user id.
+  await runWithUsersList(
+    [
+      {
+        id: "U_OTHER",
+        name: "other",
+        deleted: false,
+        is_bot: false,
+        is_app_user: false,
+        profile: { email: "other@example.com", display_name: NFD },
+      },
+      {
+        id: "U_INTENDED",
+        name: "intended",
+        deleted: false,
+        is_bot: false,
+        is_app_user: false,
+        profile: { email: "intended@example.com", display_name: NFC },
+      },
+    ],
+    async ({ baseUrl }) => {
+      vi.stubEnv("SLACK_API_URL", `${baseUrl}/api/`);
+
+      const exact = await resolveSlackUserAllowlist({
+        token: "xoxb-synthetic",
+        entries: [NFC],
+      });
+
+      expect(exact[0]).toMatchObject({ resolved: true, id: "U_INTENDED" });
+    },
+  );
+});
+
 it("does not admit a different principal (accent-stripped) through the production path", async () => {
   await runWithUsersList(
     [
@@ -159,15 +200,14 @@ it("keeps same-form and ASCII controls unchanged through the production path", a
 describe("name-derived grant through production admission", () => {
   const DM_POLICY = {
     // authorizeSlackDirectMessage only reads dmEnabled / dmPolicy /
-    // allowNameMatching / teamId from ctx; cast the minimal fixture the same way
-    // monitor/auth.test.ts does so the strict CI typecheck is satisfied.
-    ctx: {
-      dmEnabled: true,
-      dmPolicy: "allowlist" as const,
+    // allowNameMatching / teamId from ctx; reuse the typed monitor fixture so the
+    // context satisfies SlackMonitorContext without casting away the mismatch.
+    ctx: createMonitorTestContext({
+      dmPolicy: "allowlist",
       allowNameMatching: true,
-      teamId: "T_ACCENT",
       installationIdentity: { kind: "workspace", teamId: "T_ACCENT" },
-    } as unknown as SlackMonitorContext,
+      teamId: "T_ACCENT",
+    }),
     accountId: "workspace",
     resolveSenderName: async () => ({ name: "Ren\u00e9e" }),
     sendPairingReply: vi.fn(),
@@ -176,42 +216,49 @@ describe("name-derived grant through production admission", () => {
     log: vi.fn(),
   };
 
-  // Reproduces resolveWorkspacePolicy's grant derivation: resolved user ids from
-  // resolveSlackUserAllowlist become additions merged into the allow-from list,
-  // which retains the configured name alongside the derived id.
-  function deriveAllowFrom(
-    allowFrom: string[],
-    resolutions: Array<{ input: string; resolved: boolean; id?: string }>,
-  ): string[] {
-    const { additions } = buildAllowlistResolutionSummary(
-      resolutions.filter((entry) => allowFrom.includes(entry.input)),
-      { formatResolved: () => null },
-    );
-    return mergeAllowlist({ existing: allowFrom, additions });
-  }
-
+  // Drives the production policy path: createMonitorTestContext returns a ctx whose
+  // readRuntimeContext is the real createSlackRuntimeContextReader, so awaiting it
+  // runs resolveWorkspacePolicy (monitor/runtime-policy.ts) which resolves the
+  // allowlist names through the real resolveSlackUserAllowlist over the local
+  // users.list fixture and merges the derived ids into ctx.allowFrom. The returned
+  // allowFrom is then enforced by the production DM admission function
+  // authorizeSlackDirectMessage.
   async function admitWithUsers(
     users: Array<Record<string, unknown>>,
     allowFrom: string[],
   ): Promise<{ allowedFor: (id: string) => Promise<boolean>; allowFromAfter: string[] }> {
-    let derivedAllowFrom: string[] = [];
+    let policyAllowFrom: string[] = [];
     await runWithUsersList(users, async ({ baseUrl }) => {
       vi.stubEnv("SLACK_API_URL", `${baseUrl}/api/`);
-      const resolutions = await resolveSlackUserAllowlist({
-        token: "xoxb-synthetic",
-        entries: allowFrom,
+      const cfg = {
+        channels: {
+          slack: {
+            enabled: true,
+            dangerouslyAllowNameMatching: true,
+            allowFrom,
+          },
+        },
+      } as never;
+      setRuntimeConfigSnapshot(cfg, cfg);
+      const ctx = createMonitorTestContext({
+        cfg,
+        dmPolicy: "allowlist",
+        allowNameMatching: true,
+        installationIdentity: { kind: "workspace", teamId: "T_ACCENT" },
+        teamId: "T_ACCENT",
       });
-      derivedAllowFrom = deriveAllowFrom(allowFrom, resolutions);
+      const policy = await ctx.readRuntimeContext();
+      policyAllowFrom = policy.allowFrom;
     });
     return {
-      allowFromAfter: derivedAllowFrom,
+      allowFromAfter: policyAllowFrom,
       allowedFor: async (id: string) => {
         const onUnauthorized = vi.fn();
         const allowed = await authorizeSlackDirectMessage({
           ...DM_POLICY,
           ctx: { ...DM_POLICY.ctx },
           senderId: id,
-          allowFromLower: derivedAllowFrom.map((entry) => entry.toLowerCase()),
+          allowFromLower: policyAllowFrom.map((entry) => entry.toLowerCase()),
           onUnauthorized,
         });
         if (!allowed) {
