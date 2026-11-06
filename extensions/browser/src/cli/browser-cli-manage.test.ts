@@ -1,3 +1,4 @@
+import { AsyncWorkScope } from "openclaw/plugin-sdk/concurrency-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { BrowserStatus, ProfileStatus } from "../browser/client.js";
 import {
@@ -385,4 +386,54 @@ describe("browser manage output", () => {
     expect(capture.runtimeErrors).toEqual([]);
     expectHumanOutput(0);
   });
+
+  it.each(["/doctor", "/profiles"])(
+    "does not report an interrupted doctor read at %s as unhealthy",
+    async (path) => {
+      const scope = new AsyncWorkScope();
+      const report = { status: makeStatus(), checks: [] };
+      mockDoctor(report);
+      if (path === "/profiles") {
+        gateway.mockResolvedValueOnce(report);
+      }
+      gateway.mockImplementationOnce(async () => {
+        process.exitCode = 130;
+        scope.beginClose(new DOMException("CLI stopping (SIGINT)", "AbortError"));
+        return path === "/doctor" ? report : { profiles: [] };
+      });
+
+      await scope.run(() => run(["--json", "doctor"]));
+
+      expect(capture.runtimeLogs).toEqual([]);
+      expect(capture.runtimeErrors).toEqual([]);
+      expect(process.exitCode).toBe(130);
+    },
+  );
+
+  it.each(["start", "stop"])(
+    "keeps the accepted %s status output after interruption",
+    async (action) => {
+      const scope = new AsyncWorkScope();
+      mockResponse("/", makeStatus({ running: action === "start" }));
+      gateway.mockImplementationOnce(async () => {
+        process.exitCode = 130;
+        scope.beginClose(new DOMException("CLI stopping (SIGINT)", "AbortError"));
+        return {
+          ok: true,
+          profile: "chrome-live",
+          ...(action === "stop" ? { stopped: true } : {}),
+        };
+      });
+
+      await scope.run(() => run(["--json", action]));
+
+      expect(capture.runtimeLogs).toHaveLength(1);
+      expect(JSON.parse(capture.runtimeLogs[0] ?? "")).toMatchObject({
+        profile: "chrome-live",
+        running: action === "start",
+      });
+      expect(capture.runtimeErrors).toEqual([]);
+      expect(process.exitCode).toBe(130);
+    },
+  );
 });

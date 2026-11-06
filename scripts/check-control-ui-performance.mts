@@ -55,9 +55,9 @@ const controlUiPerformanceBudgets = {
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
   // Generated-name-normalized main measurement plus 64 B toolchain headroom.
-  // Two-phase transcript mount after the copy cleanup: measured head plus 64 B.
-  chatBootJsGzipBytes: 1_286_945,
-  newBootJsGzipBytes: 797_539,
+  // Retired copy, browser fallbacks, and unused initializers: measured head plus 64 B.
+  chatBootJsGzipBytes: 1_287_916,
+  newBootJsGzipBytes: 796_969,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
