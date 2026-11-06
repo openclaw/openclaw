@@ -50,8 +50,8 @@ const controlUiPerformanceBudgets = {
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
   // CPU-backed theme readback cuts Appearance latency 7–20% across both engines.
-  // Matched 60a0ffc99ca build: 1,296,296 B + 1,844 B bounded LaTeX + 192 B headroom.
-  chatBootJsGzipBytes: 1_298_332,
+  // After the medium-transcript merge: 1,295,862 B + 192 B generated-name headroom.
+  chatBootJsGzipBytes: 1_296_054,
   // The same theme readback win also affects New Session's shared bundle.
   // After the merge: 802,351 B + 192 B generated-name headroom.
   newBootJsGzipBytes: 802_543,
@@ -74,6 +74,9 @@ const controlUiPerformanceBudgets = {
   totalCssGzipBytes: 323_616,
   totalCssRawBytes: 1_672_449,
 } satisfies Record<string, number>;
+// Keep the measured math allowance separate from upstream baseline updates.
+// Matched 60a0ffc99ca: 1,298,140 B + 192 B headroom = 1,296,054 B + 2,278 B.
+controlUiPerformanceBudgets.chatBootJsGzipBytes += 2_278;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
 function readAssetMetrics(assetsDir: string, entry: fs.Dirent) {
