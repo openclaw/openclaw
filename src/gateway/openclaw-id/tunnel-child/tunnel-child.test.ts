@@ -1,8 +1,11 @@
+import { fork } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
@@ -14,7 +17,7 @@ import {
 } from "../../../../packages/openclaw-id-protocol/src/index.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../../../infra/runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "../../../infra/runtime-worker-url.js";
-import type { TunnelReadyMessage } from "../tunnel-ipc.js";
+import { TUNNEL_EXIT_UNAVAILABLE, type TunnelReadyMessage } from "../tunnel-ipc.js";
 import { createTunnelSupervisor, type TunnelSupervisor } from "../tunnel-supervisor.js";
 import { loadIrohBinding, type IrohBinding } from "./addon.js";
 import { createTunnelTestClient } from "./tunnel-client.test-support.js";
@@ -227,4 +230,59 @@ describe.skipIf(!binding)("tunnel child", () => {
       await client.close();
     }
   });
+
+  // Without forced termination, a serving child must still leave once the Gateway goes.
+  it.each(["disconnect", "SIGTERM"] as const)(
+    "exits 0 by itself after %s",
+    async (how) => {
+      const child = forkChild();
+      const exited = once(child, "exit");
+      const started = new Promise((resolve) => {
+        child.on("message", (message: { type?: string }) => {
+          if (message.type === "ready") {
+            resolve(message);
+          }
+        });
+      });
+      child.send({
+        type: "start",
+        relayUrl: "http://127.0.0.1:9/",
+        keyPath: path.join(dir, `exit-${how}`, "endpoint.key"),
+        bindAddr: "127.0.0.1:0",
+        ingress: { socketPath: path.join(dir, "ingress.sock"), proxyToken: PROXY_TOKEN },
+        forwardedProto: "https",
+      });
+      await started;
+      if (how === "disconnect") {
+        child.disconnect();
+      } else {
+        child.kill("SIGTERM");
+      }
+      const outcome = await Promise.race([exited, sleep(15_000, "still running")]);
+      if (outcome === "still running") {
+        child.kill("SIGKILL");
+      }
+      expect(outcome).toEqual([0, null]);
+    },
+    30_000,
+  );
+});
+
+// Forks the production child entry the way its supervisor does.
+function forkChild() {
+  const entry = resolveRuntimeProcessEntrypointUrl("openclawIdTunnel");
+  return fork(fileURLToPath(entry), [], {
+    execArgv: resolveRuntimeWorkerArgv(entry).slice(0, -1),
+    serialization: "advanced",
+    stdio: ["ignore", "ignore", "ignore", "ipc"],
+  });
+}
+
+// The production child must leave on its own, with the status its supervisor reads.
+describe.skipIf(binding)("tunnel child without the iroh binding", () => {
+  it("exits by itself as transport unavailable", async () => {
+    const child = forkChild();
+    const [code, signal] = await once(child, "exit");
+    expect({ code, signal }).toEqual({ code: TUNNEL_EXIT_UNAVAILABLE, signal: null });
+  }, 30_000);
 });
