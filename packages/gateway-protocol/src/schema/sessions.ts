@@ -491,8 +491,7 @@ export const SessionsCreateResultSchema = Type.Object(
   { additionalProperties: true },
 );
 
-export { SessionsPostParamsSchema } from "./sessions-post.js";
-export type { SessionsPostParams } from "./sessions-post.js";
+export { SessionsPostParamsSchema, type SessionsPostParams } from "./sessions-post.js";
 
 export const SessionsSendParamsSchema = closedObject({
   key: NonEmptyString,
