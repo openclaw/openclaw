@@ -101,8 +101,8 @@ export function renderControlUiUnavailableDocument(title: string): string {
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="light dark"><title>OpenClaw — Temporarily unavailable</title>
 <style>
-:root{color-scheme:light;--bg:#f8f8f8;--text:#353535;--text-strong:#202020;--muted:#5e5e5e;--rail:#f0f0f0;--rail-edge:#ebebeb;--side:#f4f4f4;--side-edge:#ededed;--icon:rgb(53 53 53/.6);--current:#e5e5e5;--current-icon:#202020;--accent:#bd4531;--on-accent:#fff;--divider:rgb(0 0 0/.13);--placeholder:rgb(94 94 94/.16);--skeleton:rgb(94 94 94/.09);--skeleton-heading:rgb(94 94 94/.12);--presence:#92400e;--tile:#fbfbfb;--tile-edge:#eaeaea;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;line-height:1.55;letter-spacing:-.01em;color:var(--text);background:var(--bg);-webkit-font-smoothing:antialiased}
-@media(prefers-color-scheme:dark){:root{color-scheme:dark;--bg:#0e1015;--text:#bcbcc0;--text-strong:#f4f4f5;--muted:#8e8e97;--rail:#15171c;--rail-edge:#1f2126;--side:#121419;--side-edge:#1d1f24;--icon:rgb(188 188 192/.48);--current:#222429;--current-icon:#f4f4f5;--accent:#ff5c5c;--on-accent:#0e1015;--divider:rgb(255 255 255/.14);--placeholder:rgb(142 142 151/.16);--skeleton:rgb(142 142 151/.09);--skeleton-heading:rgb(142 142 151/.12);--presence:#f59e0b;--tile:#1c1e23;--tile-edge:#23252a}}
+:root{color-scheme:light;--bg:#f8f8f8;--text:#353535;--text-strong:#202020;--muted:#5e5e5e;--tertiary:rgb(53 53 53/.484);--rail:#f0f0f0;--rail-edge:#ebebeb;--side:#f4f4f4;--side-edge:#ededed;--icon:rgb(53 53 53/.6);--current:#e5e5e5;--current-icon:#202020;--accent:#bd4531;--on-accent:#fff;--divider:rgb(0 0 0/.13);--placeholder:rgb(94 94 94/.16);--skeleton:rgb(94 94 94/.09);--skeleton-heading:rgb(94 94 94/.12);--presence:#92400e;--tile:#fbfbfb;--tile-edge:#eaeaea;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;line-height:1.55;letter-spacing:-.01em;color:var(--text);background:var(--bg);-webkit-font-smoothing:antialiased}
+@media(prefers-color-scheme:dark){:root{color-scheme:dark;--bg:#0e1015;--text:#bcbcc0;--text-strong:#f4f4f5;--muted:#8e8e97;--tertiary:rgb(188 188 192/.484);--rail:#15171c;--rail-edge:#1f2126;--side:#121419;--side-edge:#1d1f24;--icon:rgb(188 188 192/.48);--current:#222429;--current-icon:#f4f4f5;--accent:#ff5c5c;--on-accent:#0e1015;--divider:rgb(255 255 255/.14);--placeholder:rgb(142 142 151/.16);--skeleton:rgb(142 142 151/.09);--skeleton-heading:rgb(142 142 151/.12);--presence:#f59e0b;--tile:#1c1e23;--tile-edge:#23252a}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg)}
 .shell{display:flex;min-height:100svh}
 .sidebar{display:flex;flex:none;position:sticky;top:0;height:100svh}
@@ -123,8 +123,8 @@ export function renderControlUiUnavailableDocument(title: string): string {
 .skeleton-rows>span>:first-child{flex:none;width:9px;height:9px;border-radius:50%}
 .skeleton-rows>span>:last-child{width:70%}.skeleton-rows>:nth-child(2)>:last-child{width:52%}.skeleton-rows>:nth-child(3)>:last-child{width:79%}.skeleton-rows>:nth-child(4)>:last-child{width:61%}
 .content{position:relative;display:flex;flex-direction:column;flex:1;min-width:0;padding:0 20px}
-.topbar{position:absolute;inset:0 0 auto;display:grid;grid-template-columns:min(100%,480px);justify-content:center;height:53px;padding:8px 52px 0}
-.wordmark{display:block;width:140px;height:32px;margin-top:6.5px;color:var(--text-strong)}
+.topbar{position:absolute;inset:0 auto auto 0;display:flex;align-items:center;height:53px;padding:0 12px}
+.wordmark{display:block;width:140px;height:32px;color:var(--text-strong)}
 main{display:grid;place-items:center;flex:1;min-height:100svh;padding:48px 32px}
 .body{width:min(100%,480px);padding-bottom:9vh}
 .busy{display:grid;place-items:center;width:48px;height:48px;margin-bottom:28px;border:1px solid var(--tile-edge);border-radius:14px;background:var(--tile);color:var(--accent)}
@@ -132,8 +132,8 @@ main{display:grid;place-items:center;flex:1;min-height:100svh;padding:48px 32px}
 h1{margin:0;font-size:clamp(24px,2.5vw,32px);font-weight:600;line-height:1.2;letter-spacing:-.035em;text-wrap:balance}
 p{margin:16px 0 0;max-width:42ch;color:var(--muted);font-size:12px;line-height:1.7}
 /* Holds the empty action row height of the app view, so the block sits where the app draws it. */
-.status{margin:4px 0 calc(64px - 1.7em)}
-@media(max-width:768px),(max-width:932px) and (max-height:500px) and (orientation:landscape){.sidebar{display:none}.content{padding:0 4px}.topbar{position:static;display:flex;padding:8px 12px 0}main{min-height:calc(100svh - 64px);margin-top:11px}}
+.status{margin:20px 0 calc(48px - 1.7em);color:var(--tertiary);font-size:11px}
+@media(max-width:768px),(max-width:932px) and (max-height:500px) and (orientation:landscape){.sidebar{display:none}.content{padding:0 4px}.topbar{position:static;align-items:flex-start;justify-content:center;padding:14.5px 12px 0}main{min-height:calc(100svh - 64px);margin-top:11px}}
 @media(max-width:640px){main{padding:32px 24px}.body{padding-bottom:6vh}}
 @media(prefers-reduced-motion:reduce){.busy svg{animation:none}}
 </style></head><body>
