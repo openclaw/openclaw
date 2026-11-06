@@ -490,8 +490,7 @@ it.each([
 ] as const)("clones exact persisted fields: %j", async (fields) => {
   const sourceJob = createCronJob("source", "Source", { ...fields, agentId: "writer" });
   const cronJobs = "schedule" in fields ? [sourceJob] : [];
-  const { submit } = cloneJob(sourceJob, { cronJobs });
-  const payload = await submit();
+  const payload = await cloneJob(sourceJob, { cronJobs }).submit();
   expect(payload).toMatchObject({ agentId: "writer", name: "Source copy" });
   for (const [field, expected] of Object.entries(fields)) {
     // oxlint-disable-next-line unicorn/prefer-structured-clone -- verify omitted fields on the wire
