@@ -52,12 +52,12 @@ export function createSidebarScroll(
     windowKeys() {
       const keys = new Set<string>();
       for (const read of windows) {
-        const window = read();
-        if (!window) {
+        const sessionKeys = read();
+        if (!sessionKeys) {
           return undefined;
         }
-        for (const key of window) {
-          keys.add(key);
+        for (const sessionKey of sessionKeys) {
+          keys.add(sessionKey);
         }
       }
       return [...keys];

@@ -251,7 +251,7 @@ export function createSidebarSessionWindow(
     }),
   );
   onSettled(() =>
-    // Reload starts at zero; capture that range without another layout read.
+    // Snapshot capture samples the measured zero-offset range without layout reads.
     scroll.registerWindow(() => {
       const source = inputs();
       if (source.length === 0) {

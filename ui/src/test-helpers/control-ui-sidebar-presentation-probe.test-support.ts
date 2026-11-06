@@ -153,12 +153,13 @@ export function sidebarPresentationProbe() {
       }
     }
   };
-  channel.port1.onmessage = () => {
+  channel.port1.addEventListener("message", () => {
     sample();
     for (const resolve of pendingFrames.splice(0)) {
       resolve();
     }
-  };
+  });
+  channel.port1.start();
   const requestSample = () => {
     if (!stopped) {
       // rAF precedes ResizeObserver; this task samples after the rendering update.
@@ -168,7 +169,10 @@ export function sidebarPresentationProbe() {
   };
   requestAnimationFrame(requestSample);
   const probe = {
-    nextFrame: () => new Promise<void>((resolve) => pendingFrames.push(resolve)),
+    nextFrame: () =>
+      new Promise<void>((resolve) => {
+        pendingFrames.push(resolve);
+      }),
     read() {
       stopped = true;
       channel.port1.close();
