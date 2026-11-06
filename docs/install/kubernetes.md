@@ -149,19 +149,48 @@ If the root stops matching, kubelet can walk the volume again. CSI drivers that
 advertise `VOLUME_MOUNT_GROUP` handle permissions themselves, so this policy
 does not apply to them. See [Kubernetes volume permission policy](https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#configure-volume-permission-and-ownership-change-policy-for-pods).
 
-An initial successful boot does not establish that the same PVC will pass
-private-storage admission after a pod replacement. The supplied init container
-prepares configuration and temporary storage; it does not restore private
-credential or recovery-storage permissions. This template has not been validated
-as a complete recovery procedure for already widened storage.
+The Gateway restores the private modes of the stores this installation owns
+before Doctor's recovery capture and before credential admission, so a remount
+that widens them no longer blocks startup. The restore covers the state
+directory, the client credential store, the daemon runtime pin store, their
+SQLite sidecars, and the sibling `<stateDir>.update-captures` directory.
 
-If startup reports `Client credential directory is unsafe`, keep the Gateway
-stopped and have the storage owner inspect the state directory, its
+The restore is deliberately narrow. It repairs an enumerated path list rather
+than walking the state tree, changes no ownership, skips symlinks instead of
+following them, leaves paths owned by another UID alone, and leaves any path
+carrying world permission bits for its owner to refuse, because `fsGroup` never
+sets those. Every downstream admission check stays as strict as before:
+membership in the volume's group still does not grant private credential
+authority.
+
+Validated on OpenShift 4.21.16 (Kubernetes v1.34.7, RHCOS 9.6) with the
+`ebs.csi.aws.com` driver (`gp3`, `fsGroupPolicy: File`) and
+`fsGroupChangePolicy: Always`, against an existing PVC whose directories kubelet
+had left at mode `2770` and whose store files it had left at `0660`.
+
+Two cases still need the storage owner.
+
+A kubelet-created mount point stays owned by another UID, and `fsGroup` leaves it
+group-writable. Doctor's pre-repair recovery copy refuses a staging ancestor that
+another user could replace, and it walks the whole ancestor chain, so it names the
+mount point itself. Placing the state directory deeper under that mount does not
+help. Restoring modes is not ownership transfer and an unprivileged container
+cannot chown a foreign-owned mount point, so recovery capture needs a mount point
+provisioned with the Gateway's ownership before startup, as described below. The
+Gateway still starts and Doctor still completes; only the pre-repair recovery copy
+is unavailable.
+
+A state volume shared between workloads by group membership is not a supported
+layout for OpenClaw state: the Gateway requires its stores to be private to its
+own UID, so group sharing of the state volume has no supported configuration. Use
+a volume with a single writer.
+
+If startup still reports `Client credential directory is unsafe`, keep the
+Gateway stopped and have the storage owner inspect the state directory, its
 `client/credentials.sqlite` store, and the sibling `<stateDir>.update-captures`
 directory. Credential directories and files must remain private to the Gateway
 UID (`0700` and `0600`, respectively). Recovery storage also needs trusted
-ancestors that prevent other users from replacing its directories. Membership in
-the volume's group does not grant private credential authority.
+ancestors that prevent other users from replacing its directories.
 
 The shipped PVC mount covers `/home/node/.openclaw`, while retained update
 captures resolve to `/home/node/.openclaw.update-captures`. That sibling needs a
@@ -194,8 +223,10 @@ storage owner must still verify ownership, private modes, source-entry protectio
 and the target mount ancestry before changing the mounts. Do not automatically
 create missing children or reseed config as a substitute for existing data.
 
-A deployment-specific preparation step can restore modes on exact, authorized,
-UID-owned private paths after mounting and before Gateway or Doctor admission.
+The Gateway performs this restore for its own enumerated paths. A
+deployment-specific preparation step is still what establishes ownership of a
+foreign-owned mount root, and can restore modes on exact, authorized, UID-owned
+private paths after mounting and before Gateway or Doctor admission.
 It must refuse symlinks, hardlinked files, foreign owners, unsafe ancestors, and
 unsupported recovery states, and leave source/schema/backup validation intact.
 Pathname `chmod` after a separate check is not a validated implementation of

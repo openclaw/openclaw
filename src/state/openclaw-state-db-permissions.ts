@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, statSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
+import { resolveStateDir } from "../config/state-dir.js";
 import { createDedupeCache } from "../infra/dedupe.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
@@ -44,6 +45,78 @@ function bestEffortChmodSync(target: string, mode: number): void {
   stateDbLog.warn(`skipped permission hardening for ${target}: ${String(result.error)}`);
 }
 
+/** Private stores this installation owns beside its shared state database. */
+const PRIVATE_STATE_STORES = Object.freeze([
+  // Keep in step with resolveClientCredentialStorePath and
+  // resolveDaemonRuntimePinStorePath; openclaw-state-db-permissions.test.ts asserts it.
+  Object.freeze(["client", "credentials.sqlite"]),
+  Object.freeze(["control", "services.sqlite"]),
+] as const);
+
+/** Mirrors resolveUpdateCaptureRoot, which is a hard sibling of the state directory. */
+const UPDATE_CAPTURE_ROOT_SUFFIX = ".update-captures";
+
+/**
+ * Restores the private mode of one enumerated, installation-owned path.
+ *
+ * Deliberately narrow, so this stays a repair rather than a policy change:
+ * symlinks are skipped instead of followed, foreign-owned paths are left alone,
+ * an already-private path is untouched so its ctime stays stable, and a path
+ * carrying world permission bits is left for its owner to refuse because
+ * fsGroup never sets those.
+ */
+function restorePrivateStoreMode(target: string, mode: number): void {
+  let observed: ReturnType<typeof lstatSync>;
+  try {
+    observed = lstatSync(target);
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR")) {
+      return;
+    }
+    throw error;
+  }
+  if (observed.isSymbolicLink()) {
+    stateDbLog.warn(`skipped permission restore for ${target}: symbolic link`);
+    return;
+  }
+  const uid = process.getuid?.();
+  if (uid !== undefined && observed.uid !== uid) {
+    return;
+  }
+  if ((observed.mode & 0o007) !== 0 || (observed.mode & 0o7070) === 0) {
+    return;
+  }
+  bestEffortChmodSync(target, mode);
+}
+
+/**
+ * Restores private modes that an fsGroup volume remount broadens.
+ *
+ * Kubernetes re-applies `fsGroup` group permissions to every directory and file
+ * of a volume on each mount, and Linux propagates the volume's setgid bit into
+ * directories the gateway creates under it. The private-storage owners then
+ * refuse to open state this installation already owns, and the Gateway cannot
+ * start (#192959). `fsGroupChangePolicy: OnRootMismatch` only narrows when this
+ * will happen; it does not restore permissions already broadened.
+ *
+ * This repairs an enumerated set of owned paths before those owners run, so
+ * every downstream admission check stays exactly as strict as before.
+ */
+export function restorePrivateStateStoreModes(env: NodeJS.ProcessEnv): void {
+  if (process.platform === "win32") {
+    return;
+  }
+  const stateDir = path.resolve(resolveStateDir(env));
+  restorePrivateStoreMode(stateDir, OPENCLAW_STATE_DIR_MODE);
+  restorePrivateStoreMode(`${stateDir}${UPDATE_CAPTURE_ROOT_SUFFIX}`, OPENCLAW_STATE_DIR_MODE);
+  for (const [directory, file] of PRIVATE_STATE_STORES) {
+    restorePrivateStoreMode(path.join(stateDir, directory), OPENCLAW_STATE_DIR_MODE);
+    for (const candidate of resolveSqliteDatabaseFilePaths(path.join(stateDir, directory, file))) {
+      restorePrivateStoreMode(candidate, OPENCLAW_STATE_FILE_MODE);
+    }
+  }
+}
+
 export function ensureOpenClawStatePermissions(
   pathname: string,
   env: NodeJS.ProcessEnv,
@@ -55,6 +128,11 @@ export function ensureOpenClawStatePermissions(
   const isDefaultStateDatabase = path.resolve(pathname) === path.resolve(defaultPath);
   if (isDefaultStateDatabase && dir !== defaultDir) {
     throw new Error(`OpenClaw state database path resolved outside its state dir: ${pathname}`);
+  }
+  // A custom database path owns no sibling private stores, so only the default
+  // installation's own paths are restored.
+  if (isDefaultStateDatabase) {
+    restorePrivateStateStoreModes(env);
   }
   const dirExisted = existsSync(dir);
   if (options.createDirectory) {

@@ -102,6 +102,13 @@ export async function prepareDoctorHealthFlow(
   // Config loading can initialize SQLite-backed state before integrity runs.
   // Preserve the entry fact so doctor can report that automatic initialization.
   const stateDirExistedAtStart = stateDirectoryExistsAtDoctorStart();
+  // An fsGroup volume remount broadens the private stores this installation owns,
+  // and Doctor's recovery capture reads them before database preflight restores
+  // permissions. Restore them first so the capture and credential admission both
+  // see private storage on the same start (#192959).
+  (await import("../state/openclaw-state-db-permissions.js")).restorePrivateStateStoreModes(
+    process.env,
+  );
   showIntro("OpenClaw doctor");
   const root = await readDoctorStartup("package root", async (signal) => {
     const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
