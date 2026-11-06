@@ -1401,7 +1401,7 @@
         padding-bottom: 9vh;
       }
 
-      /* Same status tile as the Gateway holding screen: spinner while recovering, dot once stopped. */
+      /* Same status tile as the Gateway holding screen, shown only while recovery runs. */
       .mount-fallback__mark {
         box-sizing: border-box;
         display: grid;
@@ -1428,20 +1428,9 @@
         animation: mount-fallback-spin 1.6s linear infinite;
       }
 
-      .mount-fallback__dot {
+      /* Only a busy screen shows the status tile; a stopped one leads with its title. */
+      .mount-fallback[data-recovery="stopped"] .mount-fallback__mark {
         display: none;
-        width: 9px;
-        height: 9px;
-        border-radius: 50%;
-        background: var(--mount-fallback-muted);
-      }
-
-      .mount-fallback[data-recovery="stopped"] .mount-fallback__spinner {
-        display: none;
-      }
-
-      .mount-fallback[data-recovery="stopped"] .mount-fallback__dot {
-        display: block;
       }
 
       @keyframes mount-fallback-spin {
@@ -1998,7 +1987,7 @@
         <div class="mount-fallback__stage">
           <div class="mount-fallback__panel" tabindex="-1">
             <div class="mount-fallback__mark" aria-hidden="true">
-              <span class="mount-fallback__spinner"></span><span class="mount-fallback__dot"></span>
+              <span class="mount-fallback__spinner"></span>
             </div>
             <h1 id="openclaw-mount-fallback-title">Control UI didn’t start</h1>
             <p id="openclaw-mount-fallback-summary">
