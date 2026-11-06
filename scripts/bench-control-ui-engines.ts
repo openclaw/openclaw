@@ -134,8 +134,8 @@ if (!Number.isInteger(memorySoakRounds) || memorySoakRounds < 1 || memorySoakRou
 }
 const pageBenchmark = values.pages || values.steps?.split(",").some((id) => id.startsWith("page-"));
 const pagePhases = values["page-phases"].split(",");
-if (pagePhases.some((phase) => !["visit", "action", "leave"].includes(phase))) {
-  throw new Error("page-phases must contain visit, action and/or leave");
+if (pagePhases.some((phase) => !["visit", "revisit", "action", "leave"].includes(phase))) {
+  throw new Error("page-phases must contain visit, revisit, action and/or leave");
 }
 const engines: ControlUiEngine[] = values.engines.split(",").map((name) => {
   if (name !== "chromium" && name !== "webkit") {
@@ -217,6 +217,7 @@ const needsWorkboard =
     .some(
       (id) =>
         id.startsWith("workboard-") ||
+        id.startsWith("noop-workboard-") ||
         /^page-(?:workboard|plugin)-(?:visit|action|leave)$/u.test(id),
     );
 if (needsWorkboard && directories.some((_, index) => !sourceRoots[index])) {
@@ -605,7 +606,11 @@ try {
                 );
               }
               await installControlUiPageObserver(page);
-              await installEngineConfigurationObserver(page, configuration, !scenario.standalone);
+              await installEngineConfigurationObserver(
+                page,
+                configuration,
+                !scenario.standaloneDocument,
+              );
               await page.addInitScript(installInteractionNavigationPreloadObserver);
               if (scenario.memory) {
                 await page.addInitScript(installControlUiResourceCounts);
@@ -726,8 +731,8 @@ try {
               await scenario.setup?.(page);
               if (scenario.navigation !== "measured") {
                 await page.goto(new URL(scenario.route, slot.server.baseUrl).href);
-                await waitForControlUiInitialRoster(page, 30_000);
-                if (!scenario.standalone) {
+                if (!scenario.standaloneDocument) {
+                  await waitForControlUiInitialRoster(page, 30_000);
                   await page.waitForFunction(
                     (locale) => document.documentElement.lang === locale,
                     configuration.locale,
@@ -736,7 +741,9 @@ try {
               }
               await scenario.prepare(page, gateway);
               if (scenario.navigation !== "measured") {
-                observation.navigationPreloads = await settleInteractionNavigationPreloads(page);
+                if (!scenario.standaloneDocument) {
+                  observation.navigationPreloads = await settleInteractionNavigationPreloads(page);
+                }
                 await page.waitForLoadState("networkidle");
                 await page.evaluate(() => document.fonts.ready.then(() => undefined));
                 observation.prepareFrameIntervalMs = await frames(page);
@@ -883,7 +890,7 @@ try {
               observation.configurationEvidence = await readEngineConfigurationObservation(
                 page,
                 configuration,
-                !scenario.standalone,
+                !scenario.standaloneDocument,
               );
               observation.pageMetrics = await readControlUiPageObserver(
                 page,

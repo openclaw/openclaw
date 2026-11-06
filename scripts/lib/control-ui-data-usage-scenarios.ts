@@ -268,7 +268,8 @@ const usageScenarios: readonly InteractionScenario[] = [
     run: async (page, gateway) => {
       const firstTitle = await page.locator(".session-bar-title").first().textContent();
       const after = (await gateway.getRequests("sessions.usage", { sort: "recent" })).length;
-      await page.locator(".sessions-sort select").selectOption("recent");
+      // Native type-ahead emits a trusted input boundary for application timing.
+      await page.locator(".sessions-sort select").press("r");
       await gateway.waitForRequest("sessions.usage", { after, match: { sort: "recent" } });
       await page.waitForFunction(
         (previous) => document.querySelector(".session-bar-title")?.textContent !== previous,

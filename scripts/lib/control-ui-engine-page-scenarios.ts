@@ -13,6 +13,7 @@ import type { ModelAuthStatusResult } from "../../ui/src/api/types.ts";
 import { APP_ROUTE_IDS, pathForRoute, type RouteId } from "../../ui/src/app-route-paths.ts";
 import type { ColdLoadRpcRecord } from "../../ui/src/test-helpers/control-ui-cold-load-probe-init.ts";
 import { createColdLoadProbeInitScript } from "../../ui/src/test-helpers/control-ui-cold-load-probes.ts";
+import type { MockGatewayWindow } from "../../ui/src/test-helpers/control-ui-e2e-contract.ts";
 import { waitForControlUiRoute } from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import {
   meetingEntry,
@@ -33,6 +34,10 @@ import type {
 type PageAction = {
   label: string;
   run: InteractionScenario["run"];
+};
+type NoChangeAction = PageAction & {
+  kind: "push" | "refresh" | "poll" | "presence-push" | "model-push";
+  prepare?: InteractionScenario["prepare"];
 };
 type PageDefinition = {
   ready: string;
@@ -1007,6 +1012,150 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   },
 };
 
+async function settleNoChangeAction(page: Page) {
+  await page.waitForFunction(() => {
+    const reads: { pendingMethods: string[]; queued: number } = Reflect.get(
+      window,
+      "__coldLoad",
+    ).read();
+    return reads.queued === 0 && reads.pendingMethods.length === 0;
+  });
+  await frames(page);
+}
+
+function unchangedPush(
+  event: string,
+  payload: unknown,
+  method: string,
+  kind: NoChangeAction["kind"] = "push",
+): NoChangeAction {
+  return {
+    kind,
+    label: `Deliver ${event}; ${method} returns its unchanged fixture payload`,
+    run: async (page, gateway) => {
+      const before = (await gateway.getRequests(method)).length;
+      const rosterBefore =
+        event === "config.changed" ? (await gateway.getRequests("agents.list")).length : null;
+      await page.evaluate(
+        ({ event: eventName, payload: eventPayload }) => {
+          window.openclawEngineMarkGatewayInput?.();
+          (window as MockGatewayWindow).openclawControlUiE2eGateway!.emit(eventName, eventPayload);
+        },
+        { event, payload },
+      );
+      await gateway.waitForRequest(method, { after: before });
+      // Config delivery also owns a 100ms roster debounce; include its resulting publication.
+      if (rosterBefore !== null) {
+        await gateway.waitForRequest("agents.list", { after: rosterBefore });
+      }
+      await settleNoChangeAction(page);
+      return {
+        unchangedPayload: true,
+        refreshRequests: (await gateway.getRequests(method)).length - before,
+      };
+    },
+  };
+}
+
+const unchangedPresence = Array.from({ length: 30 }, (_, index) => ({
+  instanceId: `census-node-${index}`,
+  deviceId: `census-node-${index}`,
+  host: `Census node ${index}`,
+  platform: "linux",
+  mode: "node",
+  ts: time,
+}));
+
+/** Diagnostic-only actions: fresh transport values, unchanged domain contents. */
+function noChangeActions(id: RouteId): NoChangeAction[] {
+  const configPush = unchangedPush("config.changed", {}, "config.get");
+  const actions: NoChangeAction[] = [configPush];
+  if (id === "approvals") {
+    actions[0] = unchangedPush(
+      "exec.approval.resolved",
+      { id: "census-approval-0", decision: "deny" },
+      "approval.history",
+    );
+  } else if (id === "portals") {
+    actions[0] = unchangedPush("portal.changed", {}, "portal.list");
+  } else if (id === "apps") {
+    actions[0] = unchangedPush("config.changed", {}, "mcp.app.discover");
+  } else if (id === "profile") {
+    actions[0] = unchangedPush("sessions.changed", { reason: "profile-identity" }, "users.self");
+  }
+  if (id === "devices" || id === "activity" || id === "agents" || id === "systems") {
+    actions.push({
+      kind: "presence-push",
+      label: "Deliver the identical 30-node presence snapshot twice; measure the second delivery",
+      prepare: async (page, gateway) => {
+        await gateway.emitGatewayEvent("presence", { presence: unchangedPresence });
+        await settleNoChangeAction(page);
+      },
+      run: async (page, gateway) => {
+        await gateway.emitGatewayEvent("presence", { presence: unchangedPresence });
+        await settleNoChangeAction(page);
+        return { unchangedPresenceRows: unchangedPresence.length };
+      },
+    });
+  }
+  if (id === "devices") {
+    actions.push(
+      unchangedPush("node.hostStats", { nodeId: "census-node-0" }, "node.list", "refresh"),
+    );
+  }
+  if (id === "model-providers" || id === "profile") {
+    actions.push(
+      unchangedPush(
+        "chat.metadata.changed",
+        { authChanged: true, modelCatalogChanged: true },
+        id === "profile" ? "users.listModelAccounts" : "models.list",
+        "model-push",
+      ),
+    );
+  }
+  if (id === "agents" || id === "memory") {
+    const action = definitions[id]?.action;
+    assert(action);
+    actions.push({ ...action, kind: "refresh" });
+  }
+  if (id === "debug") {
+    actions.push({
+      kind: "refresh",
+      label: "Refresh diagnostics with identical status, health, models, heartbeat and lane data",
+      run: async (page, gateway) => {
+        const before = (await gateway.getRequests("status")).length;
+        await page.locator("openclaw-debug-page .debug-refresh:enabled").click();
+        await gateway.waitForRequest("status", { after: before });
+        await settleNoChangeAction(page);
+        return { unchangedDiagnostics: true };
+      },
+    });
+    actions.push({
+      kind: "poll",
+      label: "Wait for the real three-second diagnostics poll to return unchanged lane data",
+      run: async (page, gateway) => {
+        const before = (await gateway.getRequests("diagnostics.lanes")).length;
+        await gateway.waitForRequest("diagnostics.lanes", { after: before });
+        await settleNoChangeAction(page);
+        return { unchangedDiagnostics: true, intervalMs: 3000 };
+      },
+    });
+  }
+  if (id === "connection") {
+    actions.push({
+      kind: "poll",
+      label: "Wait for the real ten-second system-info poll to return its unchanged host snapshot",
+      run: async (page, gateway) => {
+        const before = (await gateway.getRequests("system.info")).length;
+        await gateway.waitForRequest("system.info", { after: before });
+        await settleNoChangeAction(page);
+        return { unchangedHostSnapshot: true, intervalMs: 10000 };
+      },
+    });
+  }
+  return actions;
+}
+
 export const enginePageCoverage: readonly PageCoverage[] = APP_ROUTE_IDS.map((id) => {
   const definition = definitions[id];
   return {
@@ -1677,6 +1826,61 @@ export function createEnginePageScenarios(): readonly EngineScenario[] {
       await navigate(page, id, definition.search);
       await ready(page, id, definition);
     };
+    const noChanges: EngineScenario[] = definition.landed
+      ? []
+      : noChangeActions(id).map((action) =>
+          Object.assign({}, common, {
+            id: `page-${id}-${action.kind}`,
+            expected: action.label,
+            initScript: createColdLoadProbeInitScript({
+              ownerProbes: false,
+              sidebarCounters: false,
+              latencyMs: 0,
+              frameGapMs: 0,
+              events: [],
+            }),
+            // Successful, deterministic diagnostics keep the poll census on the data path.
+            // The existing visit/action fixtures keep their original responses.
+            fixtureOverrides: (sandbox, base) => {
+              const fixture = common.fixtureOverrides?.(sandbox, base) ?? {};
+              return id === "debug" || id === "connection"
+                ? {
+                    ...fixture,
+                    featureMethods: [
+                      ...new Set([
+                        ...(fixture.featureMethods ?? []),
+                        "diagnostics.lanes",
+                        "system.info",
+                      ]),
+                    ],
+                    methodResponses: {
+                      ...fixture.methodResponses,
+                      "last-heartbeat": { ts: time, status: "ok" },
+                      "diagnostics.lanes": {
+                        lanes: Array.from({ length: 30 }, (_, index) => ({
+                          lane: `census-lane-${index}`,
+                          activeCount: 0,
+                          queuedCount: 0,
+                          maxConcurrent: 4,
+                        })),
+                        dynamic: null,
+                      },
+                    },
+                  }
+                : fixture;
+            },
+            prepare: async (page, gateway) => {
+              await enter(page);
+              await settleNoChangeAction(page);
+              await action.prepare?.(page, gateway);
+            },
+            run: async (page, gateway) => {
+              const evidence = await action.run(page, gateway);
+              await ready(page, id, definition);
+              return evidence;
+            },
+          } satisfies Partial<EngineScenario>),
+        );
     const visit: EngineScenario = {
       ...common,
       id: `page-${id}-visit`,
@@ -1686,6 +1890,17 @@ export function createEnginePageScenarios(): readonly EngineScenario[] {
         const timing = await measureVisit(page, id, definition);
         await ready(page, id, definition);
         return { visitReadyMs: timing.readyMs, contentReadyMs: timing.contentReadyMs };
+      },
+    };
+    const revisit: EngineScenario = {
+      ...visit,
+      id: `page-${id}-revisit`,
+      expected: `Warm return to ${coverage.path} after its first visit.`,
+      prepare: async (page) => {
+        await enter(page);
+        const destination = id === "about" ? "connection" : "about";
+        await navigate(page, destination);
+        await ready(page, destination, definitions[destination]!);
       },
     };
     const leave: EngineScenario = {
@@ -1702,7 +1917,7 @@ export function createEnginePageScenarios(): readonly EngineScenario[] {
       },
     };
     if (!definition.action) {
-      return [visit, leave];
+      return [visit, revisit, leave].concat(noChanges);
     }
     const action: EngineScenario = {
       ...common,
@@ -1750,7 +1965,7 @@ export function createEnginePageScenarios(): readonly EngineScenario[] {
           };
         },
       };
-      return [visit, action, leave, firstAdvancedOpen];
+      return [visit, revisit, action, leave, firstAdvancedOpen].concat(noChanges);
     }
     if (id === "terminal") {
       const composerInput: EngineScenario = {
@@ -1789,8 +2004,8 @@ export function createEnginePageScenarios(): readonly EngineScenario[] {
           return { typedCharacters: command.length, inputSent: true };
         },
       };
-      return [visit, action, leave, composerInput];
+      return [visit, revisit, action, leave, composerInput].concat(noChanges);
     }
-    return [visit, action, leave];
+    return [visit, revisit, action, leave].concat(noChanges);
   });
 }
