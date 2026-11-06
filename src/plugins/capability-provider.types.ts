@@ -489,6 +489,8 @@ export type WorkerProvider = {
           preparedWorkspace?: {
             preparationKey: string;
             cacheKey: string;
+            /** Verified completed content base; retained snapshots may differ from the request. */
+            baseCommit?: string;
             workspaceDir: string;
             homeDir: string;
             sourceManifestRef: string;
