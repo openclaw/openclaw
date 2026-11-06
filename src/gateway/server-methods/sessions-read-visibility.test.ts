@@ -411,7 +411,7 @@ test.each(["research", "ops"] as const)(
   },
 );
 
-test("sessions.describe preserves caller roles and sessions.get hides foreign drafts", async () => {
+test("direct reads preserve legacy roleless Draft access and named-role privacy", async () => {
   setRuntimeConfigSnapshot({});
   const sessionKey = "agent:main:foreign-draft-describe";
   const sessionId = "session-foreign-draft-describe";
@@ -467,6 +467,8 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
   const admin = identifiedClient(profileId("draft-admin"));
   admin.connect!.scopes = ["operator.admin"];
   const missingProfile = identifiedClient(profileId("draft-missing-profile"));
+  const sessionOnly = identifiedClient(profileId("draft-session-only"));
+  sessionOnly.connect.scopes = ["operator.sessions.read"];
   const cases = [
     {
       name: "view",
@@ -521,6 +523,13 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
     {
       name: "no roles",
       client: identifiedClient(profileId("draft-outsider")),
+      cfg: {},
+      hidden: false,
+      sharedRole: "viewer",
+    },
+    {
+      name: "roleless session-only",
+      client: sessionOnly,
       cfg: {},
       hidden: true,
       sharedRole: "viewer",

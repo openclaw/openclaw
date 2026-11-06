@@ -21,6 +21,7 @@ import {
   authorizeIncognitoSessionTarget,
   authorizeResolvedSessionMutationAsync,
   createSessionListEntryFilter,
+  createSessionDirectEntryFilter,
   resolveSessionSharingRole,
   resolveSessionSharingTargetAsync,
   resolveSessionVisibility,
@@ -567,6 +568,12 @@ describe("session sharing policy", () => {
 
   it("returns retryable unavailability from direct session guards while profile sync is pending", async () => {
     const pending = client({ githubSyncPending: true });
+    expect(
+      createSessionDirectEntryFilter({ client: pending })?.("agent:main:foreign-draft", {
+        visibility: "draft",
+        createdActor: { type: "human", source: "profile", id: "foreign" },
+      }),
+    ).toBe(false);
     const ownedTarget = target({ type: "human", id: "profile-owner" });
     const incognitoTarget = {
       ...ownedTarget,

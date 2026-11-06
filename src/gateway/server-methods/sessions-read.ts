@@ -43,6 +43,7 @@ import { hasSessionReadAccessChanged } from "../session-sharing-policy.js";
 import {
   authorizeIncognitoSessionTarget,
   createSessionListEntryFilter,
+  createSessionDirectEntryFilter,
   isGatewayAdmin,
 } from "../session-sharing.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
@@ -446,7 +447,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             }
             const current = read.describe({ key, agentId: currentAgent.agentId });
             const visibilityFilter = hasOperatorBoundary(client, policyConfig)
-              ? createSessionListEntryFilter({
+              ? createSessionDirectEntryFilter({
                   client,
                   cfg: policyConfig,
                   membership: current?.membership,
@@ -508,7 +509,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 )
               : undefined;
             const visibilityFilter = hasOperatorBoundary(client, policyConfig)
-              ? createSessionListEntryFilter({
+              ? createSessionDirectEntryFilter({
                   client,
                   cfg: policyConfig,
                   membership: current?.membership,

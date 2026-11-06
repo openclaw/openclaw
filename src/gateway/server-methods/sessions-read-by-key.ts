@@ -17,7 +17,7 @@ import { prepareSessionRowPublication } from "../session-row-presentation.js";
 import { requireSessionRowProjection } from "../session-row-projection-access.js";
 import {
   authorizeIncognitoSessionTarget,
-  createSessionListEntryFilter,
+  createSessionDirectEntryFilter,
 } from "../session-sharing.js";
 import { readRecentSessionMessagesWithStatsAsync } from "../session-transcript-readers.js";
 import { createVisibleActiveSessionRunProjector } from "./session-active-runs.js";
@@ -86,7 +86,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
       if (
         !record ||
         (hasOperatorBoundary(client, read.state.policyConfig) &&
-          !presentation.sharing.canReadTarget(presentation.target(query)!))
+          !presentation.sharing.canReadDirectTarget(presentation.target(query)!))
       ) {
         respond(true, { session: null });
         return undefined;
@@ -184,7 +184,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
             current.entry.sessionId !== selected.entry.sessionId ||
             current.entry.lifecycleRevision !== selected.entry.lifecycleRevision ||
             (hasOperatorBoundary(client, read.state.policyConfig) &&
-              !presentation.sharing.canReadTarget(presentation.target(query)!))
+              !presentation.sharing.canReadDirectTarget(presentation.target(query)!))
           ) {
             respond(true, { session: null });
             return;
@@ -243,7 +243,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
       const record = read.describe({ key, agentId: requested.agentId });
       const policyConfig = read.state.policyConfig;
       const boundaryFilter = hasOperatorBoundary(client, policyConfig)
-        ? createSessionListEntryFilter({
+        ? createSessionDirectEntryFilter({
             client,
             cfg: policyConfig,
             membership: record?.membership,
@@ -287,7 +287,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
         : undefined;
       const policyConfig = read.state.policyConfig;
       const boundaryFilter = hasOperatorBoundary(client, policyConfig)
-        ? createSessionListEntryFilter({
+        ? createSessionDirectEntryFilter({
             client,
             cfg: policyConfig,
             membership: current?.membership,

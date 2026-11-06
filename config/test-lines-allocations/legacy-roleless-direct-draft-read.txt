@@ -1,0 +1,3 @@
+# Restore roleless legacy directly addressed Draft reads; preserve named-role and explicit ACL denials.
+# Real HTTP and keyed-read scope regression coverage, net new test LF only.
+210

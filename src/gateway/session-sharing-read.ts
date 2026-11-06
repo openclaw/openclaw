@@ -144,11 +144,19 @@ export function prepareSessionSharing(
       isMember ?? (prepared && Boolean(identity && prepared.isMember(target, identity.id))),
     );
   const entryFilter = createSessionListEntryFilter(params, isCreator, { sessionCap });
+  const directEntryFilter = createSessionDirectEntryFilter(params, isCreator, { sessionCap });
   return {
     identity,
     isCreator,
     sessionCap,
     entryFilter,
+    directEntryFilter,
+    canReadDirectTarget: (target: SessionSharingTarget) =>
+      directEntryFilter?.(
+        target.canonicalKey,
+        target.entry,
+        Boolean(identity && prepared?.isMember(target, identity.id)),
+      ) ?? true,
     canReadTarget: (target: SessionSharingTarget) =>
       entryFilter?.(
         target.storeKey,
@@ -526,6 +534,25 @@ export function createSessionListEntryFilter(
     { profileId: identity.id, sessionCap, cfg: params.cfg, membership: params.membership },
     isCreator,
   );
+}
+
+/** Legacy roleless readers may address unset rows, never discover foreign Drafts. */
+export function createSessionDirectEntryFilter(
+  ...args: Parameters<typeof createSessionListEntryFilter>
+): ReturnType<typeof createSessionListEntryFilter> {
+  const [params] = args;
+  const filter = createSessionListEntryFilter(...args);
+  if (
+    params.cfg?.gateway?.roles ||
+    (params.client?.authenticatedGitHubIdentitySync &&
+      !sharingIdentity(params.client, resolveGatewayOperatorRoleActor(params.client))) ||
+    !operatorScopeSatisfied("operator.read", params.client?.connect?.scopes ?? [])
+  ) {
+    return filter;
+  }
+  return (key, entry, isMember) =>
+    (entry.access === undefined && entry.incognito !== true && !isIncognitoSessionKey(key)) ||
+    filter?.(key, entry, isMember) !== false;
 }
 
 export function createProfileSessionEntryFilter(

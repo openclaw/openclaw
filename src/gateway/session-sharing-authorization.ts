@@ -45,7 +45,10 @@ import {
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
-import { createSessionListEntryFilter } from "./session-sharing-read.js";
+import {
+  createSessionDirectEntryFilter,
+  createSessionListEntryFilter,
+} from "./session-sharing-read.js";
 import type {
   createSessionSharingConsumption,
   PreparedMutationSharing,
@@ -158,12 +161,25 @@ export function createSessionTargetPolicyAuthorizer(context: {
     const isMember = target
       ? resolveMembership(target, identity?.id, members, projection)
       : undefined;
+    const directRead = [
+      "sessions.describe",
+      "sessions.get",
+      "sessions.preview",
+      "chat.history",
+    ].includes(params.method);
     const entryFilter = policy
-      ? policy.entryFilter
-      : createSessionListEntryFilter({ cfg, client: params.client });
+      ? directRead
+        ? policy.directEntryFilter
+        : policy.entryFilter
+      : (directRead ? createSessionDirectEntryFilter : createSessionListEntryFilter)({
+          cfg,
+          client: params.client,
+        });
+    const canReadTarget =
+      policy && (directRead ? policy.canReadDirectTarget : policy.canReadTarget);
     if (target && !error) {
-      const visible = policy
-        ? policy.canReadTarget(target)
+      const visible = canReadTarget
+        ? canReadTarget(target)
         : entryFilter?.(target.canonicalKey, target.entry, isMember) !== false;
       if (!visible) {
         return hiddenSessionNotFound(target.canonicalKey);
@@ -178,10 +194,10 @@ export function createSessionTargetPolicyAuthorizer(context: {
     ) {
       return error;
     }
-    if (authorizesRead) {
-      const visible = policy
-        ? policy.canReadTarget(target)
-        : entryFilter?.(target.storeKey, target.entry, isMember) !== false;
+    if (authorizesRead || directRead) {
+      const visible = canReadTarget
+        ? canReadTarget(target)
+        : entryFilter?.(target.canonicalKey, target.entry, isMember) !== false;
       return visible ? null : hiddenSessionNotFound(target.canonicalKey);
     }
     return policy

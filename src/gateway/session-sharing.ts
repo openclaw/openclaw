@@ -78,6 +78,7 @@ export {
   prepareSessionSharing,
   prepareProjectedSessionSharing,
   createSessionListEntryFilter,
+  createSessionDirectEntryFilter,
   createProfileSessionEntryFilter,
 } from "./session-sharing-read.js";
 

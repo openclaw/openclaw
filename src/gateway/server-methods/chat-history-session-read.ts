@@ -113,7 +113,7 @@ export async function prepareChatHistorySessionRead({
     sessionMutationAuthorization?.assertCurrent();
     if (
       current.entry
-        ? !sharing.canReadTarget({
+        ? !(method === "chat.history" ? sharing.canReadDirectTarget : sharing.canReadTarget)({
             ...current,
             entry: current.entry,
             storeKey: current.canonicalKey,

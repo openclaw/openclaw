@@ -3,7 +3,10 @@ import type { IncomingMessage } from "node:http";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  appendTranscriptMessage,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   prepareGatewaySuspend,
@@ -31,10 +34,7 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { setControlUiPluginAuthCookie } from "../control-ui-plugin-auth-cookie.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
-import {
-  authorizeControlUiPluginCookieRequest,
-  resolveControlUiPluginAuthCookieGeneration,
-} from "../http-auth-plugin-cookie.js";
+import { resolveControlUiPluginAuthCookieGeneration } from "../http-auth-plugin-cookie.js";
 import { authorizeOperatorScopesForMethod, CLI_DEFAULT_OPERATOR_SCOPES } from "../method-scopes.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -45,6 +45,11 @@ import { createSessionRowProjection } from "../session-row-projection.js";
 import { makeMockHttpResponse } from "../test-http-response.js";
 import { withTempConfig } from "../test-temp-config.js";
 import { createGatewayTestRegistry } from "./__tests__/test-utils.js";
+import {
+  createCookieSessionReadDispatch,
+  type DispatchResult,
+  type SessionReadMethod,
+} from "./plugins-http-session-read.test-support.js";
 import {
   createGatewayPluginRequestHandler,
   createGatewayPluginUpgradeHandler,
@@ -324,8 +329,6 @@ describe("plugin HTTP route runtime scopes", () => {
   });
 });
 
-type SessionReadMethod = "sessions.list" | "sessions.describe";
-type DispatchResult = Awaited<ReturnType<typeof dispatchGatewayMethod>>;
 type SessionDispatch = (method: SessionReadMethod, key?: string) => Promise<DispatchResult>;
 const sessionKey = (name: string) => `agent:main:${name}`;
 
@@ -341,10 +344,15 @@ async function withCookieSessionReader(
     ) => Promise<{ statusCode: number; result: DispatchResult | undefined }>;
     blockCatalog: () => { entered: Promise<void>; release: () => void };
   }) => Promise<void>,
+  sourcePolicy = false,
+  realHttp = false,
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const config: OpenClawConfig = {
       agents: { entries: { main: {} } },
+      ...(sourcePolicy
+        ? { session: { sharing: { accessPolicy: { default: "creator" as const, groups: [] } } } }
+        : {}),
       ...(roles
         ? {
             gateway: {
@@ -384,6 +392,34 @@ async function withCookieSessionReader(
             },
           );
         }
+        for (const mode of sourcePolicy
+          ? (["creator", "audience", "source", "unrestricted"] as const)
+          : []) {
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: sessionKey(mode + "-draft") },
+            {
+              sessionId: mode + "-draft",
+              updatedAt: 1,
+              visibility: "draft",
+              access: mode === "audience" ? { mode, profileIds: [reader.id] } : { mode },
+              createdActor: { type: "human", source: "profile", id: owner.id },
+            },
+          );
+        }
+        for (const name of [
+          "foreign-draft",
+          ...(sourcePolicy
+            ? ["creator-draft", "audience-draft", "source-draft", "unrestricted-draft"]
+            : []),
+        ]) {
+          await appendTranscriptMessage(
+            { agentId: "main", sessionKey: sessionKey(name), sessionId: name },
+            {
+              eventId: "legacy-direct-" + name,
+              message: { role: "user", content: "legacy direct transcript", timestamp: Date.now() },
+            },
+          );
+        }
         const context = createDirectChatContext({
           getRuntimeConfig: () => config,
           trackExecution: trackAsyncWork,
@@ -416,44 +452,19 @@ async function withCookieSessionReader(
           throw new Error("expected signed HTTP plugin cookie");
         }
         const cookie = value.split(";", 1)[0]!;
-        const dispatchHttp = async (method: SessionReadMethod, key = "agent:main:shared") => {
-          let result: DispatchResult | undefined;
-          const handler = setup(
-            [
-              createRoute({
-                gatewayMethodDispatchAllowed: true,
-                handler: async () => {
-                  result = await dispatchGatewayMethod(
-                    method,
-                    method === "sessions.list" ? {} : { key },
-                  );
-                  return true;
-                },
-              }),
-            ],
-            { getGatewayRequestContext: () => context },
-          ).handler;
-          const req = {
-            method: "GET",
-            url: SECURE_HOOK_PATH,
-            headers: { cookie },
-          } as IncomingMessage;
-          const authorized = authorizeControlUiPluginCookieRequest(req, {
-            requestPath: SECURE_HOOK_PATH,
-            authGeneration: "http-generation",
-          });
-          expect(authorized).not.toBeNull();
-          const response = await dispatchPluginRequest(handler, {
-            req,
-            authContext: {
-              gatewayAuthSatisfied: true,
-              gatewayRequestAuth: authorized!.requestAuth,
-              gatewayRequestOperatorScopes: authorized!.operatorScopes,
-            },
-          });
-          expect(response.handled).toBe(true);
-          return { statusCode: response.res.statusCode, result };
-        };
+        const dispatchHttp = createCookieSessionReadDispatch({
+          path: SECURE_HOOK_PATH,
+          cookie,
+          roles,
+          sourcePolicy,
+          realHttp,
+          createHandler: (handler) =>
+            setup([createRoute({ gatewayMethodDispatchAllowed: true, handler })], {
+              getGatewayRequestContext: () => context,
+            }).handler,
+          dispatchInProcess: (handler, req, authContext) =>
+            dispatchPluginRequest(handler, { req, authContext }),
+        });
         const dispatch: SessionDispatch = async (method, key) => {
           const { statusCode, result } = await dispatchHttp(method, key);
           expect(statusCode).toBe(200);
@@ -505,18 +516,76 @@ describe("plugin HTTP authenticated session reads", () => {
   it.each([false, true])(
     "keeps signed viewer privacy and shared access (roles=%s)",
     async (roles) => {
-      await withCookieSessionReader(roles, async ({ dispatch }) => {
+      await withCookieSessionReader(
+        roles,
+        async ({ dispatch }) => {
+          expectSessionKeys(await dispatch("sessions.list"), ["own-draft", "shared"]);
+          await expectSession(dispatch, "shared", {
+            key: sessionKey("shared"),
+            sharingRole: "viewer",
+          });
+          // A known legacy Draft stays directly readable without roles, never discoverable.
+          await expectSession(
+            dispatch,
+            "foreign-draft",
+            roles
+              ? null
+              : {
+                  key: sessionKey("foreign-draft"),
+                  sharingRole: "viewer",
+                },
+          );
+          expect(
+            await dispatch("sessions.describe", "agent:main:dashboard:incognito-http-reader"),
+          ).toMatchObject({ ok: false });
+        },
+        false,
+        true,
+      );
+    },
+  );
+
+  it.each([false, true])("keeps explicit ACL Drafts hidden (roles=%s)", async (roles) => {
+    await withCookieSessionReader(
+      roles,
+      async ({ dispatch }) => {
         expectSessionKeys(await dispatch("sessions.list"), ["own-draft", "shared"]);
-        await expectSession(dispatch, "shared", {
-          key: sessionKey("shared"),
-          sharingRole: "viewer",
-        });
-        // Confidential Drafts stay hidden from an authenticated outsider without named roles too.
-        await expectSession(dispatch, "foreign-draft", null);
-        expect(
-          await dispatch("sessions.describe", "agent:main:dashboard:incognito-http-reader"),
-        ).toMatchObject({ ok: false });
-      });
+        for (const mode of ["creator", "audience", "source", "unrestricted"]) {
+          await expectSession(dispatch, mode + "-draft", null);
+        }
+        await expectSession(
+          dispatch,
+          "foreign-draft",
+          roles
+            ? null
+            : {
+                key: sessionKey("foreign-draft"),
+                sharingRole: "viewer",
+              },
+        );
+      },
+      true,
+    );
+  });
+
+  it.each(["sessions.get", "sessions.preview", "chat.history"] as const)(
+    "keeps legacy direct transcript access without admitting explicit ACLs through %s",
+    async (method) => {
+      await withCookieSessionReader(
+        false,
+        async ({ dispatch }) => {
+          const allowed = await dispatch(method, sessionKey("foreign-draft"));
+          expect(allowed.ok).toBe(true);
+          expect(JSON.stringify(allowed.payload)).toContain("legacy direct transcript");
+          for (const mode of ["creator", "audience", "source", "unrestricted"]) {
+            const denied = await dispatch(method, sessionKey(mode + "-draft"));
+            expect(JSON.stringify(denied)).not.toContain("legacy direct transcript");
+          }
+          expectSessionKeys(await dispatch("sessions.list"), ["own-draft", "shared"]);
+        },
+        true,
+        true,
+      );
     },
   );
 
