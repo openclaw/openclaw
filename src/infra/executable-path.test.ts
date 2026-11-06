@@ -412,6 +412,62 @@ describe("resolveExecutable", () => {
     },
   );
 
+  it("honors PATH directory precedence instead of a later .cmd over an earlier .exe", async () => {
+    // #193806: collect-then-prefer-.cmd let a stale lower-priority install win.
+    await withMockedPlatform("win32", async () => {
+      await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+        const first = path.join(base, "first");
+        const later = path.join(base, "later");
+        await fs.mkdir(first, { recursive: true });
+        await fs.mkdir(later, { recursive: true });
+        await fs.writeFile(path.join(first, "gcloud.exe"), "fixture\n", "utf8");
+        await fs.writeFile(path.join(later, "gcloud.cmd"), "fixture\n", "utf8");
+
+        withEnv({ PATH: `${first};${later}`, PATHEXT: ".EXE;.CMD;.BAT;.COM" }, () => {
+          expect(resolveExecutable("gcloud")).toBe(path.join(first, "gcloud.exe"));
+        });
+      });
+    });
+  });
+
+  it("keeps CMD-over-EXE preference inside the first PATH directory that matches", async () => {
+    await withMockedPlatform("win32", async () => {
+      await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+        const first = path.join(base, "first");
+        const later = path.join(base, "later");
+        await fs.mkdir(first, { recursive: true });
+        await fs.mkdir(later, { recursive: true });
+        await fs.writeFile(path.join(first, "gcloud.exe"), "fixture\n", "utf8");
+        await fs.writeFile(path.join(first, "gcloud.cmd"), "fixture\n", "utf8");
+        await fs.writeFile(path.join(later, "gcloud.cmd"), "fixture\n", "utf8");
+
+        withEnv({ PATH: `${first};${later}`, PATHEXT: ".EXE;.CMD;.BAT;.COM" }, () => {
+          expect(resolveExecutable("gcloud")).toBe(path.join(first, "gcloud.cmd"));
+        });
+        withEnv({ PATH: `${first};${later}`, PATHEXT: ".EXE;.CMD" }, () => {
+          expect(resolveExecutable("gcloud")).toBe(path.join(first, "gcloud.cmd"));
+        });
+      });
+    });
+  });
+
+  it("skips a PATH directory that has no supported suffix for the command", async () => {
+    await withMockedPlatform("win32", async () => {
+      await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+        const first = path.join(base, "first");
+        const later = path.join(base, "later");
+        await fs.mkdir(first, { recursive: true });
+        await fs.mkdir(later, { recursive: true });
+        await fs.writeFile(path.join(first, "gcloud.ps1"), "fixture\n", "utf8");
+        await fs.writeFile(path.join(later, "gcloud.exe"), "fixture\n", "utf8");
+
+        withEnv({ PATH: `${first};${later}`, PATHEXT: ".EXE;.CMD" }, () => {
+          expect(resolveExecutable("gcloud")).toBe(path.join(later, "gcloud.exe"));
+        });
+      });
+    });
+  });
+
   it("returns original cmd when no PATH match exists on Windows", () => {
     withMockedPlatform("win32", () => {
       expect(resolveExecutable("gog")).toBe("gog");
