@@ -1,2 +1,2 @@
-225
-# Active warm-reload regressions and deterministic native measurement/caret readiness.
+253
+# Active warm-reload regressions and native transcript measurement contracts.
