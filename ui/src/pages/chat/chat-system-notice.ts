@@ -94,6 +94,7 @@ export function projectChatSystemNotice(
     status: PendingInputStatus;
     key: string;
     timestamp: number;
+    cancelledByUser?: true;
     retired?: NonNullable<Extract<ChatItem, { kind: "notice" }>["retiredPendingInput"]>;
   },
 ): ChatItem[] {
@@ -117,11 +118,13 @@ export function projectChatSystemNotice(
   const provenance = asRecord(raw?.provenance);
   const agentUpdate = provenance?.kind === "inter_session";
   const pendingText =
-    pending && agentUpdate && pending.status === "cancelled"
-      ? t(`chat.pendingInputs.agentUpdate.${pending.status}`)
-      : pending && pending.status !== "queued"
-        ? t(`chat.pendingInputs.${pending.status}`)
-        : undefined;
+    pending?.status === "cancelled" && pending.cancelledByUser
+      ? undefined
+      : pending && agentUpdate && pending.status === "cancelled"
+        ? t(`chat.pendingInputs.agentUpdate.${pending.status}`)
+        : pending && pending.status !== "queued"
+          ? t(`chat.pendingInputs.${pending.status}`)
+          : undefined;
   const pendingItems: ChatItem[] =
     pending && pendingText
       ? [

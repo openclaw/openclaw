@@ -35,7 +35,7 @@ import { loadCronRuns, loadCronRunsForJob, updateCronRunsFilter } from "../../li
 import type { CronFormState, CronState } from "../../lib/cron/types.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
-import { formatMissingOperatorReadScopeMessage } from "../../lib/gateway-errors.ts";
+import { formatMissingOperatorReadScopeMessage } from "../../lib/permission-error.ts";
 import { profileDirectory } from "../../lib/profile-directory.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectOwner, projectMutableSource } from "../../lib/reactive/projection.ts";
@@ -49,7 +49,7 @@ import {
 import { createCronEventEditor } from "./event-editor.ts";
 import { resolveCronEventPatch, validateCronEventSelection } from "./event-source.ts";
 import { canManageCronJob } from "./human-owner.ts";
-import { createCronRouteSelection, resolveCronRouteData } from "./route-model.ts";
+import * as cronRoute from "./route-model.ts";
 import { createCronRunTranscript } from "./run-transcript.tsx";
 
 registerEnglishCatalog(registerCronEnglish);
@@ -94,7 +94,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
         }
       : null;
   });
-  const routeSelection = createCronRouteSelection();
+  const routeSelection = cronRoute.createCronRouteSelection();
   let pendingRunScroll = false;
   const runRows = new Map<HTMLElement, () => CronRunLogEntry>();
   const deliveryDirectory = createDeliveryConversations({
@@ -166,6 +166,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     if (sourceChanged) {
       gateway.invalidate();
     }
+    let selfUserId = currentContext.gateway.snapshot.selfUser?.id;
     const applySnapshot = () => {
       if (!active || context() !== currentContext) {
         return;
@@ -173,8 +174,11 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       const snapshot = currentContext.gateway.snapshot;
       const previousConnected = gateway.capture() !== null;
       const presentationChanged = routeSelection.bind(currentContext.gateway);
-      const changed = gateway.transition(snapshot) || presentationChanged;
-      if (presentationChanged) {
+      // Profile hydration retires shared inventory even while its page scope stays stable.
+      const identityChanged = selfUserId !== snapshot.selfUser?.id;
+      selfUserId = snapshot.selfUser?.id;
+      const changed = gateway.transition(snapshot) || presentationChanged || identityChanged;
+      if (presentationChanged || identityChanged) {
         gateway.invalidate();
       }
       const nextAvailable = isGatewayAvailable(snapshot);
@@ -289,7 +293,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     });
     nextCron.canRefresh = () => canRefreshCron(nextCron);
     cron = nextCron;
-    const routeData = resolveCronRouteData(routeSearch);
+    const routeData = cronRoute.resolveCronRouteData(routeSearch);
     cron.cronSessionFilter = routeData.session;
     routeSelection.requested = false;
     cron.cronAgentId = context().agentSelection.state.scopeId;
@@ -369,7 +373,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     runTranscript.close();
     cron.cronError = null;
     cron.cronNotice = null;
-    const routeData = resolveCronRouteData(search);
+    const routeData = cronRoute.resolveCronRouteData(search);
     if (JSON.stringify(cron.cronSessionFilter) !== JSON.stringify(routeData.session)) {
       resetGatewayState(context().gateway.snapshot);
       ensureInitialData();
@@ -392,7 +396,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       presentation.retire();
       lastPanelKey = panelKey;
       runTranscript.close();
-      setDetailTab(editingJobId && cron.cronRunsRunId ? "history" : "settings");
+      setDetailTab(cronRoute.resolveCronDetailTab(cron.cronEditingJob, cron.cronRunsRunId));
       const scroller = host().closest(".content");
       if (scroller instanceof HTMLElement && typeof scroller.scrollTo === "function") {
         scroller.scrollTo({ top: 0 });
@@ -512,16 +516,20 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
   }
 
   function selectJob(job: CronJob, runId: string | null = null) {
-    routeSelection.select(job.id, runId);
-    pendingRunScroll = Boolean(runId);
-    if (runId) {
-      setDetailTab("history");
-    }
+    const selection = cronRoute.resolveCronDetailSelection(cron, job, runId);
+    routeSelection.select(job.id, selection.runId);
+    pendingRunScroll = Boolean(selection.runId);
+    setDetailTab(selection.tab);
     cron.cronCreateOpen = false;
-    startCronEdit(cron, job);
+    // Inspecting another run of the current saved job must not discard its draft.
+    if (cron.cronEditingJob !== job) {
+      startCronEdit(cron, job);
+      deliveryDirectory.openEditor();
+    }
     // Claim the run pane before awaiting to retire the previous job's history.
-    void presentation.runTask((cronState) => loadCronRunsForJob(cronState, job.id, runId));
-    deliveryDirectory.openEditor();
+    void presentation.runTask((cronState) =>
+      loadCronRunsForJob(cronState, job.id, selection.runId),
+    );
   }
 
   function resetEditor(createOpen: boolean) {

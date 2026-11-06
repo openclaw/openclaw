@@ -54,7 +54,7 @@ suite.define(() => {
       expect(await startup.textContent()).toContain("Starting up");
       expect(await startup.textContent()).toContain("This view will load automatically.");
       expect(await startup.getByRole("button").count()).toBe(0);
-      expect(await page.getByText("Panel failed to load", { exact: true }).count()).toBe(0);
+      expect(await page.getByText("Couldn’t load this panel.", { exact: true }).count()).toBe(0);
       expect(await sidebar.locator(sidebarErrors).count()).toBe(0);
       expect(await page.locator("body").textContent()).not.toContain("openclaw doctor --fix");
 
@@ -98,7 +98,7 @@ suite.define(() => {
       await pauseVirtualClock(page);
       await page.clock.runFor(150_000);
 
-      await page.getByText("Panel failed to load", { exact: true }).waitFor();
+      await page.getByText("Couldn’t load this panel.", { exact: true }).waitFor();
       expect(await startup.count()).toBe(0);
       expect(await page.getByRole("button", { name: "Retry", exact: true }).isEnabled()).toBe(true);
       await sidebar.locator(sidebarErrors).filter({ hasText: diagnostic }).first().waitFor();
@@ -218,10 +218,11 @@ suite.define(() => {
         expect(await gateway.getSocketCount()).toBe(1);
         expect(await composer.inputValue()).toBe(draft);
         if (method === "chat.startup") {
-          expect(await page.locator(".chat-history-error").textContent()).toContain("timed out");
+          const errorText = await page.locator(".chat-history-error").textContent();
+          expect(errorText).toContain("Couldn’t load the conversation in time. Try again.");
           expect(await retry.isEnabled()).toBe(true);
           expect(
-            await page.getByRole("button", { name: "Loading chat", exact: true }).count(),
+            await page.getByRole("button", { name: "Loading conversation…", exact: true }).count(),
           ).toBe(0);
           const send = page.locator(".chat-send-btn--send");
           expect(await send.isEnabled()).toBe(true);

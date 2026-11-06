@@ -11,7 +11,7 @@ import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
 const lexicalData = new LruCache<
   { bytes: number } & (
     | { kind: "index"; index: ReturnType<typeof buildLexicalIndex<number>> }
-    | { kind: "document"; terms: string[] }
+    | { kind: "document"; terms: Map<string, number> }
     | { kind: "entry"; text: string }
   )
 >(1024, { maxBytes: 8 * 1024 * 1024, sizeOf: (entry) => entry.bytes });
@@ -60,13 +60,18 @@ export function getTextLexicalIndex(
       const key = `text:${text}`;
       let tokenized = lexicalData.get(key);
       if (tokenized?.kind !== "document") {
-        const terms = tokenizeDocument(text);
+        const terms = new Map<string, number>();
+        for (const term of tokenizeDocument(text)) {
+          terms.set(term, (terms.get(term) ?? 0) + 1);
+        }
         tokenized = {
           kind: "document",
           terms,
-          // Token slices can retain the full source; count repeated terms conservatively.
+          // Retain frequencies, not one string and array slot per occurrence.
           bytes:
-            text.length * 2 + 64 + terms.reduce((size, term) => size + 64 + term.length * 2, 0),
+            text.length * 2 +
+            64 +
+            Array.from(terms.keys()).reduce((size, term) => size + 96 + term.length * 2, 0),
         };
         lexicalData.set(key, tokenized);
       }

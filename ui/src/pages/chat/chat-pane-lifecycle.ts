@@ -447,6 +447,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     chatState.addCleanup(
       this.context.gateway.subscribeEvents((event) => {
         const state = this.state;
+        this.handleCatalogGatewayEvent(event.event);
         if (state && modelAuthEventInvalidates(event)) {
           state.modelAuthStatusResult = null;
           void refreshChatModelAuthStatus(state);

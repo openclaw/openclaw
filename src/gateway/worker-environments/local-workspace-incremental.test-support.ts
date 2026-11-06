@@ -47,8 +47,8 @@ const writeText = (directory: string, relative: string, data: string) =>
   fs.writeFile(path.join(directory, relative), data);
 const expectText = async (directory: string, relative: string, expected: string) =>
   expect(await fs.readFile(path.join(directory, relative), "utf8")).toBe(expected);
-const expectMissing = async (directory: string, relative: string) =>
-  expect(fs.stat(path.join(directory, relative))).rejects.toMatchObject({ code: "ENOENT" });
+export const expectMissing = async (directory: string, ...parts: string[]) =>
+  expect(fs.stat(path.join(directory, ...parts))).rejects.toMatchObject({ code: "ENOENT" });
 
 export function observeAcknowledgedUpdate(
   observe: (row: workspaceStore.LocalWorkspaceProjection) => void,
@@ -484,6 +484,56 @@ export async function prepareLocalWorkspaceArchiveFixture(
   ).fingerprint;
   await registry.insertRegistryWorktree(process.env, owner.worktree, { provisionedPaths });
   return { service, registry, retentionMs: SNAPSHOT_RETENTION_MS };
+}
+
+export async function proveWorkerOwnedArchive(owner: LocalWorkspaceOwner) {
+  const { service } = await prepareLocalWorkspaceArchiveFixture(owner);
+  const projection = await prepare(owner);
+  const snapshot = await requireGit(owner.worktree.repoRoot, ["rev-parse", "HEAD"]);
+  const before = await readLocalWorkspaceProjection(owner.worktree.id);
+  const source = path.join(projection, "source.txt");
+  const original = await fs.readFile(source);
+  for (const change of ["edit", "delete", "add", "symlink"] as const) {
+    const added = path.join(projection, "new.txt");
+    const saved = `${projection}-saved`;
+    if (change === "symlink") {
+      await fs.rename(projection, saved);
+      await fs.symlink(saved, projection, "junction");
+    } else if (change === "delete") {
+      await fs.unlink(source);
+    } else {
+      await fs.writeFile(change === "edit" ? source : added, "changed\n");
+    }
+    try {
+      await expect(
+        withLocalWorkspaceProjection(owner, (state) => state.prepareArchive(snapshot)),
+      ).rejects.toThrow(
+        change === "symlink"
+          ? "Local sandbox workspace directory changed"
+          : "Local workspace changed before archive capture",
+      );
+      expect((await readLocalWorkspaceProjection(owner.worktree.id))?.baseline_ref).toBe(
+        before?.baseline_ref,
+      );
+    } finally {
+      if (change === "symlink") {
+        await fs.unlink(projection);
+        await fs.rename(saved, projection);
+      } else if (change === "add") {
+        await fs.unlink(added);
+      } else {
+        await fs.writeFile(source, original);
+      }
+    }
+  }
+  const manifests = await import("./workspace-manifest.js");
+  const parse = vi.spyOn(manifests, "parseWorkerWorkspaceManifest");
+  expect((await service.gc({ readOwnerState: () => "active" })).removed).toEqual([]);
+  expect((await fs.stat(owner.worktree.path)).isDirectory()).toBe(true);
+  expect(parse).not.toHaveBeenCalled();
+  expect((await service.gc()).removed).toContain(owner.worktree.id);
+  await expectMissing(owner.worktree.path, "");
+  expect(parse).not.toHaveBeenCalled();
 }
 
 export async function proveInterruptedWorkspaceCheckpoint(

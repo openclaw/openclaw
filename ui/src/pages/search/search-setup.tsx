@@ -6,8 +6,11 @@ import type { ApplicationContext } from "../../app/context-types.ts";
 import { analyzeConfigSchema } from "../../components/config-form.analyze.ts";
 import { ConfigNode } from "../../components/config-form.node.tsx";
 import { resolveConfigFieldMeta } from "../../components/config-form.search.ts";
+import { Icon } from "../../components/solid/icon.tsx";
+import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import { LearnMoreLink, SettingsRow, SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
+import type { ConfigSecretFields } from "../../lib/config/config-secret-fields.ts";
 import {
   currentConfigObject,
   type RuntimeConfigState,
@@ -16,7 +19,7 @@ import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { PluginCredentialEditor } from "../plugins/credential-editor.tsx";
 import { pluginConfigSchema } from "../plugins/settings-model.ts";
-import { readConfigValue } from "./search-config.ts";
+import { isProviderReady, readConfigValue } from "./search-config.ts";
 
 type SearchProvider = WebSearchStatusResult["providers"][number];
 type SearchSettingsProps = {
@@ -24,14 +27,19 @@ type SearchSettingsProps = {
   canEdit: () => boolean;
   busy: () => boolean;
   commit: (path: Array<string | number>, value: unknown) => Promise<boolean>;
+  secretFields: ConfigSecretFields;
 };
-type SearchConfigFieldProps = Pick<SearchSettingsProps, "state" | "canEdit" | "busy">;
+type SearchConfigFieldProps = Pick<
+  SearchSettingsProps,
+  "state" | "canEdit" | "busy" | "secretFields"
+>;
 function SearchConfigField(
   props: SearchConfigFieldProps & {
     schema: JsonSchema;
     path: Array<string | number>;
     value: unknown;
     unsupported: Set<string>;
+    nested?: boolean;
     patch: (path: Array<string | number>, value: unknown) => Promise<boolean>;
   },
 ) {
@@ -42,6 +50,7 @@ function SearchConfigField(
       title={meta().label}
       description={meta().help}
       stackedOnNarrow
+      nested={props.nested}
       control={
         <ConfigNode
           params={{
@@ -56,6 +65,7 @@ function SearchConfigField(
             showLabel: false,
             rawAvailable: false,
             maskSensitive: true,
+            secretFields: props.secretFields,
             onPatch: (path, value) => void props.patch(path, value),
             onRemove: (path) => void props.patch(path, undefined),
           }}
@@ -100,29 +110,20 @@ export function SearchSetup(
   );
   return (
     <>
-      <SettingsRow
-        title={t("searchPage.configuration")}
-        description={t(`searchPage.credentialSources.${props.provider.credentialSource}`)}
-        control={
-          <SettingsStatus
-            kind={props.provider.available && props.provider.configured ? "ok" : "warn"}
-            label={t(
-              !props.provider.installed
-                ? "searchPage.pluginMissing"
-                : !props.provider.available
-                  ? "searchPage.pluginUnavailable"
-                  : props.provider.configured
-                    ? "searchPage.configured"
-                    : "searchPage.needsSetup",
-            )}
-          />
-        }
-      />
+      {/* The list row carries the status; a missing key shows as its empty field. */}
+      <Show when={props.provider.credentialSource !== "missing" || !credential()}>
+        <SettingsRow
+          title={t("searchPage.configuration")}
+          description={t(`searchPage.credentialSources.${props.provider.credentialSource}`)}
+          nested
+        />
+      </Show>
       <Show when={credential()}>
         {(descriptor) => (
           <SettingsRow
             title={descriptor().label}
             stackedOnNarrow
+            nested
             control={
               <PluginCredentialEditor
                 field={{
@@ -155,7 +156,9 @@ export function SearchSetup(
             path={[...props.provider.configPath, field()[0]]}
             value={values()?.[field()[0]]}
             unsupported={unsupported()}
+            nested
             patch={props.commit}
+            secretFields={props.secretFields}
             state={props.state}
             canEdit={props.canEdit}
             busy={props.busy}
@@ -163,6 +166,7 @@ export function SearchSetup(
         )}
       </For>
       <SettingsRow
+        nested
         title={t("searchPage.pluginSettings")}
         description={t("searchPage.pluginSettingsHint")}
         control={
@@ -176,8 +180,73 @@ export function SearchSetup(
       />
       <Show when={props.provider.docsUrl}>
         {(url) => (
-          <SettingsRow title={t("searchPage.docs")} control={<LearnMoreLink url={url()} />} />
+          <SettingsRow
+            nested
+            title={t("searchPage.docs")}
+            control={<LearnMoreLink url={url()} />}
+          />
         )}
+      </Show>
+    </>
+  );
+}
+
+/** One provider in the setup list: its status at a glance, its setup in place when opened. */
+export function SearchProviderRow(
+  props: Parameters<typeof SearchSetup>[0] & {
+    open: boolean;
+    /** Only a provider in use warns, so unused providers don't read as a wall of problems. */
+    inUse: boolean;
+    onToggle: () => void;
+  },
+) {
+  const ready = () => isProviderReady(props.provider);
+  return (
+    <>
+      <button
+        type="button"
+        class="settings-row settings-row--nav search-provider"
+        aria-expanded={props.open ? "true" : "false"}
+        onClick={() => props.onToggle()}
+      >
+        <span class="settings-row__text">
+          <span class="settings-row__title">{props.provider.label}</span>
+          <Show when={props.open && props.provider.hint}>
+            <span class="settings-row__desc">{props.provider.hint}</span>
+          </Show>
+        </span>
+        <span class="settings-row__control">
+          <SettingsStatus
+            kind={ready() ? "ok" : props.inUse ? "warn" : "muted"}
+            label={t(
+              !props.provider.installed
+                ? "searchPage.pluginMissing"
+                : !props.provider.available
+                  ? "searchPage.pluginUnavailable"
+                  : props.provider.configured
+                    ? "searchPage.configured"
+                    : "searchPage.needsSetup",
+            )}
+          />
+          <span class="settings-row__chevron">
+            <Icon name="chevronRight" />
+          </span>
+        </span>
+      </button>
+      <Show when={props.open}>
+        <SearchSetup
+          provider={props.provider}
+          state={props.state}
+          context={props.context}
+          gateway={props.gateway}
+          getPresentationLifetime={props.getPresentationLifetime}
+          secretFields={props.secretFields}
+          canEdit={props.canEdit}
+          busy={props.busy}
+          commit={(path, value) =>
+            props.open ? props.commit(path, value) : Promise.resolve(false)
+          }
+        />
       </Show>
     </>
   );
@@ -196,27 +265,23 @@ export function AdvancedSearchSettings(props: SearchSettingsProps) {
   );
   return (
     <Show when={fields().length > 0}>
-      <details class="settings-section config-advanced-disclosure">
-        <summary class="settings-section__heading config-advanced-disclosure__summary">
-          {t("searchPage.advanced")}
-        </summary>
-        <div class="settings-group">
-          <For each={fields()} keyed={(field) => field[0]}>
-            {(field) => (
-              <SearchConfigField
-                schema={field()[1]}
-                path={["tools", "web", "search", field()[0]]}
-                value={value()?.[field()[0]]}
-                unsupported={unsupported()}
-                patch={props.commit}
-                state={props.state}
-                canEdit={props.canEdit}
-                busy={props.busy}
-              />
-            )}
-          </For>
-        </div>
-      </details>
+      <SettingsDisclosure class="config-advanced-disclosure" title={t("searchPage.advanced")}>
+        <For each={fields()} keyed={(field) => field[0]}>
+          {(field) => (
+            <SearchConfigField
+              schema={field()[1]}
+              path={["tools", "web", "search", field()[0]]}
+              value={value()?.[field()[0]]}
+              unsupported={unsupported()}
+              patch={props.commit}
+              secretFields={props.secretFields}
+              state={props.state}
+              canEdit={props.canEdit}
+              busy={props.busy}
+            />
+          )}
+        </For>
+      </SettingsDisclosure>
     </Show>
   );
 }

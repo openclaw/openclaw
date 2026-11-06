@@ -120,7 +120,7 @@ suite.define(() => {
             phase: "preparing_context",
             seq: 1,
           });
-          await expect.poll(() => statusText.textContent()).toBe("Preparing this turn…");
+          await expect.poll(() => statusText.textContent()).toBe("Preparing reply…");
           await stop.click();
           expect((await gateway.waitForRequest("chat.abort")).params).toMatchObject({
             sessionKey,

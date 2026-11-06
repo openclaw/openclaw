@@ -23,7 +23,7 @@ suite.define(() => {
       const toolText = "Successor C tool proof";
       await page.goto(`${suite.server.baseUrl}settings/appearance`);
       await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
-      await page.locator("[data-settings-send-shortcut]").selectOption("enter");
+      await page.locator('[data-test-id="send-shortcut-enter"]').click();
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const composer = page.locator(".agent-chat__input textarea");
       await composer.fill("Start the original task.");
@@ -89,7 +89,9 @@ suite.define(() => {
       });
       if (status === "timeout") {
         await page
-          .getByTitle("The run ended before the message was accepted.", { exact: true })
+          .getByTitle("Your message wasn’t accepted before the reply ended. Try again.", {
+            exact: true,
+          })
           .waitFor();
       } else {
         await gateway.waitForRequest("chat.history", { after: historyRequests });
@@ -103,7 +105,7 @@ suite.define(() => {
         await composer.fill("");
         await stop.click();
         const aborted = await gateway.waitForRequest("chat.abort");
-        expect(aborted.params).toEqual({ sessionKey, runId });
+        expect(aborted.params).toEqual({ sessionKey, runId, userInitiated: true });
       } else {
         expect(await successorTool.isVisible()).toBe(true);
         expect(await successorTool.locator(".chat-tool-row__cmd").textContent()).toContain(

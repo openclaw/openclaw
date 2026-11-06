@@ -14,7 +14,7 @@ import {
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
-import { payloadTextResult } from "../tools/common.js";
+import { payloadTextResult } from "../tools/tool-results.js";
 import { runAgentHarnessAfterToolCallHook } from "./hook-helpers.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "./lifecycle-hook-helpers.js";
 import {

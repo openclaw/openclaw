@@ -7,11 +7,16 @@ import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/vers
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import * as systemPresence from "../../../infra/system-presence.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
+import { ensureProfileForEmail } from "../../../state/user-profiles.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { resolveGatewayAuth } from "../../auth-resolve.js";
 import type { HealthSummary } from "../../health/types.js";
 import { startGatewayTailscaleExposure } from "../../server-tailscale.js";
 import { prepareTailscalePublishedOrigin } from "../../tailscale-published-origin.js";
+import { dispatchProfile } from "../client-fixtures.test-support.js";
 import { getHealthCache } from "../health-state.js";
+import { disconnectDisallowedGatewayPolicyClients } from "../ws-origin-policy.js";
 import type { GatewayWsClient } from "../ws-types.js";
 
 // Hello update-scope tests cover authenticated role/scope and recovery ownership projection.
@@ -121,11 +126,12 @@ function makeContext(
     role,
     scopes,
   };
+  const gatewayClient = client ? { connect: connectParams, ...client } : null;
   return {
     handler: {
       socket: new EventEmitter(),
       isClosed: vi.fn(() => false),
-      getClient: () => client ?? null,
+      getClient: () => gatewayClient,
       connId: `conn-${role}`,
       bootId: "gateway-boot-a",
       gatewayMethods: [],
@@ -165,6 +171,37 @@ function makeState(role: "operator" | "node", scopes: string[]) {
   };
 }
 
+describe("sendGatewayHello running Gateway exposure", () => {
+  const gatewayExposure = { bindHost: "0.0.0.0", tailscaleMode: "off" } as const;
+
+  it("advertises what the process runs with to admins, not what config says", async () => {
+    const context = makeContext("operator", ["operator.admin"]);
+    await sendGatewayHello(
+      { ...context, handler: { ...context.handler, gatewayExposure } } as never,
+      { ...makeState("operator", ["operator.admin"]), resolvedAuth: { mode: "password" } } as never,
+      {},
+    );
+    expect(helloSnapshot(context)).toMatchObject({
+      authMode: "password",
+      bindHost: "0.0.0.0",
+      tailscaleMode: "off",
+    });
+  });
+
+  it("keeps it from clients without admin scope", async () => {
+    const context = makeContext("operator", ["operator.read"]);
+    await sendGatewayHello(
+      { ...context, handler: { ...context.handler, gatewayExposure } } as never,
+      makeState("operator", ["operator.read"]) as never,
+      {},
+    );
+    const snapshot = helloSnapshot(context);
+    expect(snapshot?.authMode).toBeUndefined();
+    expect(snapshot?.bindHost).toBeUndefined();
+    expect(snapshot?.tailscaleMode).toBeUndefined();
+  });
+});
+
 function helloPayload(context: ReturnType<typeof makeContext>) {
   const response = context.sendFrame.mock.calls.at(0)?.at(0) as { payload?: HelloOk } | undefined;
   return response?.payload;
@@ -197,6 +234,64 @@ describe("sendGatewayHello update detail scope", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getHealthCache).mockReturnValue(null);
+  });
+
+  it("fences an advertised privacy claim while hello delivery is pending", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const person = ensureProfileForEmail("hello-timeline@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      let committed: OpenClawConfig = {
+        gateway: {
+          roles: {
+            default: "member",
+            definitions: {
+              member: {
+                sessions: { others: "view" },
+                agents: "*",
+                scopes: ["operator.read", "operator.sessions.write"],
+              },
+            },
+          },
+        },
+      };
+      const context = makeContext("operator", ["operator.sessions.write"]);
+      context.configSnapshot = committed;
+      const client = {
+        connect: context.connectParams,
+        authenticatedUserProfile: dispatchProfile(person.id),
+        socket: { close: vi.fn() },
+        profileActivity: undefined as GatewayWsClient["profileActivity"],
+      };
+      context.handler.getClient = () => client;
+      context.handler.buildRequestContext = () => ({
+        nodeRegistry: { get: () => undefined },
+        getCommittedRuntimeConfig: () => committed,
+      });
+      const deliveryEntered = createDeferredCore();
+      const deliver = createDeferredCore();
+      context.sendFrame.mockImplementation(async () => {
+        deliveryEntered.resolve();
+        await deliver.promise;
+      });
+      const sending = sendGatewayHello(
+        context as never,
+        makeState("operator", context.connectParams.scopes!) as never,
+        {},
+      );
+      try {
+        await deliveryEntered.promise;
+        expect(helloPayload(context)?.auth.profileActivityViewerId).toBeUndefined();
+        expect(client.profileActivity).toEqual({ viewerId: undefined });
+        committed = structuredClone(committed);
+        committed.gateway!.roles!.definitions.member!.scopes = ["operator.sessions.write"];
+        disconnectDisallowedGatewayPolicyClients([client], committed);
+        expect(client.socket.close).toHaveBeenCalledExactlyOnceWith(4001, "gateway policy changed");
+      } finally {
+        deliver.resolve();
+        await sending;
+      }
+      expect(client.profileActivity).toEqual({ viewerId: undefined });
+    });
   });
 
   it("advertises input custody without changing negotiated scopes", async () => {

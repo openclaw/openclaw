@@ -1,5 +1,131 @@
 # Team-scale Control UI cold-load benchmark
 
+## Cross-flow CPU census
+
+Use the cross-engine harness's Chromium-only `--cpu-profile` mode to find small
+costs shared across its existing route and interaction workloads. It uses V8
+sampling without Playwright/Timeline tracing and writes source-mapped
+`*.cpuprofile` files plus `cpu-census.json` after each completed profile.
+
+```sh
+pnpm ui:build
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --pages --page-phases visit,action --engines chromium --viewport both \
+  --cpu-profile --cpu-throttle 1 --output .artifacts/cpu-census/routes-1x
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --engines chromium --viewport both --cpu-profile --cpu-throttle 6 \
+  --output .artifacts/cpu-census/interactions-6x
+```
+
+Repeat each selection at both 1× and 6× on the same production build. Use
+`--steps` for explicit-only scenarios. Keep throttle rankings separate: pooled
+self time weights the throttled run more heavily. Each report ranks every
+function and file by **self** time, with its share of all active samples, unique
+scenario/viewport/bundle flow count, and per-flow contribution. Repeated
+observations increase time without increasing flow count. File totals sum leaf
+samples rather than inclusive stacks, so a sample is never charged to both a
+caller and its callee. Failed assertions do not enter the aggregate.
+
+The denominator excludes root and idle samples. It also excludes the leading
+`(program)` interval: this harness awaits `Profiler.start` before running the
+action, and V8 charges profiler initialization to that first sample. Raw sampled,
+idle and profiler lead-in durations remain in the observation records. Later
+browser/native frames (including GC and V8's
+unattributed `(program)` bucket), Solid, application sources, other dependencies,
+automation, and unmapped frames remain separate owners. Ownership is based on
+source paths, not inferred from a caller: a WebAssembly address without a map
+remains unmapped. Generated JS without a source map also remains unmapped.
+
+Profiles identify candidates, not timing improvements or precise consumed CPU.
+Confirm any candidate in separate unprofiled, interleaved baseline/candidate
+comparisons with an A/A control, the three flows contributing most of its cost,
+and an unaffected flow. Use at least 20 pairs in Chromium and WebKit. WebKit
+acceptance uses application elapsed time, never `cpuMs`; see the Solid
+performance guide for timing, tail, and noisy-host criteria. Synthetic Gateway
+fixtures measure rendering and transport simulation, not live provider latency.
+
+## Long sessions
+
+`--long-session --transcript-messages 2000 --face chat` uses a mixed synthetic
+transcript with Markdown, code, tables, tool calls/results, and images. It adds
+switch-out/return, end-to-end scrolling, transcript search, and retained-memory
+measurements to the existing open/streaming measurements. The other session
+contains 400 messages. Run the same workload with `--transcript-messages 400`
+for the size control, and add `--streaming-reply` for bottom-follow behavior.
+Long-session mode requires `--boot-route chat` and cannot run with `--layout-matrix`.
+Open-to-interactive is `presentation.firstComposerFocusMs`: after navigation,
+Playwright waits for the active composer to be visible, enabled, and editable,
+focuses it, and verifies focus before the initial metrics settle and save.
+The init script records that real focus event; it does not focus from a rendering callback.
+
+Use `--first-load` for full-history renderer stress comparisons. The open boundary
+checks the actual loaded transcript count against the fixture (or the initial
+page size for `paging`); warm restores can otherwise contain only the latest 80
+messages. Full-history scenarios intentionally return all records in their
+synthetic startup response. Use `paging` to exercise bounded history responses.
+Switch-in also checks and records the full expected count before its measured
+callback returns; `visibleMs` remains the earlier first-row visibility time.
+
+`--long-session-scenario` selects a dedicated workload while retaining the same
+production server, browser, fixture clock, network profile, and paired-run loop:
+
+| Scenario          | Workload and assertions                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `mixed` (default) | Mixed messages, session switches, local transcript search, scrolling, and memory. Supports `--streaming-reply`.                                                                                                                                                                                                                                                                                                                      |
+| `paging`          | The initial response contains at most 80 records. Upward wheel input loads older pages through the real UI owner, with exact 1,000-record/3 MiB request contracts. At 2,000 records the pages contain 80 + 1,000 + 920; at 400 they contain 80 + 320. Each response is held until its reading anchor is sampled; every sampled frame must stay within two pixels. The oldest entry must render and the exhausted sentinel disappear. |
+| `single-run`      | One dashboard prompt, assistant/tool pairs sharing one run identity, and one final answer. Records default collapsed work, expansion, scroll endpoints, collapse, DOM size, and retained heap.                                                                                                                                                                                                                                       |
+| `direct-run`      | The same single run on a direct-session key, preserving its normally expanded commentary. Records initial retention and end-to-end scrolling without requiring a disclosure.                                                                                                                                                                                                                                                         |
+
+For example, add `--long-session-scenario paging` to the mixed-workload command
+above, then run `single-run` and `direct-run` separately. Dedicated modes require
+unchanged history; streaming, live events, and the separate session-switch phase
+belong to `mixed`. Single-run modes require at least two messages. Their first and
+final entry identities must render at the scroll endpoints; DOM counts are
+measurements, so a bounded inner window can pass without mounting every message.
+Expansion/collapse timings end after the asserted disclosure/entry DOM and two
+rendering opportunities, not a compositor paint acknowledgment. Scroll trajectories
+begin with real wheel input to retire placement/follow commands through the reader-input owner.
+The fast sweep uses 60 programmatic `scrollTop` assignments and retains all 61
+sampled frames, including its raw endpoint gap. Row measurements can displace
+that synthetic target; a nonzero gap remains a reported trajectory problem.
+Endpoint completion is a separate measured phase: after two sampled settling
+frames, at most one native wheel input requests the remaining distance plus one
+viewport, followed by two more sampled frames. The final endpoint must be within
+two pixels in either direction. Endpoint misses remain in the result alongside
+their CPU, long tasks, and sampled geometry; completing collection is not an
+acceptance verdict. Score every candidate's endpoint and correction fields,
+and report baseline misses rather than discarding their attempted samples.
+This proves reader-directed completion, not
+automatic anchor recovery. One long-task observer and the CPU/wall interval cover
+hover, wheel admission, the full sweep, settling, and native completion. Reports
+keep the sweep and completion frames separate; neither phase is discarded.
+Each scroll frame retains row counts and geometric coverage. Repeated row-key
+strings are omitted to keep browser-side measurement and result serialization
+bounded. The sweep also records actual sampling start/completion times: the
+rAF-supplied timestamp precedes callback work and is not its completion boundary.
+Geometric coverage measures active row boxes, not compositor paint.
+Collapse starts
+after an unmeasured return to the disclosure, which may be unmounted while reading
+the bottom of a virtualized run. Long-task
+observers cover these actions; the paging anchor also records eight frames after
+history publication. Explicit GC and optional retained heap snapshots run outside
+the timed intervals. Deep snapshots are limited to the first sample of each
+compared bundle, and are disabled during CPU profiling. The remote profile throttles
+synthetic JSON RPC replies and HTTP independently, without modeling WebSocket
+compression or framing; snapshots from the first sample per bundle are streamed
+to count detached native nodes, while subsequent samples use GC and DOM counters.
+
+Acceptance: the 2,000-message open and switch should take at most 1.5 times the
+400-message control; fast scrolling should have no task over 50 ms or blank
+viewport; live DOM/retained heap should stay bounded by the rendered window.
+A candidate must improve an attributable CPU or latency cell by at least 5%
+without correctness regressions. Use ten serial interleaved base/head pairs,
+report median/p95/range and host load, and include base/base controls on a loaded
+host. If those controls are noisy, use twenty pairs and thread CPU plus work
+counts. Run localhost and `--network-latency-ms 100 --download-kbps 10000`
+separately; mock RPC delay uses `--latency-ms 100`. These fixtures measure the
+production renderer and synthetic transport, not real provider latency.
+
 ## Low-memory mobile profile
 
 Both `bench-control-ui-cold-load.ts` and `bench-control-ui-interactions.ts` accept
@@ -481,6 +607,8 @@ not qualify a product scheduling change against live behavior.
 `--latency-ms` sets the inbound message delay (default 35 ms). `--frame-gap-ms`
 sets the minimum separation between Gateway message deliveries (default 4 ms).
 Concurrent requests remain concurrent; replies share one serialized wire.
+Sequenced events retain socket order even when delayed browser callbacks overtake;
+each event still dispatches in its own task, without holding independent RPC replies.
 `--sidebar-query-latency-ms ownerFirst=400` (also `involvingMe`, `ownerCounts`, and
 `children`) overrides method latency for that sidebar query shape. Use
 `--omit-hello-self-presence --method-latency-ms users.self=900` to exercise identity

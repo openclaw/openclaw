@@ -84,6 +84,10 @@ const loaders = {
     ),
   userGitHubConnections: () =>
     import("./user-github-connections.worker.js").then((m) => m.userGitHubConnectionOperations),
+  "githubPublications.personalRestart": () =>
+    import("../gateway/github-personal-publication-store.worker.js").then(
+      ({ personalPublicationRestartOperations }) => personalPublicationRestartOperations,
+    ),
   githubPublications: () =>
     import("./github-publication.worker.js").then((m) => m.publicationOperations),
   userBackground: async () =>
@@ -116,7 +120,7 @@ const loaders = {
   // Workshop changes and generic skill usage share the `skills.` operation domain.
   skills: async () => {
     const [workshop, usage] = await Promise.all([
-      import("../skills/workshop/changes.worker.js").then((m) => m.skillWorkshopOperations),
+      import("../skills/workshop-changes/changes.worker.js").then((m) => m.skillWorkshopOperations),
       import("../skills/runtime/skill-usage.worker.js").then((m) => m.skillUsageOperations),
     ]);
     return { ...workshop, ...usage };
@@ -215,5 +219,6 @@ export type RegisteredStateWorkerOperations = WorkerOperationsFromLoaders<typeof
 
 export const stateWorkerRegistry = createWorkerOperationRegistry<
   RegisteredStateWorkerOperations,
-  WorkerWriteOperationContext
+  WorkerWriteOperationContext,
+  keyof typeof loaders
 >(loaders);

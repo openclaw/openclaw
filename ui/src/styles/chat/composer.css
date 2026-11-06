@@ -325,12 +325,12 @@
   overflow: hidden;
   overscroll-behavior: contain;
   scrollbar-gutter: auto;
-  transition:
-    height 220ms cubic-bezier(0.2, 1, 0.22, 1),
-    opacity var(--oc-overlay-hide-duration, var(--control-ui-transition-fast)) ease,
-    scale var(--oc-overlay-hide-duration, var(--control-ui-transition-fast)) ease,
-    display var(--oc-overlay-hide-duration, var(--control-ui-transition-fast)) allow-discrete,
-    overlay var(--oc-overlay-hide-duration, var(--control-ui-transition-fast)) allow-discrete;
+}
+
+/* Height eases only between views of a settled menu. Entry and exit keep the
+   shared menu presentation instead of growing from the last measured height. */
+.agent-chat__capability-menu-panel:where([data-phase="open"]) {
+  transition: height 220ms cubic-bezier(0.2, 1, 0.22, 1);
 }
 
 .agent-chat__capability-menu-body {
@@ -626,27 +626,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.mcp-server-dialog {
-  width: min(520px, calc(100vw - 48px));
-  gap: var(--space-4);
-}
-
-.mcp-server-dialog__scope {
-  display: grid;
-  gap: var(--space-2);
-}
-
-.mcp-server-dialog .mcp-server-form {
-  grid-template-columns: minmax(0, 1fr);
-  align-items: stretch;
-  padding: 0;
-  border-bottom: 0;
-}
-
-.mcp-server-dialog .mcp-server-message {
-  margin: 0;
 }
 
 /* Selected/open states stay a quiet neutral wash; only live recording gets a
@@ -3247,9 +3226,10 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   flex: 0 0 var(--chat-composer-chip-icon, 14px);
 }
 
-/* The filled lightning carries more visual mass than the stroked microphone.
-   A 14px box makes their visible ink match while the fast-mode row keeps the
-   full chip icon token. */
+/* The filled lightning carries more visual mass than the provider mark, so a
+   14px box keeps it one step above that mark without outweighing the chip.
+   The footer svg rule below makes the glyph follow this box rather than the
+   footer icon token; the fast-mode row keeps the full chip icon token. */
 .chat-controls__effort-zap {
   display: inline-flex;
   width: 14px;
@@ -3259,9 +3239,9 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 }
 
 .chat-controls__effort-zap--ultrafast {
-  width: 16px;
-  height: 18px;
-  flex-basis: 16px;
+  width: 14px;
+  height: 16px;
+  flex-basis: 14px;
 }
 
 /* Phone glyphs replace the text; desktop keeps its label and active-speed indicator. */
@@ -3304,7 +3284,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 
 .chat-controls__fast-mode-icon svg,
 .chat-controls__effort-zap svg,
-.agent-chat__composer-footer .chat-controls__effort-zap--ultrafast svg {
+.agent-chat__composer-footer .chat-controls__effort-zap svg {
   width: 100%;
   height: 100%;
   fill: currentColor;

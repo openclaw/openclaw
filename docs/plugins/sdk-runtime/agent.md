@@ -191,7 +191,8 @@ compaction or reset boundary. It preserves
 tool-result ownership and rejects a limit that cannot retain the newest complete
 frame or required boundary. Stored transcripts stay unchanged. Omitting `limits`
 keeps the full selected context. Async reads retain admission, anchor, and
-cancellation checks.
+cancellation checks. Background model views should pass bounded limits, because an
+unbounded read of a very large session can exhaust the transcript worker.
 
 For a temporary model-only view, callers may explicitly add
 `toolResultOverflow: "omit"` to `limits`. Under byte pressure, the reader replaces
@@ -427,6 +428,8 @@ Each `SessionTranscriptMessageEntry` contains:
     ```
 
     `runEmbeddedAgent(...)` is the neutral helper for starting a normal OpenClaw agent turn from plugin code. It uses the same provider/model resolution and agent-harness selection as channel-triggered replies.
+
+    Each call owns a detached execution lifetime, so deferred turns can continue after the triggering request completes. During reversible suspension, calls from an admitted request can continue; other calls wait for admission to reopen. Pass `abortSignal` to cancel that wait or the turn.
 
     The caller owns `terminalReplyExpectation`: `"required"` for a normally requested response, `"optional"` for optional work, or `"result-required"` for internal work that must return a result. External turns may explicitly finish with an entire final that trims to uppercase `NO_REPLY` under either default reply expectation. The terminal producer prepares the full payload once and publishes `meta.terminalReply`; delivery consumes that fact without reparsing text. Producer preparation strips one literal leading `NO_REPLY\n`, preserving the remaining bytes as visible text. Otherwise, a standalone `NO_REPLY` on the last non-empty line is removed and the preceding answer is delivered; whitespace around that final line is allowed. Lowercase, punctuation, quoted or JSON forms, and inline or mid-text mentions are ordinary visible text. Internal result-required turns need a completed current-source final result, not a silent payload or progress update. `NO_REPLY` discards anything written this turn that was not sent, so send confirmations before ending silently. Empty output is not silence: recovery after settled tools uses a tool-free finalization pass rather than repeating completed actions.
 

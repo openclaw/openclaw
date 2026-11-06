@@ -567,8 +567,13 @@ export function createManagedServiceLaunchdClockPreload(params: {
     "const actualSpawn = children.spawn;",
     "const actualSetTimeout = global.setTimeout;",
     "const startedAt = Date.now();",
+    // The recovery budget is elapsed (monotonic) time, so simulated command work
+    // must also advance performance.now(); a wall-clock-only step would leave the
+    // recovery budget unconsumed. Wall-clock steps stay separately injectable.
+    "const performanceStartedAt = performance.now();",
     "let elapsed = 0;",
     "Date.now = () => startedAt + elapsed;",
+    "performance.now = () => performanceStartedAt + elapsed;",
     "global.setTimeout = (callback, delay, ...args) => {",
     "  if (delay === 500) {",
     "    elapsed += delay;",

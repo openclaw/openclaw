@@ -1,3 +1,4 @@
+import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { patchSettings } from "../../app/settings.ts";
@@ -6,7 +7,7 @@ import { navigateMarkdownSession } from "../../components/markdown-session-links
 import { personActivityRouting } from "../../components/person-activity-link.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { canPresentGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   pickFreshestObserverDigest,
   projectSessionObserverDigest,
@@ -28,7 +29,7 @@ import { createChatPaneResourceProps } from "./chat-pane-resource-presentation.t
 import {
   createChatPaneQueuedEditProps,
   createChatPaneSessionActionCallbacks,
-  canDismissChatPendingInputs,
+  createChatPanePendingInputControls,
   readChatPaneMutationAccess,
   renderChatPaneComposerControls,
 } from "./chat-pane-session-controls.ts";
@@ -45,8 +46,10 @@ import {
 } from "./chat-pane-state.ts";
 import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
 import { createChatQuestionActions } from "./chat-question-actions.ts";
+import { isChatQueuePaused } from "./chat-queue-pause.ts";
 import { dismissRealtimeTalkError } from "./chat-realtime.ts";
 import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
+import { clearChatQueue, resumeChatQueue } from "./chat-send-actions.ts";
 import { chatSendPendingReason } from "./chat-send-support.ts";
 import { refreshChatCommands } from "./chat-session-commands.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
@@ -281,7 +284,15 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const composerPendingReason = state.connected ? null : pendingReason;
     const auth = gatewaySnapshot.hello?.auth ?? null;
     const hasWriteScope = hasOperatorWriteAccess(auth);
-    const composerAccess = hasWriteScope || (!catalog && mutationAccess.composeScope.allowed);
+    const composerAccess = catalogKey
+      ? hasWriteScope ||
+        (catalogKey.catalogId === "beam" &&
+          canPresentGatewayMethod(
+            gatewaySnapshot,
+            "beam.owned.continue",
+            "operator.sessions.write",
+          ))
+      : hasWriteScope || mutationAccess.composeScope.allowed;
     const suggestionViewer =
       multiIdentity &&
       !selectedSessionArchived &&
@@ -354,7 +365,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         ? this.captureProgressCardRefreshAction()
         : undefined;
     const props: ChatProps = {
-      canDismissPendingInputs: canDismissChatPendingInputs(mutationAccess, selectedSession, {
+      ...createChatPanePendingInputControls(mutationAccess, selectedSession, {
         nativeConversation,
         participationBlocked: sessionParticipationBlocked,
       }),
@@ -510,6 +521,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       ...composerAvailability,
       disabledReasonAction: catalogReason?.action,
       error: providerPaused ? null : state.lastError,
+      errorDetail: state.lastErrorDetail,
       diskSpace: placementComposer.diskSpace,
       workerRuntimeInstall: placementComposer.workerRuntimeInstall,
       runError:
@@ -529,6 +541,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       ...this.transcriptSessionProps(selectedSession),
       contextUsage: this.cachedSessionState()?.contextUsage,
       toolOverrides: selectedSession?.toolOverrides,
+      incognito: Boolean(selectedSession?.incognito) || isIncognitoSessionKey(state.sessionKey),
       capabilityMenu: catalogKey
         ? undefined
         : this.composerCapabilityMenu(state, selectedSession, currentAgentId),
@@ -566,7 +579,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onOpenSessionLink: (target) => navigateMarkdownSession(this.context, target),
       onNavigate: (routeId, options) => this.context.navigate(routeId, options),
       onRefresh: this.refreshHistory,
-      onChatScroll: (event) => this.handleTranscriptScroll(event),
       onHistoryIntent: (event) => this.handleTranscriptHistoryIntent(event),
       // Lazy SVG sizing can resize a committed row; re-enter the scroll owner
       // so an active follow lock stays pinned to the latest message.
@@ -591,6 +603,9 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       }),
       ...createChatPaneRunRecoveryActions(state, {
         canSend: composerAvailability.canSend && !catalogKey && !suggestionViewer,
+        onRewindMessage: selectedSessionArchived
+          ? undefined
+          : sessionActionCallbacks.onRewindMessage,
         isCurrent: () =>
           this.state === state && this.connectionGeneration === selectionConnectionGeneration,
         latestFailedRunId: () =>
@@ -607,6 +622,9 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         state.realtimeTalk.update({ realtimeTalkInputNotice: null }),
       ...sessionActionCallbacks,
       onQueueRemove: state.removeQueuedMessage,
+      queuePaused: isChatQueuePaused(state),
+      onQueueResume: providerPaused ? undefined : () => resumeChatQueue(state),
+      onQueueClear: () => clearChatQueue(state),
       onQueueRetry: providerPaused ? undefined : (id) => void state.retryQueuedChatMessage(id),
       onQueueSteer:
         sessionParticipationBlocked || providerPaused

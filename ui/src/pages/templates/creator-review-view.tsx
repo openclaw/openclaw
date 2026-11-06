@@ -98,7 +98,7 @@ function TemplateReviewDialog(props: {
       // Closing or leaving releases presentation; the owner still records the write outcome.
       yield Promise.race([pending, retired]);
     } catch (error) {
-      showToast({ message: formatUiError(error) });
+      showToast({ severity: "error", message: formatUiError(error) });
     }
   });
   async function publish() {

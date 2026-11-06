@@ -138,6 +138,7 @@ export function pollLocatorText(locator: Locator) {
 export function createNewSessionPageE2eSuite() {
   return createControlUiE2eSuite({
     name: "Control UI new-session page mocked Gateway E2E",
+    trackBrowserContexts: true,
     unavailableMessage: (executablePath) =>
       `Playwright Chromium is unavailable at ${executablePath}`,
   });

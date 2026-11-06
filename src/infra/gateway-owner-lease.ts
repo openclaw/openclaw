@@ -33,7 +33,6 @@ import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import {
   classifyGatewayOwnerProcessNamespace,
   describeGatewayLockHolder,
-  GATEWAY_OWNER_HEARTBEAT_STALE_MS,
   GatewayLockNamespaceError,
   readGatewayLockProcessNamespace,
 } from "./gateway-lock-payload.js";
@@ -385,10 +384,8 @@ export function acquireGatewayOwnerLease(params: {
         leaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
         acquiredAt: expiresAt - STARTUP_MIGRATION_LEASE_TTL_MS,
         expiresAt,
-        // Keep holder diagnostics fresh even when its process namespace is not visible.
-        heartbeatMs: Math.floor(
-          Math.min(STARTUP_MIGRATION_LEASE_TTL_MS, GATEWAY_OWNER_HEARTBEAT_STALE_MS) / 3,
-        ),
+        // Heartbeat age is diagnostic; process evidence, not age, governs recovery.
+        heartbeatMs: Math.floor(STARTUP_MIGRATION_LEASE_TTL_MS / 3),
         ...(processOwner.startedAt === null
           ? { processOwner: { identity: processOwner, env: resolveDiagnosticProcessEnv(env) } }
           : {}),

@@ -450,6 +450,33 @@ it("releases unrelated registration rows while following new owners and deletion
   expect(preparedRows().has("unrelated")).toBe(true);
 });
 
+it("selects registration rows in owner order without traversing unrelated live runs", async () => {
+  const child = "agent:main:subagent:indexed-registration";
+  seed(
+    entry("first", { childSessionKey: child }),
+    entry("explicit", { createdAt: 2 }),
+    entry("unrelated"),
+  );
+  await restore();
+  const context = captureOpenClawStateWorkerContext();
+  const prepare = () => prepareSubagentRegistrationRows(child, ["explicit"], context);
+  const initial = await prepare();
+  expect([...initial().keys()]).toEqual(["first", "explicit"]);
+  const traversal = vi.spyOn(subagentRuns, Symbol.iterator);
+  const reader = await prepare();
+  expect([...reader().keys()]).toEqual(["first", "explicit"]);
+  expect(traversal).not.toHaveBeenCalled();
+  traversal.mockRestore();
+  // A live replacement leaves the durable bucket; a new live row joins it.
+  subagentRuns.set("first", entry("first", { childSessionKey: "agent:main:elsewhere" }));
+  subagentRuns.set("last", entry("last", { childSessionKey: child }));
+  expect([...reader().keys()]).toEqual(["explicit", "last"]);
+  await register(entry("durable-next", { childSessionKey: child }));
+  expect([...reader().keys()]).toEqual(["explicit", "durable-next", "last"]);
+  await mutateSubagentRuns(["explicit"], () => postimages([["explicit", null]]));
+  expect([...reader().keys()]).toEqual(["durable-next", "last"]);
+});
+
 it("persists prepared-only registration without resurrecting it after a queued deletion", async () => {
   await register(entry("warm-registration"));
   const original = entry("prepared-deletion");

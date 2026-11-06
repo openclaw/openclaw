@@ -48,6 +48,7 @@ type SidebarSubtitleValue = ReturnType<typeof resolveSidebarSessionSubtitle>;
 
 type SidebarProjectionInput = {
   rows: SidebarRecentSession[];
+  selectedSessionKey: string | null;
   /** Personal placements participate in disclosure lifetime, not canonical grouping. */
   referencedRows?: readonly SidebarRecentSession[];
   sections?: SidebarSessionSection<SidebarRecentSession>[];
@@ -251,7 +252,7 @@ export class SidebarSessionProjection {
       data.sessionsLoading,
       data.sessionsStartupPending,
       data.sessionsResult?.hasMore,
-      data.sessionMutationError,
+      data.sessionListError,
       data.sessionCatalogRefreshStatus,
       data.loadingMoreSessionCatalogIds,
       data.childSessionErrorsByParent,
@@ -523,11 +524,7 @@ export class SidebarSessionProjection {
     ) {
       this.resetMembership();
     }
-    this.children.beginPass(
-      previous !== null &&
-        (previous.agentId !== input.agentId ||
-          previous.connectionIdentity !== input.connectionIdentity),
-    );
+    this.children.beginPass(input, previous);
     if (scopeChanged) {
       this.heldSubtitles.clear();
     }
@@ -633,7 +630,7 @@ export class SidebarSessionProjection {
       const { initialLimit, key } = sidebarSessionPagination(grouping, section.id);
       const visibleLimit = input.visibleSessionLimits.get(key) ?? initialLimit;
       const requiredRowCount = section.rows.reduce(
-        (count, row) => count + Number(row.active || row.pinned),
+        (count, row) => count + Number(row.active || row.containsActiveDescendant || row.pinned),
         0,
       );
       const collapsedVisibleRowCount = Math.max(
@@ -648,7 +645,7 @@ export class SidebarSessionProjection {
         // Keep one prior page through run-state and recency changes. An unbounded
         // union eventually renders the entire roster without a Show more action.
         section.rows = section.rows.filter((row) => {
-          if (row.active || row.pinned) {
+          if (row.active || row.containsActiveDescendant || row.pinned) {
             return true;
           }
           if (optionalSlots > 0) {

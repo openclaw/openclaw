@@ -5,7 +5,7 @@ import { isNativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts
 const MOBILE_NAV_MAX_WIDTH = 900;
 const NATIVE_WEB_CHROME_MOBILE_NAV_MAX_WIDTH = 600;
 const FLOATING_HEADER_MEDIA_QUERY =
-  "(max-width: 600px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)";
+  "(max-width: 640px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)";
 const hasNativeShellClass = (...classNames: string[]) =>
   [
     "openclaw-native-macos",

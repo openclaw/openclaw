@@ -1,10 +1,13 @@
-export const CHAT_COMPOSER_DRAFT_STORAGE_ERROR =
-  "Could not store the previous draft in browser storage. It remains available in this tab.";
+import { t } from "../../i18n/index.ts";
+
+export function chatComposerDraftStorageError(): string {
+  return t("chat.queue.draftStorageFailed");
+}
 
 export function reportChatComposerDraftStorageError(host: {
   lastError?: string | null;
   chatError?: string | null;
 }): void {
-  host.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
-  host.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
+  host.lastError = chatComposerDraftStorageError();
+  host.chatError = chatComposerDraftStorageError();
 }
