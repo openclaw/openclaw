@@ -1442,9 +1442,23 @@ openclaw-tooltip:last-child > .btn.refresh-button {
   gap: 10px;
 }
 
+.callout__body {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
 .callout__content {
   min-width: 0;
   flex: 1;
+}
+
+.callout__body > .callout__content {
+  /* Reserve a readable text measure before wrapping the action below it. */
+  flex-basis: 24ch;
 }
 
 .callout__title {
@@ -1455,8 +1469,14 @@ openclaw-tooltip:last-child > .btn.refresh-button {
 .callout__action {
   display: flex;
   flex: 0 0 auto;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  max-width: 100%;
+}
+
+.callout__action > .btn {
+  white-space: normal;
 }
 
 .callout__action:empty {

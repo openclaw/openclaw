@@ -66,15 +66,17 @@ export function InlineAlert(
       role={liveRole()}
     >
       <Show when={hasAction() || props.onDismiss || props.title != null} fallback={props.children}>
-        <div class="callout__content">
-          <Show when={props.title != null}>
-            <strong class="callout__title">{props.title}</strong>
+        <div class="callout__body">
+          <div class="callout__content">
+            <Show when={props.title != null}>
+              <strong class="callout__title">{props.title}</strong>
+            </Show>
+            {props.children}
+          </div>
+          <Show when={hasAction()}>
+            <div class="callout__action">{props.action}</div>
           </Show>
-          {props.children}
         </div>
-        <Show when={hasAction()}>
-          <div class="callout__action">{props.action}</div>
-        </Show>
         <Show when={props.onDismiss}>
           {(onDismiss) => (
             <button
