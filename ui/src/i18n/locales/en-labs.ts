@@ -6,7 +6,6 @@ const enLabs = {
     swarm: {
       title: en.labsPage.swarm.title,
       groupTitle: "Parallel tasks",
-      defaultPhase: en.labsPage.swarm.defaultPhase,
       progress: "{complete} of {total}",
       active: "{running} running · {queued} queued · {failed} failed or stopped",
       finished: "{done} completed · {failed} failed or stopped",

@@ -23,6 +23,7 @@ type StripeRow = {
   stripe: number;
   lint_selection_json?: string;
   shared_central_lint_selection_json?: string;
+  requires_sdk_declarations?: true;
   type_graph_names_json?: string;
   root_type_stripe?: string;
 };
@@ -307,6 +308,7 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
           {
             ...template,
             lint_selection_json: JSON.stringify(withExtensions(selected, extensionStripes)),
+            ...(extensionStripes.length > 0 ? { requires_sdk_declarations: true as const } : {}),
           },
         ];
       });
