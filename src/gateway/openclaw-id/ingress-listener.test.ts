@@ -79,7 +79,7 @@ async function setup(authenticate = false) {
   gateway = http.createServer((req, res) => {
     void observe(req).then(() => res.end("gateway"));
   });
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 });
   gateway.on("upgrade", (req, socket, head) => {
     void observe(req, true).then(() => {
       wss.handleUpgrade(req, socket, head, (ws) => ws.close(1000, "ok"));
