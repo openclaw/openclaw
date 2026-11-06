@@ -87,6 +87,7 @@ type WorkerGeneration = {
     "inlineProviderModels" | "configuredCatalogEntries"
   > & { pluginRegistry: PluginRegistry };
   pluginIds: ReadonlySet<string>;
+  plannedPluginIds: ReadonlySet<string>;
   staticProviderIds: ReadonlySet<string>;
   release: () => void | Promise<void>;
 };
@@ -171,6 +172,9 @@ async function prepareWorkerGeneration(
     config,
     pluginGeneration,
     pluginIds: new Set([...basePluginIds, ...pluginRegistry.plugins.map((plugin) => plugin.id)]),
+    // Scope growth preserves admission facts. A remote catalog replacement must
+    // replan, because refreshed manifest rows can change which owners need runtime.
+    plannedPluginIds: previous && pluginIds ? previous.plannedPluginIds : new Set(),
     staticProviderIds: previous?.staticProviderIds ?? new Set(),
     release: ownPreparedPluginGeneration(pluginGeneration).retain(),
   };
@@ -330,18 +334,25 @@ async function runCatalogRequest(
         ]),
       ],
     });
-    const discoveryPluginIds = [...(discoveryScope?.keys() ?? [])];
-    const discoveryPlan = await withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
-      planRuntimePluginDiscovery({
-        config: value.input.config,
-        env: value.input.env,
-        workspaceDir: value.input.workspaceDir,
-        pluginMetadataSnapshot,
-        onlyPluginIds: discoveryPluginIds,
-      }),
+    // Unknown credential providers are not plugin owners. Keep planning coverage bounded
+    // by this metadata generation, independently of which owners require runtime loading.
+    const discoveryPluginIds = [...(discoveryScope?.keys() ?? [])].filter((id) =>
+      pluginMetadataSnapshot.byPluginId.has(id),
     );
+    const { plannedPluginIds } = prepared;
+    const discoveryPlan = discoveryPluginIds.every((id) => plannedPluginIds.has(id))
+      ? undefined
+      : await withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
+          planRuntimePluginDiscovery({
+            config: value.input.config,
+            env: value.input.env,
+            workspaceDir: value.input.workspaceDir,
+            pluginMetadataSnapshot,
+            onlyPluginIds: discoveryPluginIds,
+          }),
+        );
     let catalogGeneration = prepared.pluginGeneration;
-    if (discoveryPlan.kind === "runtime") {
+    if (discoveryPlan?.kind === "runtime") {
       // Keep newly observed owners in this bounded metadata generation. Alternating agents
       // must not reconstruct each other's registrations or retry recorded load failures.
       const pluginIds = [
@@ -485,6 +496,11 @@ async function runCatalogRequest(
       Object.assign(prepared, acquiredGeneration);
       acquiredGeneration = undefined;
       await releasePrevious();
+    }
+    if (discoveryPlan) {
+      // Publish only after successful discovery/adoption; failed expansion must not
+      // make the predecessor skip admission on the next request.
+      prepared.plannedPluginIds = new Set([...prepared.plannedPluginIds, ...discoveryPluginIds]);
     }
     return result;
   } catch (error) {

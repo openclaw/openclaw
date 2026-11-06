@@ -16,6 +16,7 @@ import {
   availableLinkPreviewReaders,
 } from "../../app/link-reader-routing.ts";
 import { nativeGatewaysCapability } from "../../app/native-gateways.runtime.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { isChatControlCommand } from "../../lib/chat/commands.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -384,12 +385,12 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         <Show when={reviewVisited()}>
           <Errored
             fallback={(error, reset) => (
-              <div class="callout danger" role="alert">
+              <InlineAlert tone="danger" role="alert">
                 {formatUiError(error())}
                 <button class="btn btn--sm" type="button" onClick={reset}>
                   {t("common.retry")}
                 </button>
-              </div>
+              </InlineAlert>
             )}
           >
             <Loading>

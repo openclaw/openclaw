@@ -117,6 +117,20 @@ async function runFile(
   request: MediaRequestOverrides,
   execution?: MediaExecutionContext,
 ): Promise<RunMediaUnderstandingFileResult> {
+  const run = () => runFileInScope(params, request, execution);
+  return execution
+    ? withGuardedFetchRequestAuthority(
+        () => assertMediaExecutionCurrent(execution),
+        () => withCommandProcessScope(run, execution.signal),
+      )
+    : run();
+}
+
+async function runFileInScope(
+  params: RunMediaUnderstandingFileParams,
+  request: MediaRequestOverrides,
+  execution?: MediaExecutionContext,
+): Promise<RunMediaUnderstandingFileResult> {
   const { cfg } = params;
   const requestTimeoutSeconds =
     typeof params.timeoutMs === "number" &&
@@ -337,8 +351,9 @@ export async function extractStructuredWithModel(params: ExtractStructuredWithMo
 
 export async function describeVideoFile(
   params: DescribeVideoFileParams,
+  execution?: MediaExecutionContext,
 ): Promise<RunMediaUnderstandingFileResult> {
-  return await runMediaUnderstandingFile({ ...params, capability: "video" });
+  return await runFile({ ...params, capability: "video" }, {}, execution);
 }
 
 /** Prepares the largest input that any configured transcription fallback can accept. */
@@ -371,19 +386,12 @@ export async function transcribeAudioFile(
   params: TranscribeAudioFileParams,
   execution?: MediaExecutionContext,
 ): Promise<RunMediaUnderstandingFileResult> {
-  const run = () =>
-    runFile(
-      { ...params, capability: "audio" },
-      {
-        prompt: params.prompt?.trim() || params.prompt || undefined,
-        language: params.language || undefined,
-      },
-      execution,
-    );
-  return execution
-    ? withGuardedFetchRequestAuthority(
-        () => assertMediaExecutionCurrent(execution),
-        () => withCommandProcessScope(run, execution.signal),
-      )
-    : run();
+  return await runFile(
+    { ...params, capability: "audio" },
+    {
+      prompt: params.prompt?.trim() || params.prompt || undefined,
+      language: params.language || undefined,
+    },
+    execution,
+  );
 }

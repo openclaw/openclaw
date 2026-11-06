@@ -107,9 +107,9 @@ describe("renderPluginCatalogResults", () => {
     const { container, ui } = await mount(props);
     ui.node("openclaw-panel-empty-state").not.toBeNull();
     update(container, { ...props, remoteError: "ClawHub unavailable" });
-    ui.content(".callout.warning").toContain("ClawHub unavailable");
+    ui.content(".callout.warn").toContain("ClawHub unavailable");
     ui.node("openclaw-panel-empty-state").toBeNull();
-    container.querySelector<HTMLButtonElement>(".callout.warning button")!.click();
+    container.querySelector<HTMLButtonElement>(".callout.warn button")!.click();
     expect(props.onRetry).toHaveBeenCalledOnce();
 
     const pending = Promise.withResolvers<null>();

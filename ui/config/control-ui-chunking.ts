@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build, type Plugin, type ResolvedConfig } from "vite";
 import {
+  controlUiLocaleErrorNamespaces,
   resolvedLocaleConfigHintsModulePrefix,
   resolvedLocaleNamespaceModulePrefix,
 } from "./control-ui-locales.ts";
@@ -419,7 +420,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
       // These shared Cron owners already load together in Cron and Agents.
       return "cron-domain";
     case "ui/src/lib/cron/model-suggestions.ts":
-    case "ui/src/pages/chat/chat-transcript-pages.ts":
     case "packages/model-catalog-core/src/configured-model-refs.ts":
     case "ui/src/styles/cron.css":
     case "ui/src/pages/cron/cron-page.tsx":
@@ -511,6 +511,14 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return `${controlUiLocaleConfigHintsChunkPrefix}${normalized.slice(resolvedLocaleConfigHintsModulePrefix.length)}`;
   }
   if (normalized.startsWith(resolvedLocaleNamespaceModulePrefix)) {
+    const [locale, namespace] = normalized
+      .slice(resolvedLocaleNamespaceModulePrefix.length)
+      .split("/");
+    // The local-error registrar prepares these together. Share their request without
+    // pulling them into the locale entry or changing when their copy is installed.
+    if (controlUiLocaleErrorNamespaces.includes(namespace!)) {
+      return `locale-errors-${locale}`;
+    }
     return `locale-namespace-${normalized.slice(resolvedLocaleNamespaceModulePrefix.length).replace("/", "-")}`;
   }
 

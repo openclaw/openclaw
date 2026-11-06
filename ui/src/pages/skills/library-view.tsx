@@ -2,7 +2,9 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import type { SkillsLibraryMutateParams } from "../../../../packages/gateway-protocol/src/index.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import "../../components/modal-dialog.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
@@ -172,18 +174,18 @@ export function SkillLibraryFeedback(props: {
           current().error && (props.dialog || (!current().draft && !props.library.local.importOpen))
         }
       >
-        <div class="callout danger" role="alert">
+        <InlineAlert tone="danger" role="alert">
           {current().error}
-        </div>
+        </InlineAlert>
       </Show>
       <Show
         when={
           current().notice && (props.dialog === "editor" || (!props.dialog && !current().draft))
         }
       >
-        <div class="callout success" role="status">
+        <InlineAlert tone="success" role="status">
           {current().notice}
-        </div>
+        </InlineAlert>
       </Show>
     </>
   );
@@ -403,8 +405,7 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
       </div>
       <Show when={support() && props.library.canEdit()}>
         <label class="field checkbox">
-          <input
-            type="checkbox"
+          <Checkbox
             name="library-file-executable"
             disabled={disabled()}
             checked={support()!.executable === true}
