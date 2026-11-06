@@ -1030,14 +1030,9 @@ openclaw-pending-session-create {
   justify-content: space-between;
   gap: 8px;
 }
-.context-usage__header {
-  min-height: 20px;
-}
-.context-usage__context-value {
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 650;
-  white-space: nowrap;
+/* The panel's own gutter already insets the heading. */
+.oc-menu-heading.context-usage__header {
+  padding-inline: 0;
 }
 .context-usage__open {
   display: flex;
