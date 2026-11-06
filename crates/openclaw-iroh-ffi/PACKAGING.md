@@ -22,6 +22,11 @@ Targets:
 - `aarch64-apple-ios`: iOS device slice.
 - `aarch64-apple-ios-sim` + `x86_64-apple-ios`: universal simulator slice.
 
+`OPENCLAW_IROH_APPLE_PLATFORMS=macos scripts/build-apple.sh` builds only the macOS slice.
+The iOS slices currently fail to build: `netdev` 0.46 (via iroh's `netwatch` 0.19.3) uses
+`libc::in6_ifreq`, which `libc` 0.2.191 defines only for macOS. Resolving that requires a
+dependency change and awaits a maintainer decision.
+
 Output: `dist/apple/OpenClawIrohFFI.xcframework`, created by `xcodebuild
 -create-xcframework`. Minimum deployment targets are macOS 15 and iOS 18, matching
 OpenClawKit. No watchOS support. Add the XCFramework as a binary C target and
