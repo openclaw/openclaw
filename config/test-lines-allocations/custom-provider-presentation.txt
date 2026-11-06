@@ -1,0 +1,3 @@
+# Provider presentation: schema/wire, secure assets, and UI metadata/lifecycle regression coverage.
+# Includes held/rejected optional imports, focus retention, and model-less catalog presentation.
+1000

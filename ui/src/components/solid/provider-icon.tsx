@@ -1,8 +1,10 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, Show } from "solid-js";
+import { createMemo, Errored, lazy, Loading, Show } from "solid-js";
 import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
 import {
+  providerDisplayLabel,
   providerFallbackLetter,
+  type ProviderPresentation,
   resolveCloudProfileIconData,
   resolveProviderIconName,
   type CloudProfileIdentity,
@@ -31,19 +33,36 @@ export function ProviderFallbackIcon(props: { label: string; class?: JSX.ClassVa
   );
 }
 
-export function ProviderBrandIcon(props: { provider: string; class?: JSX.ClassValue }) {
-  const icon = createMemo(() => resolveProviderIconName(props.provider));
+const ConfiguredProviderIcon = lazy(() => import("./configured-provider-icon.tsx"));
+
+export function ProviderBrandIcon(props: {
+  provider: string;
+  presentation?: ProviderPresentation;
+  class?: JSX.ClassValue;
+}) {
+  const defaultIcon = () => {
+    const icon = resolveProviderIconName(props.provider);
+    return icon ? (
+      <ProviderAsset
+        icon={icon}
+        assetPath={inferControlUiPublicAssetPath(`provider-icons/ProviderIcon-${icon}.svg`)}
+        class={props.class}
+      />
+    ) : (
+      <ProviderFallbackIcon
+        label={providerDisplayLabel(props.provider, props.presentation)}
+        class={props.class}
+      />
+    );
+  };
   return (
-    <Show
-      when={icon()}
-      fallback={<ProviderFallbackIcon label={props.provider} class={props.class} />}
-    >
-      {(name) => (
-        <ProviderAsset
-          icon={name()}
-          assetPath={inferControlUiPublicAssetPath(`provider-icons/ProviderIcon-${name()}.svg`)}
-          class={props.class}
-        />
+    <Show when={props.presentation?.providerIcon} keyed fallback={defaultIcon()}>
+      {(selected) => (
+        <Errored fallback={defaultIcon}>
+          <Loading fallback={defaultIcon()}>
+            <ConfiguredProviderIcon icon={selected} class={props.class} fallback={defaultIcon()} />
+          </Loading>
+        </Errored>
       )}
     </Show>
   );

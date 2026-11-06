@@ -1,7 +1,33 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { projectChatSystemNotice } from "../chat-system-notice.ts";
 import { ChatNotice } from "./chat-notice-view.tsx";
+
+it("keeps row-specific provider presentation after the lazy notice icon resolves", async () => {
+  const view = mountSolid(() => (
+    <ChatNotice
+      item={{
+        kind: "notice",
+        key: "model-change",
+        timestamp: 1,
+        text: "",
+        label: "Model changed",
+        modelChange: { from: "workstation/first", to: "workstation/second" },
+      }}
+      modelCatalog={[
+        { provider: "workstation", id: "first", name: "First", providerName: "Alpha" },
+        { provider: "workstation", id: "second", name: "Second", providerName: "Bravo" },
+      ]}
+    />
+  ));
+  const initials = () =>
+    [...view.container.querySelectorAll(".chat-divider__model .provider-brand-icon")].map(
+      (icon) => icon.textContent,
+    );
+  expect(initials()).toEqual(["A", "B"]);
+  await vi.dynamicImportSettled();
+  expect(initials()).toEqual(["A", "B"]);
+});
 
 it.each(["queued", "history"] as const)("shows the recorded restart-resume time in %s", (stage) => {
   const timestamp = new Date(2026, 9, 16, 14, 37).getTime();

@@ -56,3 +56,13 @@ describe("cloud provider presentation", () => {
     },
   );
 });
+
+it("uses configured names without reinterpreting provider identity", () => {
+  expect(providerDisplayLabel("rtx-pro-workstation", { providerName: "Workstation" })).toBe(
+    "Workstation",
+  );
+  expect(providerDisplayLabel("rtx-pro-workstation")).toBe("Rtx Pro Workstation");
+  expect(providerDisplayLabel("openai", { providerName: "My inference server" })).toBe(
+    "My inference server",
+  );
+});
