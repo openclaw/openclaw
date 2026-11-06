@@ -305,7 +305,9 @@ export default createCatalog({${namespaces.map((namespace) => `${namespace}: () 
         runScripts: "dangerously",
         beforeParse(window) {
           Object.defineProperty(window.navigator, "language", { value: language });
-          if (saved) window.localStorage.setItem("openclaw.i18n.locale", saved);
+          if (saved) {
+            window.localStorage.setItem("openclaw.i18n.locale", saved);
+          }
         },
       },
     );
