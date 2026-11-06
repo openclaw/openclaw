@@ -1,2 +1,2 @@
-259
-# Active-reload fixtures cover retained geometry, zero backtracking, separate history/tool rounds, and automatic following with native row measurement receipts.
+260
+# Active warm-reload regressions and deterministic native measurement/caret readiness.
