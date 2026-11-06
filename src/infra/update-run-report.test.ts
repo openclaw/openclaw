@@ -405,7 +405,9 @@ it.each([
 });
 
 it("states the total when work ran outside the recorded phases", () => {
-  const steps = [{ step: "activating", status: "completed", startedAtMs: 61_000, endedAtMs: 121_000 }];
+  const steps = [
+    { step: "activating", status: "completed", startedAtMs: 61_000, endedAtMs: 121_000 },
+  ];
   const finished = render({ steps, createdAtMs: 1_000, finishedAtMs: 301_000 });
   expect(finished.lines).toContain("Phases: activating (60s)");
   expect(finished.lines).toContain("Total: 5m, including work outside these phases.");

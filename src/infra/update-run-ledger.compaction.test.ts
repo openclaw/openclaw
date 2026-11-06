@@ -130,7 +130,9 @@ describe("update run ledger compaction", () => {
       );
     }
     ledger.finishUpdateRun(run.runId, { status: "succeeded" }, options);
-    const report = renderUpdateRunReport(toPublicUpdateRun(ledger.getUpdateRun(run.runId, options)!));
+    const report = renderUpdateRunReport(
+      toPublicUpdateRun(ledger.getUpdateRun(run.runId, options)!),
+    );
     expect(report.headline).toContain("2 warnings need attention");
   });
 
