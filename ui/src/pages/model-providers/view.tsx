@@ -112,7 +112,7 @@ function AddProvider(props: ModelProvidersViewProps) {
                 <button
                   class="btn primary"
                   disabled={busy()}
-                  onClick={() => void props.onAddStartChat()}
+                  onClick={() => props.onAddStartChat()}
                 >
                   {t("modelProviders.login.startChat", { model: model().name })}
                 </button>
