@@ -1,0 +1,2 @@
+# Pairing-locality connect journal line: gateway connect-event journal assertions (#185766).
+195
