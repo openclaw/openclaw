@@ -234,6 +234,13 @@ describe("safe npm install helpers", () => {
     "preserves quoted dependency-source restrictions (redirected=%s)",
     async (redirected) => {
       await withTempDir("openclaw-npm-source-policy-", async (dir) => {
+        // Make this the npm project root; otherwise a parent sandbox's node_modules
+        // can cause npm to ignore this directory's project .npmrc entirely.
+        fsSync.writeFileSync(
+          path.join(dir, "package.json"),
+          JSON.stringify({ name: "npm-source-policy-fixture", version: "1.0.0" }),
+          "utf-8",
+        );
         const home = path.join(dir, "home");
         const userconfig = path.join(dir, "user.npmrc");
         const globalconfig = path.join(dir, "global.npmrc");
