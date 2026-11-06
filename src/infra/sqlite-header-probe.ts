@@ -6,12 +6,10 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-wor
 const SQLITE_HEADER_PROBE_BATCH_SIZE = 4096;
 const SQLITE_HEADER_PROBE_TIMEOUT_MS = 10_000;
 
-type ProbeAnswers = Map<string, boolean>;
-
 function probeSqliteHeaderBatch(
   workerArgv: string[],
   batch: string[],
-  results: ProbeAnswers,
+  results: Map<string, boolean>,
 ): void {
   // Closing a raw descriptor could release another connection's POSIX locks
   // on the same inode. Bound each child’s work while preserving that isolation.
@@ -54,7 +52,7 @@ export function probeSqliteDatabaseHeaders(pathnames: Iterable<string>): Map<str
   if (paths.length === 0) {
     return new Map();
   }
-  const results: ProbeAnswers = new Map();
+  const results = new Map<string, boolean>();
   try {
     const workerArgv = resolveRuntimeWorkerArgv(
       resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteHeaderProbe),

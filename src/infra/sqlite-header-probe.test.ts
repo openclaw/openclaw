@@ -44,26 +44,17 @@ it.each(["ETIMEDOUT", "ENOENT"] as const)(
 );
 
 it("splits a batch that misses its deadline so slow storage still gets an answer", () => {
-  const timedOut = Object.assign(new Error("spawnSync node ETIMEDOUT"), { code: "ETIMEDOUT" });
+  const error = Object.assign(new Error("spawnSync node ETIMEDOUT"), { code: "ETIMEDOUT" });
   const sizes: number[] = [];
   vi.spyOn(childProcess, "spawnSync").mockImplementation(((_file, _argv, options) => {
-    const batch = JSON.parse(String(options?.input)) as string[];
+    const batch = JSON.parse(options?.input as string) as string[];
     sizes.push(batch.length);
+    const base = { pid: 1, output: [], stderr: "" };
     return batch.length > 2
-      ? {
-          pid: 1,
-          output: [],
-          stdout: "",
-          stderr: "",
-          status: null,
-          signal: "SIGTERM",
-          error: timedOut,
-        }
+      ? { ...base, stdout: "", status: null, signal: "SIGTERM", error }
       : {
-          pid: 1,
-          output: [],
+          ...base,
           stdout: JSON.stringify(batch.map((pathname) => pathname.endsWith("db"))),
-          stderr: "",
           status: 0,
           signal: null,
         };
