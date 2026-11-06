@@ -574,18 +574,14 @@ describe("sessions_spawn model fallback through the Gateway", () => {
         } else {
           expect(childRequests.every((request) => request.model === failedModel)).toBe(true);
           expect(text).not.toContain(SUCCESS);
+          const openclawRunError = {
+            runId: settledRunId,
+            summary: expect.stringMatching(/\S/),
+            cause: { provider: "proof-primary", failoverReason: "rate_limit" },
+          };
           expect(
             history.messages.filter((message) => message.openclawRunError?.runId === settledRunId),
-          ).toEqual([
-            expect.objectContaining({
-              role: "custom",
-              openclawRunError: {
-                runId: settledRunId,
-                summary: expect.stringMatching(/\S/),
-                cause: { provider: "proof-primary", failoverReason: "rate_limit" },
-              },
-            }),
-          ]);
+          ).toEqual([expect.objectContaining({ role: "custom", openclawRunError })]);
         }
         if (scenario.configuredProfile || scenario.model?.includes("@")) {
           expect(childRequests).toContainEqual(

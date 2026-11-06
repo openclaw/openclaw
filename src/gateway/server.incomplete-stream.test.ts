@@ -200,19 +200,17 @@ it(
             const errors = history.messages.filter(
               (message) => message.openclawRunError?.runId === started.runId,
             );
-            expect.soft(errors, scenario).toEqual([
-              expect.objectContaining({
-                role: "custom",
-                openclawRunError: {
-                  runId: started.runId,
-                  summary: expect.stringMatching(/\S/),
-                  cause: {
-                    provider: "stream-fixture",
-                    ...(scenario === "started-tool" ? {} : { failoverReason: "timeout" }),
-                  },
-                },
-              }),
-            ]);
+            const openclawRunError = {
+              runId: started.runId,
+              summary: expect.stringMatching(/\S/),
+              cause: {
+                provider: "stream-fixture",
+                ...(scenario === "started-tool" ? {} : { failoverReason: "timeout" }),
+              },
+            };
+            expect
+              .soft(errors, scenario)
+              .toEqual([expect.objectContaining({ role: "custom", openclawRunError })]);
             if (scenario.endsWith("text")) {
               expect.soft(JSON.stringify(assistant?.content), scenario).toContain("Partial answer");
             }
