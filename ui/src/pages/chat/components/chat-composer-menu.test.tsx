@@ -98,6 +98,47 @@ it("keeps current editing state when suggestion rows load after dismissal", asyn
   expect(view.getByRole("option", { selected: true }).textContent).toContain("/status");
 });
 
+it("keeps a selected slash argument only while the same draft remains active", () => {
+  const { menu, host } = mountSlashMenu("argument-selection");
+  let options = ["default", "ultra", "ultralight"];
+  host.resolveArgOptions = () => options;
+  const selected = () => menu.state.slashMenuArgItems[menu.state.slashMenuIndex];
+
+  menu.update("/think ", host);
+  flush();
+  menu.hover(1);
+  flush();
+  menu.update("/think ", host);
+  flush();
+  expect(selected()).toBe("ultra");
+
+  options = ["default", "ultralight", "ultra"];
+  menu.update("/think ", host);
+  flush();
+  expect(selected()).toBe("ultra");
+
+  menu.update("/think u", host);
+  flush();
+  expect(selected()).toBe("ultralight");
+  menu.hover(1);
+  flush();
+  options = ["default", "ultralight"];
+  menu.update("/think u", host);
+  flush();
+  expect(selected()).toBe("ultralight");
+
+  menu.update("/verbose ", host);
+  flush();
+  expect(selected()).toBe("default");
+  menu.hover(1);
+  flush();
+  menu.reset();
+  flush();
+  menu.update("/verbose ", host);
+  flush();
+  expect(selected()).toBe("default");
+});
+
 it("uses the current focus policy on a retained suggestion option", () => {
   let setPreserveFocus!: (value: boolean) => void;
   const view = mountSolid(() => {
