@@ -42,6 +42,7 @@ actor RemoteTunnelManager {
     private var sandboxForward: RemotePortTunnel?
     private var sandboxForwardAttempt: SandboxForwardAttempt?
     private var lastSandboxForwardAttemptAt: Date?
+    private var loggedSandboxForwardSkip = false
     private let sandboxForwardRetrySeconds: TimeInterval = 30
     private var createInFlight: TunnelCreation?
     private var retirementInFlight: (token: UUID, task: Task<Void, Never>)?
@@ -254,7 +255,8 @@ actor RemoteTunnelManager {
 
     /// Keeps the widget sandbox forward of the current route open when its port allows. Every outcome
     /// stays inside the forward's own SSH process: a failure is logged and retried later, never
-    /// propagated to the Gateway route. Attempts start only after the probe passes, at most every 30 s.
+    /// propagated to the Gateway route. Runs on every route lookup or reuse; an attempt starts only
+    /// after the probe passes and at least 30 s after the previous attempt.
     private func refreshSandboxForward(configuration: RemotePortTunnel.Configuration, route: Route) {
         guard self.sandboxForwardAttempt == nil else { return }
         if let forward = self.sandboxForward {
@@ -271,7 +273,18 @@ actor RemoteTunnelManager {
             localPort: route.localPort,
             remotePort: configuration.remotePort,
             reservedLocalPorts: configuration.reservedLocalPorts)
-        else { return }
+        else {
+            // Lookups repeat often; log once until an attempt or a new route changes the picture.
+            if !self.loggedSandboxForwardSkip {
+                self.loggedSandboxForwardSkip = true
+                self.logger.info(
+                    "widget sandbox port for remote port \(configuration.remotePort + 1, privacy: .public) " +
+                        "is in use or reserved on this Mac; skipping its forward and checking again " +
+                        "on later Gateway route lookups")
+            }
+            return
+        }
+        self.loggedSandboxForwardSkip = false
         self.lastSandboxForwardAttemptAt = Date()
         let token = UUID()
         let logger = self.logger
@@ -387,6 +400,7 @@ actor RemoteTunnelManager {
             configuration: create.configuration,
             route: route)
         self.lastSandboxForwardAttemptAt = nil
+        self.loggedSandboxForwardSkip = false
         self.refreshSandboxForward(configuration: create.configuration, route: route)
         self.logger.info(
             "ssh tunnel ready localPort=\(resolvedPort, privacy: .public) " +

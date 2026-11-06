@@ -5,7 +5,7 @@ import Testing
 
 @Suite(.testWaitLimit)
 struct RemoteTunnelManagerTests {
-    @Test func `tunnel opened without the sandbox forward is replaced once the port is free`() async {
+    @Test func `widget sandbox forward opens and fails without touching the Gateway tunnel`() async {
         let tests = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         // Compile the real manager against a tunnel double: its reuse decision runs without SSH,
         // the PortGuardian ledger, or operator state.
