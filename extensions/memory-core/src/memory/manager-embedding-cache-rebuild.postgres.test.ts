@@ -4,7 +4,7 @@ import path from "node:path";
 import type { EmbeddingInput } from "openclaw/plugin-sdk/embedding-providers";
 import { readMemorySearchManagerStatus } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
-import { getMemorySearchManager } from "./index.js";
+import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
 import { createPostgresIndexFixture } from "./postgres-index.test-support.js";
 
 const embeddingInputs = vi.hoisted(() => [] as Array<string | EmbeddingInput>);
@@ -95,6 +95,50 @@ describe("PostgreSQL full memory rebuild at cache capacity", () => {
         embeddingInputs.length = 0;
         await manager.sync({ reason: "cli", force: true });
         expect(embeddingInputs).toEqual([]);
+      }),
+  );
+  it.skipIf(fixture.unavailable).each([true, false])(
+    "reuses published chunks on ordinary edits with cache/vector enabled=%s",
+    async (cacheEnabled) =>
+      fixture.run(async () => {
+        await closeAllMemorySearchManagers();
+        const config = structuredClone(fixture.config);
+        assert(config.memory?.search?.cache);
+        assert(config.memory.search.store?.vector);
+        config.memory.search.cache.enabled = cacheEnabled;
+        config.memory.search.store.vector.enabled = cacheEnabled;
+        const memory = path.join(fixture.workspace, "memory");
+        await fs.mkdir(memory, { recursive: true });
+        const filename = cacheEnabled ? "shifted-enabled.md" : "shifted-disabled.md";
+        const file = path.join(memory, filename);
+        const lines = Array.from({ length: 18 }, (_, i) =>
+          `Alpha archive record ${i}: stable reference details.`.padEnd(900, "."),
+        );
+        const newline = String.fromCharCode(10);
+        const original = lines.join(newline);
+        await fs.writeFile(file, original);
+        const result = await getMemorySearchManager({
+          cfg: config,
+          agentId: "main",
+          purpose: "cli",
+          runInBackgroundContext: fixture.run,
+        });
+        assert(result.manager, result.error ?? "Expected memory manager");
+        const manager = result.manager;
+        assert(typeof manager.sync === "function", "Expected memory indexing support");
+        // Only one of 18 chunks can remain cached: base cannot pass via cache hits.
+        (manager as unknown as { cache: { maxEntries?: number } }).cache.maxEntries = 1;
+        await manager.sync({ reason: "search-bootstrap" });
+        embeddingInputs.length = 0;
+        const header = "Beta newly inserted header.";
+        await fs.writeFile(file, header + newline + original);
+        await manager.sync({ reason: "search-bootstrap" });
+        expect(embeddingInputs).toEqual([header + newline + lines[0]]);
+        const results = await manager.search(header, { minScore: 0 });
+        expect(
+          results.some((row) => row.path === "memory/" + filename && row.snippet.includes(header)),
+        ).toBe(true);
+        await closeAllMemorySearchManagers();
       }),
   );
 });

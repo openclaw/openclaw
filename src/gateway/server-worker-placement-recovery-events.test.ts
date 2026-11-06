@@ -486,7 +486,7 @@ describe("worker placement recovery session events", () => {
     );
   });
 
-  it("publishes startup reconciliation before the runtime becomes ready", async () => {
+  it("publishes startup reconciliation after admitting the runtime", async () => {
     const recovered = recoveryPlacement();
     await withRecoveryRuntime(
       {
@@ -497,12 +497,12 @@ describe("worker placement recovery session events", () => {
       },
       async ({ context, environments, start, expectBroadcast }) => {
         context.broadcastToConnIds.mockImplementation(() => {
-          expect(environments.start).not.toHaveBeenCalled();
+          expect(environments.start).toHaveBeenCalledOnce();
         });
 
         await start();
 
-        expectBroadcast({ sessionKey: recovered.sessionKey }, {});
+        await vi.waitFor(() => expectBroadcast({ sessionKey: recovered.sessionKey }, {}));
         expect(environments.start).toHaveBeenCalledOnce();
       },
     );

@@ -275,7 +275,8 @@ export async function loadChatRoute(
   if (
     target.kind === "literal" &&
     context.sessions.cachedRoutingDefaults &&
-    (!target.slugCandidate || context.sessions.cachedRoutingDefaults.scope === "per-sender")
+    target.slugCandidate &&
+    context.sessions.cachedRoutingDefaults.scope === "per-sender"
   ) {
     // Literal keys and display-name links share the scoped roster used by short links.
     await context.sessions.whenCachedRosterSettled();
@@ -311,6 +312,11 @@ export async function loadChatRoute(
     (context.offlineSessionDefaults?.scope ?? context.agents.state.agentsList?.scope) !== "global";
   const catalogKey = catalogSessionKeyFromSearch(routeLocation.search);
   if (target.kind === "main" && catalogKey) {
+    const { resolveCatalogContinuation } = await import("./route-loader-catalog-share.runtime.ts");
+    const continued = await resolveCatalogContinuation(context, catalogKey, target.agentId, signal);
+    if (continued) {
+      return { kind: "session", ...continued, ...sessionRouteHints(routeLocation), face };
+    }
     const sessionKey = buildCatalogSessionKey(catalogKey);
     let canonicalLocation = preferenceDerived
       ? locationWithoutNavigationHints(routeLocation)
@@ -636,9 +642,9 @@ export async function loadSessionPage(
       ? { sessionKey: data?.kind === "session" ? data.sessionKey : undefined }
       : undefined,
   );
-  const creation = context.chatSubmissions.creation;
   if ("kind" in result && result.kind === "session") {
-    if (creation?.sessionKey === result.sessionKey) {
+    const creation = context.chatSubmissions.creationFor(result.sessionKey);
+    if (creation) {
       result.creation = creation;
     }
     if (result.creation || context.placementStartup.get(result.sessionKey)?.initialTurn) {

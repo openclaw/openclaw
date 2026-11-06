@@ -102,6 +102,37 @@ function stageResult({ ref, base, current }: Awaited<ReturnType<typeof resultFix
   });
 }
 
+it.each(["base", "current"] as const)(
+  "identifies only a current-manifest path rejection before staging (%s invalid)",
+  async (invalid) => {
+    const fixture = await resultFixture(`unsafe-${invalid}`);
+    const rejected = encodeWorkspaceManifest({
+      version: 1,
+      baseCommit: null,
+      entries: [
+        {
+          path: "legacy\\notes.txt",
+          type: "file",
+          mode: 0o644,
+          size: 0,
+          sha256: "a".repeat(64),
+        },
+      ],
+    });
+    fixture[invalid] = rejected;
+    const error = await stageResult(fixture).catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toHaveProperty("message", "Worker workspace manifest contains an unsafe path");
+    if (invalid === "current") {
+      expect(error).toHaveProperty("code", "WORKSPACE_STAGE_CURRENT_PATH_UNSAFE");
+    } else {
+      expect(error).not.toHaveProperty("code");
+    }
+    expect(await hasRef(fixture.ref)).toBe(false);
+    expect(await readText("result.txt")).toBe("base\n");
+  },
+);
+
 function prepareWorkspaceResult(params: {
   ref: string;
   base: ReturnType<typeof encodeWorkspaceManifest>;
@@ -124,23 +155,23 @@ function prepareWorkspaceResult(params: {
   });
 }
 
-it("applies a mixed workspace delta without per-entry worker verification", async () => {
+it("applies a staged mixed workspace delta without per-entry worker verification", async () => {
   const baseFiles = {
-    "edit.txt": "base edit\n",
+    "src/edit.txt": "base edit\n",
     "delete.txt": "delete me\n",
     "rename-old.txt": "rename me\n",
     "conflict.txt": "base conflict\n",
-    "unchanged.txt": "keep me\n",
+    "src/nested/unchanged.txt": "keep me\n",
   };
   const additions = Object.fromEntries(
     Array.from({ length: 8 }, (_, index) => [`add-${index}.txt`, `added ${index}\n`]),
   );
   const currentFiles = {
     ...additions,
-    "edit.txt": "worker edit\n",
+    "src/edit.txt": "worker edit\n",
     "rename-new.txt": "rename me\n",
     "conflict.txt": "worker conflict\n",
-    "unchanged.txt": "keep me\n",
+    "src/nested/unchanged.txt": "keep me\n",
   };
   await writeWorkspaceFiles(local, baseFiles);
   await writeWorkspaceFiles(staged, currentFiles);
@@ -156,7 +187,13 @@ it("applies a mixed workspace delta without per-entry worker verification", asyn
   diagnostics.subscribe(record);
   let applied;
   try {
-    applied = await apply(base, current);
+    const prepared = await prepareWorkspaceResult({
+      ref: workerWorkspaceResultRef("mixed-delta"),
+      base: encodeWorkspaceManifest(base),
+      current: encodeWorkspaceManifest(current),
+    });
+    await prepared.applyPreparedStagedResult();
+    applied = prepared.getAppliedWorkspaceResult()!;
   } finally {
     diagnostics.unsubscribe(record);
   }
@@ -175,9 +212,9 @@ it("applies a mixed workspace delta without per-entry worker verification", asyn
   expect(operations).toContainEqual(
     expect.objectContaining({ operation: "workspace.reconcile.preflight", outcome: "ok" }),
   );
-  expect(operations).not.toContainEqual(
-    expect.objectContaining({ operation: "workspace.manifest.file" }),
-  );
+  for (const operation of ["workspace.manifest.file", "workspace.manifest.nodes"]) {
+    expect(operations).not.toContainEqual(expect.objectContaining({ operation }));
+  }
 });
 
 it("keeps local-only paths outside a Git workspace's accepted manifest", async () => {

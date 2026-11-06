@@ -40,11 +40,18 @@ export const integrityVerificationKey: SqliteDatabaseAdmissionKey<number> = {
   read: (value) => (typeof value === "number" && Number.isSafeInteger(value) ? value : undefined),
 };
 
+// Recovery QUICK may survive an orderly close without claiming a FULL verification.
+export const quickIntegrityVerificationKey: SqliteDatabaseAdmissionKey<number> = {
+  ...integrityVerificationKey,
+  name: "sqlite.quick-verification",
+};
+
 // Only completed validation facts cross a restart. Row caches and live authority
 // are deliberately excluded; their owners reconstruct them from current state.
 const sealedKeys = new Set([
   "sqlite-schema",
   "sqlite.full-verification",
+  "sqlite.quick-verification",
   "state.schema-version",
   "state.runtime-schema",
   "state.integrity",
@@ -144,7 +151,10 @@ export class SqliteDatabaseCleanCloseSeals {
             typeof entry[1] === "boolean",
         ) ||
         !facts.some(
-          ([name, , value]) => name === integrityVerificationKey.name && value === seal.verifiedAt,
+          ([name, , value]) =>
+            (name === integrityVerificationKey.name ||
+              name === quickIntegrityVerificationKey.name) &&
+            value === seal.verifiedAt,
         ) ||
         !facts.some(([name, , value]) => name === "sqlite-schema" && isRecord(value))
       ) {

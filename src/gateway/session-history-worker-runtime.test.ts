@@ -702,11 +702,13 @@ it.each([
     try {
       const reply = page("shared result");
       const bytes = new TextEncoder().encode(JSON.stringify(reply.page.messages));
+      const activity = new TextEncoder().encode('[{"messageId":"tool","items":[]}]');
       const deflated = new Uint8Array([0, 0, 255, 255]);
       if (encoded) {
         reply.page.messages = [];
         reply.page.encodedResponse = {
           messages: bytes,
+          activity,
           messagesBytes: bytes.byteLength,
           responseHistoryBytes: 1024,
           omission: { omittedCount: 1, normalizedBytes: 2048 },
@@ -728,6 +730,7 @@ it.each([
         for (const result of pages) {
           // A coalesced page transfers its immutable wire buffer only once.
           expect(result.encodedResponse?.messages).toBe(bytes);
+          expect(result.encodedResponse?.activity).toBe(activity);
           expect(result.encodedMessagesDeflate).toBe(deflated);
         }
         pages[0]!.encodedResponse!.omission!.omittedCount = 9;

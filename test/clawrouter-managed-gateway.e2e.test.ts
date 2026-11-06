@@ -134,7 +134,7 @@ describe("ClawRouter managed gateway contract", () => {
       `Reply exactly: ${SUCCESS_MARKER}`,
       "--json",
     ]);
-    expect(agent).toContain(SUCCESS_MARKER);
+    expect(JSON.parse(agent).result.payloads[0]?.text).toBe(SUCCESS_MARKER);
 
     const inferenceRequests = router.requests.filter(
       (request) => request.method === "POST" && request.path === "/v1/responses",

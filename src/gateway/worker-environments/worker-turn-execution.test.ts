@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
+  WORKER_LOCAL_MCP_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
@@ -23,7 +25,10 @@ import {
   CORE_WORKER_LAUNCH_TOOL_NAMES,
   resolveCoreToolExecutionLocation,
 } from "../../agents/tool-catalog.js";
-import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  patchSessionEntryCore,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { setActiveNodeContexts } from "../../infra/active-node-context.js";
 import { resolveNodeWorkerLaunchToolNames } from "../../infra/node-runner-inventory.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
@@ -33,12 +38,17 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
+import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-context-binding.js";
 import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import { roundTripWorkerLaunchDescriptor } from "../../worker/launch-descriptor.test-support.js";
+import { createNodeSession } from "../node-invoke-plugin-policy.test-helpers.js";
+import { NodeRegistry } from "../node-registry.js";
+import { createGatewayRequestContext } from "../server-request-context.js";
+import { makeContextParams } from "../server-request-context.test-support.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { getWorkerTurnToolSurface } from "./placement-turn-claim-events.js";
 import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-contract.js";
@@ -53,6 +63,8 @@ import {
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   placements,
+  mockWorkerMcpQuestionAnswer,
+  registerWorkerMcpTestTools,
   openSessionManager,
   readWorkerTurnTranscriptStorageRows,
   root,
@@ -408,8 +420,141 @@ describe("worker turn execution", () => {
     },
   );
 
+  it.each([
+    "local",
+    "local-without-questions",
+    "legacy",
+    "v1-worker",
+    "completion-handoff",
+  ] as const)(
+    "grants only the admitted same-node MCP tool to a capable placement (%s)",
+    async (scenario) => {
+      const supported = scenario !== "legacy";
+      const local = scenario === "local" || scenario === "local-without-questions";
+      await seedActivePlacement();
+      const environment = attachedEnvironment();
+      environment.nodeDeviceId = "local-node";
+      environment.bootstrapReceipt!.protocolFeatures.push(
+        scenario === "v1-worker" ? "worker-local-mcp-v1" : WORKER_LOCAL_MCP_PROTOCOL_FEATURE,
+      );
+      registerWorkerMcpTestTools();
+      const authorize = vi.spyOn(placements, "authorizeWorkerTurnTools");
+      const node = createNodeSession({ nodeId: "local-node" });
+      const nodeRegistry = new NodeRegistry();
+      vi.spyOn(nodeRegistry, "get").mockImplementation((id) =>
+        id === node.nodeId ? node : undefined,
+      );
+      const gateway = createGatewayRequestContext(makeContextParams({ nodeRegistry }));
+      const input = turn("admit-local-mcp");
+      const admitted = await input.preparedRunAdmission.admit("worker", environment.environmentId);
+      bindGatewayContextResolver(admitted, () => gateway);
+      const ask = (id: string) =>
+        nodeRegistry.mcpElicitation.receive(
+          node,
+          {
+            id,
+            requestId: randomUUID(),
+            params: { message: "Continue?", requestedSchema: { type: "object", properties: {} } },
+          },
+          async () => true,
+        );
+      const register = vi.spyOn(nodeRegistry.mcpElicitation, "register");
+      const userInput = mockWorkerMcpQuestionAnswer(input);
+      const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async ({ plan }) => {
+        const grant = plan.assignment.toolAuthority.mcpTools?.[0];
+        if (grant && scenario === "local") {
+          await expect(ask(grant.id)).resolves.toEqual({ action: "accept" });
+          vi.spyOn(placements, "isWorkerTurnToolAuthorized").mockReturnValueOnce(false);
+          await expect(ask(grant.id)).rejects.toThrow("lost its turn authority");
+        } else if (grant) {
+          await expect(ask(grant.id)).rejects.toThrow("grant is unavailable");
+        }
+        throw new WorkerRunnerCapacityError();
+      });
+      const provider = turnProvider({
+        get: () => environment,
+        acquireTurnCredential: async () => credential(),
+        startTunnel: async () =>
+          unusedTunnel({ launchTurn, supportsLocalMcp: async () => supported }),
+      });
+      const handoff = scenario === "completion-handoff";
+      const child = { sessionKey: "agent:main:subagent:child", sessionId: "child-session" };
+      if (handoff) {
+        await replaceSessionEntry(
+          { ...sessionTarget, sessionKey: child.sessionKey },
+          {
+            sessionId: child.sessionId,
+            updatedAt: Date.now(),
+            spawnedBy: input.sessionKey,
+            spawnDepth: 1,
+            subagentRole: "orchestrator",
+            subagentControlScope: "children",
+            inheritedToolPolicyVersion: 1,
+            inheritedToolAllow: ["remote_search"],
+          },
+        );
+      }
+      try {
+        await expect(
+          execute(provider, {
+            ...input,
+            ...(handoff && {
+              inputProvenance: {
+                kind: "inter_session",
+                sourceTool: "subagent_announce",
+                sourceSessionKey: child.sessionKey,
+              },
+              trustedInternalHandoff: {
+                kind: "subagent-completion",
+                sourceSessionKey: child.sessionKey,
+                sourceSessionId: child.sessionId,
+                targetSessionKey: input.sessionKey,
+                targetSessionId: input.sessionId,
+                provider: input.provider,
+                model: input.model,
+              },
+            }),
+            toolsAllow: ["local_search", "local_action", "remote_search"],
+            config: {
+              ...input.config,
+              mcp: { apps: { enabled: scenario !== "local-without-questions" } },
+              tools: {
+                profile: "full",
+                gatewayPolicy: {
+                  allow: ["local_search", "local_action", "remote_search"],
+                  actions: { local_action: ["read"] },
+                },
+              },
+              session: { store: sessionTarget.storePath },
+            },
+          }),
+        ).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
+        const { toolAuthority } = launchTurn.mock.calls[0]![0].plan.assignment;
+        expect(authorize.mock.calls[0]![1].toSorted()).toEqual([
+          "local_action",
+          "local_search",
+          "remote_search",
+        ]);
+        expect(toolAuthority.allowedToolNames).toEqual(local ? ["local_search"] : []);
+        const handle = { id: expect.any(String), server: "workspace", tool: "local_search" };
+        expect(toolAuthority.mcpTools).toStrictEqual(
+          local
+            ? [{ ...handle, ...(scenario === "local" && { allowElicitation: true }) }]
+            : undefined,
+        );
+        expect(register).toHaveBeenCalledTimes(scenario === "local" ? 1 : 0);
+        if (toolAuthority.mcpTools?.[0]) {
+          await expect(ask(toolAuthority.mcpTools[0].id)).rejects.toThrow("grant is unavailable");
+        }
+      } finally {
+        userInput.mockRestore();
+        input.preparedRunAdmission.close();
+      }
+    },
+  );
+
   it.each([false, true])(
-    "preserves prepared context and limits launch authority to supervisor tools (declared: %s)",
+    "preserves recorded workspace context and limits launch authority to supervisor tools (declared: %s)",
     async (declared) => {
       await seedActivePlacement();
       const launchToolNames = resolveNodeWorkerLaunchToolNames({
@@ -446,7 +591,7 @@ describe("worker turn execution", () => {
         writeFile(path.join(agentWorkspace, "USER.md"), "Canonical user context."),
         writeFile(path.join(agentWorkspace, "TOOLS.md"), "Canonical tool instructions."),
         writeFile(path.join(root, "AGENTS.md"), "Selected execution project instructions."),
-        writeFile(path.join(root, "SOUL.md"), "Unselected execution identity must stay private."),
+        writeFile(path.join(root, "SOUL.md"), "Selected session identity."),
       ]);
       try {
         await expect(
@@ -462,17 +607,19 @@ describe("worker turn execution", () => {
               },
             },
             currentInboundContext: { text: "Current sender: fixture-sender" },
+            extraSystemPrompt: "Current delivery: fixture-channel",
+            extraSystemPromptTurnContext: { start: 0, text: "Current delivery: fixture-channel" },
           }),
         ).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
         const request = launchTurn.mock.calls[0]![0];
         const { systemPrompt, prompt, runtimeContext } = request.plan.assignment;
         expect(systemPrompt).toContain("You are a personal assistant running inside OpenClaw.");
-        expect(systemPrompt).toContain("Canonical agent instructions.");
-        expect(systemPrompt).toContain("Canonical agent identity.");
-        expect(systemPrompt).toContain("Canonical user context.");
+        expect(systemPrompt).not.toContain("Canonical agent instructions.");
+        expect(systemPrompt).not.toContain("Canonical agent identity.");
+        expect(systemPrompt).not.toContain("Canonical user context.");
         expect(systemPrompt).not.toContain("Canonical tool instructions.");
         expect(systemPrompt).toContain("Selected execution project instructions.");
-        expect(systemPrompt).not.toContain("Unselected execution identity must stay private.");
+        expect(systemPrompt).toContain("Selected session identity.");
         expect(systemPrompt).toContain("Working directory: /worker/workspace");
         expect(prompt).toMatch(
           /^\[[^\]]+\d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] Inspect this workspace$/u,
@@ -480,6 +627,11 @@ describe("worker turn execution", () => {
         expect(runtimeContext).toContainEqual({
           kind: "conversation-data",
           text: "Current sender: fixture-sender",
+        });
+        expect(systemPrompt).not.toContain("Current delivery: fixture-channel");
+        expect(runtimeContext).toContainEqual({
+          kind: "runtime-instruction",
+          text: "Current turn instructions (apply only to this turn):\n\nCurrent delivery: fixture-channel",
         });
         const allowed = request.plan.assignment.toolAuthority.allowedToolNames;
         expect(allowed.length).toBeGreaterThan(0);

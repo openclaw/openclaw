@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, expect, it, onTestFinished } from "vitest";
 import { writePluginInstallIndexForE2E } from "../../scripts/e2e/lib/plugin-index-sqlite.mjs";
+import { packToArchive } from "../../src/plugins/test-helpers/archive-fixtures.js";
 import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { resolveWorkflowBash } from "../helpers/workflow-bash.js";
@@ -23,7 +24,7 @@ const digest = (file: string, algorithm: "sha256" | "sha512") =>
     .digest(algorithm === "sha256" ? "hex" : "base64");
 const integrity = (file: string) => `sha512-${digest(file, "sha512")}`;
 
-function tarball(
+async function tarball(
   root: string,
   filename: string,
   name: string,
@@ -35,8 +36,7 @@ function tarball(
   mkdirSync(join(staging, "package"), { recursive: true });
   writeJson(join(staging, "package/package.json"), { name, version });
   writeFileSync(join(staging, "package/build.txt"), bytes);
-  execFileSync("tar", ["-czf", filename, "-C", staging, "package"], { cwd: outputDir });
-  return join(outputDir, filename);
+  return packToArchive({ pkgDir: join(staging, "package"), outDir: outputDir, outName: filename });
 }
 
 async function expectArchive(url: string, archive: string) {
@@ -80,23 +80,28 @@ it.for([
     const bin = join(root, "bin");
     mkdirSync(artifact);
     mkdirSync(bin);
-    const packages = (scenario === "base" ? ["codex", "discord", "whatsapp"] : ["discord"]).map(
-      (id) => {
-        const name = `@openclaw/${id}`;
-        const published = tarball(root, `${id}-published.tgz`, name, BASELINE, "published bytes");
-        const candidate = tarball(
-          root,
-          `${id}-candidate.tgz`,
-          name,
-          version,
-          "candidate bytes",
-          artifact,
-        );
-        expect(integrity(candidate)).not.toBe(integrity(published));
-        return { id, name, published, candidate };
-      },
-    );
-    const core = tarball(root, "core.tgz", "openclaw", version, "candidate core");
+    const packages = [];
+    for (const id of scenario === "base" ? ["codex", "discord", "whatsapp"] : ["discord"]) {
+      const name = `@openclaw/${id}`;
+      const published = await tarball(
+        root,
+        `${id}-published.tgz`,
+        name,
+        BASELINE,
+        "published bytes",
+      );
+      const candidate = await tarball(
+        root,
+        `${id}-candidate.tgz`,
+        name,
+        version,
+        "candidate bytes",
+        artifact,
+      );
+      expect(integrity(candidate)).not.toBe(integrity(published));
+      packages.push({ id, name, published, candidate });
+    }
+    const core = await tarball(root, "core.tgz", "openclaw", version, "candidate core");
     const manifest = join(artifact, "prepublish-plugin-registry.json");
     writeJson(manifest, {
       schema: "openclaw.prepublish-plugin-registry/v1",

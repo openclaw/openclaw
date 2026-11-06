@@ -199,14 +199,6 @@ openclaw-pending-session-create {
   opacity: 0.1;
 }
 
-.chat > * {
-  transition: opacity 140ms cubic-bezier(0.23, 1, 0.32, 1);
-}
-
-.chat[data-attachment-drop-active] > * {
-  opacity: 0.5;
-}
-
 /* Center search in its own pane, including narrow split views. */
 .agent-chat__search-bar {
   display: flex;
@@ -249,6 +241,13 @@ openclaw-pending-session-create {
 
 .agent-chat__search-bar input::placeholder {
   color: var(--muted);
+}
+
+/* Search ranges only span .chat-text; keep browser-find colors without making
+   unrelated UI elements participate in highlight matching. */
+.chat-text::highlight(openclaw-chat-search) {
+  background-color: Mark;
+  color: MarkText;
 }
 
 .chat-workspace-conflict-notice,
@@ -332,7 +331,8 @@ openclaw-pending-session-create {
   corner-shape: superellipse(1.5);
 }
 
-:is(.chat-composer-neighbor-card, .session-suggestion) {
+.chat-composer-neighbor-card,
+.session-suggestion {
   padding: 10px 12px;
 }
 
@@ -440,6 +440,12 @@ openclaw-pending-session-create {
   max-width: min(34rem, calc(100% - 104px));
   transform: translateX(-50%);
   pointer-events: none;
+}
+
+/* Clear the floating connection indicator without extending the bounded gutter. */
+.sidebar-region:has(> .sidebar-region__header .chat-pane__connection)
+  :is(.chat-gutter-stack, .chat-main__conversation-column > .chat-topbar-notices) {
+  padding-top: 38px;
 }
 
 .chat-topbar-notices:empty {
@@ -629,8 +635,8 @@ openclaw-pending-session-create {
 }
 
 .chat-virtual-block {
-  /* The outer extent owns scroll height. This translated row window must not
-     contribute a second changing box when saved rows become live rows. */
+  /* Keep the row window in local coordinates, even near a long transcript's
+     tail. The outer extent owns scroll height; parked rows have no layout. */
   contain: size;
   position: absolute;
   top: 0;
@@ -639,21 +645,15 @@ openclaw-pending-session-create {
 }
 
 /* Browser flow preserves adjacency even when smooth scrolling skips a row's
-   measurement. flow-root includes child margins in each measured row. */
+   measurement. flow-root includes child margins in each measured row.
+   The virtualizer bounds mounted rows, so overscan rows always lay out: a
+   skipped (content-visibility: auto) row kept its estimate until it reached
+   the viewport, then pushed the messages being read as it rendered. */
 .chat-virtual-row {
   position: relative;
   display: flow-root;
   width: 100%;
-  content-visibility: auto;
-}
-
-@media (min-width: 769px) {
-  .chat-virtual-row {
-    /* The virtualizer bounds mounted rows. Wide rows pay for WebKit's automatic
-       content skipping; compact rows retain it for steadier frame delivery. */
-    content-visibility: visible;
-    contain: content;
-  }
+  contain: content;
 }
 
 /* Small notice rows must enter at their real height, not the virtual estimate. */
@@ -669,7 +669,7 @@ openclaw-pending-session-create {
 }
 
 /* Message jumps need real mounted-row sizes before their target settles. */
-.chat-thread-inner[data-measuring-rows] .chat-virtual-row {
+.chat-thread-inner[data-measuring-rows] .chat-virtual-row:not([data-prepared-row]) {
   content-visibility: visible;
   contain: none;
 }
@@ -734,7 +734,6 @@ openclaw-pending-session-create {
 
 /* Included in the transcript virtualizer's header margin; keep this height exact. */
 .chat-pending-inputs--history {
-  box-sizing: border-box;
   overflow: hidden;
   height: 44px;
   flex-wrap: nowrap;
@@ -755,12 +754,14 @@ openclaw-pending-session-create {
    contract with CHAT_HISTORY_BOUNDARY_HEIGHT_PX (chat-history-boundary.ts):
    it becomes the virtualizer scrollMargin, so drift misaligns row offsets. */
 .chat-history-boundary {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-rows: 44px;
   overflow: hidden;
   height: 44px;
   align-items: center;
   gap: 10px;
-  padding: 8px 8px 0;
+  padding: 0 8px;
   color: var(--muted);
   font-size: 12px;
   user-select: none;
@@ -789,25 +790,51 @@ openclaw-pending-session-create {
   animation: chat-history-comet 1.2s ease-in-out infinite;
 }
 
-.chat-history-boundary--loading .chat-history-boundary__line:last-child::after {
+.chat-history-boundary--loading .chat-history-boundary__line--trailing::after {
   animation-direction: reverse;
 }
 
 .chat-history-boundary__action {
   display: inline-flex;
+  min-width: 160px;
+  height: 44px;
+  flex-direction: column;
+  gap: 2px;
   align-items: center;
-  padding: 2px 10px;
-  border: 0;
-  background: none;
-  color: var(--muted-strong);
+  justify-content: center;
+  padding: 0 16px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--text);
   font: inherit;
   font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+}
+
+.chat-history-boundary__status {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 12px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-history-boundary--error .chat-history-boundary__status {
+  color: var(--danger);
 }
 
 .chat-history-boundary__action:not([aria-disabled="true"]):hover {
-  color: var(--text);
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+.chat-history-boundary__action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 @keyframes chat-history-comet {
@@ -937,7 +964,6 @@ openclaw-pending-session-create {
   color: inherit;
   list-style: none;
   user-select: none;
-  animation: fade-in 0.2s var(--ease-out);
   transition:
     color 150ms ease-out,
     background 150ms ease-out;
@@ -993,11 +1019,15 @@ openclaw-pending-session-create {
   animation: fade-in 150ms var(--ease-out);
 }
 
-.context-usage__header {
+.context-usage__header,
+.context-usage__actions,
+.context-usage__latest {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+.context-usage__header {
   min-height: 20px;
 }
 .context-usage__context-value {
@@ -1017,17 +1047,56 @@ openclaw-pending-session-create {
   color: var(--muted);
   font: inherit;
   font-size: 11.5px;
+
+  svg {
+    width: 11px;
+    height: 11px;
+    transition: transform 150ms var(--ease-out);
+  }
+
+  @media (hover: hover) {
+    &:hover:not(:disabled) {
+      color: var(--text);
+
+      svg {
+        transform: translateX(2px);
+      }
+    }
+  }
 }
-.context-usage__open svg {
-  width: 11px;
-  height: 11px;
-  transition: transform 150ms var(--ease-out);
+/* The label's caps sit 1px above its content-box center. Lift only the outline so it
+   centers on the line it shares with View context; both labels keep one baseline. */
+.context-usage__actions .chat-context__compact {
+  margin-top: -2px;
+  padding-top: 2px;
 }
-.context-usage__open:hover:not(:disabled) {
-  color: var(--text);
+/* Shared Compact control: the composer popover and the context panel size it. */
+.chat-context__compact {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  color: var(--text-strong);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
 }
-.context-usage__open:hover:not(:disabled) svg {
-  transform: translateX(2px);
+.chat-context__compact:disabled {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--border);
+  color: var(--muted);
+}
+@media (hover: hover) {
+  .chat-context__compact:not(:disabled):not(.chat-context__compact--high):hover {
+    background: var(--bg-hover);
+  }
 }
 .context-usage__separator {
   height: 1px;
@@ -1035,9 +1104,6 @@ openclaw-pending-session-create {
   background: var(--details-separator);
 }
 .context-usage__latest {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
   flex-wrap: wrap;
   gap: 4px 8px;
   min-height: 26px;
@@ -1295,6 +1361,10 @@ openclaw-chat-video-player {
   background: var(--primary-hover);
 }
 
+.chat-audio-player__toggle:active {
+  background: var(--primary-active);
+}
+
 .chat-audio-player__toggle:focus-visible,
 .chat-audio-player__volume:focus-visible {
   outline: 2px solid var(--ring);
@@ -1345,6 +1415,14 @@ openclaw-chat-video-player {
   border-radius: 999px;
   background: var(--accent);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.chat-bubble .chat-audio-player__seek::-webkit-slider-thumb {
+  border-color: var(--chat-attachment-surface, var(--card));
+}
+
+.chat-bubble .chat-audio-player__seek::-moz-range-thumb {
+  border-color: var(--chat-attachment-surface, var(--card));
 }
 
 .chat-audio-player__seek:focus-visible {
@@ -1486,10 +1564,10 @@ openclaw-chat-video-player {
   position: fixed;
   z-index: 9999;
   padding: var(--menu-padding);
-  border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
+  background: var(--menu-surface);
+  box-shadow: var(--menu-shadow);
+  backdrop-filter: var(--menu-backdrop);
 }
 
 .chat-reply-context-menu {
@@ -1509,9 +1587,9 @@ openclaw-chat-video-player {
 }
 
 .chat-reply-context-menu button {
-  gap: 8px;
+  gap: 6px;
   width: 100%;
-  padding: 8px 12px;
+  padding: 5px 8px;
   text-align: left;
 }
 
@@ -1674,7 +1752,7 @@ openclaw-chat-video-player {
   padding: 14px 16px 17px;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
-  border-radius: 16px;
+  border-radius: var(--radius-xl);
   background: var(--task-suggestion-card-bg);
   user-select: text;
   box-shadow:
@@ -1739,7 +1817,7 @@ openclaw-chat-video-player {
 .task-suggestion__position {
   flex: 0 0 auto;
   padding: 2px 6px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--task-suggestion-path-bg);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0;
@@ -1758,7 +1836,7 @@ openclaw-chat-video-player {
   padding: 0;
   place-items: center;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
   cursor: var(--cursor-action);
@@ -1893,7 +1971,7 @@ openclaw-chat-video-player {
   margin-top: -5px;
   padding: 12px 13px;
   overflow: auto;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: var(--task-suggestion-prompt-bg);
 }
 
@@ -1912,7 +1990,7 @@ openclaw-chat-video-player {
   min-width: 0;
   padding: 8px 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--panel);
   color: var(--text);
   font: inherit;
@@ -2143,7 +2221,7 @@ button.chat-pr__diff {
   gap: 5px;
   padding: 1px 8px;
   border: 1px solid color-mix(in srgb, currentColor 27%, transparent);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, currentColor 12%, transparent);
   cursor: var(--cursor-action);
   font-size: 12px;
@@ -2188,7 +2266,7 @@ button.chat-pr__diff {
   overscroll-behavior: contain;
   padding: 12px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--menu-radius);
   background: var(--panel);
   box-shadow: var(--shadow-md);
   color: var(--text);
@@ -2325,7 +2403,7 @@ button.chat-pr__diff {
   flex: 0 0 auto;
   padding: 4px 8px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text);
   cursor: var(--cursor-action);
@@ -2743,6 +2821,11 @@ openclaw-chat-ci-details {
   flex: 0 0 auto;
 }
 
+.agent-chat__disabled-banner .btn[data-authority-pending] {
+  opacity: 1;
+  cursor: default;
+}
+
 .agent-chat__disabled-banner--neutral {
   color: inherit;
 }
@@ -2858,7 +2941,7 @@ openclaw-chat-ci-details {
   max-width: min(100%, 780px);
   padding: 8px 10px;
   border: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--bg) 82%, transparent);
 }
 
@@ -2934,7 +3017,7 @@ openclaw-chat-ci-details {
       min-width: var(--chat-microphone-picker-width);
       height: var(--chat-microphone-picker-width);
       border: 1px solid var(--chat-composer-surface);
-      background: var(--chat-composer-popover-background);
+      background: var(--popover);
     }
 
     .agent-chat__input--chat .chat-talk-input-picker__trigger svg {

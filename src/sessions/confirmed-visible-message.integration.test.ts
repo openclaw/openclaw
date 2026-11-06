@@ -89,10 +89,14 @@ describe("confirmed visible message ownership", () => {
     async ({ payload, expectedText }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const { params, storePath } = setup();
-        const input = { ...params, payload };
+        const assertDirectAdapterHandoff = vi.fn(() => {
+          throw new Error("Transport authority revoked after delivery acceptance");
+        });
+        const input = { ...params, payload, assertDirectAdapterHandoff };
         const first = await commitConfirmedVisibleMessage(input);
         expect(first).toMatchObject({ ok: true });
         expect(await commitConfirmedVisibleMessage(input)).toEqual(first);
+        expect(assertDirectAdapterHandoff).not.toHaveBeenCalled();
         const entry = loadSessionEntryReadOnly({ sessionKey: route.sessionKey, storePath });
         expect(entry).toBeDefined();
         const events = await loadTranscriptEvents({

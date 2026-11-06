@@ -1,5 +1,6 @@
 import { Icon } from "../../components/solid/icon.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
+import { CHAT_HEADER_VIEWER_LIMIT } from "./chat-header-viewers-snapshot.ts";
 import "./chat-pane-header-presence.css";
 
 export function PaneSubagentStop(props: { onAbort: () => void; notice?: boolean }) {
@@ -18,13 +19,17 @@ export function PaneSubagentStop(props: { onAbort: () => void; notice?: boolean 
   );
 }
 export function PaneHeaderPresence(
-  props: Pick<HTMLElementTagNameMap["openclaw-viewer-facepile"], "staticUsers" | "personActivity">,
+  props: Pick<
+    HTMLElementTagNameMap["openclaw-viewer-facepile"],
+    "staticUsers" | "totalCount" | "personActivity"
+  >,
 ) {
   return (
     <openclaw-viewer-facepile
       class="chat-pane__presence chat-pane__presence--desktop"
       prop:staticUsers={props.staticUsers}
-      prop:maxVisible={3}
+      prop:maxVisible={CHAT_HEADER_VIEWER_LIMIT}
+      prop:totalCount={props.totalCount}
       prop:personActivity={props.personActivity}
       variant="session"
     />

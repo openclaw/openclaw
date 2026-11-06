@@ -2,6 +2,7 @@ import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host
 import { resolveContextEngineOwnerPluginId } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+import { withProviderRateLimitRetryDeadline } from "../../llm/provider-rate-limit.js";
 import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import {
   getAdmittedRunDelegatedAuthority,
@@ -55,12 +56,10 @@ import {
   requestSettledTurnFinalizationContext,
 } from "./run/settled-turn-finalization.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./run/terminal-outcome.js";
-import {
-  createTerminalToolPresentationTracker,
-  resolveEmbeddedRunTerminal,
-} from "./run/terminal-resolution.js";
+import { resolveEmbeddedRunTerminal } from "./run/terminal-resolution.js";
 import { createEmbeddedRunTerminalRetryState } from "./run/terminal-retry-state.js";
 import { resolveEmbeddedRunTerminalTimeout } from "./run/terminal-timeout.js";
+import { createTerminalToolPresentationTracker } from "./run/terminal-tool-presentation.js";
 import { createAgentTurnTaintState } from "./run/turn-taint-state.js";
 import type { EmbeddedAgentRunResult, TraceAttempt } from "./types.js";
 import { createUsageAccumulator } from "./usage-accumulator.js";
@@ -87,6 +86,7 @@ export async function runPreparedEmbeddedLoop(
       prepareEmbeddedRunRuntime({
         ...input,
         assertCurrent: input.laneController.throwIfAborted,
+        getAuthDeadline: input.laneController.getExecutionDeadline,
         hookContext: preReplyGeneration?.assertCurrent
           ? withClaimingHookAdmission(
               { ...hookCtx },
@@ -327,7 +327,7 @@ export async function runPreparedEmbeddedLoop(
       });
       let dispatch: Awaited<ReturnType<typeof prepareAndDispatchEmbeddedRunAttempt>>;
       try {
-        dispatch = await sessionPromptState.withSessionWriterContext(() =>
+        const dispatchAttempt = () =>
           prepareAndDispatchEmbeddedRunAttempt(
             {
               permissionChange: permissionChanges.forAttempt(),
@@ -381,7 +381,10 @@ export async function runPreparedEmbeddedLoop(
                 captureContext,
               );
             },
-          ),
+          );
+        dispatch = await withProviderRateLimitRetryDeadline(
+          failoverRetryController.sharedTpmRetryDeadline,
+          () => sessionPromptState.withSessionWriterContext(dispatchAttempt),
         );
       } catch (error) {
         accounting.close();

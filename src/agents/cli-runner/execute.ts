@@ -135,38 +135,46 @@ export async function executePreparedCliRun(
     ? params.prompt
     : (context.openClawHistoryPrompt ?? params.prompt);
   // Recovery reuses preparation. Only the same native resume receives this handoff.
-  const basePrompt = composeCliPromptContext(attemptPrompt, {
-    prependContext:
-      useResume &&
-      cliSessionIdToUse === resolveCliSessionId(context.reusableCliSession) &&
-      !params.forkCliSessionOnResume
-        ? context.resumeContext
-        : undefined,
-  });
+  const resumeContext =
+    useResume &&
+    cliSessionIdToUse === resolveCliSessionId(context.reusableCliSession) &&
+    !params.forkCliSessionOnResume
+      ? context.resumeContext
+      : undefined;
+  const basePrompt = usePluginOwnedExecution
+    ? attemptPrompt
+    : composeCliPromptContext(attemptPrompt, { prependContext: resumeContext });
+  const privatePrependContext = [
+    context.promptContext?.prependContext,
+    usePluginOwnedExecution ? resumeContext : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
   let prompt =
     params.controlOperation !== undefined
       ? basePrompt
       : applyPluginTextReplacements(basePrompt, context.backendResolved.textTransforms?.input);
-  const promptContext = context.promptContext
-    ? {
-        ...(context.promptContext.prependContext
-          ? {
-              prependContext: applyPluginTextReplacements(
-                context.promptContext.prependContext,
-                context.backendResolved.textTransforms?.input,
-              ),
-            }
-          : {}),
-        ...(context.promptContext.appendContext
-          ? {
-              appendContext: applyPluginTextReplacements(
-                context.promptContext.appendContext,
-                context.backendResolved.textTransforms?.input,
-              ),
-            }
-          : {}),
-      }
-    : undefined;
+  const promptContext =
+    privatePrependContext || context.promptContext?.appendContext
+      ? {
+          ...(privatePrependContext
+            ? {
+                prependContext: applyPluginTextReplacements(
+                  privatePrependContext,
+                  context.backendResolved.textTransforms?.input,
+                ),
+              }
+            : {}),
+          ...(context.promptContext?.appendContext
+            ? {
+                appendContext: applyPluginTextReplacements(
+                  context.promptContext.appendContext,
+                  context.backendResolved.textTransforms?.input,
+                ),
+              }
+            : {}),
+        }
+      : undefined;
   if (
     nodePlacement &&
     ((params.images?.length ?? 0) > 0 ||

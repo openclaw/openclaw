@@ -208,8 +208,9 @@ describe("chat transcript invalidation", () => {
         }
 
         toggleTranscriptSearch(paneId);
-        flush();
-        const input = expectDefined(searchContainer.querySelector("input"), "search input");
+        const input = await waitForSolid(() =>
+          expectDefined(searchContainer.querySelector("input"), "search input"),
+        );
         input.value = ownMessage.content;
         input.dispatchEvent(new Event("input", { bubbles: true }));
         await flushDeferredRowPrune();
@@ -651,14 +652,14 @@ describe("chat transcript invalidation", () => {
       transcript.start();
       await flushDeferredRowPrune();
       await waitForSolid(() =>
-        expect(container.textContent).toContain("Received · waiting for worker setup"),
+        expect(container.textContent).toContain("Received · setting up device"),
       );
       expect(container.querySelectorAll('[data-message-text="Queued follow-up"]')).toHaveLength(1);
       expect(buildSpy).toHaveBeenCalledOnce();
 
       rerender();
       expect(buildSpy).toHaveBeenCalledOnce();
-      expect(container.textContent).toContain("Received · waiting for worker setup");
+      expect(container.textContent).toContain("Received · setting up device");
 
       props.selectedSession = {
         ...props.selectedSession,
@@ -669,7 +670,7 @@ describe("chat transcript invalidation", () => {
       };
       rerender();
       expect(buildSpy).toHaveBeenCalledTimes(2);
-      expect(container.textContent).not.toContain("Received · waiting for worker setup");
+      expect(container.textContent).not.toContain("Received · setting up device");
       expect(container.querySelectorAll('[data-message-text="Queued follow-up"]')).toHaveLength(1);
     } finally {
       transcript.dispose();
@@ -779,9 +780,7 @@ describe("chat transcript invalidation", () => {
     const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
     const transcript = createTestTranscript();
     const container = transcriptContainer();
-    const client = {
-      request: vi.fn(async () => null),
-    } as unknown as Parameters<typeof createTestChatPane>[0]["client"];
+    const client = createGatewayBrowserClientFixture({ request: vi.fn(async () => null) });
     const sessions = createSessionCapabilityFixture();
     const { pane, state } = createTestChatPane({ client, sessions });
     const applyToken = (deviceToken: string) =>

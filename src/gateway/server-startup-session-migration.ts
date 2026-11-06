@@ -2,7 +2,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import {
   runSessionStartupMigration,
   type SessionStartupMigrationLogger,
-} from "../config/sessions/startup-migration.js";
+} from "../config/sessions/startup-migration-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   assertExistingDatabaseIdentity,

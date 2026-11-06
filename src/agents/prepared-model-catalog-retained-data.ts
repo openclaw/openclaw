@@ -104,7 +104,15 @@ function measureRemoteCatalogs(
 
 /** Inspect only explicit data roots; registry callbacks and hidden runtime graphs are excluded. */
 export function measurePreparedCatalogRetainedData(
-  generations: Iterable<PreparedModelRuntimePluginGeneration>,
+  generations: Iterable<
+    Pick<
+      PreparedModelRuntimePluginGeneration,
+      | "pluginMetadataSnapshot"
+      | "pluginRegistry"
+      | "remoteCatalog"
+      | "preparedStaticProviderCatalog"
+    >
+  >,
   request: PreparedModelCatalogWorkerInput | undefined,
   generationConfigs: Iterable<OpenClawConfig> = [],
 ): DiagnosticWorkerRetainedData[] {
@@ -136,15 +144,6 @@ export function measurePreparedCatalogRetainedData(
     ...measurePublishedRoots("catalog-metadata", [...metadata], () => [
       row("catalog-metadata", metadata, metadata.size),
     ]),
-    row(
-      "catalog-entries",
-      live.flatMap((entry) => [entry.inlineProviderModels, entry.configuredCatalogEntries]),
-      live.reduce(
-        (count, entry) =>
-          count + entry.inlineProviderModels.length + entry.configuredCatalogEntries.length,
-        0,
-      ),
-    ),
     row("catalog-static", staticProviders, staticProviders.length, {
       providers: staticProviders.length,
     }),

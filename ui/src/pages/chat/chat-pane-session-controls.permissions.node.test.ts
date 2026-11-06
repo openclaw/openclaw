@@ -115,12 +115,15 @@ async function createControlsFixture(
   const container = document.createElement("div");
   document.body.append(container);
   renderPaneModelControl(controls.composerControls, container, true);
+  // Await lazy module work before starting the DOM readiness deadline.
+  await import("./components/chat-model-picker-panel.tsx");
   await waitForSolid(() =>
     expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
   );
   const effort = container.querySelector<HTMLDetailsElement>(".chat-controls__effort-picker")!;
   effort.open = true;
   effort.dispatchEvent(new Event("toggle"));
+  await import("./components/chat-effort-picker-panel.tsx");
   await waitForSolid(() =>
     expect(container.querySelector("[data-chat-thinking-slider]")).not.toBeNull(),
   );

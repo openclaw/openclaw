@@ -98,6 +98,10 @@ describe("classifyControlUiRequest", () => {
       ["plugin routes", "/plugins/webhook", "GET", outside],
       ["marketplace root", "/plugins", "GET", serve],
       ["marketplace root slash", "/plugins/", "GET", serve],
+      ["readable marketplace detail", "/plugins/openclaw/linear", "GET", serve],
+      ["marketplace detail HEAD", "/plugins/openclaw/linear", "HEAD", serve],
+      ["plugin nested route", "/plugins/openclaw/linear/events", "GET", outside],
+      ["plugin write", "/plugins/openclaw/linear", "POST", outside],
       ["API routes", "/api/sessions", "GET", outside],
       ["the device join root", "/j", "GET", outside],
       ["device join codes", `/j/${"a".repeat(22)}`, "GET", outside],
@@ -137,6 +141,7 @@ describe("classifyControlUiRequest", () => {
     it.each([
       ["HTML catalogue root slash", "/plugins/", "text/html", serve],
       ["JSON catalogue", "/plugins", "application/json", outside],
+      ["JSON plugin route", "/plugins/openclaw/linear", "application/json", outside],
       ["JSON catalogue slash", "/plugins/", "application/json", outside],
     ] as const)("%s", (_name, pathname, accept, expected) => {
       expect(classify({ pathname, accept })).toEqual(expected);

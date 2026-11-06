@@ -15,6 +15,7 @@ import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { waitForAgentInputAdmission } from "../../state/agent-database-preparation-context.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import { hasInboundMediaForUnderstanding } from "./inbound-media.js";
@@ -87,7 +88,11 @@ export async function applyLinkUnderstandingIfNeeded(params: {
 }
 
 /** Refuse a changed channel choice before preparing an agent's model or workspace. */
-export async function resolveReplyAgentScope(params: { cfg: OpenClawConfig; ctx: MsgContext }) {
+export async function resolveReplyAgentScope(params: {
+  cfg: OpenClawConfig;
+  ctx: MsgContext;
+  signal?: AbortSignal;
+}) {
   const { cfg, ctx } = params;
   const targetSessionKey = resolveCommandTurnTargetSessionKey(ctx);
   if (
@@ -98,14 +103,13 @@ export async function resolveReplyAgentScope(params: { cfg: OpenClawConfig; ctx:
     await assertPreparedConversationBindingRouteCurrent(ctx);
   }
   const agentSessionKey = targetSessionKey || ctx.SessionKey;
-  return {
-    agentSessionKey,
-    agentId: resolveSessionAgentId({
-      sessionKey: agentSessionKey,
-      config: cfg,
-      fallbackAgentId: ctx.AgentId,
-    }),
-  };
+  const agentId = resolveSessionAgentId({
+    sessionKey: agentSessionKey,
+    config: cfg,
+    fallbackAgentId: ctx.AgentId,
+  });
+  await waitForAgentInputAdmission(agentId, { cfg, signal: params.signal });
+  return { agentSessionKey, agentId };
 }
 
 /** Expose local attachment paths only when this request can actually read them. */

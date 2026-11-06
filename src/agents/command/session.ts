@@ -164,7 +164,9 @@ export function buildExplicitSessionIdSessionKey(params: {
   sessionId: string;
   agentId?: string;
 }): string {
-  return `agent:${normalizeAgentId(params.agentId)}:explicit:${params.sessionId.trim()}`;
+  return normalizeStoreSessionKey(
+    `agent:${normalizeAgentId(params.agentId)}:explicit:${params.sessionId.trim()}`,
+  );
 }
 
 async function collectSessionIdMatchesForRequest(opts: {

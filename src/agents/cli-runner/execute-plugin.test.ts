@@ -1,6 +1,7 @@
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { resolveReplyFailureSummary } from "../../auto-reply/reply/agent-runner-failure-reply.js";
 import type { CliExecutionHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
@@ -28,6 +29,12 @@ import type { PreparedCliRunContext } from "./types.js";
 vi.mock("../tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
 }));
+const hostMemory = vi.hoisted(() => ({ freeBytes: vi.fn(() => 8 * 1024 ** 3) }));
+vi.mock("../../infra/host-memory.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/host-memory.js")>()),
+  readHostFreeMemoryBytes: hostMemory.freeBytes,
+}));
+const LOW_MEMORY = 512 * 1024 ** 2;
 
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
 const activeSessions = new Set<CliBackendLiveSessionHandle>();
@@ -49,7 +56,7 @@ async function runTurn<T>(
   return value;
 }
 
-function registerOwnerSession(context: PreparedCliRunContext, generation: string) {
+function registerOwnerSession(context: PreparedCliRunContext, generation: string, idle = true) {
   const capability = createCliLiveSessionCapability({
     context,
     argv: ["/bin/sh", "-p", "--permission-mode", "bypassPermissions"],
@@ -61,13 +68,13 @@ function registerOwnerSession(context: PreparedCliRunContext, generation: string
   const session: CliBackendLiveSessionHandle = {
     generation,
     fingerprint: capability.fingerprint,
-    isIdle: () => true,
+    isIdle: () => idle,
     close,
     waitForExit: vi.fn(async () => {}),
   };
   capability.register(session);
   activeSessions.add(session);
-  return { handle: session, close };
+  return { handle: session, close, capability };
 }
 
 async function startBlockedRun({
@@ -134,6 +141,7 @@ afterEach(() => {
     session.close("restart");
   }
   activeSessions.clear();
+  hostMemory.freeBytes.mockReturnValue(8 * 1024 ** 3);
   closePluginTestAdmissions();
   mockCallGatewayTool.mockReset();
   vi.restoreAllMocks();
@@ -194,11 +202,11 @@ describe("plugin-owned CLI execution host boundary", () => {
 
   it.each([
     [{ kind: "internal_system", sourceTool: "exec" }, "host"],
-    [{ kind: "internal_system", sourceTool: "heartbeat" }, undefined],
-    [{ kind: "external_user" }, undefined],
+    [{ kind: "inter_session", sourceTool: "subagent_announce" }, "host"],
+    [{ kind: "external_user", sourceTool: "exec" }, undefined],
     [undefined, undefined],
   ] as const)(
-    "marks only exec completion wakes as host prompts (%j)",
+    "preserves input provenance instead of classifying prompt text (%j)",
     async (provenance, origin) => {
       const { context } = await createExecution();
       context.params.inputProvenance = provenance;
@@ -421,6 +429,70 @@ describe("plugin-owned CLI execution host boundary", () => {
       }
     },
   );
+
+  it("closes the least recently used idle process before low memory starts another", async () => {
+    const owner = async (name: string) => {
+      const { context } = await createExecution({ runId: `memory-${name}` });
+      context.params.sessionId = `memory-${name}`;
+      context.params.sessionKey = `agent:main:memory-${name}`;
+      return registerOwnerSession(context, name, name !== "busy");
+    };
+    const older = await owner("older");
+    const busy = await owner("busy");
+    const recent = await owner("recent");
+    // A later turn on the oldest process makes it the most recently used.
+    older.capability.activate(older.handle);
+    const { context } = await createExecution({ runId: "memory-new" });
+    context.params.sessionId = "memory-new";
+    context.params.sessionKey = "agent:main:memory-new";
+    hostMemory.freeBytes.mockReturnValueOnce(LOW_MEMORY);
+
+    await runTurn(
+      context,
+      (execution) => {
+        const capability = execution.liveSession;
+        const handle: CliBackendLiveSessionHandle = {
+          generation: "new",
+          fingerprint: capability?.fingerprint ?? "",
+          isIdle: () => true,
+          close: () => capability?.remove(handle),
+          waitForExit: async () => {},
+        };
+        capability?.register(handle);
+        activeSessions.add(handle);
+      },
+      { liveSession: true },
+    );
+    expect(recent.close).toHaveBeenCalledWith("idle");
+    expect(older.close).not.toHaveBeenCalled();
+    expect(busy.close).not.toHaveBeenCalled();
+  });
+
+  it("fails over with host-memory copy when low memory leaves only busy processes", async () => {
+    const owner = await createExecution({ runId: "memory-busy" });
+    owner.context.params.sessionId = "memory-busy";
+    owner.context.params.sessionKey = "agent:main:memory-busy";
+    const busy = registerOwnerSession(owner.context, "busy", false);
+    const { context } = await createExecution({ runId: "memory-starved" });
+    context.params.sessionId = "memory-starved";
+    context.params.sessionKey = "agent:main:memory-starved";
+    hostMemory.freeBytes.mockReturnValue(LOW_MEMORY);
+    const execute = vi.fn(async function* () {
+      yield SUCCESS_RESULT;
+    });
+
+    const error = await runPlugin(context, execute, { liveSession: true }).catch(
+      (failure: unknown) => failure,
+    );
+    expect(error).toMatchObject({ reason: "rate_limit", code: "cli_live_session_host_memory" });
+    expect(execute).not.toHaveBeenCalled();
+    expect(busy.close).not.toHaveBeenCalled();
+    expect(
+      resolveReplyFailureSummary({ error, message: String(error), reason: "rate_limit" })?.text,
+    ).toBe(
+      "⚠️ This host is low on memory, so it could not start another session. Try again after active conversations finish.",
+    );
+  });
 
   it("rejects missing or replaced required generations but permits a deliberate cold recovery", async () => {
     const { context } = await createExecution({ runId: "plugin-required-generation" });

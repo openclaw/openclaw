@@ -303,6 +303,13 @@ describe("session event target custody", () => {
   it("rejects deleted-agent events", async ({ nativeState: state }) => {
     const { env } = state;
     const target = await captureTarget("main", sessionKey, { env });
+    {
+      using resolution = vi.spyOn(path, "resolve");
+      for (let index = 0; index < 10_000; index += 1) {
+        assertTargetCurrent(target);
+      }
+      expect(resolution.mock.calls.length).toBe(0);
+    }
     await withAgentDeletion(
       "main",
       async (begin) => {
@@ -524,6 +531,32 @@ describe("session event target custody", () => {
     },
   );
 
+  it("batches retained owner authority only for the same requester", async ({ state: { env } }) => {
+    setRuntimeConfigSnapshot({
+      agents: { entries: { main: {} } },
+      channels: { telegram: {} },
+      commands: { ownerAllowFrom: ["456", "457"] },
+    });
+    const capture = (senderId: string) =>
+      withGatewayToolCallerIdentity(
+        { ...eventScope, requesterOrigin: { sessionKey, messageProvider: "telegram", senderId } },
+        () => captureTarget("main", sessionKey, { env, retainRequesterOwner: true }),
+      );
+    const owner = await capture("456");
+    const [sameOwner, guest, otherOwner] = await Promise.all([
+      capture("456"),
+      capture("789"),
+      capture("457"),
+    ]);
+    expect(combineSessionEventTargetsForHost([owner, sameOwner])).toBeDefined();
+    // Owners share a source label, but each authority rechecks only its own requester.
+    for (const other of [guest, otherOwner]) {
+      expect(() => combineSessionEventTargetsForHost([owner, other])).toThrow(
+        "requester authority",
+      );
+    }
+  });
+
   it("retains store, route and producer limits across lookup", async ({
     state: { env, path: fixturePath, storePath },
   }) => {
@@ -672,7 +705,13 @@ describe("session event target custody", () => {
         resetSystemEventsForTest();
       }
       await expect(receipt.accepted).resolves.toMatchObject({ ok: false });
-      await expectStopped(receipt, boundary === "reject" ? "failed" : "cancelled");
+      await expectStopped(receipt, "cancelled");
+      if (boundary === "reject") {
+        await expect(receipt.settled).resolves.toMatchObject({
+          terminalOutcome: { stopReason: "restart" },
+          interruptedByRestart: true,
+        });
+      }
       expect(isSystemEventTurnOwned(sessionKey, occurrence)).toBe(false);
       expect(peekSystemEventEntries(sessionKey)).toEqual(
         boundary === "removed" ? [] : [occurrence],

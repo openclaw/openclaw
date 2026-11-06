@@ -21,7 +21,6 @@ import type { CommandLaneConfiguration } from "../../process/lanes.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   isExecCompletionInputProvenance,
-  isMainSessionRestartRecoveryInputProvenance,
   isProgressCardRefreshInputProvenance,
   normalizeInputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
@@ -31,7 +30,7 @@ import {
   createAgentDatabaseAdmissionErrorShape,
   readAgentDatabaseAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
-import { waitForAgentDatabaseWriteAdmission } from "../../state/agent-database-preparation-context.js";
+import { waitForAgentInputAdmission } from "../../state/agent-database-preparation-context.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { resolveExpectedExistingSessionConstraint } from "../server-methods/agent-expected-session.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
@@ -74,7 +73,8 @@ export async function prepareAgentRequestPreflight(params: {
     normalizeOptionalString(request.agentId) ??
     tryResolveSessionCompatibilityOwnerAgentId(cfg, requestSessionKey);
   if (preparingAgentId) {
-    await waitForAgentDatabaseWriteAdmission(preparingAgentId, {
+    await waitForAgentInputAdmission(preparingAgentId, {
+      cfg,
       owner: params.context.resolveGatewayContext?.()?.agentDatabaseStartup,
     });
   }
@@ -264,28 +264,6 @@ export async function prepareAgentRequestPreflight(params: {
       delete inputProvenance.sourceRole;
     }
   }
-  const isRestartRecoveryResumeRun =
-    canUseInternalRuntimeHandoff && isMainSessionRestartRecoveryInputProvenance(inputProvenance);
-  if (
-    (request.internalExecutionIdentityRetry !== undefined ||
-      request.internalExecutionIdentityRecoveryAttempt !== undefined) &&
-    !isRestartRecoveryResumeRun
-  ) {
-    return rejectInvalidRequest(
-      "internal execution identity recovery fields are reserved for main-session restart recovery.",
-    );
-  }
-  // Child recovery shares the restricted tool policy, but not main-session cycle ownership.
-  const canUseRestartRecoveryToolPolicy =
-    isRestartRecoveryResumeRun ||
-    (canUseInternalRuntimeHandoff &&
-      inputProvenance?.kind === "internal_system" &&
-      inputProvenance.sourceTool === "subagent_restart_recovery" &&
-      requestSessionKey !== undefined &&
-      inputProvenance.sourceSessionKey === requestSessionKey);
-  if (request.forceCodeModeTools === true && !canUseRestartRecoveryToolPolicy) {
-    return rejectInvalidRequest("forceCodeModeTools is reserved for native restart recovery.");
-  }
   const sessionEffects =
     isOneShotModelRun || requestedInternalSessionEffects ? "internal" : request.sessionEffects;
   const agentDedupeKeys = resolveAgentDedupeKeys({
@@ -314,7 +292,6 @@ export async function prepareAgentRequestPreflight(params: {
       groupSpace: request.groupSpace,
     }),
     inputProvenance,
-    isRestartRecoveryResumeRun,
     preserveUserFacingSessionModelState:
       canUseInternalRuntimeHandoff &&
       shouldPreserveUserFacingSessionStateForInputProvenance(inputProvenance),

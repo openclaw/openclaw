@@ -13,7 +13,21 @@ export const CLI_STREAM_JSON_OUTPUT_LIMITS = Object.freeze({
   maxTurnLines: CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES,
 });
 
-const PARTIAL_RECORD_KEYS = new Set(["type", "event", "uuid", "session_id", "parent_tool_use_id"]);
+// Claude Code attaches `api_message_id` to every partial frame and the
+// `thinking_display` display setting to thinking frames. The parser reads
+// neither; both stay bounded, and `thinking_display` only on thinking deltas.
+const PARTIAL_RECORD_METADATA_LIMITS = {
+  uuid: 128,
+  session_id: 128,
+  parent_tool_use_id: 128,
+  api_message_id: 64,
+  thinking_display: 32,
+} as const;
+const PARTIAL_RECORD_KEYS = new Set([
+  "type",
+  "event",
+  ...Object.keys(PARTIAL_RECORD_METADATA_LIMITS),
+]);
 const PARTIAL_EVENT_KEYS = new Set(["type", "index", "delta"]);
 
 /** Discount recognized token envelopes, retaining payload, padding, and a per-frame budget. */
@@ -28,9 +42,9 @@ function measureClaudePartialMessage(
   ) {
     return undefined;
   }
-  for (const key of ["uuid", "session_id", "parent_tool_use_id"]) {
+  for (const [key, limit] of Object.entries(PARTIAL_RECORD_METADATA_LIMITS)) {
     const value = parsed[key];
-    if (value != null && (typeof value !== "string" || value.length > 128)) {
+    if (value != null && (typeof value !== "string" || value.length > limit)) {
       return undefined;
     }
   }
@@ -57,6 +71,7 @@ function measureClaudePartialMessage(
   if (
     typeof payload !== "string" ||
     !payload ||
+    (parsed.thinking_display != null && delta.type !== "thinking_delta") ||
     Object.keys(delta).some(
       (key) =>
         key !== "type" &&
@@ -74,8 +89,12 @@ function measureClaudePartialMessage(
     return undefined;
   }
   // The fixed charge bounds tiny delta floods and retained chunk bookkeeping:
-  // the 8 MiB budget admits fewer than 262,144 partial frames. Empty deltas,
-  // unknown fields, and oversized metadata keep the ordinary raw/frame limits.
+  // the smallest frame costs 36 characters with its newline, so the 8 MiB
+  // budget admits at most 233,016 partial frames. Metadata is not charged: the
+  // per-field caps allow up to 480 characters of values per frame, so a flood
+  // can pass more raw bytes through the parser than the budget counts. Empty
+  // deltas, unknown fields, and oversized metadata keep the ordinary raw/frame
+  // limits.
   return (
     JSON.stringify(payload).length +
     32 +
@@ -84,6 +103,42 @@ function measureClaudePartialMessage(
       : JSON.stringify({ estimated_tokens: estimatedTokens }).length) +
     Math.max(0, rawLine.length - JSON.stringify(parsed).length)
   );
+}
+
+/** Discount tool-result payloads, which are handed to consumers and never retained. */
+function measureClaudeToolResultMessage(
+  parsed: Record<string, unknown>,
+  rawLine: string,
+): number | undefined {
+  const content = isRecord(parsed.message) ? parsed.message.content : undefined;
+  if (parsed.type !== "user" || !Array.isArray(content) || content.length === 0) {
+    return undefined;
+  }
+  // Both payload copies are discarded; IDs, metadata, padding, and frames stay charged.
+  // Re-encode numbers as one character because e.g. `1e20` otherwise grows to 21 digits.
+  // This lower bound cannot discount more than the original wire payload.
+  let payloadChars = 0;
+  try {
+    for (const block of content) {
+      if (!isRecord(block) || block.type !== "tool_result") {
+        return undefined;
+      }
+      if (block.content !== undefined) {
+        payloadChars += JSON.stringify(block.content, minimalNumberEncoding).length;
+      }
+    }
+    if (parsed.tool_use_result !== undefined) {
+      payloadChars += JSON.stringify(parsed.tool_use_result, minimalNumberEncoding).length;
+    }
+  } catch {
+    // A payload too deep to re-serialize falls back to raw accounting.
+    return undefined;
+  }
+  return Math.max(32, rawLine.length - payloadChars);
+}
+
+function minimalNumberEncoding(_key: string, value: unknown): unknown {
+  return typeof value === "number" ? 0 : value;
 }
 
 // Forwarded child message payloads are discarded; only their progress id survives.
@@ -109,11 +164,17 @@ export function chargeClaudeStreamJsonLine(
 ): { chars: number; partialMessage: boolean } {
   const partialChars = record ? measureClaudePartialMessage(record, rawLine) : undefined;
   const subagentChars = record ? measureClaudeSubagentRecord(record) : undefined;
+  // Measured before media normalization rewrites the record in place.
+  const toolResultChars =
+    record && subagentChars === undefined
+      ? measureClaudeToolResultMessage(record, rawLine)
+      : undefined;
   const normalized = record ? normalizeClaudeCliStreamJsonRecord(record) : undefined;
-  // Neither media omission nor token-envelope discounts may erase wire whitespace.
+  // Neither media omission nor envelope/payload discounts may erase wire whitespace.
   const chars =
     subagentChars ??
     partialChars ??
+    toolResultChars ??
     (normalized
       ? Math.max(normalized.line.length, rawLine.length - normalized.omittedRawChars)
       : rawLine.length);

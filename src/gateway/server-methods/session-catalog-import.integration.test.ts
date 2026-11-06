@@ -302,6 +302,46 @@ async function createCatalog(restricted: boolean) {
 }
 
 describe("sessions.catalog.import with durable Gateway owners", () => {
+  it.each([false, true])(
+    "rechecks Draft creation policy after import preparation (existing=%s)",
+    (existing) =>
+      withCatalog(async (fixture) => {
+        if (existing) {
+          expectSuccess(await fixture.call(), { created: true, importedItems: 2 });
+        }
+        let current = fixture.config;
+        vi.spyOn(fixture.context, "getRuntimeConfig").mockImplementation(() => current);
+        const createGatewaySession = sessionCreation.createGatewaySession;
+        vi.spyOn(sessionCreation, "createGatewaySession").mockImplementationOnce(async (params) => {
+          current = {
+            ...fixture.config,
+            session: { ...fixture.config.session, sharing: { drafts: false } },
+          };
+          setRuntimeConfigSnapshot(current);
+          return createGatewaySession(params);
+        });
+        const response = await fixture.call();
+        if (existing) {
+          expectSuccess(response, { created: false, importedItems: 0 });
+          expect(fixture.entry()?.visibility).toBe("draft");
+        } else {
+          expectFailure(response, {
+            code: "INVALID_REQUEST",
+            details: { code: "SESSION_VISIBILITY_DISABLED", visibility: "draft" },
+          });
+          expect(fixture.entry()).toBeUndefined();
+          expect(await fixture.transcript()).toEqual([]);
+        }
+      }),
+  );
+
+  it("keeps the configured import default when Draft creation starts disabled", () =>
+    withCatalog(async (fixture) => {
+      fixture.config.session = { sharing: { drafts: false } };
+      expectSuccess(await fixture.call(), { created: true, importedItems: 2 });
+      expect(fixture.entry()?.visibility ?? "shared").toBe("shared");
+    }));
+
   it("reopens preserved tool records through the shared display conversion", () =>
     withCatalog(async (fixture) => {
       fixture.source.splice(

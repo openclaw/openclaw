@@ -21,10 +21,14 @@ import {
 import { resolveAgentHarnessPolicy } from "../harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { selectAgentHarness } from "../harness/selection.js";
-import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import { runWithModelFallback } from "../model-fallback-runner.js";
-import type { FallbackAttempt } from "../model-fallback.types.js";
+import type {
+  FallbackAttempt,
+  ModelFallbackResultClassification,
+} from "../model-fallback.types.js";
+import { isOperatorAccessProgramAllowed } from "../operator-access-program.js";
 import { forgetPromptBuildDrainCacheForRun } from "../plugin-turn-context.js";
+import { withAgentPromptProjects } from "../prompt-projects.js";
 import { settleFailedRequesterRun, settleRequesterRun } from "../requester-run-settlement.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import {
@@ -93,7 +97,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
         assertCurrent: admission?.assertSourceCurrent,
         signal: params.abortSignal,
       },
-      () => runEmbeddedAgentEntryInternal(params),
+      () => withAgentPromptProjects(() => runEmbeddedAgentEntryInternal(params)),
     );
     // Placement and asynchronous terminal cleanup have finished. Only this
     // accepted logical result may release children retained across candidates.
@@ -499,7 +503,9 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
     if (
       capturedCyberRefusal &&
       target &&
+      params.selection.cyberAccessProgram === undefined &&
       (!operatorAuthority?.modelPolicy || operatorAuthority.modelPolicy.allows(target)) &&
+      isOperatorAccessProgramAllowed(operatorAuthority?.rolePolicy, "daybreak_blue") &&
       !isFallbackCandidateSkipped({
         sessionId: params.identity.sessionId,
         provider: target.provider,

@@ -43,6 +43,7 @@ function agentEffectiveToolsEventInvalidates(
 }
 
 type ReadOptions = {
+  canRead: () => boolean;
   scope: () => {
     client: GatewayBrowserClient | null;
     connected: boolean;
@@ -63,7 +64,9 @@ export function createAgentToolsCatalog(options: ReadOptions) {
     result: Promise<ToolsCatalogResult | null>;
   } | null>(null);
   const isCurrent = (current: CatalogRequest) =>
-    target === current && options.isCurrent(current.client, current.generation, current.agentId);
+    target === current &&
+    options.canRead() &&
+    options.isCurrent(current.client, current.generation, current.agentId);
   const read: () => ToolsCatalogResult | null = createMemo(async () => request()?.result ?? null);
   async function load(current: CatalogRequest) {
     try {
@@ -84,25 +87,6 @@ export function createAgentToolsCatalog(options: ReadOptions) {
       throw error;
     }
   }
-  function ensure(agentId: string) {
-    const { client, connected, requestGeneration: generation } = options.scope();
-    if (!client || !connected) {
-      return;
-    }
-    if (
-      target?.client === client &&
-      target.agentId === agentId &&
-      (target.generation === generation || target === accepted)
-    ) {
-      return;
-    }
-    accepted = null;
-    target = { client, generation, agentId };
-    const result = load(target);
-    // A hidden panel can leave the receipt unobserved until it is revisited.
-    void result.catch(() => undefined);
-    setRequest({ result });
-  }
   function reset() {
     target = null;
     accepted = null;
@@ -111,7 +95,29 @@ export function createAgentToolsCatalog(options: ReadOptions) {
   return {
     read,
     request,
-    ensure,
+    ensure(agentId: string) {
+      if (!options.canRead()) {
+        reset();
+        return;
+      }
+      const { client, connected, requestGeneration: generation } = options.scope();
+      if (!client || !connected) {
+        return;
+      }
+      if (
+        target?.client === client &&
+        target.agentId === agentId &&
+        (target.generation === generation || target === accepted)
+      ) {
+        return;
+      }
+      accepted = null;
+      target = { client, generation, agentId };
+      const result = load(target);
+      // A hidden panel can leave the receipt unobserved until it is revisited.
+      void result.catch(() => undefined);
+      setRequest({ result });
+    },
     reset,
     invalidate() {
       if (target !== accepted) {
@@ -144,7 +150,9 @@ export function createAgentEffectiveTools(
     result: Promise<ToolsEffectiveResult | null>;
   } | null>(null);
   const isCurrent = (current: EffectiveRequest) =>
-    target === current && options.isCurrent(current.client, current.generation, current.agentId);
+    target === current &&
+    options.canRead() &&
+    options.isCurrent(current.client, current.generation, current.agentId);
   const read: () => ToolsEffectiveResult | null = createMemo(async () => request()?.result ?? null);
   async function load(current: EffectiveRequest) {
     try {
@@ -169,6 +177,10 @@ export function createAgentEffectiveTools(
     }
   }
   function ensure(refresh = false) {
+    if (!options.canRead()) {
+      reset();
+      return;
+    }
     const {
       client,
       connected,

@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createContext } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import {
   completeSessionDelivery,
   loadPendingSessionDeliveries,
@@ -18,18 +17,17 @@ import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { forbidMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
-import {
-  bindSubagentRunGatewayOwners,
-  retryDeferredSubagentCompletionSource,
-} from "../registry/subagent-registry-gateway-owner.js";
-import { getSubagentActivationRuns, subagentRuns } from "../registry/subagent-registry-memory.js";
+import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import {
   assertSubagentRegistryWriteOutcomeKnown,
   restoreSubagentRunsFromDisk,
 } from "../registry/subagent-registry-persistence.js";
 import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
 import { readSubagentRun } from "../registry/subagent-registry.store.sqlite.js";
-import { admitSubagentCompletionDelivery } from "./subagent-completion-admission.store.js";
+import {
+  admitSubagentCompletionDelivery,
+  settleSubagentCompletionDelivery,
+} from "./subagent-completion-admission.store.js";
 import {
   seedSubagentCompletionDelivery,
   seedSubagentCompletionOwner,
@@ -37,6 +35,7 @@ import {
   records as requesterRecords,
   currentCompletionRun,
   armRequesterWake,
+  readCompletionSystemEvents,
   settleRequesterCompletionBatch,
   updateCompletionOwner,
 } from "./subagent-completion-admission.test-helpers.js";
@@ -44,6 +43,7 @@ import {
   admitCorrelatedSubagentSessionDelivery,
   settleCorrelatedSubagentDelivery,
 } from "./subagent-completion-delivery.js";
+import type { RequesterWakeCommittedWrite } from "./subagent-completion-mutation.types.js";
 
 function records() {
   const now = Date.now();
@@ -68,6 +68,7 @@ function records() {
       kind: "agentTurn",
       sessionKey: subagent.requesterSessionKey,
       message: "load native result at delivery time",
+      expectedMediaUrls: ["/tmp/completed-result.png"],
       messageId: "completion:1",
       idempotencyKey: "completion:1",
       owner: {
@@ -137,22 +138,13 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("native subagent completion worker admission", () => {
   it.each(["pending", "acknowledged", "failed"] as const)(
-    "preserves a legacy completion queue until its %s receipt reconciles",
+    "preserves produced media completion until its %s receipt reconciles",
     async (receipt) => {
-      await withAdmissionState(async ({ input, context, admit, owner, pending, runId }) => {
+      await withAdmissionState(async ({ input, context, admit, owner, pending }) => {
         await admit();
         if (receipt === "acknowledged") {
           await markSessionDeliverySettlement(input.queueEntry, "recovered", context);
         }
-        const gateway = createContext();
-        const resolver = () => gateway;
-        await bindSubagentRunGatewayOwners({
-          runs: subagentRuns,
-          entries: [...getSubagentActivationRuns(subagentRuns)],
-          resumedRuns: new Set(),
-          getGatewayContextResolver: () => resolver,
-          onRecovered: () => {},
-        });
         expect(owner()?.delivery).toMatchObject({
           status: "in_progress",
           queueId: input.queueEntry.id,
@@ -174,16 +166,38 @@ describe("native subagent completion worker admission", () => {
           await completeSessionDelivery(input.queueEntry.id, context);
         }
         expect(await pending()).toEqual([]);
-        await retryDeferredSubagentCompletionSource(
-          expectDefined(subagentRuns.get(runId), "settled completion"),
-        );
         expect(owner()?.delivery).toMatchObject({
-          status: receipt === "failed" ? "failed" : "delivered",
+          status: receipt === "failed" ? "suspended" : "delivered",
           disposition: receipt === "failed" ? "permanent_failure" : "delivered",
+          ...(receipt === "failed" ? { suspendedReason: "permanent_failure" } : {}),
         });
       });
     },
   );
+
+  it("keeps acknowledged legacy inference inert instead of settling its completion", async () => {
+    await withAdmissionState(async ({ input, context, admit, owner, pending }) => {
+      if (input.queueEntry.kind !== "agentTurn") {
+        throw new Error("Expected the legacy inference fixture");
+      }
+      delete input.queueEntry.expectedMediaUrls;
+      await admit();
+      const before = owner();
+      await markSessionDeliverySettlement(input.queueEntry, "recovered", context);
+      const queued = expectDefined((await pending())[0], "legacy inference receipt");
+      await settleCorrelatedSubagentDelivery(queued, "recovered", context);
+      expect(owner()).toEqual(before);
+      await expect(
+        settleSubagentCompletionDelivery({
+          subagent: expectDefined(subagentRuns.get(input.subagent.runId), "completion owner"),
+          queueId: queued.id,
+          context,
+        }),
+      ).rejects.toThrow("lost its produced delivery or native owner");
+      expect(owner()).toEqual(before);
+      expect(await pending()).toEqual([queued]);
+    });
+  });
 
   it("commits queue and native owner atomically, then acknowledges replay without rewriting them", async () => {
     await withAdmissionState(async ({ input, database, admit, owner, runId }) => {
@@ -347,6 +361,7 @@ describe("native subagent completion worker admission", () => {
                 kind: "agentTurn",
                 sessionKey: input.expected.requesterSessionKey,
                 message: "done",
+                expectedMediaUrls: ["/tmp/completed-result.png"],
                 messageId: "facade-completion",
               },
             });
@@ -484,6 +499,40 @@ it("settles a requester cohort after concurrently admitted children complete", a
       release.resolve();
       await Promise.allSettled([...completions, settled]);
     }
+  });
+});
+
+it("retains a failed completion without creating another parent input after publication fails", async () => {
+  await withSubagentCompletionWorkerState(async (database) => {
+    const { subagent } = armRequesterWake(requesterRecords());
+    seedSubagentCompletionOwner({ subagent, databaseOptions: { database } });
+    let committed: RequesterWakeCommittedWrite | undefined;
+    const settle = (onPublished: () => void) =>
+      settleRequesterCompletionBatch({
+        entries: [subagent],
+        outcome: { delivered: false, path: "none", error: "Requester unavailable" },
+        databaseOptions: { database },
+        committed,
+        onCommitted: (receipt) => {
+          committed = receipt;
+        },
+        onPublished,
+      });
+    await expect(
+      settle(() => {
+        throw new Error("Synthetic publication observer failure");
+      }),
+    ).rejects.toMatchObject({ outcome: "committed", publication: "published" });
+    expect(readCompletionSystemEvents(database)).toEqual([]);
+    expect(subagentRuns.get(subagent.runId)?.delivery).toMatchObject({
+      status: "failed",
+      lastError: "Requester unavailable",
+    });
+    database.db.exec(
+      "CREATE TRIGGER reject_replay BEFORE UPDATE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'outcome replayed'); END",
+    );
+    await expect(settle(() => {})).resolves.toEqual({ applied: true, publication: "published" });
+    expect(readCompletionSystemEvents(database)).toEqual([]);
   });
 });
 

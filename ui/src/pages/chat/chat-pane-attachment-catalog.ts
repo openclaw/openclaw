@@ -63,6 +63,7 @@ export class PaneAttachmentCatalog {
       chatProps.onOpenImage,
       chatProps.onOpenSidebar,
       Boolean(chatProps.resolveArtifactDownload),
+      Boolean(chatProps.onFindWorkspaceFile),
     ];
     if (
       !this.catalog ||
@@ -105,12 +106,15 @@ export class PaneAttachmentCatalog {
             mediaReadAllowed: chatProps.mediaReadAllowed,
             onRequestOpenImage: chatProps.onRequestOpenImage,
             onOpenImage: chatProps.onOpenImage,
+            onFindWorkspaceFile: chatProps.onFindWorkspaceFile
+              ? (target) => attachmentCatalog.chat.onFindWorkspaceFile?.(target)
+              : undefined,
             resolveArtifactDownload: chatProps.resolveArtifactDownload
               ? (request, signal) =>
                   attachmentCatalog.chat.resolveArtifactDownload!(request, signal)
               : undefined,
-            getTurnVideoMessages: (key) =>
-              getTranscriptState(chatProps.paneId).transcriptRenderContext.turnVideoMessages?.get(
+            getTurnMediaMessages: (key) =>
+              getTranscriptState(chatProps.paneId).transcriptRenderContext.turnMediaMessages?.get(
                 key,
               ),
           },

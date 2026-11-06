@@ -15,7 +15,7 @@ export type MarkdownDomMedia = {
 type MarkdownSessionTitleRegistration = (target: HTMLElement, label: HTMLElement) => () => void;
 
 type CanonicalNode = {
-  prepared?: Node;
+  prepared?: Element;
   key: string | number;
   canonical: string;
   tag?: string;
@@ -97,7 +97,7 @@ function parseCanonical(
   html: MarkdownContent,
   prefix: string,
   incremental: boolean,
-  sessionTitles: boolean,
+  sessionTitleSelector: string | undefined,
 ): CanonicalNode[] {
   const template = document.createElement("template");
   const prepared = typeof html !== "string";
@@ -156,7 +156,7 @@ function parseCanonical(
     }
   }
 
-  const children = (parent: ParentNode): CanonicalNode[] => {
+  const children = (parent: Node & ParentNode): CanonicalNode[] => {
     const nodes = Array.from(parent.childNodes);
     const counts = new Map<string, number>();
     for (const node of nodes) {
@@ -172,29 +172,34 @@ function parseCanonical(
       const opaque = Boolean(
         element &&
         ((!incremental && !hasMedia) ||
-          (sessionTitles && element.matches(SESSION_TITLE_TARGET_SELECTOR)) ||
+          (sessionTitleSelector && element.matches(sessionTitleSelector)) ||
           element.classList.contains("markdown-mermaid") ||
           element.hasAttribute("data-code-highlight") ||
           element.localName.includes("-")),
       );
-      return {
-        prepared: prepared && opaque ? node.cloneNode(true) : undefined,
+      const descriptor: CanonicalNode = {
+        prepared: (prepared || !incremental) && opaque ? element : undefined,
         key: key && counts.get(key) === 1 ? key : index,
         canonical: `${node.nodeType}:${element ? element.outerHTML : node.textContent}`,
         tag: element?.localName,
-        namespace: element?.namespaceURI ?? undefined,
-        attributes: element
-          ? Array.from(element.attributes, ({ name, value }) => [name, value])
-          : undefined,
+        namespace: !opaque ? (element?.namespaceURI ?? undefined) : undefined,
+        attributes:
+          element && !opaque
+            ? Array.from(element.attributes, ({ name, value }) => [name, value])
+            : undefined,
         children: element && !opaque ? children(element) : [],
         hasMedia,
         slot: slots.get(node),
         text: node instanceof Text ? node.data : undefined,
         opaque,
       };
+      if (descriptor.prepared) {
+        parent.removeChild(node);
+      }
+      return descriptor;
     });
   };
-  // Opaque prepared nodes are detached clones: descriptors must not retain the
+  // Opaque prepared nodes are detached: descriptors must not retain the
   // parsed tree through parent pointers after its content has been replaced.
   return children(template.content);
 }
@@ -280,6 +285,7 @@ export class MarkdownDomReconciler {
   constructor(
     container: ParentNode,
     private readonly registerSessionTitle?: MarkdownSessionTitleRegistration,
+    private readonly sessionTitleSelector = SESSION_TITLE_TARGET_SELECTOR,
   ) {
     this.range = createRange(container);
   }
@@ -398,7 +404,7 @@ export class MarkdownDomReconciler {
             completed,
             media?.prefix ?? "",
             previous.incremental,
-            Boolean(this.registerSessionTitle),
+            this.registerSessionTitle ? this.sessionTitleSelector : undefined,
           );
           const remaining = previous.children.splice(completedNodes.length);
           if (remaining.length) {
@@ -497,7 +503,7 @@ export class MarkdownDomReconciler {
           fragment.html,
           prefix,
           fragment.incremental,
-          Boolean(this.registerSessionTitle),
+          this.registerSessionTitle ? this.sessionTitleSelector : undefined,
         );
         fragment.prefix = prefix;
         fragment.parsedHtml = fragment.html;
@@ -609,20 +615,31 @@ export class MarkdownDomReconciler {
     } else {
       clearRenderedRange(node);
       if (source.tag) {
-        const template = document.createElement("template");
+        let content: Element | DocumentFragment;
         // Serializing parsed HTML restores literal CRs; encode them before another parse.
         if (source.prepared) {
-          template.content.append(source.prepared.cloneNode(true));
+          const prepared = source.prepared;
+          // Consume the private parse once; remounts use pristine canonical HTML,
+          // never a node that live highlighting or decorations may have changed.
+          source.prepared = undefined;
+          content = prepared;
         } else {
+          const template = document.createElement("template");
           template.innerHTML = source.canonical
             .slice(source.canonical.indexOf(":") + 1)
             .replaceAll("\r", "&#13;");
+          content = template.content;
         }
         const registerSessionTitle = this.registerSessionTitle;
         const targets = registerSessionTitle
-          ? [...template.content.querySelectorAll<HTMLElement>(SESSION_TITLE_TARGET_SELECTOR)]
+          ? [
+              ...(content instanceof HTMLElement && content.matches(this.sessionTitleSelector)
+                ? [content]
+                : []),
+              ...content.querySelectorAll<HTMLElement>(this.sessionTitleSelector),
+            ]
           : [];
-        node.end.before(template.content);
+        node.end.before(content);
         if (registerSessionTitle && targets.length) {
           const releases = targets.map((target) =>
             registerSessionTitle(target, document.createElement("span")),

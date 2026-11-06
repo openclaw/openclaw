@@ -80,21 +80,18 @@ async function writeRawWorkspaceTree(params: {
   source: WorkspaceManifestValueInputs["workspace.manifest.tree-input"]["source"];
 }): Promise<string> {
   // A working-tree/index snapshot would apply user encodings and clean filters.
+  const root = params.repositoryRoot;
   const ref = `refs/heads/openclaw-snapshot-${randomBytes(16).toString("hex")}`;
-  const inputPath = path.join(params.repositoryRoot, ".git", "snapshot-input");
+  const inputPath = path.join(root, ".git", "snapshot-input");
   try {
     await prepareWorkspaceTreeInput({ ...params, inputPath, ref });
-    const input = await fs.open(inputPath, "r");
-    try {
-      await runExec("git", ["-C", params.repositoryRoot, "fast-import", "--quiet"], {
-        stdinFileDescriptor: input.fd,
-        timeoutMs: PATCH_TIMEOUT_MS,
-        maxBuffer: 1024 * 1024,
-      });
-    } finally {
-      await input.close();
-    }
-    return await requireGit(params.repositoryRoot, ["rev-parse", `${ref}^{tree}`]);
+    await using input = await fs.open(inputPath, "r");
+    const { stdout } = await runExec("git", ["-C", root, "fast-import", "--quiet"], {
+      stdinFileDescriptor: input.fd,
+      timeoutMs: PATCH_TIMEOUT_MS,
+      maxBuffer: 1024 * 1024,
+    });
+    return stdout.split(" ")[2]!.split("\t")[0]!;
   } finally {
     await fs.rm(inputPath, { force: true });
   }
@@ -210,6 +207,10 @@ export async function createWorkspacePatch(params: {
     }
     if (packed.stdout.byteLength > MAX_RECONCILIATION_PACK_BYTES) {
       throw new Error("Cloud workspace recovery snapshot exceeds its byte limit");
+    }
+    // Directory-only and fully conflicted reconciliations share the empty tree.
+    if (params.baseEntries.length === 0 && params.appliedEntries.length === 0) {
+      return { patch: new Uint8Array(), baseTree, basePack: packed.stdout };
     }
     const appliedTree = await writeRawWorkspaceTree({
       repositoryRoot: temporary,

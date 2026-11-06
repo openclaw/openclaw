@@ -5,6 +5,7 @@
  * Linux TIDs and recycled PIDs cannot impersonate a dead claim owner.
  */
 import { randomUUID } from "node:crypto";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { getFileLockProcessStartTime, getProcessStartTime } from "../../shared/pid-alive.ts";
 import type {
   ChannelIngressQueueClaim,
@@ -38,7 +39,19 @@ const INGRESS_CLAIM_PROCESS_START_TIME = readProcessStartTime(process.pid);
 export const INGRESS_CLAIM_PROCESS_ID = createIngressDrainOwnerId();
 
 /** Process-local live drain instance UUIDs (ownerId third field). */
-const liveIngressDrainInstanceIds = new Set<string>();
+const { liveIngressDrainInstanceIds, retiredClaims } = resolveGlobalSingleton(
+  Symbol.for("openclaw.ingressClaimCustody"),
+  () => ({ liveIngressDrainInstanceIds: new Set<string>(), retiredClaims: new Set<string>() }),
+);
+
+type IngressClaimIdentity = Pick<ChannelIngressQueueClaim<unknown>, "queueName" | "id" | "claim">;
+const claimIdentity = (row: IngressClaimIdentity) =>
+  JSON.stringify([row.queueName, row.id, row.claim.ownerId, row.claim.token]);
+
+/** Failed terminal writes must not replay delivered work in this process. */
+export function retainRetiredIngressClaim(row: IngressClaimIdentity): void {
+  retiredClaims.add(claimIdentity(row));
+}
 
 export function processPidFromOwnerId(ownerId: string): number {
   const pid = Number.parseInt(ownerId.split(":", 1)[0] ?? "", 10);
@@ -70,12 +83,15 @@ export function deregisterLiveIngressDrainInstance(ownerId: string): void {
 }
 
 /**
- * True when a same-process drain instance still holds this ownerId.
- * Recovery must not steal claims from a live peer drain on the same queue.
+ * Live drains and unresolved retired claims fence exact rows in this process.
+ * Recovery must not steal either from a peer on the same queue.
  */
-export function isLiveLocalIngressDrainOwner(ownerId: string): boolean {
-  const instanceId = processInstanceIdFromOwnerId(ownerId);
-  return instanceId != null && liveIngressDrainInstanceIds.has(instanceId);
+export function isLiveLocalIngressClaim(row: IngressClaimIdentity): boolean {
+  const instanceId = processInstanceIdFromOwnerId(row.claim.ownerId);
+  return (
+    (instanceId != null && liveIngressDrainInstanceIds.has(instanceId)) ||
+    retiredClaims.has(claimIdentity(row))
+  );
 }
 
 // Canonical ownerId: pid:startToken:uuid. startToken is a numeric starttime, or

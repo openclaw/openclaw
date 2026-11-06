@@ -3,6 +3,7 @@ import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { getConfigResolutionFacts } from "./resolution-facts.js";
 import {
   captureRuntimeConfigWithSource,
+  getPublishedRuntimeConfigSource,
   getRuntimeConfigCapture,
 } from "./runtime-config-capture-state.js";
 import { getRuntimeConfigSnapshot, getRuntimeConfigSourceSnapshot } from "./runtime-snapshot.js";
@@ -39,6 +40,10 @@ export function projectConfigOntoRuntimeSourceSnapshot(config: OpenClawConfig): 
   const captured = getRuntimeConfigCapture(config);
   if (captured) {
     return captured.source;
+  }
+  const published = getPublishedRuntimeConfigSource(config);
+  if (published) {
+    return published;
   }
   const runtimeConfigSnapshot = getRuntimeConfigSnapshot();
   const runtimeConfigSourceSnapshot = getRuntimeConfigSourceSnapshot();

@@ -12,6 +12,7 @@ import {
   buildGatewayCrashLoopBreakerDecision,
   maintenanceStartupReasons,
 } from "./gateway-boot-lifecycle.kernel.js";
+import { resolveGatewayPlatformSupervisor } from "./gateway-supervision.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { pathMayExistSync } from "./path-existence.js";
 import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
@@ -69,6 +70,8 @@ export type GatewayCrashLoopBreakerDecision = ReturnType<
   typeof buildGatewayCrashLoopBreakerDecision
 >;
 
+export type GatewayRestartResumeWindow = { startedAt: number; endedAt: number };
+
 /** Inspection keeps snapshot preparation off the caller's event loop. */
 export async function readGatewayLastShutdownAsync(env = process.env) {
   const reply = await executeExistingOpenClawStateRead(
@@ -90,7 +93,11 @@ export async function readGatewayLastInstallationReplacementAsync(env = process.
 export async function beginGatewayBootLifecycle(
   env: NodeJS.ProcessEnv = process.env,
   nowMs = Date.now(),
-): Promise<{ decision: GatewayCrashLoopBreakerDecision; id: string | undefined }> {
+): Promise<{
+  decision: GatewayCrashLoopBreakerDecision;
+  id: string | undefined;
+  restartResumeWindow?: GatewayRestartResumeWindow;
+}> {
   try {
     const context = captureOpenClawStateWorkerContext({ env });
     return await runOpenClawStateWorkerOperation(context, (scope) =>
@@ -174,9 +181,18 @@ export async function completeGatewayBootLifecycle(
       }),
     );
     if (signal && recentStops !== undefined && recentStops >= 3) {
-      gatewayLifecycleLog.warn(
-        formatGatewayRepeatedSignalHint(signal, recentStops, "stopped after"),
-      );
+      // A declared platform supervisor stops and replaces processes on purpose
+      // (Pod deletes, rollouts); repeated stops there are not a competing owner.
+      const platformSupervisor = resolveGatewayPlatformSupervisor(env);
+      if (platformSupervisor) {
+        gatewayLifecycleLog.info(
+          `stopped after ${signal} ${recentStops} times in 5 min (${platformSupervisor === "kubernetes" ? "Kubernetes" : "external supervisor"} manages this Gateway)`,
+        );
+      } else {
+        gatewayLifecycleLog.warn(
+          formatGatewayRepeatedSignalHint(signal, recentStops, "stopped after"),
+        );
+      }
     }
   } catch (err) {
     gatewayLifecycleLog.warn(`failed to persist gateway boot outcome; fail-open: ${String(err)}`);

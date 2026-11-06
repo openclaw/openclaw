@@ -63,7 +63,7 @@ function fixtures(
     env,
     repoRoot: repo,
     stateDir,
-    now: now - IDLE_GC_MS - 1,
+    now: now - IDLE_GC_MS - 3_600_001,
     ownerKind: "workboard",
     names,
     ...overrides,

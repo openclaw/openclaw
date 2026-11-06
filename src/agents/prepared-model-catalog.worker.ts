@@ -1,7 +1,6 @@
 /** Worker-thread entrypoint for complete model-catalog discovery. */
 import { parentPort, workerData } from "node:worker_threads";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { withClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import {
   copyConfigResolutionFacts,
   restoreConfigResolutionFacts,
@@ -38,6 +37,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import { captureAuthProfileCredentialCommits } from "../state/user-model-account-authority.js";
+import { withTemplateInstallSchemaVersionFacts } from "../templates/provenance-runtime-read.js";
 import {
   resolveAgentCredentialMapFromStore,
   resolveUsableAgentCredentialModes,
@@ -82,7 +82,10 @@ type WorkerGeneration = {
     runtime: PreparedModelCatalogWorkerInput["input"]["config"];
     source: PreparedModelCatalogWorkerInput["sourceConfigForSecrets"];
   }>;
-  pluginGeneration: PreparedModelRuntimePluginGeneration & { pluginRegistry: PluginRegistry };
+  pluginGeneration: Omit<
+    PreparedModelRuntimePluginGeneration,
+    "inlineProviderModels" | "configuredCatalogEntries"
+  > & { pluginRegistry: PluginRegistry };
   pluginIds: ReadonlySet<string>;
   staticProviderIds: ReadonlySet<string>;
   release: () => void | Promise<void>;
@@ -111,8 +114,6 @@ async function prepareWorkerGeneration(
   previous?: WorkerGeneration,
   pluginIds?: readonly string[],
 ): Promise<WorkerGeneration> {
-  const { prepareConfiguredModelFacts } =
-    await import("./prepared-model-runtime.configured-facts.js");
   // Rediscovery under agent workspaces or runtime activation overlays loses the owner's
   // metadata generation. Its source/built artifact selection must survive reconstruction too.
   const metadata =
@@ -120,7 +121,7 @@ async function prepareWorkerGeneration(
     restorePluginMetadataSnapshot(value.pluginMetadataSnapshot);
   // The parent owns native harness observations; this worker owns provider catalog hooks.
   // An empty eligible set stays empty instead of reopening unscoped plugin discovery.
-  const normalizedConfig = normalizePluginsConfig(value.input.config.plugins);
+  const normalizedConfig = normalizePluginsConfig(config.runtime.plugins);
   const basePluginIds =
     pluginIds ??
     (previous && [...previous.pluginIds]) ??
@@ -131,7 +132,7 @@ async function prepareWorkerGeneration(
           isManifestPluginAvailableForControlPlane({
             snapshot: metadata,
             plugin,
-            config: value.input.config,
+            config: config.runtime,
             normalizedConfig,
             ...(value.input.env ? { env: value.input.env } : {}),
           }),
@@ -157,7 +158,9 @@ async function prepareWorkerGeneration(
           () => {},
         );
   const pluginGeneration = Object.freeze({
-    ...(previous?.pluginGeneration ?? prepareConfiguredModelFacts(value.input.config, metadata)),
+    // Configured model facts arrive with each request; retaining host-only projections here
+    // duplicates those rows for every workspace without contributing to discovery.
+    ...previous?.pluginGeneration,
     remoteCatalog: value.remoteCatalog,
     pluginMetadataSnapshot: metadata,
     pluginRegistry,
@@ -592,7 +595,7 @@ if (parentPort) {
                 try {
                   const work = new AsyncWorkScope();
                   const result = await withWorkerAuthProfileWrites(value.input.env, work, () =>
-                    withClawInstallSchemaVersionFacts(request.clawInstallSchemaVersions, () =>
+                    withTemplateInstallSchemaVersionFacts(request.templateInstallSchemaVersions, () =>
                       // Never select a Codex binary here; report the parent's decision.
                       withHandedOffCodexClientVersion(request.codexClientVersion, () =>
                         work.run(() =>

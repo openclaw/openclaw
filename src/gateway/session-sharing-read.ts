@@ -30,6 +30,7 @@ import {
   authorizeSessionSharingTarget,
   canManageSessionSharing,
   isGatewayAdmin,
+  isSessionSharingOwnerEquivalent,
   prepareSessionSharingRole,
   resolveSessionVisibility,
   sharingIdentity,
@@ -69,7 +70,7 @@ export function canReceiveSessionEvent(params: {
       (!operatorScopeSatisfied("operator.sessions.read", client.connect.scopes ?? []) ||
         operatorActor?.kind === "system" ||
         operatorScopeSatisfied("operator.read", client.connect.scopes ?? [])) &&
-      (!policyConfig.gateway?.roles || operatorActor?.kind === "system") &&
+      (!policyConfig.gateway?.roles || isSessionSharingOwnerEquivalent(client, operatorActor)) &&
       event !== "session.suggestion" &&
       event !== "session.typing"
     );
@@ -127,6 +128,7 @@ export function prepareSessionSharing(
     );
   const entryFilter = createSessionListEntryFilter(params, isCreator, { sessionCap });
   return {
+    identity,
     isCreator,
     sessionCap,
     entryFilter,
@@ -312,6 +314,11 @@ export function createSessionSharingInputAuthority(
   return {
     // Transport/source custody owns lifetime; profile selection ends at input acceptance.
     assertLifetimeCurrent: () => {},
+    prepareForSourceScope: () =>
+      withCurrentSessionSharingProfiles(ownedParams.client, async (profiles) => {
+        profiles.readCurrent();
+        ownedParams.preparedProfiles = profiles;
+      }),
     withCurrent: (consume) =>
       withCurrentSessionSharingProfiles(ownedParams.client, (profiles, beginConsume) => {
         ownedParams.preparedProfiles = profiles;
@@ -338,10 +345,8 @@ export function createSessionSharingInputAuthority(
   };
 }
 
-const projectedSharingKeys = new WeakMap<
-  object,
-  WeakMap<object, { facts: readonly unknown[]; key: string }>
->();
+const projectedSharingKeys = new WeakMap<object, { facts: readonly unknown[]; key: string }>();
+const emptyProfileAliases: ReadonlySet<string> = new Set();
 
 export function prepareProjectedSessionSharing(params: {
   cfg: OpenClawConfig;
@@ -372,23 +377,24 @@ export function prepareProjectedSessionSharing(params: {
             cfg,
             roleProfile?.githubLogin ?? null,
           );
+  const ownerEquivalent =
+    !identity && Boolean(cfg.gateway?.roles) && isSessionSharingOwnerEquivalent(client, actor);
   let cacheKey: string | undefined;
   return {
     ...prepareSessionSharing(params, {
-      aliases: profile?.aliases ?? new Set(),
+      aliases: profile?.aliases ?? emptyProfileAliases,
       sessionCap: policy?.sessions.others,
       isMember,
     }),
     policy,
-    /** Only publication owners may supply a revision retired on sharing/config changes. */
-    getCacheKey(revision?: object) {
+    /** Connection facts follow config/access publications, independently of row revisions. */
+    getCacheKey() {
       if (cacheKey !== undefined) {
         return cacheKey;
       }
-      let keys = revision && projectedSharingKeys.get(revision);
       const viewer = client ?? cfg;
       const scopes = client?.connect.scopes;
-      const previous = keys?.get(viewer);
+      const previous = projectedSharingKeys.get(viewer);
       const facts = previous?.facts;
       // Compare live authority directly; only misses need a new fact snapshot.
       if (
@@ -406,10 +412,11 @@ export function prepareProjectedSessionSharing(params: {
         facts[10] === policy &&
         facts[11] === Boolean(cfg.gateway?.roles) &&
         facts[12] === (scopes !== undefined) &&
-        facts.length === 13 + (scopes?.length ?? 0)
+        facts[13] === ownerEquivalent &&
+        facts.length === 14 + (scopes?.length ?? 0)
       ) {
         let i = 0;
-        while (i < (scopes?.length ?? 0) && facts[13 + i] === scopes?.[i]) {
+        while (i < (scopes?.length ?? 0) && facts[14 + i] === scopes?.[i]) {
           i++;
         }
         if (i === (scopes?.length ?? 0)) {
@@ -428,30 +435,30 @@ export function prepareProjectedSessionSharing(params: {
         profile && [...profile.aliases].sort(),
         policy,
         Boolean(cfg.gateway?.roles),
+        // Equal effective scopes can retain different source sharing authority.
+        ownerEquivalent,
       ]);
-      if (revision) {
-        const next: unknown[] = [
-          cfg,
-          getRuntimeConfigSnapshotMetadata(),
-          readGatewayAccessRevision(),
-          actor?.kind,
-          actor?.kind === "operator" ? actor.profileId : undefined,
-          identity?.id,
-          client?.authenticatedUserProfile?.profileId,
-          client?.authenticatedUserId,
-          Boolean(client?.authenticatedGitHubIdentitySync),
-          profile,
-          policy,
-          Boolean(cfg.gateway?.roles),
-          scopes !== undefined,
-        ];
-        if (!keys) {
-          keys = new WeakMap();
-          projectedSharingKeys.set(revision, keys);
-        }
-        // Concatenation retains an exact-sized snapshot instead of push's spare capacity.
-        keys.set(viewer, { facts: scopes?.length ? next.concat(scopes) : next, key: cacheKey });
-      }
+      const next: unknown[] = [
+        cfg,
+        getRuntimeConfigSnapshotMetadata(),
+        readGatewayAccessRevision(),
+        actor?.kind,
+        actor?.kind === "operator" ? actor.profileId : undefined,
+        identity?.id,
+        client?.authenticatedUserProfile?.profileId,
+        client?.authenticatedUserId,
+        Boolean(client?.authenticatedGitHubIdentitySync),
+        profile,
+        policy,
+        Boolean(cfg.gateway?.roles),
+        scopes !== undefined,
+        ownerEquivalent,
+      ];
+      // Concatenation retains an exact-sized snapshot instead of push's spare capacity.
+      projectedSharingKeys.set(viewer, {
+        facts: scopes?.length ? next.concat(scopes) : next,
+        key: cacheKey,
+      });
       return cacheKey;
     },
   };
@@ -472,11 +479,14 @@ export function createSessionListEntryFilter(
   | undefined {
   const operatorActor = resolveGatewayOperatorRoleActor(params.client);
   const identity = sharingIdentity(params.client, operatorActor);
-  if (isGatewayAdmin(params.client) || (!identity && operatorActor?.kind === "system")) {
+  if (isGatewayAdmin(params.client)) {
     return undefined;
   }
   if (!identity) {
-    return params.cfg?.gateway?.roles ? () => false : undefined;
+    return params.cfg?.gateway?.roles &&
+      !isSessionSharingOwnerEquivalent(params.client, operatorActor)
+      ? () => false
+      : undefined;
   }
   const sessionCap = prepared
     ? prepared.sessionCap

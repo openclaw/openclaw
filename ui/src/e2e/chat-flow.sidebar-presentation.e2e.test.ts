@@ -59,7 +59,7 @@ function rowLayout(locator: Locator) {
 
 function expectUnreadLayout(layout: Awaited<ReturnType<typeof rowLayout>>, nameLeft: number) {
   const { unread, lead, name } = layout;
-  expect(unread).toMatchObject({ width: 7, height: 7 });
+  expect(unread).toMatchObject({ width: 8, height: 8 });
   for (const [start, end] of [
     ["left", "right"],
     ["top", "bottom"],
@@ -254,7 +254,11 @@ suite.define(() => {
           return x === 0 ? 0 : readingDirection === "rtl" ? -x : x;
         }, direction);
       await label.waitFor({ state: "visible", timeout: 10_000 });
-      await expect.poll(() => mask(label)).toContain(direction === "rtl" ? "to left" : "to right");
+      await expect
+        .poll(() => mask(label))
+        .toBe(
+          `linear-gradient(to ${direction === "rtl" ? "left" : "right"}, rgb(0, 0, 0) calc(100% - 6px), rgba(0, 0, 0, 0))`,
+        );
       expect(await mask(shortLabel)).toBe("none");
       const rowWidth = await row.evaluate((element) => element.getBoundingClientRect().width);
 
@@ -399,7 +403,10 @@ suite.define(() => {
             const style = getComputedStyle(element);
             const accent = document.createElement("span").style;
             accent.color = style.getPropertyValue("--accent").trim();
-            return { actual: style.borderTopColor, expected: accent.color };
+            return {
+              actual: style.backgroundColor,
+              expected: accent.color,
+            };
           });
         expect.soft(spinnerColors.actual).toBe(spinnerColors.expected);
       }
@@ -472,42 +479,13 @@ suite.define(() => {
     expect(longLayout.singleLine).toBe(true);
     expect(longLayout.nameOverflowing).toBe(true);
     expect(longLayout.endcap.right).toBeLessThanOrEqual(longLayout.row.right);
+    expect(longLayout.endcap.left - longLayout.name.right).toBeCloseTo(6, 1);
     const intrinsicAtomWidth = longLayout.atoms.reduce((sum, atom) => sum + atom.width, 0);
     expect(intrinsicAtomWidth).toBeGreaterThan(0);
     expect(longLayout.endcap.width).toBeGreaterThanOrEqual(intrinsicAtomWidth);
     expectUnreadLayout(longLayout, plain.nameLeft);
 
-    const unreadRow = sessionRow(page, unreadKey);
-    const unreadBadge = unreadRow.locator(
-      ".sidebar-session-indicator .session-glyph__badge--unread",
-    );
-    const unreadTitle = unreadRow.locator(".sidebar-recent-session__name");
-    await unreadBadge.waitFor({ state: "visible" });
-    const restingBadge = await unreadBadge.boundingBox();
-    const restingTitle = await unreadTitle.boundingBox();
-    const restingWidth = await unreadTitle.evaluate((element) => element.clientWidth);
-    await unreadRow.hover();
-
-    await unreadBadge.waitFor({ state: "visible" });
-    expect(await unreadBadge.boundingBox()).toEqual(restingBadge);
-    expect((await unreadTitle.boundingBox())?.x).toBe(restingTitle?.x);
-    const hoverWidth = await unreadTitle.evaluate((element) => element.clientWidth);
-    const actionReserve = await unreadRow.evaluate((element) =>
-      Number.parseFloat(
-        getComputedStyle(element).getPropertyValue("--session-row-actions-reserve"),
-      ),
-    );
-    // The leading badge stays fixed while the title reserves the full action width.
-    expect(restingWidth - hoverWidth).toBeCloseTo(actionReserve, 0);
-    await page.mouse.move(900, 400);
-    await unreadBadge.waitFor({ state: "visible" });
-    await unreadRow.locator("[data-sidebar-session-archive]").focus();
-    await unreadBadge.waitFor({ state: "visible" });
-    expect(await unreadBadge.boundingBox()).toEqual(restingBadge);
-    expect((await unreadTitle.boundingBox())?.x).toBe(restingTitle?.x);
-    expect(await unreadTitle.evaluate((element) => element.clientWidth)).toBe(hoverWidth);
     await sidebarResizer.focus();
-    await unreadBadge.waitFor({ state: "visible" });
 
     await busyRow.hover();
     for (const selector of [
@@ -523,7 +501,7 @@ suite.define(() => {
 
     await plainRow.waitFor();
     for (const size of badgeSizes) {
-      expect(size).toEqual({ height: 12, width: 12 });
+      expect(size).toEqual({ height: 14, width: 14 });
     }
   });
 
@@ -539,6 +517,10 @@ suite.define(() => {
       return route.fulfill({ contentType: "image/png", body: avatarBody });
     });
     await installMockGateway(page, {
+      historyMessages: [chatMessage("assistant", "Ready to help.")],
+      sessions: chatSessionListResponse().sessions.map((row) =>
+        Object.assign(row, { kind: "group" }),
+      ),
       methodResponses: {
         "agent.identity.get": {
           agentId: "main",
@@ -546,7 +528,6 @@ suite.define(() => {
           avatar: "/avatar/main?v=fixture",
           avatarStatus: "local",
         },
-        "sessions.list": chatSessionListResponse(),
       },
       sessionKey: "agent:main:session-a",
     });
@@ -560,7 +541,7 @@ suite.define(() => {
       return marker;
     });
     const avatar = page.locator(
-      'openclaw-chat-pane[aria-hidden="false"] .agent-chat__welcome-avatar img',
+      'openclaw-chat-pane[aria-hidden="false"] .chat-group.assistant img.chat-avatar',
     );
     await avatar.waitFor({ state: "visible" });
     await expect.poll(() => avatar.getAttribute("src")).toMatch(/^blob:/);

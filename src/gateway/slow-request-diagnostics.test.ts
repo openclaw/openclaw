@@ -45,7 +45,7 @@ test.each(["disabled", "muted", "fast", "slow"])("slow request diagnostics: %s",
   }
 });
 
-test("failed requests sum repeated waits and keep their trace even when the sink throws", () => {
+test("failed requests sum bounded nested waits and keep their trace when the sink throws", () => {
   const trace = createDiagnosticTraceContext();
   log.warn.mockImplementation(() => {
     expect(getActiveDiagnosticTraceContext()).toBe(trace);
@@ -53,8 +53,20 @@ test("failed requests sum repeated waits and keep their trace even when the sink
   });
   const failure = new Error("request failed");
   expect(() => {
-    using diagnostics = runWithDiagnosticTraceContext(trace, () => start("accessFacts"));
+    using diagnostics = runWithDiagnosticTraceContext(trace, () =>
+      startSlowRequestDiagnostics<"accessFacts" | "projectionReadiness">(
+        log,
+        "slow request",
+        "test",
+        "accessFacts",
+        undefined,
+        ["rows"],
+      ),
+    );
+    expect(diagnostics?.observeSpan("private-session-key")).toBeUndefined();
+    const rows = diagnostics?.observeSpan("rows");
     clock = 600;
+    rows?.();
     diagnostics?.mark("projectionReadiness");
     clock = 800;
     diagnostics?.mark("accessFacts");
@@ -64,7 +76,7 @@ test("failed requests sum repeated waits and keep their trace even when the sink
   expect(log.warn).toHaveBeenCalledExactlyOnceWith("slow request", {
     operation: "test",
     elapsedMs: 1_200,
-    phaseDurationsMs: { accessFacts: 1_000, projectionReadiness: 200 },
+    phaseDurationsMs: { accessFacts: 1_000, projectionReadiness: 200, "detail.rows": 600 },
   });
 });
 

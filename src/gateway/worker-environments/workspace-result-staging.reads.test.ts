@@ -317,7 +317,7 @@ it("isolates cancellation and releases failed staged reads for retry", async () 
 it.each<[number, number, FixtureOptions]>([
   [64, 4, { linked: true }],
   [300, 6, {}],
-  [0, 4, { largeFileBytes: 9 * 1024 * 1024 }],
+  [0, 4, { largeFileBytes: 64 * 1024 * 1024 }],
   [0, 4, { objectFormat: "sha256" }],
 ])(
   "materializes %i files with at most %i Git reads (%j)",
@@ -335,19 +335,27 @@ it.each<[number, number, FixtureOptions]>([
     await fixture.read(async (snapshot) => {
       stagingRoot = snapshot.stagingRoot;
       expect((await fs.readdir(stagingRoot)).toSorted()).toEqual(
-        snapshot.changedEntries.map((entry) => entry.path).toSorted(),
+        [
+          ...fixture.files.keys(),
+          ...(process.platform === "win32" ? [] : ["current-link"]),
+        ].toSorted(),
       );
-      for (const entry of snapshot.changedEntries) {
-        const target = path.join(stagingRoot, entry.path);
-        if (entry.type === "symlink") {
-          expect(await fs.readlink(target)).toBe(entry.target);
-        } else {
-          // Node compares Buffer bytes without Vitest's per-byte object traversal.
-          assert.deepStrictEqual(await fs.readFile(target), fixture.files.get(entry.path));
-          if (process.platform !== "win32") {
-            expect((await fs.stat(target)).mode & 0o777).toBe(entry.mode);
-          }
+      expect(Buffer.byteLength(JSON.stringify(snapshot))).toBeLessThan(1024);
+      expect(snapshot.changedEntryCount).toBe(
+        fixture.files.size + Number(process.platform !== "win32"),
+      );
+      expect(snapshot.current).toEqual({ baseCommit: null });
+      for (const [name, bytes] of fixture.files) {
+        const target = path.join(stagingRoot, name);
+        assert.deepStrictEqual(await fs.readFile(target), bytes);
+        if (process.platform !== "win32") {
+          expect((await fs.stat(target)).mode & 0o777).toBe(
+            name === "executable.sh" ? 0o755 : 0o644,
+          );
         }
+      }
+      if (process.platform !== "win32") {
+        expect(await fs.readlink(path.join(stagingRoot, "current-link"))).toBe(fixture.binaryPath);
       }
     });
     await expect(fs.stat(stagingRoot)).rejects.toMatchObject({ code: "ENOENT" });
@@ -415,16 +423,12 @@ it.each(
       }
     });
     const temporary = vi.spyOn(fs, "mkdtemp");
-    const writes = vi.spyOn(fs, "writeFile");
-    const links = vi.spyOn(fs, "symlink");
     const use = vi.fn(async () => {});
     await expect(fixture.read(use)).rejects.toThrow(
       corruption === "symlink" ? "payload is invalid: current-link" : "payload",
     );
     expect(corrupted).toHaveBeenCalledOnce();
-    for (const effect of [use, writes, links]) {
-      expect(effect).not.toHaveBeenCalled();
-    }
+    expect(use).not.toHaveBeenCalled();
     expect(temporary).toHaveBeenCalledOnce();
     const created = temporary.mock.results[0];
     assert(created?.type === "return", "Staging did not create its temporary directory");

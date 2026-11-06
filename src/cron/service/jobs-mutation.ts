@@ -114,6 +114,7 @@ export function finalizeUpdatedJob(params: {
     // Anchor restart catch-up to the new inputs. Without this, startup replays a
     // slot the previous schedule never had, because lastRunAtMs still belongs to
     // the old one and looks perpetually stale against the new slots (#91944).
+    delete nextJob.state.admissionDeferred;
     nextJob.state.scheduleActivatedAtMs = now;
     nextJob.state.startupCatchupAtMs = undefined;
     // A paced timestamp is owned by the exact schedule, pacing bounds, and

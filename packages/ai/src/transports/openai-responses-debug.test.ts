@@ -1,12 +1,14 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import {
   normalizeResponsesFailedEvent as normalizeFailure,
+  observeResponsesTransportFailure as observeFailure,
   ResponsesStreamFailure,
   summarizeResponsesPayload as summarizePayload,
-  summarizeOpenAITransportError as summarizeError,
 } from "./openai-responses-debug.js";
-import { createModel } from "./openai-responses-prompt-observer.test-support.js";
+import { createAssistant, createModel } from "./openai-responses-prompt-observer.test-support.js";
 
+const initialHost = getAiTransportHost();
 const failedEventModel = createModel({ id: "gpt-5.6-luna" });
 const failedResponse = (error: { message: string; code?: string }) =>
   normalizeFailure({ response: { id: "resp_failed", status: "failed", error } }, failedEventModel);
@@ -19,7 +21,30 @@ function expectRedacted(value: string) {
   expect(value).not.toContain(compaction.id);
 }
 
-afterEach(() => vi.unstubAllEnvs());
+function observeTransportWarning(error: unknown, requestSignal?: AbortSignal): string {
+  const logWarn = vi.fn();
+  configureAiTransportHost({ ...initialHost, isLogEnabled: () => true, logWarn });
+  expect(
+    observeFailure({
+      error,
+      model: failedEventModel,
+      output: createAssistant(failedEventModel),
+      signal: AbortSignal.abort(new Error("synthetic outer transport failure")),
+      requestSignal,
+    }),
+  ).toBeUndefined();
+  expect(logWarn).toHaveBeenCalledExactlyOnceWith(
+    "openai-transport",
+    expect.stringContaining("[responses] error provider=openai"),
+    undefined,
+  );
+  return logWarn.mock.calls[0]?.[1] ?? "";
+}
+
+afterEach(() => {
+  configureAiTransportHost(initialHost);
+  vi.unstubAllEnvs();
+});
 
 it.each(["summary", "tools", "full-redacted"])(
   "redacts %s prompt, tool and provider-error content",
@@ -55,8 +80,9 @@ it.each(["summary", "tools", "full-redacted"])(
       code: "service_unavailable",
       cause: Object.assign(new Error(privateText), { code: "ECONNRESET" }),
     });
-    expectRedacted(summarizeError(error));
-    expect(summarizeError(error)).toContain("ECONNRESET");
+    const warning = observeTransportWarning(error);
+    expectRedacted(warning);
+    expect(warning).toContain("causeCode=ECONNRESET");
     for (const value of [
       privateText,
       { message: privateText },
@@ -66,11 +92,13 @@ it.each(["summary", "tools", "full-redacted"])(
         cause: { name: privateText, code: { tool_arguments: privateText } },
       },
     ]) {
-      expectRedacted(summarizeError(value));
+      expectRedacted(observeTransportWarning(value));
     }
     const controller = new AbortController();
     controller.abort(new Error(privateText));
-    expectRedacted(summarizeError(error, controller.signal));
+    const abortedWarning = observeTransportWarning(error, controller.signal);
+    expect(abortedWarning).toContain("abortReason=caller_abort");
+    expectRedacted(abortedWarning);
   },
 );
 
@@ -88,11 +116,23 @@ it.each([
 ])("classifies %j as %s without exposing reason text", (reason, expected) => {
   const controller = new AbortController();
   const error = new Error("private provider text");
-  expect(summarizeError(error, controller.signal)).not.toContain("abortReason=");
+  expect(
+    observeFailure({
+      error,
+      model: failedEventModel,
+      output: createAssistant(failedEventModel),
+      requestSignal: controller.signal,
+    }),
+  ).toEqual({ abortReason: undefined, incompleteReason: undefined });
   controller.abort(reason);
-  const summary = summarizeError(error, controller.signal);
-  expect(summary).toContain(`abortReason=${expected}`);
-  expect(summary).not.toContain("private");
+  const diagnostic = observeFailure({
+    error,
+    model: failedEventModel,
+    output: createAssistant(failedEventModel),
+    requestSignal: controller.signal,
+  });
+  expect(diagnostic).toEqual({ abortReason: expected, incompleteReason: undefined });
+  expect(JSON.stringify(diagnostic)).not.toContain("private");
 });
 
 it("reports an empty replay set for non-array input", () => {

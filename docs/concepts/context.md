@@ -39,6 +39,11 @@ capacity and configured limits. If neither current metadata nor a matching
 verified budget is available, the denominator is `?` (`null` in session-list
 JSON); reports do not substitute a generic window or another model's capacity.
 
+For models with selectable windows, `/status` and `session_status` use the selected
+window or the catalog's default window, rather than the model's larger scalar
+capacity. This also applies to the active fallback model; a smaller configured
+runtime cap still takes precedence.
+
 The Control UI context meter uses the last run's prompt budget when it still
 matches the selected model and effective context cap. This budget leaves room
 for the runtime's compaction reserve. Its label is **Prompt budget (last run)**:
@@ -171,6 +176,10 @@ When truncation occurs, the runtime injects a concise in-prompt notice under Pro
 The system prompt includes a compact **skills list** (name + description + location). This list has real overhead.
 
 `/context` counts the catalog included in the rendered system prompt, not every installed skill. In the embedded runtime without Code Mode, denying both `read` and `skills_read` omits the catalog and reports zero skills.
+
+Code Mode also omits the catalog when installed skill search and reading are
+available. Its report then shows zero listed skills, while the agent can still
+search eligible skills and read their complete instructions on demand.
 
 Skill instructions are _not_ included by default. The model is expected to `read` the skill's `SKILL.md` **only when needed**.
 

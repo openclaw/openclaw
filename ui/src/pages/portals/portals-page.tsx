@@ -14,6 +14,7 @@ import {
   onCleanup,
   onSettled,
 } from "solid-js";
+import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import type { PortalPanelToggleDetail } from "../../components/panel-toggle-contract.ts";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -274,6 +275,7 @@ function PortalPreview(props: {
                 if (item.id === "copy") {
                   void copyToClipboard(props.portal.publicUrl).then((copied) =>
                     showToast({
+                      severity: copied ? "success" : "error",
                       message: t(
                         copied ? "portalsPage.embeddedCopied" : "portalsPage.embeddedCopyFailed",
                       ),
@@ -502,7 +504,7 @@ export function PortalContent(props: { model: PortalsModel; mobile?: boolean }) 
     const pending = props.model.closePortal(portal);
     await Promise.resolve();
     await presentClose(view, portal.id, pending, retired).catch((error: unknown) =>
-      showToast({ message: formatUiError(error) }),
+      showToast({ severity: "error", message: formatUiError(error) }),
     );
   };
   const closing = () => presentation().closing() ?? state().closingPortalId;
@@ -540,7 +542,7 @@ export function PortalContent(props: { model: PortalsModel; mobile?: boolean }) 
         <Show
           when={props.model.presentation().embedded}
           fallback={
-            <>
+            <ShellLayoutBoundary traits={{ portalsPage: true }}>
               <HubPageHeader
                 active="portals"
                 wide
@@ -581,7 +583,7 @@ export function PortalContent(props: { model: PortalsModel; mobile?: boolean }) 
                   </section>
                 </Show>
               </PortalReadiness>
-            </>
+            </ShellLayoutBoundary>
           }
         >
           <div

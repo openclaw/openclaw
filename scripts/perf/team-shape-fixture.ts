@@ -20,6 +20,7 @@ export function parseTeamShapeOptions(argv: string[]) {
     options: {
       "state-dir": { type: "string" },
       sessions: { type: "string" },
+      agents: { type: "string" },
       runs: { type: "string" },
       "settled-runs": { type: "boolean" },
       "team-stress": { type: "boolean" },
@@ -105,8 +106,8 @@ export function parseTeamShapeOptions(argv: string[]) {
   }
   const worktreeFiles = integer("worktree-files", 0);
   const worktreeFileBytes = integer("worktree-file-bytes", 0);
-  if (worktreeFiles * worktreeFileBytes > 256 * 1024 ** 2) {
-    throw new Error("Synthetic worktree contents must fit within 256 MiB");
+  if (worktreeFiles * worktreeFileBytes > 2 * 1024 ** 3) {
+    throw new Error("Synthetic worktree contents must fit within 2 GiB");
   }
   const worktreeColdCommits = integer("worktree-cold-commits", 0);
   if (worktreeFiles > 500_000) {
@@ -128,6 +129,7 @@ export function parseTeamShapeOptions(argv: string[]) {
   return {
     stateDir: path.resolve(values["state-dir"] ?? "."),
     sessions,
+    agents: integer("agents", values["team-stress"] ? 4 : 1, 1),
     retainedRuns,
     settledRuns: values["settled-runs"] ?? false,
     teamStress: values["team-stress"] ?? false,
@@ -157,7 +159,8 @@ export function parseTeamShapeOptions(argv: string[]) {
 }
 
 export async function generateTeamShapeFixture(
-  options: ReturnType<typeof parseTeamShapeOptions> & Pick<TeamShapeSessionsOptions, "sessionKeys">,
+  options: ReturnType<typeof parseTeamShapeOptions> &
+    Pick<TeamShapeSessionsOptions, "sessionKeys" | "agentId">,
 ) {
   const startedAt = performance.now();
   const { stateDir } = options;
@@ -206,28 +209,22 @@ export async function generateTeamShapeFixture(
         ? { session: { maintenance: { maxEntries: Math.max(5_000, options.sessions * 2) } } }
         : {}),
       agents: {
-        ...(options.teamStress
-          ? {
-              ownership: "explicit" as const,
-              defaults: {
-                systemAgent: { agentId: "main" },
-                subagents: { archiveAfterMinutes: 24 * 60 },
-              },
-            }
-          : {}),
+        ownership: "explicit" as const,
+        defaults: {
+          systemAgent: { agentId: "main" },
+          ...(options.teamStress ? { subagents: { archiveAfterMinutes: 24 * 60 } } : {}),
+        },
         entries: Object.fromEntries(
-          (options.teamStress ? ["main", "reviewer", "researcher", "planner"] : ["main"]).map(
-            (agentId) => [
-              agentId,
-              {
-                workspace: path.join(
-                  stateDir,
-                  "workspace",
-                  ...(agentId === "main" ? [] : [agentId]),
-                ),
-              },
-            ],
-          ),
+          Array.from(
+            { length: options.agents },
+            (_, index) =>
+              ["main", "reviewer", "researcher", "planner"][index] ?? `agent-${index + 1}`,
+          ).map((agentId) => [
+            agentId,
+            {
+              workspace: path.join(stateDir, "workspace", ...(agentId === "main" ? [] : [agentId])),
+            },
+          ]),
         ),
       },
       logging: { file: path.join(stateDir, "gateway.log") },
@@ -245,7 +242,7 @@ export async function generateTeamShapeFixture(
         import("../../src/state/openclaw-agent-db.js"),
         import("../../src/state/openclaw-state-db.js"),
       ]);
-    const agent = agentDb.openOpenClawAgentDatabase({ agentId: "main" });
+    const agent = agentDb.openOpenClawAgentDatabase({ agentId: options.agentId ?? "main" });
     const state = stateDb.openOpenClawStateDatabase();
     let summary;
     try {
@@ -268,6 +265,7 @@ export async function generateTeamShapeFixture(
         seed: options.seed,
         now: options.now,
         sessionCount: sessions.length,
+        agentCount: options.agents,
         ...sessionMetrics,
         sessionGenerationMs,
         ...extras,
@@ -297,6 +295,7 @@ async function main() {
   --sessions 5000 --runs 6000 --approvals 200 --cron 100 --projects 12
   --settled-runs           Keep run history terminal and delivered, without a subagent recovery backlog.
   --team-stress            Use the shared stress harness's session categories and four configured agents.
+  --agents <count>        Override configured agents (default one, or four with --team-stress).
   --local-placements 0    Retain local placement rows for startup orphan-workspace discovery.
   --cron-announce-last     Seed disabled isolated cron jobs with announce/last delivery.
   --seed 967 --now <epoch-ms> --transcript-mib 64

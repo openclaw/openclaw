@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPidDefinitelyDead } from "../src/shared/pid-alive.ts";
 import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
-import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
+import { readCurrentGitCommit, resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
 import {
   distArtifactEntryArgs,
   withDistArtifactOwnership,
@@ -26,7 +26,8 @@ const repoRoot = path.resolve(here, "..");
 const uiDir = path.join(repoRoot, "ui");
 const requireFromUi = createRequire(path.join(uiDir, "package.json"));
 
-const FORWARDED_SIGNAL_KILL_GRACE_MS = 250;
+// Vite drains its active transforms and dependency optimizer before returning.
+const FORWARDED_SIGNAL_KILL_GRACE_MS = 5_000;
 const PUBLISH_RENAME_DELAYS_MS = [100, 200, 400, 800, 1600];
 const PUBLISH_RENAME_WAIT = new Int32Array(new SharedArrayBuffer(4));
 
@@ -37,15 +38,6 @@ type UiBuildEnvironmentSources = {
   readGitCommit?: () => string | null;
   readPackageVersion?: () => string | null;
 };
-
-function readCurrentGitCommit(): string | null {
-  const result = spawnSync("git", ["rev-parse", "HEAD"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  return result.status === 0 ? result.stdout.trim() : null;
-}
 
 function readCurrentPackageVersion(): string | null {
   try {
@@ -77,7 +69,7 @@ export function resolveUiBuildEnvironment(
     commitLabel: "Control UI build commit",
     env,
     now: sources.now,
-    readGitCommit: sources.readGitCommit ?? readCurrentGitCommit,
+    readGitCommit: sources.readGitCommit ?? (() => readCurrentGitCommit(repoRoot)),
   });
   if (env.OPENCLAW_BUILD_TIMESTAMP?.trim() || env.OPENCLAW_CONTROL_UI_BUILD_ID?.trim()) {
     return buildEnv;

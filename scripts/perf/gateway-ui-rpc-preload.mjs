@@ -157,7 +157,7 @@ function installObserver() {
           const owner = (file) => import(pathToFileURL(path.join(checkout, "src", file)).href);
           const [
             { loadCronJobsStoreWithConfigJobsReadOnly },
-            { resolveCronJobBoundSessionKeys },
+            { resolveCronJobSessionBindings },
             config,
           ] = await Promise.all([
             owner("cron/store/read-only.ts"),
@@ -179,7 +179,7 @@ function installObserver() {
           const cfg = config.getRuntimeConfig();
           const bindings = jobs.map((job) => ({
             id: job.id,
-            keys: [...resolveCronJobBoundSessionKeys(job, { cfg, defaultAgentId: "main" })],
+            keys: [...resolveCronJobSessionBindings(job, { cfg, defaultAgentId: "main" }).keys()],
           }));
           const common = bindings[0].keys.filter((key) =>
             bindings.every((binding) => binding.keys.includes(key)),

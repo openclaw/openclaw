@@ -9,6 +9,7 @@ import {
 } from "../transports/anthropic-payload-policy.js";
 import { runAnthropicStreamLifecycle } from "../transports/anthropic-stream-lifecycle.js";
 import { applyAnthropicThinkingOptions } from "../transports/anthropic-transport-options.js";
+import { withModelRequestBodyBytes } from "../transports/model-request-body.js";
 import { resolveOpencodeSessionHeaders } from "../transports/session-affinity.js";
 import { streamFragmentError } from "../transports/transport-utils.js";
 import type { Model, SimpleStreamOptions, StreamFunction } from "../types.js";
@@ -152,10 +153,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
             ? { sanitizeSse: false as const }
             : undefined;
         // Anthropic supports custom fetch, so sentinels stay opaque until guarded egress.
+        const modelFetch = getAiTransportHost().buildModelFetch(model, undefined, fetchOptions);
         const clientOptions = {
           baseURL: model.baseUrl,
           dangerouslyAllowBrowser: true,
-          fetch: getAiTransportHost().buildModelFetch(model, undefined, fetchOptions),
+          fetch: modelFetch ? withModelRequestBodyBytes(requestOptions, modelFetch) : undefined,
           maxRetries: 0,
         };
         const baseHeaders = {

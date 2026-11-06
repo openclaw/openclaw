@@ -64,7 +64,8 @@ type Phase =
   | "doctor"
   | "plugins"
   | "targetConfigConvergence"
-  | "completionCache";
+  | "completionCache"
+  | "gatewayRestoration";
 type DoctorPhase = "doctor" | "targetConfigConvergence";
 type Outcome = "completed" | "failed" | "warning" | "skipped" | "deferred";
 
@@ -109,6 +110,10 @@ export class UpdateFinalizationLifecycle {
 
   get ownsUpdateRun(): boolean {
     return this.ownsRun;
+  }
+
+  get ownsUpdateRepairRun(): boolean {
+    return this.ownsRepairRun;
   }
 
   attachLedger(repair = false, reportResult = false): string {

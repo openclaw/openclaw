@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../test/helpers/temp-dir.js";
-import { ExpectedCliError } from "./cli/failure-output.js";
+import { ExpectedCliError } from "./cli/expected-cli-error.js";
 import { runMainOrRootHelp } from "./entry.js";
 import type { PluginRuntime } from "./plugin-sdk/runtime-store.js";
 import { buildPluginApi } from "./plugins/api-builder.js";

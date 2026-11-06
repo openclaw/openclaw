@@ -22,6 +22,7 @@ import {
   isCommandLaneTaskTimeoutError,
 } from "../../../process/command-queue.js";
 import type {
+  CommandQueueAdmissionOptions,
   CommandQueueEnqueueOptions,
   CommandQueueTaskDeadline,
 } from "../../../process/command-queue.types.js";
@@ -37,10 +38,8 @@ import {
   type SessionControllerWatchdogAttempt,
   type SessionWatchdogWait,
 } from "../../../sessions/session-controller.watchdog.js";
-import {
-  getAdmittedRunDelegatedAuthority,
-  isPreparedRunRestartRecovery,
-} from "../../admitted-run-context.js";
+import { createPendingPromiseTracker } from "../../../shared/pending-promises.js";
+import { getAdmittedRunDelegatedAuthority } from "../../admitted-run-context.js";
 import { createAgentRunDirectAbortError } from "../../run-termination.js";
 import { beginForegroundSessionMaintenance } from "../../session-maintenance/coordinator.js";
 import { withSessionPlacementTurnAdmission } from "../../session-placement-admission.js";
@@ -77,6 +76,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     sessionKey: initialParams.sessionKey,
     runId: initialParams.runId,
     requesterSessionKey: initialParams.spawnedBy ?? undefined,
+    modelFallbackCandidate: initialParams.isFinalFallbackAttempt !== undefined,
   };
   const sessionLanePolicy = resolveEmbeddedRunSessionLanePolicy(
     initialParams.trigger,
@@ -120,12 +120,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
   let ownedGlobalCapacityWaits = 0;
   let activeGlobalCapacityTickets = 0;
   const pendingGlobalExecutions = new Set<Promise<unknown>>();
-  const trackGlobalExecution = <T>(run: Promise<T>): Promise<T> => {
-    const release = () => pendingGlobalExecutions.delete(run);
-    pendingGlobalExecutions.add(run);
-    void run.then(release, release);
-    return run;
-  };
+  const trackGlobalExecution = createPendingPromiseTracker(pendingGlobalExecutions);
   let releaseQueuedRunContext: ReturnType<typeof retainQueuedAgentRunContext>;
   let queuedRunAbortSignal: AbortSignal | undefined;
   let releaseCapacityWait: (() => void) | undefined;
@@ -288,9 +283,9 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     return laneTaskTimeoutError;
   };
   const throwIfAborted = () => {
-    // Bind only this lane's admitted claim; queued children can inherit a closed parent.
-    assertPlacementCurrent?.();
     if (!abortSignal.aborted) {
+      // Cancellation retains its original reason even after cleanup closes the claim.
+      assertPlacementCurrent?.();
       return;
     }
     const reason = resolveLaneTimeoutError() ?? abortSignal.reason;
@@ -384,42 +379,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       }
       // Queue waits can outlive durable harness and placement bindings.
       // Recheck and claim only after lifecycle admission, before context or hooks execute.
-      const preparedAdmission = params.preparedRunAdmission;
-      const restartRecovery = preparedAdmission
-        ? isPreparedRunRestartRecovery(preparedAdmission, params.runId)
-        : undefined;
-      const claimWriter = () => claimAgentSessionWriter(params);
-      const writerClaim = restartRecovery
-        ? await (async () => {
-            const target = params.sessionTarget;
-            if (!target?.agentId || !target.sessionKey || !target.storePath) {
-              throw new Error("Restart recovery presentation has no owned transcript target");
-            }
-            const { withRestartRecoveryPresentation } =
-              await import("../../main-session-recovery/main-session-recovery-presentation.js");
-            return withRestartRecoveryPresentation({
-              target: {
-                ...target,
-                agentId: target.agentId,
-                sessionKey: target.sessionKey,
-                sessionId: params.sessionId,
-                storePath: target.storePath,
-              },
-              runId: params.runId,
-              claimWriter,
-              assertCurrent: () => {
-                throwIfAborted();
-                assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-                if (
-                  !preparedAdmission ||
-                  !isPreparedRunRestartRecovery(preparedAdmission, params.runId)
-                ) {
-                  throw new Error("Restart recovery presentation lost its prepared source");
-                }
-              },
-            });
-          })()
-        : await claimWriter();
+      const writerClaim = await claimAgentSessionWriter(params);
       if (writerClaim) {
         params = {
           ...params,
@@ -505,7 +465,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
         noteLaneWaitIfBusy(options.globalLane);
       }
       // Only explicit preparation waits release capacity; timeouts retain raw-task custody.
-      const queueOptions: CommandQueueEnqueueOptions = {
+      const queueOptions: CommandQueueAdmissionOptions = {
         taskIdentity,
         abortSignal,
         maxConcurrent: options.getParams().swarmExecutionLane?.maxConcurrent,
@@ -725,6 +685,16 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     laneTaskAbortController,
     noteLaneTaskProgress,
     setLaneTaskDeadline,
+    // Preparation has its own run budget; active auth uses execution time, without teardown grace.
+    getExecutionDeadline: (): CommandQueueTaskDeadline | undefined =>
+      !activeAttemptOwner
+        ? undefined
+        : laneTaskDeadline?.kind === "bounded"
+          ? {
+              kind: "bounded",
+              deadlineAtMs: laneTaskDeadline.deadlineAtMs - EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
+            }
+          : laneTaskDeadline,
     createAttemptControls,
     throwIfAborted,
     assertCurrent,

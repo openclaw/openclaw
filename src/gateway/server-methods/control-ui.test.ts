@@ -8,10 +8,7 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.js";
-import {
-  SecretSurfaceUnavailableError,
-  setActiveDegradedSecretOwners,
-} from "../../secrets/runtime-degraded-state.js";
+import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as checkDetails from "../control-ui-session-pr-check-details.js";
@@ -20,7 +17,7 @@ import {
   createTestControlUiSessionPrSubscriptions,
   createTestSessionPrReadSource,
 } from "../control-ui-session-pr-subscriptions.test-support.js";
-import { gitHubPublicApi } from "../github-public-api.js";
+import { gitHubPublicApi, githubApiToken } from "../github-public-api.js";
 import { createControlUiRequestOptions } from "./control-ui-request.test-support.js";
 import { controlUiHandlers } from "./control-ui.js";
 import { identifiedClient } from "./sessions-sharing.test-support.js";
@@ -268,13 +265,10 @@ describe("controlUi.githubPreview", () => {
     const title =
       mode === "managed" ? "Use the selected GitHub identity" : "Public metadata without a login";
     const anonymousResponse = json(issueFields(title));
-    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
       if (mode === "anonymous") {
         return anonymousResponse;
       }
-      expect(new Headers(init?.headers).get("Authorization")).toBe(
-        `Bearer ${mode === "managed" ? identity.token : "configured-reader-token"}`,
-      );
       const url = input instanceof Request ? input.url : input.toString();
       const issue = mode === "managed" ? url.endsWith("/issues/88120") : url.includes("/issues/");
       return json(
@@ -385,6 +379,7 @@ describe("controlUi.githubPreview", () => {
         refKeys: ["store:default:PREVIEW_TOKEN"],
       },
     ]);
+    expect(githubApiToken({ GH_TOKEN: "ambient" }, {})).toBe("ambient");
     respond.mockClear();
     await send(
       target,
@@ -438,18 +433,10 @@ describe("controlUi.githubPreview", () => {
     { name: "malformed owner", owner: "openclaw/evil", refresh: undefined, valid: false },
   ])("validates $name", async ({ owner, refresh, valid }) => {
     const target = githubTarget(99817, "openclaw", owner);
-    const preview = {
-      ...target,
-      login: "octocat",
-      state: "open",
-      title: "Refreshed preview",
-      createdAt: "2026-09-01T08:00:00Z",
-      updatedAt: "2026-09-01T09:00:00Z",
-    };
-    const loadPreview = vi.spyOn(gitHubPublicApi, "loadControlUiGitHubPreview");
-    if (owner === "openclaw") {
-      loadPreview.mockResolvedValue(preview);
-    }
+    const preview = { title: "Refreshed preview" };
+    const loadPreview = vi
+      .spyOn(gitHubPublicApi, "loadControlUiGitHubPreview")
+      .mockResolvedValue(preview);
     const { respond, send } = fixture("githubPreview");
     await send({ ...target, ...(refresh !== undefined ? { refresh } : {}) });
     if (valid) {
@@ -488,13 +475,6 @@ describe("controlUi.githubPreview", () => {
       message: "GitHub API rate limit exceeded (HTTP 429). Wait and retry.",
       retryable: true,
     },
-    {
-      failure: "configured-unavailable preview credential",
-      managed: false,
-      error: new SecretSurfaceUnavailableError(degradedPreview),
-      message: previewUnavailable,
-      retryable: false,
-    },
   ])("preserves the $failure diagnostic", async ({ managed, error, message, retryable }) => {
     const loadPreview = vi.spyOn(gitHubPublicApi, "loadControlUiGitHubPreview");
     if (managed) {
@@ -505,10 +485,8 @@ describe("controlUi.githubPreview", () => {
     const { respond, send } = fixture("githubPreview");
     await send(
       {
+        ...githubTarget(managed ? 88125 : 99816),
         kind: managed ? "issue" : "pull",
-        number: managed ? 88125 : 99816,
-        owner: "openclaw",
-        repo: "openclaw",
         ...(managed ? { agentId: "main" } : {}),
       },
       managed

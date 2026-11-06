@@ -4,35 +4,41 @@
 }
 
 /* Account identity remains recognizable while a cold profile photo resolves. */
-.sidebar-identity-card .viewer-avatar.is-pending > img {
+:is(.sidebar-identity-card, .sidebar-identity-menu__avatar) .viewer-avatar.is-pending > img {
   display: none;
 }
 
-.sidebar-identity-card .viewer-avatar.is-pending > .viewer-avatar__fallback {
+:is(.sidebar-identity-card, .sidebar-identity-menu__avatar)
+  .viewer-avatar.is-pending
+  > .viewer-avatar__fallback {
   display: grid;
   visibility: visible;
 }
 
 .sidebar--rail .sidebar-shell__footer {
-  min-height: 37px;
-  padding-block: 4px;
+  min-height: 0;
 }
 
-.sidebar--rail .sidebar-shell__connection,
-.sidebar--rail .sidebar-shell__footer .gateway-status--row {
-  height: 28px;
+.sidebar--rail .sidebar-shell__content {
+  position: relative;
+}
+
+/* Reconnecting feedback floats over the list without reserving healthy-state space. */
+.sidebar--rail .sidebar-shell__connection {
+  position: absolute;
+  inset-inline: calc(-1 * var(--sidebar-pad-x));
+  bottom: 0;
+  padding: 4px var(--sidebar-pad-x);
+  border-block-start: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  background: var(--sidebar-bg);
 }
 
 .sidebar-shell__connection > .gateway-status-tooltip {
   display: flex;
 }
 
-.sidebar--rail .sidebar-shell__footer .gateway-status--connected {
-  color: var(--muted);
-}
-
-.sidebar--rail .sidebar-shell__footer .gateway-status--connected .gateway-status__icon {
-  color: var(--ok);
+.sidebar--rail .sidebar-shell__connection .gateway-status--row {
+  height: 28px;
 }
 
 .sidebar--rail .sidebar-shell {
@@ -67,6 +73,7 @@
   --sidebar-rail-control-size: 36px;
   --sidebar-rail-action-size: 30px;
   --sidebar-rail-glyph-size: 19px;
+  --sidebar-rail-item-gap: 8px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -74,7 +81,7 @@
   min-width: 0;
   min-height: 0;
   padding: 8px 4px;
-  gap: 8px;
+  gap: var(--sidebar-rail-item-gap);
   border-inline-end: var(--shell-divider-size) solid var(--resize-handle-rest-color);
   background: var(--sidebar-rail-surface, transparent);
 }
@@ -85,7 +92,7 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: var(--sidebar-rail-item-gap);
 }
 
 .sidebar-rail__pins {
@@ -120,16 +127,13 @@
   line-height: 1;
 }
 
-.sidebar-rail
-  :is(
-    .sidebar-rail__button,
-    .nav-item,
-    .sidebar-brand__icon,
-    .sidebar-issues-button,
-    .sidebar-agent-card__main,
-    .sidebar-workspace-header__main,
-    .sidebar-identity-card
-  ) {
+.sidebar-rail .sidebar-rail__button,
+.sidebar-rail .nav-item,
+.sidebar-rail .sidebar-brand__icon,
+.sidebar-rail .sidebar-issues-button,
+.sidebar-rail .sidebar-agent-card__main,
+.sidebar-rail .sidebar-workspace-header__main,
+.sidebar-rail .sidebar-identity-card {
   --sidebar-rail-control-surface: var(--sidebar-rail-background);
   display: flex;
   align-items: center;
@@ -224,14 +228,16 @@
 
 .sidebar-rail__create .sidebar-new-session:hover:not(:disabled, [aria-disabled="true"]) {
   background: var(--sidebar-rail-action-hover-bg);
+  color: var(--accent-foreground);
 }
 
 .sidebar-rail__create .sidebar-new-session:active:not(:disabled, [aria-disabled="true"]) {
   background: var(--sidebar-rail-action-active-bg);
+  color: var(--accent-foreground);
 }
 
 .sidebar-rail__create .sidebar-new-session:focus-visible {
-  outline-color: var(--accent-foreground);
+  outline-color: var(--ring);
 }
 
 .sidebar-rail__create .sidebar-new-session:is(:disabled, [aria-disabled="true"]) {
@@ -292,7 +298,7 @@
   flex-direction: column;
   min-height: 0;
   width: var(--sidebar-rail-control-size);
-  gap: 8px;
+  gap: var(--sidebar-rail-item-gap);
   padding: 0;
   border: 0;
 }
@@ -304,7 +310,7 @@
   transform: none;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--sidebar-rail-item-gap);
 }
 
 .sidebar-rail .sidebar-identity-anchor {
@@ -397,6 +403,7 @@
    surface across the pin slot so tags and multi-selection keep one owner. */
 .sidebar-pages__entry {
   --sidebar-pages-pin-width: 28px;
+  --sidebar-session-row-min-height: 30px;
 
   display: flex;
   align-items: center;
@@ -414,21 +421,36 @@
 
 .sidebar-pages__entry:has(.nav-item):where(:hover) {
   background: var(--surface-hover);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 72%, transparent);
 }
 
 .sidebar-pages__entry:has(.nav-item--active) {
   background: var(--surface-selected);
-  box-shadow: inset 0 0 0 1px var(--navigation-selected-border);
 }
 
 .sidebar-pages__entry:has(.nav-item--active):hover {
   background: var(--surface-selected-hover);
 }
 
+/* Page links take the session rows' rhythm: 30px fill, 15px muted icon, 13px title. */
 .sidebar-pages__entry .nav-item {
+  min-height: var(--sidebar-session-row-floor, 30px);
   background: transparent;
   border-color: transparent;
+}
+
+.sidebar-pages__entry .nav-item__icon {
+  color: var(--muted);
+  opacity: 1;
+}
+
+.sidebar-pages__entry .nav-item__icon svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.75px;
+}
+
+.sidebar-pages__entry .nav-item__text {
+  letter-spacing: -0.008em;
 }
 
 .sidebar-pages__entry:hover
@@ -449,17 +471,16 @@
 }
 
 .sidebar-pages__entry .sidebar-recent-session::after {
-  inset-inline-end: calc(-1px - var(--sidebar-pages-pin-width));
+  inset-block: 0;
+  inset-inline-end: calc(-1 * var(--sidebar-pages-pin-width));
 }
 
 .sidebar-pages__entry:hover .sidebar-recent-session {
   --session-row-bg: var(--session-row-hover-tint, var(--surface-hover));
-  --session-row-border: color-mix(in srgb, var(--border) 72%, transparent);
 }
 
 .sidebar-pages__entry:hover .sidebar-recent-session--active {
   --session-row-bg: var(--surface-selected-hover);
-  --session-row-border: var(--navigation-selected-border);
 }
 
 .sidebar-pages__entry:hover .sidebar-recent-session--selected {
@@ -475,7 +496,7 @@
   border: 0;
   border-radius: var(--radius-md);
   background: transparent;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--muted) 82%, var(--sidebar-bg, var(--bg)));
   opacity: 0;
 }
 
@@ -497,12 +518,6 @@
 
 .sidebar-pages__pin--pinned svg {
   fill: currentColor;
-}
-
-.sidebar-pages__heading {
-  padding: 6px 8px;
-  color: var(--muted);
-  font-size: var(--font-size-sm);
 }
 
 /* Match the 44px session toolbar centerline without changing drawer or native clearance. */
@@ -555,16 +570,69 @@ html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-she
   padding-top: 0 !important;
 }
 
+/* One 40px step for every control; blocks add a fixed 8px beyond the step. */
+.shell--mobile-nav .sidebar-rail {
+  --sidebar-rail-control-size: 36px;
+  --sidebar-rail-action-size: 30px;
+  --sidebar-rail-item-gap: 4px;
+  --sidebar-rail-block-gap: 8px;
+  flex-basis: calc(48px + var(--shell-divider-size));
+  align-items: flex-start;
+  padding-block: 12px;
+  padding-inline: 6px 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.shell--mobile-nav
+  .sidebar-rail
+  :is(
+    .sidebar-rail__button,
+    .nav-item,
+    .sidebar-brand__icon,
+    .sidebar-issues-button,
+    .sidebar-agent-card__main,
+    .sidebar-workspace-header__main,
+    .sidebar-identity-card
+  ) {
+  border-radius: calc(10px * var(--openclaw-corner-radius-scale, 1));
+}
+
+.shell--mobile-nav .sidebar-rail__create {
+  margin-block-end: calc(var(--sidebar-rail-block-gap) - var(--sidebar-rail-item-gap));
+  padding-bottom: calc(
+    var(--sidebar-rail-block-gap) -
+      (var(--sidebar-rail-control-size) - var(--sidebar-rail-action-size)) / 2
+  );
+  border-bottom: var(--shell-divider-size) solid
+    var(--sidebar-rail-divider-color, var(--resize-handle-rest-color));
+}
+
+.shell--mobile-nav .sidebar-rail__pins {
+  align-self: flex-start;
+  width: calc(var(--sidebar-rail-control-size) + 4px);
+  min-height: 0;
+  margin-block-start: calc(var(--sidebar-rail-block-gap) - var(--sidebar-rail-item-gap) - 2px);
+}
+
+.shell--mobile-nav .sidebar-rail__bottom {
+  margin-block-start: calc(var(--sidebar-rail-block-gap) - var(--sidebar-rail-item-gap));
+}
+
+.shell--mobile-nav .sidebar-rail .sidebar-footer-bar__home .session-glyph__ring {
+  inset: -5px;
+}
+
 @media (hover: none), (pointer: coarse) {
-  .sidebar-rail {
-    --sidebar-rail-control-size: 44px;
-    --sidebar-rail-action-size: 44px;
+  .shell:not(.shell--mobile-nav) .sidebar-rail {
+    --sidebar-rail-control-size: 38px;
+    --sidebar-rail-action-size: 38px;
     flex-basis: 52px;
   }
 
   .sidebar-pages__pin {
     opacity: 1;
-    height: 44px;
+    height: 38px;
   }
 }
 
@@ -638,14 +706,6 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
   gap: 6px;
 }
 
-.sidebar-session-toolbar__collapse {
-  margin-inline-start: auto;
-}
-
-.sidebar-session-toolbar .sidebar-session-toolbar__collapse {
-  margin-inline-start: 0;
-}
-
 /* A growing section toggle would cover the row's empty space, which must stay
    non-interactive so native hosts can drag the window from it. */
 .sidebar-panel-header > .sidebar-session-group-toggle {
@@ -664,21 +724,94 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
   min-width: 0 !important;
 }
 
+.sidebar-session-owner-filter > div,
 .sidebar-session-owner-filter .picker-select__trigger {
-  gap: 4px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.sidebar-session-owner-filter .picker-select__trigger {
+  justify-content: flex-start;
+  gap: 5px;
+  width: auto;
   min-height: 30px;
-  padding: 4px 6px;
+  padding: 4px 6px 4px 5px;
   border: 0;
+  border-radius: var(--radius-sm);
+  corner-shape: superellipse(1.5);
   background: transparent;
   font-weight: 600;
 }
 
+.sidebar-session-owner-filter .picker-select__copy {
+  flex: 0 1 auto;
+}
+
 .sidebar-session-owner-filter .picker-select__chevron {
-  margin-inline-start: 0;
+  margin-inline-start: -2px;
+  color: var(--muted);
+}
+
+.sidebar-session-owner-filter .picker-select__chevron svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 1.75px;
+}
+
+.sidebar-session-owner-filter .picker-select__leading .viewer-avatar {
+  width: 18px;
+  height: 18px;
 }
 
 .sidebar-session-owner-filter.picker-select--sheet .picker-select__trigger .picker-select__chevron {
   transform: rotate(90deg);
+}
+
+/* In the phone drawer the choice page floats over the list as a card. */
+.sidebar-session-owner-filter.picker-select--sheet .picker-select__menu {
+  /* Short rosters hug their rows; long ones stop at the drawer's bottom inset. */
+  inset: var(--space-2) var(--space-2) auto;
+  max-height: calc(100% - var(--space-2) * 2);
+  padding: var(--space-3) var(--space-3) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--overlay-modal-radius);
+  background: var(--menu-surface);
+  box-shadow: var(--menu-shadow);
+  backdrop-filter: var(--menu-backdrop);
+}
+
+/* The card covers its trigger, so the trigger's open ring must not show through. */
+.sidebar-session-owner-filter.picker-select--sheet .picker-select__trigger[aria-expanded="true"] {
+  box-shadow: none;
+}
+
+/* Names keep one line; the full-width label box fades its end instead of wrapping
+   or adding an ellipsis, so names that end before the fade zone stay untouched. */
+.sidebar-session-owner-filter.picker-select--sheet .picker-select__option .picker-select__copy {
+  flex: 1 1 auto;
+}
+
+.sidebar-session-owner-filter.picker-select--sheet .picker-select__option .picker-select__label {
+  white-space: nowrap;
+  text-overflow: clip;
+  mask-image: linear-gradient(
+    to right,
+    black calc(100% - 48px),
+    rgb(0 0 0 / 45%) calc(100% - 20px),
+    transparent
+  );
+}
+
+.sidebar-session-owner-filter.picker-select--sheet:dir(rtl)
+  .picker-select__option
+  .picker-select__label {
+  mask-image: linear-gradient(
+    to left,
+    black calc(100% - 48px),
+    rgb(0 0 0 / 45%) calc(100% - 20px),
+    transparent
+  );
 }
 
 .sidebar-session-owner-filter .picker-select__trigger:hover {
@@ -688,13 +821,6 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
 .sidebar--rail .sidebar-session-toolbar__button {
   width: 28px;
   height: 28px;
-}
-
-.sidebar--rail .sidebar-session-toolbar__button.sidebar-session-sort {
-  width: auto;
-  max-width: 50%;
-  gap: 2px;
-  opacity: 1;
 }
 
 html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-panel-header {

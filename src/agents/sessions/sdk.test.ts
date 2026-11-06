@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterEach, assert, expect, it, vi } from "vitest";
+import { attachInternalToolExecutionPreparer } from "../../../packages/agent-core/src/internal-hooks.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import type { ImageContent, Model, SimpleStreamOptions } from "../../llm/types.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
@@ -12,7 +13,6 @@ import {
 import { finalizeRuntimePromptImages } from "../../media/runtime-prompt-image-provenance.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
 import type { AgentTool, AgentMessage } from "../runtime/index.js";
-import { attachInternalToolExecutionPreparer } from "../runtime/internal-hooks.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import {
   createAssistant,

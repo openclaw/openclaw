@@ -5,7 +5,7 @@ import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";
@@ -20,7 +20,7 @@ import { SubagentDesktopAvatar } from "./chat-subagent-avatar.tsx";
 import { ChatSubagentsNative } from "./chat-subagents-native.tsx";
 import type { createSubagentsPresentation } from "./chat-subagents-presentation.ts";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 registerEnglishCatalog(registerChatDetailsEnglish);
 
 type Group = "active" | "waiting" | "done" | "stopped" | "failed";
@@ -102,6 +102,8 @@ function DesktopRow(props: {
     <div
       class="subagents-desktop__row"
       data-session-key={props.row.session.key}
+      data-depth={props.row.depth ?? 0}
+      style={{ "--subagent-depth": props.row.depth ?? 0 }}
       data-group={group()}
       role="listitem"
     >
@@ -129,7 +131,7 @@ function DesktopRow(props: {
                     : groupLabel(group())
                 }
               >
-                <span class="subagents-desktop__working">
+                <span class="subagents-desktop__working text-shimmer">
                   {t("chat.subagentsPanel.desktopWorking")}
                 </span>{" "}
                 <Show
@@ -231,7 +233,19 @@ export function ChatSubagentsPanelDesktop(props: ChatSubagentsPanelDesktopProps)
     },
   );
   const allDone = () => props.doneExpanded ?? navigation.showAllDone;
-  const visible = (group: Group) => props.rows.filter((row) => groupFor(row) === group);
+  const families = createMemo(() => {
+    const result: Array<[SubagentsPanelRow, ...SubagentsPanelRow[]]> = [];
+    for (const row of props.rows) {
+      const family = result.at(-1);
+      if (!row.depth || !family) {
+        result.push([row]);
+      } else {
+        family.push(row);
+      }
+    }
+    return result;
+  });
+  const visible = (group: Group) => families().filter(([root]) => groupFor(root) === group);
   const shownGroups = createMemo(() => groups.filter((group) => visible(group).length > 0));
   const open = (row: SubagentsPanelRow, source: HTMLButtonElement) => {
     setNavigation((draft) => {
@@ -320,16 +334,20 @@ export function ChatSubagentsPanelDesktop(props: ChatSubagentsPanelDesktopProps)
                           ? visible("done").slice(0, 10)
                           : visible(group())
                       }
-                      keyed={(row) => row.session.key}
+                      keyed={(family) => family[0].session.key}
                     >
-                      {(row) => (
-                        <DesktopRow
-                          row={row()}
-                          onOpen={open}
-                          createStop={props.createStop}
-                          renderElapsed={props.renderElapsed}
-                          registerOpen={registerOpen}
-                        />
+                      {(family) => (
+                        <For each={family()} keyed={(row) => row.session.key}>
+                          {(row) => (
+                            <DesktopRow
+                              row={row()}
+                              onOpen={open}
+                              createStop={props.createStop}
+                              renderElapsed={props.renderElapsed}
+                              registerOpen={registerOpen}
+                            />
+                          )}
+                        </For>
                       )}
                     </For>
                   </div>
@@ -338,7 +356,7 @@ export function ChatSubagentsPanelDesktop(props: ChatSubagentsPanelDesktopProps)
                       class="subagents-desktop__more"
                       type="button"
                       onClick={() => {
-                        const key = visible("done")[10]?.session.key;
+                        const key = visible("done")[10]?.[0].session.key;
                         const currentScope = scope();
                         setNavigation((draft) => {
                           draft.showAllDone = true;

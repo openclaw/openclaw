@@ -9,7 +9,6 @@ import {
   createConfigRuntimeEnvBase,
   prepareConfigRuntimeEnvLoad,
 } from "./config-env-vars.js";
-import { resolveManagedUnsetPathsForWrite } from "./config-path-mutation.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./config-write-guard.js";
 import { getDeferredPluginMigrationConfigFacts } from "./deferred-plugin-migration-config.js";
 import { resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
@@ -117,21 +116,29 @@ type RuntimeConfigAsyncReader<T> = (() => Promise<T>) & { assertCurrent: () => v
 export function captureRuntimeConfigAsyncReader(options: {
   assertCurrent?: () => void;
   capture: true;
+  observe?: boolean;
   skipPluginValidation?: boolean;
 }): RuntimeConfigAsyncReader<CapturedRuntimeConfigRead>;
 export function captureRuntimeConfigAsyncReader(options?: {
   assertCurrent?: () => void;
   capture?: false;
+  observe?: boolean;
   skipPluginValidation?: boolean;
 }): RuntimeConfigAsyncReader<OpenClawConfig>;
 export function captureRuntimeConfigAsyncReader(
-  options: { assertCurrent?: () => void; capture?: boolean; skipPluginValidation?: boolean } = {},
+  options: {
+    assertCurrent?: () => void;
+    capture?: boolean;
+    observe?: boolean;
+    skipPluginValidation?: boolean;
+  } = {},
 ): RuntimeConfigAsyncReader<OpenClawConfig | CapturedRuntimeConfigRead> {
   const cwd = tryProcessCwd();
   const stage = prepareConfigRuntimeEnvLoad({ previousConfig: {} });
   // Legacy cold IO chooses the root config path before dotenv changes the environment.
   const io = createConfigIO({
     env: stage.env,
+    ...(options.observe === false ? { observe: false } : {}),
     ...(options.skipPluginValidation ? { pluginValidation: "skip" as const } : {}),
   });
   const assertCurrent = () => options.assertCurrent?.();
@@ -236,7 +243,7 @@ export function readCurrentConfigForPolicyCheck(params: {
   return createCurrentConfigReader(params).loadConfig({ skipSuspiciousRecovery: true });
 }
 
-/** Keep the Claw Add policy reader bound to its admitted plugin-state lease. */
+/** Keep the Template Add policy reader bound to its admitted plugin-state lease. */
 export async function withCurrentConfigPolicyReader<T>(
   params: {
     configPath: string;
@@ -493,7 +500,6 @@ export async function writeConfigFile(
           expectedConfigPath: options.expectedConfigPath,
           envSnapshotForRestore: options.envSnapshotForRestore,
         }),
-        unsetPaths: resolveManagedUnsetPathsForWrite(options.unsetPaths),
         explicitSetValueSource: options.explicitSetPaths
           ? (options.explicitSetValueSource ?? cfg)
           : undefined,

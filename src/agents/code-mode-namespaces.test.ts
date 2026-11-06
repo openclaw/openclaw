@@ -43,7 +43,14 @@ describe("Code Mode MCP namespace model", () => {
       content: [{ type: "text", text: "Repository 名称" }],
       structuredContent: { path: "README.md", lines: [1, 2] },
     };
-    const transcript = snapshotToolSearchTargetTranscriptResult(projectMcpCallToolResult(source));
+    const projected = projectMcpCallToolResult(source);
+    const values = vi.spyOn(Object, "values");
+    const transcript = snapshotToolSearchTargetTranscriptResult(projected);
+    const copiedResultArrays = values.mock.calls.filter(
+      ([value]) => Array.isArray(value) && value[0] === 1,
+    );
+    values.mockRestore();
+    expect(copiedResultArrays).toHaveLength(0);
     const transcriptBytes = JSON.stringify(transcript);
     const guest = consumeMcpCodeModeGuestResult(transcript);
     const result = await runtime.invoke("mcp", ["github", "readFile"], [{}], async () => guest);

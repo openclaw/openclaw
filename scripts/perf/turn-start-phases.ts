@@ -8,6 +8,7 @@
 // records a separate diagnostic CPU/Git-trace pass; --git-trace records Git Trace2 alone.
 // --state-dir reuses an existing
 // synthetic fixture after a setup failure; --output must always be new.
+// --now <epoch-ms> shares a fresh fixture clock between arms; otherwise use startup time.
 // Subscriber waterfalls include provider delay; server scope totals are overlapping stage aggregates.
 // Fresh bursts are separated by 31s to expire the base-refresh TTL. Tails at 40 samples are descriptive, not regression gates. All state is synthetic.
 // See docs/reference/session-start-measurement.md for receipts, outputs, and comparison rules.
@@ -18,6 +19,12 @@
 // among the 40 plugins. Memory search stays disabled; no embedding provider is called.
 // --history-turns overrides the seed length; seeded histories require --cold-rounds 0.
 // Warm-only fixtures omit the local origin clone; they exercise existing session workspaces.
+// --worktree-files and --worktree-file-bytes select a bounded synthetic workspace;
+// an existing --state-dir supplies its recorded shape unless explicitly matched.
+// --workspace-mutations cycles host edits, guest edits and guest deletions before
+// warm rounds, then verifies both workspaces converge after every measured turn.
+// --sandbox-turn-timeout-ms raises the harness deadline for large cold fixtures
+// (default 170000, maximum 600000); it does not change Gateway agent timeouts.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -41,6 +48,7 @@ import {
 const { values } = parseArgs({
   options: {
     output: { type: "string" },
+    now: { type: "string" },
     "state-dir": { type: "string" },
     "start-file": { type: "string" },
     port: { type: "string", default: "41920" },
@@ -51,6 +59,10 @@ const { values } = parseArgs({
     "sandbox-image": { type: "string" },
     "cold-rounds": { type: "string" },
     "warm-rounds": { type: "string", default: "10" },
+    "worktree-files": { type: "string" },
+    "worktree-file-bytes": { type: "string" },
+    "workspace-mutations": { type: "boolean", default: false },
+    "sandbox-turn-timeout-ms": { type: "string" },
     "history-turns": { type: "string" },
     "rich-context": { type: "boolean", default: false },
   },
@@ -59,34 +71,58 @@ if (!values.output) {
   throw new Error("--output must name a new directory");
 }
 const output = path.resolve(values.output);
+const stateDir = values["state-dir"]
+  ? path.resolve(values["state-dir"])
+  : path.join(output, "state");
+let fixtureShape = values["state-dir"]
+  ? JSON.parse(readFileSync(path.join(stateDir, "team-shape-summary.json"), "utf8"))
+  : undefined;
 const port = Number(values.port);
 const historyTurns = Number(values["history-turns"] ?? (values["rich-context"] ? "100" : "0"));
 const coldRounds = Number(values["cold-rounds"] ?? (historyTurns ? "0" : "10"));
 const warmRounds = Number(values["warm-rounds"]);
+const now = Number(fixtureShape?.now ?? values.now ?? Date.now());
+const worktreeFiles = Number(values["worktree-files"] ?? fixtureShape?.worktreeFiles ?? 3000);
+const worktreeFileBytes = Number(
+  values["worktree-file-bytes"] ?? fixtureShape?.worktreeFileBytes ?? 256,
+);
+if (
+  ![worktreeFiles, worktreeFileBytes].every(Number.isSafeInteger) ||
+  worktreeFiles < 0 ||
+  worktreeFiles > 500_000 ||
+  worktreeFileBytes < 0 ||
+  worktreeFiles * worktreeFileBytes > 2 * 1024 ** 3 ||
+  (fixtureShape &&
+    (fixtureShape.worktreeFiles !== worktreeFiles ||
+      fixtureShape.worktreeFileBytes !== worktreeFileBytes))
+) {
+  throw new Error(
+    "Use a workspace of at most 500000 files and 2 GiB, matching any supplied fixture",
+  );
+}
 const worktreeLocalOrigin = coldRounds > 0;
 const advanceOrigin = worktreeLocalOrigin && !values["unchanged-origin"];
 if (
-  ![port, coldRounds, warmRounds, historyTurns].every(Number.isSafeInteger) ||
+  ![port, coldRounds, warmRounds, historyTurns, now].every(Number.isSafeInteger) ||
   port < 40000 ||
   port > 65532 ||
   coldRounds < 0 ||
   warmRounds < 1 ||
   historyTurns < 0 ||
-  (historyTurns > 0 && coldRounds > 0)
+  (historyTurns > 0 && coldRounds > 0) ||
+  now < 0
 ) {
   throw new Error(
-    "Use port 40000–65532, nonnegative cold/history counts, positive warm rounds, and zero cold rounds with seeded history",
+    "Use port 40000–65532, nonnegative cold/history counts and epoch-ms clock, positive warm rounds, and zero cold rounds with seeded history",
   );
 }
 mkdirSync(output);
 const entry = path.resolve(values.entry);
-const stateDir = values["state-dir"]
-  ? path.resolve(values["state-dir"])
-  : path.join(output, "state");
 const before = { at: new Date().toISOString(), load: loadavg() };
 const buildInfoPath = path.join(path.dirname(entry), "build-info.json");
 const identity = {
   workload: {
+    now,
     sessions: 10800,
     plugins: 40,
     clients: 65,
@@ -105,8 +141,10 @@ const identity = {
       : {}),
     freshRoundGapMs: 31000,
     warmRoundGapMs: 0,
-    files: 3000,
-    fileBytes: 256,
+    files: worktreeFiles,
+    fileBytes: worktreeFileBytes,
+    workspaceMutations: values["workspace-mutations"],
+    sandboxTurnTimeoutMs: Number(values["sandbox-turn-timeout-ms"] ?? 170_000),
     longTranscriptEntries: 2000,
     longTranscriptSessions: 4,
     providerDelayMs: 200,
@@ -159,20 +197,17 @@ const identity = {
 };
 writeFileSync(path.join(output, "identity.json"), JSON.stringify(identity, null, 2));
 if (!values["state-dir"]) {
-  await generateTeamShapeStressFixture({
+  ({ summary: fixtureShape } = await generateTeamShapeStressFixture({
     stateDir,
     port,
     seed: 1823,
-    now: 1792961880000,
-    worktreeFiles: 3000,
-    worktreeFileBytes: 256,
+    now,
+    worktreeFiles,
+    worktreeFileBytes,
     worktreeLocalOrigin,
     longTranscriptEntries: 2000,
-  });
+  }));
 }
-const fixtureShape = JSON.parse(
-  readFileSync(path.join(stateDir, "team-shape-summary.json"), "utf8"),
-);
 if (
   fixtureShape.sessionCount !== identity.workload.sessions ||
   fixtureShape.longTranscriptEntries !== identity.workload.longTranscriptEntries ||
@@ -257,6 +292,10 @@ const probeArgs = [
   ...(values["git-trace"] || values["cpu-profile"] ? ["--git-trace"] : []),
   ...(values["start-file"] ? ["--start-file", path.resolve(values["start-file"])] : []),
   ...(values["sandbox-image"] ? ["--sandbox-image", values["sandbox-image"]] : []),
+  ...(values["workspace-mutations"] ? ["--turn-start-workspace-mutations"] : []),
+  ...(values["sandbox-turn-timeout-ms"]
+    ? ["--sandbox-turn-timeout-ms", values["sandbox-turn-timeout-ms"]]
+    : []),
   ...(advanceOrigin ? ["--turn-start-advance-origin"] : []),
   "--scenario",
   "chat.send",

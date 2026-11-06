@@ -2,7 +2,9 @@ import { createMemo, createSignal, For, Show } from "solid-js";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
-import { t } from "../../lib/reactive/i18n.ts";
+import { formatUsd } from "../../lib/reactive/format.ts";
+import { getLocale, t } from "../../lib/reactive/i18n.ts";
+import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import "../../components/tooltip.ts";
 import {
   formatAnalysisCost,
@@ -50,12 +52,7 @@ const TOKEN_TYPE_COLORS = {
 function formatAxisCost(value: number, scale: number): string {
   const digits =
     scale >= 10 ? 0 : scale > 0 ? Math.min(8, Math.max(2, Math.ceil(-Math.log10(scale / 2)))) : 2;
-  return value.toLocaleString("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  });
+  return formatUsd(value, digits);
 }
 
 /** Rounds an axis maximum up to 1, 2 or 5 times a power of ten. */
@@ -107,11 +104,8 @@ export function DailyChartCompact(props: {
   const days = () => calendar().days;
   const dates = createMemo(() => days().map((day) => day.date));
   const isTokens = () => props.chartMode === "tokens";
-  // A day with an interrupted response shows its recorded subtotals as lower bounds.
-  const measure = (value: number, index: number) => {
-    const report = days()[index]?.usageReport;
-    return isTokens() ? formatUsageTokens(value, report) : formatAnalysisCost(value, report);
-  };
+  const measure = (value: number) =>
+    isTokens() ? formatUsageTokens(value) : formatAnalysisCost(value);
   const axisLabel = (value: number) =>
     isTokens() ? formatUsageTokens(value) : formatAxisCost(value, scale());
   const series = createMemo((): ChartSeries[] => {
@@ -166,9 +160,7 @@ export function DailyChartCompact(props: {
     dates().map((_, index) => series().reduce((sum, entry) => sum + (entry.values[index] ?? 0), 0)),
   );
   const scale = createMemo(() => niceCeiling(Math.max(...totals(), 0)));
-  const sharesKnown = createMemo(
-    () => props.range.complete && days().every((day) => day.usageReport?.state !== "unavailable"),
-  );
+  const sharesKnown = () => props.range.complete;
   const shares = createMemo(() => {
     const sum = totals().reduce((total, value) => total + value, 0);
     return series().map((entry) => ({
@@ -181,20 +173,22 @@ export function DailyChartCompact(props: {
   const selected = createMemo(() => new Set(props.selectedDays));
   // An object, not the index alone: index 0 must still read as hovering.
   const [hover, setHover] = createSignal<{ index: number } | null>(null);
-  const labelEvery = createMemo(() => Math.max(1, Math.ceil(dates().length / 7)));
+  // The narrowest phones have room for five date labels, not seven.
+  const narrow = createMediaQuery("(max-width: 360px)");
+  const labelEvery = createMemo(() => Math.max(1, Math.ceil(dates().length / (narrow() ? 5 : 7))));
   const dimmed = (index: number) => {
     const active = hover();
     return active
       ? active.index !== index
       : selected().size > 0 && !selected().has(dates()[index] ?? "");
   };
-  const dayLabel = (index: number) => {
+  const dayLabel = (index: number, dateLabel: string) => {
     const day = days()[index];
     if (day && calendar().pending.has(day.date)) {
-      return `${formatFullDate(day.date)}: ${t("usage.daily.pending")}`;
+      return `${dateLabel}: ${t("usage.daily.pending")}`;
     }
-    const tokens = `${formatUsageTokens(day?.totalTokens ?? 0, day?.usageReport)} ${t("usage.metrics.tokens").toLowerCase()}`;
-    return `${formatFullDate(day?.date ?? "")}: ${tokens}, ${formatAnalysisCost(day?.totalCost ?? 0, day?.usageReport)}`;
+    const tokens = `${formatUsageTokens(day?.totalTokens ?? 0)} ${t("usage.metrics.tokens").toLowerCase()}`;
+    return `${dateLabel}: ${tokens}, ${formatAnalysisCost(day?.totalCost ?? 0)}`;
   };
   const tipPosition = (index: number) => {
     const share = (index + 0.5) / Math.max(1, dates().length);
@@ -215,8 +209,7 @@ export function DailyChartCompact(props: {
         </div>
         <SettingsSegmented
           mode="buttons"
-          variant="accent"
-          class="small sessions-toggle"
+          class="sessions-toggle"
           value={props.dailyChartMode}
           onChange={(mode) => props.onDailyChartModeChange(mode)}
           onReselect={(mode) => props.onDailyChartModeChange(mode)}
@@ -240,64 +233,70 @@ export function DailyChartCompact(props: {
           <div class="daily-chart-plot" onPointerLeave={() => setHover(null)}>
             <div class="daily-chart-bars" style={{ "--daily-columns": String(dates().length) }}>
               <For each={dates()} keyed={false}>
-                {(date, index) => (
-                  <button
-                    type="button"
-                    class={[
-                      "daily-bar-wrapper",
-                      {
-                        selected: selected().has(date()),
-                        "daily-bar-wrapper--dim": dimmed(index),
-                        "daily-bar-wrapper--pending": calendar().pending.has(date()),
-                      },
-                    ]}
-                    aria-pressed={selected().has(date()) ? "true" : "false"}
-                    aria-label={dayLabel(index)}
-                    onPointerEnter={() => setHover({ index })}
-                    onFocus={() => setHover({ index })}
-                    onBlur={() => setHover(null)}
-                    onKeyDown={(event: KeyboardEvent) => {
-                      // Shift+Space and Shift+Enter extend the range like Shift-click.
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        props.onSelectDay(date(), event.shiftKey, dates());
-                      }
-                    }}
-                    onClick={(event: MouseEvent) =>
-                      props.onSelectDay(date(), event.shiftKey, dates())
-                    }
-                  >
-                    <span
-                      class={["daily-bar", { "daily-bar--empty": !totals()[index] }]}
-                      style={{
-                        height: `${scale() > 0 ? (((totals()[index] ?? 0) / scale()) * 100).toFixed(2) : 0}%`,
-                      }}
-                    >
-                      <For
-                        each={series().filter((entry) => (entry.values[index] ?? 0) > 0)}
-                        keyed={(entry) => entry.id}
-                      >
-                        {(entry) => (
-                          <span
-                            class="cost-segment"
-                            style={{
-                              background: entry().color,
-                              "flex-grow": String(entry().values[index] ?? 0),
-                            }}
-                          />
-                        )}
-                      </For>
-                    </span>
-                    <span
+                {(date, index) => {
+                  const dateLabel = createMemo(() => {
+                    getLocale();
+                    return formatFullDate(date());
+                  });
+                  return (
+                    <button
+                      type="button"
                       class={[
-                        "daily-bar-label",
-                        { "daily-bar-label--hidden": index % labelEvery() !== 0 },
+                        "daily-bar-wrapper",
+                        {
+                          selected: selected().has(date()),
+                          "daily-bar-wrapper--dim": dimmed(index),
+                          "daily-bar-wrapper--pending": calendar().pending.has(date()),
+                        },
                       ]}
+                      aria-pressed={selected().has(date()) ? "true" : "false"}
+                      aria-label={dayLabel(index, dateLabel())}
+                      onPointerEnter={() => setHover({ index })}
+                      onFocus={() => setHover({ index })}
+                      onBlur={() => setHover(null)}
+                      onKeyDown={(event: KeyboardEvent) => {
+                        // Shift+Space and Shift+Enter extend the range like Shift-click.
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          props.onSelectDay(date(), event.shiftKey, dates());
+                        }
+                      }}
+                      onClick={(event: MouseEvent) =>
+                        props.onSelectDay(date(), event.shiftKey, dates())
+                      }
                     >
-                      {formatDayLabel(date())}
-                    </span>
-                  </button>
-                )}
+                      <span
+                        class={["daily-bar", { "daily-bar--empty": !totals()[index] }]}
+                        style={{
+                          height: `${scale() > 0 ? (((totals()[index] ?? 0) / scale()) * 100).toFixed(2) : 0}%`,
+                        }}
+                      >
+                        <For
+                          each={series().filter((entry) => (entry.values[index] ?? 0) > 0)}
+                          keyed={(entry) => entry.id}
+                        >
+                          {(entry) => (
+                            <span
+                              class="cost-segment"
+                              style={{
+                                background: entry().color,
+                                "flex-grow": String(entry().values[index] ?? 0),
+                              }}
+                            />
+                          )}
+                        </For>
+                      </span>
+                      <span
+                        class={[
+                          "daily-bar-label",
+                          { "daily-bar-label--hidden": index % labelEvery() !== 0 },
+                        ]}
+                      >
+                        {index % labelEvery() === 0 ? formatDayLabel(date()) : ""}
+                      </span>
+                    </button>
+                  );
+                }}
               </For>
             </div>
             <Show when={hover()}>
@@ -307,7 +306,7 @@ export function DailyChartCompact(props: {
                     {formatFullDate(dates()[active().index] ?? "")} ·{" "}
                     {calendar().pending.has(dates()[active().index] ?? "")
                       ? t("usage.daily.pending")
-                      : measure(totals()[active().index] ?? 0, active().index)}
+                      : measure(totals()[active().index] ?? 0)}
                   </strong>
                   <Show when={series().length > 1}>
                     <For each={series().filter((entry) => (entry.values[active().index] ?? 0) > 0)}>
@@ -315,7 +314,7 @@ export function DailyChartCompact(props: {
                         <span>
                           <i style={{ background: entry.color }} />
                           {entry.label}
-                          <b>{measure(entry.values[active().index] ?? 0, active().index)}</b>
+                          <b>{measure(entry.values[active().index] ?? 0)}</b>
                         </span>
                       )}
                     </For>
@@ -357,9 +356,7 @@ export function CostBreakdownCompact(props: { totals: UsageTotals; mode: "tokens
         className,
         labelKey,
         percentage: total === 0 ? 0 : (value / total) * 100,
-        formatted: isTokenMode
-          ? formatUsageTokens(value, totals.usageReport)
-          : formatAnalysisCost(value, totals.usageReport),
+        formatted: isTokenMode ? formatUsageTokens(value) : formatAnalysisCost(value),
       };
     });
 
@@ -394,8 +391,8 @@ export function CostBreakdownCompact(props: { totals: UsageTotals; mode: "tokens
       <div class="cost-breakdown-total">
         {t("usage.breakdown.total")}:{" "}
         {state().isTokenMode
-          ? formatUsageTokens(state().totals.totalTokens, state().totals.usageReport)
-          : formatAnalysisCost(state().totals.totalCost, state().totals.usageReport)}
+          ? formatUsageTokens(state().totals.totalTokens)
+          : formatAnalysisCost(state().totals.totalCost)}
       </div>
     </div>
   );

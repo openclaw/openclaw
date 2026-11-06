@@ -20,7 +20,7 @@ export function authorizeSessionDescribe(params: {
   }
   const { cfg, policyConfig } = projection.state;
   for (const target of resolveDirectSessionTargets("sessions.describe", params.requestParams)) {
-    const agent = resolveRequestedSessionAgentId(cfg, target.sessionKey, target.agentId);
+    const agent = resolveRequestedSessionAgentId(cfg, target.sessionKey, target.agentId, "read");
     if (!agent.ok) {
       return agent.error;
     }

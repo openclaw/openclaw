@@ -9,7 +9,7 @@ import {
 } from "../../media/staged-inputs.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import { withWorkspaceHashContext } from "./workspace-hash-memo.js";
-import { prepareWorkspaceReconciliation } from "./workspace-manifest-comparison.js";
+import type { WorkspaceReconciliationPreparation } from "./workspace-manifest-comparison.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import {
   MAX_RECONCILIATION_ENTRIES,
@@ -41,7 +41,7 @@ export async function applyStagedWorkerWorkspace(params: {
   stagingRoot: string;
   baseManifestRef: string;
   currentManifestRef: string;
-  base: WorkerWorkspaceManifest;
+  reconciliation: WorkspaceReconciliationPreparation;
   current: WorkerWorkspaceManifest;
   additionalPaths?: ReadonlySet<string>;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
@@ -59,12 +59,10 @@ export async function applyStagedWorkerWorkspace(params: {
 }): Promise<WorkerWorkspaceApplyResult> {
   return await withWorkspaceHashContext(async (): Promise<WorkerWorkspaceApplyResult> => {
     const root = await fs.realpath(params.root);
-    const {
-      baseNodes,
-      currentNodes,
-      changed,
-      preflight: preflightInput,
-    } = prepareWorkspaceReconciliation(params.base, params.current);
+    const { preflight: preflightInput, includePaths: preparedPaths } = params.reconciliation;
+    const baseNodes = new Map(preflightInput.baseNodes);
+    const currentNodes = new Map(preflightInput.currentNodes);
+    const changed = new Set(preflightInput.changedPaths);
     const buildCacheInputs =
       preflightInput.buildCacheInputs === undefined
         ? undefined
@@ -124,10 +122,10 @@ export async function applyStagedWorkerWorkspace(params: {
     );
     // Git workspaces must keep the eligibility boundary established at dispatch.
     // Local-only ignored files are outside both manifests and must never enter the accepted state.
-    const includePaths = params.current.baseCommit
-      ? new Set([...baseNodes.keys(), ...currentNodes.keys()])
-      : undefined;
-    params.additionalPaths?.forEach((entryPath) => includePaths?.add(entryPath));
+    const includePaths =
+      preparedPaths && params.additionalPaths?.size
+        ? new Set([...preparedPaths, ...params.additionalPaths])
+        : preparedPaths;
     const inspectPaths = () => preflightWorkspaceApply({ root, ...preflightInput });
     const preflight = await inspectPaths();
     const acceptReconciled = async (

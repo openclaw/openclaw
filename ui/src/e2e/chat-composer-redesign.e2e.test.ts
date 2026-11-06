@@ -10,7 +10,6 @@ import {
   bottom,
   layoutBox,
   right,
-  twoFrames,
   exactButton,
   polledFocus,
   polledAttribute,
@@ -62,7 +61,7 @@ suite.define(() => {
           await polledCount(page.locator(".agent-chat__composer-status-band")).toBe(0);
           if (message) {
             await polledText(setupBanner).toContain(message);
-            const setupAction = setupBanner.getByRole("button", { name: "Connect an AI provider" });
+            const setupAction = setupBanner.getByRole("button", { name: "Set up a model" });
             await polledVisible(setupAction).toBe(true);
             expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           } else {
@@ -115,7 +114,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}chat`);
-      await exactButton(page, "Stop generating").waitFor();
+      await exactButton(page, "Stop").waitFor();
       await gateway.emitGatewayEvent("chat", {
         errorDetail: {
           provider: "openai",
@@ -236,9 +235,44 @@ suite.define(() => {
         microphonePicker.evaluate((node) => node.getBoundingClientRect().width);
       await expect.poll(pickerWidth).toBe(0);
       await page.emulateMedia({ reducedMotion: "no-preference" });
+      // Probe the actual hover transition inside its delay, independent of
+      // browser round trips that can outlast the dwell time on a loaded host.
+      const hoverDelay = await microphonePickerShell.evaluateHandle((node) => ({
+        proof: new Promise<{ delay: number; width: number }>((resolve, reject) => {
+          const onTransition = (event: Event) => {
+            if (
+              !(event instanceof TransitionEvent) ||
+              event.target !== node ||
+              event.propertyName !== "width"
+            ) {
+              return;
+            }
+            node.removeEventListener("transitionrun", onTransition);
+            const transition = node
+              .getAnimations()
+              .find(
+                (animation) =>
+                  animation instanceof CSSTransition && animation.transitionProperty === "width",
+              );
+            if (!transition?.effect) {
+              reject(new Error("Missing microphone width transition"));
+              return;
+            }
+            transition.pause();
+            const delay = transition.effect.getTiming().delay ?? 0;
+            transition.currentTime = delay / 2;
+            const width = node.getBoundingClientRect().width;
+            transition.play();
+            resolve({ delay, width });
+          };
+          node.addEventListener("transitionrun", onTransition);
+        }),
+      }));
       await voice.hover();
-      await twoFrames(page);
-      expect(await pickerWidth()).toBe(0);
+      const dwell = await hoverDelay.evaluate(({ proof }) => proof);
+      await hoverDelay.dispose();
+      expect(dwell.delay).toBeGreaterThan(0);
+      expect(dwell.width).toBe(0);
       await expect.poll(pickerWidth).toBeGreaterThanOrEqual(27.5);
       const [voiceBeforeHold, pickerBeforeHold] = await Promise.all([
         voice.boundingBox(),

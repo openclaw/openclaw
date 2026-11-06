@@ -1,7 +1,6 @@
 import { Command } from "commander";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginCliCommandDescriptors } from "../../plugins/cli-root-descriptors.js";
-import type { PluginLoadOptions } from "../../plugins/loader.js";
 import { VERSION } from "../../version.js";
 import {
   addCommandDescriptorsToProgram,
@@ -13,7 +12,7 @@ import { configureProgramHelp, formatProgramHelpOutput } from "./help.js";
 import { getSubCliCommandMetadata } from "./subcli-command-metadata.js";
 
 /** Options for rendering root help without fully registering the live CLI. */
-export type RootHelpRenderOptions = Pick<PluginLoadOptions, "pluginSdkResolution"> & {
+export type RootHelpRenderOptions = {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 };
@@ -22,9 +21,7 @@ export type RootHelpRenderOptions = Pick<PluginLoadOptions, "pluginSdkResolution
 export async function outputRootHelp(renderOptions?: RootHelpRenderOptions): Promise<void> {
   const program = new Command();
   const pluginDescriptors = renderOptions?.config
-    ? await getPluginCliCommandDescriptors(renderOptions.config, renderOptions.env, {
-        pluginSdkResolution: renderOptions.pluginSdkResolution,
-      })
+    ? await getPluginCliCommandDescriptors(renderOptions.config, renderOptions.env)
     : [];
   configureProgramHelp(
     program,

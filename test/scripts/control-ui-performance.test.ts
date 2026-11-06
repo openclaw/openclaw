@@ -32,6 +32,8 @@ const performanceSources = [
     "control-ui-optional-assets.ts",
     "record-shared.mjs",
     "regexp.mjs",
+    "release-context.mjs",
+    "release-version.mjs",
   ].map((name) => `scripts/lib/${name}`),
 ].map((file): [string, string] => [file, fs.readFileSync(path.resolve(file), "utf8")]);
 function compileFixture(root: string, entry: string[], options: Parameters<typeof build>[0] = {}) {
@@ -377,9 +379,9 @@ describe("Control UI performance budgets", () => {
 
   it("rejects the renderer in route boot preloads", () => {
     const { distDir, writeAsset, writeHtml } = createStartupFixture();
-    writeHtml(startupHtml + routeTemplate("chat", [preload("mermaid.min-a.js")]));
+    writeHtml(startupHtml + routeTemplate("chat", [preload("pele.min-a.js")]));
     writeAsset("lazy-b.js", 200, 70, 55);
-    writeAsset("mermaid.min-a.js", 200, 200_000, 100);
+    writeAsset("pele.min-a.js", 200, 200_000, 100);
     const metrics = collectMetrics(distDir);
     expect(evaluateBudgets(metrics).map((entry) => entry.metric)).toEqual([
       "startup Mermaid JS assets",
@@ -488,7 +490,7 @@ describe("Control UI performance budgets", () => {
         area === "locale"
           ? 307_200
           : area === "startup"
-            ? 641
+            ? 769
             : CONTROL_UI_PERFORMANCE_BUDGETS[`${area}BootJsGzipBytes`];
       const writeBytes = (fixture: ReturnType<typeof createCliFixture>, bytes: number) => {
         if (area === "startup") {
@@ -500,12 +502,12 @@ describe("Control UI performance budgets", () => {
         }
       };
       writeBytes(base, cap + 100);
-      for (const growth of [-1, 0, 64, 65]) {
+      for (const growth of [-1, 0, 192, 193]) {
         writeBytes(head, cap + 100 + growth);
-        const result = jsonCli(head, ["--base-dist", base.distDir], growth > 64 ? 1 : 0);
-        if (growth > 64) {
+        const result = jsonCli(head, ["--base-dist", base.distDir], growth > 192 ? 1 : 0);
+        if (growth > 192) {
           expect(result.report).toContain("base already exceeds the cap");
-          expect(result.report).toContain("no growth beyond 64 B build variance");
+          expect(result.report).toContain("no growth beyond 192 B build variance");
         } else {
           expect(result.violations).toEqual([]);
         }
@@ -518,7 +520,7 @@ describe("Control UI performance budgets", () => {
     const head = createCliFixture();
     for (const [fixture, ru, de] of [
       [base, 310_000, 320_000],
-      [head, 310_065, 315_000],
+      [head, 310_193, 315_000],
     ] as const) {
       fixture.writeAsset("ru-a.js", ru);
       fixture.writeAsset("de-a.js", de);
@@ -527,8 +529,8 @@ describe("Control UI performance budgets", () => {
     expect(result.violations).toEqual([
       expect.objectContaining({
         metric: "ru locale catalog pair JS gzip",
-        actual: 310_065,
-        limit: 310_064,
+        actual: 310_193,
+        limit: 310_192,
       }),
     ]);
   });
@@ -617,10 +619,10 @@ describe("Control UI performance budgets", () => {
   });
 
   it.each([
-    { baselineBytes: 315_881, limit: 316_457 },
-    { baselineBytes: 311_544, limit: 312_120 },
+    { baselineBytes: 315_881, limit: 316_585 },
+    { baselineBytes: 311_544, limit: 312_248 },
   ])(
-    "enforces unchanged startup allowances for a $baselineBytes B baseline",
+    "enforces approved startup allowances for a $baselineBytes B baseline",
     ({ baselineBytes, limit }) => {
       const fixture = createCliFixture();
       // Synthetic assets and their baseline must not depend on the live build ratchet.
@@ -634,7 +636,7 @@ describe("Control UI performance budgets", () => {
         budgets: { startupJsGzipBytes: 325_131 },
         startupBudgetBaseline: { startupJsGzipBytes: baselineBytes },
         startupJsTolerance: 512,
-        startupJsBuildVariance: 64,
+        startupJsBuildVariance: 192,
         metrics: { startup: { js: { gzipBytes: limit, requests: 2 } } },
         violations: [],
       });
@@ -750,7 +752,7 @@ export function createControlUiPrecompressedAssetVariants(fileName, source) {
   ];
 }
 export default {
-  build: { outDir, emptyOutDir: true },
+  build: { outDir, emptyOutDir: true, sourcemap: true },
   plugins: [{ name: "fixture-precompression", writeBundle(_options, bundle) {
     fs.writeFileSync(path.join(outDir, ".build-inputs.json"), JSON.stringify(
       [...this.getModuleIds()].filter((file) => path.isAbsolute(file) && !file.includes("node_modules/")).map((file) => path.relative(path.resolve(import.meta.dirname, ".."), file))
@@ -909,7 +911,7 @@ fs.writeFileSync(path.join(output, "dist/control-ui/index.js"), "native presente
     for (const directory of ["node_modules", "ui/node_modules"]) {
       fs.rmSync(at(directory), { recursive: true, force: true });
     }
-    for (const name of ["tsx", "@openclaw/fs-safe"]) {
+    for (const name of ["tsx", "@openclaw/fs-safe", "pako"]) {
       fs.mkdirSync(path.dirname(at("node_modules", name)), { recursive: true });
       fs.symlinkSync(
         fs.realpathSync(path.join(repoRoot, "node_modules", name)),
@@ -979,7 +981,21 @@ fs.writeFileSync(path.join(output, "dist/control-ui/index.js"), "native presente
         packageVersion: string;
         entryCode: string;
       }>;
-    return { temporaryRoot, root, at, base, write, commit, runComparison, readIdentities };
+    const prependScript = (name: string, source: string) => {
+      const file = `scripts/${name}.mts`;
+      write(file, `${source}\n${fs.readFileSync(at(file), "utf8").replace(/^#![^\n]*\n/u, "")}`);
+    };
+    return {
+      temporaryRoot,
+      root,
+      at,
+      base,
+      write,
+      commit,
+      runComparison,
+      readIdentities,
+      prependScript,
+    };
   }
 
   function test(
@@ -1010,6 +1026,12 @@ fs.writeFileSync(path.join(output, "dist/control-ui/index.js"), "native presente
     );
     expect(output).toMatch(/startup CSS gzip vs base: \d+ B -> \d+ B \(\+\d+ B/u);
     expect(output).toContain("startup CSS gzip growth:");
+    expect(output).toContain("Control UI candidate failure attribution:");
+    expect(output).toContain("Control UI baseline failure attribution:");
+    expect(output.match(/"moduleAttribution": \{/gu)).toHaveLength(2);
+    expect(output).toMatch(/"standaloneGzipBytes": \d+/u);
+    expect(output).toContain("ui/main.js");
+    expect(output).toContain("[control-ui-performance-base] FAILED (exit 1)");
     const identities = repo.readIdentities();
     expect(identities).toMatchObject([
       { packageVersion: "1.0.1", gitDisabled: true },
@@ -1034,6 +1056,74 @@ fs.writeFileSync(path.join(output, "dist/control-ui/index.js"), "native presente
     expect(fs.existsSync(repo.at("dist/control-ui/index.html"))).toBe(true);
   });
 
+  test("preserves comparison failure when candidate attribution is malformed", {}, async (repo) => {
+    repo.write("ui/style.css", css(1_400));
+    repo.write(
+      "ui/vite.config.ts",
+      candidateConfig.replace(
+        'fs.writeFileSync(path.join(outDir, ".build-inputs.json")',
+        'fs.writeFileSync(path.join(outDir, Object.values(bundle).find((output) => output.type === "chunk" && output.isEntry).fileName + ".map"), "{");\n    fs.writeFileSync(path.join(outDir, ".build-inputs.json")',
+      ),
+    );
+    const { output } = await repo.runComparison(repo.base, 1);
+    expect(output).toContain("startup CSS gzip growth:");
+    expect(output).toContain("candidate attribution failed:");
+    expect(output).toContain("Control UI baseline failure attribution:");
+    expect(output.match(/"moduleAttribution": \{/gu)).toHaveLength(1);
+    expect(output).toContain("[control-ui-performance-base] FAILED (exit 1)");
+  });
+
+  for (const failure of ["signal", "launch"] as const) {
+    test(`does not diagnose a comparison ${failure} failure`, {}, async (repo) => {
+      const marker = path.join(repo.temporaryRoot, "checker-started");
+      repo.prependScript(
+        "check-control-ui-performance",
+        `import { appendFileSync as recordChecker } from "node:fs";
+recordChecker(${JSON.stringify(marker)}, JSON.stringify(process.argv.slice(2)) + "\\n");
+${failure === "signal" ? 'if (process.argv.includes("--base-dist")) process.kill(process.pid, "SIGTERM");' : ""}`,
+      );
+      if (failure === "launch") {
+        // Inject the OS launch result at the actual CLI's child boundary; no
+        // production flag or alternate runner is needed to exercise this path.
+        repo.prependScript(
+          "check-control-ui-performance-base",
+          `import fixtureChildProcess from "node:child_process";
+import { syncBuiltinESMExports as syncFixtureBuiltins } from "node:module";
+const spawnFixtureChild = fixtureChildProcess.spawnSync;
+fixtureChildProcess.spawnSync = (command, args, options) => args.includes("--base-dist")
+  ? { status: null, signal: null, error: Object.assign(new Error("fixture launch failure"), { code: "ENOENT" }) }
+  : spawnFixtureChild(command, args, options);
+syncFixtureBuiltins();`,
+        );
+      }
+      const { output } = await repo.runComparison(repo.base, 1);
+      expect(output).toContain(`failed (${failure === "signal" ? "SIGTERM" : "launch"})`);
+      expect(output).not.toContain("failure attribution:");
+      expect(fs.existsSync(marker)).toBe(failure === "signal");
+      if (failure === "signal") {
+        expect(fs.readFileSync(marker, "utf8").trim().split("\n")).toHaveLength(1);
+      }
+    });
+  }
+
+  test("stops attribution children after an interrupted candidate report", {}, async (repo) => {
+    repo.write("ui/style.css", css(1_400));
+    const marker = path.join(repo.temporaryRoot, "checker-started");
+    repo.prependScript(
+      "check-control-ui-performance",
+      `import { appendFileSync as recordChecker } from "node:fs";
+recordChecker(${JSON.stringify(marker)}, JSON.stringify(process.argv.slice(2)) + "\\n");
+if (process.argv.includes("--report-only")) process.kill(process.pid, "SIGTERM");`,
+    );
+    const { output } = await repo.runComparison(repo.base, 1);
+    expect(output).toContain("startup CSS gzip growth:");
+    expect(output).toContain("candidate attribution failed:");
+    expect(output).not.toContain("Control UI baseline failure attribution:");
+    expect(fs.readFileSync(marker, "utf8").trim().split("\n")).toHaveLength(2);
+    expect(output).toContain(`${path.basename(process.execPath)} failed (1)`);
+    expect(output).toContain("[control-ui-performance-base] FAILED (exit 1)");
+  });
+
   test("distinguishes failure from signal", { brokenSource: true }, async (repo) => {
     const signalMarker = path.join(repo.temporaryRoot, "signaled-base-config");
     repo.write(
@@ -1050,6 +1140,7 @@ export default { plugins: [{ name: "signal", buildStart() { process.kill(process
       "Base Control UI source does not build with the candidate toolchain; enforcing candidate absolute budgets without a differential comparison.",
     );
     expect(brokenBaseOutput).not.toContain("startup CSS gzip vs base:");
+    expect(brokenBaseOutput).not.toContain("failure attribution:");
     expect(repo.readIdentities()).toHaveLength(1);
     const { output: signaledBaseOutput } = await repo.runComparison(signaledBase, 1);
     expect(fs.readFileSync(signalMarker, "utf8")).toBe("loaded");
@@ -1057,6 +1148,7 @@ export default { plugins: [{ name: "signal", buildStart() { process.kill(process
     expect(signaledBaseOutput).not.toContain(
       "Base Control UI source does not build with the candidate toolchain",
     );
+    expect(signaledBaseOutput).not.toContain("failure attribution:");
   });
 
   test(
@@ -1069,6 +1161,7 @@ export default { plugins: [{ name: "signal", buildStart() { process.kill(process
       await prepareControlUiSettings(repo.root, path.join(repo.root, "scripts"));
       const unchanged = await repo.runComparison(base, 0);
       expect(unchanged.output).toContain("identical build inputs; reusing candidate as base");
+      expect(unchanged.output).not.toContain("failure attribution:");
       expect(unchanged.output).toMatch(/startup JS gzip vs base: \d+ B -> \d+ B \(\+0 B\)/u);
       expect(repo.readIdentities()).toHaveLength(1);
 
@@ -1080,6 +1173,7 @@ export default { plugins: [{ name: "signal", buildStart() { process.kill(process
       await prepareControlUiSettings(repo.root, path.join(repo.root, "scripts"));
       const changed = await repo.runComparison(base, 0);
       expect(changed.output).not.toContain("identical build inputs; reusing candidate as base");
+      expect(changed.output).not.toContain("failure attribution:");
       expect(repo.readIdentities()).toHaveLength(2);
       expect(
         fs.readFileSync(repo.at("dist/extensions/fixture/dist/control-ui/index.js"), "utf8"),

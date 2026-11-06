@@ -1,3 +1,4 @@
+import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { readFileWindowFully, safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { detectMime, kindFromMime } from "@openclaw/media-core/mime";
@@ -5,6 +6,7 @@ import { startsWithSvgRootElement } from "../../packages/gateway-protocol/src/sv
 import { relativePathInsideSandboxRoot, resolveSandboxPathMapping } from "../agents/path-policy.js";
 import { FsSafeError, openLocalFileSafely } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { resolveScratchFilePath } from "../infra/scratch-expiry.js";
 import { assertLocalMediaAllowed, LocalMediaAccessError } from "../media/local-media-access.js";
 import type { MediaProbeResult } from "../media/media-probe.js";
 import { resolveMediaReferenceLocalPathInfo } from "../media/media-reference.js";
@@ -12,6 +14,7 @@ import {
   PlaybackInspectionBusyError,
   resolvePlaybackMetadataForSource,
 } from "../media/playback-transcode.js";
+import { SCRATCH_EXPIRED_MESSAGE } from "../shared/scratch-expiry.js";
 import { resolveUserPath } from "../utils.js";
 import {
   createAssistantMediaTicket,
@@ -19,6 +22,7 @@ import {
   type resolveAssistantMediaPolicy,
   type AssistantMediaTicketPayload,
 } from "./assistant-media-policy.js";
+import { respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
 
 type AssistantMediaAvailability =
   | ({
@@ -28,6 +32,31 @@ type AssistantMediaAvailability =
       sizeBytes?: number;
     } & MediaProbeResult)
   | { available: false; reason: string; code: string; retryable?: boolean };
+
+export async function respondAssistantMediaReadFailure(
+  error: unknown,
+  source: string,
+  res: ServerResponse,
+  publishResponse: (publish: () => void) => Promise<void>,
+): Promise<void> {
+  if (res.destroyed || res.writableEnded) {
+    return;
+  }
+  if (
+    error instanceof Error &&
+    "code" in error &&
+    error.code === "not-found" &&
+    resolveScratchFilePath(source)
+  ) {
+    try {
+      await publishResponse(() => respondPlainText(res, 410, SCRATCH_EXPIRED_MESSAGE));
+      return;
+    } catch {
+      // Expiry disclosure still requires the current session and message authority.
+    }
+  }
+  respondNotFound(res);
+}
 
 export function normalizeAssistantMediaSource(source: string): string | null {
   const trimmed = source.trim();
@@ -127,9 +156,9 @@ export async function openAssistantMedia(
       if (!isPathInside(sandbox.hostRoot, opened.realPath)) {
         throw new LocalMediaAccessError("invalid-path", "Sandbox image backing is unavailable");
       }
-      const { prepareLocalWorkspaceImageRead } =
+      const { prepareLocalWorkspaceFileRead } =
         await import("../agents/sandbox/local-workspace-quiescence.js");
-      assertSourceCurrent = await prepareLocalWorkspaceImageRead({
+      assertSourceCurrent = await prepareLocalWorkspaceFileRead({
         workspaceDir,
         containerRoot: sandbox.containerRoot,
         targets: [
@@ -240,6 +269,16 @@ export async function resolveAssistantMediaAvailability(
       }),
     };
   } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "not-found") {
+      return resolveScratchFilePath(source)
+        ? {
+            available: false,
+            code: "artifact-file-expired",
+            reason: SCRATCH_EXPIRED_MESSAGE,
+            retryable: false,
+          }
+        : { available: false, code: "file-not-found", reason: "File not found" };
+    }
     if (error instanceof PlaybackInspectionBusyError) {
       return {
         available: false,
@@ -250,8 +289,6 @@ export async function resolveAssistantMediaAvailability(
     }
     if (error instanceof FsSafeError) {
       switch (error.code) {
-        case "not-found":
-          return { available: false, code: "file-not-found", reason: "File not found" };
         case "not-file":
           return { available: false, code: "not-a-file", reason: "Not a file" };
         case "invalid-path":
@@ -278,8 +315,6 @@ export async function resolveAssistantMediaAvailability(
         case "network-path-not-allowed":
         case "invalid-root":
           return { available: false, code: "blocked-local-file", reason: "Blocked local file" };
-        case "not-found":
-          return { available: false, code: "file-not-found", reason: "File not found" };
         case "not-file":
           return { available: false, code: "not-a-file", reason: "Not a file" };
         default:

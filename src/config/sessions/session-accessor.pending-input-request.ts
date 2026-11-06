@@ -2,7 +2,6 @@ import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
-import { readSessionSendDelivery } from "../../gateway/session-send-delivery.js";
 import {
   prepareUserTurnTranscriptAnnotation,
   readUserTurnTranscriptAnnotation,
@@ -122,27 +121,6 @@ export function resolvePendingInputReplayRequest(
       const request = matchAcceptedPendingInputMessage(message, accepted.request_hash);
       if (request) {
         return { message, ...request };
-      }
-      const delivery = readSessionSendDelivery(message);
-      if (!delivery) {
-        return original;
-      }
-      // Older peer admission hashed explicit undefined revisions, which JSON storage omits.
-      // Reconstruct only those fields; changed content or identity must still conflict.
-      const candidate = {
-        ...message,
-        __openclaw: {
-          ...message["__openclaw"],
-          sessionSendDelivery: {
-            ...asOptionalRecord(message["__openclaw"]?.sessionSendDelivery),
-            source: { ...delivery.source, lifecycleRevision: delivery.source.lifecycleRevision },
-            target: { ...delivery.target, lifecycleRevision: delivery.target.lifecycleRevision },
-          },
-        },
-      };
-      const legacyRequest = matchAcceptedPendingInputMessage(candidate, accepted.request_hash);
-      if (legacyRequest) {
-        return { ...original, requestHash: legacyRequest.requestHash };
       }
     }
     return original;

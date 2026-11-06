@@ -7,12 +7,18 @@ import type * as Catalog from "./prepared-model-catalog-inspection.js";
 const port = parentPort!;
 let task: Catalog.CatalogInspectionTask;
 let sqliteCopies = 0;
+let copyHookObserved: boolean | undefined;
 let plans: Catalog.CatalogInspection["plans"] = [];
 const sqlite = await import("../../infra/sqlite-snapshot-source.js");
 // Bun updates existing namespace bindings when a module is mocked.
 const copySqlite = sqlite.prepareSqliteReadOnlyLocationSync;
+const copySqliteAsync = sqlite.prepareSqliteReadOnlyLocation;
 mockNativeModuleExports(new URL("../../infra/sqlite-snapshot-source.ts", import.meta.url), {
   ...sqlite,
+  prepareSqliteReadOnlyLocation: (...args: Parameters<typeof copySqliteAsync>) => {
+    sqliteCopies += 1;
+    return copySqliteAsync(...args);
+  },
   prepareSqliteReadOnlyLocationSync: (...args: Parameters<typeof copySqlite>) => {
     sqliteCopies += 1;
     return copySqlite(...args);
@@ -50,7 +56,7 @@ const captureControl = new WeakRef({});
 const { registerResolvedAgentDir, resolveRegisteredAgentIdForDir, unregisterResolvedAgentDir } =
   await import("../agent-dir-registry.js");
 const { resolveUsableCustomProviderApiKey } = await import("../model-auth-provider-config.js");
-const { inspectSharedAuthLegacyRowsReadOnly } =
+const { inspectSharedAuthLegacyRowsReadOnlyAsync } =
   await import("../auth-profiles/shared-store-bootstrap.js");
 
 // Observe input with the real handler so initialization cannot consume queued tasks early.
@@ -59,14 +65,30 @@ port.on = (event, listener) => {
   if (event === "message") {
     port.on = on;
     return on(event, (message: { input: Catalog.CatalogInspectionTask }) => {
-      task = message.input;
-      sqliteCopies = 0;
-      plans = [];
-      const { agentDir, env } = task.value.input;
-      for (const agentId of task.inspection?.existingAgentIds ?? []) {
-        registerResolvedAgentDir({ agentId, agentDir, env });
-      }
-      Reflect.apply(listener, port, [message]);
+      void (async () => {
+        task = message.input;
+        sqliteCopies = 0;
+        plans = [];
+        copyHookObserved = undefined;
+        if (task.inspection?.copyProbePath) {
+          await inspectSharedAuthLegacyRowsReadOnlyAsync(task.inspection.copyProbePath, {
+            artifactPreservingReadOnly: true,
+          });
+          copyHookObserved = sqliteCopies > 0;
+          sqliteCopies = 0;
+        }
+        const { agentDir, env } = task.value.input;
+        for (const agentId of task.inspection?.existingAgentIds ?? []) {
+          registerResolvedAgentDir({ agentId, agentDir, env });
+        }
+        await Reflect.apply(listener, port, [message]);
+      })().catch((error: unknown) => {
+        // Preprocessing failed before the real server could accept the task.
+        // Native worker failure rejects its pending pool request as well.
+        queueMicrotask(() => {
+          throw error;
+        });
+      });
     });
   }
   return on(event, listener);
@@ -79,15 +101,10 @@ port.postMessage = (message: { status: string; value?: object }, transferList) =
       const { input, sourceConfigForSecrets } = task.value;
       const runtimeFacts = facts.getConfigResolutionFacts(input.config);
       const sourceFacts = facts.getConfigResolutionFacts(sourceConfigForSecrets);
-      const { provider, copyProbePath, existingAgentIds, expectedCredential } =
-        task.inspection ?? {};
-      const requestCopies = sqliteCopies;
-      if (copyProbePath) {
-        inspectSharedAuthLegacyRowsReadOnly(copyProbePath, { artifactPreservingReadOnly: true });
-      }
+      const { provider, existingAgentIds, expectedCredential } = task.inspection ?? {};
       const inspection: Catalog.CatalogInspection = {
-        sqliteCopies: requestCopies,
-        ...(copyProbePath ? { copyHookObserved: sqliteCopies > requestCopies } : {}),
+        sqliteCopies,
+        ...(copyHookObserved !== undefined ? { copyHookObserved } : {}),
         plans,
         runtimeFactsAbsent: runtimeFacts === null,
         sourceFactsAbsent: sourceFacts === null,
@@ -152,6 +169,11 @@ port.postMessage = (message: { status: string; value?: object }, transferList) =
     } else {
       post(response, transferList);
     }
-  })();
+  })().catch((error: unknown) => {
+    // Failed inspection must reject the pending worker request instead of losing its reply.
+    queueMicrotask(() => {
+      throw error;
+    });
+  });
 };
 await import("../prepared-model-catalog.worker.js");

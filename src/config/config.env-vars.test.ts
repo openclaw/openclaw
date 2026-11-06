@@ -65,7 +65,7 @@ describe("config env vars", () => {
           OpenClaw_Config_ReadOnly: "1",
           vars: {
             ...Object.fromEntries(
-              `OPENCLAW_CONFIG_READONLY BASH_ENV SHELL HOME ZDOTDIR
+              `OPENCLAW_CONFIG_READONLY OPENCLAW_CONFIG_READONLY_NOTICE BASH_ENV SHELL HOME ZDOTDIR
                OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS
                openclaw_allow_older_binary_destructive_actions OPENCLAW_INCLUDE_ROOTS`
                 .split(/\s+/)
@@ -73,6 +73,7 @@ describe("config env vars", () => {
             ),
             OPENCLAW_DISABLE_GATEWAY_LOCAL_TERMINALS: "0",
             OPENCLAW_DISABLE_CRON_HOST_EXECUTION: "0",
+            OPENCLAW_DEV_RELOAD_BUNDLED_PLUGINS: "1",
             OPENCLAW_NIX_MODE: "1",
             VALID: "literal",
           },

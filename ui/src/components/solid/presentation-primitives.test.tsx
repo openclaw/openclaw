@@ -39,9 +39,11 @@ describe("Solid presentation primitives", () => {
     ));
     expect(view.getAllByRole("status")).toHaveLength(2);
     expect(view.getByRole("status", { name: "Loading…" })).toBeTruthy();
-    expect(view.container.querySelector(".loading-skeleton")?.getAttribute("aria-hidden")).toBe(
-      "true",
-    );
+    const skeletons = [...view.container.querySelectorAll(".skeleton")];
+    expect(skeletons.length).toBeGreaterThan(0);
+    for (const skeleton of skeletons) {
+      expect(skeleton.closest("[aria-hidden='true']")).not.toBeNull();
+    }
     expect(view.container.querySelector(".agent-startup-state")?.textContent).not.toBe("");
   });
 
@@ -74,6 +76,27 @@ describe("Solid presentation primitives", () => {
     expect(retry).toHaveBeenCalledOnce();
     expect(close).toHaveBeenCalledOnce();
     expect(original).not.toHaveBeenCalled();
+  });
+
+  it("keeps panel diagnostics collapsed and redacted", () => {
+    const [diagnostic, setDiagnostic] = createSignal("OPENAI_API_KEY=sk-1234567890abcdef");
+    const view = render(() => (
+      <PanelErrorState
+        title="Couldn’t load this panel."
+        subtitle="Try again."
+        detail={diagnostic()}
+      />
+    ));
+    const details = view.container.querySelector("details")!;
+    expect(details.open).toBe(false);
+    expect(details.querySelector("summary")?.textContent).toBe("Show details");
+    expect(details.textContent).not.toContain("sk-1234567890abcdef");
+    fireEvent.click(details.querySelector("summary")!);
+    expect(details.open).toBe(true);
+    expect(view.getByRole("alert")).not.toBeNull();
+    setDiagnostic("Another diagnostic");
+    flush();
+    expect(view.container.querySelector("details")?.open).toBe(false);
   });
 
   it("supports non-alert panel errors with no details or actions", () => {

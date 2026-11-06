@@ -40,11 +40,7 @@ merge_outcome_stop() {
     [ "$capture_state" = absent ] && [ "$captures" = false ]; then
     echo "Confirmed pre-dispatch abort: no merge request was sent by this attempt. Next: rerun merge-run; if the operation lock was retained, first run its exact lock-recover command after verifying no child tools remain." >&2
   else
-    echo 'Next: investigate; see scripts/AGENTS.md merge-outcome doctrine and `scripts/pr merge-recover`. No automatic merge retry.' >&2
-    if [ -n "${MERGE_OUTCOME_OID:-}" ] && printf '%s\n' "${MERGE_OUTCOME_RECORD:-null}" |
-      jq -e '.phase == "intent" and .route == "auto"' >/dev/null; then
-      echo "After investigation, retire the auto request: scripts/pr merge-recover ${MERGE_OUTCOME_REF##*/} $MERGE_OUTCOME_OID --confirmed-operator-recovery --cancel-auto" >&2
-    fi
+    echo 'Next: investigate the retained outcome. Follow docs/reference/scripts/merge-recovery.md for reconciliation or explicit recovery. No automatic merge retry.' >&2
   fi
   return 1
 }
@@ -194,6 +190,9 @@ merge_outcome_load_local() {
         (.prId | type == "string" and length > 0) and (.head | oid) and (.main | oid) and
         (if has("localHead") then (.localHead | oid) else true end) and
         (.attempt | attempt) and recovery and
+        (if has("workflowAdmission") then
+          (.workflowAdmission | keys == ["binding","from","to"] and all(.[]; oid))
+         else true end) and
         (if has("workflowRecovery") then has("recovery") and
           (.workflowRecovery | keys == ["binding","from","to"] and all(.[]; oid))
          else true end) and
@@ -249,13 +248,25 @@ merge_outcome_load_local() {
       case " $parents " in *" $retained "*) ;; *) merge_outcome_stop "record does not retain required commit $retained"; return 1 ;; esac
       GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "$retained^{commit}" || { merge_outcome_stop "required historical commit $retained is unavailable"; return 1; }
     done
+    if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("workflowAdmission")' >/dev/null; then
+      # Older bound writers preserve the record and predecessor, but do not add
+      # these new fields as direct parents. Their ancestry still retains the proof.
+      local admission_binding admission_from admission_to
+      IFS=$'\t' read -r admission_binding admission_from admission_to < <(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r '.workflowAdmission | [.binding,.from,.to] | @tsv')
+      for retained in "$admission_binding" "$admission_from" "$admission_to"; do
+        GIT_NO_LAZY_FETCH=1 pr_git merge-base --is-ancestor "$retained" "$MERGE_OUTCOME_OID" || {
+          merge_outcome_stop "unretained workflow admission provenance"; return 1;
+        }
+      done
+      pr_batch_wrapper_git workflow-history "$canonical_repo_root" "$pr" "$admission_binding" "$admission_from" >/dev/null &&
+        GIT_NO_LAZY_FETCH=1 pr_git merge-base --is-ancestor "$admission_from" "$admission_to" || {
+        merge_outcome_stop "invalid retained workflow admission provenance"; return 1;
+      }
+    fi
     if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("workflowRecovery")' >/dev/null; then
-      local workflow_binding workflow_from workflow_to workflow_record
+      local workflow_binding workflow_from workflow_to
       IFS=$'\t' read -r workflow_binding workflow_from workflow_to < <(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r '.workflowRecovery | [.binding,.from,.to] | @tsv')
-      workflow_record=$(GIT_NO_LAZY_FETCH=1 pr_git show "$workflow_binding:binding.json") || return 1
-      printf '%s\n' "$workflow_record" | jq -e --arg from "$workflow_from" --arg pr "$pr" \
-        '.version == 1 and .source == $from and .pr == $pr' >/dev/null &&
-        [ "$(GIT_NO_LAZY_FETCH=1 pr_git rev-parse "$workflow_binding^@")" = "$workflow_from" ] &&
+      pr_batch_wrapper_git workflow-history "$canonical_repo_root" "$pr" "$workflow_binding" "$workflow_from" >/dev/null &&
         GIT_NO_LAZY_FETCH=1 pr_git merge-base --is-ancestor "$workflow_from" "$workflow_to" || {
         merge_outcome_stop "invalid retained workflow recovery provenance"; return 1;
       }
@@ -383,7 +394,7 @@ merge_outcome_write() {
   shift
   mark_pr_operation_side_effects_started || return 1
   local parents=()
-  for parent in $(printf '%s\n' "$record" | jq -r '[.head,.main,.landed,.localHead,.legacyRefusal.head,.legacyRefusal.preparedBase,.priorCiAdmin.priorHead,.priorCiAdmin.testedMerge,.headDrift.mergedHead,.cancellation.observedHead,.workflowRecovery.binding,.workflowRecovery.from,.workflowRecovery.to] | unique | .[] | select(. != null)'); do
+  for parent in $(printf '%s\n' "$record" | jq -r '[.head,.main,.landed,.localHead,.legacyRefusal.head,.legacyRefusal.preparedBase,.priorCiAdmin.priorHead,.priorCiAdmin.testedMerge,.headDrift.mergedHead,.cancellation.observedHead,.workflowRecovery.binding,.workflowRecovery.from,.workflowRecovery.to,.workflowAdmission.binding,.workflowAdmission.from,.workflowAdmission.to] | unique | .[] | select(. != null)'); do
     parents+=(-p "$parent")
   done
   [ -z "$MERGE_OUTCOME_OID" ] || parents+=(-p "$MERGE_OUTCOME_OID")
@@ -580,6 +591,8 @@ merge_rest() {
       mode=observe-admission
     fi
   fi
+  # Merge stdin belongs to the dispatch envelope, not repository discovery.
+  [ "$mode" != merge ] || [ -n "$repo" ] || return 1
   [ -n "$repo" ] || repo=$(pr_gh_plain repo view --json id,nameWithOwner,url) || return 1
   node "${BASH_SOURCE[0]%/*}/merge-rest.mjs" "$mode" "$repo" "$pr" "$@"
 }
@@ -602,7 +615,10 @@ merge_outcome_dispatch_squash() (
 
 merge_outcome_dispatch_async() {
   local result
-  result=$(merge_rest merge "$1" "$2" "$3" "$MERGE_OBSERVATION") || return 1
+  result=$(printf '%s\n%s\n' "$3" "$MERGE_OBSERVATION" | jq -cse '
+    if length != 2 then error("merge dispatch envelope requires 2 JSON texts")
+    else {bodySnapshot:.[0],expectedObservation:.[1]} end
+  ' | merge_rest merge "$1" "$2") || return 1
   # Recovery retains this child's capture with the acknowledgement, so finish
   # stdout before recording it; later writes would invalidate retained evidence.
   printf '%s\n' "$result"
@@ -1084,7 +1100,7 @@ merge_outcome_stable() {
   printf 'Merge stability observation: %s\nMerge stability reread: %s\n' \
     "$MERGE_OBSERVATION" "$reread" >&2
   merge_outcome_diagnose "$1" "$reread" "$MERGE_OBSERVATION"
-  merge_outcome_stop "PR or main changed during observation; rerun for read-only reconciliation if intent exists"
+  merge_outcome_stop "PR or main changed during observation; investigate before selecting reconciliation or explicit recovery"
 }
 
 merge_outcome_verify_landed() {
@@ -1262,7 +1278,7 @@ merge_outcome_accept_head_drift() {
     --arg actor "$actor" --arg outcome "$expected_oid" --arg merged "$merged_head" --arg landed "$landed" \
     '.phase="merged" | .landed=$landed | .headDrift={actor:$actor,outcome:$outcome,mergedHead:$merged}')" || return 1
   echo "MERGED pushed head $merged_head (retained auto head $head) as $landed; head-drift receipt retained at $MERGE_OUTCOME_REF."
-  echo "After ownership-checked cleanup, explicitly finalize: scripts/pr merge-complete $pr $MERGE_OUTCOME_OID --confirmed-operator-completion"
+  merge_outcome_print_cleanup_guidance "$pr"
 }
 
 merge_outcome_cancel_auto() {
@@ -1409,7 +1425,16 @@ merge_outcome_comment_body() {
         .ciUrl == ($record.repo.url + "/actions/runs/" + (.runId|tostring) + "/attempts/" + (.runAttempt|tostring))) |
       .ciUrl
     ') || { merge_outcome_stop "incomplete retained prior-CI completion evidence"; return 1; }
-    if [ "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .priorCiAdmin.changeKind)" = pre-existing-failure ]; then
+    if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e '.priorCiAdmin | has("primaryCi")' >/dev/null; then
+      local primary_ci_url
+      primary_ci_url=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -er '
+        def positive: type == "number" and . > 0 and floor == .;
+        . as $record | .priorCiAdmin.primaryCi |
+        select((.runId | positive) and (.runAttempt | positive)) |
+        $record.repo.url + "/actions/runs/" + (.runId|tostring) + "/attempts/" + (.runAttempt|tostring)
+      ') || { merge_outcome_stop "incomplete retained primary-CI completion evidence"; return 1; }
+      printf '\n- Artifact-build failure with successful primary CI: failed artifact run %s; successful primary run %s.\n- Exact prepared head: `%s`; unchanged failure inputs and optional check attribution retained as operator evidence.' "$ci_url" "$primary_ci_url" "$head"
+    elif [ "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .priorCiAdmin.changeKind)" = pre-existing-failure ]; then
       printf '\n- CI with explicitly attributed pre-existing failures: %s\n- Exact prepared head: `%s`; source attribution and independent qualification retained as operator evidence. Cancelled jobs remain unrun coverage. No current-head CI success is claimed.' "$ci_url" "$head"
     else
       printf '\n- Prior successful CI: %s\n- Subsequent conflict changes: reviewed at `%s`; scoped validation retained as operator evidence. No current-head CI success is claimed.' "$ci_url" "$head"
@@ -1466,7 +1491,7 @@ merge_outcome_require_cleanup_absent() {
     [ "$ref_status" -eq 1 ] || { echo "Completion requires local branch $branch to be absent; no deletion attempted." >&2; return 1; }
   done
   ref_status=0
-  pr_git ls-remote --exit-code --refs "https://$MERGE_REPO_HOST/$MERGE_HEAD_REPO.git" "refs/heads/$MERGE_HEAD_REF" >/dev/null || ref_status=$?
+  pr_remote_branch_sha "https://$MERGE_REPO_HOST/$MERGE_HEAD_REPO.git" "$MERGE_HEAD_REF" >/dev/null || ref_status=$?
   [ "$ref_status" -eq 2 ] || { echo "Completion requires authoritative remote branch absence; no deletion attempted." >&2; return 1; }
 }
 
@@ -1531,6 +1556,15 @@ merge_complete() {
   echo "completion comment: $MERGE_COMPLETION_COMMENT_URL"
 }
 
+merge_outcome_print_cleanup_guidance() {
+  local pr="$1"
+  echo "After checking ownership and releasing the checkout's session cwd, run from the persistent checkout with a qualified wrapper."
+  echo "Replace the placeholder path with its absolute path. See docs/reference/scripts/merge-recovery.md#delayed-completion."
+  printf '/path/to/qualified-checkout/scripts/pr gc --pr %s &&\n' "$pr"
+  printf '%s\n' "  pr_cleanup_outcome=\$(git rev-parse --verify refs/openclaw/pr-merge-outcomes/$pr) &&"
+  printf '%s\n' "  /path/to/qualified-checkout/scripts/pr merge-complete $pr \"\$pr_cleanup_outcome\" --confirmed-operator-completion"
+}
+
 merge_outcome_resume() {
   local pr="$1" phase MERGE_COMPLETION_COMMENT_URL
   merge_outcome_reconcile "$pr" || return 1
@@ -1548,6 +1582,8 @@ merge_outcome_resume() {
     retire_pr_workflow_binding "$pr" || return 1
   else
     echo "Merge confirmed; completion pending. Recovery does not repeat comment POST or cleanup. Inspect the completion marker in PR comments and any remaining .worktrees/pr-$pr/local branches; verify their ownership before manual cleanup."
-    echo "After cleanup, explicitly finalize: scripts/pr merge-complete $pr $MERGE_OUTCOME_OID --confirmed-operator-completion"
+    if [ "$phase" != commenting ] || [ -n "$MERGE_COMPLETION_COMMENT_URL" ]; then
+      merge_outcome_print_cleanup_guidance "$pr"
+    fi
   fi
 }

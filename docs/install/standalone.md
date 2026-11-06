@@ -102,6 +102,7 @@ use a JIT build for full speed. Fetched CJS/TypeScript plugins load from disk
 through the normal loader against the compiled SDK in both emitted-JavaScript
 and original-TypeScript AOT builds. The loader transfers compiled SDK exports to
 interpreted plugins; virtual SDK paths do not contain readable source files.
+AOT builds enable `compile.allowCodeFromDisk` so installed plugins, their disk workers, and dynamic sibling imports can run interpreted.
 Missing runtime modules and
 builds with `--disallow-code-generation-from-strings=strict` still report actionable
 guidance. Guest runtimes keep their own qualification requirements; OpenClaw
@@ -157,8 +158,13 @@ do not match their declared types. Type errors still stop compilation.
 
 AOT-only options apply to either input mode:
 
-- `--trim` removes unused compiler/runtime features. `--trim-locales <locale,...>`
-  requires `--trim` or `--trim-allow` and retains the selected locales.
+- `--trim` removes unused compiler/runtime features. Trimmed AOT builds retain
+  the interpreter and the password, TOML, YAML, JSON5, and JSONC APIs for fetched
+  plugins and same-executable children. The builder supplies these
+  `compile.trim.allow` entries because code loaded after compilation cannot
+  retain the features it needs. No API is called eagerly to keep it alive.
+  `--trim-locales <locale,...>` requires `--trim` or `--trim-allow` and retains
+  the selected locales.
 - `--trim-allow run[,jit]` enables trimming while retaining Bun's subprocess runner
   and, optionally, its JIT. Both AOT modes pass these retention options through
   the compiler's build API. The JIT support companion does not inherit AOT options.
@@ -168,6 +174,11 @@ AOT-only options apply to either input mode:
   `=strict` also denies VM string execution. The strict option breaks host NodeVM
   execution. These settings do not prohibit every guest interpreter.
 - `--explain[=<report>]` writes compiler diagnostics. It can be repeated.
+- Compiler analysis uses Bun's defaults. `--aot-disable <name,...>` is an explicit
+  diagnostic opt-out and can be repeated. Bun defines and validates the names;
+  a name supported by one compiler revision may not exist in another. Use an
+  opt-out only for a measured build limitation, then qualify the resulting
+  artifact and record the option in build comparisons.
 - `--aot-log-type-mismatches` inventories mismatches and changes generated code;
   rebuild without it for performance measurements.
 
@@ -401,6 +412,48 @@ exercise native plugin loading. See [macOS signing](/platforms/mac/signing).
 
 ## Update the complete artifact
 
+### Desktop app artifacts
+
+The Tauri companion in `apps/linux` can embed a prebuilt AOT standalone artifact
+on glibc Linux x64/arm64 or Apple silicon macOS. Its build input defaults to
+`OPENCLAW_DESKTOP_RUNTIME=jit`; select AOT explicitly:
+
+```sh
+cd apps/linux/src-tauri
+OPENCLAW_DESKTOP_RUNTIME=aot \
+OPENCLAW_DESKTOP_AOT_ARTIFACT=/absolute/path/to/standalone-aot \
+  pnpm dlx @tauri-apps/cli@2.11.4 build --bundles app \
+  --config '{"bundle":{"createUpdaterArtifacts":false}}'
+```
+
+This command packages a macOS Tauri app. Linux builds use `--bundles deb,appimage`
+with the [AppImage preparation steps](https://github.com/openclaw/openclaw/blob/main/apps/linux/README.md#packaging).
+The normal app workflow never builds the AOT compiler. Produce and qualify the
+standalone artifact separately, then supply the directory containing its
+`manifest.json`, executable, and `runtime/` sidecar. Its OpenClaw version and
+target must match the app build. Keep the recorded source and compiler identity;
+a matching version number alone does not establish qualification.
+
+The desktop manifest embeds the standalone facts alongside `runtime.flavor` and
+an inventory of the staged files. Seeding verifies those bytes; launch selection,
+CLI installation, and Gateway activation follow that manifest. Changing the
+input back to `jit` packages the pinned Bun and matching OpenClaw package. After
+updating an existing app, use **Use bundled runtime…** to activate its runtime.
+The service and CLI retain their current selection until that action succeeds.
+
+AOT remains experimental. Qualify native addons, fetched plugins, and child
+processes against the exact signed executable and sidecar. Linux payloads must
+meet the app's glibc 2.35 and GLIBCXX_3.4.30 floor; packaging cannot lower a
+payload's ABI requirement. macOS Tauri builds require macOS 26.2 or later, with
+hardened runtime and no `allow-jit` or unsigned executable-memory entitlement
+for AOT. macOS Intel uses JIT.
+
+The native macOS app is not switched by this Tauri input. A future native adapter
+can consume the same standalone executable, sidecar, target, source/compiler
+identity, and hashes: select AOT for `darwin-arm64`, keep JIT for `darwin-x64`,
+and let its existing runtime owner handle seeding, launch, and updates. That
+adoption is a separate reviewed app change; all current app defaults remain JIT.
+
 ### Managed Gateway service
 
 Install a complete standalone artifact as the managed Gateway runtime with:
@@ -508,19 +561,23 @@ executable metadata supplies bundled plugin source checks and Doctor contract
 hashes. Installed plugins keep their normal filesystem admission and loading
 rules and live in the configured state directory.
 
-Standalone builds retain native plugin loading, Jiti, and its lazy Babel transformer
-in one host-owned package under
+Standalone builds retain Jiti and its lazy Babel transformer in one host-owned package under
 `runtime/node_modules/@openclaw/plugin-loader/`. The package loads only when a
-plugin needs source transformation or an AOT host loads an external module.
+plugin needs source transformation.
 Native plugin loading leaves Jiti and Babel uninitialized. The `pluginLoader`
 resource category includes the bundle, package metadata, and license.
 
 AOT builds keep bundled plugins and the host SDK in the compiled image. Fetched
-plugins load through the declared external loader and run interpreted against
-that same SDK; installing one does not change the executable. Existing plugin
+plugins run interpreted and receive the compiled SDK's exports through the
+existing module resolver. Disk code never imports the image's virtual files,
+and the host and plugins share the same SDK instances. Installing a plugin does
+not change the executable. Existing plugin
 admission and generation ownership still apply. A paired AOT/JIT build keeps the
 same loader resource snapshot in both sidecars. Strict code-generation policies
 can still reject interpreted plugins with runtime execution guidance.
+
+Due to a compiler limitation, query or fragment imports of disk modules in AOT
+builds do not create separate module instances.
 
 On-demand plugin installs use the declared npm runtime in `runtime/npm/` through
 the standalone executable's Bun mode. This preserves npm registry authentication,

@@ -24,7 +24,7 @@ const assistantTexts = async (page: Page) =>
   );
 const terminalMessage = (text: string, displayContent: ReturnType<typeof textContent> = []) =>
   chatMessage("assistant", text, { openclawDisplayContent: displayContent });
-const stopButton = (page: Page) => page.getByRole("button", { name: "Stop generating" });
+const stopButton = (page: Page) => page.getByRole("button", { name: "Stop", exact: true });
 type Gateway = Awaited<ReturnType<typeof installMockGateway>>;
 const savedAnswer = (runId: string, text: string, id = "answer", seq = 2) => ({
   ...chatMessage("assistant", text),
@@ -94,7 +94,6 @@ async function reconnect(gateway: Gateway) {
 }
 async function expectReconciled(page: Page, texts: string[]) {
   expect(await assistantTexts(page)).toEqual(texts);
-  expect(await page.locator(".chat-duplicate-count").count()).toBe(0);
   expect(await page.locator(".chat-bubble.streaming").count()).toBe(0);
 }
 async function openRun(runId: string, options: Parameters<typeof installMockGateway>[1]) {

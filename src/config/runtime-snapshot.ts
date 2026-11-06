@@ -19,6 +19,7 @@ import {
   captureRuntimeConfigWithSource,
   type CapturedRuntimeConfigRead,
   getRuntimeConfigCapture,
+  recordPublishedRuntimeConfigSource,
 } from "./runtime-config-capture-state.js";
 import { runtimeConfigPublication } from "./runtime-config-publication.js";
 import { configSnapshotsMatch } from "./runtime-config-snapshot-match.js";
@@ -247,6 +248,7 @@ function publishRuntimeConfigSnapshot(
   runtimeConfigSnapshot = config;
   runtimeConfigCapturedSnapshot = captured;
   runtimeConfigSourceSnapshot = sourceConfig ?? null;
+  recordPublishedRuntimeConfigSource(config, sourceConfig ?? config);
   runtimeConfigSnapshotMetadata = metadata;
   if (
     runtimeModelConfigCacheKey === null ||

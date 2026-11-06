@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { captureExecRequestOwners, withExecRequestTurn } from "../infra/exec-request-context.js";
 import type { ManagedRun, RunExit, SpawnInput } from "../process/supervisor/types.js";
@@ -305,12 +305,13 @@ it.each([
     const cleanupScope = createAgentCleanupScope();
     const scopeKey = "scope:sandbox-artifact-cleanup";
     const cleanupFailure = "sandbox artifact cleanup failed";
-    queueRun(async () => createRunExit({ exitCode: commandCode }));
+    const secret = `ghp_${"a".repeat(36)}`;
+    queueRun(async () => createRunExit({ exitCode: commandCode }), "saved process output");
     let run: Awaited<ReturnType<typeof runExecProcess>> | undefined;
     const finalizeExec = vi.fn(async () => {
       await finalization.wait();
       if (fails) {
-        throw new Error(cleanupFailure);
+        throw new Error(`${cleanupFailure}: token=${secret}`);
       }
     });
     try {
@@ -349,8 +350,14 @@ it.each([
         const outcome = await run.promise;
         expect(outcome.status).toBe(fails || commandCode !== 0 ? "failed" : "completed");
         if (fails) {
+          assert(outcome.status === "failed");
           expect(outcome.aggregated).toContain(cleanupFailure);
           expect(run.session.aggregated).toContain(cleanupFailure);
+          expect(outcome.message).toContain(cleanupFailure);
+          expect(outcome.message).not.toContain("saved process output");
+          expect(outcome.reason).toContain("saved process output");
+          expect(outcome.reason.split(cleanupFailure)).toHaveLength(2);
+          expect(JSON.stringify(outcome)).not.toContain(secret);
         }
         expect(finalizeExec).toHaveBeenCalledOnce();
       });
@@ -359,6 +366,39 @@ it.each([
       finalization.release();
       await run?.promise;
     }
+  },
+);
+
+const descendantCleanupFailure = "service child cleanup did not complete before its hard deadline";
+
+it.each([
+  { exitCode: 0, status: "completed", reported: "@1\n\nOpenClaw could not confirm" },
+  {
+    exitCode: 3,
+    status: "completed",
+    reported: "(Command exited with code 3)\n\nOpenClaw could not confirm",
+  },
+  { exitCode: 127, status: "failed", reported: descendantCleanupFailure },
+])(
+  "keeps the observed exit when descendant cleanup is unconfirmed (exitCode=$exitCode)",
+  async ({ exitCode, status, reported }) => {
+    const cleanupScope = createAgentCleanupScope();
+    queueRun(async () => createRunExit({ exitCode }), "@1\n", {
+      waitForExtinction: async () => {
+        throw new Error(descendantCleanupFailure);
+      },
+    });
+    await cleanupScope.run(async () => {
+      const run = await runTestExecProcess({ command: "tmux new -d" });
+      await expect(run.promise).resolves.toMatchObject({
+        status,
+        exitCode,
+        aggregated: expect.stringContaining(reported),
+      });
+      expect(run.session.aggregated).toContain("@1");
+      expect(run.session.cleanupUncertain || run.session.finalizationFailed).toBe(true);
+    });
+    expect(cleanupScope.outcome).toBe("uncertain");
   },
 );
 

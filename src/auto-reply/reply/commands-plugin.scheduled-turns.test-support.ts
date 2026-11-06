@@ -6,8 +6,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
 import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
+import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import { closeSwarmScheduler } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { withAdminIngress } from "../../channels/message-access/operator-authority.test-support.js";
 import {
+  loadSessionEntry,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -25,6 +28,10 @@ import { createGatewayCronAgentDeps } from "../../gateway/server-cron-agent-run.
 import { createGatewayInstanceRuntime } from "../../gateway/server-instance-runtime.js";
 import { createRequestGatewayMethodRegistry } from "../../gateway/server-methods.js";
 import { resetGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import {
+  bindLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../../plugins/legacy-sdk-resource-host.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { waitForPluginCacheRetirement } from "../../plugins/plugin-cache.js";
 import { getPluginInstanceIncarnation } from "../../plugins/plugin-instance-scope.js";
@@ -102,7 +109,10 @@ export async function withCommandPlugin(
     bundled?: boolean;
   } = {},
 ) {
-  await withAdminIngress(async ({ cfg, state, admins, context, gateway }) => {
+  await withAdminIngress(async (ingress) => {
+    const { cfg, state, admins, context, gateway, resolveGatewayContext } = ingress;
+    const sdkResources = new LegacyPluginSdkResourceHost();
+    bindLegacyPluginSdkResourceHost(resolveGatewayContext, sdkResources);
     // The test state restores both bundled-plugin variables when it ends.
     const bundledDist = options.bundled ? state.path("openclaw-package", "dist") : undefined;
     if (bundledDist) {
@@ -194,16 +204,14 @@ export async function withCommandPlugin(
     let agentTurnRuntime: ReturnType<typeof createGatewayInstanceRuntime> | undefined;
     const scheduledResults: Fixture["scheduledResults"] = [];
     const sessionEventPrompts: string[] = [];
+    const previousSubagentRuns = new Set(subagentRuns.keys());
     let fixtureRef: Fixture | undefined;
-    const runSchedulerOwned = createScheduledGatewayRunner(
-      () => gateway,
-      () => registry,
-    );
+    const runSchedulerOwned = createScheduledGatewayRunner(resolveGatewayContext, () => registry);
     const gatewayCronAgentDeps = createGatewayCronAgentDeps({
       deps: {},
       storePath: cronStorePath,
       resolveCronAgent: () => ({ agentId: "main", cfg }),
-      resolveGatewayContext: () => gateway,
+      resolveGatewayContext,
       resolvePluginRegistry: () => registry,
     });
     const createCron = () =>
@@ -244,7 +252,7 @@ export async function withCommandPlugin(
           cron,
           cronStorePath,
           getRuntimeConfig: () => cfg,
-          resolveGatewayContext: () => gateway,
+          resolveGatewayContext,
           validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
           getGatewayMethodRegistry: () => createRequestGatewayMethodRegistry(),
           trackExecution: trackAsyncWork,
@@ -353,7 +361,7 @@ export async function withCommandPlugin(
           });
           agentTurnRuntime = runtime;
           gateway.createAgentTurnFacade = runtime.createAgentTurnFacade;
-          gateway.recoveryRuntime = runtime.recovery;
+          gateway.lifecycleRuntime = runtime.lifecycle;
           gateway.getGatewayMethodRegistry = () => methodRegistry;
         },
       };
@@ -361,7 +369,7 @@ export async function withCommandPlugin(
       await withPluginRuntimeGatewayRequestScope(
         {
           context: gateway,
-          resolveGatewayContext: () => gateway,
+          resolveGatewayContext,
           pluginRegistry: loadedRegistry,
           isWebchatConnect: () => false,
         },
@@ -371,7 +379,30 @@ export async function withCommandPlugin(
     } finally {
       cron.stop();
       await cron.waitForIdle();
+      const queuedChildCleanups = [...subagentRuns.values()].filter(
+        (entry) =>
+          !previousSubagentRuns.has(entry.runId) &&
+          entry.requesterSessionKey === sessionKey &&
+          entry.collectorLaunchCleanupPending &&
+          entry.execution.outcome?.error ===
+            "Queued channel operator authority changed; submit a new request.",
+      );
+      // Queued source revocation still needs this lifecycle to delete the child session.
+      await closeSwarmScheduler(resolveGatewayContext);
       agentTurnRuntime?.close();
+      for (const child of queuedChildCleanups) {
+        expect
+          .soft(
+            loadSessionEntry({
+              agentId: child.childAgentId ?? "main",
+              sessionKey: child.childSessionKey,
+              storePath,
+            }),
+            "revoked queued child session is physically deleted before fixture retirement",
+          )
+          .toBeUndefined();
+        expect.soft(subagentRuns.get(child.runId)?.collectorLaunchCleanupPending).toBe(false);
+      }
       Reflect.deleteProperty(globalThis, bridge);
       resetGlobalHookRunner();
       resetPluginRuntimeStateForTest();
@@ -379,6 +410,7 @@ export async function withCommandPlugin(
         await disposePlugin();
       }
       await expect(waitForPluginCacheRetirement()).resolves.toMatchObject({ failures: [] });
+      await sdkResources.close();
     }
   });
 }

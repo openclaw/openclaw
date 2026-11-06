@@ -361,7 +361,7 @@ function resolveOpenAITransportAbortReason(signal?: AbortSignal): string | undef
   );
 }
 
-export function summarizeOpenAITransportError(error: unknown, signal?: AbortSignal): string {
+function summarizeOpenAITransportError(error: unknown, signal?: AbortSignal): string {
   const record = isRecord(error) ? error : undefined;
   const cause =
     record?.cause && typeof record.cause === "object"

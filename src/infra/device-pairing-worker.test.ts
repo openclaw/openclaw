@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import { afterAll, assert, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -6,7 +6,7 @@ import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-d
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
-import { approveBootstrapDevicePairing, approveDevicePairing } from "./device-pairing-approval.js";
+import { approveBootstrapDevicePairing } from "./device-pairing-approval.js";
 import {
   isPairedDeviceTokenIdentityCurrent,
   resolveAuthenticatedDeviceTokenIdentity,
@@ -38,7 +38,6 @@ import {
   recordPairedDeviceAccess,
   listDevicePairing,
   listDevicePairingReadOnly,
-  requestDevicePairing,
   updatePairedDeviceMetadata,
 } from "./device-pairing.js";
 import * as queries from "./kysely-sync.js";
@@ -63,22 +62,21 @@ async function holdWriter() {
 }
 async function nodeGeneration() {
   const generation = resolveNodePairingGeneration(await paired());
-  if (!generation) {
-    throw new Error("expected fixture node generation");
-  }
+  assert(generation, "expected fixture node generation");
   return generation;
 }
-async function withUnreadableSibling(run: () => Promise<void>) {
-  database.db
-    .prepare("UPDATE device_pairing_paired SET tokens_json = ? WHERE device_id = ?")
-    .run("synthetic-unreadable-json", "paired-minimal");
+async function withUnreadableSibling(kind: "paired" | "pending", run: () => Promise<void>) {
+  const statement = database.db.prepare(
+    kind === "paired"
+      ? "UPDATE device_pairing_paired SET tokens_json = ? WHERE device_id = 'paired-minimal'"
+      : "UPDATE device_pairing_pending SET roles_json = ? WHERE request_id = 'refreshed'",
+  );
+  statement.run("synthetic-unreadable-json");
   try {
     await run();
   } finally {
     await withDevicePairingLock(async () => {});
-    database.db
-      .prepare("UPDATE device_pairing_paired SET tokens_json = NULL WHERE device_id = ?")
-      .run("paired-minimal");
+    statement.run(kind === "paired" ? null : "[]");
   }
 }
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -252,11 +250,7 @@ test("reconnect receipts refresh native replacements without decoding unrelated 
   state.pairedByDeviceId["paired-rich"]!.publicKey = "synthetic-sibling-key";
   state.pairedByDeviceId["paired-rich"]!.displayName = "Sibling fixture";
   persistDevicePairingStoreState(state, baseDir, "paired");
-  // A receipt must not decode unrelated pending requests.
-  database.db
-    .prepare("UPDATE device_pairing_pending SET roles_json = ? WHERE request_id = ?")
-    .run("synthetic-unreadable-json", "refreshed");
-  try {
+  await withUnreadableSibling("pending", async () => {
     await expect(
       updatePairedDeviceMetadata("paired-minimal", { displayName: "Reconnected" }, baseDir),
     ).resolves.toBe(true);
@@ -268,20 +262,17 @@ test("reconnect receipts refresh native replacements without decoding unrelated 
       token: "synthetic-operator-token",
     });
     expect(getPublishedPairedDeviceBinding("paired-rich", baseDir)).toEqual(currentBinding);
-  } finally {
-    await withDevicePairingLock(async () => {});
-    database.db
-      .prepare("UPDATE device_pairing_pending SET roles_json = ? WHERE request_id = ?")
-      .run("[]", "refreshed");
-  }
+  });
   expect((await getPendingDevicePairing("refreshed", baseDir))?.roles).toEqual([]);
   const native = readState().pairedByDeviceId["paired-rich"];
   expect(JSON.stringify((await listDevicePairing(baseDir)).paired[0])).toBe(JSON.stringify(native));
   expect(JSON.stringify(await paired())).toBe(JSON.stringify(native));
 });
 
-test("publishes a device metadata update without loading unrelated paired rows", async () => {
+test("publishes reconnect metadata, token issuance, and node facts without reading unrelated devices", async () => {
   await listDevicePairing(baseDir);
+  const generation = await nodeGeneration();
+  const node = { nodeId: "paired-rich", expectedPairingGeneration: generation, baseDir };
   const originalBinding = getPublishedPairedDeviceBinding("paired-rich", baseDir);
   expect(originalBinding).not.toBeNull();
   const unavailable = vi
@@ -297,21 +288,12 @@ test("publishes a device metadata update without loading unrelated paired rows",
   expect(() => getPublishedPairedDeviceBinding("paired-rich", baseDir)).toThrow(
     "Device pairing authority requires a current worker publication",
   );
-  await withUnreadableSibling(async () => {
+  await withUnreadableSibling("paired", async () => {
     const patch = { lastSeenAtMs: 1234, lastSeenReason: "connect" };
     await expect(updatePairedDeviceMetadata(" paired-rich ", patch, baseDir)).resolves.toBe(true);
     expect(getPublishedPairedDeviceBinding("paired-rich", baseDir)).toEqual(originalBinding);
     expect(await paired()).toMatchObject(patch);
     expect(getPublishedPairedDeviceBinding("paired-minimal", baseDir)).toBeNull();
-  });
-});
-
-test("persists token use and node connection facts without reading unrelated devices", async () => {
-  await listDevicePairing(baseDir);
-  const generation = await nodeGeneration();
-  const node = { nodeId: "paired-rich", expectedPairingGeneration: generation, baseDir };
-  const originalBinding = getPublishedPairedDeviceBinding("paired-rich", baseDir);
-  await withUnreadableSibling(async () => {
     await expect(verifyOperator(baseDir)).resolves.toEqual({ ok: true });
     await withDevicePairingLock(async () => {});
     expect((await paired())?.tokens?.operator?.lastUsedAtMs).toBeGreaterThan(3);
@@ -350,6 +332,22 @@ test("persists token use and node connection facts without reading unrelated dev
       lastHostStats: hostStats,
     });
     expect(getPublishedPairedDeviceBinding("paired-rich", baseDir)).toEqual(originalBinding);
+    const issuer = {
+      kind: "shared-gateway-auth" as const,
+      generation: "synthetic-reconnected-generation",
+    };
+    const issued = await ensureDeviceToken({ ...operator, issuer });
+    expect(issued).toMatchObject({ role: "operator", scopes: ["operator.read"], issuer });
+    expect(issued?.token).not.toBe("synthetic-operator-token");
+    expect((await paired())?.tokens?.operator).toEqual(issued);
+    await expect(
+      verifyDeviceToken({
+        ...operator,
+        token: issued!.token,
+        requiredSharedGatewaySessionGeneration: issuer.generation,
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true, issuer });
   });
 });
 
@@ -451,15 +449,10 @@ test.each(["reply lost", "policy revoked", "callback throws"] as const)(
 
 test("rechecks the original operator generation through reopened read-only pairing storage", async () => {
   const isolatedDir = tempDirs.make("pairing-operator-generation-");
-  const deviceId = "recovery-device";
-  const scopes = ["operator.read"];
-  const { request } = await requestDevicePairing(
-    { deviceId, publicKey: "synthetic-recovery-public-key", role: "operator", scopes },
-    isolatedDir,
-  );
-  await expect(
-    approveDevicePairing(request.requestId, { callerScopes: scopes }, isolatedDir),
-  ).resolves.toMatchObject({ status: "approved" });
+  const { deviceId, scopes } = operator;
+  const state = readState();
+  state.pairedByDeviceId[deviceId]!.publicKey = "synthetic-isolated-key";
+  persistDevicePairingStoreState(state, isolatedDir, "both");
   const isolatedDatabase = openOpenClawStateDatabase({
     env: { ...process.env, OPENCLAW_STATE_DIR: isolatedDir },
   });
@@ -467,13 +460,11 @@ test("rechecks the original operator generation through reopened read-only pairi
     const original = await loadPairedDevicePairingStoreRecordReadOnly(deviceId, isolatedDir);
     const identity = resolveAuthenticatedDeviceTokenIdentity(original, {
       role: "operator",
-      publicKey: "synthetic-recovery-public-key",
+      publicKey: "synthetic-isolated-key",
       token: original!.tokens!.operator!.token,
       scopes,
     });
-    if (!identity) {
-      throw new Error("Original admitted operator token has no generation");
-    }
+    assert(identity, "Original admitted operator token has no generation");
     await closeOpenClawStateDatabaseByPathAsync(isolatedDatabase.path);
     const reopened = await loadPairedDevicePairingStoreRecordReadOnly(deviceId, isolatedDir);
     expect(isPairedDeviceTokenIdentityCurrent(reopened, "operator", identity, scopes)).toBe(true);

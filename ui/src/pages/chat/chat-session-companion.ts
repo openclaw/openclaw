@@ -243,7 +243,7 @@ export class ChatSessionCompanionThreads {
       (companionSelectionContext(attachments)?.length ?? 0) >
       SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS
     ) {
-      showToast({ message: t("chat.rail.selectionTooLong") });
+      showToast({ severity: "error", message: t("chat.rail.selectionTooLong") });
       return false;
     }
     const thread = this.get(companionThreadKey(sessionKey, agentId));

@@ -14,6 +14,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../../gateway/agent-runtime-approval-authority.js";
 import { callGateway } from "../../../gateway/call.js";
 import * as operatorCapture from "../../../gateway/operator-run-authority.js";
+import { bindGatewayLifecycleRequest } from "../../../gateway/server-lifecycle-runtime-context.js";
 import type { GatewayRequestHandlerOptions } from "../../../gateway/server-methods/types.js";
 import { dispatchGatewayMethodInProcessRaw } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import {
@@ -21,7 +22,6 @@ import {
   createOperatorClient,
 } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
-import { bindGatewayLifecycleRequest } from "../../../gateway/server-recovery-runtime-context.js";
 import { onAgentEvent, rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -42,6 +42,7 @@ import {
   createTestRegistry,
 } from "../../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import { createEnteredGate } from "../../entered-gate.test-support.js";
 import { createOperationalRunInstanceRef } from "../../operational-run-instance.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "../announce/subagent-announce-overrides.test-support.js";
@@ -63,7 +64,7 @@ import {
 } from "./subagent-registry.js";
 import { settleSubagentRegistryPersistenceWork } from "./subagent-registry.persistence.test-support.js";
 import { registerSubagentRegistrationOwnershipTests } from "./subagent-registry.registration-ownership.test-support.js";
-import { registerRequesterCompletionCustodyTests } from "./subagent-registry.requester-completion.test-support.js";
+import { registerRequesterAutomationCustodyTests } from "./subagent-registry.requester-automation-custody.test-support.js";
 import {
   releaseSubagentRun,
   resetSubagentRegistryForTests,
@@ -72,7 +73,7 @@ import type { SubagentRegistrationScope, SubagentRunRecord } from "./subagent-re
 
 vi.mock("../../../config/config.js", { spy: true });
 vi.mock("../../../gateway/call.js", { spy: true });
-vi.mock("../../../gateway/server-recovery-runtime-context.js", { spy: true });
+vi.mock("../../../gateway/server-lifecycle-runtime-context.js", { spy: true });
 vi.mock("../../../infra/agent-events.js", { spy: true });
 
 function useConfig<T extends OpenClawConfig>(cfg: T) {
@@ -538,7 +539,7 @@ describe("registered completion source custody", () => {
     },
   );
 
-  registerRequesterCompletionCustodyTests({ registration, updateRun });
+  registerRequesterAutomationCustodyTests({ registration, updateRun });
 
   it.each([
     "completed System parent",
@@ -791,7 +792,9 @@ describe("registered completion source custody", () => {
     "cancelled-with-requester-custody",
     "cancelled-with-missing-custody",
     "cancelled-with-distinct-custody",
+    "cancelled-with-independent-invocation",
     "mixed-cancellation-source",
+    "mixed-cancellation-independent-invocation",
     "mixed-cancellation-same-source",
     "stale-batch-member",
   ] as const)("outlives execution and closes on %s", async (ending) => {
@@ -800,6 +803,15 @@ describe("registered completion source custody", () => {
       const { context, resolveGatewayContext, client, revoked, source } =
         await retainedOperatorFixture("completion-owner");
       try {
+        const independentInvocation = () => ({
+          ...client,
+          internal: {
+            operatorRunAuthority: createAdmittedRunOperatorAuthority({
+              ...source.authority,
+              invocation: {},
+            }),
+          },
+        });
         const register = (runId = "child", actor = client) =>
           inGateway({ client: actor, context, resolveGatewayContext: () => context }, () =>
             registerSubagentRun(
@@ -861,9 +873,13 @@ describe("registered completion source custody", () => {
           await releaseSubagentRun(entry.runId);
         } else if (
           ending === "cancelled-with-missing-custody" ||
-          ending === "cancelled-with-distinct-custody"
+          ending === "cancelled-with-distinct-custody" ||
+          ending === "cancelled-with-independent-invocation"
         ) {
-          const other = operatorFixture("other-requester");
+          const other =
+            ending === "cancelled-with-independent-invocation"
+              ? { client: independentInvocation(), revoked: new AbortController() }
+              : operatorFixture("other-requester");
           await register("other", other.client);
           await markCancelled(entry.runId);
           await markCancelled("other");
@@ -896,11 +912,14 @@ describe("registered completion source custody", () => {
           await releaseSubagentRun(entry.runId);
         } else if (ending.startsWith("mixed-cancellation") || ending === "stale-batch-member") {
           const differentSource = ending === "mixed-cancellation-source";
+          const differentInvocation = ending === "mixed-cancellation-independent-invocation";
           await register(
             "other",
             differentSource
               ? createOperatorClient({ profileName: "other-owner", scopes: ["operator.write"] })
-              : client,
+              : differentInvocation
+                ? independentInvocation()
+                : client,
           );
           const other = subagentRuns.get("other")!;
           if (ending === "stale-batch-member") {
@@ -910,7 +929,7 @@ describe("registered completion source custody", () => {
             ).toThrow(/authority/);
           } else {
             await markCancelled(other.runId);
-            if (differentSource) {
+            if (differentSource || differentInvocation) {
               expect(() =>
                 subagentRuns.runWithCompletionBatchAuthority([entry, other], () => "wrong caller"),
               ).toThrow(/incompatible operator authority/);

@@ -293,7 +293,7 @@ it.each([
   ["browse", { kind: "plugin", query: "calendar", feed: "trending" }],
   ["browse", { kind: "plugin", pageSize: 101 }],
   ["browse", { kind: "plugin", pageSize: 0 }],
-  ["browse", { kind: "claw" }],
+  ["browse", { kind: "template" }],
   ["searchKeywords", { keywords: [" "] }],
   ["searchKeywords", { keywords: [] }],
   ["searchKeywords", { keywords: Array.from({ length: 101 }, () => "term") }],

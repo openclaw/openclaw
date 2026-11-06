@@ -116,6 +116,7 @@ export function createPluginsTool(options?: {
   sessionId?: string;
   runId?: string;
   onYield?: SessionsYieldCallback;
+  senderIsOwner?: boolean;
 }): AnyAgentTool {
   const runtimeRefresh = captureAgentPluginRuntimeRefresh();
   let operation = options?.runId ? findSessionControllerOperationByRunId(options.runId) : undefined;
@@ -155,6 +156,8 @@ export function createPluginsTool(options?: {
           return await handoffSessionTool({
             ...options,
             name: "Plugin reload",
+            terminal: true,
+            fenceSuccessors: true,
             operation,
             requestOwners,
             signal,
@@ -242,12 +245,12 @@ export function createPluginsTool(options?: {
       if (action === "list") {
         // SAFETY: The list action dispatches only plugins.list, whose handler returns listManagedPlugins.
         const inventory = result as Awaited<ReturnType<typeof listManagedPlugins>>;
-        const query = readToolStringParam(params, "query")?.toLowerCase();
+        const query = readToolStringParam(params, "query")?.toLowerCase().normalize("NFC");
         const matching = inventory.plugins.filter(
           (plugin) =>
             !query ||
             [plugin.id, plugin.name, plugin.description].some((value) =>
-              value?.toLowerCase().includes(query),
+              value?.toLowerCase().normalize("NFC").includes(query),
             ),
         );
         return pluginsToolResult({

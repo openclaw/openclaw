@@ -99,20 +99,21 @@ function appendImportEdges(
   imports,
   sourceType,
   includeTypeScript,
-  onNodeLoaderReference,
   onStaticImport,
+  onLiteralCall,
 ) {
   function visit(node) {
-    if (
-      onNodeLoaderReference &&
-      ((node.type === "Identifier" && (node.name === "require" || node.name === "createRequire")) ||
-        (node.type === "Literal" && (node.value === "require" || node.value === "createRequire")))
-    ) {
-      onNodeLoaderReference();
-    }
     // These leaves cannot contain import edges; avoid allocating property lists for them.
     if (node.type === "Identifier" || node.type === "Literal" || node.type === "TemplateElement") {
       return;
+    }
+    // Pruning can conservatively retain resolvable literal targets without making
+    // ordinary path arguments required imports or performing full scope analysis.
+    if (onLiteralCall && node.type === "CallExpression") {
+      const argument = literal(node.arguments[0]);
+      if (argument?.startsWith(".")) {
+        onLiteralCall(argument);
+      }
     }
     let kind;
     let specifier;
@@ -264,8 +265,8 @@ export function collectPackageDistImports(params) {
       imports,
       sourceTypeFor(importerPath, packageJsons),
       params.includeTypeScript,
-      params.onNodeLoaderReference,
       params.onStaticImport,
+      params.onLiteralCall,
     );
   }
 

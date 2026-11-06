@@ -51,6 +51,13 @@ precedes the rejected response in the current turn. Failures that may have cause
 side effects, unfinished tools, and asynchronous work still block it; the
 continuation does not replay the original task or increase the retry budget.
 
+If a model prints a complete tool call as text, including a call to an available
+deferred tool, the built-in runner can request one native correction when replay
+is safe. Recognition does not authorize executing a deferred call as text. The
+model must reissue it through its native tool interface (`dispatch_action` in
+Tool Search's `tools` mode). A repeated text call produces a visible failure instead
+of silently reporting success.
+
 Recovery history stays available across attempts within the same run. The run
 releases message payloads from replaced recovery envelopes and when it ends,
 including envelopes retained by copied attempt parameters. Each accepted
@@ -332,6 +339,10 @@ replace that explanation or restart an already-final timed-out turn.
 This includes a timeout during tool execution when no final payload or accepted
 continuation remains. A compaction failure label does not turn that unfinished
 tool timeout into a paused run; completed tool results remain in the transcript.
+Tool execution deadlines retain `timeoutPhase: "tool_execution"` through terminal
+settlement. The error identifies the outcome as unknown: inspect current state
+before repeating the operation. Continuing is an ordinary new input, not an
+automatic replay of the timed-out tool.
 Earlier tool warnings and reasoning output do not count as a completed reply.
 Quiet or collect-mode children do not suppress a timeout unless another
 continuation owns the reply; accepting a child alone does not promise delivery.
@@ -362,6 +373,10 @@ Harness cleanup flushes trajectory events accepted before foreground work ended,
 including during restart cancellation. It cannot accept new events after that
 lifetime ends, or flush through a closed host, revoked admission, replaced run,
 or replaced recorder.
+
+Completed and aborted built-in attempts release their session transcript listeners
+even if transcript-owner cleanup fails. The cleanup error remains visible, while
+the global listener registry no longer retains the completed session's history.
 
 When a runtime reports a definitive timeout, the Gateway records its terminal
 status and error for the session sidebar immediately, without waiting for
