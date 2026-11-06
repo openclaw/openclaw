@@ -139,7 +139,7 @@ export async function reconcileManaged(
   return client({ version: 1, action: "poll", handle }, signal);
 }
 
-export function managedResult(snapshot: ResearchAdapterSnapshot): ResearchResult {
+function managedResult(snapshot: ResearchAdapterSnapshot): ResearchResult {
   return {
     version: 1,
     engine: "managed",

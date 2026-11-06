@@ -468,6 +468,19 @@ A newer candidate cannot repair the updater already running. Install the target
 release once with the manual procedure above. Published OpenClaw 2026.9.5 and
 later include the baseline-timeout fallback.
 
+The published OpenClaw 2026.9.7 and 2026.9.8 updaters can fail at `package-swap`
+with `Package publication recovery permissions are unsafe` once
+`.openclaw.package-activation-<key>.control` exists beside the package. An earlier
+update or failed attempt leaves that receipt, so each retry fails the same way.
+These updaters hard-link its `operation.sqlite` journal into their retained runtime
+during the update and remove the extra link when that runtime is cleaned up.
+Afterward the journal shows owner-only permissions and one link, so tightening
+permissions, `openclaw doctor --fix`, and `openclaw update repair` do not prevent
+the next attempt from failing. A newer candidate cannot repair the updater already
+running. Install the target release once with the manual
+procedure above and keep the receipt; later updaters replace it themselves.
+Published OpenClaw 2026.9.9 and later keep the receipt out of their retained runtime.
+
 Gateways with installation-replacement detection also check the installed build
 on their maintenance tick. If the running and installed builds differ, the
 Gateway records the replacement, stops accepting new work, and gives active work

@@ -4,7 +4,6 @@ import { en } from "./en.ts";
 const enLabs = {
   labsPage: {
     swarm: {
-      title: en.labsPage.swarm.title,
       groupTitle: "Parallel tasks",
       progress: "{complete} of {total}",
       active: "{running} running · {queued} queued · {failed} failed or stopped",
