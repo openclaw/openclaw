@@ -236,6 +236,13 @@ describe.skipIf(!hasBinding)("native OpenClaw ID node transport", () => {
     client.start();
     try {
       expect((await rejected).message).toMatch(/pairing/i);
+      const label = transport.formatDiagnostic(transport.url);
+      expect(label).toMatch(/^.+ via OpenClaw ID \(direct\)$/);
+      const socketPath = parseUnixGatewayUrl(transport.url)!.socketPath;
+      expect(transport.formatDiagnostic(`connect ENOENT ${socketPath}`)).toBe(
+        `connect ENOENT ${label}`,
+      );
+      expect(transport.formatDiagnostic("pairing required")).toBe("pairing required");
       expect(
         (await listDevicePairing()).pending.some(
           (entry) => entry.role === "node" || entry.roles?.includes("node"),

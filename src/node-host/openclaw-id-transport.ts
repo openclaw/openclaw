@@ -282,8 +282,15 @@ export async function startNodeTunnelTransport(options: {
     await fs.rm(dir, { recursive: true, force: true });
     throw error;
   }
+  const url = `ws+unix:${socketPath}:/`;
   return {
-    url: `ws+unix:${socketPath}:/`,
+    url,
+    formatDiagnostic(message: string): string {
+      const kind = session.pathKind();
+      const route = kind === "direct" ? "direct" : kind === "relay" ? "relayed" : "not connected";
+      const target = `${options.target.hostname} via OpenClaw ID (${route})`;
+      return message.replaceAll(url, target).replaceAll(socketPath, target);
+    },
     peerKey: `iroh:${endpoint.id()}`,
     async close() {
       for (const ws of wss.clients) {
