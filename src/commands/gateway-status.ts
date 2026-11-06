@@ -75,6 +75,9 @@ export async function gatewayStatusCommand(
   },
   runtime: RuntimeEnv,
 ) {
+  if (opts.url !== undefined && !opts.url.trim()) {
+    throw new Error("--url must not be blank");
+  }
   await ensureExplicitGatewayAuth({
     urlOverride: opts.url?.trim(),
     urlOverrideSource: "cli",

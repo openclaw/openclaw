@@ -16,6 +16,10 @@ function failDaemonStatus(opts: DaemonStatusOptions, message: string): void {
 
 /** Run Gateway status diagnostics and apply --require-rpc exit behavior. */
 export async function runDaemonStatus(opts: DaemonStatusOptions) {
+  if (opts.rpc.url !== undefined && !opts.rpc.url.trim()) {
+    failDaemonStatus(opts, "Gateway status failed: --url must not be blank");
+    return;
+  }
   if (opts.runtimeIntentOnly && opts.requireRpc) {
     failDaemonStatus(
       opts,
