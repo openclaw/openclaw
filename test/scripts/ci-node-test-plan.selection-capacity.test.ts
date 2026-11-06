@@ -63,12 +63,11 @@ it("shares selected serial setup within the shortest contributing timeout", () =
   const selected = expectDefined(
     createSelectedNodeTestShardBundles(targets, {
       runnerBackend: "hybrid",
-      includeReleaseOnlyToolingShards: false,
     }),
     "qualified serial selection",
   );
-  expect(selected).toHaveLength(1);
-  expect(selected[0]).toMatchObject({
+  expect(selected).toHaveLength(2);
+  expect(selected.find((job) => job.groups.length === 7)).toMatchObject({
     runner: "blacksmith-32vcpu-ubuntu-2404",
     planConcurrency: 1,
     timeoutMinutes: 60,

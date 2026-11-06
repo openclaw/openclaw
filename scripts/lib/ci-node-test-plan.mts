@@ -4412,8 +4412,14 @@ export function createSelectedNodeTestShardBundles(
           tooling,
         )
       : []),
+    // Keep parallel bundles before compacting their remaining serial singletons.
     ...packSelectedNodeTestJobs(
-      projected.map(normalizeSingletonNodeTestJob),
+      packSelectedNodeTestJobs(
+        projected,
+        options.runnerBackend,
+        canonicalFamilies,
+        groupSeconds,
+      ).map(normalizeSingletonNodeTestJob),
       options.runnerBackend,
       canonicalFamilies,
       groupSeconds,
