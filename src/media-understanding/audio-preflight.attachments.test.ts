@@ -82,10 +82,10 @@ describe("audio preflight attachment handoff", () => {
     "forwards the selected workspace and transcribes a voice note with %s MIME",
     async (contentType) => {
       await withTestDir({ prefix: "openclaw-audio-preflight-workspace-" }, async (dir) => {
-        const media = (await audioFiles(dir, ["voice.wav"])).map((fact) => ({
-          ...fact,
-          contentType,
-        }));
+        const media = await audioFiles(dir, ["voice.wav"]);
+        for (const fact of media) {
+          fact.contentType = contentType;
+        }
         const providers: Record<string, MediaUnderstandingProvider> = {
           fixture: {
             id: "fixture",
