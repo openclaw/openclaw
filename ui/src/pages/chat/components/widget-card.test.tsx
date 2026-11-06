@@ -579,12 +579,12 @@ describe("widget-card", () => {
       expect(button).toMatchObject({
         disabled: false,
         ariaLabel: "Pin to dashboard",
-        title: "Could not pin to dashboard. Try again.",
+        title: "Couldn’t pin to dashboard. Try again.",
       }),
     );
     mountWidget({ ...preview, title: "Retained failure" }, { boardProvider: provider }, host);
     expect(pinButton(host)).toBe(button);
-    expect(button.title).toBe("Could not pin to dashboard. Try again.");
+    expect(button.title).toBe("Couldn’t pin to dashboard. Try again.");
     button.click();
     await waitForSolid(() => pinState(button, "Pinning…", true));
     expect(pinWidget).toHaveBeenLastCalledWith({
@@ -623,18 +623,19 @@ describe("widget-card", () => {
     button.focus();
     button.click();
     pending.reject(new Error("Synthetic pin failure"));
-    await waitForSolid(() => expect(button.title).toBe("Could not pin to dashboard. Try again."));
+    await waitForSolid(() => expect(button.title).toBe("Couldn’t pin to dashboard. Try again."));
     expect(pinButton(root.container)).toBe(button);
     expect(document.activeElement).toBe(button);
     expect(showToast).toHaveBeenCalledExactlyOnceWith({
-      message: "Could not pin to dashboard. Try again.",
+      severity: "error",
+      message: "Couldn’t pin to dashboard. Try again.",
     });
 
     setTitle("Updated chart");
     flush();
     expect(pinButton(root.container)).toBe(button);
     expect(document.activeElement).toBe(button);
-    expect(button.title).toBe("Could not pin to dashboard. Try again.");
+    expect(button.title).toBe("Couldn’t pin to dashboard. Try again.");
     expect(showToast).toHaveBeenCalledTimes(1);
 
     snapshot.set({ widgets: [{ name: "widget" }] });

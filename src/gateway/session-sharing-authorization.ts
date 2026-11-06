@@ -48,8 +48,6 @@ import {
   type SessionMutationTarget,
 } from "./session-sharing-target-input.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
-import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
-import type { GatewaySessionStoreCache } from "./session-utils-store-lookup.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 import type { PreparedTalkSessionTarget } from "./talk/session-target.types.js";
 
@@ -60,6 +58,8 @@ export type SessionMutationAuthorizationParams = {
   context: GatewayRequestContext;
   /** Trusted prepared identity; never adopt a later target while capturing authority. */
   expectedTarget?: ExpectedSessionMutationTarget;
+  /** Recorded-principal input requires an existing, unarchived physical destination. */
+  assertPrincipalTargetCurrent?: (target: SessionSharingTarget | null) => void;
   /** The router's actual alternative admission, not other grants on the same client. */
   sessionScope?: SessionOperatorScope;
   /** Database access classified by the host-owned method registry. */
@@ -189,15 +189,6 @@ export type ExpectedSessionMutationTarget = Readonly<{
 }>;
 
 export type { PreparedMutationSharing } from "./session-sharing-read.js";
-
-export type SessionSharingLookupCaches = {
-  storeCache: GatewaySessionStoreCache;
-  targetDiscoveryCache: GatewaySessionStoreDiscoveryCache;
-};
-
-export function createSessionSharingLookupCaches(): SessionSharingLookupCaches {
-  return { storeCache: new Map(), targetDiscoveryCache: new Map() };
-}
 
 // docs/gateway/protocol.md gives these handlers visibility-based authorization.
 // The router still prevents view/suggest-capped callers from reassigning foreign sessions.
@@ -407,7 +398,7 @@ export function resolvePreparedTalkAuthorizationTarget(
 }
 
 export function findPreparedSharingTarget(
-  params: SessionMutationAuthorizationParams,
+  params: Pick<SessionMutationAuthorizationParams, "preparedTargets">,
   targetRef: { sessionKey?: string; key?: string; agentId?: string },
 ) {
   const sessionKey = normalizeOptionalString(targetRef.sessionKey ?? targetRef.key);

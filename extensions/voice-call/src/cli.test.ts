@@ -13,22 +13,10 @@ const tailscaleMocks = vi.hoisted(() => ({
   getSelfInfo: vi.fn(),
   setup: vi.fn(),
 }));
-const sleepMock = vi.hoisted(() =>
-  vi.fn(
-    async (ms: number) =>
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, ms);
-      }),
-  ),
-);
 
 vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/gateway-runtime")>()),
   callGatewayFromCli: callGatewayFromCliMock,
-}));
-vi.mock("../api.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../api.js")>()),
-  sleep: sleepMock,
 }));
 vi.mock("./manager/store.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./manager/store.js")>()),
@@ -101,15 +89,12 @@ describe("voice-call CLI status fallback", () => {
     tailscaleMocks.cleanup.mockReset();
     tailscaleMocks.getSelfInfo.mockReset();
     tailscaleMocks.setup.mockReset();
-    sleepMock.mockReset();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
   function withBriefPath<T>(run: (file: string) => Promise<T>) {
-    return withTempDir("openclaw-voice-call-brief-", async (dir) =>
-      run(path.join(dir, "brief.json")),
-    );
+    return withTempDir("voice-brief-", (dir) => run(path.join(dir, "brief.json")));
   }
 
   function buildProgram(
@@ -190,55 +175,66 @@ describe("voice-call CLI status fallback", () => {
     expect(output).toEqual(expected[kind]);
   });
 
-  it.each(["printed", "creation", "operation"] as const)(
-    "joins standalone %s on interruption",
-    async (phase) => {
-      const signal = phase === "printed" ? "SIGTERM" : "SIGINT";
-      const originalListeners = new Set(process.listeners(signal));
-      const originalExitCode = process.exitCode;
-      const ready = Promise.withResolvers<void>();
-      const release = Promise.withResolvers<void>();
-      const stopping = Promise.withResolvers<void>();
-      const stopped = Promise.withResolvers<void>();
-      const pause = async () => {
+  it.each(["printed", "creation", "operation", "poll"])("joins interrupted %s", async (phase) => {
+    const signal = phase === "printed" ? "SIGTERM" : "SIGINT";
+    const originalListeners = new Set(process.listeners(signal));
+    const originalExitCode = process.exitCode;
+    const ready = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const stopping = Promise.withResolvers<void>();
+    const stopped = Promise.withResolvers<void>();
+    const pause = async () => {
+      ready.resolve();
+      await release.promise;
+    };
+    const stop = vi.fn(async () => {
+      stopping.resolve();
+      await stopped.promise;
+    });
+    const initiateCall = vi.fn(async () => {
+      if (phase === "operation") {
+        await pause();
+      }
+      return { success: true, callId: "call-owned" };
+    });
+    const ensureRuntime = async () => {
+      if (phase === "creation") {
+        await pause();
+      }
+      return { config: { toNumber: "+15550001234" }, manager: { initiateCall }, stop } as never;
+    };
+    const capturer = captureStdout((output) => {
+      if (phase === "printed" && output.includes("call-owned")) {
         ready.resolve();
-        await release.promise;
-      };
-      const stop = vi.fn(async () => {
-        stopping.resolve();
-        await stopped.promise;
+      }
+    });
+    callGatewayFromCliMock.mockRejectedValue(gatewayTransportError());
+    if (phase === "poll") {
+      vi.useFakeTimers();
+      pendingContinue(5_000).mockImplementationOnce(async () => {
+        ready.resolve();
+        return { status: "pending" };
       });
-      const initiateCall = vi.fn(async () => {
-        if (phase === "operation") {
-          await pause();
-        }
-        return { success: true, callId: "call-owned" };
-      });
-      const ensureRuntime = async () => {
-        if (phase === "creation") {
-          await pause();
-        }
-        return { config: { toNumber: "+15550001234" }, manager: { initiateCall }, stop } as never;
-      };
-      const capturer = captureStdout((output) => {
-        if (phase === "printed" && output.includes("call-owned")) {
-          ready.resolve();
-        }
-      });
-      callGatewayFromCliMock.mockRejectedValue(gatewayTransportError());
-      const command = runCli(buildProgram({}, ensureRuntime), ["call", "--message", "hello"]);
-      let completed = false;
-      const outcome = command.then(
-        () => {
-          completed = true;
-        },
-        (error: unknown) => error,
-      );
-      const handlers = () => process.listeners(signal).filter((fn) => !originalListeners.has(fn));
-      try {
-        await ready.promise;
-        expect(handlers()).toHaveLength(1);
-        handlers()[0]?.(signal);
+    }
+    const args = phase === "poll" ? continueArgs : ["call", "--message", "hello"];
+    const completed = vi.fn();
+    const outcome = runCli(buildProgram({}, ensureRuntime), args).then(
+      completed,
+      (error: unknown) => error,
+    );
+    const handlers = () => process.listeners(signal).filter((fn) => !originalListeners.has(fn));
+    try {
+      await ready.promise;
+      if (phase === "poll") {
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      expect(handlers()).toHaveLength(1);
+      handlers()[0]?.(signal);
+      if (phase === "poll") {
+        await outcome;
+        expect(capturer()).toBe("");
+        expect(stop).not.toHaveBeenCalled();
+      } else {
         if (phase === "printed") {
           expect(JSON.parse(capturer())).toEqual({ callId: "call-owned" });
           handlers()[0]?.(signal);
@@ -247,8 +243,7 @@ describe("voice-call CLI status fallback", () => {
         }
         release.resolve();
         await stopping.promise;
-        expect(completed).toBe(false);
-        expect(stop).toHaveBeenCalledOnce();
+        expect(completed).not.toHaveBeenCalled();
         stopped.resolve();
         const result = await outcome;
         expect(stop).toHaveBeenCalledOnce();
@@ -259,19 +254,20 @@ describe("voice-call CLI status fallback", () => {
           expect(result).toBeUndefined();
           expect(initiateCall).toHaveBeenCalledOnce();
         }
-        expect(process.listeners(signal)).toEqual([...originalListeners]);
-        expect(process.exitCode).toBe(signal === "SIGTERM" ? 143 : 130);
-      } finally {
-        for (const handler of handlers()) {
-          handler(signal);
-        }
-        release.resolve();
-        stopped.resolve();
-        await outcome;
-        process.exitCode = originalExitCode;
       }
-    },
-  );
+      expect(process.listeners(signal)).toEqual([...originalListeners]);
+      expect(process.exitCode).toBe(signal === "SIGTERM" ? 143 : 130);
+    } finally {
+      handlers().forEach((handler) => handler(signal));
+      release.resolve();
+      stopped.resolve();
+      if (phase === "poll") {
+        await vi.advanceTimersByTimeAsync(5_000);
+      }
+      await outcome;
+      process.exitCode = originalExitCode;
+    }
+  });
 
   it("explains a standalone webhook port collision", async () => {
     callGatewayFromCliMock.mockRejectedValue(gatewayTransportError());
@@ -435,7 +431,7 @@ describe("voice-call CLI status fallback", () => {
     "accepts a 16000-character Unicode %s brief",
     async (kind) => {
       await withBriefPath(async (file) => {
-        const brief = { task: "Arrange a visit", context: "é".repeat(4000) };
+        const brief = { task: "Arrange a visit 日本語 �", context: "é".repeat(4000) };
         const json = JSON.stringify(brief);
         fs.writeFileSync(file, " ".repeat(16000 - json.length) + json);
         const input = kind === "regular" ? file : `${file}.link`;
@@ -443,18 +439,19 @@ describe("voice-call CLI status fallback", () => {
           fs.symlinkSync(file, input);
         }
         callGatewayFromCliMock.mockResolvedValue({ callId: "call-1" });
-        expect(await capture(briefArgs(input), { ringTimeoutMs: 1000 })).toEqual({
-          callId: "call-1",
-        });
+        await run(briefArgs(input), { ringTimeoutMs: 1000 });
         expect(callGatewayFromCliMock.mock.calls[0]?.[2]).toMatchObject({ brief });
       });
     },
   );
 
-  it("retains the character limit for brief files", async () => {
+  it.each([
+    [" ".repeat(16001), "Brief input is too large"],
+    [Buffer.from('{"task":"caf\xff"}', "latin1"), /Brief file.*UTF-8/],
+  ])("rejects an invalid brief file before call creation", async (bytes, error) => {
     await withBriefPath(async (file) => {
-      fs.writeFileSync(file, " ".repeat(16001));
-      await expect(run(briefArgs(file))).rejects.toThrow("Brief input is too large");
+      fs.writeFileSync(file, bytes);
+      await expect(run(briefArgs(file))).rejects.toThrow(error);
       expect(callGatewayFromCliMock).not.toHaveBeenCalled();
     });
   });

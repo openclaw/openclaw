@@ -622,6 +622,31 @@ private func makeGatewayPair(
             nodeOptions: options))
 }
 
+/// Operational approval fixtures need a configured owner, not merely remembered chat identity.
+@MainActor
+private func configureMockApprovalRoute(_ model: NodeAppModel, stableID: String = "test-gateway") {
+    guard let url = URL(string: "wss://approval-fixture.example.test") else {
+        preconditionFailure("Invalid synthetic approval route")
+    }
+    model.activeGatewayConnectConfig = GatewayConnectConfig(
+        url: url,
+        stableID: stableID,
+        tls: nil,
+        token: "synthetic-approval-token",
+        bootstrapToken: nil,
+        password: nil,
+        nodeOptions: GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "ios",
+            clientMode: "node",
+            clientDisplayName: "Phone"))
+    model.connectedGatewayID = stableID
+}
+
 @MainActor
 private func makeWatchModel() -> (MockWatchMessagingService, NodeAppModel) {
     let watchService = MockWatchMessagingService()
@@ -1249,6 +1274,84 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 }
 
 @Suite(.serialized, .testWaitLimit) struct NodeAppModelInvokeTests {
+    @Test @MainActor func `first model frame already targets the last chat`() {
+        let registry = GatewaySettingsStore.loadGatewayRegistry()
+        let stableID = "scroll-launch-\(UUID().uuidString)"
+        let sessionKey = "agent:main:dashboard:last-used"
+        defer {
+            _ = GatewaySettingsStore.saveGatewayRegistry(registry)
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: nil)
+            GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: nil)
+        }
+        #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: stableID, kind: .manual, name: "Launch test", host: "localhost", port: 443,
+            useTLS: true, contextPath: nil, lastConnectedAtMs: nil), activate: true))
+        GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: sessionKey)
+        GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: "main")
+        let model = NodeAppModel(restoringSavedGatewayRoute: true)
+        defer { model.voiceWake.stop() }
+        #expect(model.chatSessionKey == sessionKey)
+        #expect(model.connectedGatewayID == stableID)
+        #expect(model.selectedAgentId == "main")
+        model.prepareForGatewayConnect(stableID: stableID)
+        #expect(model.chatSessionKey == sessionKey)
+        model.chatSessionRoutingRestoreTask?.cancel()
+    }
+
+    @Test @MainActor func `agent switch forgets the previous agent's saved chat`() {
+        let registry = GatewaySettingsStore.loadGatewayRegistry()
+        let stableID = "agent-switch-\(UUID().uuidString)"
+        let agentAChat = "agent:alpha:dashboard:last-used"
+        defer {
+            _ = GatewaySettingsStore.saveGatewayRegistry(registry)
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: nil)
+            GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: nil)
+        }
+        #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: stableID, kind: .manual, name: "Agent switch test", host: "localhost", port: 443,
+            useTLS: true, contextPath: nil, lastConnectedAtMs: nil), activate: true))
+        GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: "alpha")
+        let model = NodeAppModel(restoringSavedGatewayRoute: true)
+        defer { model.voiceWake.stop() }
+        model.focusChatSession(agentAChat)
+        #expect(GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: stableID) == agentAChat)
+        model.setSelectedAgentId("beta")
+        #expect(GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: stableID) == nil)
+        let relaunched = NodeAppModel(restoringSavedGatewayRoute: true)
+        defer { relaunched.voiceWake.stop() }
+        #expect(relaunched.selectedAgentId == "beta")
+        #expect(relaunched.chatSessionKey != agentAChat)
+    }
+
+    @Test @MainActor func `roster removal of the selected agent forgets its saved chat`() {
+        let registry = GatewaySettingsStore.loadGatewayRegistry()
+        let stableID = "agent-roster-\(UUID().uuidString)"
+        let alphaChat = "agent:alpha:dashboard:last-used"
+        defer {
+            _ = GatewaySettingsStore.saveGatewayRegistry(registry)
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: nil)
+            GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: nil)
+        }
+        #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: stableID, kind: .manual, name: "Agent roster test", host: "localhost", port: 443,
+            useTLS: true, contextPath: nil, lastConnectedAtMs: nil), activate: true))
+        GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: "alpha")
+        let model = NodeAppModel(restoringSavedGatewayRoute: true)
+        defer { model.voiceWake.stop() }
+        model.focusChatSession(alphaChat)
+        #expect(model.chatSessionKey == alphaChat)
+        model.retireSelectedAgentIfRemoved(from: [AgentSummary(
+            id: "beta", name: "Beta", identity: nil, workspace: nil, workspacegit: nil,
+            model: nil, agentruntime: nil)])
+        #expect(model.selectedAgentId == nil)
+        #expect(model.chatSessionKey != alphaChat)
+        #expect(GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: stableID) == nil)
+        let relaunched = NodeAppModel(restoringSavedGatewayRoute: true)
+        defer { relaunched.voiceWake.stop() }
+        #expect(relaunched.selectedAgentId == nil)
+        #expect(relaunched.chatSessionKey != alphaChat)
+    }
+
     @Test(arguments: [false, true]) @MainActor
     func `chat preserves a typed draft on initial agent resolution only for the same account`(
         changesAccount: Bool) throws
@@ -1642,6 +1745,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
     @Test @MainActor func `exec approval prompt presentation tracks latest notification tap`() throws {
         let appModel = NodeAppModel()
+        configureMockApprovalRoute(appModel)
         try appModel._test_presentExecApprovalPrompt(
             #require(
                 NodeAppModel._test_makeExecApprovalPrompt(
@@ -1676,7 +1780,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     @Test @MainActor func `explicit notification tap replaces visible approval after canonical fetch`() async throws {
         let fetchGate = WatchSnapshotSendGate()
         let appModel = makeNodeModelWithMockServices()
-        appModel.connectedGatewayID = "test-gateway"
+        configureMockApprovalRoute(appModel)
         try appModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-visible-a",
@@ -1707,7 +1811,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let (watchService, appModel) = makeWatchModel(notificationCenter: MockBootstrapNotificationCenter())
-        appModel.connectedGatewayID = "test-gateway"
+        configureMockApprovalRoute(appModel)
         try appModel._test_setUnifiedExecApprovalGetResponses([
             ("exec-inactive", makePendingExecApprovalJSON("exec-inactive", commandText: "echo canonical")),
             ("plugin-inactive", makePendingApprovalJSON(
@@ -1753,7 +1857,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(persisted.attentionSource == nil)
         #expect(persisted.createdAtMs == nil)
         let (_, restoredModel) = makeWatchModel(notificationCenter: MockBootstrapNotificationCenter())
-        restoredModel.connectedGatewayID = "test-gateway"
+        configureMockApprovalRoute(restoredModel)
         #expect(restoredModel.pendingApprovalAttentionRequests.isEmpty)
 
         appModel._test_setUnifiedExecApprovalGetResponse(makePendingExecApprovalJSON("exec-inactive"))
@@ -1806,7 +1910,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let (_, appModel) = makeWatchModel(notificationCenter: MockBootstrapNotificationCenter())
-        appModel.connectedGatewayID = "test-gateway"
+        configureMockApprovalRoute(appModel)
         let expiresAtMs = Int(Date().timeIntervalSince1970 * 1000) + 1000
         try appModel._test_setUnifiedExecApprovalGetResponses([
             ("expires", makePendingApprovalJSON(
@@ -1840,7 +1944,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let (_, appModel) = makeWatchModel(notificationCenter: MockBootstrapNotificationCenter())
-        appModel.connectedGatewayID = "test-gateway"
+        configureMockApprovalRoute(appModel)
         let presentation: ApprovalPresentation = switch kind {
         case .exec: execApprovalPresentation(commandText: "echo event")
         case .plugin: pluginApprovalPresentation(title: "Review plugin action", description: "Send the request.")
@@ -1974,7 +2078,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let capture = ApprovalResolutionCapture()
         let (watchService, appModel) = makeWatchModel(
             notificationCenter: MockBootstrapNotificationCenter())
-        appModel.connectedGatewayID = "test-gateway"
+        configureMockApprovalRoute(appModel)
         appModel._test_setUnifiedExecApprovalGetResponse(pluginJSON)
         appModel._test_setExecApprovalResolutionSuccessHandler { _, kind, _, _ in
             await capture.record(kind: kind)
@@ -2007,7 +2111,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
         let firstWatchService = MockWatchMessagingService()
         let firstModel = NodeAppModel(watchMessagingService: firstWatchService)
-        firstModel.connectedGatewayID = "test-gateway"
+        configureMockApprovalRoute(firstModel)
         try firstModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-plugin-restored",
@@ -2023,7 +2127,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
         let restoredWatchService = MockWatchMessagingService()
         let restoredModel = NodeAppModel(watchMessagingService: restoredWatchService)
-        restoredModel.connectedGatewayID = "test-gateway"
+        configureMockApprovalRoute(restoredModel)
 
         #expect(restoredModel._test_pendingExecApprovalInboxItems().map(\.id) == [
             "approval-plugin-restored",
@@ -2133,6 +2237,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
         let (watchService, appModel) = makeWatchModel(
             notificationCenter: MockBootstrapNotificationCenter())
+        configureMockApprovalRoute(appModel)
         try appModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-race",
@@ -2160,6 +2265,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
         let (ownWinnerService, ownWinnerModel) = makeWatchModel(
             notificationCenter: MockBootstrapNotificationCenter())
+        configureMockApprovalRoute(ownWinnerModel)
         try ownWinnerModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-race",
@@ -2192,6 +2298,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     @Test @MainActor func `legacy approval resolve acknowledgment uses neutral gateway attribution`() async throws {
         let (watchService, appModel) = makeWatchModel(
             notificationCenter: MockBootstrapNotificationCenter())
+        configureMockApprovalRoute(appModel)
         try appModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-legacy-ack",
@@ -2218,6 +2325,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             warningText: "Deletes build output",
             applied: false)
         let appModel = makeNodeModelWithMockServices()
+        configureMockApprovalRoute(appModel)
         try appModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-denied-elsewhere",
@@ -2329,6 +2437,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let appModel = makeNodeModelWithMockServices()
+        configureMockApprovalRoute(appModel)
         let approvalID = "approval-uncertain-dismissible"
         let prompt = try #require(NodeAppModel._test_makeExecApprovalPrompt(
             id: approvalID,
@@ -2351,6 +2460,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(appModel._test_pendingExecApprovalState().error == uncertainMessage)
 
         let restoredModel = makeNodeModelWithMockServices()
+        configureMockApprovalRoute(restoredModel, stableID: prompt.gatewayStableID)
         restoredModel._test_presentExecApprovalPrompt(prompt)
         #expect(restoredModel._test_pendingExecApprovalState().resolving)
         #expect(restoredModel._test_pendingExecApprovalState().error == uncertainMessage)
@@ -2367,6 +2477,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let approvalID = "approval-uncertain-readback-fence"
         let appModel = NodeAppModel(watchMessagingService: MockWatchMessagingService())
+        configureMockApprovalRoute(appModel)
         try appModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: approvalID,
@@ -2403,6 +2514,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             commandText: "echo expired",
             expiresAtMs: 1))
         let firstModel = NodeAppModel(watchMessagingService: MockWatchMessagingService())
+        configureMockApprovalRoute(firstModel, stableID: prompt.gatewayStableID)
         firstModel._test_presentExecApprovalPrompt(prompt)
         firstModel._test_setPendingExecApprovalPromptUncertain("Awaiting expired terminal truth.")
         #expect(firstModel._test_watchExecApprovalCacheIDs().isEmpty)
@@ -2411,7 +2523,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let restoredModel = NodeAppModel(
             notificationCenter: MockBootstrapNotificationCenter(),
             watchMessagingService: MockWatchMessagingService())
-        restoredModel.connectedGatewayID = prompt.gatewayStableID
+        configureMockApprovalRoute(restoredModel, stableID: prompt.gatewayStableID)
         #expect(restoredModel._test_watchExecApprovalCacheIDs().isEmpty)
         #expect(restoredModel._test_pendingPersistedExecApprovalReadbacks().map(\.approvalId) == [approvalID])
         restoredModel._test_setUnifiedExecApprovalGetResponse(makeExpiredExecApprovalJSON(approvalID))
@@ -2422,6 +2534,107 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(restoredModel.pendingExecApprovalPrompt == nil)
     }
 
+    @Test(arguments: [true, false]) @MainActor
+    func `startup remembered chat retains delivered watch decision without an approval route`(
+        matchingCachedPrompt: Bool) async throws
+    {
+        let isolation = await GatewayRegistryTestIsolation()
+        defer { isolation.restore() }
+        let state = try TemporaryOpenClawState(instanceID: "startup-watch-\(UUID().uuidString)")
+        defer { state.restore() }
+        let defaults = UserDefaults.standard
+        let bridgeKey = "watch.execApproval.bridge.state.v1"
+        let previousBridgeState = defaults.object(forKey: bridgeKey)
+        let stableID = "startup-approval-\(UUID().uuidString)"
+        let savedChat = "agent:main:dashboard:startup-watch-custody"
+        defer {
+            defaults.removeObject(forKey: bridgeKey)
+            if let previousBridgeState { defaults.set(previousBridgeState, forKey: bridgeKey) }
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: nil)
+            GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: nil)
+        }
+        defaults.removeObject(forKey: bridgeKey)
+        try #require(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: stableID, kind: .manual, name: "Startup approval test",
+            host: "approval-fixture.example.test", port: 443, useTLS: true,
+            contextPath: nil, lastConnectedAtMs: nil), activate: true))
+        GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: "main")
+        GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: savedChat)
+
+        struct CachedApproval: Decodable {
+            let id: String
+            let gatewayStableID: String
+        }
+        struct DeliveredDecision: Decodable, Equatable {
+            let replyId: String
+            let approvalId: String
+            let gatewayStableID: String
+            let decision: String
+        }
+        struct BridgeState: Decodable {
+            let approvals: [CachedApproval]
+            let pendingResolutions: [DeliveredDecision]
+        }
+        func persistedBridge() throws -> BridgeState {
+            try JSONDecoder().decode(
+                BridgeState.self, from: #require(defaults.data(forKey: bridgeKey)))
+        }
+
+        let cachedID = matchingCachedPrompt ? "startup-delivered-approval" : "startup-unrelated-approval"
+        do {
+            let producer = NodeAppModel(
+                notificationCenter: MockBootstrapNotificationCenter(),
+                watchMessagingService: MockWatchMessagingService(),
+                audioAdmissionInitiallyAllowed: false)
+            defer { producer.voiceWake.stop() }
+            configureMockApprovalRoute(producer, stableID: stableID)
+            try producer._test_presentExecApprovalPrompt(#require(NodeAppModel._test_makeExecApprovalPrompt(
+                id: cachedID, gatewayStableID: stableID, commandText: "echo startup custody",
+                expiresAtMs: 4_000_000_000_000)))
+        }
+        let seeded = try persistedBridge()
+        #expect(seeded.approvals.map(\.id) == [cachedID])
+        #expect(seeded.approvals.map(\.gatewayStableID) == [stableID])
+        #expect(seeded.pendingResolutions.isEmpty)
+
+        // Use the real startup constructor and resolve owner, with no fetch/resolve hook.
+        // Remembered Chat must not admit a cached write or consume an uncached reply.
+        let model = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: MockWatchMessagingService(),
+            audioAdmissionInitiallyAllowed: false, restoringSavedGatewayRoute: true)
+        defer { model.voiceWake.stop() }
+        #expect(model.activeGatewayConnectConfig == nil)
+        #expect(!model.gatewayConnected)
+        #expect(!model.isOperatorGatewayConnected)
+        #expect(await model.operatorSession.currentRoute() == nil)
+        #expect(model.connectedGatewayID == stableID)
+        #expect(model.chatSessionKey == savedChat)
+        let delivered = WatchExecApprovalResolveEvent(
+            replyId: "startup-delivered-reply", approvalId: "startup-delivered-approval",
+            gatewayStableID: stableID, decision: .deny, sentAtMs: 123, transport: "transferUserInfo")
+        let expected = [DeliveredDecision(
+            replyId: "startup-delivered-reply", approvalId: "startup-delivered-approval",
+            gatewayStableID: stableID, decision: "deny")]
+
+        #expect(await model.handleWatchExecApprovalResolve(delivered) == false)
+        #expect(try persistedBridge().pendingResolutions == expected)
+        #expect(await model.handleWatchExecApprovalResolve(delivered) == false)
+        #expect(try persistedBridge().pendingResolutions == expected)
+
+        let recreated = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: MockWatchMessagingService(),
+            audioAdmissionInitiallyAllowed: false, restoringSavedGatewayRoute: true)
+        defer { recreated.voiceWake.stop() }
+        #expect(recreated.activeGatewayConnectConfig == nil)
+        #expect(!recreated.gatewayConnected)
+        #expect(!recreated.isOperatorGatewayConnected)
+        #expect(recreated.connectedGatewayID == stableID)
+        #expect(recreated.chatSessionKey == savedChat)
+        #expect(try persistedBridge().pendingResolutions == expected)
+    }
+
     @Test @MainActor func `canonical pending readback resumes queued watch decision`() async throws {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
@@ -2429,6 +2642,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let appModel = NodeAppModel(
             notificationCenter: MockBootstrapNotificationCenter(),
             watchMessagingService: MockWatchMessagingService())
+        configureMockApprovalRoute(appModel)
         let prompt = try #require(NodeAppModel._test_makeExecApprovalPrompt(
             id: approvalID,
             commandText: "echo watch",
@@ -2464,6 +2678,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let appModel = NodeAppModel(watchMessagingService: MockWatchMessagingService())
+        configureMockApprovalRoute(appModel)
         let firstPrompt = try #require(NodeAppModel._test_makeExecApprovalPrompt(
             id: "approval-uncertain-replaced",
             commandText: "echo first",
@@ -2506,6 +2721,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let appModel = NodeAppModel(
             notificationCenter: MockBootstrapNotificationCenter(),
             watchMessagingService: MockWatchMessagingService())
+        configureMockApprovalRoute(appModel)
         let approvalID = "approval-terminal-beats-uncertain"
         try appModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
@@ -2585,6 +2801,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(appModel._test_pendingExecApprovalState().error == "simulated approval write failure")
 
         let restoredModel = makeNodeModelWithMockServices()
+        configureMockApprovalRoute(restoredModel, stableID: prompt.gatewayStableID)
         restoredModel._test_presentExecApprovalPrompt(prompt)
         #expect(restoredModel._test_pendingExecApprovalState().resolving)
         #expect(restoredModel._test_pendingExecApprovalState().error == "simulated approval write failure")
@@ -2701,6 +2918,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let appModel = makeNodeModelWithMockServices()
+        configureMockApprovalRoute(appModel)
         let approvalID = "approval-watch-unknown-ack-retry"
         let prompt = try #require(NodeAppModel._test_makeExecApprovalPrompt(
             id: approvalID,
@@ -2832,7 +3050,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let resolveModel = NodeAppModel(
             notificationCenter: MockBootstrapNotificationCenter(),
             watchMessagingService: watchService)
-        resolveModel.connectedGatewayID = composedGatewayID
+        configureMockApprovalRoute(resolveModel, stableID: composedGatewayID)
         try resolveModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-exact-gateway-resolve",
@@ -2840,7 +3058,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 commandText: "echo resolve",
                 allowedDecisions: ["deny"],
                 expiresAtMs: 4_000_000_000_000)))
-        resolveModel.connectedGatewayID = decomposedGatewayID
+        configureMockApprovalRoute(resolveModel, stableID: decomposedGatewayID)
 
         let applied = await resolveModel._test_applyLegacyExecApprovalTerminal(
             approvalID: "approval-exact-gateway-resolve",
@@ -4377,6 +4595,41 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(talkMode.canKeepContinuousTalkActiveInBackground)
     }
 
+    @Test @MainActor func `background expiry preserves continuous Talk until it stops`() async {
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: "talk.background.enabled")
+        defaults.set(true, forKey: "talk.background.enabled")
+        let (talkMode, appModel) = makeTalkModel()
+        talkMode.updateGatewayConnected(true)
+        talkMode.isEnabled = true
+        talkMode._test_setContinuousTranscriptProcessingActive(true)
+        appModel.gatewayConnected = true
+        defer {
+            talkMode.stop()
+            appModel.setScenePhase(.active)
+            if let previous {
+                defaults.set(previous, forKey: "talk.background.enabled")
+            } else {
+                defaults.removeObject(forKey: "talk.background.enabled")
+            }
+        }
+
+        appModel.setScenePhase(.background)
+        appModel.suppressBackgroundReconnect(reason: "background_grace_timer")
+
+        #expect(!appModel.backgroundReconnectSuppressed)
+        #expect(appModel.gatewayConnected)
+        #expect(talkMode.isGatewayConnected)
+        #expect(talkMode.canKeepContinuousTalkActiveInBackground)
+
+        talkMode.stop()
+        appModel.suppressBackgroundReconnect(reason: "node_loop:lease_expired")
+        #expect(appModel.backgroundReconnectSuppressed)
+        await waitForTalkCondition { !talkMode.isGatewayConnected }
+        #expect(!appModel.gatewayConnected)
+        #expect(appModel.gatewayStatusText == "Background idle")
+    }
+
     @Test @MainActor func `late finalizer release cannot restart Voice Wake in background`() async throws {
         let (talkMode, appModel) = makeTalkModel()
         let barrier = TalkPreparationBarrier()
@@ -5000,6 +5253,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
     @Test @MainActor func `dismiss pending exec approval prompt by id leaves different prompt visible`() throws {
         let appModel = NodeAppModel()
+        configureMockApprovalRoute(appModel)
         try appModel._test_presentExecApprovalPrompt(
             #require(
                 NodeAppModel._test_makeExecApprovalPrompt(
@@ -5016,6 +5270,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
     @Test @MainActor func `presenting exec approval prompt syncs watch prompt`() async throws {
         let (watchService, appModel) = makeWatchModel()
+        configureMockApprovalRoute(appModel)
         let prompt = try #require(
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-watch-sync",
@@ -5044,6 +5299,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let (watchService, appModel) = makeWatchModel(
             notificationCenter: MockBootstrapNotificationCenter())
+        configureMockApprovalRoute(appModel)
         let (snapshotEvents, snapshotEventContinuation) = AsyncStream.makeStream(
             of: OpenClawWatchExecApprovalSnapshotMessage.self)
         defer { snapshotEventContinuation.finish() }
@@ -5082,6 +5338,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let (watchService, appModel) = makeWatchModel(
             notificationCenter: MockBootstrapNotificationCenter())
+        configureMockApprovalRoute(appModel)
         let futureExpiryMs = Int64(Date().timeIntervalSince1970 * 1000) + 60000
         try appModel._test_presentExecApprovalPrompt(
             #require(
@@ -5155,7 +5412,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let (watchService, appModel) = makeWatchModel(
             notificationCenter: MockBootstrapNotificationCenter())
-        appModel.connectedGatewayID = "test-gateway"
+        configureMockApprovalRoute(appModel)
         let approvalID = "approval-held-pending"
         let resolutionAttemptID = "attempt-e\u{0301}-\u{0085}"
         appModel._test_setUnifiedExecApprovalGetResponse(makePendingExecApprovalJSON(approvalID))
@@ -5181,7 +5438,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let (watchService, appModel) = makeWatchModel(
             notificationCenter: MockBootstrapNotificationCenter())
-        appModel.connectedGatewayID = "test-gateway"
+        configureMockApprovalRoute(appModel)
         appModel._test_setUnifiedExecApprovalGetResponse(#"{"invalid":true}"#)
         let snapshotCount = watchService.sentExecApprovalSnapshots.count
 
@@ -5201,7 +5458,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let (watchService, appModel) = makeWatchModel(
             notificationCenter: MockBootstrapNotificationCenter())
-        appModel.connectedGatewayID = "test-gateway"
+        configureMockApprovalRoute(appModel)
         let approvalIDs = ["approval-held-b", "approval-held-a"]
         appModel._test_setUnifiedExecApprovalGetResponses(approvalIDs.map {
             (approvalID: $0, json: makePendingExecApprovalJSON($0))
@@ -5238,7 +5495,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         """#)
         let (watchService, appModel) = makeWatchModel(
             notificationCenter: MockBootstrapNotificationCenter())
-        appModel.connectedGatewayID = "test-gateway"
+        configureMockApprovalRoute(appModel)
         try appModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-cached-owner",
@@ -5287,7 +5544,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             GatewayStableIdentifier.key(decomposedGatewayID))
         let (watchService, appModel) = makeWatchModel(
             notificationCenter: MockBootstrapNotificationCenter())
-        appModel.connectedGatewayID = composedGatewayID
+        configureMockApprovalRoute(appModel, stableID: composedGatewayID)
         try appModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-watch-exact-owner",
@@ -5323,7 +5580,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let (watchService, appModel) = makeWatchModel(
             notificationCenter: MockBootstrapNotificationCenter())
-        appModel.connectedGatewayID = "test-gateway"
+        configureMockApprovalRoute(appModel)
         try appModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-watch-not-found",
@@ -5350,7 +5607,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let (watchService, appModel) = makeWatchModel(
             notificationCenter: MockBootstrapNotificationCenter())
-        appModel.connectedGatewayID = "test-gateway"
+        configureMockApprovalRoute(appModel)
         try appModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-watch-stale-cache",
@@ -5380,7 +5637,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let (watchService, appModel) = makeWatchModel(
             notificationCenter: MockBootstrapNotificationCenter())
-        appModel.connectedGatewayID = "test-gateway"
+        configureMockApprovalRoute(appModel)
         appModel._test_setUnifiedExecApprovalGetResponse(makeDeniedExecApprovalJSON(
             "approval-watch-terminal-readback",
             commandText: "echo guarded"))
@@ -5407,7 +5664,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let (watchService, appModel) = makeWatchModel(
             notificationCenter: MockBootstrapNotificationCenter())
-        appModel.connectedGatewayID = "test-gateway"
+        configureMockApprovalRoute(appModel)
         appModel._test_setUnifiedExecApprovalGetResponse(makePendingExecApprovalJSON(
             "approval-watch-pending-readback",
             commandText: "echo guarded",
@@ -5436,7 +5693,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let fetchGate = WatchSnapshotSendGate()
         let appModel = makeNodeModelWithMockServices()
-        appModel.connectedGatewayID = "test-gateway"
+        configureMockApprovalRoute(appModel)
         try appModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-visible-b",
@@ -5468,7 +5725,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let fetchGate = WatchSnapshotSendGate()
         let appModel = NodeAppModel(watchMessagingService: MockWatchMessagingService())
-        appModel.connectedGatewayID = "test-gateway"
+        configureMockApprovalRoute(appModel)
         appModel._test_setUnifiedExecApprovalGetResponse(
             makePendingExecApprovalJSON("approval-delayed-a", commandText: "echo delayed-a"),
             beforeResponse: { await fetchGate.wait() })
@@ -5497,7 +5754,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let fetchGate = WatchSnapshotSendGate()
         let (watchService, appModel) = makeWatchModel(
             notificationCenter: MockBootstrapNotificationCenter())
-        appModel.connectedGatewayID = "test-gateway"
+        configureMockApprovalRoute(appModel)
         let approvalID = "approval-terminal-interleave"
         try appModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
@@ -5544,7 +5801,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let (watchService, appModel) = makeWatchModel()
-        appModel.connectedGatewayID = "test-gateway"
+        configureMockApprovalRoute(appModel)
         let prompt = try #require(NodeAppModel._test_makeExecApprovalPrompt(
             id: "approval-reconnect-restore",
             commandText: "echo restore",
@@ -5578,6 +5835,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let (watchService, appModel) = makeWatchModel(
             notificationCenter: MockBootstrapNotificationCenter())
+        configureMockApprovalRoute(appModel)
         try appModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-watch-reconcile",
@@ -5607,6 +5865,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let appModel = NodeAppModel(watchMessagingService: MockWatchMessagingService())
+        configureMockApprovalRoute(appModel)
         let approvalID = "approval-phone-write-race"
         try appModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
@@ -5652,6 +5911,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let (watchService, appModel) = makeWatchModel(
             notificationCenter: MockBootstrapNotificationCenter())
+        configureMockApprovalRoute(appModel)
         let approvalID = "approval-phone-watch-lease"
         try appModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
@@ -5705,7 +5965,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let appModel = NodeAppModel(watchMessagingService: MockWatchMessagingService())
-        appModel.connectedGatewayID = "test-gateway"
+        configureMockApprovalRoute(appModel)
         for approvalID in ["approval-b", "approval-a"] {
             try appModel._test_presentExecApprovalPrompt(#require(
                 NodeAppModel._test_makeExecApprovalPrompt(
@@ -5764,7 +6024,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let gatewayStableID = " gateway-watch-snapshot "
         appModel.gatewayConnected = true
         appModel.setOperatorConnected(true)
-        appModel.connectedGatewayID = gatewayStableID
+        configureMockApprovalRoute(appModel, stableID: gatewayStableID)
         appModel.gatewayStatusText = "Connected"
         appModel.talkMode.setEnabled(true)
         appModel.talkMode.statusText = "Listening"
@@ -6010,6 +6270,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let (watchService, appModel) = makeWatchModel()
+        configureMockApprovalRoute(appModel)
         let previousSnapshotID = watchService.lastSentAppSnapshot?.snapshotId
 
         try appModel._test_presentExecApprovalPrompt(
@@ -6065,11 +6326,68 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(watchService.lastSentAppSnapshot?.sessionKey == "incident-42")
     }
 
+    @Test(arguments: [OpenClawWatchAppCommand.openChat, .startTalk]) @MainActor
+    func `restored startup rejects tagged watch actions until a route is configured`(
+        command: OpenClawWatchAppCommand) async throws
+    {
+        let isolation = await GatewayRegistryTestIsolation()
+        defer { isolation.restore() }
+        let state = try TemporaryOpenClawState(instanceID: "startup-watch-action-\(UUID().uuidString)")
+        defer { state.restore() }
+        let stableID = "startup-watch-action-\(UUID().uuidString)"
+        let savedChat = "agent:main:dashboard:startup-watch-action"
+        defer {
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: nil)
+            GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: nil)
+        }
+        try #require(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: stableID, kind: .manual, name: "Startup Watch action test",
+            host: "watch-fixture.example.test", port: 443, useTLS: true,
+            contextPath: nil, lastConnectedAtMs: nil), activate: true))
+        GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: "main")
+        GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: savedChat)
+
+        let messaging = MockWatchMessagingService()
+        let model = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: messaging,
+            audioAdmissionInitiallyAllowed: false, restoringSavedGatewayRoute: true)
+        defer { model.voiceWake.stop() }
+        #expect(model.connectedGatewayID == stableID)
+        #expect(model.chatSessionKey == savedChat)
+        #expect(model.activeGatewayConnectConfig == nil)
+        #expect(await model.operatorSession.currentRoute() == nil)
+        model.setTalkEnabled(false)
+        let opened = model.openChatRequestID
+
+        messaging.emitAppCommand(makeWatchAppCommand(
+            "startup-tagged-action", command, session: "watch-requested-session",
+            gateway: stableID, sentAt: 125, transport: "transferUserInfo"))
+        try #require(await waitForMainActorWork { messaging.lastSentAppSnapshot != nil })
+        #expect(model.openChatRequestID == opened)
+        #expect(model.chatSessionKey == savedChat)
+        #expect(!model.talkMode.isEnabled)
+        #expect(messaging.lastSentAppSnapshot?.gatewayStableID == nil)
+
+        // The same tagged target is valid once an actual connection config owns it.
+        configureMockApprovalRoute(model, stableID: stableID)
+        messaging.emitAppCommand(makeWatchAppCommand(
+            "configured-tagged-action", command, session: "watch-requested-session",
+            gateway: stableID, sentAt: 126, transport: "transferUserInfo"))
+        try #require(await waitForMainActorWork {
+            command == .openChat ? model.openChatRequestID == opened + 1 : model.talkMode.isEnabled
+        })
+        if command == .openChat {
+            #expect(model.chatSessionKey == "watch-requested-session")
+        }
+        model.setTalkEnabled(false)
+    }
+
     @Test @MainActor func `watch app commands reject stale gateway targets`() async {
         let watchService = MockWatchMessagingService()
         let talkMode = TalkModeManager(allowSimulatorCapture: true)
         let appModel = NodeAppModel(watchMessagingService: watchService, talkMode: talkMode)
-        appModel.connectedGatewayID = "gateway-current"
+        configureMockApprovalRoute(appModel, stableID: "gateway-current")
         appModel.setTalkEnabled(false)
 
         for command in [OpenClawWatchAppCommand.openChat, .startTalk] {
@@ -7765,13 +8083,13 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         appModel._test_setUnifiedExecApprovalGetResponse(makePendingExecApprovalJSON(
             "approval-shipped-cache",
             commandText: "canonical command"))
-        appModel.connectedGatewayID = "gateway-b"
+        configureMockApprovalRoute(appModel, stableID: "gateway-b")
         await appModel.reconcileWatchExecApprovalCache(reason: "operator_reconnected")
         #expect(appModel._test_watchExecApprovalCacheIDs().isEmpty)
         #expect(appModel.pendingExecApprovalPrompt == nil)
         #expect(appModel._test_pendingPersistedExecApprovalReadbacks().count == 1)
 
-        appModel.connectedGatewayID = "gateway-a"
+        configureMockApprovalRoute(appModel, stableID: "gateway-a")
         await appModel.reconcileWatchExecApprovalCache(reason: "operator_reconnected")
         #expect(appModel._test_watchExecApprovalCacheIDs() == ["approval-shipped-cache"])
         #expect(appModel.pendingExecApprovalPrompt?.id == "approval-shipped-cache")
@@ -7785,6 +8103,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
 
         let appModel = NodeAppModel(notificationCenter: MockBootstrapNotificationCenter())
+        configureMockApprovalRoute(appModel)
         appModel._test_recordPendingWatchExecApprovalRecoveryID("approval-watch-clear")
         #expect(appModel._test_pendingWatchExecApprovalRecoveryIDs() == ["approval-watch-clear"])
 
@@ -7899,7 +8218,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             ])]
         let appModel = NodeAppModel(notificationCenter: notificationCenter)
         let gatewayStableID = "test-gateway"
-        appModel.connectedGatewayID = gatewayStableID
+        configureMockApprovalRoute(appModel, stableID: gatewayStableID)
         appModel._test_recordPendingWatchExecApprovalRecoveryID(
             "approval-event-resolved",
             gatewayDeviceId: "gateway-device-a")
@@ -7962,7 +8281,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let appModel = NodeAppModel(notificationCenter: MockBootstrapNotificationCenter())
-        appModel.connectedGatewayID = "gateway-a"
+        configureMockApprovalRoute(appModel, stableID: "gateway-a")
         appModel._test_setExecApprovalPromptFetchFailure("gateway unavailable")
         let gatewayA = ApprovalNotificationPrompt(
             approvalId: "shared-approval-id",
@@ -8017,7 +8336,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let composedID = "approval-\u{00E9}"
         let decomposedID = "approval-e\u{0301}"
         let (watchService, appModel) = makeWatchModel()
-        appModel.connectedGatewayID = "test-gateway"
+        configureMockApprovalRoute(appModel)
 
         for approvalID in [composedID, decomposedID] {
             try appModel._test_presentExecApprovalPrompt(#require(
@@ -8056,6 +8375,20 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 bootstrapToken: nil,
                 password: nil,
                 hasStoredOperatorToken: false))
+        #expect(
+            NodeAppModel.shouldStartOperatorGatewayLoop(
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
+                hasStoredOperatorToken: false,
+                hasVerifiedIngressPrincipal: true))
+        #expect(
+            !NodeAppModel.shouldStartOperatorGatewayLoop(
+                token: nil,
+                bootstrapToken: "fresh-bootstrap-token",
+                password: nil,
+                hasStoredOperatorToken: false,
+                hasVerifiedIngressPrincipal: true))
         #expect(
             NodeAppModel.shouldStartOperatorGatewayLoop(
                 token: nil,
@@ -8113,7 +8446,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let appModel = NodeAppModel(
             notificationCenter: center,
             watchMessagingService: MockWatchMessagingService())
-        appModel.connectedGatewayID = "test-gateway"
+        configureMockApprovalRoute(appModel)
         appModel._test_setExecApprovalPromptFetchFailure("route_changed")
 
         await appModel.handleOperatorGatewayServerEvent(EventFrame(
@@ -8196,7 +8529,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             seq: nil,
             stateversion: nil))
         _ = try #require(appModel.pendingNotificationPermissionGuidancePrompt)
-        appModel.connectedGatewayID = "test-gateway"
+        configureMockApprovalRoute(appModel)
         appModel._test_setUnifiedExecApprovalGetResponse(makeDeniedExecApprovalJSON(
             "approval-guidance-resolved",
             commandText: "echo guarded"))
@@ -8971,7 +9304,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         case "whitespace", "trimmed-is-other": " gateway-\(suffix) "
         default: nil
         }
-        model.connectedGatewayID = currentID
+        configureMockApprovalRoute(model, stableID: currentID)
         model.selectedAgentId = "ui-other"
         model.gatewayDefaultAgentId = "main"
         let databases = try OpenClawClientDatabases(directoryURL: #require(NodeAppModel.chatDatabaseDirectoryURL()))
@@ -9170,7 +9503,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("Sent to gateway") == true)
     }
 
-    @Test @MainActor func `operator scopes use the active gateway token`() throws {
+    @Test @MainActor func `stored operator scopes request permissions without granting disconnected authority`() throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -9216,8 +9549,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             token: "operator-token",
             scopes: ["operator.read", "operator.admin", "operator.approvals"],
             gatewayID: authenticationOwnerID)
-        appModel.refreshOperatorAdminScopeFromStore()
-        #expect(appModel.hasOperatorAdminScope == true)
+        #expect(appModel.hasOperatorAdminScope == false)
         #expect(appModel._test_shouldRequestStoredOperatorAdminScope(gatewayID: authenticationOwnerID))
         #expect(appModel._test_shouldRequestStoredOperatorApprovalScope(
             gatewayID: authenticationOwnerID,
@@ -9233,7 +9565,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             deviceId: identity.deviceId,
             role: "operator",
             gatewayID: authenticationOwnerID)
-        appModel.refreshOperatorAdminScopeFromStore()
         #expect(appModel.hasOperatorAdminScope == false)
     }
 

@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { getOwedHarnessCompletionTask } from "../../agents/agent-harness-completion-recovery.js";
 import { resolveMessageReceiptPrimaryId } from "../../channels/message/receipt.js";
 import {
   ConversationDeliveryMissingError,
@@ -29,6 +28,7 @@ import {
 import type { PendingFinalDeliverySettlementInput } from "../../config/sessions/session-pending-final-settlement.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { resolveStateDir } from "../../config/state-dir.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   isSameOpenClawAgentDatabasePath,
@@ -40,6 +40,7 @@ import {
   resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
+import { formatErrorMessage } from "../errors.js";
 import { isGatewayExternallySupervised } from "../gateway-supervision.js";
 import { wrapSqliteWorkerError } from "../sqlite-worker-contract.js";
 import {
@@ -53,6 +54,8 @@ import {
   type DeliveryPlacementEvidence,
 } from "./delivery-placement-evidence.js";
 import type { DurableDeliveryCompletion } from "./delivery-queue-types.js";
+
+const log = createSubsystemLogger("outbound/delivery-completion");
 
 /** In-process locator captured before delivery preparation; never queue payload data. */
 export type ConversationDeliveryTarget = Pick<
@@ -153,11 +156,10 @@ export async function settlePendingFinalDelivery(
     identifiedResult?: OutboundDeliveryResult;
     batch?: DeliveryEvidenceBatch;
     /** Delivery has settled; durable queue owners must retain their receipt until ACK. */
-    clearAfterSettled?: { recoveryRunId?: string };
+    clearAfterSettled?: true;
   } = {},
 ): Promise<DurableDeliveryCompletionResult> {
   let settled: DurableDeliveryCompletionResult["state"] = "stale";
-  let wakeRecovery = false;
   const scope = {
     agentId: completion.agentId,
     sessionKey: completion.sessionKey,
@@ -174,7 +176,6 @@ export async function settlePendingFinalDelivery(
       ? {
           cleanup: {
             sessionKey: completion.sessionKey,
-            recoveryRunId: options.clearAfterSettled.recoveryRunId,
             now: Date.now(),
             preserveActivity: options.preserveActivity,
           },
@@ -182,7 +183,6 @@ export async function settlePendingFinalDelivery(
       : {}),
   };
   const authority = completion.sessionWriterDeliveryAuthority;
-  const claim = authority?.harnessCompletion;
   if (
     completion.agentId !== undefined &&
     authority?.agentId !== undefined &&
@@ -191,41 +191,24 @@ export async function settlePendingFinalDelivery(
     return { state: "stale" };
   }
   let refused = false;
-  let preimage: SessionEntry | undefined;
-  const hasCurrentClaim = (entry: SessionEntry | undefined, previous = entry) =>
-    !claim ||
-    Boolean(
-      entry &&
-      previous &&
-      entry.sessionId === completion.sessionId &&
-      entry.pendingFinalDelivery?.intentId === completion.intentId &&
-      entry.pendingFinalDelivery.deliveries?.some(({ id }) => id === completion.deliveryId) &&
-      authority &&
-      authority.sessionKey === completion.sessionKey &&
-      (authority.storePath === undefined || authority.storePath === completion.storePath) &&
-      claim.requesterSessionKey === completion.sessionKey &&
-      claim.sessionId === completion.sessionId &&
-      authority.expectedSessionId === completion.sessionId &&
-      (authority.agentId === undefined || authority.agentId === claim.requesterAgentId) &&
-      (completion.agentId === undefined ||
-        normalizeAgentId(claim.requesterAgentId) === normalizeAgentId(completion.agentId)) &&
-      (authority.expectedLifecycleRevision === undefined ||
-        authority.expectedLifecycleRevision === entry.lifecycleRevision) &&
-      (authority.expectedWriterRunId === undefined ||
-        authority.expectedWriterRunId === entry.activeWriterRunId) &&
-      getOwedHarnessCompletionTask(claim, previous),
-    );
   const evidence = (entry: SessionEntry | undefined): SessionActorDeliveryEvidence => ({
-    ...(claim ? { claim } : {}),
     result: resolvePendingFinalResultEvidence(options, entry?.pendingFinalDelivery?.context),
   });
   const live: SessionActorAuthority = {
     assertCurrent() {},
-    authorize(stage, facts) {
-      if (stage === "transaction" || !preimage) {
-        preimage = facts.entry;
-      }
-      if (!hasCurrentClaim(facts.entry, preimage)) {
+    authorize(_stage, facts) {
+      const entry = facts.entry;
+      if (
+        authority &&
+        (!entry ||
+          authority.sessionKey !== completion.sessionKey ||
+          (authority.storePath !== undefined && authority.storePath !== completion.storePath) ||
+          authority.expectedSessionId !== entry.sessionId ||
+          (authority.expectedLifecycleRevision !== undefined &&
+            authority.expectedLifecycleRevision !== entry.lifecycleRevision) ||
+          (authority.expectedWriterRunId !== undefined &&
+            authority.expectedWriterRunId !== entry.activeWriterRunId))
+      ) {
         refused = true;
         throw new Error("Pending final delivery authority was revoked");
       }
@@ -270,22 +253,10 @@ export async function settlePendingFinalDelivery(
       throw new Error("Pending final delivery returned another settlement");
     }
     settled = outcome.value.state;
-    wakeRecovery = outcome.value.wakeRecovery;
     if (outcome.failure) {
       throw new Error(outcome.failure.message);
     }
   });
-  if (wakeRecovery) {
-    const { scheduleMainSessionRecoveryPendingTarget } =
-      await import("../../agents/main-session-recovery/main-session-recovery-owner-release.js");
-    scheduleMainSessionRecoveryPendingTarget({
-      ...(completion.agentId !== undefined ? { agentId: completion.agentId } : {}),
-      sessionId: completion.sessionId,
-      sessionKey: completion.sessionKey,
-      ...(options.stateDir !== undefined ? { stateDir: options.stateDir } : {}),
-      storePath: completion.storePath,
-    });
-  }
   return { state: settled };
 }
 
@@ -343,6 +314,38 @@ function readPlatformMessageId(result: OutboundDeliveryResult): string | undefin
   return receiptId ?? (result.messageId.trim() || undefined);
 }
 
+/**
+ * A plugin notice has no owner record to update; its owner is the posting plugin, which must
+ * still be loaded and enabled in this process. The returned check reads the live registry on
+ * each call, so recovery can repeat it synchronously right before transport I/O.
+ */
+export async function preparePluginNoticeOwnerCheck(pluginId: string): Promise<() => void> {
+  const [{ getActivePluginRegistry }, { isPluginRecordActive }] = await Promise.all([
+    import("../../plugins/runtime.js"),
+    import("../../plugins/registry-lifecycle.js"),
+  ]);
+  return () => {
+    const registry = getActivePluginRegistry();
+    const record = registry?.plugins.find((plugin) => plugin.id === pluginId);
+    if (!registry || !record || !isPluginRecordActive(registry, record)) {
+      throw new Error(`plugin "${pluginId}" that posted this notice is no longer active`);
+    }
+  };
+}
+
+async function pluginNoticeOwnerState(
+  completion: Extract<DurableDeliveryCompletion, { kind: "plugin-notice" }>,
+): Promise<DurableDeliveryCompletionResult> {
+  try {
+    (await preparePluginNoticeOwnerCheck(completion.pluginId))();
+    return { state: "queued" };
+  } catch (error) {
+    const rejectionError = formatErrorMessage(error);
+    log.warn(`Refusing a queued plugin notice: ${rejectionError}`);
+    return { state: "rejected", rejectionError };
+  }
+}
+
 /** Records queue ownership before either the live sender or recovery crosses platform I/O. */
 export async function markDurableDeliveryQueued(
   completion: DurableDeliveryCompletion,
@@ -352,6 +355,9 @@ export async function markDurableDeliveryQueued(
   stateContext?: DeliveryQueueStateContext,
   target?: ConversationDeliveryTarget,
 ): Promise<DurableDeliveryCompletionResult> {
+  if (completion.kind === "plugin-notice") {
+    return await pluginNoticeOwnerState(completion);
+  }
   return completion.kind === "pending-final"
     ? // The reply dispatcher may have claimed direct custody ("queued") before the
       // durable enqueue; both states still belong to this send attempt.
@@ -403,6 +409,10 @@ export async function settleDurableDelivery(
       : "platformSendStarted" in evidence && evidence.platformSendStarted
         ? "unknown"
         : "suppressed";
+  if (completion.kind === "plugin-notice") {
+    // The posting plugin keeps no delivery record; the queue row is the only state.
+    return { state };
+  }
   return completion.kind === "pending-final"
     ? await settlePendingFinalDelivery(completion, state, undefined, {
         stateDir,

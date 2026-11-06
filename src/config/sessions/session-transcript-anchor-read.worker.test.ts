@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it as baseIt, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  nextEventLoopTurn,
+} from "../../../test/helpers/promise.js";
 import {
   observeHostDataSql,
   trackSqliteStatementExecutions,
@@ -41,7 +45,7 @@ import {
 import { readSessionTranscriptHydrationRequest } from "./session-transcript-hydration-read.worker.js";
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import * as targetWorker from "./session-transcript-read-worker-runtime.js";
-import { historyLane } from "./session-transcript-worker-resources.js";
+import { historyLane, targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 
 const events = [
@@ -365,6 +369,74 @@ it("reads active anchors and raw tail facts without caller SQL, including cold d
   await expect(fs.stat(absentPath)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
+it.for([false, true])(
+  "lets writers finish while hydration waits (changed=%s)",
+  async (changed, { scope }) => {
+    const { append } = await seedDatabase(scope);
+    const entered = createDeferred();
+    const release = createDeferred();
+    const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
+    let held = false;
+    const delayed = vi
+      .spyOn(targetDiscoveryLane.pool, "run")
+      .mockImplementation(async (...args) => {
+        const reply = await run(...args);
+        if (!held) {
+          held = true;
+          entered.resolve();
+          await release.promise;
+        }
+        return reply;
+      });
+    const consume = vi.fn(
+      (
+        prepared: import("./session-transcript-worker.types.js").PreparedSessionTranscriptHydration,
+      ) => {
+        if (prepared.kind !== "bounded") {
+          throw new Error("Expected bounded hydration");
+        }
+        expect(prepared.snapshot.events).toEqual(
+          changed
+            ? expect.arrayContaining([expect.objectContaining({ id: "later" })])
+            : expect.not.arrayContaining([expect.objectContaining({ id: "later" })]),
+        );
+      },
+    );
+    const hydration = prepareSessionTranscriptHydration(scope, { maxBytes: 4096, maxEvents: 10 });
+    const reading = hydration.readCohort!(
+      { sessionKey: scope.sessionKey, entryIds: ["question"] },
+      consume,
+    );
+    let writer: Promise<void> | undefined;
+    try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        reading,
+        "Hydration never entered the worker",
+      );
+      writer = runOpenClawAgentWriteAdmission(
+        { agentId: scope.agentId, path: scope.storePath, env: scope.env },
+        () => {
+          if (changed) {
+            append(message("later", "answer", "new response", "later-run"));
+          }
+        },
+      );
+      expect(
+        await Promise.race([writer.then(() => true), nextEventLoopTurn().then(() => false)]),
+      ).toBe(true);
+      expect(consume).not.toHaveBeenCalled();
+      release.resolve();
+      await reading;
+      expect(consume).toHaveBeenCalledTimes(1);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([reading, writer]);
+      delayed.mockRestore();
+    }
+  },
+);
+
 it.for([
   "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
   "UPDATE session_transcript_index_state SET indexed_seq = indexed_seq - 1 WHERE session_id = ?",
@@ -594,7 +666,11 @@ it("reuses bounded message payloads for presence without treating an omitted mes
           },
         },
         undefined,
-        { runNativeSection: async (run) => run(), throwIfCancelled() {} },
+        {
+          signal: new AbortController().signal,
+          runNativeSection: async (run) => run(),
+          throwIfCancelled() {},
+        },
       );
       if (result.kind !== "bounded") {
         throw new Error("Expected bounded transcript hydration");

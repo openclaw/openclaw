@@ -79,6 +79,34 @@ export function copyPrWrapperSources(destination: string): string[] {
   return components;
 }
 
+export function copyPrRoutingWrapperSources(destination: string): string[] {
+  // Routing, review artifacts, and supervision use tooling; app-import fixtures keep the full inventory.
+  // Keep the local-check component for the unanchored fixture's trust-drift assertions.
+  const components = [
+    "package.json",
+    "scripts/lib/plain-gh.sh",
+    "scripts/lib/plain-gh.mjs",
+    "scripts/lib/direct-run.mjs",
+    "scripts/lib/record-shared.mjs",
+    "scripts/lib/managed-child-process.mts",
+    "scripts/lib/managed-cleanup-handoff.mts",
+    "scripts/windows-cmd-helpers.mjs",
+    "scripts/lib/vitest-resource-ownership.mts",
+    "scripts/lib/windows-taskkill.mjs",
+    "scripts/lib/local-check-runtime.mts",
+  ];
+  const sources = ["scripts/pr", "scripts/pr-lib", ...components];
+  mkdirSync(join(destination, "scripts/lib"), { recursive: true });
+  for (const component of sources) {
+    cpSync(component, join(destination, component), { recursive: true });
+  }
+  writeFileSync(
+    join(destination, "scripts/pr-lib/wrapper-components.txt"),
+    `${components.join("\n")}\n`,
+  );
+  return sources;
+}
+
 export function linkPrWrapperDependencies(destination: string): void {
   // Fixture initialization may repeat; stale-base squash merges have reintroduced
   // duplicate initialization twice.
@@ -92,6 +120,7 @@ export function linkPrWrapperDependencies(destination: string): void {
     "acorn",
     "chalk",
     "commander",
+    "croner",
     "dotenv",
     "execa",
     "hosted-git-info",
@@ -111,6 +140,7 @@ export function linkPrWrapperDependencies(destination: string): void {
     "typebox",
     "typescript",
     "undici",
+    "ws",
     "yaml",
     "zod",
   ]) {

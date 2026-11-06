@@ -398,12 +398,17 @@ describe("modelsStatusCommand auth overview", () => {
     }
   });
 
-  it("rejects a non-integer probe concurrency", async () => {
+  it.each([
+    ["probeConcurrency", "--probe-concurrency", "2.5", "integer"],
+    ["probeTimeout", "--probe-timeout", "abc", "number"],
+  ])("rejects invalid %s", async (key, flag, value, kind) => {
     const localRuntime = createTestRuntime();
-    mocks.runAuthProbes.mockClear();
     await expect(
-      modelsStatusCommand({ json: true, probe: true, probeConcurrency: "2.5" }, localRuntime),
-    ).rejects.toThrow("--probe-concurrency");
+      modelsStatusCommand({ json: true, probe: true, [key]: value }, localRuntime),
+    ).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      message: `${flag} must be a positive ${kind}.`,
+    });
     expect(mocks.runAuthProbes).not.toHaveBeenCalled();
     expect(localRuntime.log).not.toHaveBeenCalled();
   });

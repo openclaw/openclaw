@@ -19,6 +19,29 @@ it("delivers remote EOF once when shutdown callers overlap", () => {
   }
 });
 
+it("reports a closed write separately from the queued stream failure", async () => {
+  const stream = new Writable({
+    write(_chunk, _encoding, callback) {
+      callback();
+    },
+  });
+  const onError = vi.fn();
+  const stdin = createManagedChildStdin(stream, undefined, onError)!;
+  const onWrite = vi.fn();
+  const closed = new Promise<void>((resolve) => {
+    stream.once("close", resolve);
+  });
+
+  stdin.destroy!();
+  stdin.write("late input", onWrite);
+  await closed;
+
+  expect(onWrite).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ code: "EPIPE" }));
+  expect(onError).toHaveBeenCalledTimes(2);
+  expect(onError.mock.calls[0]?.[0]).toBe(onWrite.mock.calls[0]?.[0]);
+  expect(onError).toHaveBeenNthCalledWith(2, expect.objectContaining({ code: "EPIPE" }));
+});
+
 it.each(["ECANCELED", "ERR_STREAM_DESTROYED", "EIO"])(
   "preserves remote pipe closure when buffered writes fail with %s",
   async (code) => {

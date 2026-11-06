@@ -15,7 +15,7 @@ import {
   createQaTransportAdapter,
   type QaTransportAdapterFactory,
 } from "./qa-transport-registry.js";
-import type { RuntimeParityScenarioExecution } from "./runtime-parity.js";
+import type { RuntimeParityScenarioExecution } from "./runtime-parity.types.js";
 import * as scenarioCatalog from "./scenario-catalog.js";
 import type { writeQaSuiteArtifacts } from "./suite-artifacts.js";
 import * as suiteRunStandard from "./suite-run-standard.js";

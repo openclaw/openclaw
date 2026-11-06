@@ -10,6 +10,7 @@ import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import {
   readSessionEntryCreationIdentity,
   projectSessionSharingEntry,
+  sessionSharingEntriesEqual,
   type CreatedSessionEntryReceipt,
   type CreationRecord,
   type PendingSessionEntryPublication,
@@ -259,19 +260,26 @@ export function publishRetainedSessionEntryChange(
   known: boolean,
   metadataEntry?: SessionEntry,
   fullEntry?: SessionEntry,
+  membership?: ReadonlySet<string>,
 ): void {
   recordCommittedSessionEntryPublication(database, sessionKey);
   for (const read of retainedSharingReads(database, sessionKey) ?? []) {
     publishRetainedSessionEntryPredicate(read, metadataEntry, known, { fullEntry });
     recordAcquiringSessionEntry(read.acquisition, entry, previousIdentity);
+    if (read.acquisition && membership) {
+      // A complete actor postimage supersedes older deltas and an in-flight read's membership.
+      read.acquisition.membershipPostimage = membership;
+      read.acquisition.membership.clear();
+    }
     publishRetainedSessionGeneration(read, entry, known);
     const previous = read.facts;
     read.facts =
       entry &&
       previous?.entry &&
-      previous.entry.sessionId === entry.sessionId &&
-      (read.followLifecycle || previous.entry.lifecycleRevision === entry.lifecycleRevision)
-        ? { entry, membership: previous.membership }
+      ((previous.entry.sessionId === entry.sessionId &&
+        (read.followLifecycle || previous.entry.lifecycleRevision === entry.lifecycleRevision)) ||
+        (read.followTranscript && previous.entry.lifecycleRevision === entry.lifecycleRevision))
+        ? { entry, membership: membership ?? previous.membership }
         : undefined;
   }
 }
@@ -283,6 +291,7 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
   const initial = "acquiring" in params ? undefined : params;
   const read: PreparedSessionSharingRead = {
     followLifecycle: params.followLifecycle,
+    followTranscript: params.followTranscript,
     predicate: params.predicate,
     pending: new Set(),
     facts: initial && {
@@ -297,13 +306,21 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
   reads.add(read);
   preparedSharingReads.set(key, reads);
   let active = true;
-  const pending = () =>
+  const pending = (scope: "sharing" | "session-access") =>
     read.pending.size > 0 ||
     [...(pendingSessionEntryPublications.get(key) ?? [])].some(
       (publication) =>
         !publication.settled &&
         ((!publication.superseded.has(sessionKey) &&
-          !publication.sharingUnchanged.has(sessionKey)) ||
+          !publication.sharingUnchanged.has(sessionKey) &&
+          !(
+            scope === "session-access" &&
+            sessionSharingEntriesEqual(
+              read.facts?.entry,
+              publication.entryPostimages?.get(sessionKey),
+              scope,
+            )
+          )) ||
           publication.membershipInvalidated.has(sessionKey)),
     );
   // Unchanged identity and settings remain usable during unrelated metadata writes.
@@ -399,7 +416,8 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
     readGeneration: () => (active && !generationPending() ? read.generation?.current : undefined),
     readGenerationSettings: () =>
       active && !generationPending(true) ? read.generation?.current : undefined,
-    readCurrent: () => (pending() || unknownSharingAuthorities.has(key) ? undefined : read.facts),
+    readCurrent: (scope: "sharing" | "session-access" = "sharing") =>
+      pending(scope) || unknownSharingAuthorities.has(key) ? undefined : read.facts,
     release: () => {
       if (!active) {
         return;

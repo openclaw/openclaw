@@ -1,6 +1,11 @@
 import { EventEmitter } from "node:events";
 import { MessageChannel } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  areWorkerNativeSectionsSettled,
+  cancelWorkerNativeSections,
+  createWorkerNativeSectionState,
+} from "./worker-task-native-sections.js";
 import { serveOwnedWorkerTasks } from "./worker-task-server.js";
 
 const boundary = vi.hoisted((): { port: unknown } => ({ port: undefined }));
@@ -79,3 +84,46 @@ it.each([false, true])("joins retirement (cleanup rejects: %s)", async (rejectCl
 
 const callCounts = (...mocks: Array<{ mock: { calls: unknown[] } }>) =>
   mocks.map(({ mock }) => mock.calls.length);
+
+it("cancels noninteractive owned work and joins cleanup before releasing native custody", async () => {
+  const started = Promise.withResolvers<void>();
+  const cancelled = Promise.withResolvers<void>();
+  const cleanup = Promise.withResolvers<void>();
+  const idle = Promise.withResolvers<void>();
+  const parent = Object.assign(new EventEmitter(), { postMessage: vi.fn() });
+  boundary.port = parent;
+  const sections = createWorkerNativeSectionState();
+  serveOwnedWorkerTasks(
+    (_input, _channel, control) =>
+      control.runNativeSection(async () => {
+        control.signal.addEventListener("abort", () => cancelled.resolve(), { once: true });
+        started.resolve();
+        await cancelled.promise;
+        await cleanup.promise;
+        control.signal.throwIfAborted();
+      }),
+    { closeResource: vi.fn() },
+    {
+      initialize: vi.fn(),
+      onMessage: vi.fn(),
+      installTaskContext: vi.fn(),
+      onIdle: () => idle.resolve(),
+    },
+  );
+  parent.emit("message", { taskId: 1, nativeSections: sections.buffer });
+  try {
+    await started.promise;
+    cancelWorkerNativeSections(sections);
+    await cancelled.promise;
+    expect(areWorkerNativeSectionsSettled(sections)).toBe(false);
+    expect(parent.postMessage).not.toHaveBeenCalled();
+  } finally {
+    cleanup.resolve();
+    await idle.promise;
+  }
+  expect(areWorkerNativeSectionsSettled(sections)).toBe(true);
+  expect(parent.postMessage).toHaveBeenCalledWith(
+    expect.objectContaining({ status: "failed", taskId: 1, error: "worker task cancelled" }),
+    [],
+  );
+});

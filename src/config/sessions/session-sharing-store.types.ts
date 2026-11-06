@@ -90,7 +90,16 @@ export type SessionInvolvementMutation = {
   profileIds: readonly string[];
   change:
     | { kind: "visibility"; hidden: boolean }
-    | { kind: "mention"; source: NonNullable<SessionProfileInvolvement["lastMention"]> };
+    | {
+        kind: "mention";
+        source: NonNullable<SessionProfileInvolvement["lastMention"]>;
+        /** Only the committed human-input owner supplies a revalidated sharing grant. */
+        invitation?: {
+          addedBy: string;
+          profileIds: readonly string[];
+          expectedEntry?: SessionSharingExpectedEntry;
+        };
+      };
 };
 
 export type SessionSharingWorkerOperations = {
@@ -100,7 +109,11 @@ export type SessionSharingWorkerOperations = {
       params: SessionInvolvementMutation;
       profiles: { profileId: string; aliases: string[] }[];
     };
-    output: { accepted: boolean; changed: boolean };
+    output: {
+      accepted: boolean;
+      changed: boolean;
+      memberFacts?: Extract<SessionRowFacts, { kind: "member" }>[];
+    };
   };
   "owner.assign": {
     input: { scope: SessionAccessScope; params: SessionOwnerAssignParams };

@@ -141,7 +141,7 @@ then `gateway.publicOrigin` precedes discovery for freshly provisioned workers.
 For other deployment prerequisites, see
 [Gateway deployments that cannot host nodes](/nodes/node-host#gateway-deployments-that-cannot-host-nodes).
 Plaintext LAN pairing can use a setup code directly instead of an HTTP join URL.
-See [Connect a machine](/cli/connect).
+See [Connect a device](/cli/connect).
 
 ### `openclaw devices remove <deviceId>`
 

@@ -344,6 +344,24 @@ it("preserves unknown contents, legacy scratch, rollback directories and symboli
   }
 });
 
+it("preserves a verifier payload containing a symbolic link", async () => {
+  const root = dirs.make("backup-scratch-verifier-link-");
+  const scratch = await createScratch(root);
+  const input = path.join(root, "input");
+  await fs.mkdir(input);
+  await fs.writeFile(path.join(input, "archive.tar.gz"), "preserved archive");
+  const payload = path.join(scratch.directory, "payload");
+  await fs.mkdir(payload);
+  const link = path.join(payload, "redirected");
+  await fs.symlink(input, link, linkType);
+  scratch.release();
+  const report = await inspect(root);
+  expect(report.reclaimed).toEqual([]);
+  expect(report.warnings).toEqual([expect.stringContaining(link)]);
+  await expectContents(path.join(input, "archive.tar.gz"), "preserved archive");
+  await expect(fs.lstat(link)).resolves.toSatisfy((entry) => entry.isSymbolicLink());
+});
+
 it.each(["admitted", "creating"] as const)(
   "classifies active scratch before inspecting a journal that can disappear (%s)",
   async (phase) => {

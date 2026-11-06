@@ -5,7 +5,7 @@ import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/sessio
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { withSessionActor } from "../config/sessions/session-actor-scope.js";
 import * as entryReads from "../config/sessions/session-entry-read-runtime.js";
-import { buildRestartRecoveryExpectedState } from "../config/sessions/session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "../config/sessions/session-transcript-turn-state.js";
 import { promptReport } from "../config/sessions/system-prompt-report.test-support.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
@@ -83,7 +83,7 @@ describe("live model switch worker persistence", () => {
             sessionId: entry.sessionId,
             lifecycleRevision: entry.lifecycleRevision ?? null,
             writerRunId: entry.activeWriterRunId,
-            expectedState: buildRestartRecoveryExpectedState(entry),
+            expectedState: buildSessionTranscriptTurnExpectedState(entry),
           },
           reducers: [reducer],
         },
@@ -212,9 +212,7 @@ it("propagates model-guard read cancellation instead of treating it as missing m
     const { scope, warnings } = modelGuardFixture();
     const controller = new AbortController();
     const reason = new Error("model read owner cancelled");
-    let cancelledAtAdmission = false;
     probe.admission(workerAdmission, (request, grant, callback) => {
-      cancelledAtAdmission = true;
       controller.abort(reason);
       callback(request, grant);
     });
@@ -225,7 +223,6 @@ it("propagates model-guard read cancellation instead of treating it as missing m
         assertReadCurrent: () => controller.signal.throwIfAborted(),
       }),
     ).rejects.toBe(reason);
-    expect(cancelledAtAdmission).toBe(true);
     expect(await warnings.findText("model rollback preparation unavailable")).toBeUndefined();
   });
 });

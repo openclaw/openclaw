@@ -18,7 +18,10 @@ import {
   createPluginCliConfigIO,
   createPluginCliConfigSnapshot,
 } from "./plugins-cli-config.test-support.js";
+import { updateNpmInstalledHookPacksMock } from "./plugins-cli-install-mocks.test-support.js";
 import type { CliMockOutputRuntime } from "./test-runtime-capture.js";
+
+export { updateNpmInstalledHookPacksMock } from "./plugins-cli-install-mocks.test-support.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
@@ -36,8 +39,6 @@ type ResolveMarketplaceInstallShortcutFn =
   (typeof import("../plugins/marketplace.js"))["resolveMarketplaceInstallShortcut"];
 type UpdateNpmInstalledPluginsFn =
   (typeof import("../plugins/update.js"))["updateNpmInstalledPlugins"];
-type UpdateNpmInstalledHookPacksFn =
-  (typeof import("../hooks/update.js"))["updateNpmInstalledHookPacks"];
 type ReadPersistedInstalledPluginIndexFn =
   (typeof import("../plugins/installed-plugin-index-store.js"))["readPersistedInstalledPluginIndex"];
 type RestorePersistedInstalledPluginIndexIfCurrentFn =
@@ -186,7 +187,6 @@ export const planPluginUninstallMock =
 export const applyPluginUninstallDirectoryRemovalMock =
   vi.fn<(typeof import("../plugins/uninstall.js"))["applyPluginUninstallDirectoryRemoval"]>();
 export const updateNpmInstalledPluginsMock: Mock<UpdateNpmInstalledPluginsFn> = vi.fn();
-export const updateNpmInstalledHookPacksMock: Mock<UpdateNpmInstalledHookPacksFn> = vi.fn();
 export const promptYesNoMock: AsyncUnknownMock = vi.fn();
 const promptText: AsyncUnknownMock = vi.fn();
 export class PromptInputClosedError extends Error {
@@ -238,6 +238,9 @@ const { defaultRuntime, pluginsCliRuntimeLogs, runtimeErrors, resetRuntimeCaptur
       resetRuntimeCapture: () => {
         runtimeLogsLocal.length = 0;
         runtimeErrorsLocal.length = 0;
+        for (const mock of Object.values(defaultRuntimeLocal)) {
+          mock.mockReset();
+        }
       },
     };
   },
@@ -247,33 +250,6 @@ export { runtimeErrors, pluginsCliRuntimeLogs };
 
 export function setInstalledPluginIndexInstallRecords(records: PluginInstallRecordMap): void {
   mockInstalledPluginIndexInstallRecords = clonePluginInstallRecords(records);
-}
-
-function restoreRuntimeCaptureMocks() {
-  defaultRuntime.log.mockReset();
-  defaultRuntime.log.mockImplementation((...args: unknown[]) => {
-    pluginsCliRuntimeLogs.push(args.map((value) => String(value)).join(" "));
-  });
-
-  defaultRuntime.error.mockReset();
-  defaultRuntime.error.mockImplementation((...args: unknown[]) => {
-    runtimeErrors.push(args.map((value) => String(value)).join(" "));
-  });
-
-  defaultRuntime.writeStdout.mockReset();
-  defaultRuntime.writeStdout.mockImplementation((value: string) => {
-    defaultRuntime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
-  });
-
-  defaultRuntime.writeJson.mockReset();
-  defaultRuntime.writeJson.mockImplementation((value: unknown, space = 2) => {
-    defaultRuntime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
-  });
-
-  defaultRuntime.exit.mockReset();
-  defaultRuntime.exit.mockImplementation((code: number) => {
-    throw new Error(`__exit__:${code} ${runtimeErrors.join("\n")}`);
-  });
 }
 
 vi.mock("../runtime.js", () => ({
@@ -672,19 +648,6 @@ vi.mock("../plugins/update.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../hooks/update.js", () => ({
-  updateNpmInstalledHookPacks: ((
-    ...args: Parameters<(typeof import("../hooks/update.js"))["updateNpmInstalledHookPacks"]>
-  ) =>
-    invokeMock<
-      Parameters<(typeof import("../hooks/update.js"))["updateNpmInstalledHookPacks"]>,
-      ReturnType<(typeof import("../hooks/update.js"))["updateNpmInstalledHookPacks"]>
-    >(
-      updateNpmInstalledHookPacksMock,
-      ...args,
-    )) as (typeof import("../hooks/update.js"))["updateNpmInstalledHookPacks"],
-}));
-
 vi.mock("./prompt.js", () => ({
   PromptInputClosedError,
   promptText: ((...args: Parameters<(typeof import("./prompt.js"))["promptText"]>) =>
@@ -871,7 +834,6 @@ export function expectNoPluginCliCalls(...mocks: unknown[]) {
 
 export function resetPluginsCliTestState() {
   resetRuntimeCapture();
-  restoreRuntimeCaptureMocks();
   pluginCliConfigMock.mockReset();
   readConfigFileSnapshotMock.mockReset();
   readConfigFileSnapshotForWriteMock.mockReset();

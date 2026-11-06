@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { inspectCiTsgoCheckGraphs } from "../../scripts/check-tsgo-core-boundary.mts";
 import {
@@ -7,6 +6,7 @@ import {
   TSGO_CI_ADDITIONAL_GRAPHS,
 } from "../../scripts/lib/tsgo-core-test-shards.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { fixtureFiles } from "./script-fixture-files.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());
@@ -16,11 +16,7 @@ it.each([undefined, "tsgo"])(
   async (typeChecker) => {
     vi.stubEnv("OPENCLAW_TYPECHECKER", typeChecker);
     const cwd = fs.realpathSync(tempDirs.make("tsconfig-membership-"));
-    const write = (file: string, text: string) => {
-      const target = path.join(cwd, file);
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, text);
-    };
+    const { file, write } = fixtureFiles(cwd);
     write(
       "src/root.ts",
       'export type { Value } from "./value.js";\nexport type { Local } from "./lib.es5.js";\nexport type { Dependency } from "dependency";\n',
@@ -34,7 +30,7 @@ it.each([undefined, "tsgo"])(
         config,
         JSON.stringify({
           compilerOptions: { noEmit: true, types: [], lib: ["es5"], module: "nodenext" },
-          files: [path.join(cwd, "src/root.ts")],
+          files: [file("src/root.ts")],
         }),
       );
     }

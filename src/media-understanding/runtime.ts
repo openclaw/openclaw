@@ -3,7 +3,12 @@
 import path from "node:path";
 import { kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
+import {
+  findDecisionReason,
+  normalizeDecisionReason,
+} from "../../packages/media-understanding-common/src/format.js";
 import { resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import { resolveImageCompressionModelPolicy } from "../agents/image-compression-policy.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
@@ -20,11 +25,7 @@ import {
   normalizeMediaProviderId,
 } from "./provider-registry.js";
 import { resolveMaxBytes, resolveMediaRuntimeTimeoutMs, resolveModelEntries } from "./resolve.js";
-import {
-  findDecisionReason,
-  normalizeDecisionReason,
-  type MediaRequestOverrides,
-} from "./runner.entries.js";
+import type { MediaRequestOverrides } from "./runner.entries.js";
 import {
   buildProviderRegistry,
   createMediaAttachmentCache,
@@ -112,6 +113,20 @@ export async function runMediaUnderstandingFile(
 }
 
 async function runFile(
+  params: RunMediaUnderstandingFileParams,
+  request: MediaRequestOverrides,
+  execution?: MediaExecutionContext,
+): Promise<RunMediaUnderstandingFileResult> {
+  const run = () => runFileInScope(params, request, execution);
+  return execution
+    ? withGuardedFetchRequestAuthority(
+        () => assertMediaExecutionCurrent(execution),
+        () => withCommandProcessScope(run, execution.signal),
+      )
+    : run();
+}
+
+async function runFileInScope(
   params: RunMediaUnderstandingFileParams,
   request: MediaRequestOverrides,
   execution?: MediaExecutionContext,
@@ -272,11 +287,13 @@ export async function describePreparedImageWithModel(params: DescribePreparedIma
   const image = await optimizeImageDescriptionInput({
     ...params.image,
     maxBytes: MEDIA_CAPABILITY_DEFAULTS.image.maxBytes,
-    cfg: params.cfg,
-    provider: params.provider,
-    model: params.model,
-    agentDir,
-    workspaceDir: params.workspaceDir,
+    modelPolicy: await resolveImageCompressionModelPolicy({
+      cfg: params.cfg,
+      provider: params.provider,
+      model: params.model,
+      agentDir,
+      workspaceDir: params.workspaceDir,
+    }),
   });
   return await describeImage({
     buffer: image.buffer,
@@ -334,8 +351,9 @@ export async function extractStructuredWithModel(params: ExtractStructuredWithMo
 
 export async function describeVideoFile(
   params: DescribeVideoFileParams,
+  execution?: MediaExecutionContext,
 ): Promise<RunMediaUnderstandingFileResult> {
-  return await runMediaUnderstandingFile({ ...params, capability: "video" });
+  return await runFile({ ...params, capability: "video" }, {}, execution);
 }
 
 /** Prepares the largest input that any configured transcription fallback can accept. */
@@ -368,19 +386,12 @@ export async function transcribeAudioFile(
   params: TranscribeAudioFileParams,
   execution?: MediaExecutionContext,
 ): Promise<RunMediaUnderstandingFileResult> {
-  const run = () =>
-    runFile(
-      { ...params, capability: "audio" },
-      {
-        prompt: params.prompt?.trim() || params.prompt || undefined,
-        language: params.language || undefined,
-      },
-      execution,
-    );
-  return execution
-    ? withGuardedFetchRequestAuthority(
-        () => assertMediaExecutionCurrent(execution),
-        () => withCommandProcessScope(run, execution.signal),
-      )
-    : run();
+  return await runFile(
+    { ...params, capability: "audio" },
+    {
+      prompt: params.prompt?.trim() || params.prompt || undefined,
+      language: params.language || undefined,
+    },
+    execution,
+  );
 }

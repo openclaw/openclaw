@@ -128,6 +128,7 @@ import { redactSecrets } from "../logging/redact.js";
 import { normalizeGooglePreviewModelId } from "../plugin-sdk/provider-model-shared.js";
 import { resolveEffectiveThinkingProfile } from "../plugins/provider-thinking.js";
 import { LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { levenshteinDistance } from "../shared/levenshtein-distance.js";
 import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
 import { findFinalTagMatches, stripFinalTags } from "../shared/text/final-tags.js";
 import {
@@ -885,93 +886,38 @@ function shouldSkipEmptyResponseForLiveModel(params: {
 }
 
 describe("maybeStripAssistantScaffoldingForLiveModel", () => {
-  it("strips scaffolding for Gemini preview models with known transcript wrappers", () => {
-    expect(
-      maybeStripAssistantScaffoldingForLiveModel(
-        "<final>Visible</final>",
-        "google/gemini-3-flash-preview",
-      ),
-    ).toBe("Visible");
-    expect(
-      maybeStripAssistantScaffoldingForLiveModel(
-        "<final data-model=openrouter/google/gemini/>Visible",
-        "google/gemini-3-flash-preview",
-      ),
-    ).toBe("Visible");
-    expect(
-      maybeStripAssistantScaffoldingForLiveModel(
-        "<think>hidden</think>Visible",
-        "google/gemini-3.1-flash-preview",
-      ),
-    ).toBe("Visible");
-    expect(
-      maybeStripAssistantScaffoldingForLiveModel(
-        "<think>hidden</think>Visible",
-        "google/gemini-3.1-flash-lite",
-      ),
-    ).toBe("Visible");
-    expect(
-      maybeStripAssistantScaffoldingForLiveModel(
-        "<think>hidden</think>Visible",
-        "google/gemini-3.1-pro-preview",
-      ),
-    ).toBe("Visible");
-    expect(
-      maybeStripAssistantScaffoldingForLiveModel(
-        "<think>hidden</think>Visible",
-        "google/gemini-3.1-pro-preview-customtools",
-      ),
-    ).toBe("Visible");
-    expect(
-      maybeStripAssistantScaffoldingForLiveModel(
-        [
-          "<think>",
-          "1. Inspect",
-          "```",
-          "draft",
-          "```",
-          "2. Draft the explanation",
-          "</think>The event loop drains the microtask queue before the next macrotask.",
-        ].join("\n"),
-        "google/gemini-3-flash-preview",
-      ),
-    ).toBe("The event loop drains the microtask queue before the next macrotask.");
-  });
-
-  it("strips scaffolding for known OpenAI transcript wrappers", () => {
-    expect(
-      maybeStripAssistantScaffoldingForLiveModel("<final>Visible</final>", "openai/gpt-5.4-pro"),
-    ).toBe("Visible");
-    expect(
-      maybeStripAssistantScaffoldingForLiveModel("<final>Visible</final>", "openai/gpt-5.4"),
-    ).toBe("<final>Visible</final>");
-  });
-
-  it("strips Anthropic antml transcript wrappers", () => {
-    expect(
-      maybeStripAssistantScaffoldingForLiveModel(
-        "<antml:thinking>hidden</thinking>Visible",
-        "anthropic/claude-opus-4-6",
-      ),
-    ).toBe("Visible");
-  });
-
-  it("strips scaffolding for MiniMax transcript wrappers", () => {
-    expect(
-      maybeStripAssistantScaffoldingForLiveModel(
-        "<final>Visible</final>",
-        "minimax/MiniMax-M2.5-highspeed",
-      ),
-    ).toBe("Visible");
-    expect(
-      maybeStripAssistantScaffoldingForLiveModel(
-        "<final>Visible</final>",
-        "minimax-portal/MiniMax-M2.7-highspeed",
-      ),
-    ).toBe("Visible");
-    expect(
-      maybeStripAssistantScaffoldingForLiveModel("<final>Visible</final>", "minimax/MiniMax-M2.7"),
-    ).toBe("Visible");
+  it.each([
+    ["google/gemini-3-flash-preview", "<final>Visible</final>", "Visible"],
+    [
+      "google/gemini-3-flash-preview",
+      "<final data-model=openrouter/google/gemini/>Visible",
+      "Visible",
+    ],
+    ["google/gemini-3.1-flash-preview", "<think>hidden</think>Visible", "Visible"],
+    ["google/gemini-3.1-flash-lite", "<think>hidden</think>Visible", "Visible"],
+    ["google/gemini-3.1-pro-preview", "<think>hidden</think>Visible", "Visible"],
+    ["google/gemini-3.1-pro-preview-customtools", "<think>hidden</think>Visible", "Visible"],
+    [
+      "google/gemini-3-flash-preview",
+      [
+        "<think>",
+        "1. Inspect",
+        "```",
+        "draft",
+        "```",
+        "2. Draft the explanation",
+        "</think>The event loop drains the microtask queue before the next macrotask.",
+      ].join("\n"),
+      "The event loop drains the microtask queue before the next macrotask.",
+    ],
+    ["openai/gpt-5.4-pro", "<final>Visible</final>", "Visible"],
+    ["openai/gpt-5.4", "<final>Visible</final>", "<final>Visible</final>"],
+    ["anthropic/claude-opus-4-6", "<antml:thinking>hidden</thinking>Visible", "Visible"],
+    ["minimax/MiniMax-M2.5-highspeed", "<final>Visible</final>", "Visible"],
+    ["minimax-portal/MiniMax-M2.7-highspeed", "<final>Visible</final>", "Visible"],
+    ["minimax/MiniMax-M2.7", "<final>Visible</final>", "Visible"],
+  ])("normalizes %s transcript %s", (modelKey, text, expected) => {
+    expect(maybeStripAssistantScaffoldingForLiveModel(text, modelKey)).toBe(expected);
   });
 });
 
@@ -2696,38 +2642,6 @@ function randomImageProbeCode(len = 6): string {
   return out;
 }
 
-function editDistance(a: string, b: string): number {
-  if (a === b) {
-    return 0;
-  }
-  const aLen = a.length;
-  const bLen = b.length;
-  if (aLen === 0) {
-    return bLen;
-  }
-  if (bLen === 0) {
-    return aLen;
-  }
-
-  let prev = Array.from({ length: bLen + 1 }, (_v, idx) => idx);
-  let curr = Array.from({ length: bLen + 1 }, () => 0);
-
-  for (let i = 1; i <= aLen; i += 1) {
-    curr[0] = i;
-    const aCh = a.charCodeAt(i - 1);
-    for (let j = 1; j <= bLen; j += 1) {
-      const cost = aCh === b.charCodeAt(j - 1) ? 0 : 1;
-      curr[j] = Math.min(
-        expectDefined(prev[j], "prev[j] test invariant") + 1, // delete
-        expectDefined(curr[j - 1], "curr[j - 1] test invariant") + 1, // insert
-        expectDefined(prev[j - 1], "prev[j - 1] test invariant") + cost, // substitute
-      );
-    }
-    [prev, curr] = [curr, prev];
-  }
-
-  return prev[bLen] ?? Number.POSITIVE_INFINITY;
-}
 async function getFreeGatewayPort(): Promise<number> {
   // Gateway uses derived ports (browser/canvas). Avoid flaky collisions by
   // ensuring the common derived offsets are free too.
@@ -3565,7 +3479,8 @@ async function verifyGatewayUltraSubagentHandoff(params: {
   const existingRunIds = new Set(
     listSubagentRunsForRequester(params.sessionKey).map((entry) => entry.runId),
   );
-  const nonce = randomBytes(3).toString("hex").toUpperCase();
+  // This proves exact child/parent routing, not long random-token copy fidelity.
+  const nonce = randomBytes(2).toString("hex").toUpperCase();
   const childToken = `ULTRA-CHILD-${nonce}`;
   const parentToken = `ULTRA-PARENT-${nonce}`;
   const message = [
@@ -5166,14 +5081,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           }
         : {}),
     };
-    if (ultraCandidates.length > 0) {
-      await import("../agents/ai-transport-runtime-host.js");
-      ultraWireCapture = startOpenAIUltraWireCapture(
-        ultraCandidates.map((candidate) =>
-          resolveOpenAIUltraUpstreamBaseUrl({ candidate, cfg: sanitizedCfg }),
-        ),
-      );
-    }
+    const ultraWireBaseUrls = ultraCandidates.map((candidate) =>
+      resolveOpenAIUltraUpstreamBaseUrl({ candidate, cfg: sanitizedCfg }),
+    );
     const nextCfg = buildLiveGatewayConfig({
       cfg: sanitizedCfg,
       candidates: params.candidates.map(({ model }) => model),
@@ -5218,7 +5128,12 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
         }),
         `${params.label}: gateway-connect`,
       );
-      if (ultraWireCapture) {
+      if (ultraWireBaseUrls.length > 0) {
+        // The agent transport host is installed lazily on the first embedded run,
+        // after gateway startup. Load that final owner before wrapping it so the
+        // live sweep observes requests instead of having its capture replaced.
+        await import("../agents/ai-transport-runtime-host.js");
+        ultraWireCapture = startOpenAIUltraWireCapture(ultraWireBaseUrls);
         openAIUltraRunsByClient.set(client, new Map());
       }
     } catch (error) {
@@ -5650,7 +5565,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                       if (Math.abs(cand.length - imageCode.length) > 2) {
                         return best;
                       }
-                      return Math.min(best, editDistance(cand, imageCode));
+                      return Math.min(best, levenshteinDistance(cand, imageCode));
                     }, Number.POSITIVE_INFINITY);
                     if (!(bestDistance <= 3)) {
                       logProgress(`${progressLabel}: image skip (code mismatch)`);

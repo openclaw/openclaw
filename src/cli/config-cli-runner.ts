@@ -17,6 +17,7 @@ import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { REDACTED_SENTINEL, restoreRedactedValues } from "../config/redact-snapshot.js";
 import type { ConfigSchemaResponse } from "../config/schema.js";
+import { findSkillWorkshopPolicyWriteRefusal } from "../config/skill-workshop-plugin-migration.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { visitConfigValueTree } from "../config/value-tree.js";
 import { diffConfigPaths } from "../gateway/config-diff.js";
@@ -227,6 +228,7 @@ export async function runConfigOperations(params: {
       .catch(() => undefined));
   const roster = new ConfigMutationAgentRoster(next, snapshot.sourceConfigBeforeMigrations);
   let unsetPaths: PathSegment[][] = [];
+  const allowedAgentRosterRemovals: string[] = [];
   let explicitSetPaths: PathSegment[][] = [];
   let suppliedValuePaths: PathSegment[][] = [];
   const appliedOperations: ConfigSetOperation[] = [];
@@ -302,6 +304,10 @@ export async function runConfigOperations(params: {
         unsetPaths.push(writePath);
       }
       if (unsetResult.removed) {
+        // Deleting a keyed agent entry is the explicit removal the roster-loss guard requires.
+        if (writePath.length === 3 && writePath[0] === "agents" && writePath[1] === "entries") {
+          allowedAgentRosterRemovals.push(String(writePath[2]));
+        }
         // Canonical agent IDs (even numeric IDs) are keys, not list indices.
         const arrayIndex =
           unsetResult.leafContainer === "array" &&
@@ -471,6 +477,15 @@ export async function runConfigOperations(params: {
       previousEnv: preparedPreviousValues.resolutionEnv,
     };
   }
+  // Refuse before any offline write or Gateway-routed patch, including an equal value.
+  const workshopPolicyRefusal = findSkillWorkshopPolicyWriteRefusal({
+    previousConfig: authoredPreviousConfig,
+    nextConfig: authoredNextConfig,
+    writesPlugins: appliedOperations.some(({ setPath }) => setPath[0] === "plugins"),
+  });
+  if (workshopPolicyRefusal) {
+    throw new Error(workshopPolicyRefusal);
+  }
   const validation = await validateConfigMutation({
     config: nextConfig,
     modelValidation,
@@ -537,6 +552,7 @@ export async function runConfigOperations(params: {
             }
           : {}),
         ...(unsetPaths.length > 0 ? { unsetPaths } : {}),
+        ...(allowedAgentRosterRemovals.length > 0 ? { allowedAgentRosterRemovals } : {}),
         ...(normalizedExplicitSetPaths.length > 0
           ? { explicitSetPaths: normalizedExplicitSetPaths }
           : {}),

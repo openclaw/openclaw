@@ -38,9 +38,11 @@ Native browser UI is available by default for enabled plugins, including
 user-installed and local development plugins. There is no Custom plugin UI
 Labs switch. Install and enable only plugins you trust: their browser code runs
 inside the Control UI with each signed-in viewer's Gateway permissions.
-Installed plugin details and existing enable reviews disclose a native UI entry
-when the inspected manifest declares one. Catalog install surfaces explain that
-plugin code may include native UI when that metadata is not available yet.
+Plugin details list declared UI contributions under **Extensions**, with a short
+description of what each adds and where it appears. Existing enable reviews
+disclose a native UI entry when the inspected manifest declares one. Catalog
+install surfaces explain that plugin code may include native UI when that
+metadata is not available yet.
 
 The existing config key remains an advanced opt-out. To disable native browser
 code from user-installed plugins, set:
@@ -107,6 +109,15 @@ The project has three public SDK imports:
 
 Browser code owns its DOM and bundles its framework dependencies. It does not
 import Control UI internals or return the host framework's templates.
+
+For plugin-owned messages, `translateControlUiMessage(messages, locale, key, params?)`
+from `openclaw/plugin-sdk/control-ui` performs synchronous dotted-key lookup and
+string interpolation. The `messages` callback returns the plugin's nested string
+dictionary for a locale, or `undefined`. Missing keys fall back to `en`; empty
+strings stay empty, and non-string results return the key. Word placeholders such
+as `{name}` use the optional string parameters; unresolved placeholders stay intact.
+The helper does not load catalogs, select a locale, or retain state. Keep those
+responsibilities, including reactive reads and lazy translation assets, in the plugin.
 
 ## Define operations once
 
@@ -253,17 +264,29 @@ view is presented again; previously captured operations remain retired.
 
 Use the host for shared application behavior:
 
-| Capability              | Purpose                                                                                                       |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `agents`                | Agent snapshots, selection, scope, and refresh.                                                               |
-| `components`            | Host-owned dialogs, pickers, and session dashboards.                                                          |
-| `connection`            | Current connection and operator capabilities.                                                                 |
-| `dock` (optional)       | Open a conversation beside the current page with `openSession`, close the dock, and observe `openSessionKey`. |
-| `navigation`            | Open plugin pages and build their URLs.                                                                       |
-| `request` and `onEvent` | Authenticated Gateway requests and event subscriptions.                                                       |
-| `sessions`              | Session snapshots, independent queries, navigation, creation, and updates.                                    |
-| `subscribe`             | Observe host snapshot changes, including the docked session key.                                              |
-| `ui`                    | Register, select, and invalidate plugin contributions.                                                        |
+| Capability                   | Purpose                                                                                                       |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `agents`                     | Agent snapshots, selection, scope, and refresh.                                                               |
+| `components`                 | Host-owned dialogs, pickers, and session dashboards.                                                          |
+| `connection`                 | Current connection and operator capabilities.                                                                 |
+| `dock` (optional)            | Open a conversation beside the current page with `openSession`, close the dock, and observe `openSessionKey`. |
+| `navigation`                 | Open plugin pages and build their URLs.                                                                       |
+| `request` and `onEvent`      | Authenticated Gateway requests and event subscriptions.                                                       |
+| `recoveryStorage` (optional) | Account-bound, tab-local recovery data for this plugin.                                                       |
+| `sessions`                   | Session snapshots, independent queries, navigation, creation, and updates.                                    |
+| `subscribe`                  | Observe host snapshot changes, including the docked session key.                                              |
+| `ui`                         | Register, select, and invalidate plugin contributions.                                                        |
+
+Use `host.recoveryStorage` for private retry drafts that must survive a view
+remount. Version 1 provides `getItem`, `setItem`, `removeItem`, and
+`assertCurrent`. It is absent or null until the Gateway resolves the authenticated
+recovery owner. Include the agent and session identity in your local key. Storage
+errors throw; an unavailable read does not mean no previous operation exists.
+Captured handles stop working when the account, connection, plugin activation,
+or view changes. Credential replacement, rejection, or forgetting an account
+retires its stored data. Reconnect, acquire a new handle, and reauthorize the
+server resource before restoring private content. Do not fall back to an
+account-independent browser storage key.
 
 `onEvent("session.message", listener)` listeners receive complete messages;
 delivery begins once the Gateway confirms full-body delivery for this connection.

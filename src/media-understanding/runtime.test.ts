@@ -2,7 +2,10 @@
 // state, cleanup, remote references, and direct model-backed image calls.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { MediaUnderstandingOutput } from "../../packages/media-understanding-common/src/types.js";
 import type { OpenClawConfig } from "../config/types.js";
+import type { ImageCompressionModelPolicy } from "../media/web-media.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
 import {
   describeVideoFile,
   describeImageFile,
@@ -12,11 +15,7 @@ import {
   transcribeAudioFile,
   resolveAudioInputBudget,
 } from "./runtime.js";
-import type {
-  MediaAttachment,
-  MediaUnderstandingOutput,
-  MediaUnderstandingProvider,
-} from "./types.js";
+import type { MediaAttachment } from "./types.js";
 
 const mocks = vi.hoisted(() => {
   const cleanup = vi.fn(async () => {});
@@ -35,12 +34,8 @@ const mocks = vi.hoisted(() => {
     getMediaUnderstandingProvider: vi.fn(),
     describeImageWithModel: vi.fn(async () => ({ text: "generic image ok", model: "vision" })),
     convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
-    optimizeImageDescriptionInput: vi.fn(
-      async (params: { buffer: Buffer; fileName?: string; mime?: string }) => ({
-        buffer: Buffer.concat([Buffer.from("optimized:"), params.buffer]),
-        fileName: params.fileName,
-        mime: params.mime,
-      }),
+    resolveImageCompressionModelPolicy: vi.fn(
+      async (): Promise<ImageCompressionModelPolicy> => ({}),
     ),
     runCapability: vi.fn(),
     cleanup,
@@ -65,15 +60,16 @@ vi.mock("./image-runtime.js", () => ({
   describeImageWithModel: mocks.describeImageWithModel,
 }));
 
-vi.mock("../media/media-services.js", () => ({
-  convertHeicToJpeg: mocks.convertHeicToJpeg,
+// mock-isolation: Keep image-model policy deterministic without provider runtime bootstrap.
+vi.mock("../agents/image-compression-policy.js", () => ({
+  resolveImageCompressionModelPolicy: mocks.resolveImageCompressionModelPolicy,
 }));
 
-vi.mock("./image-input-normalize.js", async () => {
-  const actual = await vi.importActual<typeof import("./image-input-normalize.js")>(
-    "./image-input-normalize.js",
+vi.mock("../media/media-services.js", async () => {
+  const actual = await vi.importActual<typeof import("../media/media-services.js")>(
+    "../media/media-services.js",
   );
-  return { ...actual, optimizeImageDescriptionInput: mocks.optimizeImageDescriptionInput };
+  return { ...actual, convertHeicToJpeg: mocks.convertHeicToJpeg };
 });
 
 function requireRunCapabilityRequest(): unknown {
@@ -110,14 +106,7 @@ describe("media-understanding runtime", () => {
     mocks.describeImageWithModel.mockResolvedValue({ text: "generic image ok", model: "vision" });
     mocks.convertHeicToJpeg.mockReset();
     mocks.convertHeicToJpeg.mockResolvedValue(Buffer.from("jpeg-normalized"));
-    mocks.optimizeImageDescriptionInput.mockClear();
-    mocks.optimizeImageDescriptionInput.mockImplementation(
-      async (params: { buffer: Buffer; fileName?: string; mime?: string }) => ({
-        buffer: Buffer.concat([Buffer.from("optimized:"), params.buffer]),
-        fileName: params.fileName,
-        mime: params.mime,
-      }),
-    );
+    mocks.resolveImageCompressionModelPolicy.mockReset().mockResolvedValue({});
     mocks.runCapability.mockReset();
     mocks.cleanup.mockReset();
     mocks.cleanup.mockResolvedValue(undefined);
@@ -140,15 +129,7 @@ describe("media-understanding runtime", () => {
         capability: "image",
         filePath: "/tmp/sample.jpg",
         mime: "image/jpeg",
-        cfg: {
-          tools: {
-            media: {
-              image: {
-                enabled: false,
-              },
-            },
-          },
-        } as OpenClawConfig,
+        cfg: { tools: { media: { image: { enabled: false } } } } as OpenClawConfig,
         agentDir: "/tmp/agent",
       }),
     ).resolves.toEqual({
@@ -167,6 +148,19 @@ describe("media-understanding runtime", () => {
     });
 
     expect(mocks.buildProviderRegistry).not.toHaveBeenCalled();
+    expect(mocks.runCapability).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["audio", transcribeAudioFile],
+    ["video", describeVideoFile],
+  ] as const)("refuses canceled %s before preparing media", async (_kind, describeFile) => {
+    const signal = AbortSignal.abort(new Error("Media request interrupted"));
+    const execution = { signal, assertCurrent: () => signal.throwIfAborted() };
+    await expect(describeFile({ filePath: "/tmp/media", cfg: {} }, execution)).rejects.toBe(
+      signal.reason,
+    );
+    expect(mocks.createMediaAttachmentCache).not.toHaveBeenCalled();
     expect(mocks.runCapability).not.toHaveBeenCalled();
   });
 
@@ -212,34 +206,29 @@ describe("media-understanding runtime", () => {
     });
   });
 
-  it("passes workspaceDir through audio and video file helpers", async () => {
-    for (const [capability, filePath, mime, runFile] of [
-      ["video", "/tmp/sample.mp4", "video/mp4", describeVideoFile],
-      ["audio", "/tmp/sample.ogg", "audio/ogg", transcribeAudioFile],
-    ] as const) {
-      if (capability === "audio") {
-        mocks.runCapability.mockReset();
-      }
-      mocks.runCapability.mockResolvedValue({
-        outputs: [],
-        decision: { capability, outcome: "skipped", attachments: [] },
-      });
-      mocks.normalizeMediaAttachments.mockReturnValue([{ index: 0, path: filePath, mime }]);
+  it.each([
+    ["video", "/tmp/sample.mp4", "video/mp4", describeVideoFile],
+    ["audio", "/tmp/sample.ogg", "audio/ogg", transcribeAudioFile],
+  ] as const)("passes %s workspaceDir", async (capability, filePath, mime, runFile) => {
+    mocks.runCapability.mockResolvedValue({
+      outputs: [],
+      decision: { capability, outcome: "skipped", attachments: [] },
+    });
+    mocks.normalizeMediaAttachments.mockReturnValue([{ index: 0, path: filePath, mime }]);
 
-      await runFile({
-        filePath,
-        mime,
-        cfg: {} as OpenClawConfig,
-        agentDir: "/tmp/agent",
-        workspaceDir: "/tmp/workspace",
-      });
+    await runFile({
+      filePath,
+      mime,
+      cfg: {} as OpenClawConfig,
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+    });
 
-      expect(requireRunCapabilityRequest()).toMatchObject({
-        capability,
-        agentDir: "/tmp/agent",
-        workspaceDir: "/tmp/workspace",
-      });
-    }
+    expect(requireRunCapabilityRequest()).toMatchObject({
+      capability,
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+    });
   });
 
   it("passes per-request image prompts into media understanding config", async () => {
@@ -333,7 +322,7 @@ describe("media-understanding runtime", () => {
       expect(mocks.convertHeicToJpeg).toHaveBeenCalledWith(testCase.bytes);
       expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
         expect.objectContaining({
-          buffer: Buffer.from("optimized:jpeg-normalized"),
+          buffer: Buffer.from("jpeg-normalized"),
           fileName: "sample.bin",
           mime: "image/jpeg",
           agentId: "worker",
@@ -343,7 +332,7 @@ describe("media-understanding runtime", () => {
     },
   );
 
-  it("fetches remote explicit image descriptions through the media attachment cache", async () => {
+  it("enforces the selected model byte cap after preparing a remote image", async () => {
     mocks.normalizeMediaAttachments.mockReturnValue([
       { index: 0, url: "https://httpbin.org/image/png", mime: "image/png" },
     ]);
@@ -356,6 +345,7 @@ describe("media-understanding runtime", () => {
       mime: "image/png",
       size: 10,
     });
+    mocks.resolveImageCompressionModelPolicy.mockResolvedValueOnce({ maxBytes: 8 });
 
     await expect(
       describeImageFileWithModel({
@@ -363,7 +353,7 @@ describe("media-understanding runtime", () => {
         filePath: "https://httpbin.org/image/png",
         timeoutMs: 45_000,
       }),
-    ).resolves.toEqual({ text: "generic image ok", model: "vision" });
+    ).rejects.toMatchObject({ name: "ImageOptimizationLimitError", maxBytes: 8 });
 
     expect(mocks.normalizeMediaAttachments).toHaveBeenCalledWith({
       media: [{ url: "https://httpbin.org/image/png", contentType: "image/*" }],
@@ -377,15 +367,7 @@ describe("media-understanding runtime", () => {
       maxBytes: 10 * 1024 * 1024,
       timeoutMs: 45_000,
     });
-    expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        buffer: Buffer.from("optimized:remote-png"),
-        fileName: "png",
-        mime: "image/png",
-        provider: "zai",
-        model: "glm-4.6v",
-      }),
-    );
+    expect(mocks.describeImageWithModel).not.toHaveBeenCalled();
     expect(mocks.cleanup).toHaveBeenCalledOnce();
   });
 

@@ -1,6 +1,7 @@
 import type { GatewaySessionRow } from "../api/types.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { t } from "../i18n/index.ts";
+import { registerSessionMenuEnglish } from "../i18n/locales/en-session-menu.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
@@ -9,6 +10,7 @@ import { customSnoozeStorageKey, rememberCustomSnooze } from "../lib/sessions/cu
 import { resolveUiSessionRowAgentId, isSubagentSessionKey } from "../lib/sessions/session-key.ts";
 import { formatSessionSnoozeWakeTime } from "../lib/sessions/session-snooze.ts";
 import { showToast } from "../lib/toast.ts";
+import { startSidebarArchiveExit } from "./app-sidebar-archive-exit.ts";
 import type {
   SidebarSessionMutationResult,
   SidebarSessionMutationScope,
@@ -26,6 +28,7 @@ import {
 } from "./session-organizer-batch-mutations.ts";
 import { patchSession } from "./session-organizer-patch.runtime.ts";
 
+registerSessionMenuEnglish();
 registerSessionOrganizationEnglish();
 
 export async function snoozeSessionWithUndo(
@@ -47,6 +50,7 @@ export async function snoozeSessionWithUndo(
   }
   const undoHost = sessionUndoHost(host, scope);
   showToast({
+    severity: "success",
     message: t("sessionsView.sessionSnoozed", { time: formatSessionSnoozeWakeTime(snoozedUntil) }),
     actionLabel: t("common.undo"),
     onAction: () =>
@@ -63,7 +67,7 @@ export async function promoteSession(
     sessionScope: true,
   });
   if (result === "completed" && host.sessionData.isSessionMutationScopeCurrent(scope)) {
-    showToast({ message: t("sessionsView.sessionMovedToTopLevel") });
+    showToast({ severity: "success", message: t("sessionsView.sessionMovedToTopLevel") });
   }
 }
 
@@ -271,10 +275,13 @@ export async function confirmRunningSessionsArchive(
   const running = sessions.some(hasActiveArchiveWork);
   const single = sessions.length === 1 ? sessions[0] : undefined;
   const options = {
+    title: single
+      ? t("sessionsView.archiveSessionPrompt", { session: single.label })
+      : t("sessionsView.archiveSessionsPrompt", { count: String(sessions.length) }),
     message: !running
       ? ""
       : single
-        ? t("sessionsView.archiveRunningSessionConfirm", { session: single.label })
+        ? t("sessionsView.archiveRunningSessionConfirm")
         : t("sessionsView.archiveRunningSessions"),
     confirmLabel: single
       ? t("sessionsView.archiveSession")
@@ -298,6 +305,7 @@ export async function archiveSessionWithUndo(
   host: SessionActionHost,
   session: SessionActionRow,
   scope: SidebarSessionMutationScope,
+  exitFrom?: HTMLElement,
 ) {
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
@@ -320,8 +328,10 @@ export async function archiveSessionWithUndo(
     await archiveConfirmedSessionsWithUndo(host, choice.rows, scope);
     return;
   }
+  const stopExit = exitFrom ? startSidebarArchiveExit(exitFrom) : undefined;
   const finishArchive = scope.sessions.beginArchive(session.key, session.sessionId);
   if (!finishArchive) {
+    stopExit?.();
     return;
   }
   const undoPins = captureSessionArchivePins(scope, [session.key]);
@@ -342,11 +352,13 @@ export async function archiveSessionWithUndo(
     );
   } finally {
     finishArchive();
+    stopExit?.();
   }
   if (result !== "completed" || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
   showToast({
+    severity: "success",
     message: t("sessionsView.sessionArchived"),
     actionLabel: t("common.undo"),
     onAction: archiveUndoAction(host, [{ session, pinned: session.pinned }], scope, undoPins),
@@ -417,14 +429,13 @@ export async function archiveConfirmedSessionsWithUndo(
   }
   const archived = archivedRows.map((session) => ({ session, pinned: session.pinned }));
   showToast({
+    severity: "success",
     message:
       archived.length === 1
         ? t("sessionsView.sessionArchived")
         : t("sessionsView.sessionsArchived", { count: String(archived.length) }),
     actionLabel: t("common.undo"),
     onAction: archiveUndoAction(outcomeHost, archived, scope, undoPins),
-    // Keep a partial-failure notice readable before presenting successful-only Undo.
-    fifo: true,
   });
   return failure ?? "completed";
 }
@@ -534,7 +545,7 @@ function sessionUndoHost(
         if (host.sessionData.isSessionMutationScopeCurrent(candidate)) {
           host.sessionData.publishSessionMutationError(candidate, error);
         } else if (isCurrent()) {
-          showToast({ message: formatUiError(error) });
+          showToast({ severity: "error", message: formatUiError(error) });
         }
       },
     },

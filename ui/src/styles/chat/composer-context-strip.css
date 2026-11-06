@@ -25,6 +25,12 @@
   font-weight: 600;
 }
 
+/* The pending reply names its author like its sent reply line. */
+.chat-reply-preview__label {
+  color: var(--muted);
+  font-weight: 400;
+}
+
 .composer-context-strip__label-text,
 .composer-context-strip__text,
 .composer-context-strip__person-name {
@@ -85,40 +91,11 @@
   height: 100%;
 }
 
-.composer-context-strip__dismiss,
-.agent-chat__goal-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  color: var(--muted);
-  background: none;
-  border: none;
-  border-radius: var(--radius-sm);
-}
-
+/* The 28px box overhangs the strip by 2px on each side, so the strip keeps its
+   height and the glyph stays centred on the stack's trailing control column. */
 .composer-context-strip__dismiss {
   position: relative;
-  flex-shrink: 0;
-  width: var(--chat-stack-trailing-control-size, 24px);
-  height: var(--chat-stack-trailing-control-size, 24px);
-}
-
-.composer-context-strip__dismiss:hover:not(:disabled),
-.agent-chat__goal-action:hover:not(:disabled) {
-  color: var(--text);
-  background: var(--surface-hover);
-}
-
-.composer-context-strip__dismiss svg,
-.agent-chat__goal-action svg {
-  width: 14px;
-  height: 14px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.75px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  margin: -2px;
 }
 
 @media (max-width: 768px), (pointer: coarse) {

@@ -19,12 +19,12 @@ import {
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
+import { createCatalogSessionRowRef } from "./app-sidebar-session-catalog-row.ts";
 import {
   catalogErrorMessages,
   formatSidebarTimestamp,
   normalizeCatalogTimestamp,
   type CatalogSessionMenuRequest,
-  type CatalogBackingSessionDisplay,
   type CatalogRowControls,
   catalogSessionActivity,
   catalogSessionRowsByKey,
@@ -42,14 +42,6 @@ import {
   SessionRowBadges,
   sessionRunVisibility,
 } from "./solid/session-presentation.tsx";
-const CATALOG_CONTROLS = [
-  ["link", ".sidebar-recent-session__link"],
-  ["children", "[data-child-session-toggle]"],
-  ["pin", "[data-sidebar-session-pin]"],
-  ["archive", "[data-sidebar-session-archive]"],
-  ["menu", "[data-sidebar-session-menu]"],
-  ["catalogMenu", "[data-catalog-session-menu]"],
-] as const;
 const CATALOG_SESSION_GROUP_LIMIT = 5;
 export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
   // Adopted rows use canonical local labels and title snapshots; native catalog
@@ -139,41 +131,22 @@ function renderCatalogHostGroup(
         ? readLiveRowsByKeyValue.get(readSessionValue.sessionKey)
         : undefined;
     });
-    const rowRef: NonNullable<CatalogBackingSessionDisplay["rowRef"]> = (
-      element,
-      controls,
-      previousFocus,
-    ) => {
-      const stop = params.host.sessionProjection.mountCatalogRow(key());
-      const active = previousFocus instanceof HTMLElement ? previousFocus : null;
-      const activeRow = active?.closest<HTMLElement>("[data-session-key]");
-      const control = CATALOG_CONTROLS.find(([, selector]) => active?.matches(selector))?.[0];
-      const restoreFocus =
-        control !== undefined &&
-        (activeRow?.dataset.catalogSessionKey === identityKey() ||
-          activeRow?.dataset.sessionKey === identityKey() ||
-          activeRow?.dataset.sessionKey === key());
-      if (menuOpen()) {
-        params.host.sidebarMenus.catalogMenu.retargetTrigger(
-          catalogKey(),
-          controls.catalogMenu ?? controls.link,
-        );
-      }
-      if (restoreFocus && control) {
-        queueMicrotask(() => {
-          if (element.isConnected && document.activeElement === document.body) {
-            const focusTarget = controls[control];
-            (focusTarget && element.contains(focusTarget) ? focusTarget : controls.link)?.focus({
-              preventScroll: true,
-            });
-          }
-        });
-      }
-      return stop;
-    };
+    const rowRef = createCatalogSessionRowRef(params.host, () => ({
+      key: key(),
+      identityKey: identityKey(),
+      catalogKey: catalogKey(),
+      nativeSessionKey: adoptedRow()?.key,
+    }));
     const color = createMemo(() => normalizeSessionColorValue(readSession().color ?? ""));
     const active = createMemo(() => key() === params.snapshot.routeSessionKey);
-    const running = () => readSession().status === "active" || readSession().status === "running";
+    const ownRunActive = () => {
+      const row = adoptedRow();
+      return row
+        ? params.host.sessionDataContext?.sessions.isRunVisuallyActive(row) === true
+        : readSession().status === "active" || readSession().status === "running";
+    };
+    const background = () => !ownRunActive() && (adoptedRow()?.backgroundProcessCount ?? 0) > 0;
+    const running = () => ownRunActive() || background();
     const canOpenTerminal = () =>
       readSession().canOpenTerminal === true && params.snapshot.terminalAvailable;
     const openMenu = (x: number, y: number, trigger?: HTMLElement) =>
@@ -246,6 +219,7 @@ function renderCatalogHostGroup(
                 <SessionGlyph
                   content={undefined}
                   running={running()}
+                  background={background()}
                   runVisibility={sessionRunVisibility}
                 />
               ) : undefined}
@@ -292,7 +266,6 @@ function renderCatalogHostGroup(
             session={params.snapshot.toSidebarSession(liveRow())}
             display={{
               catalogIdentityKey: identityKey(),
-              catalogMenu: catalogMenu(),
               rowRef,
               pullRequest: readSession().pullRequest,
             }}
@@ -414,6 +387,14 @@ function renderCatalogHostGroup(
                     : null;
               });
               const collapsed = createMemo(() => collapsedSectionId() !== null);
+              const activity = createMemo(() =>
+                catalogSessionActivity(
+                  group().sessions,
+                  readLiveRowsByKey(),
+                  (row) =>
+                    params.host.sessionDataContext?.sessions.isRunVisuallyActive(row) ?? false,
+                ),
+              );
               return (
                 <div class="sidebar-session-catalog-project" role="listitem">
                   <button
@@ -428,6 +409,13 @@ function renderCatalogHostGroup(
                       {collapsed() ? <Icon name="chevronRight" /> : <Icon name="chevronDown" />}
                     </span>
                     <span class="sidebar-session-catalog-project__label">{group().label}</span>
+                    <Show when={collapsed() && activity().running}>
+                      <span
+                        class="session-run-spinner"
+                        role="img"
+                        aria-label={t("sessionsView.activeRun")}
+                      />
+                    </Show>
                     <span class="sidebar-session-catalog-project__count" aria-hidden="true">
                       {group().sessions.length}
                     </span>
@@ -541,22 +529,19 @@ function renderCatalogGroup(
         sectionId={sectionId()}
         sectionHeaders={params.host.sessionOrganizer.sectionHeaders}
         status={
-          hasError() || (collapsed() && rows().length > 0)
+          hasError()
             ? {
-                label: hasError() ? `${readCatalog().label}: ${errorHelp()}` : readCatalog().label,
+                label: `${readCatalog().label}: ${errorHelp()}`,
                 expanded: !collapsed(),
-                title: hasError() ? errorHelp() : undefined,
+                title: errorHelp(),
                 onToggle: () => params.host.toggleSection(sectionId()),
                 content: (
                   <span
-                    class={[
-                      "sidebar-session-group-count",
-                      { "sidebar-session-group-count--error": hasError() },
-                    ]}
-                    data-session-catalog-error={hasError() ? readCatalog().id : undefined}
+                    class="sidebar-session-group-count sidebar-session-group-count--error"
+                    data-session-catalog-error={readCatalog().id}
                     aria-hidden="true"
                   >
-                    {hasError() ? <Icon name="alertTriangle" /> : rows().length}
+                    <Icon name="alertTriangle" />
                   </span>
                 ),
               }
@@ -604,7 +589,7 @@ function renderCatalogGroup(
                 </span>
               </span>
               {renderHoverMarquee(readCatalog().label, "sidebar-recent-sessions__label-text")}
-              {hasActiveRun() ? (
+              {collapsed() && hasActiveRun() ? (
                 <span
                   class="session-run-spinner"
                   role="img"

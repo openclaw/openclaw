@@ -12,6 +12,7 @@ import {
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { getAdmittedSqlSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
+import { githubAccountAvatarUrl } from "../shared/github-account-avatar.js";
 import { normalizeGitHubLogin } from "../utils/github-login.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
@@ -290,7 +291,7 @@ function projectUserProfileGitHubIdentities(
         host: identity.host,
         login: identity.login,
         profileUrl: `https://${identity.host}/${identity.login}`,
-        avatarUrl: `https://${identity.host}/avatars/u/${identity.accountId}`,
+        avatarUrl: githubAccountAvatarUrl(identity.host, identity.accountId),
       });
     }
   }
@@ -301,7 +302,7 @@ function projectGitHubIdentity(primary: StoredGitHubIdentity): UserProfileGitHub
   return {
     login: primary.login,
     profileUrl: `https://github.com/${primary.login}`,
-    avatarUrl: `https://avatars.githubusercontent.com/u/${primary.accountId}?v=4`,
+    avatarUrl: githubAccountAvatarUrl("github.com", primary.accountId),
   };
 }
 

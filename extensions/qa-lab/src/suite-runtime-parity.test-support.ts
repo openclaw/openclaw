@@ -1,7 +1,7 @@
 import { vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
-import type { RuntimeParityCell } from "./runtime-parity.js";
+import type { RuntimeParityCell } from "./runtime-parity.types.js";
 import { recordQaSuiteTestResults } from "./suite-test-helpers.js";
 import type { QaSuiteRunParams } from "./suite-types.js";
 

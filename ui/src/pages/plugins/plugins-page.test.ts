@@ -137,6 +137,7 @@ async function mountInventory(
 }
 
 it("flushes a pending config draft before enabling and refreshes afterward", async () => {
+  await import("./settings-view.tsx");
   vi.useFakeTimers();
   let config: Record<string, unknown> = { pending: false };
   let hash = "hash-1";
@@ -838,7 +839,7 @@ it("requires a fresh install-policy review after reconnect", async () => {
   harness.emit(client, false);
   harness.emit(client, true);
   await clickPluginAction(page, "Continue installation");
-  await waitForText(page, "request a fresh review");
+  await waitForText(page, "request a new review");
   expect(installCalls).toBe(1);
   await clickPluginAction(page, "Install");
   await waitForSolid(() => expect(installCalls).toBe(2));

@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { assertDoctorPreflightMigrationsComplete } from "../commands/doctor-config-preflight-migrations.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import {
@@ -11,6 +12,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import * as stateDatabase from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { expectPlanReceiptDescriptorsToMatch } from "./state-migrations.caller-mode.test-helpers.js";
@@ -250,8 +252,15 @@ it.each([
 });
 
 it("carries a prelude refusal into every later Doctor receipt", async () => {
-  const { migrate } = fixture();
+  const { root, env, migrate } = fixture();
+  const workspace = path.join(root, "workspace");
+  const source = path.join(workspace, "openclaw-workspace-state.json");
+  const raw = JSON.stringify({ version: 1, setupCompletedAt: "2026-07-01T00:00:00.000Z" });
+  fs.mkdirSync(workspace);
+  fs.writeFileSync(source, raw);
+  const cfg = { agents: { ownership: "explicit" as const, entries: { planner: { workspace } } } };
   const result = await migrate({
+    cfg,
     doctorOnlyStateMigrations: true,
     legacySessionSurfaces: { surfaces: [], failures: ["Session migration owner is unavailable"] },
   });
@@ -267,4 +276,20 @@ it("carries a prelude refusal into every later Doctor receipt", async () => {
   expect(
     result.stepReceipts.findIndex((receipt) => receipt.id === "exec-approvals"),
   ).toBeGreaterThan(blockerIndex);
+  const warnings: string[] = [];
+  await withEnvAsync({ ...env, OPENCLAW_HOME: root }, async () => {
+    await expect(
+      assertDoctorPreflightMigrationsComplete({
+        cfg,
+        stepReceipts: result.stepReceipts,
+        report: (messages) => warnings.push(...messages.warnings),
+      }),
+    ).rejects.toBeInstanceOf(DoctorStateMigrationRefusalError);
+  });
+  expect(warnings).toHaveLength(1);
+  expect(warnings[0]).toContain(source);
+  expect(warnings[0]).toContain('migration step "plugin-migration-preparation" refused');
+  expect(warnings[0]).toContain("openclaw doctor --fix");
+  expect(warnings[0]).not.toMatch(/cannot repair|retained setup file|verified backup/u);
+  expect(fs.readFileSync(source, "utf8")).toBe(raw);
 });

@@ -9,14 +9,13 @@ import type { MemoryFlushToolRunContext } from "../../agent-tools.memory-flush.t
 import type { AssistantErrorTranscript } from "../../assistant-error-transcript.js";
 import type { ExecApprovalContinuationPromptRange } from "../../bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
-import type { QueuedAgentRunParams } from "../../command/queued-run-params.types.js";
 import type {
   AgentRunExecutionContext,
   AgentRunMessageContext,
   AgentRunChannelContext,
-  AgentStreamParams,
-  ClientToolDefinition,
-} from "../../command/shared-types.js";
+} from "../../command/execution-context.types.js";
+import type { QueuedAgentRunParams } from "../../command/queued-run-params.types.js";
+import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
 import type { ConversationRecallContext } from "../../conversation-recall.types.js";
 import type { CronCreatorAuthorityCapability } from "../../cron-creator-authority-context.js";
 import type {
@@ -39,7 +38,6 @@ import type { PromptMode } from "../../system-prompt.types.js";
 import type { EmbeddedAgentExecutionPhaseInfo } from "../execution-phase.js";
 import type { BlockReplyFlushContext } from "../types.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
-export type { ClientToolDefinition } from "../../command/shared-types.js";
 export type { CurrentInboundPromptContext } from "../../internal-runtime-context.js";
 
 export type RunEmbeddedAgentParams = Pick<
@@ -106,10 +104,6 @@ export type RunEmbeddedAgentParams = Pick<
   disableMessageTool?: boolean;
   swarmCollector?: boolean;
   swarmOutputSchema?: Record<string, unknown>;
-  /** Restrict this reconstructed run to restart-safe tools. */
-  forceRestartSafeTools?: boolean;
-  /** Preserve Code Mode controls for a replay-safe restart recovery turn. */
-  forceCodeModeTools?: boolean;
   /** Invocation-owned Code Mode activation; limits still come from config. */
   codeModeOverride?: boolean | "auto";
   /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */
@@ -120,11 +114,6 @@ export type RunEmbeddedAgentParams = Pick<
   retryTransientErrors?: boolean;
   /** Disable trajectory persistence for auxiliary runs with no durable session owner. */
   disableTrajectory?: boolean;
-  /**
-   * Background Workshop review of this conversation: edits of existing skills require a prior
-   * view, and changes credit "review" with this originating session key as their provenance.
-   */
-  skillWorkshopReviewOf?: string;
   /** Explicit system prompt mode override for trusted callers. */
   promptMode?: PromptMode;
   /** Keep the message tool available even when a narrow profile would omit it. */

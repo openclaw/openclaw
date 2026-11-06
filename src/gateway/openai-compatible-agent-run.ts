@@ -136,11 +136,15 @@ export async function runOpenAiCompatibleAgentCommand(params: {
   const client = createSyntheticPluginRuntimeClient({
     authenticatedUserProfile: params.requestAuth.authenticatedUserProfile,
     operatorRoleActor: params.requestAuth.operatorRoleActor,
+    openclawIdPrincipal: params.requestAuth.openclawIdPrincipal,
     scopes: [...params.operatorScopes],
   });
-  const operator = resolveGatewayOperatorRoleActor(client)?.kind === "operator";
-  const gatewayContext = operator ? params.resolveGatewayContext?.() : undefined;
-  if (operator && !gatewayContext) {
+  // Tunnel owners also retain their authenticated device, not just owner-profile attribution.
+  const requiresOperatorContext =
+    params.requestAuth.openclawIdPrincipal !== undefined ||
+    resolveGatewayOperatorRoleActor(client)?.kind === "operator";
+  const gatewayContext = requiresOperatorContext ? params.resolveGatewayContext?.() : undefined;
+  if (requiresOperatorContext && !gatewayContext) {
     throw new Error("OpenAI-compatible operator execution requires a current Gateway context.");
   }
   const captured = gatewayContext
@@ -152,6 +156,7 @@ export async function runOpenAiCompatibleAgentCommand(params: {
           resolveGatewayContext: params.resolveGatewayContext,
         },
         sourceAuthority: params.requestAuth.operatorAccessAuthority,
+        hasCurrentClientAuthority: params.hasCurrentClientAuthority,
       })
     : undefined;
   try {
@@ -190,7 +195,6 @@ export async function runOpenAiCompatibleAgentCommand(params: {
       },
       defaultRuntime,
       createDefaultDeps(),
-      {},
     );
     captured?.authority.assertCurrent();
     return result;

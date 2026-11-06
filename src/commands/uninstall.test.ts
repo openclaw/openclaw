@@ -96,6 +96,7 @@ describe("uninstallCommand", () => {
       expect.objectContaining({
         dryRun: true,
         preservePaths: ["/tmp/.openclaw/workspace"],
+        removeCompletionHooks: true,
       }),
     );
     expect(removeWorkspaceDirs).toHaveBeenCalledWith(["/tmp/.openclaw/workspace"], runtime, {

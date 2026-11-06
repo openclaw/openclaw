@@ -95,6 +95,14 @@ export function reconcileChronicle(
   );
 }
 
+/** Every indexed record associated with an entity, dated or not; callers enforce eligibility. */
+export function entityRecordIds(db: DatabaseSync, binding: string, entity: string): string[] {
+  return db
+    .prepare("SELECT id FROM temporal_entities_v1 WHERE binding=? AND entity=? ORDER BY id")
+    .all(binding, entity)
+    .map((row) => String(row.id));
+}
+
 /** Select IDs using fixed SQL columns and bound values; callers enforce current eligibility. */
 export function chronologicalIds(
   db: DatabaseSync,

@@ -13,7 +13,6 @@ import type { DurableMessageSendIntent } from "../../channels/message/types.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelPollResult } from "../../channels/plugins/types.public.js";
 import { createChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
-import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizePollInput } from "../../polls.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
@@ -31,6 +30,8 @@ import {
 } from "./deliver.js";
 import type { ConversationDeliveryTarget } from "./delivery-completion.js";
 import {
+  GATEWAY_SEND_RECONCILIATION_TIMEOUT_MS,
+  isUnsettledGatewayRequestTimeout,
   loadMessageGatewayRuntime,
   resolveGatewayIdempotencyKey,
   resolveOutboundMessageGatewayOptions,
@@ -213,20 +214,34 @@ async function callMessageGateway<T>(params: {
     : await params.gateway?.resolveAgentRuntimeIdentityToken?.();
   await params.onPlatformSendDispatch?.();
   assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
-  if (params.gateway?.request) {
-    return await params.gateway.request<T>({
+  const request = async (timeoutMs: number) => {
+    if (params.gateway?.request) {
+      return await params.gateway.request<T>({
+        method: params.method,
+        params: params.params,
+        timeoutMs,
+      });
+    }
+    const { callGatewayLeastPrivilege } = await loadMessageGatewayRuntime();
+    return await callGatewayLeastPrivilege<T>({
+      ...gateway,
       method: params.method,
       params: params.params,
-      timeoutMs: gateway.timeoutMs,
+      timeoutMs,
+      agentRuntimeIdentityToken,
     });
+  };
+  try {
+    return await request(gateway.timeoutMs);
+  } catch (error) {
+    if (params.method !== "send" || !(await isUnsettledGatewayRequestTimeout(error))) {
+      throw error;
+    }
+    // A slow upload can outlive the caller's timer without cancelling the send.
+    // Reattach once with the unchanged idempotency key so the Gateway joins it.
+    assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
+    return await request(Math.max(gateway.timeoutMs, GATEWAY_SEND_RECONCILIATION_TIMEOUT_MS));
   }
-  const { callGatewayLeastPrivilege } = await loadMessageGatewayRuntime();
-  return await callGatewayLeastPrivilege<T>({
-    ...gateway,
-    method: params.method,
-    params: params.params,
-    agentRuntimeIdentityToken,
-  });
 }
 
 async function resolveMessageConfig(cfg?: OpenClawConfig): Promise<OpenClawConfig> {
@@ -257,10 +272,7 @@ async function resolveDirectMessageTarget(
   return target;
 }
 
-export async function sendMessage(
-  params: MessageSendParams,
-  sessionGeneration?: SessionDeliveryGeneration,
-): Promise<MessageSendResult> {
+export async function sendMessage(params: MessageSendParams): Promise<MessageSendResult> {
   const cfg = await resolveMessageConfig(params.cfg);
   const reply = normalizeOutboundReplyFacts({ reply: params.reply, replyToId: params.replyToId });
   const { channel, plugin } = params.preparedPlugin
@@ -395,8 +407,6 @@ export async function sendMessage(
         ...(params.onDeliveredPayload ? { onDeliveredPayload: params.onDeliveredPayload } : {}),
       },
       params.conversationDeliveryTarget,
-      undefined,
-      sessionGeneration,
     );
     const sendMayHaveReachedRecipient = durableMessageBatchMayHaveReachedRecipient(send);
     const handoffRejection =

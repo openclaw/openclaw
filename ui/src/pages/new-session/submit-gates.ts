@@ -31,7 +31,6 @@ registerNewSessionSetupEnglish();
 // silently eat an Enter press again.
 type SilentSubmitGate = "submitting" | "empty-draft";
 type ReasonedSubmitGate =
-  | "initial-turn-rejected"
   | "preference-restore"
   | "model-setup"
   | "route-pending"
@@ -39,6 +38,7 @@ type ReasonedSubmitGate =
   | "attachment-reads"
   | "outcome-unknown"
   | "disconnected"
+  | "draft-unavailable"
   | "access"
   | "folder"
   | "placement-recovery"
@@ -68,9 +68,13 @@ export const PAGE_RENDERED_GATES: ReadonlySet<string> = new Set([
 export function repositoryIssueText(repository: DraftRepositoryState): string | undefined {
   switch (repository.kind) {
     case "forbidden":
-      return repository.missingScope
-        ? t("newSession.folderRequiresScope", { scope: repository.missingScope })
-        : t("newSession.gitCheckAccessDenied");
+      return repository.missingScope === "operator.admin"
+        ? t("newSession.folderRequiresScope")
+        : repository.missingScope === "operator.write"
+          ? t("newSession.folderRequiresWrite")
+          : repository.missingScope === "operator.read"
+            ? t("newSession.folderRequiresRead")
+            : t("newSession.gitCheckAccessDenied");
     case "unavailable":
       return t("newSession.gitCheckUnavailable");
     default:
@@ -237,6 +241,14 @@ export function resolveNewSessionSubmitBlock(
     // Same string readSessionMethodAccess reports for its disconnected
     // cause; checked here so the gates below can rely on a live client.
     return { gate: "disconnected", reason: t("sessionsView.actionRequiresConnection") };
+  }
+  if (
+    kind === "session" &&
+    !pendingPlacementActive &&
+    draft.visibility === "draft" &&
+    connection.snapshot.hello?.policy?.allowedSessionVisibilities?.includes("draft") === false
+  ) {
+    return { gate: "draft-unavailable", reason: t("newSession.draftUnavailable") };
   }
   const access =
     kind === "terminal"

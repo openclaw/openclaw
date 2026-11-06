@@ -18,10 +18,31 @@ import {
   resolveModelCostConfig,
 } from "../utils/usage-format.js";
 import { deriveGoalSessionTitle } from "./derive-goal-session-title.js";
+import { resolveSessionStoreKey } from "./session-store-key.js";
 import {
   createSessionRowModelCacheKey,
   type SessionListRowContext,
 } from "./session-utils-contracts.js";
+
+export function prepareGatewaySessionBackgroundProcessScope(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  agentId: string;
+  entry?: Pick<SessionEntry, "sessionId">;
+}) {
+  return {
+    scopeKeys: [
+      resolveSessionStoreKey({
+        cfg: params.cfg,
+        sessionKey: params.key,
+        storeAgentId: params.agentId,
+      }),
+      params.key,
+      params.entry?.sessionId ?? "",
+    ],
+    agentId: params.agentId,
+  };
+}
 
 export function matchesSessionArchiveFilter(
   entry: Pick<SessionEntry, "archivedAt">,

@@ -13,37 +13,36 @@ import { projectBoundedCodexVisibleSessionHistory } from "./transcript-history-p
 
 const { writeSession, writeSqliteSession } = setupSessionHistoryFixtures();
 
-function recoveryNoticeHistory() {
-  const text = "Restart recovery stopped. Resume in WebChat.";
-  const saved = "Unconfirmed draft must stay out of model context.";
+function deliveredResultHistory() {
+  const text = "Scheduled report ready.";
+  const mirrorOnly = "Local delivery bookkeeping.";
   const local = {
     ...assistantMessage(text, 1),
     provider: "openclaw",
     model: "delivery-mirror",
     content: [
       { type: "text" as const, text },
-      { type: "text" as const, text: `\nSaved reply (delivery unconfirmed):\n${saved}` },
+      { type: "text" as const, text: mirrorOnly },
     ],
   };
   const confirmed = {
     ...assistantMessage(text, 2),
     provider: "openclaw",
     model: "automation-result",
-    display: false,
     openclawAutomation: {
-      kind: "recovery-notice",
-      noticeId: "notice",
-      localNotice: { entryId: "private-anchor" },
+      kind: "cron",
+      jobId: "private-job",
+      runId: "private-run",
     },
   };
   const messages: AgentMessage[] = [local, confirmed];
-  return { text, saved, messages };
+  return { text, mirrorOnly, messages };
 }
 
 it.each(["file", "sqlite"] as const)(
-  "replays a hidden confirmed notice without its local saved reply from %s",
+  "replays a delivered cron result without local bookkeeping from %s",
   async (storage) => {
-    const { text, saved, messages: prior } = recoveryNoticeHistory();
+    const { text, mirrorOnly, messages: prior } = deliveredResultHistory();
     const { settledMessages } = settledFixture();
     const messages = [...prior, ...settledMessages];
     const sqlite = storage === "sqlite" ? await writeSqliteSession() : undefined;
@@ -75,16 +74,16 @@ it.each(["file", "sqlite"] as const)(
     expect(captured).toBeInstanceOf(CodexSettledTurnContext);
     const data = JSON.stringify(captured?.data);
     expect(data.split(text)).toHaveLength(2);
-    expect(data).not.toContain(saved);
-    expect(data).not.toContain("private-anchor");
-    expect(data).not.toContain("localNotice");
+    expect(data).not.toContain(mirrorOnly);
+    expect(data).not.toContain("private-job");
+    expect(data).not.toContain("private-run");
   },
 );
 
 it.each(["legacy", "selected", "import"] as const)(
-  "projects only the confirmed notice and normal assistant history through %s",
+  "projects delivered results and normal assistant history without mirrors through %s",
   async (projection) => {
-    const { text, saved, messages } = recoveryNoticeHistory();
+    const { text, mirrorOnly, messages } = deliveredResultHistory();
     messages.push(assistantMessage("Ordinary assistant reply.", 3));
     const projected =
       projection === "legacy"
@@ -106,9 +105,9 @@ it.each(["legacy", "selected", "import"] as const)(
     const data = JSON.stringify(projected);
     expect(data.split(text)).toHaveLength(2);
     expect(data).toContain("Ordinary assistant reply.");
-    expect(data).not.toContain(saved);
-    expect(data).not.toContain("private-anchor");
-    expect(data).not.toContain("localNotice");
+    expect(data).not.toContain(mirrorOnly);
+    expect(data).not.toContain("private-job");
+    expect(data).not.toContain("private-run");
   },
 );
 

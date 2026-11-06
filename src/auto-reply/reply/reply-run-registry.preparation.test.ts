@@ -497,7 +497,7 @@ it.each(["confirmation-rejection", "participant-callback", "participant-fulfille
     if (participant) {
       expect(participant).toHaveBeenCalledOnce();
       expect(() => operation.personalToolParticipants!.resolve("incoming")).toThrow(
-        "User is not a participant",
+        "This turn has no person authority",
       );
     }
   },

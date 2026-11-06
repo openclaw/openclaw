@@ -6,6 +6,7 @@ import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { formatCliJsonFailure } from "../cli/failure-output.js";
 import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
 import { resolveStateDir } from "../config/paths.js";
+import { getGatewayServiceInstallation } from "../infra/gateway-service-installation-context.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
@@ -31,6 +32,7 @@ import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { readStateSchemaPublicationBlocker } from "../state/openclaw-state-schema-publication.js";
+import { assertGatewayServiceSchemaMigrationAllowed } from "../state/openclaw-state-service-installation.js";
 import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
 import { VERSION } from "../version.js";
 import type { BackupSqliteSnapshotFact } from "./backup-resource-inventory.js";
@@ -38,6 +40,7 @@ import {
   prepareDoctorDatabasePreflight,
   type DoctorDatabasePreflight,
 } from "./doctor-database-preflight.js";
+import { resolveDoctorUpdateAdmission } from "./doctor-maintenance-admission.js";
 import { createDoctorRehearsalDatabaseCoverage } from "./doctor-rehearsal-databases.js";
 import {
   recordUpdateDoctorRefusal,
@@ -432,7 +435,14 @@ export async function preflightUpdateDoctorCli(options: {
     // State-only facts must never replace the later complete fleet inspection.
     return undefined;
   }
-  const schemas = await guardUpdateDoctorSchemaUpgrade({ ...options, entry: "cli-bootstrap" });
+  const serviceSchemas = getGatewayServiceInstallation()
+    ? await prepareDoctorDatabasePreflight()
+    : undefined;
+  const schemas = await guardUpdateDoctorSchemaUpgrade({
+    ...options,
+    schemas: serviceSchemas,
+    entry: "cli-bootstrap",
+  });
   if (schemas?.updateSchemaRehearsal) {
     await rehearseDeferredUpdateDoctorSchemaForParent(
       schemas,
@@ -443,7 +453,25 @@ export async function preflightUpdateDoctorCli(options: {
     // The existing one-shot owner joins cleanup and drains the warning before exit.
     exitCliAfterOutput(defaultRuntime, 0);
   }
-  return schemas;
+  const pending = serviceSchemas?.pendingMigrations?.find(
+    (database) => database.foundVersion > 0 && database.foundVersion < database.supportedVersion,
+  );
+  if (pending) {
+    // A candidate must repair before the updater rebinds the service. An inherited
+    // phase marker alone is insufficient; use the recorded live driver admission.
+    const managedUpdate =
+      process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" &&
+      Boolean(process.env.OPENCLAW_UPDATE_RUN_ID?.trim()) &&
+      resolveDoctorUpdateAdmission(process.env).readContinuation() !== undefined;
+    if (!managedUpdate) {
+      assertGatewayServiceSchemaMigrationAllowed(
+        resolveOpenClawStateSqlitePath(),
+        pending.foundVersion,
+        pending.supportedVersion,
+      );
+    }
+  }
+  return schemas ?? serviceSchemas;
 }
 
 /** The shipped Windows driver can still discard a failed npm stage before entering repair. */

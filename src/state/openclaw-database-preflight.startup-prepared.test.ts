@@ -141,6 +141,7 @@ it("still refuses an unmigrated reserved store without a recovery hold", async (
   const fleet = databaseFixture(tempDirs.make("startup-unheld-schema-"));
   const pathname = fleet.agent("openclaw").path;
   closeDatabases();
+  revokeSqliteDatabaseAdmissionsForPath(pathname);
   execSql(pathname, `PRAGMA user_version=${supportedVersions.agent - 1};`);
   await withImmediateAdmission(async () => {
     await expect(fleet.ready(agentConfig(["main"], "main"))).rejects.toThrow(
@@ -282,7 +283,7 @@ it("carries fleet compatibility once into bootstrap while readiness always inspe
     await fleet.inspect();
     fleet.expectInspections(fleet.paths.length);
   });
-  await fleet.inspect();
+  expect(await fleet.inspect()).toEqual(compatible);
   fleet.expectInspections(fleet.paths.length);
 });
 
@@ -308,6 +309,16 @@ it("preserves configured ownership when reusing an unchanged inspected database"
     ]);
     fleet.expectInspections(0);
   });
+});
+
+it("reads unsealed state for runtime preflight without a private snapshot", async () => {
+  const fleet = databaseFixture(tempDirs.make("preflight-live-state-"));
+  fleet.state();
+  closeDatabases();
+  revokeSqliteDatabaseAdmissionsForPath(fleet.statePath);
+  const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation");
+  expect(await fleet.inspect({ scope: "state" }, "runtime")).toEqual(compatible);
+  expect(prepare).not.toHaveBeenCalled();
 });
 
 it("reads newly registered stores without copying admitted state after startup writes", async () => {

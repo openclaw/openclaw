@@ -474,7 +474,7 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
           "Update mode: package",
           "Reason code: doctor-failed",
           "Failed phase finalize-doctor: exit 1",
-          "Recovery outcome: not serving (timeout)",
+          "Recovery outcome: readiness unverified (timeout)",
           "Gateway readiness was not verified; service status: unknown. Check openclaw gateway status --deep.",
         );
         expect(run.steps.filter((step) => step.step === "gateway recovery verification")).toEqual([
