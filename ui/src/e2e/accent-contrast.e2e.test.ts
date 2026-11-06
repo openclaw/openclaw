@@ -215,5 +215,21 @@ suite.define(() => {
         })),
       ).toEqual({ color: "rgb(255, 255, 255)", background: "rgb(230, 115, 92)" });
     }
+    // Tablet navigation keeps the filled header action; the phone pill is intentionally neutral.
+    await page.setViewportSize({ width: 820, height: 900 });
+    await page.goto(suite.server.baseUrl + "sessions");
+    const mobileAction = page.locator(".header-new-session");
+    await expect.poll(() => mobileAction.isVisible()).toBe(true);
+    await capture(mobileAction, "mobile-new-session.png");
+    for (const state of ["normal", "hover"]) {
+      if (state === "hover") {
+        await mobileAction.hover();
+      }
+      await expect
+        .poll(() =>
+          mobileAction.locator("svg").evaluate((element) => getComputedStyle(element).color),
+        )
+        .toBe("rgb(255, 255, 255)");
+    }
   });
 });
