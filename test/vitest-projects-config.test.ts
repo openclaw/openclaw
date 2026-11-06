@@ -504,6 +504,7 @@ describe("projects vitest config", () => {
   it.each([
     "extensions/deep-research/src/jobs.test.ts",
     "extensions/deep-research/src/jobs.cancel.test.ts",
+    "extensions/deep-research/src/jobs.control.test.ts",
     "extensions/deep-research/src/jobs.wake.test.ts",
     "extensions/deep-research/test/gateway-recovery.integration.test.ts",
     "extensions/deep-research/test/gateway-routing.integration.test.ts",

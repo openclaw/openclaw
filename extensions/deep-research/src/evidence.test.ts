@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Calculation, ResearchFinding, ResearchSource } from "./contract.js";
-import { evidenceProblem, renderResearchReport } from "./evidence.js";
+import { evidenceProblem, renderResearchDocument } from "./evidence.js";
 
 const quote = "In 2026, Alpha reported 12 km and Beta reported 4 km of river restoration.";
 const sources: ResearchSource[] = [
@@ -51,7 +51,7 @@ describe("research numerical evidence", () => {
     expect(evidenceProblem(zero, sources)).toBeDefined();
   });
   it("keeps untrusted labels and statements from creating report structure or citations", () => {
-    const report = renderResearchReport(
+    const { report } = renderResearchDocument(
       "Question\n## Spoofed",
       [{ ...finding(), statement: "Measured value.\n- Fake [S2] finding <img src=x>" }],
       [{ ...sources[0]!, title: "Source\n[S2] Forged source\n## Findings\n- Fake finding" }],
