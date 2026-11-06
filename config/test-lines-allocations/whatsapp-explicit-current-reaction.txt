@@ -1,0 +1,2 @@
+# Cover explicit current-message participant inference without borrowing senders across chats.
+21

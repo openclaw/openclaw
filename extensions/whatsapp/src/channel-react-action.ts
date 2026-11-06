@@ -183,12 +183,14 @@ export async function handleWhatsAppMessageAction(params: WhatsAppMessageActionP
   }
   const messageId = String(messageIdRaw);
   const explicitMessageId = readStringOrNumberParam(params.params, "messageId");
+  const targetsCurrentMessage =
+    scopedContext?.currentMessageId != null && messageId === String(scopedContext.currentMessageId);
   const emoji = readStringParam(params.params, "emoji", { allowEmpty: true });
   const remove = typeof params.params.remove === "boolean" ? params.params.remove : undefined;
   const explicitParticipant = readStringParam(params.params, "participant");
   const inferredParticipant =
     explicitParticipant ||
-    explicitMessageId != null ||
+    (explicitMessageId != null && !targetsCurrentMessage) ||
     !isWhatsAppSource ||
     isCrossChat ||
     !isWhatsAppGroupJid(explicitTarget ?? params.toolContext?.currentChannelId ?? "")
