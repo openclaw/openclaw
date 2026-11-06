@@ -243,10 +243,10 @@ export async function runWorkspaceManifestProgram(
   const requestedBaseCommit = process.argv[2] || null;
   const requestedMode = process.argv[3] || "";
   const verifyOnly = requestedMode.endsWith("-read-only");
-  const mode = verifyOnly ? requestedMode.slice(0, -10) : requestedMode;
-  const eligibleOnly = mode === "eligible";
-  const requestedManifestDigest = mode === "resolve" ? process.argv[4] : null;
-  const publishedManifestDigest = mode === "publish" ? process.argv[4] : null;
+  const manifestOperation = verifyOnly ? requestedMode.slice(0, -10) : requestedMode;
+  const eligibleOnly = manifestOperation === "eligible";
+  const requestedManifestDigest = manifestOperation === "resolve" ? process.argv[4] : null;
+  const publishedManifestDigest = manifestOperation === "publish" ? process.argv[4] : null;
   const memoMode = process.argv.at(-1) === "memo-v1";
   const priorManifestDigests = [
     ...new Set(process.argv.slice(4).filter((value) => value && value !== "memo-v1")),
