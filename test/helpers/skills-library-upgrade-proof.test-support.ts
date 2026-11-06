@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -8,10 +9,10 @@ import type {
   SkillsLibraryReceipt,
 } from "../../packages/gateway-protocol/src/schema/skill-library.ts";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.ts";
-import { isDirectRunUrl } from "../../scripts/lib/direct-run.mjs";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { verifyNpmRegistrySignatures } from "../../scripts/lib/npm-registry-signatures.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "../../scripts/lib/release-version.mjs";
+import { resolveNpmRunner } from "../../scripts/npm-runner.mts";
 import { OpenClawSchema } from "../../src/config/zod-schema.ts";
 import { loadOrCreateDeviceIdentity } from "../../src/infra/device-identity.ts";
 import {
@@ -45,6 +46,77 @@ const npmSchema = z.object({
   }),
 });
 const keysSchema = z.object({ keys: z.array(z.object({ keyid: z.string(), key: z.string() })) });
+
+function publicStableVersion(version: string) {
+  return /^[0-9]{4}[.][0-9]+[.][0-9]+(?:-[0-9]+)?$/.test(version)
+    ? version
+    : "redacted-invalid-version";
+}
+function publicNpmDate(value: string | null) {
+  if (value === "null" || value === "undefined" || value === "") {
+    return null;
+  }
+  const timestamp = value === null ? Number.NaN : Date.parse(value.replace(/[.]$/u, ""));
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : "unavailable";
+}
+export function summarizeStableNpmPolicy(raw: {
+  before: string | null;
+  age: string | null;
+  registry: string | null;
+  version: string | null;
+}) {
+  let registryHost = "unavailable";
+  if (raw.registry) {
+    try {
+      registryHost =
+        new URL(raw.registry).hostname === "registry.npmjs.org"
+          ? "registry.npmjs.org"
+          : "non-default-registry";
+    } catch {
+      /* Never expose an invalid/private registry value. */
+    }
+  }
+  return {
+    before: publicNpmDate(raw.before),
+    minReleaseAgeDays: raw.age !== null && /^[0-9]+$/u.test(raw.age) ? Number(raw.age) : null,
+    registryHost,
+    npmVersion:
+      raw.version && /^[0-9]+[.][0-9]+[.][0-9]+$/u.test(raw.version) ? raw.version : "unavailable",
+    queriesSucceeded: Object.values(raw).every((value) => value !== null),
+  };
+}
+export function observeStableNpmPolicy(repository: string, root: string) {
+  const env: NodeJS.ProcessEnv = { ...process.env, npm_config_cache: path.join(root, "npm-cache") };
+  const read = (args: string[]) => {
+    const runner = resolveNpmRunner({ env, npmArgs: args });
+    // Read-only queries cannot run package lifecycle scripts; retain the canonical runner/cwd/env.
+    const result = spawnSync(runner.command, runner.args, {
+      cwd: repository,
+      env: runner.env ?? env,
+      shell: runner.shell,
+      windowsVerbatimArguments: runner.windowsVerbatimArguments,
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8",
+      timeout: 10000,
+      maxBuffer: 8192,
+    });
+    return result.status === 0 ? result.stdout.trim() : null;
+  };
+  const policy = summarizeStableNpmPolicy({
+    before: read(["config", "get", "before"]),
+    age: read(["config", "get", "min-release-age"]),
+    registry: read(["config", "get", "registry"]),
+    version: read(["--version"]),
+  });
+  const environmentKeys = new Set(
+    Object.keys(env).map((key) => key.toLowerCase().replaceAll("_", "-")),
+  );
+  return {
+    ...policy,
+    beforeFromEnvironment: environmentKeys.has("npm-config-before"),
+    ageFromEnvironment: environmentKeys.has("npm-config-min-release-age"),
+  };
+}
 
 export async function runStablePackageCommand(
   phase: "resolver" | "install",
@@ -102,6 +174,13 @@ export async function runStablePackageCommand(
         "ENOENT",
         "ENOSPC",
       ].find((value) => privateOutput.includes(value)) ?? null;
+    const target = "No matching version found for openclaw@" + version;
+    const etargetMatchesRoot =
+      code === "ETARGET"
+        ? privateOutput.includes(target + " ") || privateOutput.includes(target + ".")
+        : null;
+    const before = privateOutput.match(/with a date before ([^\r\n]+)/u)?.[1]?.trim();
+    const reportedBefore = before ? publicNpmDate(before) : null;
     // Only enum/scalar facts leave the private log; never emit command arguments or child output.
     const classification = privateOutput.includes("package tarball integrity failed")
       ? privateOutput.includes(" imports missing ")
@@ -110,26 +189,27 @@ export async function runStablePackageCommand(
       : code
         ? "known-npm-or-runtime-code"
         : "unclassified-private-output";
-    throw new Error(
+    const diagnostic =
       "Owned stable-package command failed: " +
-        JSON.stringify({
-          phase,
-          version: /^[0-9]{4}[.][0-9]+[.][0-9]+(?:-[0-9]+)?$/.test(version)
-            ? version
-            : "redacted-invalid-version",
-          status,
-          exit: exit.code,
-          signal: exit.signal,
-          code,
-          classification,
-        }),
-    );
+      JSON.stringify({
+        phase,
+        version: publicStableVersion(version),
+        status,
+        exit: exit.code,
+        signal: exit.signal,
+        code,
+        etargetMatchesRoot,
+        reportedBefore,
+        classification,
+      });
+    console.error(diagnostic);
+    throw new Error(diagnostic);
   } finally {
     await log.close();
   }
 }
 
-async function prepareStablePackage() {
+export async function prepareStablePackage() {
   if (process.env.GITHUB_ACTIONS !== "true" || !process.env.PROOF_STABLE_MANIFEST) {
     throw new Error("Stable qualification requires the disposable proof workflow");
   }
@@ -159,6 +239,13 @@ async function prepareStablePackage() {
     keys: keys.keys,
   });
   const repository = process.cwd();
+  console.info(
+    "Stable npm selection policy: " +
+      JSON.stringify({
+        ...observeStableNpmPolicy(repository, root),
+        requestedVersion: publicStableVersion(metadata.version),
+      }),
+  );
   const output = path.join(root, "package-output");
   await runStablePackageCommand(
     "resolver",
@@ -669,11 +756,4 @@ export async function proveStableSkillUpgrade(options: {
     async () => candidate?.cleanup(),
     () => stable.cleanup(),
   );
-}
-
-if (isDirectRunUrl(process.argv[1] ?? "", import.meta.url)) {
-  if (!process.argv.includes("--prepare-stable")) {
-    throw new Error("Expected the stable qualification operation");
-  }
-  await prepareStablePackage();
 }

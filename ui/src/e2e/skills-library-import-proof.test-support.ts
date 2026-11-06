@@ -185,7 +185,10 @@ export async function createProofPolicy(root: string) {
 
 export type ImportProofReport = {
   schemaVersion: 1;
-  status: "running" | "passed" | "failed";
+  status: "running" | "partial" | "passed" | "failed";
+  authorityStatus: "running" | "passed" | "failed";
+  upgradeStatus: "not-run" | "running" | "passed" | "failed";
+  upgradeFailedStage?: string;
   failedStage?: string;
   source: { expectedHead: string; observedHead: string; tree: string; buildCommit: string };
   assertions: Array<{
@@ -197,6 +200,7 @@ export type ImportProofReport = {
     connectionStable?: boolean;
   }>;
   cleanup?: {
+    scope: "candidate-authority";
     gatewaysAndClientsStopped: boolean;
     sourcesClosed: boolean;
     testStateReleased: boolean;
@@ -232,6 +236,17 @@ export type ImportProofReport = {
 };
 
 export async function writePublicProof(directory: string, report: ImportProofReport) {
+  // Completion is derived here; candidate success alone must never publish a whole-proof pass.
+  report.status =
+    report.authorityStatus === "failed"
+      ? "failed"
+      : report.authorityStatus === "passed" && report.upgradeStatus === "passed"
+        ? "passed"
+        : report.authorityStatus === "passed"
+          ? "partial"
+          : report.upgradeStatus === "failed"
+            ? "failed"
+            : "running";
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   await fs.writeFile(path.join(directory, "report.json"), JSON.stringify(report, null, 2) + "\n");
 }

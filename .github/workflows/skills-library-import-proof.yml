@@ -58,8 +58,6 @@ jobs:
           vitest-worker-cache: "false"
       - name: Build the checked-out candidate normally
         run: pnpm build
-      - name: Resolve, verify and install actual latest stable in private scratch
-        run: node --import ./scripts/tsx.mjs test/helpers/skills-library-upgrade-proof.test-support.ts --prepare-stable
       - name: Install the maintained Chromium test browser
         run: pnpm exec playwright install --with-deps chromium
       - name: Exercise real authenticated import, authority and stable upgrade

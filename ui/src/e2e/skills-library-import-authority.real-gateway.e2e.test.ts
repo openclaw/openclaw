@@ -29,7 +29,10 @@ import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.ts";
 import { createLoopbackTlsFixture } from "../../../test/helpers/loopback-tls.test-support.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
-import { proveStableSkillUpgrade } from "../../../test/helpers/skills-library-upgrade-proof.test-support.ts";
+import {
+  prepareStablePackage,
+  proveStableSkillUpgrade,
+} from "../../../test/helpers/skills-library-upgrade-proof.test-support.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { createGatewayProxy, gatewayProxyRoute } from "./gateway-proxy.test-support.ts";
@@ -276,13 +279,12 @@ async function revoke(fixture: Fixture, actor: "redirect" | "publication") {
 }
 
 suite.define(() => {
-  it("proves real authenticated URL import, effect boundaries, revocation and stable-state survival", async (context) => {
+  let authorityReport: ImportProofReport | undefined;
+  it.sequential("proves real candidate URL-import authority and effect boundaries", async (context) => {
     if (
       process.env.GITHUB_ACTIONS !== "true" ||
       !process.env.PROOF_HEAD ||
-      !process.env.PROOF_PUBLIC_DIR ||
-      !process.env.PROOF_PRIVATE_DIR ||
-      !process.env.PROOF_STABLE_MANIFEST
+      !process.env.PROOF_PUBLIC_DIR
     ) {
       throw new Error(
         "Run the exact-head disposable skills-library-import-proof CI workflow; host runtime preparation is not supported",
@@ -302,6 +304,8 @@ suite.define(() => {
     const report: ImportProofReport = {
       schemaVersion: 1,
       status: "running",
+      authorityStatus: "running",
+      upgradeStatus: "not-run",
       source: {
         expectedHead: process.env.PROOF_HEAD,
         observedHead: observed,
@@ -310,6 +314,7 @@ suite.define(() => {
       },
       assertions: [],
     };
+    authorityReport = report;
     await writePublicProof(publicDir, report);
     const lifetime: { close?: () => Promise<void>; signal?: AbortSignal } = {};
     await suite.runScenario(context, {
@@ -746,14 +751,6 @@ suite.define(() => {
                       connectionStable: true,
                     });
                   });
-                  progress("latest-stable-upgrade");
-                  report.upgrade = await proveStableSkillUpgrade({
-                    source,
-                    caCert: tls.caCert,
-                    expectedHead: observed,
-                    signal,
-                    onStage: (phase) => progress("upgrade-" + phase),
-                  });
                 },
                 () => sources[0]?.close(),
                 () => sources[1]?.close(),
@@ -762,14 +759,15 @@ suite.define(() => {
             },
           );
           report.cleanup = {
+            scope: "candidate-authority",
             gatewaysAndClientsStopped: true,
             sourcesClosed: true,
             testStateReleased: true,
             testCaTrustRestored: true,
           };
-          report.status = "passed";
+          report.authorityStatus = "passed";
         } catch {
-          report.status = "failed";
+          report.authorityStatus = "failed";
           report.failedStage = stage;
           throw new Error(
             "Real skill proof failed at " + stage + "; only sanitized evidence is public",
@@ -780,4 +778,58 @@ suite.define(() => {
       },
     });
   }, 240000);
+  // Sequential cases preserve the candidate receipt before the independent required upgrade.
+  it.sequential("proves actual latest-stable copied-state upgrade", async (context) => {
+    const report = authorityReport;
+    const publicDir = process.env.PROOF_PUBLIC_DIR;
+    if (!report || !publicDir || process.env.GITHUB_ACTIONS !== "true") {
+      throw new Error("Run both proof cases in the qualified exact-head workflow");
+    }
+    report.upgradeStatus = "running";
+    await writePublicProof(publicDir, report);
+    let stage = "stable-package-preparation";
+    const progress = (next: string) => {
+      context.signal.throwIfAborted();
+      stage = next;
+      console.info("Stable upgrade proof stage: " + next);
+    };
+    try {
+      await prepareStablePackage();
+      await withOpenClawTestState(
+        { label: "skills-upgrade-owned-https", applyEnv: false },
+        async (raw) => {
+          const tls = createLoopbackTlsFixture(raw.root, "DNS:localhost,IP:127.0.0.1,IP:127.0.0.2");
+          const trusted = getCACertificates("default");
+          const sources: Source[] = [];
+          setDefaultCACertificates([...trusted, await fs.readFile(tls.caCert, "utf8")]);
+          await runQaGatewayFixture(
+            async () => {
+              const source = await createProofSource(tls, await createProofArchive());
+              sources.push(source);
+              report.upgrade = await proveStableSkillUpgrade({
+                source,
+                caCert: tls.caCert,
+                expectedHead: report.source.observedHead,
+                signal: context.signal,
+                onStage: progress,
+              });
+            },
+            () => sources[0]?.close(),
+            () => setDefaultCACertificates(trusted),
+          );
+        },
+      );
+      report.upgradeStatus = "passed";
+    } catch {
+      report.upgradeStatus = "failed";
+      report.upgradeFailedStage = stage;
+      report.failedStage ??= stage;
+      // The command owner emits its safe facts; never chain private preparation exceptions.
+      throw new Error(
+        "Stable upgrade proof failed at " + stage + "; only sanitized evidence is public",
+      );
+    } finally {
+      await writePublicProof(publicDir, report);
+    }
+  }, 1200000);
 });
