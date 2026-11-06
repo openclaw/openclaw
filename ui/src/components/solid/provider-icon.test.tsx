@@ -8,6 +8,7 @@ import {
   publishModelCatalogResult,
   type ModelCatalogClient,
 } from "../../lib/model-catalog-cache.ts";
+import { readCachedProviderPresentation } from "../../lib/provider-presentation-cache.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { ModelProviderIcon } from "../../lib/reactive/provider-presentation.tsx";
 import {
@@ -178,41 +179,53 @@ it("keeps the built-in brand if configured artwork cannot be loaded", async () =
   expect(container.querySelector("img")).toBeNull();
 });
 
-it("projects catalog updates and retires the old connection without an effect mirror", () => {
+it("projects per-connection catalog presentations through refresh and retirement", () => {
   const first = createTestGatewayClient(createGatewayRequestMock());
   const second = createTestGatewayClient(createGatewayRequestMock());
+  const provider = "workstation";
+  const model = { id: "stable-id", name: "Local model", provider };
   const source = createApplicationGateway(createApplicationGatewaySnapshot({ client: first }));
   // This standalone leaf exercises Gateway observation only, as in the canonical context harness.
   const context = { gateway: source.gateway } as ApplicationContext;
   const view = render(() => (
     <ApplicationProvider value={context}>
-      <ModelProviderIcon provider="workstation" />
+      <ModelProviderIcon provider={provider} />
     </ApplicationProvider>
   ));
   const initial = () => view.container.querySelector(".provider-brand-icon--fallback")?.textContent;
-  const publish = (target: ModelCatalogClient, providerName: string) =>
+  const publish = (target: ModelCatalogClient, providerName: string, refresh = false) =>
     publishModelCatalogResult(
       beginModelCatalogRead(target, {}),
-      {},
+      { refresh },
       {
-        models: [],
-        providerPresentations: { workstation: { providerName } },
+        models: target === first ? [] : [model],
+        providerPresentations: { [provider]: { providerName } },
       },
     );
   expect(initial()).toBe("W");
   publish(first, "Alpha workstation");
   flush();
   expect(initial()).toBe("A");
+  expect(readCachedProviderPresentation(first, provider)?.providerName).toBe("Alpha workstation");
+  publish(second, "Bravo workstation");
+  expect(readCachedProviderPresentation(second, provider)?.providerName).toBe("Bravo workstation");
+  publish(first, "Renamed workstation", true);
+  flush();
+  expect(initial()).toBe("R");
+  expect(readCachedProviderPresentation(first, provider)?.providerName).toBe("Renamed workstation");
   source.publish(createApplicationGatewaySnapshot({ client: second }));
   flush();
-  expect(initial()).toBe("W");
+  expect(initial()).toBe("B");
   publish(first, "Stale workstation");
   flush();
-  expect(initial()).toBe("W");
-  publish(second, "Bravo workstation");
+  expect(initial()).toBe("B");
+  clearModelCatalogCache(first);
   flush();
+  expect(readCachedProviderPresentation(first, provider)).toBeUndefined();
+  expect(readCachedProviderPresentation(second, provider)?.providerName).toBe("Bravo workstation");
   expect(initial()).toBe("B");
   clearModelCatalogCache(second);
   flush();
   expect(initial()).toBe("W");
+  expect(readCachedProviderPresentation(second, provider)).toBeUndefined();
 });
