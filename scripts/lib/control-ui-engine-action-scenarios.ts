@@ -14,15 +14,19 @@ function installProviderArtworkProbe(pathname: string) {
   const blobs = new WeakSet<Blob>();
   const urls = new Set<string>();
   const counts = { blobs: 0, objectUrls: 0, revokedUrls: 0 };
-  // oxlint-disable-next-line typescript/unbound-method -- The wrapper forwards the original Response receiver.
-  const originalBlob = Response.prototype.blob;
-  Response.prototype.blob = async function () {
-    const blob = await originalBlob.call(this);
-    if (new URL(this.url, location.href).pathname === pathname) {
-      blobs.add(blob);
-      counts.blobs++;
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = async (...args) => {
+    const response = await originalFetch(...args);
+    if (new URL(response.url, location.href).pathname === pathname) {
+      const originalBlob = response.blob.bind(response);
+      response.blob = async () => {
+        const blob = await originalBlob();
+        blobs.add(blob);
+        counts.blobs++;
+        return blob;
+      };
     }
-    return blob;
+    return response;
   };
   const originalCreate = URL.createObjectURL.bind(URL);
   URL.createObjectURL = function (object) {
