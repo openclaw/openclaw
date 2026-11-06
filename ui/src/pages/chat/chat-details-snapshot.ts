@@ -10,6 +10,7 @@ import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 
 export type DetailsSubagents = NonNullable<ChatDetailsSnapshot["subagents"]>;
 export type DetailsSubagent = DetailsSubagents["rows"][number];
+export type DetailsSubagentActivity = NonNullable<ChatDetailsSnapshot["subagentActivity"]>;
 export type DetailsAutomation = NonNullable<ChatDetailsSnapshot["automations"]>["rows"][number];
 export type DetailsSnapshotPatch = Partial<Omit<ChatDetailsSnapshot, "locale">>;
 
