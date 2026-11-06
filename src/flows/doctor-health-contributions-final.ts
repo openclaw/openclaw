@@ -4,7 +4,10 @@ import { shouldDeferConfiguredPluginInstallRepair } from "../commands/doctor/sha
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runFinalConfigValidationHealth } from "./doctor-config-validation-findings.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
-import { runCoreHealthFindingNote } from "./doctor-health-contribution-core.js";
+import {
+  runBundledHealthFindingNote,
+  runCoreHealthFindingNote,
+} from "./doctor-health-contribution-core.js";
 import {
   collectWriteConfigHealthFindings,
   runWriteConfigHealth,
@@ -75,6 +78,16 @@ async function collectWorkspaceStatusPluginVersionReadiness(params: {
 
 const CHANNEL_PACKAGE_STATE_CAPABILITIES_CHECK_ID =
   "core/doctor/channel-package-state-capabilities";
+
+async function runHeartbeatRetirementHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeMigrateHeartbeatCadenceToCron } =
+    await import("../commands/doctor-heartbeat-retirement.js");
+  await maybeMigrateHeartbeatCadenceToCron({
+    cfg: ctx.configResult.heartbeatMigrationSource ?? ctx.cfg,
+    shouldRepair: ctx.prompter.shouldRepair,
+    env: ctx.env,
+  });
+}
 
 export function resolveFinalDoctorHealthContributions(params: {
   runSystemdLingerHealth: (ctx: DoctorHealthFlowContext) => Promise<void>;
@@ -238,7 +251,6 @@ export function resolveFinalDoctorHealthContributions(params: {
         ["provider-catalog-projection", "Provider catalog projection", "run"],
         ["local-audio-acceleration", "Local audio acceleration", "run"],
         ["runtime-tool-schemas", "Runtime tool schemas", "agent"],
-        ["skill-workshop-tool-policy", "Skill Workshop tool policy", "agent"],
       ] as const
     ).map(([name, label, scope]) =>
       createDoctorHealthContribution(`doctor:${name}`, label, {
@@ -246,6 +258,14 @@ export function resolveFinalDoctorHealthContributions(params: {
         healthCheckIds: [`core/doctor/${name}`],
         run: (ctx) => runCoreHealthFindingNote(ctx, `core/doctor/${name}`),
       }),
+    ),
+    createDoctorHealthContribution(
+      "doctor:skill-workshop-tool-policy",
+      "Skill Workshop tool policy",
+      {
+        updateWork: { kind: "inspection", scope: "agent" },
+        run: (ctx) => runBundledHealthFindingNote(ctx, "skill-workshop/tool-policy"),
+      },
     ),
     createDoctorHealthContribution("doctor:systemd-linger", "systemd linger", {
       healthChecks: {
@@ -350,6 +370,26 @@ export function resolveFinalDoctorHealthContributions(params: {
         await noteBootstrapFileSize(ctx.cfg);
       },
     }),
+    createDoctorHealthContribution("doctor:memory-provenance", "Memory provenance", {
+      healthChecks: {
+        description:
+          "Root MEMORY.md and USER.md with untrusted provenance are excluded from automatic context.",
+        defaultEnabled: true,
+        async detect(ctx) {
+          const { collectMemoryProvenanceExclusionFindings } =
+            await import("../commands/doctor-memory-provenance.js");
+          return collectMemoryProvenanceExclusionFindings(ctx.cfg);
+        },
+      },
+      async run(ctx) {
+        const { collectMemoryProvenanceExclusionFindings } =
+          await import("../commands/doctor-memory-provenance.js");
+        renderStructuredHealthFindings(
+          ctx,
+          await collectMemoryProvenanceExclusionFindings(ctx.cfg),
+        );
+      },
+    }),
     createDoctorHealthContribution(
       "doctor:heartbeat-cadence-migration",
       "Heartbeat cadence migration",
@@ -363,15 +403,7 @@ export function resolveFinalDoctorHealthContributions(params: {
             return collectHeartbeatCadenceMigrationFindings(ctx.cfg, ctx.env);
           },
         },
-        async run(ctx) {
-          const { maybeMigrateHeartbeatCadenceToCron } =
-            await import("../commands/doctor-heartbeat-retirement.js");
-          await maybeMigrateHeartbeatCadenceToCron({
-            cfg: ctx.configResult.heartbeatMigrationSource ?? ctx.cfg,
-            shouldRepair: ctx.prompter.shouldRepair,
-            env: ctx.env,
-          });
-        },
+        run: runHeartbeatRetirementHealth,
       },
     ),
     createDoctorHealthContribution(
@@ -387,15 +419,7 @@ export function resolveFinalDoctorHealthContributions(params: {
             return collectHeartbeatScratchMigrationFindings(ctx.cfg, ctx.env);
           },
         },
-        async run(ctx) {
-          const { maybeMigrateHeartbeatCadenceToCron } =
-            await import("../commands/doctor-heartbeat-retirement.js");
-          await maybeMigrateHeartbeatCadenceToCron({
-            cfg: ctx.configResult.heartbeatMigrationSource ?? ctx.cfg,
-            shouldRepair: ctx.prompter.shouldRepair,
-            env: ctx.env,
-          });
-        },
+        run: runHeartbeatRetirementHealth,
       },
     ),
     createDoctorHealthContribution("doctor:tools-md-migration", "TOOLS.md migration", {

@@ -50,7 +50,9 @@ function buttons(root: ParentNode) {
 }
 
 function findButton(root: ParentNode, label: string) {
-  return buttons(root).find((node) => normalizeText(node) === label);
+  return buttons(root).find(
+    (node) => normalizeText(node) === label || node.getAttribute("aria-label") === label,
+  );
 }
 
 function githubDetail(skill: Partial<ClawHubSkillDetail["skill"]> = {}): ClawHubSkillDetail {
@@ -198,6 +200,17 @@ describe("renderSkills", () => {
     },
   );
 
+  it("distinguishes an empty inventory from a search with no matches", async () => {
+    const { container, render } = createView();
+    render({ report: skillReport([]) });
+    await Promise.resolve();
+    expect(container.textContent).toContain("No skills yet. Search ClawHub to add one.");
+    render({ report: skillReport([createSkill()]), filter: "no-matching-skill" });
+    await Promise.resolve();
+    expect(container.textContent).toContain("No skills match your search.");
+    expect(container.textContent).not.toContain("No skills yet.");
+  });
+
   it("preserves Unicode matches, raw detail targets and retained groups", async () => {
     const { container, render } = createView();
     const report = skillReport([
@@ -207,7 +220,9 @@ describe("renderSkills", () => {
     ]);
     const onDetailOpen = vi.fn();
     render({ report, onDetailOpen });
-    await Promise.resolve();
+    await waitForFast(() =>
+      expect(container.querySelector('.skills-group[aria-busy="true"]')).toBeNull(),
+    );
     const groups = [...container.querySelectorAll<HTMLDetailsElement>("details.skills-group")];
     expect(groups).toHaveLength(3);
     expect(groups.every((group) => group.open)).toBe(true);
@@ -328,6 +343,30 @@ describe("renderSkills", () => {
     expect(onMutation).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { phone: false, focused: true },
+    { phone: true, focused: false },
+  ])(
+    "focuses discovery search on arrival unless at phone width: %o",
+    async ({ phone, focused }) => {
+      vi.stubGlobal("matchMedia", () => ({
+        matches: phone,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      }));
+      try {
+        const { container, render } = createView();
+        render({ surface: "discovery" });
+        await Promise.resolve();
+        const search = container.querySelector<HTMLInputElement>('input[name="skills-search"]')!;
+        expect(search.hasAttribute("autofocus")).toBe(focused);
+        expect(document.activeElement === search).toBe(focused);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+
   it("keeps status and detail targets after a Unicode-filtered row is enabled", async () => {
     const { container, query, render } = createView();
 
@@ -340,7 +379,9 @@ describe("renderSkills", () => {
     const report: SkillStatusReport = skillReport([passwordSkill, appleNotesSkill]);
 
     render({ report, statusFilter: "disabled", filter: "Cafe\u0301" });
-    await Promise.resolve();
+    await waitForFast(() =>
+      expect(container.querySelector('.skills-group[aria-busy="true"]')).toBeNull(),
+    );
 
     expect(container.querySelectorAll(".plugins-item [role=img]")).toHaveLength(2);
 
@@ -361,6 +402,30 @@ describe("renderSkills", () => {
     expect(onDetailOpen).toHaveBeenCalledWith("apple-notes");
   });
 
+  it("filters by status from a select that carries each count", async () => {
+    const { container, render } = createView(true);
+    const onStatusFilterChange = vi.fn();
+    render({
+      report: skillReport([
+        createSkill({ disabled: true }),
+        createSkill({ skillKey: "second", name: "Second" }),
+      ]),
+      onStatusFilterChange,
+    });
+    await Promise.resolve();
+
+    const select = container.querySelector<HTMLSelectElement>(".skills-toolbar__status")!;
+    expect([...select.options].map((option) => option.textContent)).toEqual([
+      "All 2",
+      "Ready 1",
+      "Needs setup 0",
+      "Disabled 1",
+    ]);
+    select.value = "needs-setup";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onStatusFilterChange).toHaveBeenCalledWith("needs-setup");
+  });
+
   it("treats skills blocked by the selected agent filter as needing setup", async () => {
     const { container, query, text, render } = createView(true);
     const report: SkillStatusReport = skillReport([createSkill({ blockedByAgentFilter: true })]);
@@ -370,16 +435,33 @@ describe("renderSkills", () => {
 
     expect(container.querySelectorAll(".plugins-item")).toHaveLength(0);
     expect(text()).toContain("Ready 0");
-    expect(text()).toContain("Needs Setup 1");
+    expect(text()).toContain("Needs setup 1");
 
     render({ report, statusFilter: "needs-setup", detailKey: "repo-skill" });
     await Promise.resolve();
 
     expect(query(".plugins-item .settings-status--warn")).not.toBeNull();
     expect(text()).toContain("Reason: blocked by agent filter");
-    expect(
-      Array.from(container.querySelectorAll(".chip")).map((chip) => normalizeText(chip)),
-    ).toContain("blocked");
+    expect(query(".skill-reader-dialog .settings-status--warn")).not.toBeNull();
+  });
+
+  it("gives one signal per meaning and says why the toggle is locked", async () => {
+    const { container, query, render } = createView(true);
+    render({
+      report: skillReport([createLinkedSkill()]),
+      detailKey: "agentreceipt",
+      canUpdate: false,
+    });
+    await Promise.resolve();
+    expect(query(".skill-reader-dialog .oc-dialog__title .statusDot")).toBeNull();
+    const dialog = expectDefined(query(".skill-reader-dialog"), "skill dialog");
+    const labels = Array.from(dialog.querySelectorAll(".oc-dialog__row-label")).map(normalizeText);
+    expect(labels).toEqual(expect.arrayContaining(["Package", "Security check", "Source"]));
+    expect(normalizeText(dialog)).toContain("You need admin access to change this skill.");
+    expect(container.querySelector(".skill-reader-dialog input[type=checkbox]")).toHaveProperty(
+      "disabled",
+      true,
+    );
   });
 
   it("closes installed details and installs ClawHub details with their cached icon", async () => {
@@ -401,7 +483,7 @@ describe("renderSkills", () => {
     render({
       surface: "discovery",
       clawhubSearchError: "rate limited",
-      clawhubInstallMessage: { kind: "success", text: "Installed github" },
+      clawhubInstallMessage: { ref: "other", kind: "success", text: "Installed other" },
       clawhubDetailRef: "github",
       clawhubDetail: githubDetail({ icon }),
       clawhubIconUrls: { [icon]: "blob:clawhub-detail-icon" },
@@ -410,7 +492,7 @@ describe("renderSkills", () => {
     await getRenderedModalDialog(container);
     expect([...container.querySelectorAll(".callout")].map(normalizeText)).toEqual([
       "rate limited Retry",
-      "Installed github",
+      "Installed other",
     ]);
     expect(container.querySelector<HTMLImageElement>(".clawhub-skill-icon--detail")?.src).toBe(
       "blob:clawhub-detail-icon",
@@ -646,16 +728,16 @@ describe("renderSkills", () => {
     expect(query(".plugins-item")).toBe(row);
     expect(query('input[name="skills-filter"]')).toBe(search);
     expect(document.activeElement).toBe(search);
-    const refresh = () => findButton(container, "Loading…") ?? findButton(container, "Refresh")!;
+    const refresh = () => findButton(container, "Refresh")!;
     expect(refresh().disabled).toBe(true);
-    expect(refresh().textContent).toContain("Loading");
+    expect(refresh().getAttribute("aria-busy")).toBe("true");
     const updated = skillReport([createSkill({ description: "Updated description" })]);
     pending.resolve({ value: updated, error: null });
     render({ report: updated, skillsRead: pendingRead });
     await waitForFast(() => expect(row?.textContent).toContain("Updated description"));
     expect(query(".plugins-item")).toBe(row);
     expect(refresh().disabled).toBe(false);
-    expect(refresh().textContent).toContain("Refresh");
+    expect(refresh().getAttribute("aria-busy")).toBeNull();
   });
 
   it("renders card read errors and retries inside the existing detail dialog", async () => {
@@ -732,10 +814,12 @@ describe("renderSkills", () => {
     });
     await Promise.resolve();
 
-    const chips = Array.from(container.querySelectorAll(".chip"));
-    const verdictChip = chips.find((chip) => normalizeText(chip) === "Unavailable");
-    expect(verdictChip).toBeDefined();
-    expect(chips.some((chip) => normalizeText(chip) === "Clean")).toBe(false);
-    expect(verdictChip?.classList.contains("chip-ok")).toBe(false);
+    const statuses = Array.from(
+      container.querySelectorAll(".skill-reader-dialog .settings-status"),
+    );
+    const verdictStatus = statuses.find((status) => normalizeText(status) === "Unavailable");
+    expect(verdictStatus).toBeDefined();
+    expect(statuses.some((status) => normalizeText(status) === "Clean")).toBe(false);
+    expect(verdictStatus?.classList.contains("settings-status--ok")).toBe(false);
   });
 });

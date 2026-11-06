@@ -141,7 +141,9 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
     <>
       <TemplateWorkspaceFiles
         files={contents().instructions}
-        onOpen={(name) => props.view.onOpenPreview("instruction", name)}
+        onOpen={(name) =>
+          props.view.onOpenPreview("instruction", name ?? contents().instructions[0]!.name)
+        }
       />
       {renderPluginCapabilitySection(
         t("templatesCatalog.skillsSection"),

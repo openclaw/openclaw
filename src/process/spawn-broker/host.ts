@@ -10,8 +10,10 @@ import {
   classifyChildRuntimeFailure,
 } from "../../infra/child-runtime-viability.js";
 import { hasErrnoCode } from "../../infra/errno.js";
+import { registerProcessExitCleanup } from "../../infra/process-exit-cleanup.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
+  runtimeNeedsTypeScriptLoader,
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
@@ -51,6 +53,7 @@ const RESTART_DELAYS = [100, 250, 500, 1000, 2000];
 const MAX_BOOTSTRAP_BYTES = 1024;
 
 export class SpawnBrokerHost {
+  private readonly unregisterExitCleanup: () => void;
   readonly entryPath: string;
   private readonly workerUrl: URL;
   private readonly runInContext = AsyncLocalStorage.snapshot();
@@ -131,7 +134,7 @@ export class SpawnBrokerHost {
       }
       throw error;
     }
-    process.once("exit", this.onParentExit);
+    this.unregisterExitCleanup = registerProcessExitCleanup(this.onParentExit);
   }
 
   get pid(): number | undefined {
@@ -164,6 +167,10 @@ export class SpawnBrokerHost {
     return this.resourceClaims.capture(
       {
         ...input,
+        ...(input.moduleUrl.startsWith("file:") &&
+        runtimeNeedsTypeScriptLoader(fileURLToPath(input.moduleUrl))
+          ? { sourceLoaderUrl: import.meta.resolve("tsx/esm/api") }
+          : {}),
         ...this.resourceAuthority,
         generation: this.generation - 1,
         startupDeadline: this.available ? undefined : this.startupDeadline,
@@ -716,7 +723,7 @@ export class SpawnBrokerHost {
         }
       }
     } finally {
-      process.removeListener("exit", this.onParentExit);
+      this.unregisterExitCleanup();
     }
   }
 }

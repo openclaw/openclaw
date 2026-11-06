@@ -9,7 +9,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
-import { waitForCliSignalExit } from "./signal-exit-barrier.js";
+import { registerSignalExitGate, waitForCliSignalExit } from "./signal-exit-barrier.js";
 import {
   expectNoSideEffects,
   freshRestartCalls,
@@ -731,11 +731,15 @@ describe("update-cli", () => {
       } else {
         serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
       }
-
       const updatePromise = updateCommand({
         yes: true,
         restart: phase === "service pre-stop inspection",
+      }).catch((cause: unknown) => {
+        throw new Error(`${getLogOutput()}\n${getErrorOutput()}`, { cause });
       });
+      // The executable retains the whole command, including unwind, before signal cleanup.
+      const releaseCommandGate = registerSignalExitGate(updatePromise);
+      void updatePromise.then(releaseCommandGate, releaseCommandGate);
       try {
         await Promise.race([
           entered.promise,
@@ -747,19 +751,16 @@ describe("update-cli", () => {
           .filter(([event]) => event === signal)
           .map(([, listener]) => listener);
         expect(signalListeners.length).toBeGreaterThan(0);
-        // A native signal reaches every invocation-owned listener in registration order.
-        for (const listener of signalListeners) {
-          listener();
-        }
-        for (const listener of signalListeners) {
+        // Repeated signals reach every invocation-owned listener in registration order.
+        for (const listener of signalListeners.concat(signalListeners)) {
           listener();
         }
         expect(processExitSpy).not.toHaveBeenCalled();
         expect(resumeScheduledTaskAutoStartAfterUpdate).not.toHaveBeenCalled();
         expect(gitMutation).not.toHaveBeenCalled();
         gate.resolve();
-
         await updatePromise;
+        await expect(waitForCliSignalExit()).resolves.toBe(130);
         expect(resumeScheduledTaskAutoStartAfterUpdate).toHaveBeenCalledOnce();
         expect(serviceStop).not.toHaveBeenCalled();
         expect(Boolean(packageInstallCommandCall())).toBe(phase !== "Git task suspension");
@@ -769,12 +770,13 @@ describe("update-cli", () => {
           { phase: "finished", status: "skipped", reason: "cancelled" },
         ]);
         expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-        await expect(waitForCliSignalExit()).resolves.toBe(130);
         expect(process.exitCode).toBe(130);
         expect(processExitSpy).not.toHaveBeenCalled();
       } finally {
         gate.resolve();
-        await updatePromise;
+        // The try body observes command errors; cleanup joins work before signal finalization.
+        await Promise.allSettled([updatePromise]);
+        await waitForCliSignalExit();
       }
     },
   );
@@ -806,11 +808,9 @@ describe("update-cli", () => {
     suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(true);
     resumeScheduledTaskAutoStartAfterUpdate.mockResolvedValue(true);
 
-    try {
-      await updateCommand({ yes: true, restart: false });
-    } catch (cause) {
+    await updateCommand({ yes: true, restart: false }).catch((cause: unknown) => {
       throw new Error(`${getLogOutput()}\n${getErrorOutput()}`, { cause });
-    }
+    });
 
     expect(serviceStop).not.toHaveBeenCalled();
     expect(packageInstallCommandCall()).toBeDefined();

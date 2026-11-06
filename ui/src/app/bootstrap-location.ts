@@ -334,7 +334,9 @@ export function subscribeForegroundChatBootstrap({
     // Admission previews have no transcript controller and cannot claim its
     // bootstrap priority. Resume ordinary scheduling until the real pane mounts.
     connectionBootstrap.setForegroundRoute(
-      !isSessionRouteId(match?.routeId) || chatSubmissions.creation
+      !isSessionRouteId(match?.routeId) ||
+        chatSubmissions.creation ||
+        (key !== null && chatSubmissions.creationFor(key)?.admitted === false)
         ? null
         : match.status === "pending"
           ? undefined

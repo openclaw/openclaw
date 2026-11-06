@@ -116,8 +116,8 @@ openclaw-plugin-settings-groups {
   opacity: 0;
 }
 .plugin-editor__menu .oc-menu-trigger {
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
 }
 .plugin-editor__menu .oc-menu-trigger svg {
   transform: rotate(90deg);

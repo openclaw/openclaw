@@ -14,7 +14,7 @@ import {
 } from "./install-paths.js";
 import {
   requestDeferredPluginInstall,
-  resolvePluginInstallTransaction,
+  takePluginInstallTransaction,
 } from "./install-transaction.js";
 import type { PluginInstallArtifactConsentRequest } from "./install-types.js";
 import {
@@ -680,7 +680,7 @@ describe("installPluginFromNpmSpec", () => {
       assert(updated.ok, JSON.stringify(updated));
       expect(updated.targetDir).toBe(targetDir);
       expect(readText(targetDir, "dist", "index.js")).toContain("replacement");
-      const transaction = resolvePluginInstallTransaction(updated);
+      const transaction = takePluginInstallTransaction(updated);
       expect(transaction).toBeDefined();
       await transaction?.rollback();
       expect(readTextFileTree(projectRoot)).toEqual(original);
@@ -786,7 +786,7 @@ describe("installPluginFromNpmSpec", () => {
     expect(result.targetDir).not.toBe(priorPackageDir);
     expect(readText(preparedProjectRoot, "cohort-intent.txt")).toBe("prepared before publish");
     expect(readTextFileTree(priorProjectRoot)).toEqual(priorBytes);
-    const transaction = resolvePluginInstallTransaction(result);
+    const transaction = takePluginInstallTransaction(result);
     assert(transaction);
     await transaction.rollback();
     expectAbsent(preparedProjectRoot);
@@ -1311,7 +1311,7 @@ describe("installPluginFromNpmSpec", () => {
     info.mockImplementation(() => {});
     const retry = await install();
     expect(retry).toMatchObject({ ok: true, pluginId });
-    await resolvePluginInstallTransaction(retry)?.commit();
+    await takePluginInstallTransaction(retry)?.commit();
     expectPresent(installedPackageDir(npmRoot, packageName));
   });
 

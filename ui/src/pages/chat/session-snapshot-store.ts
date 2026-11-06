@@ -29,6 +29,7 @@ import {
 import {
   accessSidebarSnapshot,
   sidebarRecordBytes,
+  SIDEBAR_SNAPSHOT_PROJECTION_VERSION,
   type SidebarRecord,
 } from "./session-sidebar-snapshot.ts";
 import {
@@ -337,7 +338,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
       const record: SidebarRecord = {
         sessionKey: key,
         savedAt: Date.now(),
-        projectionVersion: 3,
+        projectionVersion: SIDEBAR_SNAPSHOT_PROJECTION_VERSION,
         model: structuredClone(model),
       };
       if (sidebarRecordBytes(record) > 512 * 1024) {

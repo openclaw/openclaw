@@ -28,9 +28,11 @@ import {
 import { createTrajectoryEvent, trajectoryEventBytes } from "./runtime-store.test-support.js";
 import { createTrajectoryRuntimeRecorder } from "./runtime.js";
 
-// Real native writes and admission run unchanged; only delivery of their evidence changes.
+// Real native writes run unchanged; tests control commit admission and result delivery.
 const delivery = vi.hoisted(() => ({
   beforeAppend: undefined as (() => Promise<void>) | undefined,
+  refuseCommit: undefined as Error | undefined,
+  commitRefusals: 0,
   afterResult: undefined as (() => void) | undefined,
   settlement: undefined as Promise<SqliteWorkerOperationSettlement> | undefined,
   hideCommit: false,
@@ -45,6 +47,7 @@ vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
       ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>
     ): ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution> => {
       const owned = actual.captureOpenClawAgentDatabaseExecution(...args);
+      let executingAppend = false;
       return {
         ...owned,
         get fileIdentity() {
@@ -55,7 +58,18 @@ vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
             {
               ...source,
               createAdmission(binding) {
-                const create = source.createAdmission(binding);
+                const create = source.createAdmission({
+                  ...binding,
+                  authorize(request) {
+                    binding.authorize(request);
+                    if (executingAppend && request.stage === "commit" && delivery.refuseCommit) {
+                      const refusal = delivery.refuseCommit;
+                      delivery.refuseCommit = undefined;
+                      delivery.commitRefusals += 1;
+                      throw refusal;
+                    }
+                  },
+                });
                 return (retained) => {
                   const settlement = delivery.settlement;
                   const result = create(
@@ -78,15 +92,20 @@ vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
                     delivery.beforeAppend = undefined;
                     await before?.();
                   }
-                  const result = await scope.execute(command, commandOptions);
-                  if (command.type === "trajectory.events.append") {
-                    const after = delivery.afterResult;
-                    delivery.afterResult = undefined;
-                    delivery.settlement = undefined;
-                    delivery.hideCommit = false;
-                    after?.();
+                  executingAppend = command.type === "trajectory.events.append";
+                  try {
+                    const result = await scope.execute(command, commandOptions);
+                    if (command.type === "trajectory.events.append") {
+                      const after = delivery.afterResult;
+                      delivery.afterResult = undefined;
+                      delivery.settlement = undefined;
+                      delivery.hideCommit = false;
+                      after?.();
+                    }
+                    return result;
+                  } finally {
+                    executingAppend = false;
                   }
-                  return result;
                 },
               }),
             options,
@@ -147,6 +166,8 @@ afterEach(() => {
   retention.accepted = undefined;
   retention.reads = 0;
   delivery.beforeAppend = undefined;
+  delivery.refuseCommit = undefined;
+  delivery.commitRefusals = 0;
   delivery.afterResult = undefined;
   delivery.settlement = undefined;
   delivery.hideCommit = false;
@@ -389,26 +410,18 @@ it("rolls back the successful attempt's diagnostic prefix with its terminal even
         state: { terminal: { kind: "ok" }, beforeAgentRunBlockedBy: undefined },
         transcriptLifecycle: { beginCleanup: async () => {}, dispose: async () => {} },
       });
-      const databaseOptions = { agentId: target.agentId, path: target.storePath };
-      const database = await runOpenClawAgentWriteAdmission(databaseOptions, () => {
-        const admittedDatabase = openOpenClawAgentDatabase(databaseOptions);
-        admittedDatabase.db.exec(`CREATE TRIGGER reject_trajectory_terminal
-        BEFORE INSERT ON trajectory_runtime_events
-        WHEN NEW.event_json LIKE '%"type":"session.ended"%'
-        BEGIN SELECT RAISE(ABORT, 'synthetic terminal append failure'); END`);
-        return admittedDatabase;
-      });
-      try {
-        await owner.complete();
-        expect(await loadSqliteTrajectoryRuntimeEvents(target)).toEqual([]);
-        expect(loadSessionEntry(target)).toMatchObject(original);
-        expect(recorder.describeFlushState()).toContain("pendingRows=3");
-      } finally {
-        await runOpenClawAgentWriteAdmission(databaseOptions, () => {
-          database.db.exec("DROP TRIGGER reject_trajectory_terminal");
-        });
-      }
+      // The cold append inserts the whole batch before requesting its commit grant.
+      delivery.refuseCommit = new Error("synthetic trajectory commit refusal");
+      await owner.complete();
+      expect(delivery.commitRefusals).toBe(1);
+      expect(delivery.appendCalls).toBe(1);
+      expect(delivery.appendInputs[0]).toHaveProperty("windowFacts", undefined);
+      expect(delivery.appendInputs[0]).toHaveProperty("events.length", 3);
+      expect(await loadSqliteTrajectoryRuntimeEvents(target)).toEqual([]);
+      expect(loadSessionEntry(target)).toMatchObject(original);
+      expect(recorder.describeFlushState()).toContain("pendingRows=3");
       await recorder.flush();
+      expect(delivery.appendCalls).toBe(2);
       expect(await eventTypes(target)).toEqual([
         "model.completed",
         "trace.artifacts",

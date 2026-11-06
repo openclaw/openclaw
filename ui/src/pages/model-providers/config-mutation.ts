@@ -1,6 +1,7 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { FastMode, ModelsProbeResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
@@ -217,7 +218,11 @@ export function modelProviderConfigMutationBlockedReason(
     return t("modelProviders.readOnly.disconnected");
   }
   if (context.runtimeConfig.canPatch !== true) {
-    return t("modelProviders.readOnly.adminRequired");
+    return t(
+      hasOperatorAdminAccess(snapshot.hello?.auth ?? null)
+        ? "modelProviders.configUnavailable"
+        : "modelProviders.readOnly.adminRequired",
+    );
   }
   const config = context.runtimeConfig.state;
   if (!snapshot.client || config.client !== snapshot.client || !currentConfigObject(config)) {
@@ -227,7 +232,9 @@ export function modelProviderConfigMutationBlockedReason(
 }
 
 export function modelProviderErrorMessage(error: unknown): string {
-  return formatUiError(error, t("modelProviders.requestFailed"));
+  const summary = t("modelProviders.requestFailed");
+  const detail = formatUiError(error, summary);
+  return detail === summary ? summary : `${summary} ${detail}`;
 }
 
 export async function modelProviderMutationWarnings(
@@ -304,11 +311,16 @@ export async function runModelProviderConfigMutation(
   }
 }
 
-/** Credential writes share config serialization and retain acknowledged success during refresh. */
+/**
+ * Credential writes share config serialization and retain acknowledged success during refresh.
+ * A saved key is then checked against its provider while the form stays busy, so the message
+ * the user sees is the check's outcome rather than a save receipt for a key that doesn't work.
+ */
 export async function runModelProviderApiKeyMutation(
   owner: ModelProviderConfigMutationOwner & {
     canMutate: () => boolean;
     refreshProviders: () => Promise<string | null>;
+    checkSavedKey: () => Promise<ModelProviderRowMessage | null>;
   },
   params: {
     client: GatewayBrowserClient;
@@ -317,7 +329,7 @@ export async function runModelProviderApiKeyMutation(
     apiKey: string;
     success: string;
   },
-): Promise<{ ok: false } | { ok: true; warning: string | null }> {
+): Promise<{ ok: false } | { ok: true; warning: string | null; rejected: boolean }> {
   const isCurrent = () => owner.isCurrentClient() && owner.isCurrentAgent();
   owner.setBusy(true);
   owner.setMessage(null);
@@ -348,8 +360,14 @@ export async function runModelProviderApiKeyMutation(
     if (!isCurrent()) {
       return { ok: false };
     }
-    owner.setMessage({ kind: "success", text: params.success, ...(warning ? { warning } : {}) });
-    return { ok: true, warning };
+    const checked = await owner.checkSavedKey();
+    if (!isCurrent()) {
+      return { ok: false };
+    }
+    const message = checked ?? { kind: "success" as const, text: params.success };
+    const warnings = [message.warning, warning].filter(Boolean).join(" ");
+    owner.setMessage({ ...message, ...(warnings ? { warning: warnings } : {}) });
+    return { ok: true, warning, rejected: message.kind === "error" };
   } finally {
     if (isCurrent()) {
       owner.setBusy(false);

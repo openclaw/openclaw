@@ -2,10 +2,13 @@
 import { createComponent, createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
+import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
-import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
+import type { ApplicationContext } from "../../../app/context.ts";
 import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
+import { disposeSidebarContextLifecycles } from "../../../test-helpers/app-sidebar-context-lifecycle.ts";
+import { createContext, createSessions } from "../../../test-helpers/app-sidebar.ts";
 import { createApplicationGateway } from "../../../test-helpers/application-context-fixtures.ts";
 import {
   createGatewayRequestMock,
@@ -15,6 +18,7 @@ import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { restorePropertyDescriptor } from "../../../test-helpers/property-descriptor.ts";
 import { createActiveSessionPlacement } from "../../../test-helpers/session-placement.ts";
+import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatContextPanel } from "./chat-context-panel.tsx";
 import { ChatDetailsEnvironmentMobile } from "./chat-details-environment-mobile.tsx";
@@ -26,7 +30,7 @@ import type { SubagentActivityProps } from "./chat-subagent-activity.tsx";
 
 type ChatSubagentActivityLive = SolidBridgeElement<SubagentActivityProps>;
 
-async function mount(overrides: Partial<ChatDetailsProps> = {}) {
+async function mount(overrides: Partial<ChatDetailsProps> = {}, context?: ApplicationContext) {
   const value: ChatDetailsProps = {
     sessionKey: "agent:main:details",
     currentAgentId: "main",
@@ -34,8 +38,9 @@ async function mount(overrides: Partial<ChatDetailsProps> = {}) {
     selectedSession: { key: "agent:main:details", kind: "direct" },
     ...overrides,
   };
-  const view = mountSolid(() =>
-    createComponent(ChatDetailsSession, { props: value, presented: true }),
+  const view = mountSolid(
+    () => createComponent(ChatDetailsSession, { props: value, presented: true }),
+    { wrapper: context ? createSolidApplicationContextProvider(context).wrapper : undefined },
   );
   const element = view.container.querySelector("openclaw-chat-details-session")!;
   await element.updateComplete;
@@ -45,6 +50,90 @@ async function updateDetails(element: ChatDetailsSession, patch: Partial<ChatDet
   element.props = { ...element.props!, ...patch };
   await element.updateComplete;
 }
+it("hides only the authenticated viewer's complete self-only desktop People section", async () => {
+  const self = { identity: { type: "profile", id: "alex" }, label: "Alex" } as const;
+  const actor = { type: "human", id: "native-alex", ...self } as const;
+  const { gateway, publish } = createApplicationGateway();
+  const context = createContext(gateway, createSessions("main", []));
+  onTestFinished(disposeSidebarContextLifecycles);
+  const element = await mount(
+    {
+      sessionFactsReady: true,
+      desktopPresentation: {
+        peopleLabel: "People",
+        outputsLabel: "Outputs",
+        subagentsWorkingLabel: "Working",
+      },
+    },
+    context,
+  );
+  element.desktop = true;
+  const section = () => element.querySelector('[data-details-group="people"]');
+  const select = async (facts: Partial<GatewaySessionRow>, visible: boolean) => {
+    await updateDetails(element, {
+      selectedSession: { key: "agent:main:details", kind: "direct", ...facts },
+    });
+    expect(Boolean(section())).toBe(visible);
+  };
+  const onlySelf = {
+    owner: { actor },
+    createdActor: actor,
+    participants: [self],
+    participantCount: 1,
+  };
+  await select(onlySelf, true);
+  publish({
+    ...gateway.snapshot,
+    selfUser: {
+      id: "unrelated-native-id",
+      identity: self.identity,
+      name: "Different display name",
+    },
+  });
+  await waitForSolid(() => expect(section()).toBeNull());
+  // sessions.describe omits the owner from participants and omits empty metadata on the wire.
+  await select({ owner: { actor }, createdActor: actor }, false);
+  await select({ owner: { actor }, participants: [], participantCount: 0 }, false);
+  await select({ ...onlySelf, participantCount: undefined }, false);
+  await select({ ...onlySelf, participants: [self, { ...self, label: "Duplicate self" }] }, false);
+  const other = { identity: { type: "profile", id: "other" }, label: "Alex" } as const;
+  await select(
+    { owner: { actor: { type: "human", id: "other", ...other } }, participantCount: 0 },
+    true,
+  );
+  await select({ ...onlySelf, expandedParticipants: [self, other], participantCount: 2 }, true);
+  for (const facts of [
+    { ...onlySelf, participantCount: 2 },
+    { ...onlySelf, owner: { actor: { type: "human" as const, id: "alex", label: "Alex" } } },
+    { ...onlySelf, createdActor: { type: "human" as const, id: "alex", label: "Alex" } },
+    {
+      participantCount: 1,
+      participants: [
+        {
+          identity: {
+            type: "remote" as const,
+            pluginId: "chat",
+            domain: "team",
+            idKind: "user",
+            id: "alex",
+          },
+          label: "Alex",
+        },
+      ],
+    },
+  ]) {
+    await select(facts, true);
+  }
+  await select(onlySelf, false);
+  await updateDetails(element, { sessionFactsReady: false });
+  expect(section()).not.toBeNull();
+  await updateDetails(element, { sessionFactsReady: true });
+  expect(section()).toBeNull();
+  publish({ ...gateway.snapshot, selfUser: { id: "alex", name: "Alex" } });
+  await waitForSolid(() => expect(section()).not.toBeNull());
+  publish({ ...gateway.snapshot, selfUser: undefined });
+  await waitForSolid(() => expect(section()).not.toBeNull());
+});
 it("omits empty linked-work disclosures and opens arriving pull requests", async () => {
   const element = await mount();
   const linkedWork = () =>

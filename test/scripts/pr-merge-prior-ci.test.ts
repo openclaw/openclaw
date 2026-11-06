@@ -37,15 +37,15 @@ function delegate(f: ReturnType<typeof preExistingCandidate>) {
   return state;
 }
 
-function manualGateCandidate() {
+function independentEventGateCandidate() {
   const f = preExistingCandidate();
   const state = f.state();
-  state.priorCi.event = "workflow_dispatch";
+  state.priorCi.event = "pull_request";
   state.priorCi.runConclusion = "failure";
   state.priorCi.jobs = state.priorCi.jobs!.filter((job) => ![603, 604].includes(job.id));
   state.priorCi.currentGateChecks = [
-    { id: 1, suiteId: 10, event: "workflow_dispatch", conclusion: "failure" },
-    { id: 3, suiteId: 20, event: "pull_request", conclusion: "success" },
+    { id: 1, suiteId: 10, event: "pull_request", conclusion: "failure" },
+    { id: 3, suiteId: 20, event: "push", conclusion: "success" },
   ];
   f.save(state);
   const { cancellation: _cancellation, ...evidence } = f.evidence;
@@ -108,9 +108,9 @@ function mixedMatrixCandidate(workflow = matrixWorkflow) {
 
 describePosix("explicit prior-CI admin landing", () => {
   it.each(["success", "failure", "cancelled", "skipped", null])(
-    "keeps the other PR-event gate enforced when its conclusion is %s",
+    "keeps the independent push gate enforced when its conclusion is %s",
     (conclusion) => {
-      const f = manualGateCandidate();
+      const f = independentEventGateCandidate();
       const state = f.state();
       state.priorCi.currentGateChecks[1]!.conclusion = conclusion;
       state.priorCi.currentGateChecks[1]!.status =
@@ -143,7 +143,7 @@ describePosix("explicit prior-CI admin landing", () => {
     ["ambiguous suite", "required-check workflow or start time"],
     ["newer same-event gate", "effective CI gate"],
   ])("refuses a selected gate with %s", (fault, message) => {
-    const f = manualGateCandidate();
+    const f = independentEventGateCandidate();
     const state = f.state();
     const selected = state.priorCi.currentGateChecks[0]!;
     if (fault === "missing suite") {

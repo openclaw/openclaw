@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { ToolInterruptedByUser } from "../../packages/agent-core/src/tool-interruption.js";
 import { resolveStateDir } from "../config/paths.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import {
@@ -59,7 +60,11 @@ import {
   buildExecForegroundResult,
   resolveExecReviewerDefaults,
 } from "./bash-tools.exec-support.js";
-import { resolveExecElevatedMode, resolveExecHost } from "./bash-tools.exec-target.js";
+import {
+  canInterruptExec,
+  resolveExecElevatedMode,
+  resolveExecHost,
+} from "./bash-tools.exec-target.js";
 import type {
   ExecToolApprovalReview,
   ExecToolDefaults,
@@ -169,20 +174,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
   const agentId =
     defaults?.agentId ??
     (parsedAgentSession ? resolveAgentIdFromSessionKey(defaults?.sessionKey) : undefined);
-  const buildUnavailableWorkdirResult = (params: {
-    cwd: string;
-    startedAt?: number;
-    warningText?: string;
-  }) =>
-    buildExecForegroundResult({
-      outcome: buildExecRuntimeErrorOutcome({
-        error: formatUnavailableWorkdirFailure(params.cwd),
-        aggregated: "",
-        durationMs: params.startedAt ? Date.now() - params.startedAt : 0,
-      }),
-      cwd: params.cwd,
-      warningText: params.warningText,
-    });
   const requestPreparation = createExecRequestPreparation({
     defaults,
     agentId,
@@ -199,6 +190,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       });
     },
     parameters: createExecSchema(defaults),
+    interruptible: (args) => canInterruptExec(args, defaults),
     getExecutionTimeoutMs: createExecToolExecutionTimeoutResolver(defaults),
     prepareBeforeToolCallParams: requestPreparation.prepareBeforeToolCallParams,
     finalizeBeforeToolCallParams: requestPreparation.finalizeBeforeToolCallParams,
@@ -373,9 +365,13 @@ export function createExecTool(defaults?: ExecToolDefaults) {
               sandbox,
             });
       if (workdirResolution.kind === "unavailable") {
-        return buildUnavailableWorkdirResult({
+        return buildExecForegroundResult({
+          outcome: buildExecRuntimeErrorOutcome({
+            error: formatUnavailableWorkdirFailure(workdirResolution.requestedCwd),
+            aggregated: "",
+            durationMs: Date.now() - startedAt,
+          }),
           cwd: workdirResolution.requestedCwd,
-          startedAt,
           warningText: warnings.join("\n"),
         });
       }
@@ -458,7 +454,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           nonInteractiveApproval: defaults?.nonInteractiveApproval,
           approvalFollowupMode: defaults?.approvalFollowupMode,
           turnSourceChannel: defaults?.messageProvider,
-          turnSourceTo: defaults?.currentChannelId,
+          turnSourceTo: defaults?.currentMessagingTarget ?? defaults?.currentChannelId,
           turnSourceAccountId: defaults?.accountId,
           turnSourceThreadId: defaults?.currentThreadTs,
           agentId,
@@ -690,7 +686,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           }
         }
         const completed = await result;
-        if (toolAborted) {
+        if (toolAborted && !(signal?.reason instanceof ToolInterruptedByUser)) {
           throw createAbortError("Tool execution was aborted", { cause: signal?.reason });
         }
         const deadlineAtMs = run.session.processActivity?.deadlineAtMs;

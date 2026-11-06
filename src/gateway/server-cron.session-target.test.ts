@@ -47,6 +47,7 @@ it.each([
     expect(options).toMatchObject({
       agentId: expectedAgentId,
       sessionKey: expectedSessionKey,
+      cronStorePath: state.storePath,
     });
   },
 );

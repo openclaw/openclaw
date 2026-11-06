@@ -1,4 +1,3 @@
-import type { toolIconData } from "../../components/icon-data-tools.ts";
 import { registerChatMessageMetadataEnglish } from "../../i18n/locales/en-chat-message-metadata.ts";
 
 registerChatMessageMetadataEnglish();
@@ -10,7 +9,6 @@ export type PendingInputStatus =
   | "cancelled";
 
 type SystemNoticeKind = {
-  icon: keyof typeof toolIconData;
   labelKey: string;
   // Fixed operator summary shown instead of the raw model prompt. Omit when the
   // producer emits variable, informative text (reasons, doctor hints) that must
@@ -27,29 +25,28 @@ type SystemNoticeKind = {
 };
 
 const systemNoticeKinds: Readonly<Record<string, SystemNoticeKind>> = {
+  restart: {
+    labelKey: "common.system",
+    showTimestamp: true,
+  },
   // Older scheduled conversation turns lack the run metadata for an activity row.
   cron: {
-    icon: "cpu",
     labelKey: "chat.messages.forwardedAutomation",
     collapsedBody: true,
   },
   cron_failure_repair: {
-    icon: "cpu",
     labelKey: "chat.systemNotice.automationRecovery.label",
     summaryKey: "chat.systemNotice.automationRecovery.summary",
   },
   "restart-sentinel": {
-    icon: "cpu",
     labelKey: "chat.systemNotice.gatewayRestarted.label",
   },
   cli_harness_context: {
-    icon: "cpu",
     labelKey: "chat.systemNotice.cliHarnessContext.label",
     collapsedBody: true,
     startsTurn: false,
   },
   claude_cli_task_notification: {
-    icon: "cpu",
     labelKey: "chat.systemNotice.claudeCliTaskNotification.label",
     collapsedBody: true,
     startsTurn: false,
@@ -57,7 +54,6 @@ const systemNoticeKinds: Readonly<Record<string, SystemNoticeKind>> = {
 };
 
 const pluginSteeringNotice: SystemNoticeKind = {
-  icon: "cpu",
   labelKey: "chat.systemNotice.pluginSteering.label",
   collapsedBody: true,
   showTimestamp: true,

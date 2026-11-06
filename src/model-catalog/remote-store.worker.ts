@@ -10,7 +10,6 @@ import {
   readRemoteModelCatalog,
   REMOTE_MODEL_CATALOG_STATE_KEY,
   PREVIOUS_REMOTE_MODEL_CATALOG_STATE_KEY,
-  OLDER_REMOTE_MODEL_CATALOG_STATE_KEY,
   LEGACY_REMOTE_MODEL_CATALOG_STATE_KEY,
   type RemoteModelCatalogSnapshot,
   type RemoteModelCatalogWriteResult,
@@ -67,8 +66,6 @@ export const modelCatalogOperations = {
             // Adopt older snapshots only into this reader generation; keep their original bytes.
             const legacyJson =
               readConfigMachineStateRowInDatabase(db, PREVIOUS_REMOTE_MODEL_CATALOG_STATE_KEY)
-                ?.value_json ??
-              readConfigMachineStateRowInDatabase(db, OLDER_REMOTE_MODEL_CATALOG_STATE_KEY)
                 ?.value_json ??
               readConfigMachineStateRowInDatabase(db, LEGACY_REMOTE_MODEL_CATALOG_STATE_KEY)
                 ?.value_json;

@@ -8,6 +8,7 @@ import type {
 } from "../../../src/gateway/control-ui-contract.js";
 import { registerGitHubEnglish } from "../i18n/locales/en-github.ts";
 import { registerSessionProgressEnglish } from "../i18n/locales/en-session-progress.ts";
+import { formatNumber } from "../lib/reactive/format.ts";
 import { i18nRevision, registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { sessionOwnerInitials } from "../lib/session-owner.ts";
 import {
@@ -438,8 +439,8 @@ function PullRequestRow(props: { request: SessionDisplayPullRequest }) {
     [
       state(),
       checks(),
-      props.request.additions === undefined ? null : `+${props.request.additions.toLocaleString()}`,
-      props.request.deletions === undefined ? null : `−${props.request.deletions.toLocaleString()}`,
+      props.request.additions === undefined ? null : `+${formatNumber(props.request.additions)}`,
+      props.request.deletions === undefined ? null : `−${formatNumber(props.request.deletions)}`,
       props.request.sourceSessionKey
         ? t("sessionHovercard.taskBranch", { branch: props.request.branch })
         : null,
@@ -550,8 +551,6 @@ export function SessionHovercard(props: SessionHovercardInput) {
       (props.row?.placementProviderId && props.row?.placementProfileId),
     );
   const commentary = () => props.progressCard?.markdown?.trim() || undefined;
-  const preview = () =>
-    props.progressCard ? undefined : props.row?.lastMessagePreview?.trim() || undefined;
   return (
     <Show
       when={Boolean(props.row || hasContext() || hasPullRequestSection() || props.progressCard)}
@@ -604,11 +603,6 @@ export function SessionHovercard(props: SessionHovercardInput) {
               </div>
             </Show>
             <ProgressHeadsUp headsUp={headsUp()} />
-          </section>
-        </Show>
-        <Show when={preview()}>
-          <section class="session-hovercard__section session-hovercard__task">
-            <div class="session-hovercard__excerpt">{preview()}</div>
           </section>
         </Show>
         <Show when={hasPullRequestSection()}>

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
 import { readSessionEntryCount } from "../config/sessions/session-accessor.sqlite-entry-inventory.js";
 import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.sqlite-exact-read.js";
 import { runSessionStartupMigration } from "../config/sessions/startup-migration-runtime.js";
@@ -65,7 +66,11 @@ function readBackup(databasePath: string) {
   const directory = path.dirname(databasePath);
   const backups = fs
     .readdirSync(directory)
-    .filter((name) => name.startsWith(`${path.basename(databasePath)}.pre-startup-migration-`));
+    .filter(
+      (name) =>
+        name.startsWith(`${path.basename(databasePath)}.pre-startup-migration-`) &&
+        name.endsWith(".bak"),
+    );
   expect(backups).toHaveLength(1);
   return new DatabaseSync(path.join(directory, backups[0]!), { readOnly: true });
 }
@@ -286,18 +291,23 @@ it("closes a captured session inspection reader before removing its private snap
     signal: new AbortController().signal,
     warn: (message) => warnings.push(message),
   })!;
-  let snapshot: ReturnType<typeof snapshotSource.prepareSqliteReadOnlyLocationSync> | undefined;
+  let snapshot:
+    | Awaited<ReturnType<typeof snapshotSource.startSqliteReadOnlyLocationAsync>["result"]>
+    | undefined;
   let reader: DatabaseSync | undefined;
   const openAtCleanup: boolean[] = [];
-  const prepare = snapshotSource.prepareSqliteReadOnlyLocationSync;
-  vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocationSync").mockImplementation((...args) => {
-    snapshot = prepare(...args);
-    const prepared = snapshot;
+  const prepare = snapshotSource.startSqliteReadOnlyLocationAsync;
+  vi.spyOn(snapshotSource, "startSqliteReadOnlyLocationAsync").mockImplementation((...args) => {
+    const preparation = prepare(...args);
     return {
-      ...prepared,
-      cleanup() {
+      ...preparation,
+      result: preparation.result.then((prepared) => {
+        snapshot = prepared;
+        return prepared;
+      }),
+      startClose() {
         openAtCleanup.push(reader?.isOpen ?? true);
-        return prepared.cleanup();
+        return preparation.startClose();
       },
     };
   });
@@ -324,10 +334,10 @@ it("closes a captured session inspection reader before removing its private snap
       await capture.settle();
       expect(capture.receipt).toMatchObject({ unchanged: true, fromGenerations: generations });
       expect(warnings).toEqual([]);
-      expect(fs.readFileSync(legacy.databasePath)).toEqual(originalBytes);
+      expectBytesEqual(fs.readFileSync(legacy.databasePath), originalBytes, "inspected database");
     } finally {
       await scope.close();
-      snapshot?.cleanup();
+      await snapshot?.cleanupAsync();
     }
   });
 });
@@ -658,12 +668,14 @@ it("refuses a database replaced during raw inspection even when its rows are ide
   const legacy = seedEntry("replacement", { pendingFinalDelivery: true });
   const replacementPath = await snapshotReplacement(legacy);
   const scan = entryRepairs.scanDoctorSessionEntryRecords;
-  vi.spyOn(entryRepairs, "scanDoctorSessionEntryRecords").mockImplementationOnce((...args) => {
-    scan(...args);
-    closeOpenClawAgentDatabasesForTest();
-    fs.renameSync(legacy.databasePath, `${legacy.databasePath}.original`);
-    fs.renameSync(replacementPath, legacy.databasePath);
-  });
+  vi.spyOn(entryRepairs, "scanDoctorSessionEntryRecords").mockImplementationOnce(
+    async (...args) => {
+      await scan(...args);
+      closeOpenClawAgentDatabasesForTest();
+      fs.renameSync(legacy.databasePath, `${legacy.databasePath}.original`);
+      fs.renameSync(replacementPath, legacy.databasePath);
+    },
+  );
   await expect(applyRepair()).rejects.toBeInstanceOf(DoctorStateMigrationRefusalError);
   using replacement = new DatabaseSync(legacy.databasePath, { readOnly: true });
   expect(legacy.readStored(replacement)).toBe(legacy.raw);
@@ -717,7 +729,7 @@ it.each(["preparation", "native open"] as const)(
         : /changed during repair admission/,
     );
     expect(replaced).toBe(true);
-    expect(fs.readFileSync(legacy.databasePath)).toEqual(originalBytes);
+    expectBytesEqual(fs.readFileSync(legacy.databasePath), originalBytes, "replacement database");
     if (process.platform !== "win32") {
       expect(fs.statSync(legacy.databasePath).mode & 0o777).toBe(0o644);
     }
@@ -753,7 +765,11 @@ it("stops cold admission when the repair owner retires before native open return
     }),
   ).toThrow("repair owner retired during admission");
   expect(retired).toBe(true);
-  expect(fs.readFileSync(legacy.databasePath)).toEqual(originalBytes);
+  expectBytesEqual(
+    fs.readFileSync(legacy.databasePath),
+    originalBytes,
+    "retired admission database",
+  );
 });
 
 it("reuses inspected raw targets while preserving deferred schema repair", async () => {

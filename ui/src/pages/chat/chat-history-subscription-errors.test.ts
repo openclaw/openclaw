@@ -72,14 +72,13 @@ function createSubscriptionState(options?: {
   const unsubscribeMessages =
     options?.unsubscribeMessages ?? vi.fn<Unsubscribe>(async () => undefined);
   const host = makeChatHost({ requestHandlers: {}, sessionKey: selected.key });
-  const state = {
-    ...host,
+  const state = Object.assign(host, {
     connectionEpoch: 1,
     chatError: null as string | null,
     chatSessionMessageSubscriptionRequestedKey: options?.previous?.key ?? null,
     chatSessionMessageSubscription: options?.previous ?? null,
     sessions: { ...host.sessions, subscribeMessages, unsubscribeMessages },
-  } satisfies Parameters<typeof syncSubscription>[0];
+  }) satisfies Parameters<typeof syncSubscription>[0];
   onTestFinished(
     createRoot((stop) => {
       projectChatFields(chatHistoryRequests(state), ["historyLoad", "acceptedHistory"]);
@@ -90,24 +89,31 @@ function createSubscriptionState(options?: {
   return { selected, state, subscribeMessages, unsubscribeMessages, publishedLoads };
 }
 
-it("makes the new subscription ready before the old unsubscribe settles", async () => {
-  const release = createDeferred();
-  const { state, selected, unsubscribeMessages } = createSubscriptionState({
-    previous: previousSubscription,
-    unsubscribeMessages: vi.fn(() => release.promise),
-  });
-  const sync = syncSubscription(state);
-  await Promise.resolve();
-  expect(unsubscribeMessages).toHaveBeenCalledOnce();
-  try {
-    await vi.waitFor(() => expect(state.chatSessionMessageSubscription).toEqual(selected));
-    await expect(sync).resolves.toBe(true);
-    await expect(chatHistoryRequests(state).subscriptionReady).resolves.toBe(true);
-  } finally {
-    release.resolve();
-    await sync;
-  }
-});
+it.each([0, 120_000])(
+  "makes the new subscription ready before old release (clock step %s)",
+  async (step) => {
+    useFakeClock();
+    const release = createDeferred();
+    const { state, selected, subscribeMessages, unsubscribeMessages } = createSubscriptionState({
+      previous: previousSubscription,
+      unsubscribeMessages: vi.fn(() => release.promise),
+    });
+    subscribeMessages.mockRejectedValueOnce(sessionChanged());
+    const sync = syncSubscription(state);
+    await Promise.resolve();
+    vi.setSystemTime(Date.now() + step);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(unsubscribeMessages).toHaveBeenCalledOnce();
+    try {
+      await vi.waitFor(() => expect(state.chatSessionMessageSubscription).toEqual(selected));
+      await expect(sync).resolves.toBe(true);
+      await expect(chatHistoryRequests(state).subscriptionReady).resolves.toBe(true);
+    } finally {
+      release.resolve();
+      await sync;
+    }
+  },
+);
 
 it("releases an active message subscription when its pane is disposed", () => {
   const { state, selected, unsubscribeMessages } = createSubscriptionState();

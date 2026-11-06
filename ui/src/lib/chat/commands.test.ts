@@ -19,6 +19,16 @@ import {
 
 afterEach(() => replaceSlashCommands(buildFallbackSlashCommands()));
 
+it("routes /fork and its optional title to the local session operation", () => {
+  for (const text of ["/fork", "/fork Release plan"]) {
+    expect(parseSlashCommand(text)).toMatchObject({
+      command: { key: "fork", executeLocal: true, args: "[title]", icon: "copy" },
+      args: text === "/fork" ? "" : "Release plan",
+    });
+    expect(isModelIndependentChatCommand(text)).toBe(true);
+  }
+});
+
 describe("model-independent commands", () => {
   it.each([
     "/unknown",

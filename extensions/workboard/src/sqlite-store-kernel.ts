@@ -9,11 +9,14 @@ import {
   type DatabaseEngineInput,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
+  assertTransactionUsable,
   executeSqliteQueryTakeFirstSync,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
   runSqliteImmediateTransactionSync,
+  type SqliteWorkerTransactionOptions,
+  type SynchronousSqliteCallback,
   sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { definedFields } from "../record-fields.js";
@@ -65,10 +68,11 @@ type SyncStore<T> = {
 export type WorkboardSqliteKernel = {
   [K in keyof WorkboardPersistence]: SyncStore<WorkboardPersistence[K]>;
 } & {
+  assertSettled(this: void): void;
   close(this: void): void;
-  withWriteTransaction<T>(
-    operation: () => T,
-    options?: Parameters<typeof runSqliteImmediateTransactionSync>[2],
+  withWriteTransaction<T, CommitResult = void>(
+    operation: SynchronousSqliteCallback<T>,
+    options?: SqliteWorkerTransactionOptions<CommitResult>,
   ): T;
 };
 
@@ -737,6 +741,16 @@ export function createWorkboardSqliteKernel(
     sessionsBoard: new WorkboardSqliteSessionsBoardStore(db, boards),
     subscriptions: new WorkboardSqliteSubscriptionStore(db),
     attachments: new WorkboardSqliteAttachmentStore(db),
+    assertSettled() {
+      // Handled operation errors must not leave a dead connection available for reuse.
+      assertTransactionUsable(db);
+      if (!db.isOpen) {
+        throw new Error("Workboard database is closed");
+      }
+      if (db.isTransaction) {
+        throw new Error("Workboard database left an unsettled transaction");
+      }
+    },
     close,
     withWriteTransaction: (operation, options) =>
       runSqliteImmediateTransactionSync(db, operation, options),

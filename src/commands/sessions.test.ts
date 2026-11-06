@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { stripAnsi, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { loadPreparedModelCatalogSnapshot } from "../agents/prepared-model-catalog.js";
-import { ExpectedCliError } from "../cli/failure-output.js";
+import { ExpectedCliError } from "../cli/expected-cli-error.js";
 import { assignSessionOwner, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../config/sessions/types.js";

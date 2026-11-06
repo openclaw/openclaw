@@ -2,18 +2,25 @@ import {
   captureOpenAIResponsesCompaction,
   resolveCompactionReplayPressure,
 } from "@openclaw/ai/transports";
-import type { AssistantMessage, Model } from "@openclaw/llm-core";
-import { describe, expect, it } from "vitest";
+import type { AssistantMessage, Context, Model, StreamFn } from "@openclaw/llm-core";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { convertToLlm } from "../../../../packages/agent-core/src/harness/messages.js";
+import { configureAiTransportHost, getAiTransportHost } from "../../../../packages/ai/src/host.js";
+import { preparedRequestSuffix } from "../../../../packages/ai/src/provider-options.js";
 import { recordResponsesContextUsage } from "../../../../packages/ai/src/transports/openai-responses-context-usage.js";
+import { buildOpenAIResponsesParams } from "../../../../packages/ai/src/transports/openai-responses-params-internal.js";
 import { convertResponsesMessages } from "../../../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
+import { createOpenAIResponsesContextManagementWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
 import { testing } from "../../openai-transport-stream.test-support.js";
+import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { createQueuedAssistantStream } from "../../test-helpers/assistant-event-stream.test-support.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import {
   estimateLlmBoundaryTokenPressure,
+  resolveProjectedRequestPressure,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
 
@@ -24,6 +31,7 @@ const model = makeProviderModelFixture<"openai-responses">({
   provider: "openai",
   baseUrl: "https://api.openai.com/v1",
   reasoning: true,
+  input: ["text", "image"],
   contextWindow: 100_000,
   maxTokens: 8_192,
 }) satisfies Model;
@@ -189,6 +197,202 @@ describe("provider checkpoint prompt pressure", () => {
 });
 
 const BIG_OUTPUT = "build log line ".repeat(90000);
+
+describe("Responses admission conversion handoff", () => {
+  const host = getAiTransportHost();
+  const wireGolden =
+    '{"model":"gpt-5.6-luna","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"retained"}]},{"type":"compaction","id":"cmp_pressure","encrypted_content":"opaque"},{"id":"rs_summary","type":"reasoning","summary":[]},{"id":"rs_read","type":"reasoning","summary":[],"encrypted_content":"synthetic-reasoning"},{"type":"function_call","id":"fc_read","call_id":"call_read","name":"read","arguments":"{\\"path\\":\\"sample.txt\\"}"},{"type":"function_call_output","call_id":"call_read","output":[{"type":"input_text","text":"sample output"},{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,aW1hZ2U="}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"red basket"}]}],"stream":true,"prompt_cache_key":"session-a","instructions":"Synthetic instructions","max_output_tokens":8192,"reasoning":{"effort":"none"},"store":true,"context_management":[{"type":"compaction","compact_threshold":70000}]}';
+  afterEach(() => configureAiTransportHost(host));
+
+  function requestFixture() {
+    const owner = checkpoint("retained");
+    const response = assistant(2_001);
+    const reasoning = {
+      type: "thinking" as const,
+      thinking: "",
+      thinkingSignature: JSON.stringify({
+        type: "reasoning",
+        id: "rs_read",
+        summary: [],
+        encrypted_content: "synthetic-reasoning",
+      }),
+      openclawReasoningReplay: testing.buildOpenAIResponsesReasoningReplayMetadata(model, identity),
+    };
+    response.content = [
+      {
+        type: "thinking",
+        thinking: "",
+        thinkingSignature: JSON.stringify({ type: "reasoning", id: "rs_summary", summary: [] }),
+      },
+      reasoning,
+      {
+        type: "toolCall",
+        id: "call_read|fc_read",
+        name: "read",
+        arguments: { path: "sample.txt" },
+      },
+    ];
+    response.stopReason = "toolUse";
+    recordResponsesContextUsage(
+      response,
+      model,
+      identity,
+      {
+        input: convertResponsesMessages(
+          model,
+          { messages: [owner] },
+          new Set(["openai"]),
+          identity,
+        ),
+      },
+      [
+        { type: "reasoning", id: "rs_summary", summary: [] },
+        { type: "reasoning", id: "rs_read", summary: [], encrypted_content: "synthetic-reasoning" },
+        {
+          type: "function_call",
+          id: "fc_read",
+          call_id: "call_read",
+          name: "read",
+          arguments: '{"path":"sample.txt"}',
+        },
+      ],
+      "transport",
+    );
+    const context: Context = {
+      systemPrompt: "Synthetic instructions",
+      messages: [
+        owner,
+        response,
+        {
+          role: "toolResult",
+          toolCallId: "call_read|fc_read",
+          toolName: "read",
+          content: [
+            { type: "text", text: "sample output" },
+            { type: "image", mimeType: "image/png", data: "aW1hZ2U=" },
+          ],
+          timestamp: 3,
+          isError: false,
+        },
+        { role: "user", content: "red basket", timestamp: 4 },
+      ],
+    };
+    const convert = vi.fn(host.transformTransportMessages);
+    configureAiTransportHost({ ...host, transformTransportMessages: convert });
+    return { context, convert };
+  }
+
+  const admit = (context: Context) =>
+    resolveProjectedRequestPressure({
+      context,
+      contextTokenBudget: 100_000,
+      reserveTokens: 0,
+      replay: { model, ...identity },
+    });
+
+  async function build(context: Context, variant?: "stateless" | "text-transform" | "hook") {
+    let request: ReturnType<typeof buildOpenAIResponsesParams> | undefined;
+    const stream: StreamFn = async (requestModel, requestContext, options) => {
+      request = buildOpenAIResponsesParams(requestModel, requestContext, {
+        ...options,
+        ...identity,
+        ...(variant === "stateless" ? { replayResponsesItemIds: false } : {}),
+      });
+      await options?.onPayload?.(request, requestModel);
+      return createQueuedAssistantStream(() => {});
+    };
+    const wrapped = createOpenAIResponsesContextManagementWrapper(stream, undefined);
+    const send =
+      variant === "text-transform"
+        ? wrapStreamFnTextTransforms({
+            streamFn: wrapped,
+            input: [{ from: "red basket", to: "blue basket" }],
+            transformSystemPrompt: false,
+          })
+        : wrapped;
+    await send(model, context, {
+      ...identity,
+      ...(variant === "hook"
+        ? {
+            onPayload: (payload: unknown) => {
+              const input = (payload as { input: Array<{ content?: Array<{ text?: string }> }> })
+                .input;
+              input[0]!.content![0]!.text = "hook replacement";
+            },
+          }
+        : {}),
+    });
+    if (!request) {
+      throw new Error("Provider wrapper did not build a request");
+    }
+    return request;
+  }
+
+  it("converts admission and the managed request once without changing wire bytes or pressure", async () => {
+    const { context, convert } = requestFixture();
+    const decision = admit(context);
+    const request = await build(context);
+    expect(decision).toMatchObject({
+      route: "fits",
+      pressureSource: "provider_context_usage",
+      estimatedPromptTokens: 4_530,
+    });
+    expect(JSON.stringify(request)).toBe(wireGolden);
+    expect(convert).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["stateless", "text-transform"] as const)(
+    "keeps %s wire conversion distinct from the original accounting projection",
+    async (variant) => {
+      const { context, convert } = requestFixture();
+      const decision = admit(context);
+      const request = await build(context, variant);
+      expect(decision.estimatedPromptTokens).toBe(4_530);
+      expect(convert).toHaveBeenCalledTimes(2);
+      expect(JSON.stringify(request)).toBe(
+        variant === "stateless"
+          ? wireGolden
+              .replace('{"id":"rs_summary","type":"reasoning","summary":[]},', "")
+              .replace('"id":"rs_read",', "")
+              .replace('"id":"fc_read",', "")
+          : wireGolden.replace("red basket", "blue basket"),
+      );
+    },
+  );
+
+  it("consumes preparation once and isolates mutable hooks from replay and follow-up input", async () => {
+    const { context, convert } = requestFixture();
+    admit(context);
+    expect(JSON.stringify(await build(context, "hook"))).toBe(
+      wireGolden.replace("retained", "hook replacement"),
+    );
+    context.messages[3] = { role: "user", content: "next mutable turn", timestamp: 5 };
+    const request = await build(context);
+    expect(JSON.stringify(request)).toBe(wireGolden.replace("red basket", "next mutable turn"));
+    expect(convert).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves captured-prefix tool IDs when the request owns a prepared suffix", async () => {
+    const { context, convert } = requestFixture();
+    context.messages.push({
+      role: "toolResult",
+      toolCallId: "call_pending___",
+      toolName: "read",
+      content: [{ type: "text", text: "late result" }],
+      timestamp: 5,
+      isError: false,
+    });
+    preparedRequestSuffix.mark(context, new Set(["call_pending"]));
+    expect(admit(context).pressureSource).toBe("provider_context_usage");
+    expect(JSON.stringify(await build(context))).toBe(
+      wireGolden.replace(
+        '],"stream":true',
+        ',{"type":"function_call_output","call_id":"call_pending","output":"late result"}],"stream":true',
+      ),
+    );
+    expect(convert).toHaveBeenCalledTimes(2);
+  });
+});
 
 function bashExecMessage(output = BIG_OUTPUT): AgentMessage {
   return {

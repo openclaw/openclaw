@@ -12,6 +12,7 @@ import {
   chatDisplaySourceKey,
   chatRowDisplaySchema,
   boundChatThumbnails,
+  CHAT_ROW_DISPLAY_WINDOW,
   projectChatRowDisplay,
   MAX_CHAT_THUMBNAILS,
   MAX_CHAT_THUMBNAIL_BYTES,
@@ -188,7 +189,18 @@ export function createChatDisplayFacts(
           }
           const previous = snapshot.rowDisplay?.[messageId];
           const row = parseSnapshot(chatRowDisplaySchema, { ...previous, ...update });
-          if (!row || JSON.stringify(row).length > 8192) {
+          if (!row) {
+            return;
+          }
+          // Oversized replies recover live instead of becoming a first-paint payload.
+          if (
+            row.recoveredMessage &&
+            new TextEncoder().encode(JSON.stringify(row.recoveredMessage)).byteLength > 64 * 1024
+          ) {
+            delete row.recoveredMessage;
+          }
+          const { recoveredMessage: _recoveredMessage, ...display } = row;
+          if (JSON.stringify(display).length > 8192) {
             return;
           }
           cacheChatSessionSnapshot(cache, host, target, {
@@ -533,7 +545,10 @@ export function cacheChatSessionSnapshot(
     existing.snapshot.board === snapshot.board &&
     existing.snapshot.composer === snapshot.composer &&
     (previousState === sessionState ||
-      (previousState?.archived === sessionState?.archived &&
+      (previousState?.chrome === sessionState?.chrome &&
+        JSON.stringify(previousState?.contextUsage) ===
+          JSON.stringify(sessionState?.contextUsage) &&
+        previousState?.archived === sessionState?.archived &&
         previousState?.visibility === sessionState?.visibility &&
         previousState?.sharingRole === sessionState?.sharingRole &&
         previousState?.unarchiveAllowed === sessionState?.unarchiveAllowed &&
@@ -590,23 +605,27 @@ function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSess
   }
   let retainedMessageWeight = messageWeights.reduce((sum, weight) => sum + weight, 0);
   let start = 0;
+  // Every trim before the row display window shares one envelope; measure it once,
+  // not once per dropped message group.
+  const trimmedPagination = trimmedChatHistoryPagination(snapshot.pagination);
+  const lastSharedTrim = snapshot.messages.length - CHAT_ROW_DISPLAY_WINDOW;
+  let sharedEnvelope: ReturnType<typeof measureChatSnapshotEnvelope> | undefined;
   while (true) {
     if (start > 0 && start === snapshot.messages.length) {
       return null;
     }
-    const pagination =
-      start === 0 ? snapshot.pagination : trimmedChatHistoryPagination(snapshot.pagination);
-    const rowDisplay = projectChatRowDisplay(snapshot, start);
-    const envelope = { ...snapshot, messages: [], rowDisplay, pagination };
-    let weight: number | null;
-    try {
-      weight =
-        (JSON.stringify(envelope)?.length ?? 0) +
-        retainedMessageWeight +
-        Math.max(0, messageWeights.length - start - 1);
-    } catch {
-      weight = null;
+    const pagination = start === 0 ? snapshot.pagination : trimmedPagination;
+    const shared = start > 0 && start <= lastSharedTrim;
+    const envelope =
+      (shared && sharedEnvelope) || measureChatSnapshotEnvelope(snapshot, start, pagination);
+    if (shared) {
+      sharedEnvelope = envelope;
     }
+    const { rowDisplay } = envelope;
+    const weight =
+      envelope.weight === null
+        ? null
+        : envelope.weight + retainedMessageWeight + Math.max(0, messageWeights.length - start - 1);
     if (weight !== null && weight <= MAX_CACHED_CHAT_SNAPSHOT_WEIGHT) {
       return {
         snapshot:
@@ -636,6 +655,20 @@ function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSess
       start < snapshot.messages.length &&
       readSessionMessageSequence(snapshot.messages[start]) === boundarySeq
     );
+  }
+}
+
+function measureChatSnapshotEnvelope(
+  snapshot: ChatSessionSnapshot,
+  start: number,
+  pagination: ChatHistoryPagination,
+) {
+  const rowDisplay = projectChatRowDisplay(snapshot, start);
+  try {
+    const envelope = { ...snapshot, messages: [], rowDisplay, pagination };
+    return { rowDisplay, weight: JSON.stringify(envelope)?.length ?? 0 };
+  } catch {
+    return { rowDisplay, weight: null };
   }
 }
 

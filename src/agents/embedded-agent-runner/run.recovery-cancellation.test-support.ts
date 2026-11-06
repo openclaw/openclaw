@@ -505,7 +505,7 @@ describe("recovery cancellation through the public run owner", () => {
           target: { ...sessionTarget, activeWriterRunId: runParams.runId },
         });
       }
-      expect(accounting.fact?.currentContextSnapshot).toBeUndefined();
+      expect(accounting.fact?.currentContextSnapshot).toEqual({ tokens: 13_375 });
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
       expect(mockedCompactDirect).not.toHaveBeenCalled();
     },

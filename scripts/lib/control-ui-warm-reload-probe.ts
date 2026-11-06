@@ -735,8 +735,10 @@ export function warmReloadProbe(
     if (visible && caughtUp) {
       mark("firstLiveTranscript");
     }
-    const composer = pane?.querySelector<HTMLTextAreaElement>("textarea");
-    if (composer && !composer.disabled && !composer.readOnly) {
+    const hydratedComposer = pane?.querySelector<HTMLTextAreaElement>(
+      ".agent-chat__composer-combobox textarea:not(#openclaw-boot-composer)",
+    );
+    if (hydratedComposer && !hydratedComposer.disabled && !hydratedComposer.readOnly) {
       mark("inputReady");
     }
     const state = JSON.stringify({
@@ -747,7 +749,7 @@ export function warmReloadProbe(
       sidebar: Boolean(document.querySelector("aside.sidebar")),
       header: pane?.querySelector(".chat-pane__session-title-text")?.textContent ?? null,
       rows: visible,
-      input: Boolean(composer && !composer.disabled),
+      input: Boolean(hydratedComposer && !hydratedComposer.disabled),
       board: Boolean(document.querySelector(".board-widget__frame")),
     });
     if (states.at(-1)?.state !== state) {

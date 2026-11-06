@@ -24,6 +24,7 @@ import {
   loadUpdateRecovery,
   UpdateRecoveryRequiredError,
 } from "../../infra/update-run-recovery.js";
+import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -75,6 +76,7 @@ describe("package finalization recovery targets", () => {
       first.params.ownedManagedUpdateEnv = other!.run.env;
     }
     closeOpenClawStateDatabaseForTest();
+    const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
     const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
     if (kind === "retargeted") {
       observeStat(path.dirname(first.databasePath), () => {
@@ -94,11 +96,15 @@ describe("package finalization recovery targets", () => {
         : kind === "retargeted"
           ? [first.databasePath, other!.databasePath]
           : [first.databasePath];
-    expect(prepare.mock.calls.map(([pathname]) => pathname)).toEqual([
-      ...recoveryPaths,
-      // Settlement still needs its independent terminal-history read.
-      ...(phase === "settlement" ? [resolveOpenClawStateSqlitePath(first.run.env)] : []),
-    ]);
+    expect(
+      read.mock.calls
+        .filter(([, command]) => command.type === "updateRuns.recoveryAdmission")
+        .map(([options]) => options.path),
+    ).toEqual(recoveryPaths);
+    // Settlement still needs its independent terminal-history snapshot.
+    expect(prepare.mock.calls.map(([pathname]) => pathname)).toEqual(
+      phase === "settlement" ? [resolveOpenClawStateSqlitePath(first.run.env)] : [],
+    );
   });
 
   it.each(["first-read", "distinct-read"] as const)(

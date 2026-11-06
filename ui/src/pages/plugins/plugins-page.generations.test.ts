@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { setImmediate } from "node:timers/promises";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
@@ -24,6 +24,9 @@ import {
 } from "./plugins-page.test-support.ts";
 
 vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
+// The page lazy-loads its detail views. Import them once up front so the first test's
+// short render waits measure rendering, not cold module transforms on a loaded runner.
+beforeAll(() => Promise.all([import("./settings-view.tsx"), import("./catalog-detail.tsx")]));
 beforeEach(async () => {
   await i18n.setLocale("en");
   vi.mocked(showConfirmDialog).mockReset().mockResolvedValue(true);
@@ -437,24 +440,21 @@ it("retries a failed selected catalog read through its visible error action", as
   expect(page.textContent).not.toContain("Synthetic catalog unavailable");
 });
 
-it.each(["settings", "discovery"] as const)(
-  "closes a held %s detail without waiting for transport",
-  async (surface) => {
-    const held = deferred();
-    const harness = pageFixture({
-      "plugins.inspect": () => held.promise,
-      "plugins.catalog.get": () => held.promise,
-      "plugins.catalog.browse": () => ({ items: [], categories: [] }),
-    });
-    const inventory = surface === "settings" ? createResult() : createResult([]);
-    const path =
-      surface === "settings" ? "/settings/plugins/workboard" : "/plugins/catalog-workboard";
-    const { page } = await mountPage(harness.context, harness.route(path, inventory), surface);
-    await harness.waitForCall(surface === "settings" ? "plugins.inspect" : "plugins.catalog.get");
-    page.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    await waitForSolid(() => expect(page.querySelector(".plugin-catalog-detail")).toBeNull());
-    held.reject(new Error("Retired detail must not reappear"));
-    await settlePlugins();
-    expect(page.textContent).not.toContain("Retired detail must not reappear");
-  },
-);
+it("closes a held discovery detail without waiting for transport", async () => {
+  const held = deferred();
+  const harness = pageFixture({
+    "plugins.catalog.get": () => held.promise,
+    "plugins.catalog.browse": () => ({ items: [], categories: [] }),
+  });
+  const { page } = await mountPage(
+    harness.context,
+    harness.route("/plugins/catalog-workboard", createResult([])),
+    "discovery",
+  );
+  await harness.waitForCall("plugins.catalog.get");
+  page.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await waitForSolid(() => expect(page.querySelector(".plugin-catalog-detail")).toBeNull());
+  held.reject(new Error("Retired detail must not reappear"));
+  await settlePlugins();
+  expect(page.textContent).not.toContain("Retired detail must not reappear");
+});

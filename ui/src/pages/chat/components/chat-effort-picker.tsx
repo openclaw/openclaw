@@ -66,16 +66,22 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
         ? props.fastMode.label
         : t("chat.modelControls.fast");
     const triggerLabel = showReasoning ? reasoningValueText : t("chat.modelControls.speed");
-    const triggerTitle = [
-      showReasoning
-        ? props.fastMode.active
-          ? `${triggerLabel} · ${speedLabel}`
-          : triggerLabel
-        : `${triggerLabel}: ${props.fastMode.label}`,
-      props.fastMode.hint,
-    ]
-      .filter(Boolean)
-      .join(" · ");
+    const describeTrigger = (label: string) =>
+      [
+        showReasoning
+          ? props.fastMode.active
+            ? `${label} · ${speedLabel}`
+            : label
+          : `${label}: ${props.fastMode.label}`,
+        props.fastMode.hint,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+    const triggerTitle = describeTrigger(triggerLabel);
+    // The trigger shows the effective level; its accessible name keeps "Default (...)".
+    const triggerAriaLabel = showReasoning
+      ? `${t("chat.selectors.thinkingLevel")}: ${describeTrigger(reasoningValueLabel)}`
+      : triggerTitle;
     const speedOptions: { value: ChatFastModeSelectValue; label: string; disabled?: boolean }[] = [
       {
         value: props.fastMode.nextValue === "" ? "" : "off",
@@ -118,6 +124,7 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
       ultrafast,
       triggerLabel,
       triggerTitle,
+      triggerAriaLabel,
       speedOptions,
       selectedSpeed,
       onlyStop: sliderStops.length === 1 ? sliderStops[0] : undefined,
@@ -160,11 +167,7 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
               data-chat-thinking-value={view().selectedThinkingValue}
               data-chat-thinking-disabled={props.thinkingDisabled ? "true" : "false"}
               data-chat-fast-mode={props.fastMode.active ? "true" : "false"}
-              aria-label={
-                view().showReasoning
-                  ? `${t("chat.selectors.thinkingLevel")}: ${view().triggerTitle}`
-                  : view().triggerTitle
-              }
+              aria-label={view().triggerAriaLabel}
               aria-disabled={props.disabled ? "true" : "false"}
               aria-description={props.disabledReason}
               title={props.disabledReason ?? view().triggerTitle}

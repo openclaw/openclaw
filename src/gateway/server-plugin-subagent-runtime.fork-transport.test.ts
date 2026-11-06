@@ -64,6 +64,13 @@ it("sends no request for another operator's session but lets its owner reach the
       offsets: [0],
       createListener: () =>
         createServer((request, response) => {
+          // Host services probe new loopback listeners (for example `GET /` from a local Go
+          // daemon); only provider-route traffic is a request this test observes.
+          if (request.method !== "POST" || !request.url?.startsWith("/v1/")) {
+            request.resume();
+            response.writeHead(404).end();
+            return;
+          }
           const recorded: RecordedRequest = {
             url: request.url,
             authorization: request.headers.authorization,

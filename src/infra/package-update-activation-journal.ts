@@ -76,8 +76,8 @@ function descriptorJson(descriptor: PackageActivationDescriptor): string {
 }
 
 /** An existing operation is never bootstrapped, migrated, or repaired on open. */
-export function openPackageActivationJournal(anchor: string) {
-  return openJournal(anchor, false);
+export function openPackageActivationJournal(anchor: string, options?: { readOnly?: boolean }) {
+  return openJournal(anchor, false, options?.readOnly);
 }
 
 /** Historical binding drift permits settlement only, never publication or restoration. */
@@ -85,19 +85,21 @@ export function openPackageActivationSettlementJournal(anchor: string) {
   return openJournal(anchor, true);
 }
 
-function openJournal(anchor: string, settlementOnly: boolean) {
+function openJournal(anchor: string, settlementOnly: boolean, readOnly = false) {
+  const privateIdentity = (file: string, role: Parameters<typeof assertPrivate>[1]) =>
+    assertPrivate(file, role, !readOnly);
   assertPackageActivationLayout(anchor);
   const journalPath = resolvePackageActivationJournalPath(anchor);
   const parent = path.dirname(anchor);
   const parentIdentity = packageActivationIdentity(parent, "parent");
   const control = resolvePackageActivationControl(anchor);
-  const journalParentIdentity = assertPrivate(control, "control");
+  const journalParentIdentity = privateIdentity(control, "control");
   // Historical hard links may be inspected only to establish completed custody.
   // Such a handle can archive evidence, but cannot write or recover the journal.
   const completedOnly = settlementOnly && fs.lstatSync(journalPath).nlink > 1;
   const journalFileIdentity = (file: string) => {
     if (!completedOnly) {
-      return assertPrivate(file, "journal");
+      return privateIdentity(file, "journal");
     }
     const identity = packageActivationIdentity(file, false);
     if ((fs.lstatSync(file).mode & 0o077) !== 0) {
@@ -109,7 +111,7 @@ function openJournal(anchor: string, settlementOnly: boolean) {
   const assertFiles = () => {
     if (
       packageActivationIdentity(parent, "parent") !== parentIdentity ||
-      assertPrivate(control, "control") !== journalParentIdentity ||
+      privateIdentity(control, "control") !== journalParentIdentity ||
       journalFileIdentity(journalPath) !== journalIdentity ||
       fs.realpathSync(control) !== control
     ) {
@@ -120,6 +122,9 @@ function openJournal(anchor: string, settlementOnly: boolean) {
     write: boolean,
     operation: (db: DatabaseSync, transact: ExistingSqliteTransaction) => T,
   ): T => {
+    if (write && readOnly) {
+      throw new Error("Package recovery status cannot write its journal.");
+    }
     if (completedOnly && write) {
       throw new Error("Completed package evidence inspection cannot admit a journal writer.");
     }
@@ -226,10 +231,10 @@ function openJournal(anchor: string, settlementOnly: boolean) {
       packageActivationIdentity(path.dirname(anchor), "parent"),
     );
     bind(descriptor.journalParentIdentity, () =>
-      assertPrivate(resolvePackageActivationControl(anchor), "control"),
+      privateIdentity(resolvePackageActivationControl(anchor), "control"),
     );
     bind(descriptor.journalIdentity, () =>
-      assertPrivate(resolvePackageActivationJournalPath(anchor), "journal"),
+      privateIdentity(resolvePackageActivationJournalPath(anchor), "journal"),
     );
     return {
       bind,
@@ -308,7 +313,7 @@ function openJournal(anchor: string, settlementOnly: boolean) {
       publications,
     };
     if (completedOnly && !isPackageActivationComplete(anchor, record)) {
-      assertPrivate(journalPath, "journal");
+      privateIdentity(journalPath, "journal");
       throw new Error("Only completed package recovery evidence can be archived.");
     }
     // Closed history conveys no authority over today's package, helper, or
@@ -510,7 +515,7 @@ function openJournal(anchor: string, settlementOnly: boolean) {
         if (
           fs.lstatSync(control, { throwIfNoEntry: false }) ||
           !fs.lstatSync(archive, { throwIfNoEntry: false }) ||
-          assertPrivate(archive, "control") !== journalParentIdentity
+          privateIdentity(archive, "control") !== journalParentIdentity
         ) {
           throw error;
         }
@@ -521,7 +526,7 @@ function openJournal(anchor: string, settlementOnly: boolean) {
           packageActivationIdentity(parent, "parent") !== parentIdentity ||
           fs.realpathSync(retained) !== retained ||
           packageActivationIdentity(retained, true) !== retainedIdentity ||
-          assertPrivate(archive, "control") !== journalParentIdentity ||
+          privateIdentity(archive, "control") !== journalParentIdentity ||
           journalFileIdentity(path.join(archive, PACKAGE_ACTIVATION_JOURNAL)) !== journalIdentity
         ) {
           throw new Error("Package settlement control archive identity changed.");
@@ -564,7 +569,7 @@ function openJournal(anchor: string, settlementOnly: boolean) {
         scratchRoot: control,
         assertIdentity: assertFiles,
         assertFileSafe(file) {
-          assertPrivate(file, "rollback-journal");
+          privateIdentity(file, "rollback-journal");
         },
         read: (db) => decode(readRow(db)),
       });

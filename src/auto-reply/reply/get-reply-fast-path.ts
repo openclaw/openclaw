@@ -134,7 +134,6 @@ export async function initFastReplySessionState(params: {
   const resetPreservedSelection = resetTriggered
     ? resolveResetPreservedSelection({ entry: existingEntry })
     : {};
-  const channel = normalizeOptionalString(ctx.Provider);
   const subject = normalizeOptionalString(ctx.GroupSubject);
   const groupChannel = normalizeOptionalString(ctx.GroupChannel);
   const sessionEntry: SessionEntry = {
@@ -177,7 +176,6 @@ export async function initFastReplySessionState(params: {
     ttsAuto: existingEntry?.ttsAuto,
     responseUsage: existingEntry?.responseUsage,
     ...(normalizedChatType ? { chatType: normalizedChatType } : {}),
-    ...(channel ? { channel } : {}),
     ...(subject ? { subject } : {}),
     ...(groupChannel ? { groupChannel } : {}),
     topicName: normalizeOptionalString(ctx.TopicName) ?? existingEntry?.topicName,

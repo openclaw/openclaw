@@ -16,7 +16,12 @@ import {
 import { CODEX_APP_SERVER_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { resolvePreparedGatewayOperatorAccessAuthority } from "../../../gateway/operator-access-policy.js";
 import { readLocalWorkspaceProjection } from "../../../gateway/worker-environments/local-workspace-store.test-support.js";
-import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import {
+  getAgentEventLifecycleGeneration,
+  rotateAgentEventLifecycleGeneration,
+} from "../../../infra/agent-events.js";
+import { resetLogger, setLoggerOverride } from "../../../logging/logger.js";
+import { testApi as logTestApi } from "../../../logging/logger.test-support.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import { buildSkillSnapshot } from "../../../skills/loading/workspace-skill-prompt.js";
@@ -25,7 +30,6 @@ import { loadSqliteTrajectoryRuntimeEvents } from "../../../trajectory/runtime-s
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
-  prepareSystemAgentRunAdmission,
 } from "../../admitted-run-context.js";
 import { resolveSessionGitCoauthorPrompt } from "../../git-coauthor-prompt.js";
 import { createContextEngine } from "../../harness/context-engine-lifecycle.test-support.js";
@@ -33,6 +37,10 @@ import * as harnessHost from "../../harness/host-capability.js";
 import { registerAgentHarness } from "../../harness/registry.js";
 import type { AgentHarness, AgentHarnessAttemptParamsV2 } from "../../harness/types.js";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "../../model-auth-markers.js";
+import {
+  createAgentRunDirectAbortError,
+  createAgentRunRestartAbortError,
+} from "../../run-termination.js";
 import { registerSandboxBackend, type SandboxBackendFactory } from "../../sandbox/backend.js";
 import { createSandboxFsBridge } from "../../sandbox/fs-bridge.js";
 import { createSandboxTestContext } from "../../sandbox/test-fixtures.js";
@@ -49,7 +57,10 @@ import type { ManagedWorktreeRecord } from "../../worktrees/types.js";
 import { createEmbeddedRunLaneController } from "./lane-controller.js";
 import {
   assertDurableTranscriptRevocation,
+  assertFreshTranscriptAfterRetirement,
   dispatchCases,
+  createDispatchSandboxBackend as backend,
+  dispatchFreshTranscriptSuccessor,
 } from "./run-attempt-dispatch.cases.test-support.js";
 import { prepareAndDispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
 import { createSourceTurnDispatchAssertions } from "./run-attempt-dispatch.source-turn.test-support.js";
@@ -77,21 +88,6 @@ vi.mock("../../runtime-plan/build.js", () => ({
 
 afterEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
 
-function backend(id: string, workdir: string, runtimeId = id) {
-  return {
-    id,
-    runtimeId,
-    runtimeLabel: "Synthetic sandbox",
-    workdir,
-    buildExecSpec: async () => {
-      throw new Error("unexpected exec");
-    },
-    runShellCommand: async () => {
-      throw new Error("unexpected shell");
-    },
-  };
-}
-
 async function writeRetrySettings(directory: string, maxRetries: number, maxRetryDelayMs?: number) {
   await fs.mkdir(directory, { recursive: true });
   await fs.writeFile(
@@ -100,82 +96,8 @@ async function writeRetrySettings(directory: string, maxRetries: number, maxRetr
   );
 }
 
-it.each(["settled", "failed", "revoked", "unsandboxed"] as const)(
-  "settles attribution before a writable sandbox setup (%s)",
-  async (outcome) => {
-    await withOpenClawTestState({ label: "baseline-sandbox" }, async (state) => {
-      const config = {
-        agents: {
-          defaults: {
-            sandbox: {
-              mode: outcome === "unsandboxed" ? ("off" as const) : ("all" as const),
-              backend: "baseline-fixture",
-              workspaceAccess: "rw" as const,
-              browser: { enabled: false },
-            },
-          },
-        },
-      };
-      const entered = createDeferred();
-      const baseline = createDeferred();
-      const setupFile = path.join(state.workspaceDir, "setup.txt");
-      const factory = vi.fn(async () => {
-        await fs.writeFile(setupFile, "sandbox setup");
-        return backend("baseline-fixture", "/workspace");
-      });
-      const restoreBackend = registerSandboxBackend("baseline-fixture", factory);
-      const admission = prepareSystemAgentRunAdmission(config, "baseline", "main", "test");
-      const pending = workspaceSandbox.resolveAttemptWorkspaceSandbox({
-        config,
-        agentId: "main",
-        sessionId: "baseline",
-        sessionKey: "agent:main:baseline",
-        workspaceDir: state.workspaceDir,
-        admittedRunContext: await admission.admit("embedded"),
-        awaitSessionDiffBaseline: () => {
-          entered.resolve();
-          return baseline.promise;
-        },
-      });
-      void pending.catch(() => {});
-      try {
-        if (outcome === "unsandboxed") {
-          await awaitGateBeforeSettlement(pending, entered.promise, "Unsandboxed setup waited");
-          expect(factory).not.toHaveBeenCalled();
-          return;
-        }
-        await awaitGateBeforeSettlement(entered.promise, pending, "Sandbox bypassed attribution");
-        expect(factory).not.toHaveBeenCalled();
-        await expect(fs.stat(setupFile)).rejects.toMatchObject({ code: "ENOENT" });
-        if (outcome === "failed") {
-          const failure = new Error("capture failed");
-          baseline.reject(failure);
-          await expect(pending).rejects.toBe(failure);
-        } else {
-          if (outcome === "revoked") {
-            admission.close();
-          }
-          baseline.resolve();
-          if (outcome === "revoked") {
-            await expect(pending).rejects.toThrow("admitted run authority is no longer active");
-          } else {
-            await pending;
-            expect(await fs.readFile(setupFile, "utf8")).toBe("sandbox setup");
-          }
-        }
-        expect(factory).toHaveBeenCalledTimes(outcome === "settled" ? 1 : 0);
-      } finally {
-        baseline.resolve();
-        await pending.catch(() => undefined);
-        admission.close();
-        restoreBackend();
-      }
-    });
-  },
-);
-
 it.each(dispatchCases)(
-  "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey, $skillCatalog skills, remote skills $remoteSkills, one-shot $oneShotCliRun, real managed workspace $realManagedWorkspace, explicit cwd $explicitCwd, host media $hostMedia, retired placement $retirePlacement, baseline $diffBaseline, cancelled trajectory $cancelTrajectory, prepared auth $preparedAuth, access $cyberAccessProgram, transcript target $transcriptTargetInvalidation",
+  "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey, $skillCatalog skills, remote skills $remoteSkills, one-shot $oneShotCliRun, real managed workspace $realManagedWorkspace, explicit cwd $explicitCwd, host media $hostMedia, retired placement $retirePlacement, baseline $diffBaseline, cancelled trajectory $cancelTrajectory, prepared auth $preparedAuth, access $cyberAccessProgram, transcript target $transcriptTargetInvalidation/$targetField",
   async ({
     cyberAccessProgram,
     agentId = "work",
@@ -197,6 +119,7 @@ it.each(dispatchCases)(
     cancelTrajectory,
     preparedAuth,
     transcriptTargetInvalidation,
+    targetField,
   }) => {
     const gitCoauthorPrompt =
       "Git co-authors: add these exact trailers to every commit you make from this session.\n" +
@@ -315,14 +238,37 @@ it.each(dispatchCases)(
       );
       const runId = `dispatch-${agentId}`;
       const harnessId = cancelTrajectory ? "codex" : "owner-fixture";
+      let promptSessionId = `${agentId}-global`;
       const cancellation = new AbortController();
       const policyGrant = new AbortController();
       const cancellationError = new Error("session aborted");
+      const interrupted =
+        transcriptTargetInvalidation === "stopped" || transcriptTargetInvalidation === "restart";
+      const interruption =
+        transcriptTargetInvalidation === "restart"
+          ? createAgentRunRestartAbortError()
+          : createAgentRunDirectAbortError();
+      const diagnosticFile = state.path("target-refusal.log");
+      const readTargetRefusals = async () => {
+        await logTestApi.flushFileLogQueueForTests();
+        const contents = existsSync(diagnosticFile)
+          ? await fs.readFile(diagnosticFile, "utf8")
+          : "";
+        return contents
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => JSON.parse(line))
+          .filter((record) => record["2"] === "session target preparation refused");
+      };
+      if (transcriptTargetInvalidation) {
+        setLoggerOverride({ level: "warn", consoleLevel: "silent", file: diagnosticFile });
+      }
       const storePath = state.path("agents", agentId, "sessions", "sessions.json");
       if (
         cancelTrajectory ||
         transcriptTargetInvalidation === "target" ||
-        transcriptTargetInvalidation === "policy"
+        transcriptTargetInvalidation === "policy" ||
+        interrupted
       ) {
         await replaceSessionEntry(
           { sessionKey: "global", storePath },
@@ -377,16 +323,46 @@ it.each(dispatchCases)(
           >["prepareContinuationRetryCount"]
         | undefined;
       const sourceTurn = createSourceTurnDispatchAssertions();
+      const successorSourceTurn = createSourceTurnDispatchAssertions("synthetic-successor-source");
       let assertPreparedTarget: (() => void) | undefined;
       let capturedAttempt:
         | Parameters<typeof harnessHost.createAgentHarnessHostCapabilities>[0]["attempt"]
         | undefined;
       let activeControls: ReturnType<typeof laneController.createAttemptControls> | undefined;
       const targetChecked = new Error("prepared transcript target checked");
+      let retainedTranscript:
+        | Awaited<ReturnType<typeof assertDurableTranscriptRevocation>>
+        | undefined;
+      let checkRetiredDuringSuccessor: (() => Promise<void>) | undefined;
       const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (params) => {
         expect(params.cyberAccessProgram).toBe(cyberAccessProgram);
-        sourceTurn.expectBinding(params);
+        (checkRetiredDuringSuccessor ? successorSourceTurn : sourceTurn).expectBinding(params);
+        if (checkRetiredDuringSuccessor) {
+          assert(capturedAttempt);
+          await assertFreshTranscriptAfterRetirement(
+            capturedAttempt,
+            workspaceDir,
+            checkRetiredDuringSuccessor,
+          );
+          return makeEmbeddedRunnerAttempt({ sessionIdUsed: params.sessionId });
+        }
         if (transcriptTargetInvalidation) {
+          if (interrupted) {
+            assert(capturedAttempt);
+            retainedTranscript = await assertDurableTranscriptRevocation(
+              capturedAttempt,
+              workspaceDir,
+              () => {
+                cancellation.abort(interruption);
+                if (transcriptTargetInvalidation === "restart") {
+                  rotateAgentEventLifecycleGeneration();
+                }
+              },
+              interruption,
+              true,
+            );
+            throw targetChecked;
+          }
           if (
             transcriptTargetInvalidation === "target" ||
             transcriptTargetInvalidation === "policy"
@@ -394,13 +370,13 @@ it.each(dispatchCases)(
             assert(capturedAttempt);
             await assertDurableTranscriptRevocation(capturedAttempt, workspaceDir, () => {
               if (transcriptTargetInvalidation === "policy") {
-                policyGrant.abort(new Error("plugin access revoked"));
+                policyGrant.abort(new Error("synthetic private authority detail /private/target"));
               } else {
                 onValidateSource = () => {
                   onValidateSource = undefined;
                   input.sessionPromptState.sessionTarget = {
                     ...input.sessionPromptState.sessionTarget!,
-                    sessionId: "rebound-target",
+                    [targetField!]: "synthetic-private-rebound-target",
                   };
                 };
               }
@@ -417,6 +393,10 @@ it.each(dispatchCases)(
               activeControls!.close();
             } else if (transcriptTargetInvalidation === "replaced") {
               laneController.createAttemptControls({ admittedRunContext });
+            } else if (transcriptTargetInvalidation === "identity") {
+              promptSessionId = "synthetic-private-rebound-session";
+            } else if (transcriptTargetInvalidation === "source-closed") {
+              admission.close();
             }
           };
           expect(assertPreparedTarget).toThrow("Session target preparation outlived its attempt");
@@ -485,7 +465,7 @@ it.each(dispatchCases)(
           : undefined,
         admittedRunContext,
         cyberAccessProgram,
-        ...(cancelTrajectory ? { abortSignal: cancellation.signal } : {}),
+        ...(cancelTrajectory || interrupted ? { abortSignal: cancellation.signal } : {}),
         agentId,
         config,
         runId,
@@ -530,7 +510,9 @@ it.each(dispatchCases)(
       };
       sourceTurn.stamp(params);
       const writerClaim =
-        transcriptTargetInvalidation === "target" || transcriptTargetInvalidation === "policy"
+        transcriptTargetInvalidation === "target" ||
+        transcriptTargetInvalidation === "policy" ||
+        interrupted
           ? await claimAgentSessionWriter({
               ...params,
               sessionTarget: {
@@ -640,7 +622,9 @@ it.each(dispatchCases)(
                 expectedWriterRunId: writerClaim.expectedWriterRunId,
               }
             : undefined,
-          sessionId: `${agentId}-global`,
+          get sessionId() {
+            return promptSessionId;
+          },
           sessionFile: "global",
           sessionTarget: {
             agentId,
@@ -768,7 +752,45 @@ it.each(dispatchCases)(
       try {
         if (transcriptTargetInvalidation) {
           await expect(pending).rejects.toBe(targetChecked);
-          expect(runAttempt).toHaveBeenCalledOnce();
+          if (interrupted) {
+            expect(await readTargetRefusals()).toEqual([]);
+
+            const retiredTarget = assertPreparedTarget!;
+            checkRetiredDuringSuccessor = async () => {
+              expect(retiredTarget).toThrow("Session target preparation outlived its attempt");
+              await retainedTranscript!.assertRejectedWrite();
+              expect(retiredTarget).toThrow("Session target preparation outlived its attempt");
+            };
+            try {
+              await dispatchFreshTranscriptSuccessor(input, successorSourceTurn);
+            } finally {
+              assertPreparedTarget = retiredTarget;
+              checkRetiredDuringSuccessor = undefined;
+            }
+          }
+          expect(runAttempt).toHaveBeenCalledTimes(interrupted ? 2 : 1);
+          // A callback can outlive dispatch cleanup. Record only its first refusal,
+          // even when later calls observe the now-closed attempt instead.
+          expect(assertPreparedTarget).toThrow("Session target preparation outlived its attempt");
+          expect(assertPreparedTarget).toThrow("Session target preparation outlived its attempt");
+          const refusals = await readTargetRefusals();
+          expect(refusals.map((record) => record["1"])).toEqual([
+            {
+              runId,
+              reason:
+                transcriptTargetInvalidation === "target"
+                  ? "target_changed"
+                  : transcriptTargetInvalidation === "identity"
+                    ? "session_identity_changed"
+                    : transcriptTargetInvalidation === "policy" ||
+                        transcriptTargetInvalidation === "source-closed"
+                      ? "source_authority_refused"
+                      : "attempt_inactive",
+              ...(targetField ? { field: targetField } : {}),
+            },
+          ]);
+          expect(JSON.stringify(refusals)).not.toContain("synthetic-private");
+          expect(JSON.stringify(refusals)).not.toContain("synthetic private");
           return;
         }
         if (retryPreparation === "change-cwd") {
@@ -967,6 +989,10 @@ it.each(dispatchCases)(
       } finally {
         baseline.resolve();
         await pending.catch(() => undefined);
+        await retainedTranscript?.dispose();
+        await logTestApi.flushFileLogQueueForTests();
+        setLoggerOverride(null);
+        resetLogger();
         hostObserver?.mockRestore();
         preparation?.mockRestore();
         remoteImageRead?.mockRestore();

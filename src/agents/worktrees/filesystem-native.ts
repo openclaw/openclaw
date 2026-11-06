@@ -140,6 +140,9 @@ export const nativeWorktreeFilesystem = {
   createSource(this: void, destination: string, options: WorktreeFilesystemOptions) {
     return write({ type: "create", destination }, options);
   },
+  remove(this: void, destination: string, options: WorktreeFilesystemOptions) {
+    return write({ type: "remove", destination }, options);
+  },
   copy(this: void, source: string, destination: string, options: WorktreeFilesystemOptions) {
     return write({ type: "copy", source, destination }, options);
   },

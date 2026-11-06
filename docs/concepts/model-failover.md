@@ -172,6 +172,8 @@ existing run deadline and cost limits still apply.
 Local session-coordination errors also stop fallback. For example, when prepared
 session capability metadata changes, OpenClaw surfaces that error without trying
 another model. Changing providers cannot repair stale session authority.
+The `model-fallback/decision` logger records `local_runtime_coordination` for
+these stops and `transcript_not_continuable` when the transcript cannot continue.
 
 Fallback requests reuse the original user turn and its attachments exactly once.
 Fresh plugin context for the fallback model is added separately, preserving the

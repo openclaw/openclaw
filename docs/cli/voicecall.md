@@ -35,6 +35,9 @@ a second webhook server. If standalone fallback cannot bind the configured
 `serve.port`, the error identifies the likely running Gateway instead of
 printing a raw `EADDRINUSE` failure.
 
+Twilio refusals include the carrier's numeric error code and HTTPS documentation
+link when supplied, so otherwise identical refusal messages can be distinguished.
+
 ## Subcommands
 
 ```bash

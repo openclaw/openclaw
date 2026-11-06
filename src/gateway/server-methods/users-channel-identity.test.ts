@@ -2,6 +2,7 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { UsersChannelIdentityResult } from "../../../packages/gateway-protocol/src/schema/users.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import * as bundledChannels from "../../channels/plugins/bundled.js";
 import { getLoadedChannelPlugin } from "../../channels/plugins/registry.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
@@ -10,6 +11,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { waitForAbortSignal } from "../../infra/abort-signal.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   markGatewayRestartDraining,
@@ -44,7 +46,12 @@ let bob: GatewayClient;
 let context: GatewayRequestContext;
 let config: OpenClawConfig;
 let providerCurrent: boolean;
-const exchange = vi.fn(async () => ({ senderId: "123456789012345678" }));
+type PreparedIdentityLink = NonNullable<
+  Awaited<ReturnType<NonNullable<ChannelPlugin["identityLink"]>["prepare"]>>
+>;
+const exchange = vi.fn<PreparedIdentityLink["exchange"]>(async () => ({
+  senderId: "123456789012345678",
+}));
 const nonce = "11111111-1111-4111-8111-111111111111";
 const cookie = "openclaw-channel-link-" + nonce + "=" + nonce;
 const owner = (client: GatewayClient) => client.authenticatedUserProfile!.profileId;
@@ -190,7 +197,16 @@ it("reports and disconnects saved identities without loading an unconfigured cha
   expect(load).not.toHaveBeenCalled();
 });
 
-it("allows a configured bundled adapter to link before its channel runtime is registered", async () => {
+it("allows a configured bundled adapter to link before its channel runtime is registered", async ({
+  signal,
+}) => {
+  const completed = createDeferred();
+  const exchangeIdentity = exchange.getMockImplementation()!;
+  exchange.mockImplementationOnce(async (params) => {
+    // The authorization owner closes its signal after publishing the terminal result.
+    completed.resolve(waitForAbortSignal(params.signal));
+    return exchangeIdentity(params);
+  });
   const plugin = getLoadedChannelPlugin("discord")!;
   setActivePluginRegistry(createTestRegistry([]));
   config = { channels: { discord: {} } };
@@ -202,6 +218,7 @@ it("allows a configured bundled adapter to link before its channel runtime is re
   });
   const flow = await start();
   expect(callback(flow, cookie)).toBe(200);
+  await withinTest(completed.promise, signal);
   expect((await terminal(flow)).status).toBe("linked");
   expect(await listCanonicalUserChannelIdentities(owner(alice))).toHaveLength(1);
 });

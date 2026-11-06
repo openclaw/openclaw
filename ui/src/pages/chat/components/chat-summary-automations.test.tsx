@@ -509,7 +509,7 @@ it.each([false, true])("restores retry focus: moved=%s", async (moved) => {
   const { element, find } = current;
   const sibling = document.createElement("details");
   document.body.append(sibling);
-  await current.ready("Couldn't load automations.");
+  await current.ready("Couldn’t load automations. Try again.");
   expect(element.textContent).not.toContain("private server detail");
   const retry = find<HTMLButtonElement>(".chat-summary__automation-retry")!;
   expect(retry.textContent?.trim()).toBe("Retry");
@@ -706,7 +706,7 @@ it("shares pending reads, retained rows, and failed refresh recovery between the
   refresh.reject(new Error("private inventory failure"));
   await waitForSolid(() => {
     expect(view.container.querySelector('[role="alert"]')?.textContent).toContain(
-      "Couldn't update automations.",
+      "Couldn’t update automations. Try again.",
     );
     expect(view.container.querySelector('[aria-busy="true"]')).toBeNull();
   });
@@ -817,6 +817,45 @@ it("retains reconnect facts and distinguishes auto-disabled from paused and stal
   expect(element.querySelectorAll(".chat-summary__automation")).toHaveLength(3);
   pending.resolve(page());
   await current.empty();
+});
+
+it("describes one-shot automations by local day and time instead of a full numeric date", async () => {
+  const now = new Date();
+  const at = (year: number, month: number, day: number, hour: number) => ({
+    kind: "at" as const,
+    at: new Date(year, month, day, hour).toISOString(),
+  });
+  const year = now.getFullYear();
+  const current = component(
+    jobsRequest(
+      job({
+        id: "today",
+        name: "Verify main CI",
+        scheduleKind: "at",
+        schedule: at(year, now.getMonth(), now.getDate(), 11),
+      }),
+      job({
+        id: "tomorrow",
+        name: "Morning check",
+        scheduleKind: "at",
+        schedule: at(year, now.getMonth(), now.getDate() + 1, 9),
+      }),
+      job({
+        id: "later",
+        name: "Renewal",
+        scheduleKind: "at",
+        schedule: at(year + 1, 2, 3, 9),
+      }),
+    ),
+  );
+  await current.ready("Renewal");
+  const state = (id: string) =>
+    current.element.querySelector<HTMLAnchorElement>(`a[href$="job=${id}"]`)!.textContent;
+  expect(state("today")).toContain("Today at 11:00 AM");
+  expect(state("tomorrow")).toContain("Tomorrow at 9:00 AM");
+  expect(state("later")).toContain(`Mar 3, ${year + 1} at 9:00 AM`);
+  expect(current.element.textContent).not.toMatch(/At \d/);
+  current.unmount();
 });
 
 it("describes cron weekdays and non-uniform minute steps without inventing a fixed interval", async () => {

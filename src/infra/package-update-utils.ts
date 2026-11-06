@@ -20,26 +20,24 @@ export function isPackageVersionDowngrade(
   return comparePackageUpdateVersions(nextVersion, currentVersion) < 0;
 }
 
+export function isPinnedRegistrySpec(spec: string): boolean {
+  const value = spec.trim();
+  if (!value) {
+    return false;
+  }
+  const at = value.lastIndexOf("@");
+  if (at <= 0 || at >= value.length - 1) {
+    return false;
+  }
+  const version = value.slice(at + 1).trim();
+  return /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version);
+}
+
 export function expectedIntegrityForUpdate(
   spec: string | undefined,
   integrity: string | undefined,
 ): string | undefined {
-  if (!integrity || !spec) {
-    return undefined;
-  }
-  const value = spec.trim();
-  if (!value) {
-    return undefined;
-  }
-  const at = value.lastIndexOf("@");
-  if (at <= 0 || at >= value.length - 1) {
-    return undefined;
-  }
-  const version = value.slice(at + 1).trim();
-  if (!/^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) {
-    return undefined;
-  }
-  return integrity;
+  return integrity && spec && isPinnedRegistrySpec(spec) ? integrity : undefined;
 }
 
 export function readInstalledPackageManifest(dir: string): Record<string, unknown> | undefined {

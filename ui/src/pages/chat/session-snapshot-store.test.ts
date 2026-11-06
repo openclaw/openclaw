@@ -297,6 +297,18 @@ describe("persistent chat session snapshots", () => {
   );
 
   it.each<Partial<ChatSessionSnapshot>>([
+    { sessionState: { unarchiveAllowed: false } },
+    {
+      sessionState: {
+        unarchiveAllowed: false,
+        contextUsage: { used: 1_800, limit: 96_000, approximate: false, fromLastPrompt: true },
+        chrome: {
+          workspace: { root: "/workspace/observatory", label: "observatory" },
+          color: "blue",
+          hasVersions: true,
+        },
+      },
+    },
     {
       composer: {
         id: "model",
@@ -391,7 +403,7 @@ describe("persistent chat session snapshots", () => {
     await putRawRecord(
       {
         sessionKey: sidebarKey,
-        projectionVersion: 3,
+        projectionVersion: 4,
         savedAt: Date.now(),
         model: { ...sidebarSnapshot, peoplePresenceFilter: undefined, offlineUsers: undefined },
       },

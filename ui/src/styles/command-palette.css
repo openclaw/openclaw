@@ -347,6 +347,12 @@
   color: var(--muted);
 }
 
+.cmd-palette__archive-note {
+  margin-inline-end: auto;
+  font-size: 11px;
+  line-height: 16px;
+}
+
 .cmd-palette__hint {
   display: inline-flex;
   align-items: center;

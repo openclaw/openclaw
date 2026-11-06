@@ -139,19 +139,17 @@ extension NodeAppModel {
                 }
             }
 
-            if !archived {
-                // An interrupted page must not replace a more complete offline roster.
-                if snapshot.isComplete {
-                    await self.storeCachedChatSessions(
-                        snapshot.sessions,
-                        gatewayID: sourceGatewayID,
-                        agentID: sourceAgentID)
-                    if let sourceGatewayID,
-                       !GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID) ||
-                       self.chatDeliveryAgentId != sourceAgentID
-                    {
-                        throw CancellationError()
-                    }
+            // An interrupted page must not replace a more complete offline roster.
+            if !archived, snapshot.isComplete {
+                await self.storeCachedChatSessions(
+                    snapshot.sessions,
+                    gatewayID: sourceGatewayID,
+                    agentID: sourceAgentID)
+                if let sourceGatewayID,
+                   !GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID) ||
+                   self.chatDeliveryAgentId != sourceAgentID
+                {
+                    throw CancellationError()
                 }
             }
             return snapshot
@@ -214,7 +212,7 @@ final class RootSidebarModel {
     private(set) var cronJobs: [CronJob] = []
     private(set) var isRefreshing = false
     private(set) var sessionErrorText: String?
-    private(set) var isSessionRosterComplete = true
+    private(set) var isSessionRosterComplete = false
     private var rosterGeneration = 0
     private var sessionObserverVisibility = false
     private var sessionObserverSync: Task<Void, Never>?
@@ -251,6 +249,7 @@ final class RootSidebarModel {
         mainSessionKey: String,
         activeAgentID: String?,
         groups: [OpenClawChatSessionGroup],
+        rosterIsComplete: Bool = false,
         sessionRoutingContract: String? = nil,
         now: Date = .now) -> [ChatSessionSidebarModel.Section]
     {
@@ -260,19 +259,18 @@ final class RootSidebarModel {
             mainSessionKey: mainSessionKey,
             activeAgentID: activeAgentID,
             sessionRoutingContract: sessionRoutingContract)
-        let selectedIsSnoozed = sessions.contains {
-            $0.key == selectedSessionKey && $0.isSnoozed(at: now)
-        }
+        let selectedIsHidden = sessions.first { $0.key == selectedSessionKey }
+            .map { $0.isArchived || $0.isSnoozed(at: now) } ?? rosterIsComplete
         // Resolve aliases before keeping the selected automation reachable.
         let isSearching = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let browsingSessions = sessions.filter {
-            !$0.isSnoozed(at: now) && (isSearching || $0.key == selectedSessionKey ||
+            !$0.isArchived && !$0.isSnoozed(at: now) && (isSearching || $0.key == selectedSessionKey ||
                 !OpenClawChatSessionListVisibility.isAutomationSession($0))
         }
         return ChatSessionSidebarModel.sections(
             sessions: browsingSessions,
-            // The shared sidebar otherwise creates a placeholder for a missing selected row.
-            currentSessionKey: selectedIsSnoozed ? "" : currentSessionKey,
+            // Keep missing-selection placeholders only until the active roster is complete.
+            currentSessionKey: selectedIsHidden ? "" : currentSessionKey,
             mainSessionKey: mainSessionKey,
             activeAgentID: activeAgentID,
             groups: groups,

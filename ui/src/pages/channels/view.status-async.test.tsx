@@ -99,7 +99,9 @@ it.each([false, true])(
       expect(f.container.querySelector(".channels-item__detail")).not.toBeNull();
       expect(f.container.querySelector(".settings-loading-skeleton")).toBeNull();
       if (cached) {
-        expect(f.container.querySelector(".callout.info")).not.toBeNull();
+        expect(
+          f.container.querySelector(".settings-control__sr-label[role='status']"),
+        ).not.toBeNull();
         expect(document.activeElement).toBe(card);
       }
     });
@@ -124,15 +126,18 @@ it.each([false, true])(
         expect(
           Array.from(f.container.querySelectorAll(".callout"), (node) => node.className).slice(
             0,
-            3,
+            2,
           ),
-        ).toEqual(["callout info", "callout warn", "callout danger"]);
+        ).toEqual(["callout warn", "callout danger"]);
+        expect(
+          f.container.querySelector(".settings-control__sr-label[role='status']"),
+        ).not.toBeNull();
         expect(f.container.querySelector(".callout.warn")?.textContent).toContain(
           "Slack probe unavailable",
         );
         expect(f.container.querySelector("openclaw-modal-dialog")).toBe(dialog);
       } else {
-        expect(f.container.querySelector(".callout.info")).toBeNull();
+        expect(f.container.querySelector(".settings-control__sr-label[role='status']")).toBeNull();
         expect(f.container.querySelector(".settings-loading-skeleton")).toBeNull();
         expect(f.container.querySelector(".channels-item__detail")).toBe(recommended);
       }
@@ -229,7 +234,9 @@ it("recovers an initial read failure and hides a retired retry after pairing acc
     hello: gatewayHelloForMethods(["channels.pairing.list"], []),
   });
   await waitForSolid(() => {
-    expect(f.container.textContent).toContain("operator.pairing access");
+    expect(f.container.textContent).toContain(
+      "You don’t have permission to review DM access requests.",
+    );
     expect(f.container.querySelector(".settings-loading-skeleton")).toBeNull();
   });
   retired.resolve(pairingSnapshot());

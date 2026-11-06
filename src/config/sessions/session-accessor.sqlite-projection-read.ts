@@ -434,10 +434,16 @@ function readProjectionSnapshot(database: TranscriptReadDatabase, sessionId: str
     return { ...retained.facts, contextStats: retained.contextStats };
   }
   const row = projectionSnapshotReader(database.db)(sessionId).rows[0]!;
+  // Unordered accounting borrows totals only after SQL pins the same transcript snapshot.
+  const accounting = readSessionTranscriptProjectionReceipt(database, sessionId, {
+    generation: row.generation ?? null,
+    rawSeq: row.latest_seq,
+    updatedAt: row.transcript_updated_at ?? null,
+  });
   return {
     cold: Boolean(row.is_cold),
     contextMetadata: retained?.facts?.contextMetadata,
-    contextStats: actor?.transcript.contextStats ?? retained?.contextStats,
+    contextStats: actor?.transcript.contextStats ?? accounting?.contextStats,
     generation: row.generation ?? undefined,
     updatedAt: row.transcript_updated_at ?? null,
     hasUnclassified: Boolean(row.has_unclassified),

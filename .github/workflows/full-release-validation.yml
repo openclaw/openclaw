@@ -84,6 +84,7 @@ on:
           - windows-node
           - live-e2e
           - package
+          - qualified-package
           - qa-parity
           - qa-live
           - npm-telegram
@@ -151,6 +152,11 @@ on:
         required: false
         default: ""
         type: string
+      npm_preflight_use_github_hosted_runners:
+        description: Run npm artifact preflight jobs on GitHub-hosted ubuntu-24.04 instead of Blacksmith
+        required: false
+        default: false
+        type: boolean
 permissions:
   actions: write
   contents: read
@@ -180,14 +186,12 @@ env:
 jobs:
   resolve_target:
     name: Resolve target ref
-    # Hosted admission delays compound along this serial release path.
-    runs-on: &linux_runner_hybrid_small >-
+    runs-on: &linux_runner_ubuntu >-
       ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
-      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.repository == 'openclaw/openclaw' &&
-      vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04')))
-      || (github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' &&
-      'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
-    timeout-minutes: 10
+      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    # About 4.5 minutes normally; the headroom keeps degraded GitHub Git operations
+    # (slow checkouts and object fetches into the blob:none target) from cancelling the FRV.
+    timeout-minutes: 15
     outputs:
       sha: ${{ steps.resolve.outputs.sha }}
       release_tag: ${{ steps.release_inputs.outputs.release_tag }}
@@ -337,7 +341,8 @@ jobs:
               --qualification-inputs-json "$QUALIFICATION_INPUTS_JSON" --candidate-sha "$CANDIDATE_SHA")
           fi
           identity="$(
-            node workflow/scripts/release-tooling-identity.mjs resolve "${admission_args[@]}" \
+            node workflow/scripts/release-tooling-identity.mjs resolve \
+              ${admission_args[@]+"${admission_args[@]}"} \
               --repository "$GITHUB_REPOSITORY" \
               --workflow-contract "$WORKFLOW_CONTRACT" \
               --workflow-ref "$WORKFLOW_REF" \
@@ -440,7 +445,7 @@ jobs:
           if [[ "$RERUN_GROUP" =~ ^(all|cross-os|windows-node)$ &&
                 -z "${RELEASE_PACKAGE_SPEC// }" ]]; then
             release_artifact_required=true
-          elif [[ "$RERUN_GROUP" =~ ^(all|package)$ &&
+          elif [[ "$RERUN_GROUP" =~ ^(all|package|qualified-package)$ &&
                   -z "${RELEASE_PACKAGE_SPEC// }" &&
                   -z "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
             release_artifact_required=true
@@ -747,13 +752,30 @@ jobs:
             .toString('latin1').split('\0').filter(record =>
               /^(?:package\.json|apps\/android\/version\.json|extensions\/[^/]+\/(?:package\.json|README\.md)|packages\/[^/]+\/package\.json)$/.test(record.slice(record.indexOf('\t') + 1)));
           if (records.length > 4096) throw new Error('publication metadata count exceeds limit');
-          let bytes = 0;
-          for (const record of records) {
+          const oids = records.map(record => {
             const tab = record.indexOf('\t');
             const header = record.slice(0, tab), path = record.slice(tab + 1);
             const [mode, type, oid] = header.split(' ');
             new TextDecoder('utf-8', { fatal: true }).decode(Buffer.from(path, 'latin1'));
             if (!['100644', '100755'].includes(mode) || type !== 'blob') throw new Error('publication metadata must be regular committed files');
+            return oid;
+          });
+          // The target is a blob:none checkout, so each missing blob read below would be its own
+          // lazy promisor fetch. Fetch them in one batch with git's own lazy-fetch arguments first;
+          // if that fails, the reads below still fall back to lazy fetches.
+          const missing = oids.length === 0 ? [] : git('rev-list', '--objects', '--no-walk', '--missing=print', ...new Set(oids))
+            .toString().split('\n').filter(line => line.startsWith('?')).map(line => line.slice(1));
+          if (missing.length > 0) {
+            try {
+              execFileSync('git', ['--no-replace-objects', '-C', root, '-c', 'fetch.negotiationAlgorithm=noop', 'fetch', 'origin',
+                '--no-tags', '--no-write-fetch-head', '--recurse-submodules=no', '--filter=blob:none', '--stdin'],
+                { timeout: 120000, input: `${missing.join('\n')}\n`, stdio: ['pipe', 'ignore', 'pipe'] });
+            } catch (error) {
+              console.log(`::warning::Batched publication metadata prefetch failed; falling back to per-blob fetches: ${error.message}`);
+            }
+          }
+          let bytes = 0;
+          for (const oid of oids) {
             const size = Number(git('cat-file', '-s', oid).toString());
             if (!Number.isSafeInteger(size) || size > 16 * 1024 * 1024 || (bytes += size) > 64 * 1024 * 1024) throw new Error('publication metadata byte limit exceeded');
             git('cat-file', 'blob', oid);
@@ -914,7 +936,7 @@ jobs:
             else
               echo "- Plugin prerelease: skipped by rerun group"
             fi
-            if [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "install-smoke" || "$RERUN_GROUP" == "cross-os" || "$RERUN_GROUP" == "windows-node" || "$RERUN_GROUP" == "live-e2e" || "$RERUN_GROUP" == "package" || "$RERUN_GROUP" == "qa-parity" || "$RERUN_GROUP" == "qa-live" ]]; then
+            if [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "install-smoke" || "$RERUN_GROUP" == "cross-os" || "$RERUN_GROUP" == "windows-node" || "$RERUN_GROUP" == "live-e2e" || "$RERUN_GROUP" == "package" || "$RERUN_GROUP" == "qualified-package" || "$RERUN_GROUP" == "qa-parity" || "$RERUN_GROUP" == "qa-live" ]]; then
               echo "- Release/live/Docker/package/QA: \`OpenClaw Release Checks\`"
             else
               echo "- Release/live/Docker/package/QA: skipped by rerun group"
@@ -956,7 +978,7 @@ jobs:
     name: Enforce plugin compatibility release readiness
     needs: [resolve_target]
     if: needs.resolve_target.outputs.plugin_compatibility_required == 'true'
-    runs-on: *linux_runner_hybrid_small
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 10
     steps:
       - name: Checkout target source
@@ -999,7 +1021,7 @@ jobs:
     name: Check for reusable validation evidence
     needs: [resolve_target, plugin_compatibility_readiness]
     if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && inputs.rerun_group == 'all' && inputs.reuse_evidence && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-ci/')) }}
-    runs-on: *linux_runner_hybrid_small
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 10
     outputs:
       reuse: ${{ steps.find.outputs.reuse }}
@@ -1237,9 +1259,7 @@ jobs:
     name: Run normal full CI
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
     if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && contains(fromJSON('["all","ci"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: &linux_runner_ubuntu >-
-      ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
-      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 15
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -1498,6 +1518,7 @@ jobs:
               args=(-f stage="$stage" -f dispatch_id="$dispatch_id" -f source_sha="$TARGET_SHA" -f release_tag="$RELEASE_TAG" -f preflight_phase="$PREFLIGHT_PHASE")
               if [[ "$stage" == "npm" ]]; then
                 args+=(-f npm_dist_tag="$NPM_DIST_TAG" -f release_candidate_branch="$RELEASE_CANDIDATE_BRANCH")
+                args+=(-f npm_preflight_use_github_hosted_runners="$NPM_PREFLIGHT_USE_GITHUB_HOSTED_RUNNERS")
               elif [[ "$stage" == "candidate" ]]; then
                 args+=(-f request_json="$CANDIDATE_REQUEST_JSON" -f prepared_npm_bundle_json="$PREPARED_NPM_BUNDLE_JSON")
               fi
@@ -1737,11 +1758,7 @@ jobs:
     name: Run release checks independent validation
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
     if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && contains(fromJSON('["all","install-smoke","live-e2e","qa-parity","qa-live"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: &linux_runner_small >-
-      ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
-      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' &&
-      'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'
-      && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 15
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -1783,8 +1800,8 @@ jobs:
   release_checks_candidate:
     name: Run release checks candidate validation
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse, candidate_acquisition]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && (needs.resolve_target.outputs.release_candidate_artifact_required != 'true' || (needs.candidate_acquisition.result == 'success' && needs.candidate_acquisition.outputs.state == 'ready')) && (contains(fromJSON('["all","cross-os","windows-node","package"]'), inputs.rerun_group) || (inputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')) && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: *linux_runner_small
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && (needs.resolve_target.outputs.release_candidate_artifact_required != 'true' || (needs.candidate_acquisition.result == 'success' && needs.candidate_acquisition.outputs.state == 'ready')) && (contains(fromJSON('["all","cross-os","windows-node","package","qualified-package"]'), inputs.rerun_group) || (inputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 15
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -1855,7 +1872,7 @@ jobs:
     name: Run product performance evidence
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
     if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && needs.resolve_target.outputs.coverage_policy != 'npm-beta-v1' && contains(fromJSON('["all","performance"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: *linux_runner_small
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 15
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -1898,6 +1915,7 @@ jobs:
       RELEASE_TAG: ${{ needs.resolve_target.outputs.release_tag }}
       NPM_DIST_TAG: ${{ needs.resolve_target.outputs.npm_dist_tag }}
       RELEASE_CANDIDATE_BRANCH: ${{ needs.resolve_target.outputs.release_candidate_branch }}
+      NPM_PREFLIGHT_USE_GITHUB_HOSTED_RUNNERS: ${{ inputs.npm_preflight_use_github_hosted_runners }}
       PREFLIGHT_PHASE: ${{ inputs.rerun_group == 'all' && 'all' || 'prepare' }}
       CHILD_WORKFLOW_REF: ${{ github.ref_name }}
       PARENT_WORKFLOW_SHA: ${{ github.sha }}
@@ -2010,6 +2028,10 @@ jobs:
       CHILD_WORKFLOW_REF: ${{ github.ref_name }}
       PARENT_WORKFLOW_SHA: ${{ github.sha }}
       DISPATCH_ID: full-release-validation-${{ github.run_id }}-1-plugin-npm-preflight
+      # The normal publish route repacks with the admitted publisher tooling P;
+      # the preflight child packs with this run's tooling.
+      PUBLISHER_SHA: ${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission.workflowSha || '' }}
+      PUBLICATION_ROUTE: ${{ fromJSON(needs.resolve_target.outputs.publication_selection_json || '{}').route || '' }}
     steps:
       - name: Retain original plugin npm artifact descriptor
         id: reused
@@ -2022,6 +2044,62 @@ jobs:
         id: dispatch
         if: github.run_attempt == 1 && env.PUBLICATION_ARTIFACTS_REUSED != 'true'
         run: *full_release_child_dispatch
+
+      # While the child runs, pack and scan as Plugin NPM Release will: candidate
+      # source at the root, P's tooling, scripts, and inventory at .release-tooling.
+      # A P-only bundler or inventory drift then fails here instead of at publish.
+      - name: Checkout target source for publisher scan
+        if: &publisher_tooling_scan env.PUBLISHER_SHA != '' && env.PUBLISHER_SHA != github.sha && env.PUBLICATION_ROUTE == 'normal'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Checkout publisher tooling
+        if: *publisher_tooling_scan
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.PUBLISHER_SHA }}
+          path: .release-tooling
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment for publisher tooling scan
+        if: *publisher_tooling_scan
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+
+      - name: Install publisher tooling dependencies
+        if: *publisher_tooling_scan
+        working-directory: .release-tooling
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
+      - name: Scan plugin npm packs with publisher tooling
+        if: *publisher_tooling_scan
+        env:
+          TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
+        run: |
+          set -euo pipefail
+          if [[ ! -f .release-tooling/scripts/check-plugin-npm-security-scan.mts ]]; then
+            echo "::warning::Publisher tooling ${PUBLISHER_SHA} predates this scan; Plugin NPM Release scans at publish."
+            exit 0
+          fi
+          plan_args=(--selection-mode "$PLUGIN_PUBLISH_SCOPE")
+          [[ -z "$PLUGINS" ]] || plan_args+=(--plugins "$PLUGINS")
+          [[ "$NPM_DIST_TAG" != extended-stable ]] || plan_args+=(--npm-dist-tag "$NPM_DIST_TAG")
+          node --import tsx .release-tooling/scripts/plugin-npm-release-plan.ts "${plan_args[@]}" > "$RUNNER_TEMP/plugin-npm-publisher-plan.json"
+          echo "Packing with publisher tooling ${PUBLISHER_SHA}."
+          node --import tsx .release-tooling/scripts/check-plugin-npm-security-scan.mts \
+            --tooling-root .release-tooling \
+            --plan "$RUNNER_TEMP/plugin-npm-publisher-plan.json"
 
       - name: Resolve and seal exact plugin npm artifact descriptor
         id: prepared
@@ -2210,7 +2288,7 @@ jobs:
         performance,
       ]
     if: always()
-    runs-on: *linux_runner_small
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 15
     outputs:
       sha256: ${{ steps.plan.outputs.sha256 }}
@@ -2551,7 +2629,11 @@ jobs:
         release_execution_plan,
       ]
     if: always()
-    runs-on: *linux_runner_small
+    runs-on: &linux_runner_small >-
+      ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
+      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' &&
+      'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'
+      && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404') }}
     timeout-minutes: 720
     env:
       RELEASE_STATE_SCRIPT: &release_state_script ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/full-release-validation-state.mjs', github.workspace) || format('{0}/scripts/full-release-validation-state.mjs', github.workspace) }}

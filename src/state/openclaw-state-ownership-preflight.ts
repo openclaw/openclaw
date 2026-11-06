@@ -13,6 +13,7 @@ import {
 import { deferSqliteSnapshotCleanupAfterRead } from "../infra/sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
+import { isLiveStateRead } from "./artifact-preserving-state-reads.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateSchemaReadAdmission } from "./openclaw-state-db-contract.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
@@ -63,9 +64,9 @@ async function assertWriteAllowed(options: StateWriteAdmissionOptions): Promise<
     assertOwnershipAllowsWrite(read?.ownership ?? null, databasePath, env);
     return;
   }
-  // Offline admission belongs to this process. Its live scope/lease cannot be
-  // borrowed by a native reader child; retain the private-copy path instead.
+  // Offline admission belongs to this process; a child cannot borrow its schema lease.
   if (
+    !isLiveStateRead() &&
     !options.openStateSchemaReadAdmission &&
     !getOpenClawDatabaseMaintenanceScope() &&
     !getStateDatabaseSchemaLease(databasePath)
@@ -83,17 +84,20 @@ async function assertWriteAllowed(options: StateWriteAdmissionOptions): Promise<
     );
     return;
   }
-  const prepared = await prepareSqliteReadOnlyLocation(databasePath, {
-    preserveSourceArtifacts: true,
-    signal: options.signal,
-  });
+  // Gateway maintenance reads through SQLite itself; only offline inspection preserves artifacts.
+  const prepared = isLiveStateRead()
+    ? undefined
+    : await prepareSqliteReadOnlyLocation(databasePath, {
+        preserveSourceArtifacts: true,
+        signal: options.signal,
+      });
   let readSucceeded = false;
   try {
     options.signal?.throwIfAborted();
     assertStateDatabaseAccessAllowed(databasePath);
     assertOwnershipAllowsWrite(
       inspectOwnershipThroughConnection(
-        prepared.location,
+        prepared?.location ?? databasePath,
         databasePath,
         options.openStateSchemaReadAdmission,
       ),
@@ -102,7 +106,7 @@ async function assertWriteAllowed(options: StateWriteAdmissionOptions): Promise<
     );
     readSucceeded = true;
   } finally {
-    await prepared.cleanupAsync().catch((error: unknown) => {
+    await prepared?.cleanupAsync().catch((error: unknown) => {
       if (!readSucceeded || !deferSqliteSnapshotCleanupAfterRead(error, prepared.cleanupRoot)) {
         throw error;
       }

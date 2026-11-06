@@ -226,6 +226,7 @@ export function createChatComposerScenarios(): readonly EngineScenario[] {
         const input = page.locator(composer);
         let renderedOptions = 0;
         let menuSvgNodes = 0;
+        let menuContentWrappers = 0;
         for (let cycle = 0; cycle < 4; cycle++) {
           await input.pressSequentially("/");
           const menu = page.locator(`${pane} .slash-menu`);
@@ -236,6 +237,9 @@ export function createChatComposerScenarios(): readonly EngineScenario[] {
           if (cycle === 0) {
             renderedOptions = await menu.locator(".slash-menu-item").count();
             menuSvgNodes = await menu.locator(".slash-menu-icon svg").count();
+            menuContentWrappers = await menu
+              .locator(".slash-menu-icon .chat-composer-lit-content")
+              .count();
           }
           await input.press("ArrowDown");
           await input.press("ArrowUp");
@@ -248,7 +252,13 @@ export function createChatComposerScenarios(): readonly EngineScenario[] {
           await input.press("ControlOrMeta+a");
           await input.press("Backspace");
         }
-        return { cycles: 4, pluginCommands: 200, renderedOptions, menuSvgNodes };
+        return {
+          cycles: 4,
+          pluginCommands: 200,
+          renderedOptions,
+          menuSvgNodes,
+          menuContentWrappers,
+        };
       },
     },
     {
@@ -319,20 +329,232 @@ export function createChatComposerScenarios(): readonly EngineScenario[] {
         }
         await input.press("Escape");
         await input.waitFor({ state: "hidden" });
-        await prepareChat(page);
+        await page.waitForFunction(
+          (selector) => document.querySelectorAll(selector).length > 1,
+          `${pane} .chat-text`,
+        );
+        const restoredMessages = await result.count();
         if (
           (await draft.inputValue()) !== "Retained draft." ||
           !(await draft.evaluate((element) => element === document.activeElement))
         ) {
           throw new Error("Closing transcript search did not restore the focused draft");
         }
-        return { queryCharacters: 11, matchingMessages: 1 };
+        return { queryCharacters: 11, matchingMessages: 1, restoredMessages };
       },
     },
-    ...(["paste-text", "paste-image", "drop-image"] as const).map((kind): EngineScenario =>
+    {
+      ...base,
+      id: "chat-actions-paste-text",
+      expected:
+        "Keep 256 KiB pasted text in the draft without attachments or sends; emulate DOM insertion and input events after an uncancelled synthetic paste, without measuring OS clipboard or native editing.",
+      prepare: async (page) => {
+        await prepareChat(page);
+        await page.locator(composer).fill("Review this text.\n");
+      },
+      run: async (page, gateway) => {
+        const input = page.locator(composer);
+        const draft = await input.inputValue();
+        const text = "Synthetic pasted text.\n".repeat(12_000).slice(0, 256 * 1024);
+        const sendsBefore = (await gateway.getRequests("chat.send")).length;
+        await input.click();
+        await input.evaluate((element: HTMLTextAreaElement) => {
+          element.setSelectionRange(element.value.length, element.value.length);
+        });
+        const uncancelled = await input.evaluate((element, value) => {
+          const transfer = new DataTransfer();
+          transfer.setData("text/plain", value);
+          return element.dispatchEvent(
+            new ClipboardEvent("paste", {
+              bubbles: true,
+              cancelable: true,
+              clipboardData: transfer,
+            }),
+          );
+        }, text);
+        if (!uncancelled) {
+          throw new Error("Plain-text paste was cancelled instead of remaining draft input");
+        }
+        // Synthetic paste has no default action. Emulate the DOM edit and events;
+        // beforeinput supplies the composer's edit intent before input commits it.
+        await input.evaluate((element: HTMLTextAreaElement, value) => {
+          const event = { bubbles: true, inputType: "insertFromPaste", data: value };
+          if (
+            !element.dispatchEvent(new InputEvent("beforeinput", { ...event, cancelable: true }))
+          ) {
+            throw new Error("Plain-text insertion was cancelled before updating the draft");
+          }
+          element.setRangeText(value, element.selectionStart, element.selectionEnd, "end");
+          element.dispatchEvent(new InputEvent("input", event));
+        }, text);
+        await frames(page);
+        const attachments = await page.locator(`${pane} .chat-attachment-remove`).count();
+        const chatSends = (await gateway.getRequests("chat.send")).length - sendsBefore;
+        if ((await input.inputValue()) !== draft + text || attachments !== 0 || chatSends !== 0) {
+          throw new Error(
+            "Plain-text paste did not preserve the exact unsent draft without attachments",
+          );
+        }
+        return { pastedTextBytes: text.length, attachments, chatSends, pasteDefaultEmulated: true };
+      },
+    },
+    ...(["text", "image"] as const).map((kind): EngineScenario =>
+      Object.assign({}, base, {
+        id: `chat-actions-native-paste-${kind}`,
+        expected:
+          kind === "text"
+            ? "Insert 256 KiB through a trusted native paste, preserving the exact unsent draft."
+            : "Attach and decode a 2048×2048 PNG through a trusted native paste.",
+        prepare: async (page) => {
+          await prepareChat(page);
+          const input = page.locator(composer);
+          await input.fill("Review this paste.\n");
+          await input.focus();
+          await input.evaluate((element: HTMLTextAreaElement) => {
+            element.setSelectionRange(element.value.length, element.value.length);
+          });
+          // WebKit accepts clipboard-read only; evaluate supplies the write activation.
+          const chromium = page.context().browser()!.browserType().name() === "chromium";
+          await page
+            .context()
+            .grantPermissions(
+              chromium ? ["clipboard-read", "clipboard-write"] : ["clipboard-read"],
+            );
+          // Clipboard preparation and PNG encoding stay outside the measured action.
+          await page.evaluate(async (selected) => {
+            const text = "Synthetic pasted text.\n".repeat(12_000).slice(0, 256 * 1024);
+            if (selected === "text") {
+              await navigator.clipboard.writeText(text);
+              return;
+            }
+            const canvas = document.createElement("canvas");
+            canvas.width = canvas.height = 2048;
+            const context = canvas.getContext("2d")!;
+            const pixels = context.createImageData(canvas.width, canvas.height);
+            let seed = 0x12345678;
+            // Seeded 2×2 color blocks keep the PNG large but below the 5 MiB image limit.
+            for (let y = 0; y < canvas.height; y += 2) {
+              for (let x = 0; x < canvas.width; x += 2) {
+                seed ^= seed << 13;
+                seed ^= seed >>> 17;
+                seed ^= seed << 5;
+                for (const offset of [0, 1, canvas.width, canvas.width + 1]) {
+                  const index = (y * canvas.width + x + offset) * 4;
+                  pixels.data[index] = seed & 255;
+                  pixels.data[index + 1] = (seed >>> 8) & 255;
+                  pixels.data[index + 2] = (seed >>> 16) & 255;
+                  pixels.data[index + 3] = 255;
+                }
+              }
+            }
+            context.putImageData(pixels, 0, 0);
+            const png = await new Promise<Blob>((resolve) => {
+              canvas.toBlob((blob) => resolve(blob!), "image/png");
+            });
+            if (png.size < 2 * 1024 * 1024 || png.size > 5 * 1024 * 1024) {
+              throw new Error(`Expected a 2–5 MiB synthetic PNG, encoded ${png.size} bytes`);
+            }
+            await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
+          }, kind);
+        },
+        run: async (page, gateway) => {
+          const sendsBefore = (await gateway.getRequests("chat.send")).length;
+          const input = page.locator(composer);
+          const draft = await input.inputValue();
+          const observation = await input.evaluateHandle(
+            (element: HTMLTextAreaElement, { selected, prefix }) => {
+              const pastedText = "Synthetic pasted text.\n".repeat(12_000).slice(0, 256 * 1024);
+              const state: {
+                result: {
+                  nativePasteTrusted: boolean;
+                  nativePasteReadyFrameMs: number;
+                  nativePasteInputToReadyMs: number;
+                  nativePasteDispatchMs: number;
+                  nativePasteFrames: number;
+                  pastedTextBytes: number;
+                  pastedImageBytes: number;
+                } | null;
+              } = { result: null };
+              let keyDownMs: number | undefined;
+              const keyDown = (event: KeyboardEvent) => {
+                if (
+                  event.isTrusted &&
+                  event.key.toLowerCase() === "v" &&
+                  (event.metaKey || event.ctrlKey)
+                ) {
+                  keyDownMs = performance.now();
+                }
+              };
+              document.addEventListener("keydown", keyDown, true);
+              element.addEventListener(
+                "paste",
+                (event) => {
+                  const start = performance.now();
+                  document.removeEventListener("keydown", keyDown, true);
+                  const pastedTextBytes = event.clipboardData!.getData("text/plain").length;
+                  const pastedImageBytes = event.clipboardData!.files[0]?.size ?? 0;
+                  let frameCount = 0;
+                  const presented = () => {
+                    frameCount++;
+                    const image = element
+                      .closest(".chat-pane-cache__pane--active")!
+                      .querySelector<HTMLImageElement>(
+                        '.chat-attachment-thumb[aria-busy="false"]:not(.chat-attachment-thumb--error) img',
+                      );
+                    const ready =
+                      selected === "text"
+                        ? element.value === prefix + pastedText
+                        : image?.complete && image.naturalWidth > 0 && image.naturalHeight > 0;
+                    if (!ready) {
+                      requestAnimationFrame(presented);
+                      return;
+                    }
+                    state.result = {
+                      nativePasteTrusted: event.isTrusted && keyDownMs !== undefined,
+                      nativePasteReadyFrameMs: performance.now() - start,
+                      nativePasteInputToReadyMs: performance.now() - (keyDownMs ?? start),
+                      nativePasteDispatchMs: start - (keyDownMs ?? start),
+                      nativePasteFrames: frameCount,
+                      pastedTextBytes,
+                      pastedImageBytes,
+                    };
+                  };
+                  requestAnimationFrame(presented);
+                },
+                { once: true, capture: true },
+              );
+              return state;
+            },
+            { selected: kind, prefix: draft },
+          );
+          // The engine performs clipboard decoding/default editing; no event or DOM edit is injected.
+          await page.keyboard.press(process.platform === "darwin" ? "Meta+V" : "Control+V");
+          await page.waitForFunction((state) => state.result !== null, observation, {
+            timeout: 15_000,
+          });
+          const evidence = await observation.evaluate((state) => state.result!);
+          await observation.dispose();
+          const attachments = await page.locator(`${pane} .chat-attachment-remove`).count();
+          const chatSends = (await gateway.getRequests("chat.send")).length - sendsBefore;
+          if (
+            !evidence.nativePasteTrusted ||
+            chatSends !== 0 ||
+            attachments !== (kind === "image" ? 1 : 0) ||
+            (kind === "text"
+              ? evidence.pastedTextBytes !== 256 * 1024
+              : !evidence.pastedImageBytes) ||
+            (kind === "image" && (await input.inputValue()) !== draft)
+          ) {
+            throw new Error("Native paste did not preserve its trusted, exact unsent result");
+          }
+          return { ...evidence, attachments, chatSends };
+        },
+      } satisfies Partial<EngineScenario>),
+    ),
+    ...(["paste-image", "drop-image"] as const).map((kind): EngineScenario =>
       Object.assign({}, base, {
         id: `chat-actions-${kind}`,
-        expected: `Attach ${kind === "paste-text" ? "256 KiB text" : "a 2048×2048 PNG"} through the native ${kind.startsWith("paste") ? "paste" : "drop"} handler.`,
+        expected: `Attach a 2048×2048 PNG through the native ${kind.startsWith("paste") ? "paste" : "drop"} handler.`,
         prepare: async (page: Page) => {
           await prepareChat(page);
           await page.locator(composer).fill("Review these attachments.");
@@ -357,14 +579,7 @@ export function createChatComposerScenarios(): readonly EngineScenario[] {
           await page.locator(composer).click();
           await page.locator(composer).evaluate((element, selected) => {
             const transfer = new DataTransfer();
-            if (selected === "paste-text") {
-              transfer.setData(
-                "text/plain",
-                "Synthetic pasted text.\n".repeat(12_000).slice(0, 256 * 1024),
-              );
-            } else {
-              transfer.items.add(Reflect.get(window, "__chatActionFile"));
-            }
+            transfer.items.add(Reflect.get(window, "__chatActionFile"));
             element.dispatchEvent(
               selected === "drop-image"
                 ? new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: transfer })
@@ -382,22 +597,18 @@ export function createChatComposerScenarios(): readonly EngineScenario[] {
           if (attachments !== 1) {
             throw new Error(`Expected one attachment, found ${attachments}`);
           }
-          if (kind === "paste-text") {
-            await preview.locator(".chat-attachment-thumb--pasted-text").waitFor();
-          } else {
-            const ready = preview.locator(
-              '.chat-attachment-thumb[aria-busy="false"]:not(.chat-attachment-thumb--error)',
-            );
-            await ready.waitFor();
-            const image = ready.locator("img");
-            await image.waitFor();
-            await image.evaluate(async (element: HTMLImageElement) => {
-              await element.decode();
-              if (element.naturalWidth === 0 || element.naturalHeight === 0) {
-                throw new Error("Attachment preview did not decode");
-              }
-            });
-          }
+          const ready = preview.locator(
+            '.chat-attachment-thumb[aria-busy="false"]:not(.chat-attachment-thumb--error)',
+          );
+          await ready.waitFor();
+          const image = ready.locator("img");
+          await image.waitFor();
+          await image.evaluate(async (element: HTMLImageElement) => {
+            await element.decode();
+            if (element.naturalWidth === 0 || element.naturalHeight === 0) {
+              throw new Error("Attachment preview did not decode");
+            }
+          });
           return { attachments };
         },
       }),

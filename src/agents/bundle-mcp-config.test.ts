@@ -30,11 +30,6 @@ describe("loadMergedBundleMcpConfig", () => {
     const merged = loadMergedBundleMcpConfig({
       workspaceDir: "/workspace",
       cfg: {
-        plugins: {
-          entries: {
-            "bundle-probe": { enabled: true },
-          },
-        },
         mcp: {
           servers: {
             bundleProbe: {

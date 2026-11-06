@@ -1,4 +1,5 @@
 import type { ApplicationContext } from "../../ui/src/app/context.ts";
+import type { installPaneChromeProbe } from "../lib/control-ui-pane-chrome-probe.ts";
 import type { ReloadAnimationSample } from "./warm-reload-frames.ts";
 
 export const proofRegions = {
@@ -10,8 +11,54 @@ export const proofRegions = {
   dashboard: "openclaw-board-view",
 };
 
+/** Summarize the existing pane-chrome sampler after its first populated Details frame. */
+export function summarizeDetailsGeometry(
+  frames: ReturnType<ReturnType<typeof installPaneChromeProbe>["read"]>["detailsFrames"],
+) {
+  const firstIndex = frames.findIndex((frame) =>
+    frame.sections.some((row) => row.section === "session" && row.height > 0),
+  );
+  const populated = firstIndex < 0 ? [] : frames.slice(firstIndex);
+  let topMovementPx = 0;
+  let heightMovementPx = 0;
+  let sectionInsertions = 0;
+  let sectionRemovals = 0;
+  for (let index = 1; index < populated.length; index++) {
+    const before = new Map(populated[index - 1]!.sections.map((row) => [row.section, row]));
+    const after = new Map(populated[index]!.sections.map((row) => [row.section, row]));
+    for (const id of new Set([...before.keys(), ...after.keys()])) {
+      const from = before.get(id);
+      const to = after.get(id);
+      if (from && to) {
+        topMovementPx += Math.abs(to.top - from.top);
+      } else if (to) {
+        sectionInsertions++;
+      } else {
+        sectionRemovals++;
+      }
+      heightMovementPx += Math.abs((to?.height ?? 0) - (from?.height ?? 0));
+    }
+  }
+  const first = populated[0];
+  return {
+    firstPopulatedMs: first?.at ?? null,
+    firstHasAutomations: first?.sections.some((row) => row.section === "automations") ?? false,
+    firstProcessHeightPx: first?.sections.find((row) => row.section === "processes")?.height ?? 0,
+    topMovementPx,
+    heightMovementPx,
+    totalVerticalMovementPx: topMovementPx + heightMovementPx,
+    sectionInsertions,
+    sectionRemovals,
+    frames: populated,
+  };
+}
+
 /** Serialized into the top document before its application modules execute. */
-export function installWarmReloadBrowserProbe(route: string, traceIndexedDb = false) {
+export function installWarmReloadBrowserProbe(
+  route: string,
+  transcriptLatePaint = false,
+  composerContext = false,
+) {
   if (window !== window.top) {
     return undefined;
   }
@@ -20,7 +67,35 @@ export function installWarmReloadBrowserProbe(route: string, traceIndexedDb = fa
     firstMainDomMs: null as number | null,
     firstTranscriptDomMs: null as number | null,
     firstDashboardContentDomMs: null as number | null,
+    boardWidgetSkeletonMs: null as number | null,
+    allBoardWidgetsVisibleMs: null as number | null,
+    cachedBoardLayoutMs: null as number | null,
     firstPaintedRowsMs: null as number | null,
+    bottomParagraphPaintMs: null as number | null,
+    transcriptTextPaintMs: null as number | null,
+    pluginsCompleteMs: null as number | null,
+    textPaints: [] as Array<{ atMs: number; tag: string }>,
+    pluginMarks: [] as Array<{ atMs: number; name: string }>,
+    pluginStates: [] as Array<{
+      atMs: number;
+      status: string;
+      pages: number;
+      panels: number;
+      accessories: number;
+      widgets: number;
+      replacements: number;
+      selected: string[];
+      errors: number;
+    }>,
+    transcriptGeometry: [] as Array<{
+      atMs: number;
+      scrollTop: number;
+      distanceFromEnd: number;
+      width: number;
+      height: number;
+      rowHeight: number;
+      bottomVisible: boolean;
+    }>,
     finalRowsDomMs: null as number | null,
     helloPublishedMs: null as number | null,
     helloHandledMs: null as number | null,
@@ -38,7 +113,37 @@ export function installWarmReloadBrowserProbe(route: string, traceIndexedDb = fa
     }>,
     shifts: [] as Array<{ atMs: number; value: number }>,
     domStates: [] as Array<{ atMs: number; rows: number; sidebarRows: number; board: boolean }>,
+    sidebarFrames: [] as Array<{
+      atMs: number;
+      host: boolean;
+      frame: boolean;
+      state: string | null;
+      saved: string | null;
+      rows: number;
+      sections: number;
+    }>,
+    textStates: [] as Array<{
+      atMs: number;
+      hash: string;
+      characters: number;
+      truncated: boolean;
+      height: number;
+      width: number;
+    }>,
     animationSamples: [] as ReloadAnimationSample[],
+    contextRingFrames: [] as Array<{
+      atMs: number;
+      composer: { x: number; y: number; width: number; height: number };
+      ring: {
+        label: string | null;
+        opacity: string;
+        dashOffset: string | null;
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+      } | null;
+    }>,
     animationProbeMs: 0,
     animationPolicy:
       "Recognized skeleton shimmer or opacity/visibility-only fades with at most 64 elements; fades containing images, canvas, video or iframes are excluded. Signatures retain content, attributes, appearance and geometry, except intermediate opacity. No whole-page animation mask.",
@@ -58,7 +163,7 @@ export function installWarmReloadBrowserProbe(route: string, traceIndexedDb = fa
     stopped: false,
   };
   Reflect.set(window, "__warmReloadProof", data);
-  if (traceIndexedDb) {
+  if (transcriptLatePaint) {
     for (const operation of ["get", "getAll", "getAllKeys", "put"] as const) {
       const original = IDBObjectStore.prototype[operation];
       Object.defineProperty(IDBObjectStore.prototype, operation, {
@@ -130,6 +235,25 @@ export function installWarmReloadBrowserProbe(route: string, traceIndexedDb = fa
     if (identifier === "openclaw-transcript" && typeof renderTime === "number" && renderTime > 0) {
       data.firstPaintedRowsMs ??= renderTime;
     }
+    if (
+      identifier === "openclaw-transcript-bottom" &&
+      typeof renderTime === "number" &&
+      renderTime > 0
+    ) {
+      data.bottomParagraphPaintMs ??= renderTime;
+    }
+  });
+  observe("largest-contentful-paint", (entry) => {
+    const element: unknown = Reflect.get(entry, "element");
+    if (element instanceof Element && element.matches(".chat-text p, .chat-text p *")) {
+      data.transcriptTextPaintMs ??= entry.startTime;
+      data.textPaints.push({ atMs: entry.startTime, tag: element.tagName });
+    }
+  });
+  observe("mark", (entry) => {
+    if (entry.name.startsWith("warm-reload-plugin:")) {
+      data.pluginMarks.push({ atMs: entry.startTime, name: entry.name });
+    }
   });
   let firstShift = 0;
   let lastShift = 0;
@@ -158,6 +282,7 @@ export function installWarmReloadBrowserProbe(route: string, traceIndexedDb = fa
     data.loafBlockingMs += blockingMs;
   });
   let stopGateway: (() => void) | undefined;
+  let stopPlugins: (() => void) | undefined;
   const receiveContext = (event: Event) => {
     const provider = event as Event & { context?: unknown; contextTarget?: HTMLElement };
     if (provider.context !== "openclaw.application" || !provider.contextTarget) {
@@ -180,6 +305,32 @@ export function installWarmReloadBrowserProbe(route: string, traceIndexedDb = fa
                 });
               }
             });
+            let previous = "";
+            const plugins = () => {
+              const runtime = context.plugins;
+              const state = {
+                status: runtime.registryStatus,
+                pages: runtime.registrations("pages").length,
+                panels: runtime.registrations("panels").length,
+                accessories: runtime.registrations("accessories").length,
+                widgets: runtime.registrations("widgets").length,
+                replacements: runtime.registrations("replacements").length,
+                selected: (
+                  ["transcript", "workspace", "composer", "session-list"] as const
+                ).flatMap((surface) => (runtime.selectedReplacement(surface) ? [surface] : [])),
+                errors: runtime.errors.length,
+              };
+              const signature = JSON.stringify(state);
+              if (signature !== previous) {
+                data.pluginStates.push({ atMs: performance.now(), ...state });
+                previous = signature;
+              }
+              if (state.status === "complete") {
+                data.pluginsCompleteMs ??= performance.now();
+              }
+            };
+            stopPlugins = context.plugins.subscribe(plugins);
+            plugins();
           },
         }),
       );
@@ -189,7 +340,14 @@ export function installWarmReloadBrowserProbe(route: string, traceIndexedDb = fa
     window.removeEventListener("context-provider", receiveContext);
   };
   window.addEventListener("context-provider", receiveContext);
-  window.addEventListener("pagehide", () => stopGateway?.(), { once: true });
+  window.addEventListener(
+    "pagehide",
+    () => {
+      stopGateway?.();
+      stopPlugins?.();
+    },
+    { once: true },
+  );
   let domVersion = 0;
   const textObserver = new MutationObserver((records) => {
     domVersion++;
@@ -215,6 +373,13 @@ export function installWarmReloadBrowserProbe(route: string, traceIndexedDb = fa
           }
         }
       }
+    }
+    const bottom = [...document.querySelectorAll(".chat-group.assistant .chat-text p")].at(-1);
+    if (
+      bottom?.textContent?.startsWith("Synthetic paragraph 18.") &&
+      bottom.getAttribute("elementtiming") !== "openclaw-transcript-bottom"
+    ) {
+      bottom.setAttribute("elementtiming", "openclaw-transcript-bottom");
     }
   });
   textObserver.observe(document, {
@@ -265,7 +430,7 @@ export function installWarmReloadBrowserProbe(route: string, traceIndexedDb = fa
       );
       const shimmer =
         animation instanceof CSSAnimation &&
-        /shimmer|skeleton-sweep/u.test(animation.animationName) &&
+        /shimmer/u.test(animation.animationName) &&
         /skeleton/u.test(target.className);
       const fade =
         properties.size > 0 &&
@@ -368,18 +533,118 @@ export function installWarmReloadBrowserProbe(route: string, traceIndexedDb = fa
   };
   let previous = "";
   let previousRows = "";
+  let previousContextRing = "";
   const sample = () => {
     if (data.stopped) {
       stopGateway?.();
+      stopPlugins?.();
       textObserver.disconnect();
       return;
     }
     Reflect.get(window, "__paneChrome").sample(performance.now());
     sampleAnimations();
+    if (composerContext) {
+      const composer = document.querySelector(".agent-chat__input");
+      const box = composer?.getBoundingClientRect();
+      if (
+        composer &&
+        box &&
+        box.width > 0 &&
+        box.height > 0 &&
+        box.bottom > 0 &&
+        box.top < innerHeight &&
+        composer.checkVisibility({ checkOpacity: true, visibilityProperty: true })
+      ) {
+        const ring = composer.querySelector(".context-ring");
+        const ringBox = ring?.getBoundingClientRect();
+        const state = {
+          composer: { x: box.x, y: box.y, width: box.width, height: box.height },
+          ring:
+            ring && ringBox
+              ? {
+                  label: ring.getAttribute("aria-label"),
+                  opacity: getComputedStyle(ring).opacity,
+                  dashOffset:
+                    ring.querySelector(".context-ring__fill")?.getAttribute("stroke-dashoffset") ??
+                    null,
+                  x: ringBox.x,
+                  y: ringBox.y,
+                  width: ringBox.width,
+                  height: ringBox.height,
+                }
+              : null,
+        };
+        const signature = JSON.stringify(state);
+        if (signature !== previousContextRing) {
+          data.contextRingFrames.push({ atMs: performance.now(), ...state });
+          previousContextRing = signature;
+        }
+      }
+    }
+    const answer = transcriptLatePaint
+      ? [...document.querySelectorAll(".chat-group.assistant .chat-text")].at(-1)
+      : undefined;
+    if (answer) {
+      const text = answer.textContent ?? "";
+      const box = answer.getBoundingClientRect();
+      const textHash = hash(text);
+      const previousText = data.textStates.at(-1);
+      if (
+        box.width > 0 &&
+        box.height > 0 &&
+        (previousText?.hash !== textHash ||
+          previousText.height !== box.height ||
+          previousText.width !== box.width)
+      ) {
+        data.textStates.push({
+          atMs: performance.now(),
+          hash: textHash,
+          characters: text.length,
+          truncated: text.includes("...(truncated)..."),
+          height: box.height,
+          width: box.width,
+        });
+      }
+    }
     const rowElements = [...document.querySelectorAll(".chat-virtual-row")];
+    const lastAssistant = [...document.querySelectorAll(".chat-group.assistant")].at(-1);
+    const scroller = lastAssistant?.closest<HTMLElement>(".chat-thread");
+    if (
+      scroller &&
+      lastAssistant &&
+      lastAssistant.checkVisibility({ checkOpacity: true, visibilityProperty: true })
+    ) {
+      const rowBox = lastAssistant.getBoundingClientRect();
+      const box = scroller.getBoundingClientRect();
+      const bottom = [...lastAssistant.querySelectorAll(".chat-text p")]
+        .at(-1)
+        ?.getBoundingClientRect();
+      data.transcriptGeometry.push({
+        atMs: performance.now(),
+        scrollTop: scroller.scrollTop,
+        distanceFromEnd: scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop,
+        width: box.width,
+        height: box.height,
+        rowHeight: rowBox.height,
+        bottomVisible: Boolean(bottom && bottom.bottom > box.top && bottom.top < box.bottom),
+      });
+    }
     const rows = rowElements.length;
-    const sidebarRows = document.querySelectorAll("openclaw-app-sidebar [data-session-key]").length;
+    const sidebarRowElements = [
+      ...document.querySelectorAll("openclaw-app-sidebar [data-session-key]"),
+    ];
+    const sidebarRows = sidebarRowElements.length;
     const board = Boolean(document.querySelector("openclaw-board-view iframe"));
+    const sidebar = document.querySelector("aside.sidebar");
+    data.sidebarFrames.push({
+      atMs: performance.now(),
+      host: Boolean(document.querySelector("openclaw-app-sidebar")),
+      frame: Boolean(sidebar),
+      state: sidebar?.getAttribute("data-snapshot-state") ?? null,
+      saved: sidebar?.getAttribute("data-snapshot-saved") ?? null,
+      rows: new Set(sidebarRowElements.map((row) => row.getAttribute("data-session-key"))).size,
+      sections: document.querySelectorAll("openclaw-app-sidebar [data-session-section]").length,
+    });
     if (document.querySelector("openclaw-app-shell")) {
       data.firstAppDomMs ??= performance.now();
     }

@@ -524,5 +524,22 @@ describe("session actor usage accounting", () => {
     for (const [field, value] of Object.entries(visibleState)) {
       expect(Reflect.get(storedEntry, field)).toEqual(value);
     }
+
+    // A durable context observation is independent of the quiet turn's billing/model policy.
+    await session.update({
+      preserveUserFacingSessionModelState: true,
+      currentContextSnapshot: { tokens: 40_030 },
+    });
+    expect(session.read()).toMatchObject({
+      ...visibleState,
+      totalTokens: 40_030,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+    });
+    await session.update({
+      preserveUserFacingSessionModelState: true,
+      currentContextSnapshot: { tokens: undefined },
+    });
+    expect(session.read()).toMatchObject({ totalTokensFresh: false });
+    expect(session.read().totalTokensVersion).toBeUndefined();
   });
 });

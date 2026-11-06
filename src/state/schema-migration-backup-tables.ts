@@ -41,6 +41,8 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
     38: [],
     // The table definition changes; rollback retains it without rebuilding indexes/statistics.
     39: ["transcript_events"],
+    // New receipt table only; existing session data is not rewritten.
+    40: ["session_creation_operations"],
   },
   state: {
     [CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION]: [
@@ -97,5 +99,6 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
     ],
     37: ["worker_environments"],
     38: ["session_repository_workspaces", "worker_workspace_pending_results"],
+    39: ["worker_environments"],
   },
 };

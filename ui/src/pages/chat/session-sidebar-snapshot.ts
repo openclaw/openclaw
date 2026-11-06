@@ -19,6 +19,7 @@ const sidebarRecordsSchema = json.array(
   ),
 );
 export type SidebarRecord = json.SnapshotValue<typeof sidebarRecordsSchema>[number];
+export const SIDEBAR_SNAPSHOT_PROJECTION_VERSION = 4;
 export const sidebarRecordBytes = (record: SidebarRecord) =>
   new TextEncoder().encode(JSON.stringify(record)).byteLength;
 const SIDEBAR_SNAPSHOT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
@@ -63,7 +64,7 @@ export async function accessSidebarSnapshot<Model>(
     let count = 0;
     let result: Model | null = null;
     for (const record of retained.toSorted((a, b) => b.savedAt - a.savedAt)) {
-      if (record.projectionVersion !== 3) {
+      if (record.projectionVersion !== SIDEBAR_SNAPSHOT_PROJECTION_VERSION) {
         store.delete(record.sessionKey);
         continue;
       }

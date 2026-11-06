@@ -573,16 +573,26 @@ Keep this directory private and retain the complete set. Former PostgreSQL
 namespaces are not dropped automatically.
 
 All destination stores are privately migrated and verified before publication.
+Migration, checkpointing, and materialization read a private local working copy,
+not the durable recovery image. The command uses the existing private cache root;
+set `XDG_CACHE_HOME` to a local filesystem if the cache is network-backed or cannot
+be classified. A verified, checkpointed working image stays with the recovery
+manifest, so resume reconstructs scratch without repeating migration. Failed
+working directories remain untouched until their workers have stopped; successful
+stages remove their scratch.
 After committing a PostgreSQL bulk copy, port and backup restore run `ANALYZE`
 only on tables in the destination namespace. Agent ports refresh statistics again
 after the memory index rebuild. The port report records the result. Statistics
 refresh uses a 10-second statement timeout and a 1-second lock timeout; a failure
 is a warning and preserves the verified data for autovacuum to analyze later.
 
-Agent and shared-state columns normally created on a feature's first use are
-completed in the private copy when absent, preserving existing rows with `NULL`
-values and leaving the original SQLite store unchanged. Unknown columns still
-refuse the port.
+Agent and shared-state columns normally created on a feature's first use, and
+agent tables explicitly allowed to be absent, are completed in the private copy.
+Existing rows retain `NULL` values for newly added nullable columns; the original
+SQLite store stays unchanged. Recognized retired pending-input recovery envelopes
+remain in that original capture, not the portable copy. Historical input migration
+still runs before retiring the column and never grants replay authority. Unknown
+columns or changed recovery-column definitions still refuse the port.
 The command replaces each store atomically, switches config last while preserving
 SecretRefs, environment references, and includes, then archives its completed
 manifest with the captures. After success, start the Gateway through its service

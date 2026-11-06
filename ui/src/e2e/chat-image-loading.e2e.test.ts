@@ -227,7 +227,7 @@ suite.define(() => {
               expect(Math.abs(highlightX + motion.width)).toBeLessThanOrEqual(1);
             } else {
               expect(motion.name).toBe("shimmer");
-              expect(motion.duration).toBe(2.4);
+              expect(motion.duration).toBe(2);
               expect(motion.iterations).toBe("infinite");
             }
             ready.resolve();

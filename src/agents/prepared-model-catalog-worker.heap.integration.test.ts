@@ -274,10 +274,12 @@ type NativeCatalogSample = {
   descriptorReads?: number;
   snapshotFrozen?: boolean;
   snapshotBytes?: string;
+  configCaptures?: number;
 };
 
 async function createNativeCatalogFixture(options: {
   setup?: string;
+  register?: string;
   catalog?: string;
   files?: Record<string, string>;
 }) {
@@ -306,6 +308,7 @@ export function register(api) {
   registrations++;
   latestApi = api;
   const revision = api.pluginConfig.revision;
+  ${options.register ?? ""}
   api.registerProvider({
     id: ${JSON.stringify(PROVIDER_ID)}, label: "Native retention", auth: [],
     catalog: { async run() {
@@ -326,7 +329,12 @@ export function register(api) {
   );
   const config = {
     ...fixture.config,
-    plugins: { ...fixture.config.plugins, load: { paths: [entry] } },
+    plugins: {
+      ...fixture.config.plugins,
+      load: { paths: [entry] },
+      // Keep registration inputs stable instead of applying Vitest's memory defaults per load.
+      slots: { memory: "none" },
+    },
   };
   const metadataByWorkspace = new Map<string, PluginMetadataSnapshot>();
   const metadataForWorkspace = (workspaceDir: string) => {
@@ -439,6 +447,38 @@ Object.freeze = function(value) {
   expect(observed.snapshotBytes).toBe(JSON.stringify(remoteCatalog));
   expect(observed.snapshotFrozen).toBe(true);
   expect(observed.descriptorReads).toBe(0);
+}, 60_000);
+
+it("reuses immutable config across remote catalog revisions but captures config changes", async () => {
+  await using fixture = await createNativeCatalogFixture({
+    setup: "const configs = new WeakSet(); let configCaptures = 0;",
+    register: `if (!configs.has(api.config)) {
+  configs.add(api.config);
+  configCaptures++;
+}`,
+    catalog: "extra = { configCaptures };",
+  });
+  const run = (revision: string, configRevision: number) =>
+    withRemoteModelCatalogSnapshot(
+      {
+        sourceUrl: "https://capture-reuse.invalid/catalog.json",
+        revision,
+        generatedAt: 1,
+        providers: {},
+        recommendations: {},
+        pricing: {},
+        upstreamPricing: {},
+      },
+      () => fixture.run(configRevision),
+    );
+  expect(await run("one", 0)).toMatchObject({ registrations: 1, configCaptures: 1 });
+  expect(await run("two", 0)).toMatchObject({ registrations: 2, configCaptures: 1 });
+  expect(await run("three", 1)).toMatchObject({
+    registrations: 3,
+    configCaptures: 2,
+    modelId: "revision-1",
+  });
+  expect(await run("four", 1)).toMatchObject({ registrations: 4, configCaptures: 2 });
 }, 60_000);
 
 it("reuses one installed native ESM evaluation across 20 catalog context changes", async () => {

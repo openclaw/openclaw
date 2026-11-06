@@ -252,26 +252,6 @@ summary.chat-error__mobile-header {
   background: var(--conversation-loading-ink);
 }
 
-.chat-conversation-loading__lines span::after {
-  position: absolute;
-  inset: 0;
-  content: "";
-  background: linear-gradient(
-    100deg,
-    transparent 20%,
-    color-mix(in srgb, var(--text) 5%, transparent) 50%,
-    transparent 80%
-  );
-  transform: translateX(-100%);
-  animation: chat-conversation-shimmer 2s linear infinite;
-}
-
-@keyframes chat-conversation-shimmer {
-  to {
-    transform: translateX(100%);
-  }
-}
-
 .chat-conversation-loading__list {
   display: grid;
   padding-left: 12px;
@@ -313,10 +293,5 @@ summary.chat-error__mobile-header {
   }
   .chat-conversation-loading--delayed {
     animation-duration: 0.01ms;
-  }
-  .chat-conversation-loading__lines span::after {
-    animation: none;
-    transform: none;
-    background: color-mix(in srgb, var(--text) 3%, transparent);
   }
 }

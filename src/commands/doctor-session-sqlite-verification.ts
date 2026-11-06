@@ -50,7 +50,7 @@ export function createRecoveryDestinationVerifier(
 ) {
   const destinations = new Map<
     string,
-    { agentId?: string; files: (fs.BigIntStats | undefined)[]; generation: SqliteFileGeneration }
+    { agentId?: string; files: (fs.BigIntStats | undefined)[]; generation?: SqliteFileGeneration }
   >();
   return (refs: Iterable<Pick<RecoveryArtifactReference, "target" | "run" | "move">>) => {
     for (const { target, run, move } of refs) {
@@ -87,10 +87,18 @@ export function createRecoveryDestinationVerifier(
       ) {
         throw new Error("Recovery destination database changed; preview cleanup again.");
       }
-      // Ignore SHM reader bookkeeping, but freshly fingerprint WAL/journal contents even
-      // on coarse filesystem clocks. Raw descriptor closes stay outside the serving process.
-      const generation = readSqliteFileGenerationSync(target.sqlitePath);
+      const identity = target.databaseIdentity;
+      const deviceChanged = identity !== undefined && identity.dev !== String(files[0]!.dev);
+      // Owned cleanup tolerates its live Gateway writing between this stat and a fingerprint,
+      // so it needs contents only to re-certify a moved destination. Otherwise ignore SHM
+      // reader bookkeeping, but freshly fingerprint WAL/journal contents even on coarse
+      // filesystem clocks. Raw descriptor closes stay outside the serving process.
+      const generation =
+        options.allowOwnedMutation && !deviceChanged
+          ? undefined
+          : readSqliteFileGenerationSync(target.sqlitePath);
       if (
+        generation &&
         (
           [
             ["database", 0],
@@ -104,13 +112,12 @@ export function createRecoveryDestinationVerifier(
             generation[key]?.size !== files[index]?.size ||
             (expected &&
               !options.allowOwnedMutation &&
-              generation[key]?.sha256 !== expected.generation[key]?.sha256),
+              generation[key]?.sha256 !== expected.generation?.[key]?.sha256),
         )
       ) {
         throw new Error("Recovery destination database changed; preview cleanup again.");
       }
-      const identity = target.databaseIdentity;
-      if (identity && identity.dev !== String(files[0]!.dev)) {
+      if (identity && deviceChanged && generation) {
         // An inode can collide across volumes. Older manifests can only be re-certified
         // when a full producer-verified original proves the entire closed destination image.
         const original =

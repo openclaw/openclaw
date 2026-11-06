@@ -831,8 +831,7 @@ describe("sidebar attention source publication", () => {
     expect(store.entries.map((entry) => entry.type)).toEqual(["outbox", "attention"]);
     expect(sidebarInboxTabCounts(store.entries)).toMatchObject({
       all: 2,
-      system: 1,
-      automations: 1,
+      system: 2,
     });
     store.dismiss(dismissal!);
     expect(store.entries.map((entry) => entry.type)).toEqual(["attention"]);

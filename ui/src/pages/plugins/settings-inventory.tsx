@@ -6,7 +6,7 @@ import {
   SettingsEmpty,
   SettingsLoadingSkeleton,
   SettingsPage,
-  SettingsPageHeader,
+  SettingsUnavailable,
 } from "../../components/solid/settings-ui.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
@@ -14,7 +14,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { createProgressiveList } from "../../lib/reactive/progressive-list.ts";
 import { PluginArtTile } from "./consent-dialog.tsx";
 import { renderPluginCompatibilityNotices } from "./overview.tsx";
-import { renderPluginStateStatus } from "./plugin-card.tsx";
+import { renderPluginStateWord } from "./plugin-card.tsx";
 import { pluginRowKey, renderPluginRowMessage } from "./plugin-row-message.tsx";
 import { PluginRetryError } from "./settings-retry-error.tsx";
 import type { InventoryProps } from "./settings-view.tsx";
@@ -24,7 +24,7 @@ const AdvancedSettings = lazy(() => import("./settings-advanced.tsx"), {
 });
 
 function InstalledInventory(props: InventoryProps): JSX.Element {
-  const query = createMemo(() => props.query.trim().toLocaleLowerCase());
+  const query = createMemo(() => props.query.trim().toLocaleLowerCase().normalize("NFC"));
   const plugins = createMemo(() =>
     (props.result?.plugins ?? [])
       .filter(
@@ -32,7 +32,7 @@ function InstalledInventory(props: InventoryProps): JSX.Element {
           plugin.installed &&
           (!query() ||
             [plugin.name, plugin.id, plugin.description, plugin.packageName].some((value) =>
-              value?.toLocaleLowerCase().includes(query()),
+              value?.toLocaleLowerCase().normalize("NFC").includes(query()),
             )),
       )
       .toSorted((left, right) => left.name.localeCompare(right.name)),
@@ -43,7 +43,7 @@ function InstalledInventory(props: InventoryProps): JSX.Element {
       fallback={
         <div class="settings-group oc-settings-group">
           {!props.connected ? (
-            <SettingsEmpty message={t("pluginsPage.connectToManage")} carapace />
+            <SettingsUnavailable message={t("pluginsPage.connectToManage")} />
           ) : props.loading ? (
             <SettingsLoadingSkeleton rows={4} carapace />
           ) : props.error ? (
@@ -122,14 +122,12 @@ function InstalledRows(
               <div class="settings-row__control oc-settings-row-control">
                 {(() => {
                   const state = plugin().state;
-                  return state === "not-installed"
-                    ? null
-                    : renderPluginStateStatus(state, "plugins-settings-row__status");
+                  return state === "not-installed" ? null : renderPluginStateWord(state);
                 })()}
                 <span class="settings-row__chevron" aria-hidden="true">
                   <i
                     class="session-css-icon"
-                    style={{ "mask-image": sessionIconMask("chevronRight") }}
+                    style={{ "mask-image": sessionIconMask("chevronRight", 1.6) }}
                   />
                 </span>
               </div>
@@ -153,7 +151,7 @@ export function renderPluginSettingsInventory(props: InventoryProps): JSX.Elemen
               <Icon name="search" />
             </span>
             <input
-              class="settings-input oc-input"
+              class="settings-input"
               type="search"
               aria-label={t("pluginsPage.searchInstalled")}
               placeholder={t("pluginsPage.searchInstalled")}
@@ -178,11 +176,6 @@ export function renderPluginSettingsInventory(props: InventoryProps): JSX.Elemen
   );
   return (
     <SettingsPage carapace={true}>
-      <SettingsPageHeader
-        registerHeading={props.registerRemovalHeading}
-        title={t("tabs.plugins")}
-        subtitle={t("pluginsPage.settingsDescription")}
-      />
       <div class="plugins-settings-content">
         <HubTabs
           id="plugin-settings"

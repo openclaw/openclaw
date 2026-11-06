@@ -1,7 +1,6 @@
 import { applySessionEntryOperation } from "../../../config/sessions/session-accessor.sqlite-entry.js";
 import { sessionEntryCommitGuardOptions } from "../../../config/sessions/session-source-authority.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../../config/sessions/types.js";
-import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../../sessions/input-provenance.js";
 import { log } from "../logger.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 
@@ -9,21 +8,13 @@ import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 export async function publishEmbeddedRequestContext(
   attempt: Pick<
     EmbeddedRunAttemptInternalParams,
-    | "runId"
-    | "sessionPersistence"
-    | "inputProvenance"
-    | "preparedSessionTarget"
-    | "onContextAccountingEvent"
+    "runId" | "sessionPersistence" | "preparedSessionTarget" | "onContextAccountingEvent"
   >,
   contextTokens: number,
 ): Promise<void> {
   attempt.onContextAccountingEvent?.({ kind: "request", contextTokens });
   const prepared = attempt.preparedSessionTarget;
-  if (
-    !prepared ||
-    attempt.sessionPersistence === "detached" ||
-    shouldPreserveUserFacingSessionStateForInputProvenance(attempt.inputProvenance)
-  ) {
+  if (!prepared || attempt.sessionPersistence === "detached") {
     return;
   }
   const { target, assertCurrent } = prepared;

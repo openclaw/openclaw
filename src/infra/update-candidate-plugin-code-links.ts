@@ -23,7 +23,7 @@ function targetIdentity(file: string): UpdateCandidatePluginCodeLink["target"] {
   } catch (error) {
     // The producer permits internal dangling links. Becoming reachable later is
     // a changed binding, just as replacing an existing target is.
-    if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ELOOP")) {
+    if (["ENOENT", "ENOTDIR", "ELOOP"].some((code) => hasNodeErrorCode(error, code))) {
       return null;
     }
     throw error;

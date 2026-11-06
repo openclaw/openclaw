@@ -17,6 +17,13 @@
  * in one process, not worker scheduling or whole-Gateway latency. It creates 10k
  * projection rows and one large manifest, or enough distinct manifests for the
  * requested disk size. Only the fixed first manifest is measured in either case.
+ * --sweep measures the existing GC reader across every saved tree instead.
+ * --sweep-epoch=4 selects its epoch (default 3). Nonempty candidate sets are
+ * reported as sorted digests; compare these between source revisions too.
+ * For historical fixtures, use stored epochs >=2: SQLite encodes 0 and 1 without
+ * payload bytes, which understates the cost of reading an epoch after a large pack.
+ * --pager-extension=<path> loads the synthetic CACHE_MISS probe for a separate
+ * sweep pager pass; logical pager bytes are not physical disk bytes.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -36,8 +43,21 @@ const iterations = Number(process.argv[3] ?? 10);
 const mode = process.argv[4] ?? "timing";
 const databasePath = process.argv[5] ?? ":memory:";
 const options = process.argv.slice(6);
-assert.ok(options.every((option) => option === "--reuse" || option.startsWith("--target-bytes=")));
+assert.ok(
+  options.every(
+    (option) =>
+      option === "--reuse" ||
+      option === "--sweep" ||
+      option.startsWith("--sweep-epoch=") ||
+      option.startsWith("--target-bytes=") ||
+      option.startsWith("--pager-extension="),
+  ),
+);
 const reuse = options.includes("--reuse");
+const sweepEpoch = Number(
+  options.find((option) => option.startsWith("--sweep-epoch="))?.split("=")[1] ?? 3,
+);
+assert.ok(Number.isSafeInteger(sweepEpoch) && sweepEpoch > 0);
 const targetBytes = Number(
   options.find((option) => option.startsWith("--target-bytes="))?.split("=")[1] ?? 0,
 );
@@ -59,7 +79,7 @@ const { createLocalWorkspaceManifestTree, localWorkspaceManifestRootReference } 
   await import("../../src/gateway/worker-environments/local-workspace-manifest-tree.js");
 const { localWorkspaceDigestBytes, prepareLocalWorkspaceTreePacks } =
   await import("../../src/gateway/worker-environments/local-workspace-cas.js");
-const { prepareLocalWorkspaceContentInDatabase } =
+const { prepareLocalWorkspaceContentInDatabase, readLocalWorkspaceSweepCandidates } =
   await import("../../src/gateway/worker-environments/local-workspace-cas.kernel.js");
 const { mutateLocalWorkspaceProjection } =
   await import("../../src/gateway/worker-environments/local-workspace-store.kernel.js");
@@ -67,11 +87,19 @@ const { readLocalWorkspaceManifestRows, executeLocalWorkspaceManifestRead } =
   await import("../../src/gateway/worker-environments/local-workspace-manifest-scan.js");
 const { parseWorkerWorkspaceManifest } =
   await import("../../src/gateway/worker-environments/workspace-manifest.js");
-const { runSqliteImmediateTransactionSync } = await import("../../src/infra/sqlite-transaction.js");
+const { runSqliteImmediateTransactionSync, runSqliteReadSnapshotSync } =
+  await import("../../src/infra/sqlite-transaction.js");
 const { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } =
   await import("../../src/infra/kysely-sync.js");
 
-using db = new DatabaseSync(databasePath, { readOnly: reuse });
+const pagerExtension = options.find((option) => option.startsWith("--pager-extension="))?.slice(18);
+using db = new DatabaseSync(databasePath, {
+  readOnly: reuse,
+  allowExtension: Boolean(pagerExtension),
+});
+if (pagerExtension) {
+  db.loadExtension(pagerExtension);
+}
 const id = "synthetic-manifest";
 const baseCommit = "a".repeat(40);
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -178,6 +206,69 @@ const treeCount = executeSqliteQueryTakeFirstSync(
     .select((eb) => eb.fn.countAll<number>().as("count"))
     .where("tree_root_digest", "is not", null),
 )?.count;
+if (options.includes("--sweep")) {
+  db.exec("PRAGMA mmap_size=0; PRAGMA cache_size=-2048");
+  const pager = pagerExtension ? db.prepare("SELECT openclaw_pager_misses() AS misses") : undefined;
+  const pageSize = Number(db.prepare("PRAGMA page_size").get()!.page_size);
+  const inspector = new Session();
+  const samples = [];
+  let expectedCandidates: string | undefined;
+  const warmupStarted = performance.now();
+  runSqliteReadSnapshotSync(db, () => readLocalWorkspaceSweepCandidates(db, sweepEpoch));
+  const warmupMs = performance.now() - warmupStarted;
+  for (let sample = 0; sample < iterations; sample++) {
+    global.gc();
+    if (mode === "allocation") {
+      await startCollectedHeapSampling(inspector, 32_768);
+    }
+    const readBefore = Number(pager?.get()?.misses ?? 0);
+    const cpu = process.cpuUsage();
+    const started = performance.now();
+    const candidates = runSqliteReadSnapshotSync(db, () =>
+      readLocalWorkspaceSweepCandidates(db, sweepEpoch),
+    );
+    const elapsedMs = performance.now() - started;
+    const used = process.cpuUsage(cpu);
+    const allocation =
+      mode === "allocation"
+        ? (await inspector.post("HeapProfiler.stopSampling")).profile
+        : undefined;
+    if (mode === "allocation") {
+      inspector.disconnect();
+    }
+    const candidateDigest = digest(
+      JSON.stringify({
+        packs: candidates.packs.map((value) => Buffer.from(value).toString("hex")).toSorted(),
+        paths: candidates.paths.map((value) => Buffer.from(value).toString("hex")).toSorted(),
+      }),
+    );
+    expectedCandidates ??= candidateDigest;
+    assert.equal(candidateDigest, expectedCandidates);
+    samples.push({
+      elapsedMs,
+      cpuMs: (used.user + used.system) / 1000,
+      logicalReadBytes: pager ? (Number(pager.get()!.misses) - readBefore) * pageSize : undefined,
+      allocatedBytes: allocation?.samples.reduce((sum, entry) => sum + entry.size, 0),
+      candidateDigest,
+      candidateCounts: { packs: candidates.packs.length, paths: candidates.paths.length },
+      hostLoad: os.loadavg(),
+      memory: process.memoryUsage(),
+    });
+  }
+  console.log(
+    JSON.stringify({
+      operation: "sweepCandidates",
+      databaseBytes: databaseBytes(),
+      treeCount,
+      sweepEpoch,
+      warmupMs,
+      mode,
+      samples,
+    }),
+  );
+  db.close();
+  process.exit(0);
+}
 const action = { kind: "materialize" as const };
 async function run() {
   const started = performance.now();

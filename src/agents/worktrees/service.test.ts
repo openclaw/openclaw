@@ -23,6 +23,7 @@ import {
 } from "./capacity.test-support.js";
 import { isWorktreeAdd } from "./git-fixture.test-support.js";
 import * as worktreeGit from "./git.js";
+import { copyProvisionedPaths } from "./provisioned-copy.js";
 import * as worktreeRegistry from "./registry.js";
 import {
   getRegistryWorktreeProvisionedPaths,
@@ -430,8 +431,6 @@ describe("ManagedWorktreeService", () => {
   });
 
   it("rejects an included file replaced by a symlink after inspection", async () => {
-    await fs.writeFile(path.join(repo, ".gitignore"), "settings.local\n");
-    await fs.writeFile(path.join(repo, ".worktreeinclude"), "settings.local\n");
     const source = path.join(repo, "settings.local");
     await fs.writeFile(source, "included bytes\n");
     const outside = path.join(root, "outside.txt");
@@ -448,15 +447,13 @@ describe("ManagedWorktreeService", () => {
       return observed;
     });
 
-    await expect(
-      service.create({ repoRoot: repo, name: "swapped-source", baseRef: "HEAD" }),
-    ).rejects.toThrow();
+    const destination = path.join(root, "copy-destination");
+    await fs.mkdir(destination);
+    // Inject at the copy owner, which now runs in the filesystem worker.
+    await expect(copyProvisionedPaths(repo, destination, ["settings.local"], {})).rejects.toThrow();
 
     expect(replaced).toBe(true);
-    expect(listRegistryWorktrees(env)).toEqual([]);
-    expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain(
-      "refs/heads/openclaw/swapped-source",
-    );
+    expect(await fs.readdir(destination)).toEqual([]);
     expect(await fs.readFile(outside, "utf8")).toBe("outside bytes\n");
   });
 

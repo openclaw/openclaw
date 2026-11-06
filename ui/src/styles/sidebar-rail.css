@@ -231,14 +231,16 @@
 
 .sidebar-rail__create .sidebar-new-session:hover:not(:disabled, [aria-disabled="true"]) {
   background: var(--sidebar-rail-action-hover-bg);
+  color: var(--accent-foreground);
 }
 
 .sidebar-rail__create .sidebar-new-session:active:not(:disabled, [aria-disabled="true"]) {
   background: var(--sidebar-rail-action-active-bg);
+  color: var(--accent-foreground);
 }
 
 .sidebar-rail__create .sidebar-new-session:focus-visible {
-  outline-color: var(--accent-foreground);
+  outline-color: var(--ring);
 }
 
 .sidebar-rail__create .sidebar-new-session:is(:disabled, [aria-disabled="true"]) {
@@ -521,12 +523,6 @@
   fill: currentColor;
 }
 
-.sidebar-pages__heading {
-  padding: 6px 8px;
-  color: var(--muted);
-  font-size: var(--font-size-sm);
-}
-
 /* Match the 44px session toolbar centerline without changing drawer or native clearance. */
 .shell:not(.shell--mobile-nav) .sidebar-rail {
   padding-top: calc((44px - var(--sidebar-rail-control-size)) / 2);
@@ -632,14 +628,14 @@ html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-she
 
 @media (hover: none), (pointer: coarse) {
   .shell:not(.shell--mobile-nav) .sidebar-rail {
-    --sidebar-rail-control-size: 44px;
-    --sidebar-rail-action-size: 44px;
+    --sidebar-rail-control-size: 38px;
+    --sidebar-rail-action-size: 38px;
     flex-basis: 52px;
   }
 
   .sidebar-pages__pin {
     opacity: 1;
-    height: 44px;
+    height: 38px;
   }
 }
 
@@ -713,14 +709,6 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
   gap: 6px;
 }
 
-.sidebar-session-toolbar__collapse {
-  margin-inline-start: auto;
-}
-
-.sidebar-session-toolbar .sidebar-session-toolbar__collapse {
-  margin-inline-start: 0;
-}
-
 /* A growing section toggle would cover the row's empty space, which must stay
    non-interactive so native hosts can drag the window from it. */
 .sidebar-panel-header > .sidebar-session-group-toggle {
@@ -763,13 +751,6 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
   flex: 0 1 auto;
 }
 
-.sidebar-session-owner-filter .picker-select__label {
-  color: var(--text-strong);
-  font-size: calc(13px * var(--control-ui-text-scale));
-  font-weight: 550;
-  letter-spacing: -0.005em;
-}
-
 .sidebar-session-owner-filter .picker-select__chevron {
   margin-inline-start: -2px;
   color: var(--muted);
@@ -788,6 +769,52 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
 
 .sidebar-session-owner-filter.picker-select--sheet .picker-select__trigger .picker-select__chevron {
   transform: rotate(90deg);
+}
+
+/* In the phone drawer the choice page floats over the list as a card. */
+.sidebar-session-owner-filter.picker-select--sheet .picker-select__menu {
+  /* Short rosters hug their rows; long ones stop at the drawer's bottom inset. */
+  inset: var(--space-2) var(--space-2) auto;
+  max-height: calc(100% - var(--space-2) * 2);
+  padding: var(--space-3) var(--space-3) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--overlay-modal-radius);
+  background: var(--menu-surface);
+  box-shadow: var(--menu-shadow);
+  backdrop-filter: var(--menu-backdrop);
+}
+
+/* The card covers its trigger, so the trigger's open ring must not show through. */
+.sidebar-session-owner-filter.picker-select--sheet .picker-select__trigger[aria-expanded="true"] {
+  box-shadow: none;
+}
+
+/* Names keep one line; the full-width label box fades its end instead of wrapping
+   or adding an ellipsis, so names that end before the fade zone stay untouched. */
+.sidebar-session-owner-filter.picker-select--sheet .picker-select__option .picker-select__copy {
+  flex: 1 1 auto;
+}
+
+.sidebar-session-owner-filter.picker-select--sheet .picker-select__option .picker-select__label {
+  white-space: nowrap;
+  text-overflow: clip;
+  mask-image: linear-gradient(
+    to right,
+    black calc(100% - 48px),
+    rgb(0 0 0 / 45%) calc(100% - 20px),
+    transparent
+  );
+}
+
+.sidebar-session-owner-filter.picker-select--sheet:dir(rtl)
+  .picker-select__option
+  .picker-select__label {
+  mask-image: linear-gradient(
+    to left,
+    black calc(100% - 48px),
+    rgb(0 0 0 / 45%) calc(100% - 20px),
+    transparent
+  );
 }
 
 .sidebar-session-owner-filter .picker-select__trigger:hover {

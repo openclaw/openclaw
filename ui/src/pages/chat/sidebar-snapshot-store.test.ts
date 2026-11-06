@@ -60,7 +60,7 @@ async function seededStore() {
   return store;
 }
 
-async function putSidebar(value: unknown, savedAt: number, projectionVersion = 3) {
+async function putSidebar(value: unknown, savedAt: number, projectionVersion = 4) {
   const database = await openSessionSnapshotDatabase();
   assert(database, "expected snapshot database");
   const transaction = database.transaction(SIDEBAR, "readwrite");
