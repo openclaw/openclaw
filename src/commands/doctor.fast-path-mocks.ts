@@ -125,7 +125,8 @@ vi.mock("./doctor-platform-notes.js", async (importOriginal) => ({
   noteMacGatewayPlatformWarnings: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("./doctor-sandbox.js", () => ({
+vi.mock("./doctor-sandbox.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-sandbox.js")>()),
   maybeRepairSandboxImages: vi.fn(async () => []),
   noteCodexBwrapNamespaceWarnings: vi.fn(),
   maybeRepairSandboxRegistryFiles: vi.fn().mockResolvedValue(undefined),

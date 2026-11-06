@@ -38,7 +38,8 @@ vi.mock("../infra/git-exec.js", () => ({
 vi.mock("../commands/doctor-db-bloat.js", () => ({
   noteSqliteDatabaseBloat: () => obs.record("db-size-advice", undefined),
 }));
-vi.mock("../commands/doctor-sandbox.js", () => ({
+vi.mock("../commands/doctor-sandbox.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/doctor-sandbox.js")>()),
   noteCodexBwrapNamespaceWarnings: obs.codexBwrap,
   maybeRepairSandboxImages: async () => ["Sandbox base image missing: synthetic-image."],
   maybeRepairSandboxRegistryFiles: async () => {},

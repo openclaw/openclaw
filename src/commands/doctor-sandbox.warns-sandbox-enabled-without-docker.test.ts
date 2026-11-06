@@ -33,12 +33,8 @@ vi.mock("../agents/sandbox/docker.js", () => ({
 // mock-isolation: Capture Doctor notices without writing to the real terminal.
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
-// mock-isolation: Image health does not inspect agent rosters, tool policy, or retired state.
+// mock-isolation: Image health fixtures exclude agent-directory registration and filesystem observers.
 vi.mock("../agents/agent-scope-config.js", () => ({ listAgentEntriesWithSource: () => [] }));
-vi.mock("../agents/sandbox/config.js", () => ({ resolveSandboxScope: () => "agent" }));
-vi.mock("../infra/state-migrations.retired-archive.js", () => ({
-  archiveRetiredStateFiles: vi.fn(),
-}));
 
 const { maybeRepairSandboxImages, noteCodexBwrapNamespaceWarnings } =
   await import("./doctor-sandbox.js");
