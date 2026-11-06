@@ -457,6 +457,8 @@ describe("registerNodeCli", () => {
   it.each([
     ["host", ["--host", "10.0.0.2"]],
     ["port", ["--port", "19001"]],
+    ["empty TLS fingerprint", ["--tls-fingerprint", ""]],
+    ["blank TLS fingerprint", ["--tls-fingerprint", "   "]],
   ])("preserves saved gateway settings when the explicit %s is unchanged", async (_name, args) => {
     daemonMocks.loadNodeHostConfig.mockResolvedValue({
       version: 1,

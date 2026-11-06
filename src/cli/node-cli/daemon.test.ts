@@ -379,6 +379,8 @@ describe("runNodeDaemonInstall", () => {
   it.each([
     ["host", { host: "saved-gateway.local" }],
     ["port", { port: 18_789 }],
+    ["empty TLS fingerprint", { tlsFingerprint: "" }],
+    ["blank TLS fingerprint", { tlsFingerprint: "   " }],
   ])("keeps saved TLS when explicit %s resolves to the saved endpoint", async (_name, opts) => {
     await runNodeDaemonInstall({ ...opts, force: true });
 
