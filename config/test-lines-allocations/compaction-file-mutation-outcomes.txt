@@ -1,3 +1,0 @@
-# Paired no-op mutation outcomes: occurrence boundaries and both metadata consumers.
-# Net +77 tracked test lines; preserves all existing tests and the shared baseline.
-77
