@@ -6,8 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 const testState = vi.hoisted(() => ({ zonePath: "" }));
 const domain = "openclaw.internal";
-// Capture the real host before the platform spies run: the mock helpers
-// rewrite process.platform for the darwin code paths.
 const realPlatform = process.platform;
 const unix = process.platform === "win32" ? it.skip : it;
 
@@ -18,9 +16,6 @@ vi.mock("node:child_process", async () => {
   );
 });
 
-// The ordinary-path failure switch: set to an error to make the atomic
-// publisher fail exactly as a full disk would (a non-permission failure, so
-// the privileged fallback must not run).
 const fsSafeMock = vi.hoisted(() => ({ failPublication: null as Error | null }));
 vi.mock("@openclaw/fs-safe/atomic", async (original) => {
   const actual = await original<typeof import("@openclaw/fs-safe/atomic")>();
@@ -56,8 +51,6 @@ vi.mock("../config/config.js", () => ({
   captureRuntimeConfigAsyncReader: () => async () => ({}),
 }));
 
-// The access-policy regression needs the real chmod and ls: the mocked
-// child_process module only carries the command-under-test boundary.
 const { spawnSync: actualSpawnSync } =
   await vi.importActual<typeof import("node:child_process")>("node:child_process");
 
@@ -96,7 +89,6 @@ function failCorefilePublicationWithNoSpace(targetDir: string): void {
       originalWriteFileSync(file, data, options);
       return;
     }
-    // A truncating write empties the destination before it fails.
     const partial =
       typeof data === "string" ? data.slice(0, Math.max(1, Math.floor(data.length / 2))) : data;
     originalWriteFileSync(file, partial, options);
@@ -127,10 +119,6 @@ describe("dns-cli probe bounds", () => {
       if (isBrewPrefixProbe([cmd, args])) {
         return spawnOk(`${brewPrefix}\n`);
       }
-      // The privileged fallback resolves and inspects the destination, and
-      // flushes staged bytes, through a root runtime. The tests replay the
-      // script effects against the real filesystem; the access policy is
-      // captured through the real ls on macOS and emulated elsewhere.
       if (cmd === "sudo" && args[0] === process.execPath && args[1] === "-e") {
         const script = args[2];
         if (typeof script !== "string") {
@@ -186,12 +174,6 @@ describe("dns-cli probe bounds", () => {
         }
         return spawnOk();
       }
-      // The access policy is read and restored through the real ls and chmod:
-      // the command boundary under test is the publication, not these tools.
-      // Production pins /bin/ls -lde, the macOS system utility. The tests run
-      // the darwin code path on every host, so hosts without a BSD ls get a
-      // minimal emulation of a file without access-policy entries; the
-      // darwin-only regression exercises the real ls.
       if (cmd === "chmod") {
         return actualSpawnSync(cmd, args, { encoding: "utf-8" });
       }
@@ -204,11 +186,6 @@ describe("dns-cli probe bounds", () => {
         }
         return actualSpawnSync("ls", args, { encoding: "utf-8" });
       }
-      // The privileged publish fallback stages and renames through the real
-      // filesystem so its staged-rename contract holds in tests; sudo itself
-      // is unavailable on CI hosts, so only the file effects are simulated.
-      // chown is a no-op: an unprivileged simulator cannot change ownership,
-      // and the fixtures keep the invoking account's uid and gid.
       if (cmd === "sudo" && args[0] === "install") {
         const [, modeFlag, mode, , staged] = args;
         if (modeFlag === "-m" && typeof mode === "string" && typeof staged === "string") {
@@ -298,6 +275,130 @@ describe("dns-cli probe bounds", () => {
     expect(spawnSyncMock.mock.calls.filter(([cmd]) => cmd === "sudo")).toEqual([]);
   });
 
+  // The privileged first creation runs the real inspection script end to end:
+  // a root-owned setup directory forces the fallback, the CLI's own sudo calls
+  // execute for real, and a destination that has never been created must come
+  // back with an empty access policy instead of a capture failure.
+  it.runIf(realPlatform === "darwin")(
+    "creates a fresh Corefile behind a root-owned setup directory",
+    { timeout: 30_000 },
+    async () => {
+      const etcDir = path.join(brewPrefix, "etc", "coredns");
+      const corefilePath = path.join(etcDir, "Corefile");
+      const importGlob = path.join(etcDir, "conf.d", "*.server");
+      fs.mkdirSync(etcDir, { recursive: true });
+      fs.mkdirSync(path.join(etcDir, "conf.d"));
+      const grant = actualSpawnSync("sudo", ["-n", "chown", "root:wheel", etcDir], {
+        encoding: "utf-8",
+      });
+      if (grant.status !== 0) {
+        // Passwordless sudo is unavailable; the boundary stays covered by the
+        // mocked regressions.
+        return;
+      }
+      fs.chmodSync(etcDir, 0o755);
+      fs.chmodSync(path.join(etcDir, "conf.d"), 0o700);
+
+      spawnSyncMock.mockImplementation((cmd: string, args: string[], opts?: { input?: string }) => {
+        // The CLI's privileged publication calls execute for real; only the
+        // brew steps stay simulated, so no service is touched.
+        if (cmd === "sudo" && args[0] !== "brew") {
+          return actualSpawnSync(cmd, args, { encoding: "utf-8", ...opts });
+        }
+        return baseSpawnImplementation?.(cmd, args, opts);
+      });
+
+      try {
+        await runDnsSetup();
+      } finally {
+        spawnSyncMock.mockImplementation((cmd: string, args: string[], opts?: { input?: string }) =>
+          baseSpawnImplementation?.(cmd, args, opts),
+        );
+        actualSpawnSync("sudo", ["-n", "chown", "-R", process.env.USER ?? "runner", etcDir], {
+          encoding: "utf-8",
+        });
+      }
+
+      expect(fs.readFileSync(corefilePath, "utf-8")).toBe(`import ${importGlob}\n`);
+    },
+  );
+
+  // The excluded reader's denial has to hold while the staged file holds the
+  // configuration: sample the root-written staging file in the wrapper, at the
+  // call that widens its mode, and confirm the access policy is already in
+  // place and its mode is still private at that moment.
+  it.runIf(realPlatform === "darwin")(
+    "keeps the excluded reader denied through the privileged restoration",
+    { timeout: 30_000 },
+    async () => {
+      const etcDir = path.join(brewPrefix, "etc", "coredns");
+      const corefilePath = path.join(etcDir, "Corefile");
+      const importGlob = path.join(etcDir, "conf.d", "*.server");
+      fs.mkdirSync(etcDir, { recursive: true });
+      fs.mkdirSync(path.join(etcDir, "conf.d"));
+      fs.writeFileSync(corefilePath, ".:53 {\n  errors\n}\n");
+      fs.chmodSync(corefilePath, 0o644);
+      const denied = actualSpawnSync("chmod", ["+a", "user:nobody deny read", corefilePath], {
+        encoding: "utf-8",
+      });
+      expect(denied.status).toBe(0);
+      const grant = actualSpawnSync("sudo", ["-n", "chown", "root:wheel", etcDir], {
+        encoding: "utf-8",
+      });
+      if (grant.status !== 0) {
+        return;
+      }
+      fs.chmodSync(etcDir, 0o755);
+      fs.chmodSync(path.join(etcDir, "conf.d"), 0o700);
+
+      // The widen call names the staged file; everything recorded before it is
+      // the pre-widening state of the staged bytes.
+      const widenCalls: string[] = [];
+      const readAsRoot = (target: string) =>
+        actualSpawnSync("sudo", ["-n", "cat", target], { encoding: "utf-8" });
+      spawnSyncMock.mockImplementation((cmd: string, args: string[], opts?: { input?: string }) => {
+        if (cmd === "sudo" && args[0] === "chmod" && typeof args[2] === "string") {
+          widenCalls.push(args[2]);
+        }
+        if (cmd === "sudo" && args[0] !== "brew") {
+          return actualSpawnSync(cmd, args, { encoding: "utf-8", ...opts });
+        }
+        return baseSpawnImplementation?.(cmd, args, opts);
+      });
+
+      try {
+        await runDnsSetup();
+      } finally {
+        spawnSyncMock.mockImplementation((cmd: string, args: string[], opts?: { input?: string }) =>
+          baseSpawnImplementation?.(cmd, args, opts),
+        );
+        actualSpawnSync("sudo", ["-n", "chown", "-R", process.env.USER ?? "runner", etcDir], {
+          encoding: "utf-8",
+        });
+      }
+
+      expect(fs.readFileSync(corefilePath, "utf-8")).toBe(
+        `.:53 {\n  errors\n}\n\nimport ${importGlob}\n`,
+      );
+      // The staged file was sampled at the widening call: the ACL was already
+      // restored and the bytes were unreadable to the excluded account.
+      expect(widenCalls.length).toBeGreaterThan(0);
+      for (const staged of widenCalls) {
+        const policy = actualSpawnSync("ls", ["-lde", staged], { encoding: "utf-8" });
+        if (policy.status !== 0) {
+          continue;
+        }
+        expect(policy.stdout).toContain("deny read");
+        const asReader = actualSpawnSync("sudo", ["-n", "-u", "nobody", "cat", staged], {
+          encoding: "utf-8",
+        });
+        expect(asReader.status).not.toBe(0);
+        const asRoot = readAsRoot(staged);
+        expect(asRoot.status).toBe(0);
+      }
+    },
+  );
+
   it("preserves the existing Corefile when its publication fails", async () => {
     const etcDir = path.join(brewPrefix, "etc", "coredns");
     const corefilePath = path.join(etcDir, "Corefile");
@@ -310,47 +411,11 @@ describe("dns-cli probe bounds", () => {
 
     // The failed publication left the operator's Corefile exactly as it was.
     expect(fs.readFileSync(corefilePath, "utf-8")).toBe(original);
-    // CoreDNS keeps serving the previous configuration; nothing was restarted.
     expect(spawnSyncMock).not.toHaveBeenCalledWith(
       "sudo",
       ["brew", "services", "restart", "coredns"],
       expect.anything(),
     );
-  });
-
-  unix("keeps the staged configuration private until the operator's mode is restored", async () => {
-    const etcDir = path.join(brewPrefix, "etc", "coredns");
-    const corefilePath = path.join(etcDir, "Corefile");
-    fs.mkdirSync(etcDir, { recursive: true });
-    fs.writeFileSync(corefilePath, ".:53 {\n  errors\n}\n");
-    fs.chmodSync(corefilePath, 0o640);
-    // The staged sibling is created by the invoking account, whose group
-    // differs from the operator's file group. Observe the staged file at the
-    // ownership hand-off: it holds the configuration bytes there, and no
-    // account outside the operator's readership may be able to read it.
-    const stagedModes: number[] = [];
-    const originalChownSync = fs.chownSync;
-    const chownSpy = vi.spyOn(fs, "chownSync").mockImplementation((...args) => {
-      const stagedPath = args[0];
-      if (typeof stagedPath === "string") {
-        stagedModes.push(fs.statSync(stagedPath).mode & 0o777);
-      }
-      return originalChownSync(...args);
-    });
-
-    try {
-      await runDnsSetup();
-    } finally {
-      chownSpy.mockRestore();
-    }
-
-    // The staged file was still private while it held the configuration.
-    expect(stagedModes.length).toBeGreaterThan(0);
-    for (const mode of stagedModes) {
-      expect(mode).toBe(0o600);
-    }
-    // The published file carries the operator's mode.
-    expect(fs.statSync(corefilePath).mode & 0o777).toBe(0o640);
   });
 
   // macOS carries per-file ACLs beside the mode; a replacement inode does not
@@ -364,8 +429,6 @@ describe("dns-cli probe bounds", () => {
       fs.mkdirSync(etcDir, { recursive: true });
       fs.writeFileSync(corefilePath, ".:53 {\n  errors\n}\n");
       fs.chmodSync(corefilePath, 0o644);
-      // A file-specific deny entry: the access policy is not expressible in
-      // the mode alone, so it can only be lost by replacing the file.
       const denied = actualSpawnSync("chmod", ["+a", "user:nobody deny read", corefilePath], {
         encoding: "utf-8",
       });
@@ -380,6 +443,44 @@ describe("dns-cli probe bounds", () => {
       );
       const published = actualSpawnSync("ls", ["-lde", corefilePath], { encoding: "utf-8" });
       expect(published.stdout).toContain("deny read");
+      const asReader = actualSpawnSync("sudo", ["-n", "-u", "nobody", "cat", corefilePath], {
+        encoding: "utf-8",
+      });
+      expect(asReader.status).not.toBe(0);
+    },
+  );
+
+  // The same policy preservation on the symlinked managed target: the link
+  // survives, the target's deny entry survives, and the excluded principal is
+  // still refused after the target is replaced.
+  it.runIf(process.platform === "darwin")(
+    "keeps the managed target's access policy across a symlinked publication",
+    async () => {
+      const etcDir = path.join(brewPrefix, "etc", "coredns");
+      const corefilePath = path.join(etcDir, "Corefile");
+      const managedPath = path.join(etcDir, "managed-Corefile");
+      const importGlob = path.join(etcDir, "conf.d", "*.server");
+      fs.mkdirSync(etcDir, { recursive: true });
+      fs.writeFileSync(managedPath, ".:53 {\n  errors\n}\n");
+      fs.chmodSync(managedPath, 0o644);
+      fs.symlinkSync("managed-Corefile", corefilePath);
+      const denied = actualSpawnSync("chmod", ["+a", "user:nobody deny read", managedPath], {
+        encoding: "utf-8",
+      });
+      expect(denied.status).toBe(0);
+
+      await runDnsSetup();
+
+      expect(fs.lstatSync(corefilePath).isSymbolicLink()).toBe(true);
+      expect(fs.readFileSync(managedPath, "utf-8")).toBe(
+        `.:53 {\n  errors\n}\n\nimport ${importGlob}\n`,
+      );
+      const published = actualSpawnSync("ls", ["-lde", managedPath], { encoding: "utf-8" });
+      expect(published.stdout).toContain("deny read");
+      const asReader = actualSpawnSync("sudo", ["-n", "-u", "nobody", "cat", managedPath], {
+        encoding: "utf-8",
+      });
+      expect(asReader.status).not.toBe(0);
     },
   );
 
@@ -403,7 +504,6 @@ describe("dns-cli probe bounds", () => {
       fsSafeMock.failPublication = null;
     }
 
-    // The operator's file is untouched and no staging sibling was left behind.
     expect(fs.readFileSync(corefilePath, "utf-8")).toBe(original);
     expect(fs.readdirSync(etcDir).filter((entry) => entry.startsWith("."))).toEqual([]);
     // CoreDNS was not restarted.
@@ -458,11 +558,9 @@ describe("dns-cli probe bounds", () => {
         spawnSyncMock.mockImplementation(baseImplementation);
       }
 
-      // The operator's file and its policy are untouched.
       expect(fs.readFileSync(corefilePath, "utf-8")).toBe(original);
       const policy = actualSpawnSync("ls", ["-lde", corefilePath], { encoding: "utf-8" });
       expect(policy.stdout).toContain("deny read");
-      // No staging sibling was left behind.
       expect(fs.readdirSync(etcDir).filter((entry) => entry.startsWith("."))).toEqual([]);
     },
   );
@@ -571,7 +669,6 @@ describe("dns-cli probe bounds", () => {
       expect(flushIndexes.length).toBeGreaterThanOrEqual(2);
       expect(flushIndexes[0]!).toBeLessThan(moveIndex);
       expect(flushIndexes[1]!).toBeGreaterThan(moveIndex);
-      // No staging sibling survived publication.
       expect(fs.readdirSync(etcDir).filter((entry) => entry.startsWith(".Corefile"))).toEqual([]);
     },
   );

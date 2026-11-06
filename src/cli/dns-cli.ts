@@ -219,12 +219,9 @@ function flushPrivileged(targetPath: string): void {
  * One script returns everything; a capture failure aborts the fallback with
  * the operator's file untouched instead of dropping its policy.
  */
-function inspectPrivilegedDestination(filePath: string): {
-  target: string;
-  existing: { uid: number; gid: number; mode: number } | undefined;
-  aclEntries: string[];
-} {
-  const script = [
+/** Build the root-runtime script that resolves and inspects a destination. */
+export function privilegedInspectionScript(): string {
+  return [
     'const fs = require("node:fs");',
     'const path = require("node:path");',
     "let cur = path.resolve(process.argv[1]);",
@@ -246,13 +243,21 @@ function inspectPrivilegedDestination(filePath: string): {
     "if (existing) {",
     '  const listed = require("node:child_process").spawnSync("/bin/ls", ["-lde", cur], { encoding: "utf-8" });',
     "  if (listed.status !== 0) {",
-    '    process.stderr.write((listed.stderr || "ls -lde failed") + "\\n");',
+    '  process.stderr.write((listed.stderr || "ls -lde failed") + "\\n");',
     "    process.exit(1);",
     "  }",
     '  acl = String(listed.stdout || "").split("\\n").map((line) => line.trim()).filter((line) => /^\\d+:\\s/.test(line)).map((line) => line.replace(/^\\d+:\\s*/, ""));',
     "}",
     "process.stdout.write(JSON.stringify({ target: cur, existing, acl }));",
   ].join("");
+}
+
+function inspectPrivilegedDestination(filePath: string): {
+  target: string;
+  existing: { uid: number; gid: number; mode: number } | undefined;
+  aclEntries: string[];
+} {
+  const script = privilegedInspectionScript();
   const inspected = spawnSync("sudo", [process.execPath, "-e", script, filePath], {
     encoding: "utf-8",
   });
