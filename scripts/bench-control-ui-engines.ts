@@ -144,6 +144,7 @@ const { values } = parseArgs({
     "mutation-audit": { type: "boolean", default: false },
     "cpu-throttle": { type: "string", default: "1" },
     "idle-warmup-ms": { type: "string" },
+    "idle-duration-ms": { type: "string", default: "30000" },
     "memory-soak-rounds": { type: "string", default: "10" },
   },
 });
@@ -169,6 +170,10 @@ const engines: ControlUiEngine[] = values.engines.split(",").map((name) => {
   return name;
 });
 const cpuThrottle = Number(values["cpu-throttle"]);
+const idleDurationMs = Number(values["idle-duration-ms"]);
+if (!Number.isInteger(idleDurationMs) || idleDurationMs <= 0) {
+  throw new Error("idle-duration-ms must be a positive integer");
+}
 const idleWarmupOverrideMs =
   values["idle-warmup-ms"] === undefined ? undefined : Number(values["idle-warmup-ms"]);
 if (
@@ -436,8 +441,8 @@ try {
     ...createEngineBootScenarios(servers[0]!.server.baseUrl),
     ...createEngineActionScenarios(),
     ...createEngineCompletedRunScenarios(servers[0]!.server.baseUrl),
-    ...createEngineIdleScenarios(),
-    ...createEngineIdleControls(),
+    ...createEngineIdleScenarios(idleDurationMs),
+    ...createEngineIdleControls(idleDurationMs),
     ...createChatComposerScenarios(),
     ...createChatMessageScenarios(),
     ...createChatPanelScenarios().map((scenario) =>
@@ -586,6 +591,7 @@ try {
     cpuProfile: values["cpu-profile"],
     nativeAudit: values["native-audit"],
     idleWarmupOverrideMs: idleWarmupOverrideMs ?? null,
+    idleDurationMs,
     allocations: values.allocations,
     mutationAudit: values["mutation-audit"],
     cpuThrottle,
@@ -613,8 +619,7 @@ try {
       "Production bundle and HTTP owner; synthetic Gateway. Cold means fresh context; warm means same-context document reload. Mock routing disables HTTP cache in both engines. Nonlocal profiles add the configured delay to every HTTP request and every incoming mock Gateway frame (including the connect challenge); RPC replies thus include a simulated round trip, with no added throughput cap. Mobile transcript-top uses a native scrollport jump, not wheel input. No live Gateway/provider latency.",
     memoryContract:
       "Opt-in memory-* scenes retain one document, drain 4.1 s retirement timers, clear synthetic request history, then force two collections at each named checkpoint. Compare warm and late checkpoints; heap/native categories/RSS and DOM wrapper/native counts have different engine-specific meanings. Memory-scene elapsed times include forced GC and snapshots and are not latency evidence.",
-    idleContract:
-      "Idle CPU spans a Node-side 30-second wait. Hidden idle defaults to 60000 ms of warmup after native visibility settles; visible idle defaults to 0 ms. An explicit idle-warmup-ms overrides either default; 0 measures the initial transition, which can include background memory reclamation. Each idle scenario records its resolved warmup. Counter/request endpoints also include measurement instrumentation setup/draining; reveal and clock recovery occur afterward. Blank/static controls retain shared observation instrumentation without loading the app or Gateway.",
+    idleContract: `Idle CPU spans a Node-side ${idleDurationMs} ms wait. Hidden idle defaults to 60000 ms of warmup after native visibility settles; visible idle defaults to 0 ms. An explicit idle-warmup-ms overrides either default; 0 measures the initial transition, which can include background memory reclamation. Each idle scenario records its resolved warmup. Counter/request endpoints also include measurement instrumentation setup/draining; reveal and clock recovery occur afterward. Blank/static controls retain shared observation instrumentation without loading the app or Gateway.`,
     scenarios: scenarios.map((scenario) => ({
       id: scenario.id,
       route: scenario.route,
