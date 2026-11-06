@@ -16,22 +16,14 @@ export type NativeControlUiMockGatewayScenario = ControlUiMockGatewayScenario & 
   nativePlugins?: readonly NativeControlUiPluginFixture[];
 };
 
-// Keep native build dependencies with their consumers, outside the shared browser harness.
-export async function installNativePluginMockGateway(
-  page: Page,
-  { nativePlugins, ...scenario }: NativeControlUiMockGatewayScenario = {},
-  options: ControlUiMockGatewayInstallOptions = {},
-): Promise<MockGatewayControls> {
+export async function prepareNativePluginMockGatewayScenario({
+  nativePlugins,
+  ...scenario
+}: NativeControlUiMockGatewayScenario = {}) {
   if (!nativePlugins?.length) {
-    return installMockGateway(page, scenario, options);
+    return { scenario, assets: new Map<string, { body: Buffer; contentType: string }>() };
   }
   const { catalog, assets } = await prepareNativeControlUiPluginFixtures(nativePlugins);
-  if (assets.size) {
-    await page.route(`**${controlUiPluginAssetRoot()}**`, async (route) => {
-      const asset = assets.get(new URL(route.request().url()).pathname);
-      await route.fulfill(asset ? { status: 200, ...asset } : { status: 404 });
-    });
-  }
   const preparedScenario = catalog.plugins.length
     ? {
         ...scenario,
@@ -49,5 +41,21 @@ export async function installNativePluginMockGateway(
         },
       }
     : scenario;
-  return installMockGateway(page, preparedScenario, options);
+  return { scenario: preparedScenario, assets };
+}
+
+// Keep native build dependencies with their consumers, outside the shared browser harness.
+export async function installNativePluginMockGateway(
+  page: Page,
+  scenario: NativeControlUiMockGatewayScenario = {},
+  options: ControlUiMockGatewayInstallOptions = {},
+): Promise<MockGatewayControls> {
+  const prepared = await prepareNativePluginMockGatewayScenario(scenario);
+  if (prepared.assets.size) {
+    await page.route(`**${controlUiPluginAssetRoot()}**`, async (route) => {
+      const asset = prepared.assets.get(new URL(route.request().url()).pathname);
+      await route.fulfill(asset ? { status: 200, ...asset } : { status: 404 });
+    });
+  }
+  return installMockGateway(page, prepared.scenario, options);
 }
