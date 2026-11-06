@@ -47,6 +47,8 @@ it.skipIf(process.platform === "win32")(
         const gateway = await owner.start({
           repoRoot: process.cwd(),
           initializeCurrentRuntimeState: true,
+          // Match the explicit inheritance owner; do not stage a second credential store for main.
+          mockAuthAgentIds: ["qa"],
           command: {
             executablePath: process.execPath,
             argsPrefix: [path.resolve("dist/index.js")],
