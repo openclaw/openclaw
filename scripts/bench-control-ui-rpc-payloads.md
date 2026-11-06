@@ -66,6 +66,13 @@ reports renderer main-thread CPU; untraced WebKit has no equivalent public CPU
 counter. `--trace` enables a separate diagnostic run using the existing engine
 collector. Do not mix those traced timings into untraced comparisons.
 
+When the Gateway implementation also changes, set `--compare-entry` to the base
+compiled entry; `--entry` supplies the candidate. For fresh-start publication
+comparisons, add `--restart-gateway-per-sample --cold-only --routes ''`. Each arm
+restores its offline seed at the same path, clears its cache, and starts a new
+Gateway before the next sample. `--fixture-now <epoch-ms>` fixes fixture dates
+across separate invocations; comparison workers share one date automatically.
+
 `--routes-only` prepares the selected boot route outside measurement and then
 records only route visits, idle, and optional streaming. It does not claim a
 warm boot; use the ordinary census to measure persisted cold/warm startup.

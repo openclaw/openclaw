@@ -1,5 +1,39 @@
 # Team-scale Control UI cold-load benchmark
 
+## Firefox census
+
+The engines harness also accepts `--engines chromium,firefox`. Install the exact
+Firefox revision from the repository's Playwright dependency with
+`pnpm --dir ui exec playwright install firefox`. Use `PLAYWRIGHT_BROWSERS_PATH`
+for an existing approved browser-cache location. Do not substitute system Firefox.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --engines chromium,firefox --pages --page-phases visit --viewport both \
+  --output .artifacts/firefox/routes
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --engines chromium,firefox --viewport both \
+  --steps cold-boot,warm-boot,chat-typing,sidebar-toggle,sidebar-open,sidebar-close,session-switch,model-picker-first-open-search,cron-menu-open,sessions-search,streaming-645-deltas,large-transcript-open,large-transcript-fast-scroll,transcript-scroll-top \
+  --output .artifacts/firefox/interactions
+```
+
+These one-pair runs are screens, not performance evidence. Confirm any failure
+or engine/Chromium ratio above 1.3 with `--pairs 10 --configurations default,control`
+on the affected steps. The identical `control` configuration supplies the A/A
+check; positions and directions rotate. Split compound actions before attributing
+a gap. Fix validation requires 20 rotated pairs plus A/A and unchanged engines
+within the campaign's acceptance band.
+
+Firefox retains the same browser-local application elapsed clock and boot/route
+readiness milestones. These measure neither CPU nor paint. CPU counters, native
+traces, throttling, forced GC, and heap snapshots are unavailable in this harness;
+their options fail explicitly rather than falling back to a different clock.
+The page observer detects Layout Instability and Long Tasks support at runtime
+and records unavailable metrics as `null`, never zero. Mobile Firefox cells use
+the same narrow viewport and touch settings, but omit Playwright's unsupported
+`isMobile` emulation. Hidden-tab scenarios are skipped where native visibility
+cannot be controlled.
+
 ## Native browser work and composited layers
 
 Use the same production route and interaction scenarios with `--native-audit`
