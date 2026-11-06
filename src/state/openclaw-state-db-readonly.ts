@@ -693,8 +693,8 @@ export function withExistingOpenClawStateDatabaseCurrentReadOnly<T>(
     const directRead =
       (isStatePostgres() || options.allowNativeRead || isLiveStateRead()) &&
       (!isArtifactPreservingStateRead() || isLiveStateRead()) &&
-      // Admission still gets a fresh reader. Host guards run often enough that
-      // copying the whole database per check dominated update disk writes.
+      // Admission still gets a fresh reader. Host guards repeat throughout an
+      // update, so they must not copy the whole database for each check.
       (!openStateSchemaReadAdmission || options.allowNativeRead === true);
     if (!directRead) {
       assertStateFileSnapshotAllowed();
