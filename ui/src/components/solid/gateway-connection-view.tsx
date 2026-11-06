@@ -1,8 +1,9 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show } from "solid-js";
+import wordmarkDarkText from "../../assets/brand/openclaw-horizontal-dark-text.svg";
+import wordmarkLightText from "../../assets/brand/openclaw-horizontal-light-text.svg";
 import type { GatewayStatus } from "../../lib/gateway-status.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { Icon } from "./icon.tsx";
 
 /** Cold connections use the real shell; presented conversations retain their own feedback. */
 export function GatewayConnectionView(props: {
@@ -72,7 +73,10 @@ export function GatewayConnectionView(props: {
 export function GatewaySidebarSkeleton(): JSX.Element {
   return (
     <div class="sidebar-connection-skeleton" aria-hidden="true">
-      <span class="sidebar-connection-skeleton__heading" />
+      <span class="sidebar-connection-skeleton__brand">
+        <img class="sidebar-connection-skeleton__brand-light" src={wordmarkDarkText} alt="" />
+        <img class="sidebar-connection-skeleton__brand-dark" src={wordmarkLightText} alt="" />
+      </span>
       <div class="sidebar-connection-skeleton__rows">
         <For each={[0, 1, 2, 3]}>
           {() => (
@@ -88,11 +92,5 @@ export function GatewaySidebarSkeleton(): JSX.Element {
 }
 
 export function GatewayIdentityPlaceholder(props: { kind: "agent" | "user" }): JSX.Element {
-  return (
-    <span class="gateway-identity-placeholder" data-kind={props.kind} aria-hidden="true">
-      <Show when={props.kind === "agent"}>
-        <Icon name="lobster" />
-      </Show>
-    </span>
-  );
+  return <span class="gateway-identity-placeholder" data-kind={props.kind} aria-hidden="true" />;
 }

@@ -294,7 +294,11 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): SolidJSX.Elem
           }
         }}
       >
-        {branding().brandIcon !== "claw" ? (
+        {host.connectionPending ? (
+          <span class="sidebar-workspace-header__mark" aria-hidden="true">
+            <GatewayIdentityPlaceholder kind="agent" />
+          </span>
+        ) : branding().brandIcon !== "claw" ? (
           <span
             class="sidebar-workspace-header__mark sidebar-workspace-header__mark--neutral"
             aria-hidden="true"
