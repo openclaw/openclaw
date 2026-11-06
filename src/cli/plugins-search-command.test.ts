@@ -1,6 +1,5 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import type { ClawHubPackageSearchResult } from "../infra/clawhub-packages.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -45,32 +44,22 @@ describe("plugins search command", () => {
     mocks.searchClawHubPackages.mockReset();
   });
 
-  it.each(["pre-aborted", "late-results", "late-error"])(
-    "does not publish a canceled search: %s",
-    async (mode) => {
-      const scope = new AsyncWorkScope();
-      const response = createDeferred<ClawHubPackageSearchResult[]>();
-      mocks.searchClawHubPackages.mockImplementation(() => response.promise);
-      if (mode === "pre-aborted") {
-        scope.beginClose();
-      }
-      const pending = scope.run(() =>
-        runPluginsSearchCommand("calendar", { json: true }, mocks.runtime),
-      );
+  it.each(["before", "result", "error"])("cancels search: %s", async (mode) => {
+    const scope = new AsyncWorkScope();
+    mocks.searchClawHubPackages.mockImplementation(() => {
       scope.beginClose();
-      if (mode === "late-error") {
-        response.reject(new Error("Late registry failure"));
-      } else {
-        response.resolve([]);
-      }
-      await pending;
-      expect(mocks.searchClawHubPackages).toHaveBeenCalledTimes(mode === "pre-aborted" ? 0 : 2);
-      expect(mocks.logs).toEqual([]);
-      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-      expect(mocks.runtime.error).not.toHaveBeenCalled();
-      expect(mocks.runtime.exit).not.toHaveBeenCalled();
-    },
-  );
+      return mode === "error" ? Promise.reject(new Error("late")) : Promise.resolve([]);
+    });
+    if (mode === "before") {
+      scope.beginClose();
+    }
+    await scope.run(() => runPluginsSearchCommand("calendar", { json: true }, mocks.runtime));
+    expect(mocks.searchClawHubPackages).toHaveBeenCalledTimes(mode === "before" ? 0 : 2);
+    expect(mocks.logs).toEqual([]);
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
+  });
 
   it.each([
     ["openclaw-calendar", "work", undefined, " --profile work", "openclaw-calendar@latest"],
@@ -96,11 +85,10 @@ describe("plugins search command", () => {
       );
 
       // catalog-search.test.ts owns family/query/limit forwarding; assert rendered results here.
-      expect(mocks.logs.join("\n")).toContain("openclaw-calendar-bundle");
-      expect(mocks.logs.join("\n")).toContain(packageName);
-      expect(mocks.logs.join("\n")).toContain(
-        `Install: openclaw${context} plugins install ${spec}`,
-      );
+      const output = mocks.logs.join("\n");
+      expect(output).toContain("openclaw-calendar-bundle");
+      expect(output).toContain(packageName);
+      expect(output).toContain(`Install: openclaw${context} plugins install ${spec}`);
     },
   );
 
