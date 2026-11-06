@@ -698,24 +698,34 @@ function artifactAttemptJobs(request, runId, attempt, run) {
         response.total_count <= 1000,
       "Artifact producer job inventory is incomplete.",
     );
+    requireValue(
+      response.jobs.every(
+        (job) =>
+          String(job.run_id) === String(runId) &&
+          String(job.run_attempt) === String(attempt) &&
+          job.head_sha === request.toolingSha,
+      ),
+      "Artifact producer job identity changed.",
+    );
     jobs.push(...response.jobs);
     if (jobs.length === response.total_count) {
       break;
+    }
+    // A live reusable workflow can expose its expanded count before all jobs
+    // appear. Leave this observation pending; never admit a partial inventory.
+    if (
+      run &&
+      run.status !== "completed" &&
+      response.jobs.length < 100 &&
+      jobs.length < response.total_count
+    ) {
+      return [];
     }
     requireValue(
       response.jobs.length === 100 && page < 10 && jobs.length < response.total_count,
       "Artifact producer job inventory is incomplete.",
     );
   }
-  requireValue(
-    jobs.every(
-      (job) =>
-        String(job.run_id) === String(runId) &&
-        String(job.run_attempt) === String(attempt) &&
-        job.head_sha === request.toolingSha,
-    ),
-    "Artifact producer job identity changed.",
-  );
   return jobs;
 }
 
