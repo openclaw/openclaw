@@ -508,7 +508,7 @@ export function runOneShotSqliteInspection<T>(params: {
 export function runSqliteReadOnlyWorkerSync(
   pathname: string,
   stagingRoot: undefined,
-  mode: "backup-engine",
+  mode: "backup-engine" | "backup-engine-preserving",
 ): BackupEngine;
 export function runSqliteReadOnlyWorkerSync(
   pathname: string,
@@ -524,6 +524,7 @@ export function runSqliteReadOnlyWorkerSync(
     | "content-version"
     | "file-generation"
     | "update-generation"
+    | "backup-engine-preserving"
     | "backup-engine" = "sync",
   expectedSourceIdentity?: DatabaseFileIdentity,
 ): string | BackupEngine {
@@ -572,7 +573,7 @@ export function runSqliteReadOnlyWorkerSync(
             ? undefined
             : `exited with ${result.signal ? `signal ${result.signal}` : `code ${result.status}`}`,
       };
-  if (mode === "backup-engine") {
+  if (mode === "backup-engine" || mode === "backup-engine-preserving") {
     return readSqliteReadOnlyWorkerValue(output, mode);
   }
   return readSqliteReadOnlyWorkerValue(output, mode);

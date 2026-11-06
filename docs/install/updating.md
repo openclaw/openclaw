@@ -56,7 +56,10 @@ backup.
 Engine identification reads the committed SQLite engine anchor in an isolated
 read-only transaction without copying a healthy live database. Hot rollback
 journals and incomplete WAL families retain private recovery, and unreadable or
-invalid anchors still refuse admission. This applies to conditional update
+invalid anchors still refuse admission. Artifact-preserving inspection scopes and
+offline maintenance also retain private reads so engine identification cannot
+change retained SHM bytes or borrow another process's native custody.
+This applies to conditional update
 capture, engine admission, and version-zero candidate validation probes. The
 binary performing the probe must contain this fix; a candidate cannot repair an
 older installed updater's preflight. Strict recovery captures keep their separate

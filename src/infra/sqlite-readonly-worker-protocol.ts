@@ -20,6 +20,7 @@ export const SQLITE_READONLY_WORKER_MAX_BUFFER = 1024 * 1024;
 export type SqliteReadOnlyWorkerMode =
   | "sync"
   | "backup-engine"
+  | "backup-engine-preserving"
   | "private-fork"
   | "content-version"
   | "file-generation"
@@ -236,7 +237,7 @@ function parseSqliteReadOnlyWorkerResult(
 
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
-  mode: "backup-engine",
+  mode: "backup-engine" | "backup-engine-preserving",
 ): BackupEngine;
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
@@ -325,7 +326,7 @@ export function readSqliteReadOnlyWorkerValue(
   if (mode === "staging-sweep" && "reclamation" in result) {
     return result.reclamation;
   }
-  if (mode === "backup-engine" && "engine" in result) {
+  if ((mode === "backup-engine" || mode === "backup-engine-preserving") && "engine" in result) {
     return result.engine;
   }
   if (mode === "content-version" && "contentVersion" in result) {
