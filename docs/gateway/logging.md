@@ -307,6 +307,10 @@ or OTLP export. Each output redacts independently; direct reads of the file do
 not. Protect raw log files like the agent/state databases and review them before
 sharing.
 
+The built-in bare Telegram-token detector preserves the account/resource portion
+of recognized AWS ARNs. This is not a general redaction exemption:
+configured regexes and explicitly registered secret values still mask matching ARNs.
+
 Tool arguments, tool results, and session transcripts are not secret-masked.
 This includes source-code output and direct reads of `.env` files. Tool payloads
 still receive size limits, image/base64 handling, and structural normalization.

@@ -324,7 +324,10 @@ const BARE_PASS_ASSIGNMENT_MATCHER = Object.freeze({
   exec: matchBarePassAssignments,
 });
 const TELEGRAM_BOT_TOKEN_REDACT_PATTERN = String.raw`\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b`;
-const TELEGRAM_TOKEN_REDACT_PATTERN = String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`;
+// A 12-digit AWS ARN account followed by a resource is not a bare Telegram token.
+// Only this heuristic excludes that context; explicit secret rules still apply.
+const AWS_ARN_ACCOUNT_PATTERN = String.raw`\barn:aws(?:-cn|-us-gov|-iso|-iso-b|-iso-e|-iso-f|-eusc)?:[a-z0-9-]+:[a-z0-9-]*:\d{12}`;
+const TELEGRAM_TOKEN_REDACT_PATTERN = String.raw`/\b(\d{6,}(?<!${AWS_ARN_ACCOUNT_PATTERN}):[A-Za-z0-9_-]{20,})\b/g`;
 const CREDENTIAL_STYLE_HEADER_KEYS = "x-goog-api-key|api-key|apikey|x-api-token|x-access-token";
 const GATEWAY_SECURITY_HEADER_KEYS =
   "X-OpenClaw-Token|x-pomerium-jwt-assertion|X-Api-Key|X-Auth-Token";
