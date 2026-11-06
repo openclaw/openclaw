@@ -85,31 +85,6 @@ export const SessionSchema = z
               .optional(),
           })
           .optional(),
-        creationDefaults: z
-          .strictObject({
-            visibility: z.literal("draft"),
-            sharedGroups: z
-              .array(
-                z.strictObject({
-                  agentId: z.string().trim().min(1),
-                  channel: z.string().trim().min(1),
-                  chatType: z.enum(["group", "channel"]).optional(),
-                  accountId: z.string().trim().min(1).optional(),
-                  peerId: z.string().trim().min(1),
-                }),
-              )
-              .optional(),
-          })
-          .optional(),
-      })
-      .superRefine((sharing, ctx) => {
-        if (sharing.creationDefaults && sharing.drafts === false) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ["drafts"],
-            message: "creationDefaults requires Draft visibility to remain enabled",
-          });
-        }
       })
       .optional(),
     maintenance: z

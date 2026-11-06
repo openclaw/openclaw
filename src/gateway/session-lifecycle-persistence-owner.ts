@@ -101,6 +101,9 @@ export function createSessionLifecyclePersistenceOwner() {
         ...(params.agentId ? { agentId: params.agentId } : {}),
         event: params.event,
         ...(params.clientRunId ? { clientRunId: params.clientRunId } : {}),
+        ...(params.writeContext?.assertTranscriptWriteAllowed
+          ? { assertTranscriptWriteAllowed: params.writeContext.assertTranscriptWriteAllowed }
+          : {}),
         ...(authority || params.writeContext
           ? {
               assertCommitAllowed: composeSessionSourceAssertion([

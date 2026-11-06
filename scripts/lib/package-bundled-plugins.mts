@@ -69,16 +69,11 @@ export async function preparePackageBundledPlugins(
     const builtPackage = JSON.parse(
       await fs.readFile(path.join(pluginRoot, "package.json"), "utf8"),
     ) as PackageJson;
-    const sourceManifest = JSON.parse(
-      await fs.readFile(path.join(sourceDir, "extensions", id, "openclaw.plugin.json"), "utf8"),
-    ) as { id?: unknown };
     const manifest = JSON.parse(
       await fs.readFile(path.join(pluginRoot, "openclaw.plugin.json"), "utf8"),
-    ) as { id?: unknown };
+    ) as { id: string };
     if (
-      typeof sourceManifest.id !== "string" ||
-      !sourceManifest.id.trim() ||
-      manifest.id !== sourceManifest.id ||
+      manifest.id !== id ||
       (
         [
           "name",

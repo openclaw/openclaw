@@ -13,7 +13,11 @@ import {
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
-import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  loadTranscriptEvents,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import {
   patchSessionEntryCore,
   replaceSessionEntrySync,
@@ -23,8 +27,15 @@ import { composeSessionSourceAssertion } from "../config/sessions/session-source
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { SessionWorkStartChangedError } from "../config/sessions/work-start-error.js";
 import type { AgentEventRuntimePayload } from "../infra/agent-events.js";
-import { getAgentRunContext } from "../infra/agent-run-registry.js";
-import { captureAgentRunTerminalPersistence } from "../infra/agent-run-terminal-writes.js";
+import {
+  getAgentRunContext,
+  getAgentRunLifecycleGeneration,
+  registerAgentRunContext,
+} from "../infra/agent-run-registry.js";
+import {
+  bindAgentRunTerminalWriteSettlement,
+  captureAgentRunTerminalPersistence,
+} from "../infra/agent-run-terminal-writes.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -89,11 +100,18 @@ async function sourceFixture(name: string) {
     },
   });
   const admission = prepareSystemAgentRunAdmission({}, runId, "main", "lifecycle-source", source);
-  const admittedRunContext = await admission.admit("embedded");
+  // Gateway reserves terminal settlement before runtime admission installs its source fence.
+  registerAgentRunContext(runId, {
+    sessionKey,
+    sessionId,
+    lifecycleGeneration: getAgentRunLifecycleGeneration(),
+  });
+  bindAgentRunTerminalWriteSettlement(admission.operationalRunInstance);
   const writeContext = expectDefined(
     captureAgentRunTerminalPersistence(runId).writeContext,
     "The run must retain its exact delegated terminal writer",
   );
+  const admittedRunContext = await admission.admit("embedded");
   const authority = expectDefined(
     getAgentRunContext(runId)?.delegatedAuthority,
     "The run must hold its admitted source authority",
@@ -124,7 +142,7 @@ async function sourceFixture(name: string) {
           data: { phase: "start", startedAt: 2_000 },
         },
       }),
-    finish: () =>
+    finish: (phase: "end" | "error" = "end") =>
       owner.observe({
         sessionKey,
         agentId: "main",
@@ -136,7 +154,12 @@ async function sourceFixture(name: string) {
           seq: 2,
           stream: "lifecycle",
           ts: 3_000,
-          data: { phase: "end", startedAt: 2_000, endedAt: 3_000 },
+          data: {
+            phase,
+            startedAt: 2_000,
+            endedAt: 3_000,
+            error: phase === "error" ? "Synthetic provider failure" : undefined,
+          },
         },
       }),
     async close() {
@@ -146,30 +169,38 @@ async function sourceFixture(name: string) {
   };
 }
 
-it("settles an admitted source's start and terminal lifecycle without caller-thread SQLite", async () => {
-  expect(isMainThread).toBe(true);
-  const fixture = await sourceFixture("settled");
-  try {
-    const sql = observeHostDataSql();
+it.each(["end", "error"] as const)(
+  "settles an admitted source's %s without caller-thread SQLite",
+  async (phase) => {
+    expect(isMainThread).toBe(true);
+    const fixture = await sourceFixture("settled");
     try {
-      await fixture.start();
-      await fixture.finish();
-      for (const call of sql.calls) {
-        expect(call).not.toHaveBeenCalled();
+      const sql = observeHostDataSql();
+      try {
+        await fixture.start();
+        await fixture.finish(phase);
+        for (const call of sql.calls) {
+          expect(call).not.toHaveBeenCalled();
+        }
+      } finally {
+        sql.restore();
       }
+      expect(loadSessionEntry(fixture.target)).toMatchObject({
+        status: phase === "error" ? "failed" : "done",
+        startedAt: 2_000,
+        endedAt: 3_000,
+        runtimeMs: 1_000,
+      });
+      expect(
+        (
+          await loadTranscriptEvents({ ...fixture.target, sessionId: fixture.entry.sessionId })
+        ).filter((entry) => entry.type === "custom_message"),
+      ).toHaveLength(phase === "error" ? 1 : 0);
     } finally {
-      sql.restore();
+      await fixture.close();
     }
-    expect(loadSessionEntry(fixture.target)).toMatchObject({
-      status: "done",
-      startedAt: 2_000,
-      endedAt: 3_000,
-      runtimeMs: 1_000,
-    });
-  } finally {
-    await fixture.close();
-  }
-});
+  },
+);
 
 it("reuses the eager write through chat while persisting the remapped terminal run", async () => {
   const fixture = await sourceFixture("chat-handoff");
@@ -218,27 +249,37 @@ it("reuses the eager write through chat while persisting the remapped terminal r
   }
 });
 
-it("settles terminal bookkeeping after its source authority no longer admits work", async () => {
-  const fixture = await sourceFixture("changed");
-  try {
-    // A yielded checkpoint needs a resume write; an already-running start is a no-op.
-    const replacement = {
-      ...fixture.entry,
-      endedAt: 1_500,
-    };
-    replaceSessionEntrySync(fixture.target, replacement);
-    fixture.revokeSource();
-    await expect(fixture.start()).rejects.toBeInstanceOf(SessionWorkStartChangedError);
-    await fixture.finish();
-    expect(loadSessionEntry(fixture.target)).toMatchObject({
-      status: "done",
-      startedAt: 2_000,
-      endedAt: 3_000,
-    });
-  } finally {
-    await fixture.close();
-  }
-});
+it.each(["end", "error"] as const)(
+  "settles %s bookkeeping but fences revoked diagnostic transcript writes",
+  async (phase) => {
+    const fixture = await sourceFixture("changed");
+    try {
+      // A yielded checkpoint needs a resume write; an already-running start is a no-op.
+      const replacement = {
+        ...fixture.entry,
+        endedAt: 1_500,
+      };
+      replaceSessionEntrySync(fixture.target, replacement);
+      fixture.revokeSource();
+      await expect(fixture.start()).rejects.toBeInstanceOf(SessionWorkStartChangedError);
+      if (phase === "error") {
+        await expect(fixture.finish(phase)).rejects.toBeInstanceOf(SessionWorkStartChangedError);
+      } else {
+        await fixture.finish(phase);
+      }
+      expect(loadSessionEntry(fixture.target)).toMatchObject({
+        status: phase === "error" ? "failed" : "done",
+        startedAt: 2_000,
+        endedAt: 3_000,
+      });
+      expect(
+        await loadTranscriptEvents({ ...fixture.target, sessionId: fixture.entry.sessionId }),
+      ).toEqual([]);
+    } finally {
+      await fixture.close();
+    }
+  },
+);
 
 it("writes cross-store patches in the worker and refuses a source revoked before submission", async () => {
   expect(isMainThread).toBe(true);

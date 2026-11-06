@@ -1,5 +1,4 @@
 import { expect, it } from "vitest";
-import { resolveSessionCreationVisibility } from "../config/sessions/creation-visibility.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSessionCreateVisibility } from "./session-create-visibility.js";
 import {
@@ -9,21 +8,12 @@ import {
 import { createProfileSessionEntryFilter } from "./session-sharing-read.js";
 import { sharingPolicyClient, sharingPolicyTarget } from "./session-sharing.test-utils.js";
 
-const cfg: OpenClawConfig = {
-  session: {
-    sharing: {
-      creationDefaults: {
-        visibility: "draft",
-        sharedGroups: [{ agentId: "main", channel: "telegram", peerId: "-100123" }],
-      },
-    },
-  },
-};
+const cfg: OpenClawConfig = { session: { sharing: { accessPolicy: { default: "creator" } } } };
 
 it("preserves explicit creation choices and existing shared/draft sessions", () => {
   const sessionKey = "agent:main:dashboard:new";
   const params = { cfg, sessionKey, defaultVisibility: "shared" as const };
-  expect(resolveSessionCreateVisibility(params, undefined)).toEqual({ ok: true, value: "draft" });
+  expect(resolveSessionCreateVisibility(params, undefined)).toEqual({ ok: true, value: "shared" });
   expect(resolveSessionCreateVisibility({ ...params, visibility: "shared" }, undefined)).toEqual({
     ok: true,
     value: "shared",
@@ -45,7 +35,7 @@ it("uses existing creator-only Draft discovery even with a write ceiling", () =>
       (actor) => actor?.id === profileId,
     );
   const entry = {
-    ...resolveSessionCreationVisibility(cfg, "agent:main:dashboard:new"),
+    visibility: "draft" as const,
     createdActor: { type: "human" as const, source: "profile" as const, id: "creator" },
   };
   expect(filter("staff")("key", entry)).toBe(false);

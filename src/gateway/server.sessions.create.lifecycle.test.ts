@@ -626,7 +626,7 @@ test.each(["visibility", "access", "unchanged"] as const)(
       agentId: "main",
       key,
       commandSource: "test",
-      defaultVisibility: "shared",
+      defaultVisibility: change === "visibility" ? "draft" : "shared",
       onPhase(phase) {
         if (phase !== "writerAdmission") {
           return;
@@ -638,7 +638,7 @@ test.each(["visibility", "access", "unchanged"] as const)(
             ...cfg.session,
             sharing:
               change === "visibility"
-                ? { creationDefaults: { visibility: "draft" } }
+                ? { drafts: false }
                 : change === "access"
                   ? { accessPolicy: { default: "creator" } }
                   : undefined,
@@ -650,7 +650,11 @@ test.each(["visibility", "access", "unchanged"] as const)(
       expect(await creation).toMatchObject({ ok: true, entry: { visibility: "shared" } });
       expect(readEntry(key)?.visibility).toBe("shared");
     } else {
-      await expect(creation).rejects.toThrow("session creation sharing policy changed");
+      await expect(creation).rejects.toThrow(
+        change === "visibility"
+          ? "session visibility is disabled"
+          : "session creation sharing policy changed",
+      );
       expect(readEntry(key)).toBeUndefined();
     }
     expect(admitted).toBe(true);
@@ -658,32 +662,32 @@ test.each(["visibility", "access", "unchanged"] as const)(
   },
 );
 
-test("sessions.create admits web DMs privately and preserves explicit sharing overrides", async () => {
+test("sessions.create stamps source access and preserves explicit Draft choices", async () => {
   testState.sessionConfig = {
-    sharing: { creationDefaults: { visibility: "draft" } },
+    sharing: { accessPolicy: { default: "creator" } },
   };
   const key = "agent:main:dashboard:source-default-private";
-  const observed: Array<SessionEntry["visibility"]> = [];
+  const observed: Array<SessionEntry["access"]> = [];
   const stop = sessionChanges.subscribe((change) => {
     if ("sessionKey" in change && change.sessionKey === key) {
-      observed.push(readEntry(key)?.visibility);
+      observed.push(readEntry(key)?.access);
     }
   });
   try {
     const created = await createSession({ key });
-    expect(created).toMatchObject({ ok: true, payload: { entry: { visibility: "draft" } } });
+    expect(created).toMatchObject({ ok: true, payload: { entry: { access: { mode: "source" } } } });
     expect(observed.length).toBeGreaterThan(0);
-    expect(observed.every((visibility) => visibility === "draft")).toBe(true);
-    const sharedKey = "agent:main:dashboard:source-default-explicit-shared";
-    expect(await createSession({ key: sharedKey, visibility: "shared" })).toMatchObject({
+    expect(observed.every((access) => access?.mode === "source")).toBe(true);
+    const draftKey = "agent:main:dashboard:source-default-explicit-shared";
+    expect(await createSession({ key: draftKey, visibility: "draft" })).toMatchObject({
       ok: true,
-      payload: { entry: { visibility: "shared" } },
+      payload: { entry: { visibility: "draft", access: { mode: "source" } } },
     });
-    expect(await createSession({ key: sharedKey })).toMatchObject({
+    expect(await createSession({ key: draftKey })).toMatchObject({
       ok: true,
-      payload: { entry: { visibility: "shared" } },
+      payload: { entry: { visibility: "draft", access: { mode: "source" } } },
     });
-    expect(await createSession({ key, visibility: "shared" })).toMatchObject(
+    expect(await createSession({ key, visibility: "draft" })).toMatchObject(
       invalidCreate("visibility"),
     );
   } finally {

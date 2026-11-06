@@ -12,6 +12,7 @@ type TerminalWrites = {
   owner: AgentRunContext;
   instance: OperationalRunInstance;
   context?: TerminalWriteContext;
+  assertTranscriptWriteAllowed?: () => void;
   pending: Set<Promise<void>>;
 };
 
@@ -19,7 +20,11 @@ const terminalWrites = new WeakMap<AgentRunContext, TerminalWrites>();
 // Execution cleanup cannot discard terminal work already accepted by the lifecycle owner.
 const operationalTerminalWrites = new WeakMap<OperationalRunInstance, TerminalWrites>();
 
-function prepareTerminalWrites(owner: AgentRunContext, instance: OperationalRunInstance) {
+function prepareTerminalWrites(
+  owner: AgentRunContext,
+  instance: OperationalRunInstance,
+  assertTranscriptWriteAllowed = owner.assertSourceCurrent,
+) {
   let current = terminalWrites.get(owner);
   const retained = operationalTerminalWrites.get(instance);
   if (
@@ -29,18 +34,24 @@ function prepareTerminalWrites(owner: AgentRunContext, instance: OperationalRunI
     throw new Error("Terminal write settlement owner changed");
   }
   if (!current || current.instance !== instance) {
-    current = { owner, instance, pending: new Set() };
+    current = { owner, instance, assertTranscriptWriteAllowed, pending: new Set() };
     terminalWrites.set(owner, current);
+  }
+  if (assertTranscriptWriteAllowed && !current.assertTranscriptWriteAllowed) {
+    current.assertTranscriptWriteAllowed = assertTranscriptWriteAllowed;
   }
   operationalTerminalWrites.set(instance, current);
   return current;
 }
 
 /** Register settlement before a projected turn can fail prior to runtime admission. */
-export function bindAgentRunTerminalWriteSettlement(instance: OperationalRunInstance): void {
+export function bindAgentRunTerminalWriteSettlement(
+  instance: OperationalRunInstance,
+  assertTranscriptWriteAllowed?: () => void,
+): void {
   const owner = getAgentRunContext(instance.runId);
   if (owner) {
-    prepareTerminalWrites(owner, instance);
+    prepareTerminalWrites(owner, instance, assertTranscriptWriteAllowed);
   }
 }
 
@@ -92,6 +103,8 @@ export function clearAgentRunTerminalWriteContext(instance: OperationalRunInstan
 }
 
 export type CapturedAgentRunTerminalWriteContext = TerminalWriteContext & {
+  /** Diagnostics keep the admitted source fence, unlike mandatory lifecycle settlement. */
+  assertTranscriptWriteAllowed?: () => void;
   assertCurrent: () => void;
   track: (persistence: Promise<void>) => void;
 };
@@ -134,6 +147,8 @@ function captureAgentRunTerminalWriteContext(
   };
   return {
     assertCurrent,
+    // A terminal reservation may precede admission; retain the slot, not its initial value.
+    assertTranscriptWriteAllowed: () => captured.assertTranscriptWriteAllowed?.(),
     run: (write) => {
       assertCurrent();
       return context ? context.run(write) : write();

@@ -135,18 +135,19 @@ Rules match canonical agent/channel/account/chat-type/peer IDs, never mutable
 `origin` or a guessed creator. `accountId` omission matches only an account-less route;
 `chatType` defaults to `group`. Explicit `peerAliases` handle migration IDs. Telegram
 numeric `:topic:<id>` and `:thread:<id>` descendants use the same chat audience.
-Unknown groups, DMs (including account-specific DMs), web chats, children, personal
+For explicitly source-bound sessions, unknown groups, DMs (including account-specific DMs), web chats, children, personal
 agents without an exact rule, and ambiguous duplicate rules fail closed to creator/admin.
 Use per-peer routing: access control cannot split several people's conversations already
-routed into a single key. Missing verified creator attribution is admin-only, not an
+routed into a single key. Missing verified creator attribution in a restrictive session is admin-only, not an
 invitation to infer identity from names.
 
 New entries atomically persist `access: {mode: "source"}` before their first publication.
 Source-bound access resolves the current configuration at disclosure/mutation time:
 removing a profile or rule revokes the next read, write and event. Removing the whole
-setting leaves persisted source-bound sessions creator/admin-only. The setting also
-restricts existing entries with no explicit `access` field, without rewriting their rows.
-An explicit per-session access policy takes precedence. Existing Drafts stay Draft;
+setting leaves persisted source-bound sessions creator/admin-only. Existing entries
+without an `access` field retain their prior role, visibility and membership behavior;
+enabling this setting never implicitly binds or rewrites those sessions. An explicit
+per-session access policy takes precedence. Existing Drafts stay Draft;
 their membership remains inactive until their creator/admin separately changes visibility.
 Incognito guarantees, creator/admin authority, role ceilings and agent ceilings are unchanged.
 A named audience restricts access; it does not grant an otherwise disallowed agent or scope.
@@ -176,29 +177,30 @@ access; selected participants cannot widen their audience. Session rows expose o
 `accessMode`, not the confidential profile roster. Confidential sessions cannot be
 publicly published; an old bearer share stops resolving while access is restrictive.
 
-### Visual creation defaults (optional compatibility)
+### Draft visibility stays independent
 
-`session.sharing.creationDefaults: {visibility: "draft", sharedGroups: [...]}` remains
-an independent opt-in visual default. Its exact route allowlist sets initial Shared
-visibility only; it never overrides confidential `accessPolicy`. An explicit authorized
-`sessions.create.visibility` wins over this visual default, not over the access ACL.
-`drafts: false` cannot be combined with the Draft creation setting. Omit visual defaults
-for ordinary-looking confidential chats; do not globally redefine Draft.
+This feature adds no automatic Draft-creation default. Existing Drafts stay Draft, and
+callers may still choose Draft explicitly through the existing visibility contract.
+New sessions can look Shared while their separately persisted access binding is private.
 
 ### Rollout and rollback
 
 Validate the reviewed build and synthetic creator/selected/nonmember/admin checks before
 live activation. Keep temporary containment and existing Draft migration until initial
 creation, cached discovery, direct history/search/events, mutation and revocation pass
-on the deployed candidate. Configuration affects existing source-bound/unset policies;
-review the complete exact per-chat audiences before enabling it. Changing Draft to Shared
+on the deployed candidate. Configuration affects new sessions and existing explicit
+source bindings, not legacy unset rows. To bind selected existing sessions later, review
+a verified exact session list with creator/administrator authority and current
+`expectedSessionId` values, then apply explicit `access` patches. No implicit migration
+or live binding runs when the configuration is enabled. Changing Draft to Shared
 is a separate explicit migration after the confidential ACL is verified. Source tests are
 not deployment or channel E2E proof.
 
 Before binary rollback, restore restrictive containment (for example no foreign-session
 access), revoke public grants where applicable, and preserve backups. Older binaries
 ignore access metadata and cannot safely enforce this ACL. Removing config alone is not
-a safe downgrade: legacy unset rows would resume legacy discovery. Never downgrade with
+a safe downgrade: older binaries ignore persisted restrictive access. Legacy unset rows
+retain their previous role/visibility behavior in either configuration state. Never downgrade with
 staff write access until affected sessions have another verified confidentiality boundary.
 
 ## Creators and assigned owners

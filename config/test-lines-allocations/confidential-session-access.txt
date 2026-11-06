@@ -4,5 +4,4 @@
 # Adds exactly 32 LF for canonical cron/Draft fixtures and 77 LF for global/batch/plugin/actor owner proofs.
 # Adds 100 LF for question/progress controls and 1 LF for source-disposal-safe Task fixture cleanup.
 # No CI-base debt credit; source-scope justification and focused costs are retained for MAIN PR-body review.
-# Retains exactly 111 LF of existing selected-plugin packaging regressions; separate-change review remains pending.
-3738
+3627

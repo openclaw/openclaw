@@ -32,6 +32,9 @@ const entry: SessionEntry = {
 const matches = (id: string) => (actor: SessionEntry["createdActor"]) =>
   actor?.type === "human" && actor.source === "profile" && actor.id === id;
 
+const readAccess = (config: OpenClawConfig, key: string, id: string, stored = entry) =>
+  canReadSessionAccess(config, key, stored, matches(id));
+
 describe("confidential session access, independent of visibility and participation", () => {
   it("admits only selected people and creator, resolving topic/thread and explicit migration aliases", () => {
     for (const key of [
@@ -41,9 +44,9 @@ describe("confidential session access, independent of visibility and participati
       group + ":topic:7:thread:8",
       "agent:main:telegram:group:-456",
     ]) {
-      expect(canReadSessionAccess(cfg, key, entry, matches("selected"))).toBe(true);
-      expect(canReadSessionAccess(cfg, key, entry, matches("outsider"))).toBe(false);
-      expect(canReadSessionAccess(cfg, key, entry, matches("creator"))).toBe(true);
+      expect(readAccess(cfg, key, "selected")).toBe(true);
+      expect(readAccess(cfg, key, "outsider")).toBe(false);
+      expect(readAccess(cfg, key, "creator")).toBe(true);
     }
   });
   it("fails closed for DMs, children, web, unknown agent/account/group and ambiguous suffixes", () => {
@@ -60,7 +63,7 @@ describe("confidential session access, independent of visibility and participati
       group + ":child:7",
       "unknown",
     ]) {
-      expect(canReadSessionAccess(cfg, key, entry, matches("selected"))).toBe(false);
+      expect(readAccess(cfg, key, "selected")).toBe(false);
     }
   });
   it("closes ambiguous duplicate routes rather than borrowing the first grant", () => {
@@ -68,19 +71,14 @@ describe("confidential session access, independent of visibility and participati
       selectedGroup,
       { ...selectedGroup, profileIds: ["other"] },
     ]);
-    expect(canReadSessionAccess(duplicate, group, entry, matches("selected"))).toBe(false);
+    expect(readAccess(duplicate, group, "selected")).toBe(false);
   });
   it("supports account-specific group routes without granting other accounts", () => {
     const accountCfg = configWithGroups([{ ...selectedGroup, accountId: "bot" }]);
     expect(
-      canReadSessionAccess(
-        accountCfg,
-        "agent:main:telegram:bot:group:-100123:topic:9",
-        entry,
-        matches("selected"),
-      ),
+      readAccess(accountCfg, "agent:main:telegram:bot:group:-100123:topic:9", "selected"),
     ).toBe(true);
-    expect(canReadSessionAccess(accountCfg, group, entry, matches("selected"))).toBe(false);
+    expect(readAccess(accountCfg, group, "selected")).toBe(false);
   });
   it("matches canonical default-account inbound groups without making omitted account a wildcard", () => {
     const inboundKey = buildAgentPeerSessionKey({
@@ -100,25 +98,20 @@ describe("confidential session access, independent of visibility and participati
     }
     for (const accountId of ["default", "other-bot"]) {
       expect(
-        canReadSessionAccess(
-          cfg,
-          `agent:main:telegram:${accountId}:group:-100123:topic:7`,
-          entry,
-          matches("selected"),
-        ),
+        readAccess(cfg, `agent:main:telegram:${accountId}:group:-100123:topic:7`, "selected"),
       ).toBe(false);
     }
   });
-  it("revokes source audiences on the next decision, including config removal and legacy existing rows", () => {
+  it("revokes explicit source bindings but preserves legacy unset access after policy activation", () => {
     const revoked: OpenClawConfig = {
       session: { sharing: { accessPolicy: { default: "creator", groups: [] } } },
     };
-    expect(canReadSessionAccess(cfg, group, entry, matches("selected"))).toBe(true);
-    expect(canReadSessionAccess(revoked, group, entry, matches("selected"))).toBe(false);
-    expect(canReadSessionAccess({}, group, entry, matches("selected"))).toBe(false);
+    expect(readAccess(cfg, group, "selected")).toBe(true);
+    expect(readAccess(revoked, group, "selected")).toBe(false);
+    expect(readAccess({}, group, "selected")).toBe(false);
     expect(
       canReadSessionAccess(revoked, group, { ...entry, access: undefined }, matches("selected")),
-    ).toBe(false);
+    ).toBe(true);
   });
   it("preserves explicit overrides and matches canonical profile aliases", () => {
     const audience: SessionEntry = {

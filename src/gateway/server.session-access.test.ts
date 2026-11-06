@@ -13,6 +13,7 @@ import {
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { listActiveSessionRunIds } from "../sessions/session-controller.queries.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
@@ -48,6 +49,57 @@ const people = new Map<Actor, WebSocket>();
 let harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 const privateKey = "agent:main:dashboard:acl-private-fixture";
 const text = "confidential websocket fixture";
+
+function recordApprovedInput(sessionKey: string) {
+  const completed = createDeferred();
+  dispatchInboundMessageMock.mockImplementationOnce(async (params: unknown) => {
+    const { ctx, replyOptions } = params as Parameters<typeof dispatchInboundMessage>[0];
+    try {
+      expect(ctx.SessionKey).toBe(sessionKey);
+      expect(replyOptions?.userTurnTranscriptRecorder).toBeDefined();
+      await replyOptions?.userTurnTranscriptRecorder?.persistApproved();
+      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+    } finally {
+      completed.resolve();
+    }
+  });
+  return completed;
+}
+
+const describeSession = (socket: WebSocket, key: string) =>
+  rpcReq<{ session: { key: string; accessMode?: string } | null }>(socket, "sessions.describe", {
+    key,
+  });
+
+function expectOpaqueMissing(response: Awaited<ReturnType<typeof rpcReq>>, key: string) {
+  expect(response, JSON.stringify(response.error)).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST", message: 'Session "' + key + '" was not found.' },
+  });
+}
+
+function seedEntry(
+  scope: Parameters<typeof upsertSessionEntryCore>[0],
+  sessionId: string,
+  access?: SessionEntry["access"],
+) {
+  return upsertSessionEntryCore(scope, {
+    sessionId,
+    updatedAt: Date.now(),
+    visibility: "shared",
+    ...(access ? { access } : {}),
+    createdActor: { type: "human", source: "profile", id: profileIds.get("creator")! },
+  });
+}
+
+async function restartFixtureGateway() {
+  for (const socket of people.values()) {
+    socket.terminate();
+  }
+  people.clear();
+  await harness.close();
+  harness = await createGatewaySuiteHarness();
+}
 
 async function configureAccess() {
   await configureBrowserAuth(browserProxyAuth(), {
@@ -155,31 +207,18 @@ async function client(actor: Actor) {
 beforeEach(async () => {
   // The suite reset preserves the physical store, not mutable config fixtures.
   await configureAccess();
-  await upsertSessionEntryCore(
-    { agentId: "main", sessionKey: privateKey },
-    {
-      sessionId: "acl-private-fixture",
-      updatedAt: Date.now(),
-      visibility: "shared",
-      access: { mode: "source" },
-      createdActor: { type: "human", source: "profile", id: profileIds.get("creator")! },
-    },
-  );
+  await seedEntry({ agentId: "main", sessionKey: privateKey }, "acl-private-fixture", {
+    mode: "source",
+  });
 });
 
-async function seedGroup(topic: number) {
+async function seedGroup(topic: number, sourceBound = true) {
   const scope = {
     agentId: "main",
     sessionKey: "agent:main:telegram:group:-100123:topic:" + topic,
     sessionId: "acl-ws-group-" + topic,
   };
-  await upsertSessionEntryCore(scope, {
-    sessionId: scope.sessionId,
-    updatedAt: Date.now(),
-    visibility: "shared",
-    access: { mode: "source" },
-    createdActor: { type: "human", source: "profile", id: profileIds.get("creator")! },
-  });
+  await seedEntry(scope, scope.sessionId, sourceBound ? { mode: "source" } : undefined);
   await appendTranscriptMessage(scope, {
     eventId: "acl-ws-seed-" + topic,
     message: { role: "user", content: text, timestamp: Date.now() },
@@ -214,13 +253,7 @@ async function expectHiddenSendDenied(
   const transcript = loadTranscriptEventsSync(scope);
   const pending = await listSessionPendingInputs(scope);
   const response = await deniedSend(socket, scope.sessionKey);
-  expect(response, JSON.stringify(response.error)).toMatchObject({
-    ok: false,
-    error: {
-      code: "INVALID_REQUEST",
-      message: `Session "${scope.sessionKey}" was not found.`,
-    },
-  });
+  expectOpaqueMissing(response, scope.sessionKey);
   expect(await listSessionPendingInputs(scope)).toEqual(pending);
   expect(loadTranscriptEventsSync(scope)).toEqual(transcript);
 }
@@ -265,21 +298,17 @@ test("publishes a web conversation privately without visual Draft", async () => 
     visibility: "shared",
   });
   expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  const described = await rpcReq<{ session: { key: string } | null }>(
-    await client("outsider"),
-    "sessions.describe",
-    { key },
-  );
+  const described = await describeSession(await client("outsider"), key);
   expect(described.payload?.session?.key).not.toBe(key);
 });
 
-test.each(["creator", "selected", "outsider", "admin"] as const)(
+test.each(["creator", "selected", "outsider", "admin", "legacy"] as const)(
   "enforces discovery, reads and writes for %s with independent confidential access",
   async (actor) => {
-    const topic = ["creator", "selected", "outsider", "admin"].indexOf(actor) + 1;
-    const scope = await seedGroup(topic);
+    const topic = ["creator", "selected", "outsider", "admin", "legacy"].indexOf(actor) + 1;
+    const scope = await seedGroup(topic, actor !== "legacy");
     const key = scope.sessionKey;
-    const socket = await client(actor);
+    const socket = await client(actor === "legacy" ? "outsider" : actor);
     const allowed = actor !== "outsider";
     const list = await rpcReq<{ sessions: Array<{ key: string }> }>(socket, "sessions.list", {
       archived: "all",
@@ -289,12 +318,13 @@ test.each(["creator", "selected", "outsider", "admin"] as const)(
     expect(list.payload?.sessions.some((row) => row.key === privateKey)).toBe(
       actor === "creator" || actor === "admin",
     );
-    const described = await rpcReq<{ session: { key: string } | null }>(
-      socket,
-      "sessions.describe",
-      { key },
-    );
+    const described = await describeSession(socket, key);
     expect(described.payload?.session?.key === key).toBe(allowed);
+    if (allowed) {
+      expect(described.payload?.session?.accessMode).toBe(
+        actor === "legacy" ? undefined : "source",
+      );
+    }
     const history = await rpcReq(socket, "chat.history", { sessionKey: key, limit: 10 });
     expect(JSON.stringify(history.payload ?? {}).includes(text)).toBe(allowed);
     const search = await rpcReq(socket, "sessions.search", {
@@ -310,30 +340,92 @@ test.each(["creator", "selected", "outsider", "admin"] as const)(
     if (!allowed) {
       await expectHiddenSendDenied(socket, scope);
     }
+    if (actor === "legacy") {
+      expect(loadSessionEntry(scope)?.access).toBeUndefined();
+      expect((await rpcReq(socket, "sessions.messages.subscribe", { key })).ok).toBe(true);
+      const event = onceMessage<{
+        type: string;
+        event?: string;
+        payload?: { sessionKey?: string };
+      }>(
+        socket,
+        (frame) =>
+          frame.type === "event" &&
+          frame.event === "session.message" &&
+          frame.payload?.sessionKey === key,
+      );
+      expect(
+        (
+          await rpcReq(await client("admin"), "chat.inject", {
+            sessionKey: key,
+            message: "Legacy audience event",
+          })
+        ).ok,
+      ).toBe(true);
+      expect((await event).payload?.sessionKey).toBe(key);
+    }
   },
 );
 
-test("revokes the selected audience before its next disclosure or write", async () => {
-  const scope = await seedGroup(8);
-  const { sessionKey: key, sessionId } = scope;
-  const member = await client("selected");
-  const access = { key, expectedSessionId: sessionId, access: { mode: "creator" } };
-  const before = await rpcReq(member, "chat.history", { sessionKey: key, limit: 10 });
-  expect(JSON.stringify(before.payload ?? {}).includes(text)).toBe(true);
-  const rejected = await rpcReq(member, "sessions.patch", access);
-  expect(rejected).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
-  expect(rejected.error?.message).toContain("Only the session creator or an admin");
-  const revoked = await rpcReq(await client("creator"), "sessions.patch", access);
-  expect(revoked.ok, JSON.stringify(revoked.error)).toBe(true);
-  const described = await rpcReq<{ session: { key: string } | null }>(member, "sessions.describe", {
-    key,
-  });
-  expect(described.payload?.session?.key === key).toBe(false);
-  const history = await rpcReq(member, "chat.history", { sessionKey: key, limit: 10 });
-  expect(JSON.stringify(history.payload ?? {}).includes(text)).toBe(false);
-  expect((await rpcReq(member, "sessions.patch", { key, label: "revoked" })).ok).toBe(false);
-  await expectHiddenSendDenied(member, scope);
-});
+test.each(["access", "rule", "config"] as const)(
+  "keeps explicit source access closed after admitted access/rule/config removal: %s",
+  async (revocation) => {
+    const scope = await seedGroup({ access: 8, rule: 9, config: 10 }[revocation]);
+    const { sessionKey: key, sessionId } = scope;
+    let member = await client("selected");
+    try {
+      const access = { key, expectedSessionId: sessionId, access: { mode: "creator" } };
+      const before = await rpcReq(member, "chat.history", { sessionKey: key, limit: 10 });
+      expect(JSON.stringify(before.payload ?? {}).includes(text)).toBe(true);
+      const rejected = await rpcReq(member, "sessions.patch", access);
+      expect(rejected).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
+      expect(rejected.error?.message).toContain("Only the session creator or an admin");
+      if (revocation === "access") {
+        const revoked = await rpcReq(await client("creator"), "sessions.patch", access);
+        expect(revoked.ok, JSON.stringify(revoked.error)).toBe(true);
+      } else {
+        const { getRuntimeConfig, writeConfigFile } = await import("../config/config.js");
+        testState.sessionConfig = {
+          sharing:
+            revocation === "rule"
+              ? { accessPolicy: { default: "creator", groups: [] } }
+              : undefined,
+        };
+        await writeConfigFile({
+          ...getRuntimeConfig(),
+          session: { ...getRuntimeConfig().session, ...testState.sessionConfig },
+        });
+        expect((await rpcReq(await client("admin"), "health")).ok).toBe(true);
+        expect(getRuntimeConfig().session?.sharing?.accessPolicy).toEqual(
+          revocation === "rule" ? { default: "creator", groups: [] } : undefined,
+        );
+        // Minimal Gateways keep initial committed config; a restart admits the new policy.
+        await restartFixtureGateway();
+        member = await client("selected");
+        expect(loadSessionEntry(scope)?.access).toEqual({ mode: "source" });
+      }
+      const described = await describeSession(member, key);
+      expect(described.payload?.session?.key === key, "source-describe-after-" + revocation).toBe(
+        false,
+      );
+      const history = await rpcReq(member, "chat.history", { sessionKey: key, limit: 10 });
+      expect(
+        JSON.stringify(history.payload ?? {}).includes(text),
+        "source-history-after-" + revocation,
+      ).toBe(false);
+      expect(
+        (await rpcReq(member, "sessions.patch", { key, label: "revoked" })).ok,
+        "source-patch-after-" + revocation,
+      ).toBe(false);
+      await expectHiddenSendDenied(member, scope);
+    } finally {
+      if (revocation !== "access") {
+        await configureAccess();
+        await restartFixtureGateway();
+      }
+    }
+  },
+);
 
 test.for([
   { method: "sessions.send", mode: "audience", topic: 201 },
@@ -352,12 +444,9 @@ test.for([
             sessionId: `acl-messaging-${topic}`,
           };
     if (mode === "audience") {
-      await upsertSessionEntryCore(scope, {
-        sessionId: scope.sessionId,
-        updatedAt: Date.now(),
-        visibility: "shared",
-        access: { mode: "audience", profileIds: [profileIds.get("selected")!] },
-        createdActor: { type: "human", source: "profile", id: profileIds.get("creator")! },
+      await seedEntry(scope, scope.sessionId, {
+        mode: "audience",
+        profileIds: [profileIds.get("selected")!],
       });
       await appendTranscriptMessage(scope, {
         eventId: `acl-messaging-seed-${topic}`,
@@ -380,13 +469,7 @@ test.for([
       message: "outsider must not enqueue or run",
       idempotencyKey: randomUUID(),
     });
-    expect(denied).toMatchObject({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: `Session "${scope.sessionKey}" was not found.`,
-      },
-    });
+    expectOpaqueMissing(denied, scope.sessionKey);
     expect(denied.payload).toBeUndefined();
     expect(loadSessionEntry(scope)).toEqual(before.entry);
     expect(loadTranscriptEventsSync(scope)).toEqual(before.transcript);
@@ -433,19 +516,9 @@ test.for([
     // Positive controls retain real RPC/sharing/input owners; only inference is stubbed.
     await prepareGatewayReplyRuntimeForTest();
     for (const actor of ["creator", "selected"] as const) {
-      const completed = createDeferred();
+      const completed = recordApprovedInput(scope.sessionKey);
       const message = `${method} allowed ${actor} ${mode}`;
-      dispatchInboundMessageMock.mockImplementationOnce(async (params: unknown) => {
-        const { ctx, replyOptions } = params as Parameters<typeof dispatchInboundMessage>[0];
-        try {
-          expect(ctx.SessionKey).toBe(scope.sessionKey);
-          expect(replyOptions?.userTurnTranscriptRecorder).toBeDefined();
-          await replyOptions?.userTurnTranscriptRecorder?.persistApproved();
-          return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-        } finally {
-          completed.resolve();
-        }
-      });
+
       const runId = randomUUID();
       const accepted = await rpcReq(await client(actor), method, {
         key: scope.sessionKey,
@@ -482,12 +555,9 @@ test.for(["sessions.send", "sessions.steer"] as const)(
       sessionKey: `agent:main:dashboard:acl-roleless-${topic}`,
       sessionId: `acl-roleless-${topic}`,
     };
-    await upsertSessionEntryCore(audience, {
-      sessionId: audience.sessionId,
-      updatedAt: Date.now(),
-      visibility: "shared",
-      access: { mode: "audience", profileIds: [profileIds.get("selected")!] },
-      createdActor: { type: "human", source: "profile", id: profileIds.get("creator")! },
+    await seedEntry(audience, audience.sessionId, {
+      mode: "audience",
+      profileIds: [profileIds.get("selected")!],
     });
     const outsider = await client("outsider");
     expect((await rpcReq(outsider, "health")).ok).toBe(true);
@@ -508,13 +578,7 @@ test.for(["sessions.send", "sessions.steer"] as const)(
         message: "roleless outsider must not write",
         idempotencyKey: randomUUID(),
       });
-      expect(denied).toMatchObject({
-        ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message: `Session "${scope.sessionKey}" was not found.`,
-        },
-      });
+      expectOpaqueMissing(denied, scope.sessionKey);
       expect(loadSessionEntry(scope)).toEqual(before.entry);
       expect(await listSessionPendingInputs(scope)).toEqual(before.pending);
       expect(loadTranscriptEventsSync(scope)).toEqual(before.transcript);
@@ -534,13 +598,7 @@ test.for(["sessions.send", "sessions.steer"] as const)(
         message: "must not preclaim native namespace",
         idempotencyKey: randomUUID(),
       });
-      expect(denied).toMatchObject({
-        ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message: `Session "${absent.sessionKey}" was not found.`,
-        },
-      });
+      expectOpaqueMissing(denied, absent.sessionKey);
       const create = await rpcReq(socket, "sessions.create", { key: absent.sessionKey });
       expect(create).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
       expect(create.error?.message).toContain("trusted ingress");
@@ -560,19 +618,9 @@ test.for(["sessions.send", "sessions.steer"] as const)(
       const patched = await rpcReq(selected, "sessions.patch", { key: scope.sessionKey, label });
       expect(patched, JSON.stringify(patched.error)).toMatchObject({ ok: true });
       expect(loadSessionEntry(scope)?.label).toBe(label);
-      const completed = createDeferred();
+      const completed = recordApprovedInput(scope.sessionKey);
       const message = "roleless selected may write " + scope.sessionKey;
-      dispatchInboundMessageMock.mockImplementationOnce(async (params: unknown) => {
-        const { ctx, replyOptions } = params as Parameters<typeof dispatchInboundMessage>[0];
-        try {
-          expect(ctx.SessionKey).toBe(scope.sessionKey);
-          expect(replyOptions?.userTurnTranscriptRecorder).toBeDefined();
-          await replyOptions?.userTurnTranscriptRecorder?.persistApproved();
-          return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-        } finally {
-          completed.resolve();
-        }
-      });
+
       const accepted = await rpcReq(selected, method, {
         key: scope.sessionKey,
         message,

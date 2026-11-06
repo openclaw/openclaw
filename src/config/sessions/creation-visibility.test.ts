@@ -8,15 +8,17 @@ import { applySessionEntryWritePolicy } from "./session-entry-write-policy.js";
 const cfg: OpenClawConfig = {
   session: {
     sharing: {
-      creationDefaults: {
-        visibility: "draft",
-        sharedGroups: [{ agentId: "main", channel: "telegram", peerId: "-100123" }],
+      accessPolicy: {
+        default: "creator",
+        groups: [
+          { agentId: "main", channel: "telegram", peerId: "-100123", profileIds: ["selected"] },
+        ],
       },
     },
   },
 };
 
-describe("source-aware session creation visibility", () => {
+describe("source-bound creation without visual defaults", () => {
   it.each([
     "agent:main:telegram:direct:123:thread:42",
     "agent:main:telegram:work-bot:direct:123:thread:42",
@@ -27,30 +29,35 @@ describe("source-aware session creation visibility", () => {
     "agent:main:telegram:channel:-100123",
     "agent:personal:telegram:group:-100123",
     "agent:main:discord:group:-100123",
-    "agent:main:telegram:group:-100123:topic:7",
+    "agent:main:telegram:group:-100123:topic:x",
     "agent:main:agent:main:telegram:group:-100123",
     "unknown",
-  ])("keeps %s private, including unknown or unapproved sources", (sessionKey) => {
-    expect(resolveSessionCreationVisibility(cfg, sessionKey)).toEqual({ visibility: "draft" });
+  ])("binds %s before disclosure, including unknown or unapproved sources", (sessionKey) => {
+    const entry = resolveSessionCreationVisibility(cfg, sessionKey);
+    expect(entry).toEqual({ access: { mode: "source" } });
+    expect(canReadSessionAccess(cfg, sessionKey, entry, () => false)).toBe(false);
   });
 
-  it("shares only exact approved group routes and their thread suffixes", () => {
+  it("resolves exact source audiences without changing visibility", () => {
     for (const key of [
       "agent:main:telegram:group:-100123",
       "agent:main:telegram:group:-100123:thread:7",
+      "agent:main:telegram:group:-100123:topic:7",
     ]) {
-      expect(resolveSessionCreationVisibility(cfg, key)).toEqual({ visibility: "shared" });
+      const entry = resolveSessionCreationVisibility(cfg, key);
+      expect(entry).toEqual({ access: { mode: "source" } });
+      expect(canReadSessionAccess(cfg, key, entry, (actor) => actor?.id === "selected")).toBe(true);
     }
     expect(resolveSessionCreationVisibility({}, "agent:main:dashboard:legacy")).toEqual({});
   });
 
-  it("validates supported config and rejects disabling its privacy mode", () => {
+  it("keeps Draft independent and rejects deferred creation defaults", () => {
     expect(SessionSchema.safeParse(cfg.session).success).toBe(true);
     expect(
       SessionSchema.safeParse({ sharing: { ...cfg.session?.sharing, drafts: false } }).success,
-    ).toBe(false);
+    ).toBe(true);
     expect(
-      SessionSchema.safeParse({ sharing: { creationDefaults: { visibility: "shared" } } }).success,
+      SessionSchema.safeParse({ sharing: { creationDefaults: { visibility: "draft" } } }).success,
     ).toBe(false);
   });
 });

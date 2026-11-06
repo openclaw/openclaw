@@ -123,3 +123,34 @@ it("does not redefine Draft or let audience members manage access", () => {
   expect(policy.entryFilter?.(target.canonicalKey, draft.entry)).toBe(false);
   expect(policy.authorizeTarget(draft)).not.toBeNull();
 });
+
+it("keeps legacy role and visibility read/write/event decisions when source policy is enabled", () => {
+  for (const identified of [false, true]) {
+    const who = identified ? client("outsider") : client();
+    const policy = sharing(who);
+    const legacy = { ...target, entry: { ...target.entry, access: undefined } };
+    expect(policy.entryFilter?.(legacy.canonicalKey, legacy.entry) !== false).toBe(true);
+    expect(policy.authorizeTarget(legacy)).toBeNull();
+    for (const event of [
+      "session.message",
+      "sessions.changed",
+      "session.typing",
+      "session.suggestion",
+    ]) {
+      expect(
+        canReceiveSessionEvent({
+          cfg,
+          client: who,
+          sessionKeys: [legacy.canonicalKey],
+          event,
+          prepared: { sharing: policy, target: () => legacy },
+        }),
+      ).toBe(identified || (event !== "session.typing" && event !== "session.suggestion"));
+    }
+    const draft = { ...legacy, entry: { ...legacy.entry, visibility: "draft" as const } };
+    expect(policy.entryFilter?.(draft.canonicalKey, draft.entry)).toBe(!identified);
+    expect(policy.authorizeTarget(draft) === null).toBe(!identified);
+    expect(sharing(who, cfg, "none").authorizeTarget(legacy) === null).toBe(!identified);
+    expect(policy.authorizeTarget(target)).not.toBeNull();
+  }
+});

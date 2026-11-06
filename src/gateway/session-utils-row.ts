@@ -437,8 +437,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     // Only explicitly requested summaries may clear swarm state in event merges.
     ...(input.includeSwarmSummary ? { swarm: input.swarm } : {}),
     visibility: entry ? (entry.visibility ?? "shared") : undefined,
-    accessMode:
-      entry?.access?.mode ?? (input.cfg.session?.sharing?.accessPolicy ? "source" : undefined),
+    accessMode: entry?.access?.mode,
     incognito: entry?.incognito,
     swarmGroupId: entry?.swarmGroupId,
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,

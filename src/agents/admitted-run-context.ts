@@ -25,6 +25,7 @@ import {
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { bindAgentRunTerminalWriteSettlement } from "../infra/agent-run-terminal-writes.js";
 import { prepareGatewayContextBindingOwner } from "../plugins/runtime/gateway-context-binding-owner.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
@@ -318,6 +319,8 @@ function bindAdmittedRunDelegatedAuthority(
     context.operationalRunInstance,
     assertSourceCurrent,
   );
+  // Retain source authority before execution cleanup can clear the run registry.
+  bindAgentRunTerminalWriteSettlement(context.operationalRunInstance, assertSourceCurrent);
   const previousRecovery = activeNativeHookRecoveryLeases.get(context.operationalRunInstance.runId);
   activeNativeHookRecoveryLeases.delete(context.operationalRunInstance.runId);
   previousRecovery?.releaseOperatorAuthority?.();

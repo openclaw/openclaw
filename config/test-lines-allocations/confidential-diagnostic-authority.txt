@@ -1,0 +1,3 @@
+# Confidential diagnostic append authority: retained run source fence.
+# Exact new positive-authorized and revoked terminal regression LF; no shared scalar/base credit.
+41

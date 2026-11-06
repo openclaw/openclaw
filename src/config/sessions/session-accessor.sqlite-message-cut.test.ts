@@ -388,15 +388,15 @@ it("forks an exact active-path prefix without changing the source", async () => 
   expect(readEntry(scope)?.lifecycleRevision).toBe("source-lifecycle-revision");
 });
 
-it("forks a Shared parent's history into a private child under creation defaults", async () => {
+it("forks a Shared parent's history into a source-bound child without visual defaults", async () => {
   const { scope, params } = await createSession();
   await updateEntry(scope, (entry) => ({ ...entry, visibility: "shared" }));
-  setRuntimeConfigSnapshot({ session: { sharing: { creationDefaults: { visibility: "draft" } } } });
+  setRuntimeConfigSnapshot({ session: { sharing: { accessPolicy: { default: "creator" } } } });
   const targetKey = "agent:main:fork:private-history-child";
   const forked = await fork({ ...params, targetKey }, sourceExpectedState);
   expect(forked).toMatchObject({ status: "created" });
   expect(readEntry({ ...scope, sessionKey: targetKey })).toMatchObject({
-    visibility: "draft",
+    access: { mode: "source" },
   });
   expect(readEntry(scope)).toMatchObject({ visibility: "shared" });
 });
@@ -467,7 +467,7 @@ it("reads pre-ACL stored history without rewriting its metadata when source poli
     setRuntimeConfigSnapshot(cfg);
     const stored = readEntry(scope);
     assert(stored);
-    expect(canReadSessionAccess(cfg, scope.sessionKey, stored, () => false)).toBe(!enabled);
+    expect(canReadSessionAccess(cfg, scope.sessionKey, stored, () => false)).toBe(true);
     expect(canReadSessionAccess(cfg, scope.sessionKey, stored, () => true)).toBe(true);
     expect(stored).toEqual(before);
     expect(await readEvents(scope)).toEqual(events);

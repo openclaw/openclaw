@@ -407,7 +407,7 @@ it("commits group and delivery facts with creation for one host-bound admission"
   });
 });
 
-it("creates a persistent child privately even when its parent is Shared", async () => {
+it("stamps source access for a persistent child of a Shared parent", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     await upsertSessionEntryCore(
@@ -419,10 +419,10 @@ it("creates a persistent child privately even when its parent is Shared", async 
       },
     );
     const created = await spawn({
-      cfg: { session: { sharing: { creationDefaults: { visibility: "draft" } } } },
+      cfg: { session: { sharing: { accessPolicy: { default: "creator" } } } },
     });
     expect(created).toBeDefined();
-    expect(readEntry(storePath, childSessionKey)).toMatchObject({ visibility: "draft" });
+    expect(readEntry(storePath, childSessionKey)).toMatchObject({ access: { mode: "source" } });
     expect(readEntry(storePath, sessionKey)).toMatchObject({ visibility: "shared" });
   });
 });

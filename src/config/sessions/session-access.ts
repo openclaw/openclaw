@@ -13,13 +13,11 @@ export function resolveSessionAccess(
   sessionKey: string | undefined,
   entry: Pick<SessionEntry, "access">,
 ): SessionEntry["access"] {
-  if (entry.access && entry.access.mode !== "source") {
+  // Existing unset rows keep role/visibility behavior; only explicit bindings opt in.
+  if (entry.access?.mode !== "source") {
     return entry.access;
   }
   const policy = cfg?.session?.sharing?.accessPolicy;
-  if (!policy && entry.access?.mode !== "source") {
-    return undefined;
-  }
   const thread = parseThreadSessionSuffix(sessionKey);
   const parsed = parseAgentSessionKey(thread.baseSessionKey ?? sessionKey);
   let audience: string[] | undefined;
