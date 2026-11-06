@@ -16,9 +16,13 @@ type ClaudeCliSpawnOptions = Pick<
 };
 
 export type ClaudeCliProcessContext = Pick<
-  CliBackendExecuteContextV2,
+  ClaudeCliExecuteContext,
   "command" | "argv0" | "args" | "cwd" | "env" | "abortSignal" | "assertCurrent"
->;
+> &
+  (
+    | Pick<ClaudeCliExecuteContext, "prepareExecutionAdmission" | "assertCredentialUseCurrent">
+    | { prepareExecutionAdmission?: never; assertCredentialUseCurrent?: never }
+  );
 
 /**
  * Host-internal, like the forwarded auth credential and not part of the plugin SDK: a host
@@ -27,6 +31,7 @@ export type ClaudeCliProcessContext = Pick<
  */
 export type ClaudeCliExecuteContext = CliBackendExecuteContextV2 & {
   assertPrivateInputCurrent?: () => void;
+  assertCredentialUseCurrent?: () => void;
 };
 
 export type ClaudeCliSecretInput = { fd: 3; createData: () => Buffer };
@@ -102,6 +107,13 @@ export function createClaudeCliProcessOwner(
         exactEnv: true,
         abortSignal: options.signal,
         assertCurrent,
+        prepareTargetSpawn: async () => {
+          const context = currentContext();
+          if (context?.assertCredentialUseCurrent) {
+            await context.prepareExecutionAdmission();
+            context.assertCredentialUseCurrent();
+          }
+        },
         secretInput,
         terminateOnHostLoss: true,
         stdoutConsumption: "awaited",

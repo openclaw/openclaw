@@ -299,6 +299,7 @@ export async function executeCliProcess(params: {
     : undefined;
   try {
     if (params.nodePlacement) {
+      context.preparedBackend.assertCredentialUseCurrent?.();
       const nodeRun = await executeNodeClaudeRun({
         context,
         nodePlacement: params.nodePlacement,
@@ -417,6 +418,12 @@ export async function executeCliProcess(params: {
           params.initialGatewayCaptureKey,
           assertProcessCurrent,
         );
+        const { assertCredentialUseCurrent } = context.preparedBackend;
+        const prepareProcessAdmission = async () => {
+          await prepareRuntimeAuthProfileExecution(runParams, assertProcessCurrent);
+          assertCredentialUseCurrent?.();
+          assertProcessCurrent();
+        };
         const managedRun = await runWithAgentToolSourceExecutionScope(params.assertCurrent, () =>
           withChildProcessOperation("agent.cli", () =>
             supervisor.spawn({
@@ -428,11 +435,11 @@ export async function executeCliProcess(params: {
                 await prepareRuntimeAuthProfileExecution(runParams, assertProcessCurrent);
                 assertProcessCurrent();
               },
+              prepareTargetSpawn: assertCredentialUseCurrent ? prepareProcessAdmission : undefined,
               prepareInput: params.stdin
                 ? async () => {
                     await context.cliHistoryWriter?.assertReadable();
-                    await prepareRuntimeAuthProfileExecution(runParams, assertProcessCurrent);
-                    assertProcessCurrent();
+                    await prepareProcessAdmission();
                   }
                 : undefined,
               runId: runParams.runId,

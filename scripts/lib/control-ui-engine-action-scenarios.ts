@@ -1,6 +1,8 @@
 import type { EngineScenario } from "./control-ui-engine-boot-scenarios.ts";
 import { frames, openNavigationDrawer } from "./control-ui-interaction-navigation.ts";
 import { cronLoadedJobCount, interactionScenarios } from "./control-ui-interaction-scenarios.ts";
+import { createNoopOwnerScenarios } from "./control-ui-noop-owner-scenarios.ts";
+import { createNoopPushScenarios } from "./control-ui-noop-push-scenarios.ts";
 
 /** Fixed work spans WebKit's coarse CPU samples; probes also count hot-path operations. */
 export function createEngineActionScenarios(): readonly EngineScenario[] {
@@ -53,6 +55,8 @@ export function createEngineActionScenarios(): readonly EngineScenario[] {
     });
   });
   return [
+    ...createNoopPushScenarios(),
+    ...createNoopOwnerScenarios(),
     ...(["open", "close"] as const).map((direction): EngineScenario =>
       Object.assign({}, sidebar, {
         id: `sidebar-${direction}`,

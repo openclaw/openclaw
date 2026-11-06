@@ -124,7 +124,7 @@ export function PeopleControl(props: {
   let popover: PopoverHandle | undefined;
   const phone = createMediaQuery(ACTIVITY_PHONE_QUERY);
   const selectPerson = (personId: string | null) => {
-    popover?.hide();
+    popover?.overlay.request(false, "return");
     props.view.onFiltersChange({ ...props.view.filters, personId });
   };
   const visible = () => props.people.slice(0, 3);

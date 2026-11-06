@@ -124,10 +124,16 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
     this.resumeCatalogRead();
     const state = this.state;
     const load = state && getChatHistoryLoadState(state);
-    const resumed =
+    if (
       state &&
-      (load?.phase === "pending-presentation" || load?.phase === "pending-connection") &&
-      resumePendingChatHistoryLoad(state);
+      load?.phase === "failed" &&
+      load.retryable &&
+      chatHistoryRequests(state).subscriptionError
+    ) {
+      // An approval upgrade can fail while its weaker base subscription remains.
+      void syncSelectedSessionMessageSubscription(state, { force: true });
+    }
+    const resumed = state && resumePendingChatHistoryLoad(state);
     if (state && resumed) {
       this.deferSessionHydrationUntilTranscript(
         state.sessionKey,
@@ -151,7 +157,7 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
     }
     this.reconcileWaitingApprovalSnapshot();
     if (chatHistoryRequests(state).subscriptionError) {
-      void syncSelectedSessionMessageSubscription(state);
+      void syncSelectedSessionMessageSubscription(state, { force: true });
     }
     const historyLoad = getChatHistoryLoadState(state);
     const startup = historyLoad.phase === "failed" && historyLoad.startup;
@@ -329,6 +335,9 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
     if (newHistoryIntent && (this.historyAutoLoadBlocked || !this.historyObserverArmed)) {
       this.historyAutoLoadBlocked = false;
       this.historyObserverArmed = true;
+    }
+    // A row correction can retire the observer without consuming this gesture's intent.
+    if (hasUpwardIntent && this.historyObserverArmed && !this.historyObserver) {
       this.syncHistoryObserver();
     }
     // Preserve the normal at-bottom/new-message bookkeeping while layering

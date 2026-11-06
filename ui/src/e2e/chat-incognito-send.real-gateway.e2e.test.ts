@@ -26,9 +26,22 @@ const suite = createControlUiE2eSuite({
       offsets: [0],
       createListener: () =>
         createServer((request, response) => {
-          request.resume().once("end", () => {
+          let body = "";
+          request.on("data", (chunk) => {
+            body += chunk.toString();
+          });
+          request.once("end", () => {
             if (request.method !== "POST" || request.url !== "/v1/responses") {
               response.writeHead(404).end();
+              return;
+            }
+            // Background titles must neither count as turns nor satisfy reply assertions.
+            if (body.includes("Generate a concise session title")) {
+              writeOpenAiResponsesText(response, {
+                text: "Private conversation",
+                messageId: "incognito-title-message",
+                responseId: "incognito-title-response",
+              });
               return;
             }
             modelTurns += 1;
@@ -89,7 +102,11 @@ suite.define(() => {
             const { pane, composer, send } = chatControls(page);
             // Live and persisted reply copies can overlap until the run settles.
             const reply = (text: string) =>
-              pane.getByText(text, { exact: true }).last().waitFor({ timeout: 60_000 });
+              pane
+                .locator(".chat-bubble")
+                .getByText(text, { exact: true })
+                .last()
+                .waitFor({ timeout: 60_000 });
             // New Session admits the first message through startup with an empty-root leaf.
             const startup = await wire.waitFor((rpc) => rpc.request.method === "chat.startup");
             expect(startup.response.ok).toBe(true);

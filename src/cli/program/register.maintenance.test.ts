@@ -323,4 +323,41 @@ describe("registered maintenance commands", () => {
     expectNoCalls(triageCommand);
     expectFailure(message, json);
   });
+
+  // Other commands keep the default disposition; Node already resets an inherited ignore.
+  it.each([
+    {
+      case: "triage drains cleanup and exits 129",
+      args: "triage",
+      command: triageCommand,
+      code: 129,
+    },
+    {
+      case: "dashboard leaves it alone",
+      args: "dashboard",
+      command: dashboardCommand,
+      code: undefined,
+    },
+  ])("on a closed terminal's hangup, $case", async ({ args, command, code }) => {
+    const signals = await import("../signal-exit-barrier.js");
+    const { withCliProcessScope } = await import("../runtime-cleanup-scope.js");
+    const exitCode = process.exitCode;
+    const drained = vi.fn();
+    const releaseSignals = signals.installCliSignalExitHandlers();
+    const releaseBarrier = signals.registerSignalExitBarrier(drained);
+    vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    command.mockImplementation(async () => {
+      process.emit("SIGHUP", "SIGHUP");
+    });
+    try {
+      await withCliProcessScope(() => runCli(args));
+      expect(command).toHaveBeenCalledOnce();
+      expect(await signals.waitForCliSignalExit()).toBe(code);
+      expect(drained).toHaveBeenCalledTimes(code ? 1 : 0);
+    } finally {
+      releaseBarrier();
+      releaseSignals();
+      process.exitCode = exitCode;
+    }
+  });
 });

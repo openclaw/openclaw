@@ -189,6 +189,7 @@ export async function executeNodeClaudeRun(params: {
           assertReadable: async () => {
             await params.context.cliHistoryWriter?.assertReadable();
             await prepareRuntimeAuthProfileExecution(contextParams, assertCurrent);
+            params.context.preparedBackend.assertCredentialUseCurrent?.();
             assertCurrent();
           },
           nodeId: params.nodePlacement.nodeId,

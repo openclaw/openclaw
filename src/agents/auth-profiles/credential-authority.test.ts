@@ -42,6 +42,7 @@ import {
 import type { WorkerWriteOperationContext } from "../../state/worker-operation-registry.js";
 import { withEnv } from "../../test-utils/env.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
+import { prepareCliCredentialUseCheck } from "../cli-runner/auth-profile-preparation-error.js";
 import { createExternalAuthRuntime } from "./external-auth.js";
 import { noteCommittedSharedAuthStoreOwnership } from "./path-resolve.js";
 import { coercePersistedAuthProfileStore } from "./persisted-store.js";
@@ -706,14 +707,16 @@ describe("prepared persisted credential readers", () => {
       useReaderEnvironment(environment);
       const prepare = async () => {
         const retained = await shared.prepareRead(agentDir, store("snapshot-must-not-win"));
+        const assertCliCredentialUse = await prepareCliCredentialUseCheck(profileId, agentDir);
         expect(retained?.()).toEqual(
           await nativeRuntime.findPersistedAuthProfileCredentialAsync({ agentDir, profileId }),
         );
-        return retained;
+        return { read: retained, assertCliCredentialUse };
       };
-      const read = await (scoped
+      const { read, assertCliCredentialUse } = await (scoped
         ? withAuthProfileStoreAgentDir(agentDir, shared.env.OPENCLAW_STATE_DIR, prepare)
         : prepare());
+      expect(assertCliCredentialUse).not.toThrow();
       expect(read?.()).toEqual(
         credential(source === "populated-child" ? "local-original" : "original"),
       );
@@ -725,6 +728,7 @@ describe("prepared persisted credential readers", () => {
       expect(read?.()).toEqual(credential("shared-new"));
       shared.remove();
       expect(read?.()).toBeUndefined();
+      expect(assertCliCredentialUse).toThrow("was removed");
       if (source === "scoped-child") {
         for (const excluded of [
           { ...credential("private"), copyToAgents: false },

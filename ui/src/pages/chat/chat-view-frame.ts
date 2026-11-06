@@ -21,9 +21,9 @@ import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import {
   buildPendingInputQueueItems,
-  dismissChatPendingInputs,
   getChatPendingInputs,
   isPendingInputDismissHidden,
+  mutateChatPendingInput,
 } from "./chat-pending-inputs.ts";
 import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
 import { chatStartupStatusLabel } from "./chat-run-startup.ts";
@@ -63,6 +63,7 @@ export type ChatProps = Omit<
   | "onRetryQueuedMessage"
   | "onDiscardQueuedMessage"
   | "onDismissPendingInput"
+  | "onSteerNow"
   | "onFocusComposer"
   | "commentAttachments"
   | "commentsDisabled"
@@ -100,6 +101,7 @@ export type ChatProps = Omit<
     historyState?: ChatState;
     /** Session access presentation for dismissing retired inputs; independent of model availability. */
     canDismissPendingInputs?: boolean;
+    canSteerNow?: boolean;
     environmentStartStatus?: import("../../../../packages/gateway-protocol/src/schema/environments.js").WorkerEnvironmentStartStatus;
     providerPolicyNotice?: ProviderPolicyNotice | null;
     // Resolve after the first pane frame prepares the Solid owner's permission facts.
@@ -230,7 +232,7 @@ export function createChatViewFrame(
   const historyState = props.historyState;
   const dismissPendingInput =
     props.connected && props.canDismissPendingInputs && historyState
-      ? (inputId: string) => void dismissChatPendingInputs(historyState, [inputId])
+      ? (inputId: string) => void mutateChatPendingInput(historyState, { kind: "dismiss", inputId })
       : undefined;
   const questionState = getTranscriptState(props.paneId);
   const openImage = props.onOpenImage
@@ -288,6 +290,10 @@ export function createChatViewFrame(
     onRetryQueuedMessage: props.connected && canCompose ? props.onQueueRetry : undefined,
     onDiscardQueuedMessage: props.onQueueRemove,
     onDismissPendingInput: dismissPendingInput,
+    onSteerNow:
+      props.connected && props.canSteerNow && historyState
+        ? (runId: string) => void mutateChatPendingInput(historyState, { kind: "steer", runId })
+        : undefined,
     onCompanionSelection:
       props.canSend && !props.suggestionComposer && props.onCompanionStageAttachment
         ? (selection, anchorRect) =>

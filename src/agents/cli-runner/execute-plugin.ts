@@ -473,6 +473,7 @@ export async function executePluginOwnedProcess(params: {
       params.mcpCapture?.beginCapture(params.mcpCapture.captureKey, assertCaptureCurrent);
     }
     const historyWriter = params.context.cliHistoryWriter;
+    const { assertCredentialUseCurrent } = params.context.preparedBackend;
     const prepareExecutionAdmission = async () => {
       assertCurrent();
       await historyWriter?.assertReadable();
@@ -499,6 +500,7 @@ export async function executePluginOwnedProcess(params: {
         abortSignal: signal,
         assertCurrent,
         prepareExecutionAdmission,
+        ...(assertCredentialUseCurrent ? { assertCredentialUseCurrent } : {}),
         // Host-internal: native login can change after preparation, so the
         // bundled runtime checks again where saved context leaves the host.
         ...(historyWriter?.bindsNativeLogin

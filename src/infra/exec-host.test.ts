@@ -30,11 +30,11 @@ describe("requestExecHostViaSocket", () => {
   it("refuses a request the macOS app cannot read before opening a socket", async () => {
     const connect = vi.spyOn(net.Socket.prototype, "connect");
     try {
-      // 130k two-byte characters stay under the limit in UTF-16 units but not in UTF-8 bytes.
+      // Half a MiB of two-byte characters exceeds the wire limit, but not in UTF-16 units.
       const response = await requestExecHostViaSocket({
         socketPath: "/tmp/socket",
         token: "secret",
-        request: { command: ["/bin/sh", "-c", `echo ${"é".repeat(130_000)}`] },
+        request: { command: ["/bin/sh", "-c", `echo ${"é".repeat(512 * 1024)}`] },
       });
       expect(response).toMatchObject({
         ok: false,

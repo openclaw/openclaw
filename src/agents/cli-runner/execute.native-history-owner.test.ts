@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CliExecutionHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
+import * as nodeRuntime from "../../gateway/node-agent-cli-runtime.js";
 import type { CliBackendExecuteContext } from "../../plugins/cli-backend.types.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { executePreparedCliRun as executePreparedCliRunImpl } from "./execute.js";
@@ -14,6 +15,7 @@ const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePrepare
 
 afterEach(() => {
   supervisorSpawnMock.mockReset();
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
 
@@ -62,6 +64,48 @@ function nativeRun(replaysHistory = false, history = false) {
 }
 
 describe("native login history owner at execution", () => {
+  it.each(["target", "input", "node"] as const)(
+    "refuses removed credentials before the %s execution boundary",
+    async (boundary) => {
+      const { context, writer, calls } = nativeRun();
+      const refusal = new Error("saved account removed");
+      context.preparedBackend.assertCredentialUseCurrent = () => {
+        calls.push("credential");
+        throw refusal;
+      };
+      writer.assertReadable = async () => void calls.push("history");
+      const invokeNode = vi
+        .spyOn(nodeRuntime, "invokeNodeClaudeCliRun")
+        .mockRejectedValue(new Error("unexpected node execution"));
+      if (boundary === "node") {
+        context.executionTarget = { kind: "node", placement: { nodeId: "node-fixture" } };
+      } else {
+        supervisorSpawnMock.mockImplementation(async (spawn) => {
+          if (spawn.mode !== "child") {
+            throw new Error("Expected CLI child process");
+          }
+          if (boundary === "input") {
+            await spawn.prepareInput?.();
+          } else {
+            await spawn.prepareTargetSpawn?.();
+          }
+          calls.push("sent");
+          return createManagedRun({ ...createSuccessfulProcessExit(), stdout: "done" });
+        });
+      }
+      await expect(executePreparedCliRun(context)).rejects.toBe(refusal);
+      expect(calls).toContain("credential");
+      expect(calls).not.toContain("sent");
+      if (boundary === "input") {
+        expect(calls.filter((call) => call === "history" || call === "credential")).toEqual([
+          "history",
+          "credential",
+        ]);
+      }
+      expect(invokeNode).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     { provider: "claude-cli", plugin: false },
     { provider: "google-gemini-cli", plugin: false },
