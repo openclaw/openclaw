@@ -2,8 +2,8 @@
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
 import { createHash, createPrivateKey, createPublicKey, randomUUID } from "node:crypto";
-import { createWriteStream } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { constants, createWriteStream } from "node:fs";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import { createServer, connect } from "node:net";
 import { loadavg } from "node:os";
@@ -43,6 +43,10 @@ const { values } = parseArgs({
     entry: { type: "string", default: "dist/entry.js" },
     "bundle-dir": { type: "string", default: "dist/control-ui" },
     "compare-bundle-dir": { type: "string" },
+    "compare-entry": { type: "string" },
+    "restart-gateway-per-sample": { type: "boolean", default: false },
+    "fixture-now": { type: "string" },
+    "cold-only": { type: "boolean", default: false },
     controlled: { type: "boolean", default: false },
     "routes-only": { type: "boolean", default: false },
     "boot-route": { type: "string", default: "new-session" },
@@ -81,11 +85,13 @@ const routes = (
   values.routes === "all"
     ? APP_ROUTE_IDS.filter((id) => id !== bootRoute)
     : values.routes.split(",")
-).map((id) => {
-  const selectedRoute = APP_ROUTE_IDS.find((route) => route === id);
-  assert(selectedRoute, `Unknown route: ${id}`);
-  return selectedRoute;
-});
+)
+  .filter(Boolean)
+  .map((id) => {
+    const selectedRoute = APP_ROUTE_IDS.find((route) => route === id);
+    assert(selectedRoute, `Unknown route: ${id}`);
+    return selectedRoute;
+  });
 const output = path.resolve(values.output);
 await mkdir(output, { recursive: false });
 const entry = path.resolve(values.entry);
@@ -93,6 +99,7 @@ const port = await getFreePort();
 const proxyPort = await getFreePort();
 const providerPort = await getFreePort();
 const root = path.join(output, "state");
+const fixtureNow = Number(values["fixture-now"] ?? Date.now());
 const fixtureOptions = parseTeamShapeOptions([
   "--state-dir",
   root,
@@ -117,7 +124,7 @@ const fixtureOptions = parseTeamShapeOptions([
   "--port",
   String(port),
   "--now",
-  String(Date.now()),
+  String(fixtureNow),
 ]);
 await generateTeamShapeFixture(fixtureOptions);
 const configPath = path.join(root, "openclaw.json");
@@ -195,7 +202,7 @@ const identity = {
   deviceId: createHash("sha256").update(publicKey).digest("hex"),
   publicKey: publicKey.toString("base64url"),
   privateKey: seed.toString("base64url"),
-  createdAtMs: Date.now(),
+  createdAtMs: fixtureNow,
 };
 const previousEnv = process.env;
 try {
@@ -243,7 +250,7 @@ try {
   runOpenClawStateWriteTransaction(({ db }) => {
     for (let i = 0; i < Number(values.cron) * 5; i++) {
       const jobId = `team-shape-cron-${i % Number(values.cron)}`;
-      const endedAt = Date.now() - i * 1000;
+      const endedAt = fixtureNow - i * 1000;
       const summary =
         `Synthetic result ${i}. ` + "A reproducible completed automation result. ".repeat(30);
       recordCronRunInDatabase(db, {
@@ -269,30 +276,65 @@ try {
 const stopPreload = new URL("./lib/gateway-bench-stop-preload.mjs", import.meta.url);
 stopPreload.searchParams.set("parentPid", String(process.pid));
 stopPreload.searchParams.set("entry", entry);
-const child = spawn(
-  process.execPath,
-  buildGatewayBenchChildArgs(
-    entry,
+const seedRoot = path.join(output, "seed-state");
+if (values["restart-gateway-per-sample"]) {
+  await cp(root, seedRoot, { recursive: true, mode: constants.COPYFILE_FICLONE });
+}
+let child: ReturnType<typeof spawn> | undefined;
+async function startGateway() {
+  if (values["restart-gateway-per-sample"]) {
+    await rm(root, { recursive: true, force: true });
+    await cp(seedRoot, root, { recursive: true, mode: constants.COPYFILE_FICLONE });
+    await rm(cacheRoot, { recursive: true, force: true });
+    await mkdir(cacheRoot);
+  }
+  child = spawn(
+    process.execPath,
+    buildGatewayBenchChildArgs(
+      entry,
+      port,
+      [
+        "--import",
+        fileURLToPath(new URL("./perf/gateway-ui-rpc-preload.mjs", import.meta.url)),
+        "--import",
+        stopPreload.href,
+      ],
+      "token",
+    ),
+    {
+      env,
+      cwd: path.dirname(path.dirname(entry)),
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
+    },
+  );
+  const log = createWriteStream(path.join(output, "gateway.log"), { flags: "a" });
+  child.stdout?.pipe(log);
+  child.stderr?.pipe(log);
+  child.once("close", () => log.end());
+  const result = await waitForInitialProbe({
     port,
-    [
-      "--import",
-      fileURLToPath(new URL("./perf/gateway-ui-rpc-preload.mjs", import.meta.url)),
-      "--import",
-      stopPreload.href,
-    ],
-    "token",
-  ),
-  {
-    env,
-    cwd: path.dirname(path.dirname(entry)),
-    detached: true,
-    stdio: ["ignore", "pipe", "pipe", "ipc"],
-  },
-);
-const log = createWriteStream(path.join(output, "gateway.log"));
-child.stdout?.pipe(log);
-child.stderr?.pipe(log);
-child.once("close", () => log.end());
+    path: "/readyz",
+    startAt: performance.now(),
+    deadlineAt: performance.now() + 300000,
+    isDone: () => interrupted || child?.exitCode !== null,
+  });
+  assert.equal(
+    result.status,
+    200,
+    `Compiled Gateway did not start: ${path.join(output, "gateway.log")}`,
+  );
+}
+async function stopGateway() {
+  if (child) {
+    try {
+      await stopGatewayGracefully(child, 30000);
+    } finally {
+      await stopChild(child);
+      child = undefined;
+    }
+  }
+}
 let interrupted = false;
 let activeBrowser: Browser | undefined;
 const interrupt = () => {
@@ -320,10 +362,12 @@ const proxy = createServer((socket) => {
   down.connect(target, socket, () => {});
 });
 async function control(action: "begin" | "end") {
+  assert(child, "Gateway is not running");
+  const activeChild = child;
   const id = randomUUID();
   return new Promise<unknown>((resolve, reject) => {
     const timer = setTimeout(() => {
-      child.off("message", receive);
+      activeChild.off("message", receive);
       reject(new Error("Gateway observer timed out"));
     }, 10000);
     function receive(raw: unknown) {
@@ -332,15 +376,15 @@ async function control(action: "begin" | "end") {
         return;
       }
       clearTimeout(timer);
-      child.off("message", receive);
+      activeChild.off("message", receive);
       if (message.error) {
         reject(new Error(message.error));
       } else {
         resolve(message.result);
       }
     }
-    child.on("message", receive);
-    child.send({ channel: "gateway-ui-rpc-measure", action, id, countOps: false });
+    activeChild.on("message", receive);
+    activeChild.send({ channel: "gateway-ui-rpc-measure", action, id, countOps: false });
   });
 }
 const selectors: Partial<Record<RouteId, string>> = {
@@ -449,6 +493,8 @@ const report: {
   profile: string;
   entry: string;
   rpcObserver: boolean;
+  restartGatewayPerSample: boolean;
+  fixtureNow: number;
   observations: unknown[];
   errors: unknown[];
 } = {
@@ -456,6 +502,8 @@ const report: {
   profile: values.profile,
   entry,
   rpcObserver: !values["no-rpc-observer"],
+  restartGatewayPerSample: values["restart-gateway-per-sample"],
+  fixtureNow,
   observations: [],
   errors: [],
 };
@@ -463,18 +511,9 @@ try {
   await new Promise<void>((resolve) => {
     provider.listen(providerPort, "127.0.0.1", resolve);
   });
-  const result = await waitForInitialProbe({
-    port,
-    path: "/readyz",
-    startAt: performance.now(),
-    deadlineAt: performance.now() + 300000,
-    isDone: () => interrupted || child.exitCode !== null,
-  });
-  assert.equal(
-    result.status,
-    200,
-    `Compiled Gateway did not start: ${path.join(output, "gateway.log")}`,
-  );
+  if (!values["restart-gateway-per-sample"]) {
+    await startGateway();
+  }
   await new Promise<void>((resolve) => {
     proxy.listen(proxyPort, "127.0.0.1", resolve);
   });
@@ -503,6 +542,9 @@ try {
             break;
           }
           assert.equal(command.value, "sample");
+        }
+        if (values["restart-gateway-per-sample"]) {
+          await startGateway();
         }
         const context = await browser.newContext({
           viewport: { width: 1440, height: 1000 },
@@ -606,12 +648,14 @@ try {
               () => page.goto(`${url}${pathForRoute(bootRoute)}`),
               bootRoute,
             );
-            await page.waitForFunction(
-              (storageKey) => localStorage.getItem(storageKey) !== null,
-              `openclaw.control.bootRecord.v1:${gatewayCredentialScope(url.replace("http", "ws"))}`,
-              { timeout: 60000 },
-            );
-            await measure("warm-boot", () => page.reload(), bootRoute);
+            if (!values["cold-only"]) {
+              await page.waitForFunction(
+                (storageKey) => localStorage.getItem(storageKey) !== null,
+                `openclaw.control.bootRecord.v1:${gatewayCredentialScope(url.replace("http", "ws"))}`,
+                { timeout: 60000 },
+              );
+              await measure("warm-boot", () => page.reload(), bootRoute);
+            }
           }
           for (const route of routes) {
             await page.evaluate((phase) => {
@@ -683,6 +727,9 @@ try {
           throw cause;
         } finally {
           await context.close();
+          if (values["restart-gateway-per-sample"]) {
+            await stopGateway();
+          }
         }
         if (commandIterator) {
           console.log(`RPC_WORKER done ${engine} ${sample}`);
@@ -701,16 +748,15 @@ try {
   provider.closeAllConnections();
   provider.close();
   try {
-    await stopGatewayGracefully(child, 30000);
+    await stopGateway();
   } finally {
-    await stopChild(child);
     await rm(cacheRoot, { recursive: true, force: true });
     process.off("SIGINT", interrupt);
     process.off("SIGTERM", interrupt);
   }
 }
 
-/** Three persistent isolated Gateways, one active sample at a time, rotating all positions. */
+/** Three isolated Gateway workers, one active sample at a time, rotating all positions. */
 async function compare() {
   assert(values.output && values["compare-bundle-dir"]);
   const destination = path.resolve(values.output);
@@ -723,6 +769,7 @@ async function compare() {
     lines: ReturnType<typeof createInterface>;
   }[] = [];
   const sides = ["base", "control", "head"] as const;
+  const comparisonFixtureNow = values["fixture-now"] ?? String(Date.now());
   const interruptWorkers = () => {
     process.exitCode = 130;
     for (const { worker } of workers) {
@@ -739,7 +786,9 @@ async function compare() {
         "--bundle-dir",
         path.resolve(side === "head" ? values["bundle-dir"] : values["compare-bundle-dir"]),
         "--entry",
-        path.resolve(values.entry),
+        path.resolve(side === "head" ? values.entry : (values["compare-entry"] ?? values.entry)),
+        "--fixture-now",
+        comparisonFixtureNow,
         "--engines",
         values.engines,
         "--routes",
@@ -767,11 +816,13 @@ async function compare() {
         ...(values.trace ? ["--trace"] : []),
         ...(values.stream ? ["--stream"] : []),
         ...(values["routes-only"] ? ["--routes-only"] : []),
+        ...(values["cold-only"] ? ["--cold-only"] : []),
         ...(values["no-rpc-observer"] ? ["--no-rpc-observer"] : []),
         "--observe-ms",
         values["observe-ms"],
         "--prepare-ms",
         values["prepare-ms"],
+        ...(values["restart-gateway-per-sample"] ? ["--restart-gateway-per-sample"] : []),
       ];
       const worker = spawn(
         process.execPath,
