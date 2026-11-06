@@ -84,6 +84,9 @@ vi.mock("../../../infra/host-account-name.js", async (importOriginal) => ({
 vi.mock("../../github-user-identity.js", () => ({
   createAuthenticatedGitHubIdentitySync: createAuthenticatedGitHubIdentitySyncMock,
   resolveTrustedEnterpriseGitHubAccountId: () => undefined,
+  // No repository integration is configured in the test fixture, so the real
+  // implementation returns undefined; mock it to keep the connect path alive.
+  resolveRepositoryConnectionIdentity: () => undefined,
 }));
 
 vi.mock("./auth-context.js", async (importOriginal) => {
