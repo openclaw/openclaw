@@ -16,6 +16,7 @@ beforeAll(() => {
     mkdirSync(path.dirname(target), { recursive: true });
     writeFileSync(target, content);
   };
+  write("../package.json", JSON.stringify({ type: "module" }));
   mkdirSync(path.join(scripts, "lib"), { recursive: true });
   runner = path.join(scripts, "test-database-conformance.mjs");
   copyFileSync("scripts/test-database-conformance.mjs", runner);
