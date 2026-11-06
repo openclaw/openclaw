@@ -1,2 +1,2 @@
-193
-# Real configured-engine publication and deferred-commit source-lock regression across SQLite/PostgreSQL pairs.
+367
+# Real configured-engine publication, deferred-commit source exclusion, and production requester/session authority revocation while queued across SQLite/PostgreSQL pairs.
