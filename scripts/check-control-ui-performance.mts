@@ -49,11 +49,12 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Medium transcript preparation cuts scroll script CPU 6–10% and 4x blocking 46%.
-  // Linux CI measured 1,294,857 B (+307 B); retain the existing 192 B headroom.
-  chatBootJsGzipBytes: 1_295_049,
-  // New Session retains its measured 801,486 B + 192 B headroom.
-  newBootJsGzipBytes: 801_678,
+  // CPU-backed theme readback cuts Appearance latency 7–20% across both engines.
+  // After the medium-transcript merge: 1,295,862 B + 192 B generated-name headroom.
+  chatBootJsGzipBytes: 1_296_054,
+  // The same theme readback win also affects New Session's shared bundle.
+  // After the merge: 802,351 B + 192 B generated-name headroom.
+  newBootJsGzipBytes: 802_543,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
