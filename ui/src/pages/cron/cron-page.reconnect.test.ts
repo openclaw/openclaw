@@ -129,6 +129,8 @@ it.each([
     if (intent === "another job") {
       page.querySelector<HTMLElement>('[data-test-id="cron-row-other"]')!.click();
       await page.settle();
+      page.querySelector<HTMLButtonElement>('[data-test-id="cron-detail-tab-history"]')!.click();
+      await page.settle();
       expected = other;
     }
   } else if (intent === "agent scope") {

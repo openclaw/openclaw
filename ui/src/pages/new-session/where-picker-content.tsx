@@ -8,10 +8,10 @@ import {
   onSettled,
   Show,
 } from "solid-js";
-import { resolveCloudProfileIconData } from "../../components/provider-icon-data.ts";
+import { resolveCloudProfileIconData } from "../../components/cloud-profile-icon-data.ts";
+import { CloudProfileIcon } from "../../components/solid/cloud-profile-icon.tsx";
 import { HeaderSearch } from "../../components/solid/header-search.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import { CloudProfileIcon } from "../../components/solid/provider-icon.tsx";
 import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { prettifyPlatform } from "../../lib/platform-label.ts";
 import { t } from "../../lib/reactive/i18n.ts";

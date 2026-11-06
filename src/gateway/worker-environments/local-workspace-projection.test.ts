@@ -59,6 +59,7 @@ import {
   proveColdPreparationCapacityIsolation,
   provePreparationObservationBoundary,
   provePreparationWaiterAuthority,
+  proveWorkspaceWaitAttribution,
   proveWorkspaceIncarnationRecovery,
   proveWarmWorkspaceConflictRecovery,
   proveWarmWorkspaceReuse,
@@ -185,6 +186,9 @@ it("checkpoints sandbox file writes once", () => proveSandboxMutationCheckpoints
 it("reuses warm workspaces and reconciles edits", () => proveWarmWorkspaceReuse(owner));
 
 it("isolates cold capacity", ({ signal }) => proveColdPreparationCapacityIsolation(owner, signal));
+
+it("attributes sandbox projection custody and joined preparation waits", () =>
+  proveWorkspaceWaitAttribution(owner));
 
 it("coalesces concurrent cold and warm sandbox preparations without retaining completed scans", () =>
   proveConcurrentWorkspacePreparation(owner));

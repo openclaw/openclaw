@@ -19,7 +19,6 @@ import {
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { logWarn } from "../logger.js";
 import { redactToolPayloadText } from "../logging/redact.js";
-import { resolveHostExecMemoryLimit } from "../process/child-memory.js";
 import { withChildProcessOperation } from "../process/spawn-diagnostics.js";
 import type { SpawnInitiation } from "../process/spawn-initiation.js";
 import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";
@@ -64,8 +63,9 @@ import {
   type ExecProcessOutcome,
   renderExecUpdateText,
 } from "./bash-tools.exec-output.js";
+import type { ExecToolDetails } from "./bash-tools.exec-result.types.js";
 import { settleExecProcessExit } from "./bash-tools.exec-settlement.js";
-import type { DurableExecOptions, ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { DurableExecOptions } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { chunkString, clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 import type { ExecApprovalTransport } from "./exec-approval-transport.js";
@@ -645,7 +645,6 @@ export async function runExecProcess({
       cwd: spawnSpec.cwd ?? opts.workdir,
       env: spawnSpec.env,
       timeoutMs,
-      memoryLimitBytes: opts.sandbox ? undefined : resolveHostExecMemoryLimit(),
       captureOutput: false,
       onStdout: handleOutput("stdout", sanitizeStdout),
       onStderr: handleOutput("stderr", sanitizeStderr),

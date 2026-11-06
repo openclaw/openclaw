@@ -1,4 +1,5 @@
 import type { Page } from "playwright";
+import type { ControlUiAllocationProfile } from "./control-ui-allocation-profile.ts";
 
 export type ControlUiEngine = "chromium" | "webkit";
 
@@ -57,10 +58,17 @@ export type EngineMeasurement = {
   metrics: EngineMetrics;
   timeline?: unknown[];
   profile?: unknown;
+  allocations?: ControlUiAllocationProfile;
   cpuSamples?: WebKitCpuEvent[];
 };
 
-type MeasurementOptions = { trace: boolean; cpuOnly?: boolean };
+type MeasurementOptions = {
+  trace: boolean;
+  cpuOnly?: boolean;
+  cpuProfile?: boolean;
+  nativeAudit?: boolean;
+  allocations?: boolean;
+};
 
 /** Union nested same-category records so recursive calls are counted once. */
 function intervalMilliseconds(intervals: Array<{ startTime: number; endTime: number }>) {
@@ -283,14 +291,19 @@ export async function startEngineMeasurement(
   }
   const session = await page.context().newCDPSession(page);
   const timeline: unknown[] = [];
+  const scriptUrls = new Map<string, string>();
   try {
     await session.send("Performance.enable", { timeDomain: "threadTicks" });
-    if (options.trace) {
+    if (options.trace || options.nativeAudit) {
       session.on("Tracing.dataCollected", ({ value }) => timeline.push(...value));
       await session.send("Tracing.start", {
-        categories: "toplevel,blink.user_timing,devtools.timeline",
+        categories: options.nativeAudit
+          ? "toplevel,blink,blink.user_timing,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.stack,disabled-by-default-devtools.timeline.invalidationTracking,v8,disabled-by-default-v8.gc,cc"
+          : "toplevel,blink.user_timing,devtools.timeline",
         transferMode: "ReportEvents",
       });
+    }
+    if (options.trace || options.cpuProfile || options.nativeAudit) {
       await session.send("Profiler.enable");
       await session.send("Profiler.start");
     }
@@ -299,10 +312,30 @@ export async function startEngineMeasurement(
       return Object.fromEntries(metrics.map(({ name, value }) => [name, value]));
     };
     const before = await read();
+    if (options.allocations) {
+      // HeapProfiler omits sourceURL for evaluated scripts; Debugger retains it.
+      session.on("Debugger.scriptParsed", ({ scriptId, url }) => scriptUrls.set(scriptId, url));
+      await session.send("Debugger.enable");
+      await session.send("HeapProfiler.startSampling", {
+        samplingInterval: 4096,
+        includeObjectsCollectedByMajorGC: true,
+        includeObjectsCollectedByMinorGC: true,
+      });
+    }
     return {
       async stop(): Promise<EngineMeasurement> {
         try {
           const after = await read();
+          const allocations = options.allocations
+            ? (await session.send("HeapProfiler.stopSampling")).profile
+            : undefined;
+          if (allocations) {
+            const restoreUrl = (node: typeof allocations.head) => {
+              node.callFrame.url ||= scriptUrls.get(node.callFrame.scriptId) ?? "";
+              node.children.forEach(restoreUrl);
+            };
+            restoreUrl(allocations.head);
+          }
           const delta = (key: string, factor = 1_000) => {
             const previous = before[key];
             const current = after[key];
@@ -320,8 +353,10 @@ export async function startEngineMeasurement(
             return (current - previous) * factor;
           };
           let profile: unknown;
-          if (options.trace) {
+          if (options.trace || options.cpuProfile || options.nativeAudit) {
             profile = (await session.send("Profiler.stop")).profile;
+          }
+          if (options.trace || options.nativeAudit) {
             const complete = new Promise<void>((resolve) => {
               session.once("Tracing.tracingComplete", () => resolve());
             });
@@ -342,10 +377,14 @@ export async function startEngineMeasurement(
               cpuMs: delta("TaskDuration"),
               notes: [
                 "Chromium Performance threadTicks records renderer main-thread CPU. cpuMs is TaskDuration, not total renderer-process CPU.",
-                ...(options.trace ? ["Tracing and V8 sampling add instrumentation overhead."] : []),
+                ...(options.trace || options.cpuProfile || options.nativeAudit
+                  ? ["V8 sampling adds instrumentation overhead; use separate timing runs."]
+                  : []),
               ],
             },
-            ...(options.trace ? { timeline, profile } : {}),
+            ...(options.trace || options.nativeAudit ? { timeline } : {}),
+            ...(options.trace || options.cpuProfile || options.nativeAudit ? { profile } : {}),
+            ...(allocations ? { allocations } : {}),
           };
         } finally {
           await session.detach();

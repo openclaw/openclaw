@@ -1,10 +1,16 @@
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import type { SecretRef } from "openclaw/plugin-sdk/secret-ref-runtime";
 import { crabboxCommandOutput, leaseRunArgs, runCrabboxCommand } from "./crabbox-worker-command.js";
+import type { createCrabboxWorkerLeaseLifecycle } from "./crabbox-worker-lease-lifecycle.js";
 import { createCrabboxNodeRuntimeSetup } from "./crabbox-worker-node-enrollment.js";
-import { runProvisionSetup } from "./crabbox-worker-provision-commands.js";
+import {
+  remainingProvisionTimeout,
+  runProvisionSetup,
+} from "./crabbox-worker-provision-commands.js";
 import { runCrabboxSetupEgress } from "./crabbox-worker-setup-egress.js";
 import {
+  CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS,
+  CRABBOX_SETUP_TIMEOUT_MS,
   resolveCrabboxNodeEnrollmentTimeoutMs,
   WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS,
 } from "./crabbox-worker-timeouts.js";
@@ -13,6 +19,32 @@ import type { RecipePreparation } from "./crabbox-worker-warm-image-recipe.js";
 type ProjectPreparation = NonNullable<
   NonNullable<Parameters<WorkerProvider["provision"]>[2]>["project"]
 >;
+
+export function createCrabboxPreparedProjectRefresh(params: {
+  signal: AbortSignal;
+  resolveLeaseContext: ReturnType<typeof createCrabboxWorkerLeaseLifecycle>["resolveLeaseContext"];
+}): NonNullable<WorkerProvider["refreshPreparedProject"]> {
+  return async (lease, project) => {
+    const signal = AbortSignal.any([params.signal, project.signal]);
+    const assertCurrent = () => {
+      signal.throwIfAborted();
+      project.assertCurrent();
+    };
+    assertCurrent();
+    const { context, profile } = await params.resolveLeaseContext({ ...lease, signal });
+    assertCurrent();
+    const deadline = performance.now() + CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS;
+    await prepareCrabboxProjectFiles({
+      ...context,
+      project,
+      signal,
+      setupSecrets: profile.setupSecrets,
+      assertCurrent,
+      timeoutMs: () => remainingProvisionTimeout(deadline, CRABBOX_SETUP_TIMEOUT_MS),
+    });
+    assertCurrent();
+  };
+}
 
 export async function prepareCrabboxWorkerRuntime(params: {
   context: Omit<Parameters<typeof runProvisionSetup>[0], "phase" | "setup">;
@@ -108,8 +140,9 @@ export async function prepareCrabboxProjectFiles(params: {
             signal: commandSignal,
             input: createScript?.(timeoutMs),
             timeoutMs,
+            assertCurrent,
           });
-    params.project.assertCurrent();
+    assertCurrent();
     return crabboxCommandOutput("project preparation", result);
   };
   if (params.inspectPrepared) {
@@ -117,6 +150,7 @@ export async function prepareCrabboxProjectFiles(params: {
       throw new Error("Enrolled project cannot verify its completed workspace");
     }
     await params.project.inspectPreparedWorkspace({
+      recordRecipePreparation: params.recordRecipePreparation,
       runScript: (input, signal) => run(leaseRunArgs(params), signal, () => input),
     });
     return undefined;

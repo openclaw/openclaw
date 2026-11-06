@@ -15,6 +15,7 @@ import {
 import { createStandaloneSourceEntries } from "../../scripts/lib/bun-standalone-source-entries.mjs";
 import { createStandaloneSourceGraph } from "../../scripts/lib/bun-standalone-source-graph.mjs";
 import { createStandaloneSourceParser } from "../../scripts/lib/bun-standalone-source-parser.mjs";
+import { runStandaloneBootstrap } from "../helpers/standalone-bootstrap.js";
 
 const parse = createStandaloneSourceParser();
 const temporary: string[] = [];
@@ -212,7 +213,7 @@ export function parse(text) { return require("syntax-library").parse(text); }`;
       process: { dlopen },
     });
     const requireAdapter = createStandaloneRequireAdapter({ runtimeRoot: root, embeddedPaths: {} });
-    vm.runInContext(requireAdapter.bootstrap, context);
+    runStandaloneBootstrap(requireAdapter.bootstrap, context);
     const load = context["__openclawStandaloneCreateRequire"](
       createRequire,
       path.join(relocated, "entry.mjs"),
@@ -495,6 +496,8 @@ const requireAdapter = createStandaloneRequireAdapter({ runtimeRoot: root, embed
 const bootstrap = [
   'import path from "node:path";',
   'import { fileURLToPath, pathToFileURL } from "node:url";',
+  'import { createRequire } from "node:module";',
+  'import.meta.require = createRequire(import.meta.url);',
   'const root = ' + JSON.stringify(root) + ';',
   'globalThis.__openclawStandaloneRootUrl = pathToFileURL(root + "/").href;',
   'const entries = ' + JSON.stringify(embeddedPaths) + ';',
@@ -618,7 +621,7 @@ console.log("full-ws loaded without node_modules");
         .replace(finalized.bootstrapReplacement.search, finalized.bootstrapReplacement.replacement),
       context,
     );
-    vm.runInContext(
+    runStandaloneBootstrap(
       createStandaloneRequireAdapter({ runtimeRoot: runtime.root, embeddedPaths }).bootstrap,
       context,
     );
@@ -691,7 +694,7 @@ console.log("full-ws loaded without node_modules");
           ? filename
           : embeddedPaths[path.relative(root, filename)],
     });
-    vm.runInContext(requireAdapter.bootstrap, context);
+    runStandaloneBootstrap(requireAdapter.bootstrap, context);
     pruneStandaloneRuntime(planStandaloneRuntime(root, finalized.files));
     const fromRoot = context["__openclawStandaloneCreateRequire"](
       createRequire,
@@ -763,7 +766,7 @@ console.log("full-ws loaded without node_modules");
     const { context, finalized } = evaluate(adapter, {}, root);
     const requireAdapter = createStandaloneRequireAdapter({ runtimeRoot: root, embeddedPaths: {} });
     Object.assign(context, { embedded: () => undefined, commonJsEntries: new Set() });
-    vm.runInContext(requireAdapter.bootstrap, context);
+    runStandaloneBootstrap(requireAdapter.bootstrap, context);
     pruneStandaloneRuntime(planStandaloneRuntime(root, finalized.files));
     const fromA = context["__openclawStandaloneCreateRequire"](
       createRequire,
@@ -823,7 +826,7 @@ console.log("full-ws loaded without node_modules");
         .replace(finalized.bootstrapReplacement.search, finalized.bootstrapReplacement.replacement),
       context,
     );
-    vm.runInContext(requireAdapter.bootstrap, context);
+    runStandaloneBootstrap(requireAdapter.bootstrap, context);
     pruneStandaloneRuntime(planStandaloneRuntime(root, finalized.files));
     expect(fs.existsSync(path.join(root, "node_modules"))).toBe(false);
     const load = context["__openclawStandaloneCreateRequire"](
@@ -901,7 +904,7 @@ console.log("full-ws loaded without node_modules");
       ),
       embedded: (filename: string) => embeddedPaths[path.relative(root, filename)],
     });
-    vm.runInContext(
+    runStandaloneBootstrap(
       createStandaloneRequireAdapter({ runtimeRoot: root, embeddedPaths }).bootstrap,
       context,
     );
@@ -1012,7 +1015,7 @@ console.log("full-ws loaded without node_modules");
       embedded: () => undefined,
       __openclawStandaloneRootUrl: pathToFileURL(destination + "/").href,
     });
-    vm.runInContext(
+    runStandaloneBootstrap(
       createStandaloneRequireAdapter({ runtimeRoot: root, embeddedPaths: {} }).bootstrap,
       context,
     );
@@ -1164,7 +1167,9 @@ console.log("full-ws loaded without node_modules");
         .files.filter((file: { category: string }) => file.category !== "dependencyMetadata")
         .map((file: { source: string }) => path.relative(owner, path.join(root, file.source)))
         .toSorted();
-      expect(actual).toEqual(retained.toSorted());
+      expect(actual).toEqual(
+        retained.toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
+      );
     },
   );
 
@@ -1314,7 +1319,7 @@ try { exports.getLoadablePath(); } catch (error) { console.error(error.code); pr
     );
     expect(untransformed.status, untransformed.stderr).toBe(1);
     expect(untransformed.stderr.trim()).toBe("MODULE_NOT_FOUND");
-    vm.runInContext(
+    runStandaloneBootstrap(
       adapter.bootstrap
         .replace(/^import[^\n]+\n/, "")
         .replace(

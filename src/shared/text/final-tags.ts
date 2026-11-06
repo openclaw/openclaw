@@ -67,7 +67,7 @@ export function findFinalTagMatches(text: string): FinalTagMatch[] {
       continue;
     }
     matches.push({
-      index: match.index ?? 0,
+      index: match.index,
       text: tagText,
       ...parsed,
     });
