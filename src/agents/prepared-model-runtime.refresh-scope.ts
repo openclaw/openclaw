@@ -42,7 +42,11 @@ export function refreshCommittedProviderCatalogs(
       continue;
     }
     // Headless startup needs configured turn facts; acquire inventory when a client asks for it.
-    if (!owner.catalogInventory && owner.input.config.gateway?.controlUi?.enabled === false) {
+    if (
+      !owner.catalogInventory &&
+      !owner.catalogAttempt &&
+      owner.input.config.gateway?.controlUi?.enabled === false
+    ) {
       continue;
     }
     owner.catalogRecovery = undefined;
