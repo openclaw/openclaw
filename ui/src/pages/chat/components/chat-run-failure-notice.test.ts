@@ -166,3 +166,47 @@ it("shows a repeat count only for repeated failures", () => {
     expect(part("repeat")).toBeNull();
   }
 });
+
+it("names a provider's billing problem and sends its fix to Models, not another attempt", () => {
+  const onOpenModelProvider = vi.fn<(provider?: string) => void>();
+  const onRetryRun = vi.fn<(runId: string) => void>();
+  drawNotice(
+    {
+      ...failure("Payment required"),
+      runError: {
+        runId: "run-a",
+        summary: "Payment required",
+        cause: { provider: "openrouter", failoverReason: "billing" },
+      },
+    },
+    { failureActionsRunId: "run-a", onRetryRun, onOpenModelProvider },
+  );
+  expect(part("title")?.textContent).toBe("OpenRouter reports a billing problem");
+  const [openModels, tryAgain] = container.querySelectorAll<HTMLButtonElement>(
+    ".chat-run-failure__retry",
+  );
+  expect(openModels?.textContent).toBe("Open Models");
+  expect(openModels?.classList.contains("primary")).toBe(true);
+  expect(tryAgain?.classList.contains("primary")).toBe(false);
+  openModels?.click();
+  expect(onOpenModelProvider).toHaveBeenCalledExactlyOnceWith("openrouter");
+  expect(onRetryRun).not.toHaveBeenCalled();
+
+  // A failure another attempt can fix keeps its generic title and Try again.
+  noticeView = undefined;
+  container.replaceChildren();
+  drawNotice(
+    {
+      ...failure("Overloaded"),
+      runError: {
+        runId: "run-a",
+        summary: "Overloaded",
+        cause: { provider: "openrouter", failoverReason: "overloaded" },
+      },
+    },
+    { failureActionsRunId: "run-a", onRetryRun, onOpenModelProvider },
+  );
+  expect(part("title")?.textContent).toBe("Couldn’t finish this reply");
+  expect(container.querySelectorAll(".chat-run-failure__retry")).toHaveLength(1);
+  expect(query(".chat-run-failure__retry")?.classList.contains("primary")).toBe(true);
+});

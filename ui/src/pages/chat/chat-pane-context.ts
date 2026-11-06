@@ -30,6 +30,7 @@ import {
   uiConversationMatches,
 } from "../../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../../lib/terminal-availability.ts";
+import { navigateToModelProvider } from "../model-providers/navigation.ts";
 import { cachedChatAssistantIdentity, invalidateChatAvatarCache } from "./chat-avatar.ts";
 import {
   EMPTY_QUESTION_PROJECTION,
@@ -76,6 +77,15 @@ import { resetToolStream } from "./tool-stream-state.ts";
 
 export abstract class ChatPaneContext extends ChatPaneLifecycle {
   private registeredHumanMentionAccess?: HumanMentionAccess;
+  /** Opens Models at a provider, keeping the chat's agent as the settings selection. */
+  protected readonly openModelProvider = (provider?: string) =>
+    provider
+      ? navigateToModelProvider(
+          this.context,
+          this.state ? resolveChatAgentId(this.state) : null,
+          provider,
+        )
+      : this.context.navigate("model-providers");
   protected readonly getHumanMentionAccess = () => this.registeredHumanMentionAccess;
   protected readonly registerHumanMentionAccess = (access: HumanMentionAccess) => {
     this.registeredHumanMentionAccess = access;

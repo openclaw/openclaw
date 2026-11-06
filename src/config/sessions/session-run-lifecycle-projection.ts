@@ -12,6 +12,7 @@ import {
   isSubagentSessionKey,
 } from "../../routing/session-key.js";
 import type { ProviderReviewTerminalFact } from "../../sessions/provider-review-terminal.js";
+import { readRunFailureCause, type RunFailureCause } from "../../shared/run-failure-notice.js";
 import { buildUpdatedSessionGoalStatus } from "./goals-transitions.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -45,6 +46,7 @@ export type SessionLifecyclePatchEffects = {
     errorKind?: "state_contention";
     suppressErrorNotice?: boolean;
     notice?: string;
+    cause?: RunFailureCause;
   };
 };
 
@@ -67,6 +69,7 @@ export type LifecycleEventLike = { ts: number; sessionId?: string } & {
     suppressErrorNotice?: unknown;
     /** Host-authored failure copy the requester already saw; recorded verbatim. */
     errorNotice?: unknown;
+    errorObservation?: unknown;
     executionStarted?: unknown;
     livenessState?: unknown;
     timeoutPhase?: unknown;
@@ -468,8 +471,10 @@ export function projectSessionLifecyclePatch(
     eventRunId &&
     (patch.status === "failed" || patch.status === "timeout")
   ) {
+    const cause = readRunFailureCause(params.event.data?.errorObservation);
     effects.failedRun = {
       runId: eventRunId,
+      ...(cause ? { cause } : {}),
       suppressErrorNotice: params.event.data?.suppressErrorNotice === true,
       errorKind:
         params.event.data?.errorKind === "state_contention" ? "state_contention" : undefined,

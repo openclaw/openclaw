@@ -263,6 +263,24 @@
   .chat-run-failure .chat-run-failure__retry {
     padding-inline: 6px 8px;
   }
+
+  /* A named cause is the point of the row, so it takes its own line above the actions. */
+  .chat-run-failure[data-fix] {
+    flex-wrap: wrap;
+    justify-content: center;
+    row-gap: 6px;
+  }
+
+  .chat-run-failure[data-fix]::before,
+  .chat-run-failure[data-fix]::after {
+    display: none;
+  }
+
+  .chat-run-failure[data-fix] .chat-run-failure__toggle {
+    max-width: 100%;
+    flex-basis: 100%;
+    justify-content: center;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -14,6 +14,7 @@ import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
 import { isProviderRefusalNoticeText } from "../shared/assistant-error-format.js";
+import type { RunFailureCause } from "../shared/run-failure-notice.js";
 import { sanitizeSessionRunError, truncateSessionRunError } from "./session-run-error-format.js";
 import { STATE_CONTENTION_SUMMARY } from "./session-run-error-presentation.js";
 
@@ -27,6 +28,8 @@ type GatewaySessionRunFailure = {
   suppressErrorNotice?: boolean;
   /** Host-authored copy already shown to the requester; wins over error-derived copy. */
   notice?: string;
+  /** Typed provider fact for presentation; the summary stays channel-neutral copy. */
+  cause?: RunFailureCause;
   assertCommitAllowed?: () => void;
   sessionEntryCurrent?: SessionEntryCurrentCheck;
 };
@@ -57,7 +60,12 @@ export async function recordGatewaySessionRunFailure(
           "Your request couldn't be completed."),
     display: params.suppressErrorNotice !== true,
     excludeFromContext: true,
-    details: { runId, error, ...(params.errorKind ? { errorKind: params.errorKind } : {}) },
+    details: {
+      runId,
+      error,
+      ...(params.errorKind ? { errorKind: params.errorKind } : {}),
+      ...(params.cause ? { cause: params.cause } : {}),
+    },
   };
   const result = await withSessionTranscriptWriteAssertion(
     params.target,

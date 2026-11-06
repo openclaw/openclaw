@@ -16,7 +16,6 @@ import {
 import { hasSessionPresenceViewers } from "../../lib/presence-users.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
-import { navigateToModelProvider } from "../model-providers/navigation.ts";
 import { isChatBubbleMode } from "./chat-bubble-mode.ts";
 import { chatGoalRecovery, mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
 import { chatHistoryOlderSelector } from "./chat-history-request.ts";
@@ -239,8 +238,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
           permissionAccess: mutationAccess.permission,
           canSelectFull: hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null),
           onModelSetup: () => this.context.navigate("model-setup"),
-          onProviderSettings: (provider) =>
-            navigateToModelProvider(this.context, currentAgentId, provider),
+          onProviderSettings: this.openModelProvider,
           onModelAccounts: () => this.context.navigate("profile"),
         });
     const messages = catalog ? this.history.catalogMessages : state.chatMessages;
@@ -611,6 +609,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         latestFailedRunId: () =>
           chatFailureRunId(state.chatRunError, selectedChatSessionRow(state)),
       }),
+      onOpenModelProvider: this.openModelProvider,
       onUseSystemDefaultMicrophone:
         state.realtimeTalk.snapshot.realtimeTalkUseSystemDefault ?? undefined,
       onToggleRealtimeTalk: () => (providerPaused ? undefined : void state.toggleRealtimeTalk()),

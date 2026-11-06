@@ -29,6 +29,7 @@ export type ChatNoticeProps = {
     | "runActive"
     | "runWorking"
     | "onRetryRun"
+    | "onOpenModelProvider"
     | "failedMessageEditSource"
     | "onFocusComposer"
     | "onDismissPendingInput"
