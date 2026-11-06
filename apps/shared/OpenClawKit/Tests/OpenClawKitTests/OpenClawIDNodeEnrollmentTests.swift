@@ -151,6 +151,58 @@ struct OpenClawIDNodeEnrollmentTests {
         #expect(signed.hasPrefix("keyid=\(identity.signingKey),ts=\(fixture.now),sig="))
     }
 
+    @Test func lostMailResponseRetriesIdenticalRedemption() async throws {
+        let (fixture, json) = try fixture()
+        let identity = try OpenClawIDNodeIdentity(seed: OpenClawIDNodeIdentity.unhex(fixture.node_key.seed_hex))
+        let http = RetriedMailHTTP(descriptor: try #require(json["response"]).encoded)
+        let store = TrustStore()
+        let delays = RetryDelays()
+        let client = OpenClawIDNodeEnrollmentClient(http: http, trustStore: store, now: { fixture.now },
+            sleep: { await delays.append($0) })
+        let target = try await client.enroll(joinLink: fixture.node_invite.link,
+            discoveryOrigin: "https://discovery.example", identity: identity, description: description(),
+            onVerificationCode: { _ in })
+        let requests = await http.requests
+        #expect(requests.map(\.httpMethod) == ["POST", "POST", "POST", "POST", "GET"])
+        let firstBody = try #require(requests.first?.httpBody)
+        #expect(requests.prefix(4).allSatisfy { $0.httpBody == firstBody })
+        #expect(await delays.values == [1_000_000_000, 3_000_000_000, 4_000_000_000])
+        #expect(await store.saved?.state == target.state)
+
+        let canceledHTTP = RetriedMailHTTP(descriptor: Data())
+        let canceledStore = TrustStore()
+        let canceledClient = OpenClawIDNodeEnrollmentClient(http: canceledHTTP, trustStore: canceledStore,
+            now: { fixture.now }, sleep: { _ in throw CancellationError() })
+        await #expect(throws: CancellationError.self) {
+            try await canceledClient.enroll(joinLink: fixture.node_invite.link,
+                discoveryOrigin: "https://discovery.example", identity: identity, description: description(),
+                onVerificationCode: { _ in })
+        }
+        #expect(await canceledHTTP.requests.count == 1)
+        #expect(await canceledStore.saved == nil)
+    }
+
+    private actor RetryDelays {
+        var values: [UInt64] = []
+        func append(_ value: UInt64) { values.append(value) }
+    }
+
+    private actor RetriedMailHTTP: OpenClawIDNodeEnrollmentHTTP {
+        let descriptor: Data
+        var requests: [URLRequest] = []
+        init(descriptor: Data) { self.descriptor = descriptor }
+        func send(_ request: URLRequest) throws -> OpenClawIDNodeEnrollmentHTTPResponse {
+            requests.append(request)
+            switch requests.count {
+            case 1: throw URLError(.networkConnectionLost) // The server may have accepted this mail.
+            case 2: return .init(status: 429, body: Data("{\"error\":{\"retry_after\":3}}".utf8))
+            case 3: return .init(status: 503, body: Data())
+            case 4: return .init(status: 202, body: Data())
+            default: return .init(status: 200, body: descriptor)
+            }
+        }
+    }
+
     @Test func redirectsOversizeAndCancellationNeverCommit() async throws {
         let (fixture, json) = try fixture()
         let identity = try OpenClawIDNodeIdentity(seed: OpenClawIDNodeIdentity.unhex(fixture.node_key.seed_hex))
