@@ -1,10 +1,14 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRuntimeConfigReader } from "../../config/runtime-snapshot.js";
 import { createSessionVisibilityDecisionChecker } from "../../plugin-sdk/session-visibility-internal.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import { ToolInputError } from "../tool-input-error.js";
 import { jsonResult, readToolStringParam } from "./common.js";
-import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import {
+  captureGatewayToolCallerAssertion,
+  getGatewayToolCallerIdentity,
+} from "./gateway-caller-context.js";
 import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
 import { resolveSessionToolTargetAgentId } from "./scoped-session-access.js";
 import {
@@ -17,6 +21,8 @@ import {
   resolveSessionToolCreatorReadAccess,
 } from "./sessions-access.js";
 import { resolveSessionToolContext } from "./sessions-helpers.js";
+import { readSessionCommunicationEndpoint } from "./sessions-send-communication-endpoint.js";
+import { prepareSessionsSendCommunication } from "./sessions-send-communication.js";
 import { sendFailure } from "./sessions-send-helpers.js";
 import type { SessionsSendToolOptions } from "./sessions-send-tool.types.js";
 
@@ -93,9 +99,9 @@ export async function executeSessionPost(
   // Reuse the send decision so explicit outbound denials and native-child exceptions agree.
   // Preserve only the authenticated creator's tree exception; this never admits a turn.
   const readConfig = createRuntimeConfigReader(context.cfg);
-  const checkOutbound = () => {
+  const assertOutbound = () => {
     const cfg = readConfig();
-    return resolveSessionToolCreatorReadAccess(
+    const decision = resolveSessionToolCreatorReadAccess(
       createSessionVisibilityDecisionChecker({
         action: "send",
         defaultAgentId: targetAgentId,
@@ -110,37 +116,58 @@ export async function executeSessionPost(
       }).check(targetRow),
       session.createdActor,
     );
+    if (!decision.allowed) {
+      throw new Error(
+        formatSessionToolAccessDenial(decision, {
+          action: "send",
+          targetSessionKey: targetRow.key,
+        }),
+      );
+    }
   };
-  const outbound = checkOutbound();
-  if (!outbound.allowed) {
-    return sendFailure(
-      "forbidden",
-      formatSessionToolAccessDenial(outbound, {
-        action: "send",
-        targetSessionKey: targetRow.key,
+  let communication: Awaited<ReturnType<typeof prepareSessionsSendCommunication>>;
+  try {
+    assertOutbound();
+    const assertCaller = captureGatewayToolCallerAssertion();
+    const [source, target] = await Promise.all([
+      readSessionCommunicationEndpoint({
+        config: context.cfg,
+        endpoint: { agentId: requesterAgentId, sessionKey: requesterSessionKey, storePath: "" },
+        assertCurrent: () => assertCaller?.(),
       }),
-    );
-  }
-  const receipt = await callGateway({
-    method: "sessions.post",
-    sessionMutationCommitGuard: () => {
-      const current = checkOutbound();
-      if (!current.allowed) {
-        throw new Error(
-          formatSessionToolAccessDenial(current, {
-            action: "send",
-            targetSessionKey: targetRow.key,
-          }),
-        );
-      }
-    },
-    params: {
-      sessionKey: targetRow.key,
-      agentId: targetAgentId,
-      expectedSessionId: session.sessionId,
+      readSessionCommunicationEndpoint({
+        config: context.cfg,
+        endpoint: { agentId: targetAgentId, sessionKey: targetRow.key, storePath: "" },
+        assertCurrent: () => assertCaller?.(),
+      }),
+    ]);
+    communication = await prepareSessionsSendCommunication({
+      config: context.cfg,
+      intent: "passive-post",
+      source,
+      target,
       message,
-      idempotencyKey: readToolStringParam(params, "idempotencyKey") ?? toolCallId,
-    },
-  });
-  return jsonResult(receipt);
+      access: { sandboxed: opts?.sandboxed, expectedSessionId: session.sessionId },
+      assertAccessCurrent: assertOutbound,
+      callGateway,
+    });
+  } catch (error) {
+    return sendFailure("forbidden", formatErrorMessage(error));
+  }
+  try {
+    const receipt = await callGateway({
+      method: "sessions.post",
+      sessionMutationCommitGuard: communication.assertCurrent,
+      params: {
+        sessionKey: targetRow.key,
+        agentId: targetAgentId,
+        expectedSessionId: session.sessionId,
+        message,
+        idempotencyKey: readToolStringParam(params, "idempotencyKey") ?? toolCallId,
+      },
+    });
+    return jsonResult(receipt);
+  } finally {
+    communication.close();
+  }
 }

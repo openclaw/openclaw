@@ -65,6 +65,8 @@ export async function prepareSessionsSendCommunication(params: {
   source: CommunicationEndpoint;
   target: CommunicationEndpoint;
   message: string;
+  /** Passive notes share consent, not peer-turn thread targeting. */
+  intent?: "passive-post";
   /** Host annotation and source identity checked at the final admission boundary. */
   dispatchMessage?: string;
   inputProvenance?: InputProvenance;
@@ -156,6 +158,7 @@ export async function prepareSessionsSendCommunication(params: {
     // The tool preflight may have captured an older opt-in. Admission owns the
     // current destination policy, including fallbacks and the final commit guard.
     if (
+      params.intent !== "passive-post" &&
       !params.acceptedReply &&
       targetsThread &&
       policyConfigs.some(
@@ -321,7 +324,8 @@ export async function prepareSessionsSendCommunication(params: {
       }
       for (const { scope, visibility, a2aPolicy } of accessPolicies) {
         const decision = await resolveSessionToolAccess({
-          action: "send",
+          action: params.intent === "passive-post" ? "history" : "send",
+          allowCreatorRead: params.intent === "passive-post",
           watch: params.access?.watch,
           requesterAgentId: params.source.agentId,
           requesterSessionKey: params.source.sessionKey,

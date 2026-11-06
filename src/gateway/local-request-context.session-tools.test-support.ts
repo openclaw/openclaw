@@ -170,6 +170,7 @@ export function withParticipantSessionToolsFixture(
     visibility?: "self" | "tree" | "agent" | "all";
     agentToAgent?: NonNullable<OpenClawConfig["tools"]>["agentToAgent"];
     mainSend?: string[];
+    requester?: { sessionKey: string; sessionId: string };
   },
 ) {
   return withSessionToolsFixture(async (cfg) => {
@@ -185,6 +186,17 @@ export function withParticipantSessionToolsFixture(
     };
     const alice = person("Alice");
     const bob = person("Bob");
+    const requester = options?.requester ?? {
+      sessionKey: REQUESTER,
+      sessionId: "session-tools-requester-id",
+    };
+    if (options?.requester) {
+      await seedSessionToolsFixtureSession({
+        ...requester,
+        creatorId: alice.profileId,
+        visibility: "draft",
+      });
+    }
     for (const [sessionKey, sessionId, visibility, marker] of [
       [PARTICIPANT_DRAFT, PARTICIPANT_DRAFT_ID, "draft", "Alice's distinctive draft marker"],
       [PARTICIPANT_SHARED, "participant-shared-id", "shared", "Shared participant marker"],
@@ -204,16 +216,16 @@ export function withParticipantSessionToolsFixture(
       {
         owner: alice,
         config: cfg,
-        sessionKey: REQUESTER,
-        sessionId: "session-tools-requester-id",
+        sessionKey: requester.sessionKey,
+        sessionId: requester.sessionId,
         allowCollaborativeSteering: true,
       },
       async (turn) => {
         const runId = turn.runtimeIdentity.operationalRunInstance.runId;
         registerAgentRunContext(runId, {
           agentId: "main",
-          sessionKey: REQUESTER,
-          sessionId: "session-tools-requester-id",
+          sessionKey: requester.sessionKey,
+          sessionId: requester.sessionId,
         });
         try {
           await run({ cfg, turn, alice, bob });
