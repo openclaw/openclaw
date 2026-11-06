@@ -260,7 +260,7 @@ export function removeSidebarSnapshotSession(
     windowKeys: model.windowKeys.filter((value) => retain({ key: value })),
     onlineUsers: model.onlineUsers.map((viewer) => ({
       ...viewer,
-      watchedSessions: viewer.watchedSessions.filter((sessionKey) => retain({ key: sessionKey })),
+      watchedSessions: viewer.watchedSessions.filter((watchedKey) => retain({ key: watchedKey })),
     })),
     pinnedSessions: prune(model.pinnedSessions),
     pages: prune(model.pages),
