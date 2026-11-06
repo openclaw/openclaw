@@ -2072,7 +2072,6 @@
     "probe:anthropic:prompt": "node --import ./scripts/tsx.mjs scripts/anthropic-prompt-probe.ts",
     "prompt:snapshots:check": "node --import ./scripts/tsx.mjs scripts/generate-prompt-snapshots.ts --check",
     "prompt:snapshots:gen": "node --import ./scripts/tsx.mjs scripts/generate-prompt-snapshots.ts --write",
-    "prompt:snapshots:sync-codex-model": "node --import ./scripts/tsx.mjs scripts/sync-codex-model-prompt-fixture.ts",
     "protocol:check": "pnpm protocol-registry:check && pnpm protocol:gen && node scripts/prepare-native-protocol.mjs --check && node --import ./scripts/tsx.mjs scripts/check-protocol-since.mts",
     "protocol:check:kotlin": "node scripts/prepare-native-protocol.mjs --language kotlin --check",
     "protocol:check:swift": "node scripts/prepare-native-protocol.mjs --language swift --check",

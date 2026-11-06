@@ -5,6 +5,7 @@ import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { ignoreMissingPath } from "./errno.js";
 import { normalizeGitPathForFilesystem } from "./git-exec.js";
 import { DEV_BRANCH } from "./update-channels.js";
+import type { GitFetchTarget } from "./update-git-metadata.js";
 import { isFailedUpdateStep, createUpdateStepFailureError } from "./update-run-step.js";
 import { reportUpdateStepCompletion, runStep } from "./update-runner-command.js";
 import {
@@ -234,26 +235,66 @@ export function runGitCleanCheckStep(options: RunStepOptions) {
   });
 }
 
-export function runGitUpstreamStep(options: RunStepOptions) {
-  return runClassifiedGitStep(options, (upstreamStep) => {
-    if (
-      typeof upstreamStep.exitCode === "number" &&
-      upstreamStep.exitCode !== 0 &&
-      !upstreamStep.signal &&
-      !upstreamStep.killed &&
-      !upstreamStep.outputLimitExceeded &&
-      (!upstreamStep.termination || upstreamStep.termination === "exit") &&
-      upstreamStep.exitCode !== 130 &&
-      upstreamStep.exitCode !== 143
-    ) {
-      const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
-      upstreamStep.advisory = {
-        kind: "recoverable-maintenance",
-        message: `Skipped Git upstream tracking setup. Complete it with: git ${options.argv.slice(1).map(quote).join(" ")}. Reason: ${upstreamStep.stderrTail || "git branch failed"}`,
-      };
+export async function runGitUpstreamSteps(
+  options: RunStepOptions,
+  trackingRef: string | null,
+  source: GitFetchTarget | null,
+): Promise<UpdateStepResult | undefined> {
+  const git = ["git", "-C", options.cwd];
+  // Keep cached tracking behavior; an absent cache still has an authoritative source.
+  const commands = trackingRef
+    ? [[...git, "branch", "--set-upstream-to", trackingRef, DEV_BRANCH]]
+    : source
+      ? [
+          [
+            ...git,
+            "config",
+            "--local",
+            "--replace-all",
+            `branch.${DEV_BRANCH}.remote`,
+            source.remote,
+          ],
+          [
+            ...git,
+            "config",
+            "--local",
+            "--replace-all",
+            `branch.${DEV_BRANCH}.merge`,
+            source.mergeRef,
+          ],
+        ]
+      : [];
+  let lastStep: UpdateStepResult | undefined;
+  for (const [index, argv] of commands.entries()) {
+    lastStep = await runClassifiedGitStep(
+      { ...options, name: index === 0 ? options.name : `${options.name}-merge`, argv },
+      (upstreamStep) => {
+        if (
+          typeof upstreamStep.exitCode === "number" &&
+          upstreamStep.exitCode !== 0 &&
+          !upstreamStep.signal &&
+          !upstreamStep.killed &&
+          !upstreamStep.outputLimitExceeded &&
+          (!upstreamStep.termination || upstreamStep.termination === "exit") &&
+          upstreamStep.exitCode !== 130 &&
+          upstreamStep.exitCode !== 143
+        ) {
+          const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
+          const repair = commands.map((command) => command.map(quote).join(" ")).join(" && ");
+          upstreamStep.advisory = {
+            kind: "recoverable-maintenance",
+            message: `Skipped Git upstream tracking setup. Complete it with: ${repair}. Reason: ${upstreamStep.stderrTail || "Git upstream setup failed"}`,
+          };
+        }
+        return upstreamStep;
+      },
+    );
+    // Retain best-effort setup; an incomplete pair reports both repair commands.
+    if (isFailedUpdateStep(lastStep) || lastStep.exitCode !== 0) {
+      break;
     }
-    return upstreamStep;
-  });
+  }
+  return lastStep;
 }
 
 export async function runGitActivationBranchCheckStep(stepOptions: RunStepOptions, branch: string) {

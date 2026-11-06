@@ -6,6 +6,7 @@ import { codexAppServerStartOptionsKey } from "./config-options.js";
 import { shouldRequireCodexSandboxExecServerEnvironment } from "./dynamic-tool-build.js";
 import { prepareCodexAttemptConnection } from "./run-attempt-connection.js";
 import {
+  createAgentLifecycleHarness,
   createParams,
   createCodexRuntimePlanFixture,
   setupRunAttemptTestHooks,
@@ -19,11 +20,7 @@ import {
   registerCodexTestSessionIdentity,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
-import {
-  createAppServerOptions,
-  createLeasedCodexLifecycleHarness,
-  startOrResumeThread,
-} from "./thread-lifecycle.test-fixtures.js";
+import { createAppServerOptions, startOrResumeThread } from "./thread-lifecycle.test-fixtures.js";
 import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
 const provisionWorker = useCodexWorkerProvisioningFixture();
@@ -39,8 +36,7 @@ describe("Codex local tool environment placement", () => {
     "preserves native shell policy with request PATH $requestPath and gitOnly=$gitOnly",
     async ({ requestPath, gitOnly }) => {
       const workspaceDir = path.join(tempDir, "workspace");
-      const fixture = await createLeasedCodexLifecycleHarness({
-        agentDir: path.join(tempDir, "agent"),
+      const fixture = await createAgentLifecycleHarness({
         respond: async (method: string) => {
           if (method === "config/read") {
             return {
