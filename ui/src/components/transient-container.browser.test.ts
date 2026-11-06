@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { copyToClipboard } from "../lib/clipboard.ts";
+import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { item, mountMenu, openMenu, surface as menuSurface } from "../test-helpers/solid-menu.tsx";
 import "./modal-dialog.tsx";
 import { mountNativeLinkMenu } from "./native-link-menu.runtime.tsx";
@@ -48,6 +49,7 @@ describe.runIf("__vitest_browser__" in globalThis)("native modal transient surfa
     });
     expect(menu).not.toBeNull();
     await menu!.updateComplete;
+    finishElementAnimations(dialog);
     const actions = menu!.querySelectorAll<HTMLElement>(".session-menu__item");
     expect(actions).toHaveLength(3);
     for (const action of actions) {
