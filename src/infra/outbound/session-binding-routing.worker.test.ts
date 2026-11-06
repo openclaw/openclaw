@@ -6,7 +6,10 @@ import {
 } from "../../../test/helpers/sqlite-parent-observer.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveBoundAcpDispatchSessionKey } from "../../auto-reply/reply/dispatch-from-config.context.js";
-import { resolveIngressFailureDisposition } from "../../channels/message/ingress-retry-policy.js";
+import {
+  DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
+  resolveIngressFailureDisposition,
+} from "../../channels/message/ingress-retry-policy.js";
 import { buildChannelInboundEventContext } from "../../plugin-sdk/channel-inbound.js";
 import {
   getSessionBindingService,
@@ -208,16 +211,19 @@ it.each(
         now,
       });
     expect(disposition(6)).toMatchObject({ kind: "release", attempt: 7 });
+    expect(disposition(7)).toMatchObject({ kind: "release", attempt: 8 });
+    expect(
+      resolveIngressFailureDisposition({
+        err: failure,
+        event: { receivedAt: now - DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS, attempts: 7 },
+        formatError: String,
+        now,
+      }),
+    ).toMatchObject({ kind: "fail", reason: "retry-limit-exceeded", attempt: 8 });
     if (change === "owner-retired") {
-      expect(disposition(7)).toMatchObject({
-        kind: "fail",
-        reason: "session-start-conflict-retry-limit",
-        attempt: 8,
-      });
       expect(failure).toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
     } else {
       expect(failure).toMatchObject({ code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED" });
-      expect(disposition(7)).toMatchObject({ kind: "release", attempt: 8 });
     }
   } finally {
     manager?.stop();
