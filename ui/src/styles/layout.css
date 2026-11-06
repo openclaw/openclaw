@@ -4181,9 +4181,15 @@ html.openclaw-native-web-chrome
   background: none;
 }
 
+/* Fills the avatar slot so the mark carries the same weight as a loaded avatar. */
+.sidebar-agent-card__avatar > .gateway-identity-placeholder {
+  width: 100%;
+  height: 100%;
+}
+
 .gateway-identity-placeholder svg {
-  width: 19px;
-  height: 19px;
+  width: 72%;
+  height: 72%;
 }
 .sidebar-connection-skeleton {
   padding: 18px 14px;
