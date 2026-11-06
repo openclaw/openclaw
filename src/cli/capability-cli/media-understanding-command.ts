@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Command } from "commander";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { isMissingMediaUnderstandingProvider } from "./media-understanding-result.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText } from "./output.js";
@@ -61,12 +62,16 @@ export function registerMediaUnderstandingCommand(parent: Command, kind: "audio"
         const activeModel = requireProviderModelOverride(opts.model);
         const filePath = await resolveMediaFilePath(file);
         const input = { filePath, cfg, agentId, agentDir, activeModel };
+        const signal = getAsyncWorkSignal();
         const result = audio
-          ? await transcribeAudioFile({
-              ...input,
-              language: opts.language,
-              prompt: opts.prompt,
-            })
+          ? await transcribeAudioFile(
+              {
+                ...input,
+                language: opts.language,
+                prompt: opts.prompt,
+              },
+              signal ? { signal, assertCurrent: () => signal.throwIfAborted() } : undefined,
+            )
           : await describeVideoFile(input);
         if (!result.text) {
           if (audio && isMissingMediaUnderstandingProvider(result)) {

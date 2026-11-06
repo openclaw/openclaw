@@ -21,15 +21,17 @@ import type {
   RealtimeTranscriptionSession,
 } from "../realtime-transcription/provider-types.js";
 import type {
-  RealtimeVoiceBridge,
-  RealtimeVoiceBrowserSession,
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceBridgeCreateRequest,
+  RealtimeVoiceProviderConfiguredContext,
+  RealtimeVoiceProviderResolveConfigContext,
+} from "../talk/provider-contexts.js";
+import type {
+  RealtimeVoiceBridge,
+  RealtimeVoiceBrowserSession,
   RealtimeVoiceProviderCapabilities,
   RealtimeVoiceProviderConfig,
-  RealtimeVoiceProviderConfiguredContext,
   RealtimeVoiceProviderId,
-  RealtimeVoiceProviderResolveConfigContext,
 } from "../talk/provider-types.js";
 import type { TranscriptSourceProvider as TranscriptsSourceProviderCapability } from "../transcripts/provider-types.js";
 import type {
@@ -324,6 +326,17 @@ export type WorkerRecipePreparation = {
   ignoredPropertiesNote?: string;
   note?: string;
   phaseDurationsMs?: {
+    retainedGit?: number;
+    retainedManifest?: number;
+    inspection?: number;
+    seedPreparation?: number;
+    seedTransfer?: number;
+    seedVerification?: number;
+    seedCheckout?: number;
+    seedManifest?: number;
+    gitUpdate?: number;
+    toolchainPreparation?: number;
+    preparedManifest?: number;
     onCreate?: number;
     updateContent?: number;
     detectedInstall?: number;
@@ -448,6 +461,7 @@ export type WorkerProvider = {
           /** Completed base recorded before enrollment, including a reused snapshot. */
           baseCommit?: string;
           runScript: (script: string, signal: AbortSignal) => Promise<string>;
+          recordRecipePreparation?: (value: WorkerRecipePreparation) => Promise<void>;
         }) => Promise<void>;
         /** Bound to this preparation attempt; retained callbacks reject after it closes. */
         prepare: (transport: {

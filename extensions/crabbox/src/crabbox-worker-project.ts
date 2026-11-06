@@ -152,6 +152,7 @@ export async function prepareCrabboxProjectFiles(params: {
     }
     await params.project.inspectPreparedWorkspace({
       baseCommit: params.inspectPrepared.baseCommit,
+      recordRecipePreparation: params.recordRecipePreparation,
       runScript: (input, signal) => run(leaseRunArgs(params), signal, () => input),
     });
     return undefined;

@@ -320,10 +320,11 @@ slash commands, with the same precedence and allowlist as the execution
 workspace catalog above. They appear only when you could create a session in that
 project, and switching projects replaces the list.
 
-Skills with `disable-model-invocation: true` stay out of the `$` picker and the
-model's normal prompt, so the model cannot select them on its own. An authorized
-explicit `$skill-name` reference still invokes them; the flag only hides the
-skill from model-initiated selection.
+Eligible, user-invocable skills with `disable-model-invocation: true` appear in
+the `$` picker and inline slash suggestions, but stay out of the model's normal
+prompt so it cannot select them on its own. Selecting one inserts an explicit
+`$skill-name` reference. Bundle prompt-template commands remain available as
+leading slash commands, not as `$` references or inline skill suggestions.
 
 ## Skill Workshop
 

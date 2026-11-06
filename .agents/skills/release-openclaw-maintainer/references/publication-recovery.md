@@ -158,6 +158,30 @@ packages recorded as `npm-token-bootstrap` on the approved
 [first-package route](first-package.md); their recovery does not wait on this
 exchange. If no recovered package uses `npm-oidc`, skip this check.
 
+A regular release parent with core npm publication enabled may continue when one or more
+`npm-oidc` matrix entries return the exact npm `ENEEDAUTH` code. Each deferred
+entry uploads a `plugin-npm-deferred-auth-*` checkpoint. Treat every checkpoint
+as an unpublished package, not a successful plugin publication. After the npm
+trusted-publisher binding is repaired, run the read-only exchange above for all
+deferred package names, then publish only that selected set:
+
+```bash
+gh workflow run plugin-npm-release.yml --repo openclaw/openclaw \
+  --ref release-publish/<tooling-sha12>-<epoch> \
+  -f preflight_only=false \
+  -f publish_scope=selected \
+  -f plugins=<comma-separated-deferred-package-names> \
+  -f ref=<exact-40-character-release-sha> \
+  -f npm_dist_tag=default
+```
+
+Use the checkpoint's exact protected workflow ref, source SHA, package identity,
+and version. Omit parent publication inputs: this direct recovery has its own
+`npm-release` approval and remains valid after core publication completes.
+Reconcile every checkpoint independently when several packages were deferred.
+An error other than exact `ENEEDAUTH`, a direct recovery failure, or any
+extended-stable failure remains blocking and must not use this route.
+
 For extended-stable recovery, use the same read-only exchange from protected
 tooling, but preserve that track's full-roster and frozen-source boundaries:
 

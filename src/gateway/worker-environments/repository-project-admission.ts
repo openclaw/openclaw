@@ -495,7 +495,11 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     revalidate,
     ...(requiresGitPack
       ? {
-          prepareGitPack: async (input: { temporaryRoot: string; signal: AbortSignal }) => {
+          prepareGitPack: async (input: {
+            temporaryRoot: string;
+            signal: AbortSignal;
+            retainedCommit?: string;
+          }) => {
             assertAdmission();
             await revalidate(input.signal);
             const readIdentity = identity;

@@ -1685,7 +1685,7 @@ const startupEnglish = {
     catalogOutputTruncated: "[Output truncated]",
     onboardingDisabled: "Disabled during setup",
     commandPaletteTitle: "Search or jump to… (⌘K)",
-    openCommandPalette: "search",
+    openCommandPalette: "Search",
 
     actions: {
       copyAsMarkdown: "Copy as markdown",
