@@ -15,6 +15,7 @@ import {
 } from "../infra/device-pairing.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
+import { setDeviceTokenBindingOwner } from "./openclaw-id/device-token-binding.js";
 import { removeNodePairings, reconcileNodePairings } from "./openclaw-id/node-pairing.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
@@ -88,8 +89,18 @@ beforeAll(async () => {
   setOpenClawIdTunnelPrincipalResolver(async (key) => peers.get(key));
   setOpenClawIdTunnelPrincipalLookup((key) => peers.get(key));
   setOpenClawIdNodeDescriptionLookup((key) => (peers.has(key) ? description : undefined));
+  // The service publishes its binding writer before the tunnel admits a device.
+  const bindings = new Map<string, string>();
+  setDeviceTokenBindingOwner({
+    lookup: (deviceId, role) => bindings.get(`${deviceId}:${role}`),
+    record: async (deviceId, role, peerKey) => {
+      bindings.set(`${deviceId}:${role}`, peerKey);
+    },
+    reportMismatch: () => {},
+  });
 });
 afterAll(async () => {
+  setDeviceTokenBindingOwner(undefined);
   setOpenClawIdNodeDescriptionLookup(undefined);
   setOpenClawIdTunnelPrincipalLookup(undefined);
   setOpenClawIdTunnelPrincipalResolver(undefined);
