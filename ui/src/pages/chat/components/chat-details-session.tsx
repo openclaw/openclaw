@@ -17,7 +17,6 @@ import { ProcessesPanelData } from "../processes-panel-data.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "../session-cache.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { ChatDetailsBackground } from "./chat-details-background.tsx";
-import { cachedSubagentActivity } from "./chat-details-desktop-loader.ts";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
 import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
 import "../../../styles/chat/details-desktop.css";
@@ -35,11 +34,6 @@ import { isProcessesPresentationReady } from "./chat-processes-presentation.ts";
 import { ChatPullRequests, type ChatPullRequestsProps } from "./chat-pull-requests.tsx";
 import { syncSessionPanelInputs, useSessionPanel } from "./chat-session-panel.tsx";
 import { ChatSummaryAutomations } from "./chat-summary-automations.tsx";
-
-// Start the shared activity promise before the cached composition's presentation gate.
-if (cachedSubagentActivity) {
-  void preloadChatSubagentActivity().catch(() => undefined);
-}
 
 registerEnglishCatalog(registerSessionProgressEnglish);
 
