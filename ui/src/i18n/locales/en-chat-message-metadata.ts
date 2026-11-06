@@ -102,7 +102,7 @@ const enChatMessageMetadata = {
       },
       automationRecovery: {
         label: "System · automation recovery",
-        summary: "An automation failed — asked the agent to investigate and continue if needed.",
+        summary: "Automation failed.",
       },
       gatewayRestarted: {
         label: "System · Gateway restarted",

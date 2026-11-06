@@ -88,6 +88,7 @@ export type ChatPageHost = ChatHost &
     selectedChatSessionArchived: boolean;
     selectedChatSessionIncognito: boolean;
     agentsList: AgentsListResult | null;
+    readChatAgentsList: () => AgentsListResult | null;
     agentsSelectedId: string | null;
     pendingAbort: PendingChatAbort | null;
     pendingSessionMessageReloadSessionKey: string | null;

@@ -357,10 +357,10 @@ it("measures newly committed rows before observer registration using fractional 
   }
 });
 
-it("settles retained rows whose fractional size is rounded by CSS serialization", () => {
+it("settles retained rows only after their measured size commits", () => {
   const container = transcriptContainer();
   const row = document.createElement("div");
-  row.style.setProperty("contain-intrinsic-block-size", "258.562px");
+  row.dataset.rowSize = "258.5625";
   row.dataset.preparedRow = "true";
   container.append(row);
   const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
@@ -376,7 +376,7 @@ it("settles retained rows whose fractional size is rounded by CSS serialization"
   virtualizer.elementsCache.set("fractional", row);
 
   expect(isTranscriptRangeCommitted(container, virtualizer)).toBe(true);
-  row.style.setProperty("contain-intrinsic-block-size", "256px");
+  row.dataset.rowSize = "256";
   expect(isTranscriptRangeCommitted(container, virtualizer)).toBe(false);
   row.remove();
   expect(isTranscriptRangeCommitted(container, virtualizer)).toBe(false);
@@ -496,7 +496,7 @@ it("keeps current fractional native sizes for skipped rows", async () => {
     renderRows(rows);
     expect(transcriptSize(container)).toBe(401.5);
     for (const row of transcriptRows(container)) {
-      expect(row.style.containIntrinsicBlockSize).toBe("100.375px");
+      expect(row.dataset.rowSize).toBe("100.375");
     }
   } finally {
     transcript.dispose();

@@ -2,6 +2,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { CHAT_APP_CONTEXT_LIMITS } from "../chat-app-context.js";
 import { CHAT_WORK_CONTEXT_DETAIL_LIMITS, CHAT_WORK_CONTEXT_LIMITS } from "../chat-work-context.js";
 import {
   CHAT_HISTORY_MAX_ENTRIES,
@@ -412,6 +413,17 @@ export const ChatSendParamsSchema = closedObject({
   sessionId: Type.Optional(NonEmptyString),
   message: Type.String(),
   mentions: Type.Optional(HumanMentionsSchema),
+  appContext: Type.Optional(
+    Type.Array(
+      closedObject({
+        title: Type.String({ minLength: 1, maxLength: CHAT_APP_CONTEXT_LIMITS.title }),
+        uri: Type.Optional(Type.String({ maxLength: CHAT_APP_CONTEXT_LIMITS.uri })),
+        icon: Type.Optional(Type.String({ maxLength: CHAT_APP_CONTEXT_LIMITS.icon })),
+        description: Type.Optional(Type.String({ maxLength: CHAT_APP_CONTEXT_LIMITS.description })),
+      }),
+      { minItems: 1, maxItems: CHAT_APP_CONTEXT_LIMITS.items },
+    ),
+  ),
   workContext: Type.Optional(ChatWorkContextSchema),
   intent: Type.Optional(ChatSendIntentSchema),
   thinking: Type.Optional(Type.String()),

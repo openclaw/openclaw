@@ -58,14 +58,13 @@ it.each([false, true])(
 
     frame();
     await flushDeferredRowPrune();
-    expect(row.style.getPropertyValue("contain-intrinsic-block-size")).toBe(
-      streaming ? "" : "180px",
-    );
+    expect(row.dataset.rowSize).toBe(streaming ? undefined : "180");
+    expect(row.style.getPropertyValue("contain-intrinsic-block-size")).toBe("");
     if (streaming) {
       expect(row.style.contentVisibility).toBe("visible");
       renderRows(rows.map((item) => Object.assign({}, item, { streaming: false })));
       await flushDeferredRowPrune();
-      expect(row.style.getPropertyValue("contain-intrinsic-block-size")).toBe("180px");
+      expect(row.dataset.rowSize).toBe("180");
     }
     expect(transcriptSize(container)).toBe(180);
   },

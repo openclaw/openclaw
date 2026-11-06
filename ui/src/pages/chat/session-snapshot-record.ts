@@ -113,6 +113,18 @@ const snapshotSchema = json.object(
           ),
           permissionMode: json.optional(permissionModeSchema),
           defaultPermissionMode: json.optional(permissionModeSchema),
+          contextWindowDisplay: json.optional(
+            json.object({
+              contextWindow: json.optional(json.text),
+              contextWindowDefault: json.optional(json.text),
+              contextWindows: json.optional(
+                json.array(
+                  json.object({ id: json.text, label: json.text, contextWindow: nonnegative }),
+                  30,
+                ),
+              ),
+            }),
+          ),
         }),
       ),
     ),

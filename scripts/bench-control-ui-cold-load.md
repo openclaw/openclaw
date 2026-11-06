@@ -1,5 +1,45 @@
 # Team-scale Control UI cold-load benchmark
 
+## Native browser work and composited layers
+
+Use the same production route and interaction scenarios with `--native-audit`
+to collect Chromium native work, V8 samples, and a before/after `LayerTree`
+inventory. Run each selection at 1× and 6×; keep these diagnostic captures
+separate from uninstrumented timing comparisons.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --pages --page-phases visit,action --engines chromium --viewport both \
+  --native-audit --cpu-throttle 1 --output .artifacts/native-time/routes-1x
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --steps native-composer-keystroke,native-composer-hover \
+  --engines chromium --viewport both --native-audit --cpu-throttle 6 \
+  --output .artifacts/native-time/input-6x
+```
+
+Each observation reports exclusive style, layout, pre-paint, paint, layerization,
+commit, HTML/CSS parsing, script compilation, and GC intervals. Nested categories
+are counted once per thread. Renderer-main and other renderer threads remain
+separate. Wall durations are elapsed trace time; thread CPU is reported only
+when every overlapping event has a usable thread clock. Missing clocks are
+`null`, not zero or wall time scaled into CPU.
+
+The `(program)` breakdown intersects sample intervals with native trace slices
+on the same monotonic clock, excluding the initial profiler-start interval just
+as the CPU census does. This is correlation of sampled elapsed time, not a
+causal attribution of OS CPU. Unmatched time remains explicitly unexplained.
+Raw trace/profile data is retained in `*.native.json`; observation summaries
+also include event names for investigating unclassified work.
+
+Layer inventories include compositing reasons and computed promotion-related
+styles. The RGBA estimate is content-layer width × height × four, excluding
+scale, tiles, buffers, and GPU overhead; it is not measured GPU memory. A
+discarded screenshot requests the initial inventory on idle headless pages.
+Paint clips use layer-local coordinates and can overlap. Some Chromium builds
+update layer paint counters without emitting `layerPainted`: zero events do
+not prove no repaint. Trace `Paint` clips are recording bounds, not raster
+invalidations or proof that every pixel in that rectangle changed.
+
 ## Cross-flow CPU census
 
 Use the cross-engine harness's Chromium-only `--cpu-profile` mode to find small
