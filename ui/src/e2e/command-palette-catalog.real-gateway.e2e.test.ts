@@ -294,10 +294,15 @@ suite.define(() => {
             }
             await trigger.click();
             await primary.getByRole("listbox").waitFor({ state: "visible" });
-            expect(requests).toHaveLength(requestsBeforeOpen);
+            // A queued publication may overlap opening, but cannot acquire a provider.
+            for (const { params } of requests.slice(requestsBeforeOpen)) {
+              expect(params).toEqual({ view: "configured", agentId: "main" });
+            }
             expect(acquisitions()).toBe(acquisitionsBeforeOpen);
           };
+          const requestsBeforeFirstOpen = requests.length;
           await open();
+          expect(requests).toHaveLength(requestsBeforeFirstOpen);
           await primary
             .locator('[role="option"][data-value="ollama/refresh-fixture:latest"]')
             .waitFor({ state: "visible" });
