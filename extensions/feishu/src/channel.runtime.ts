@@ -11,7 +11,13 @@ import { feishuOutbound } from "./outbound.js";
 import { createPinFeishu, listPinsFeishu, removePinFeishu } from "./pins.js";
 import { probeFeishu } from "./probe.js";
 import { addReactionFeishu, listReactionsFeishu, removeReactionFeishu } from "./reactions.js";
-import { editMessageFeishu, getMessageFeishu, sendCardFeishu, sendMessageFeishu } from "./send.js";
+import {
+  editMessageFeishu,
+  getMessageFeishu,
+  resolveFeishuReplyAnchorMessageId,
+  sendCardFeishu,
+  sendMessageFeishu,
+} from "./send.js";
 
 export const feishuChannelRuntime = {
   assertFeishuChatMember,
@@ -31,6 +37,7 @@ export const feishuChannelRuntime = {
   getFeishuMemberInfo,
   editMessageFeishu,
   getMessageFeishu,
+  resolveFeishuReplyAnchorMessageId,
   sendCardFeishu,
   sendMessageFeishu,
   sendStickerFeishu,
