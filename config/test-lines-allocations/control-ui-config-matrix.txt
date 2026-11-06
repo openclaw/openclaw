@@ -1,2 +1,2 @@
-126
-# Configuration parser coverage and pre-body RTL boot regressions.
+148
+# Configuration parser, pre-body RTL boot regressions, and plugin mutation completion barrier.
