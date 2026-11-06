@@ -55,9 +55,9 @@ async fn pair() -> (
     )
 }
 async fn streams(client: &Connection, server: &Connection) -> (BiStream, BiStream) {
-    let local = client.open_bi().await.unwrap();
+    let local = client.open_bi(None).await.unwrap();
     local.send.write(b"x".to_vec()).await.unwrap();
-    let peer = bounded(server.accept_bi()).await.unwrap();
+    let peer = bounded(server.accept_bi(None)).await.unwrap();
     assert_eq!(peer.recv.read(1).await.unwrap(), Some(b"x".to_vec()));
     (local, peer)
 }
@@ -257,6 +257,53 @@ async fn cancel_token_aborts_one_dial_and_keeps_the_endpoint_usable() {
     .await;
     assert_eq!(outgoing.unwrap().remote_id(), server.id());
     assert!(incoming.unwrap().is_some());
+    bounded(client.shutdown()).await;
+    bounded(server.shutdown()).await;
+}
+
+#[tokio::test]
+async fn cancel_token_abandons_one_stream_wait_and_keeps_the_connection() {
+    let (server, client, conn, accepted) = pair().await;
+    // Nothing is opened toward the client yet, so this accept waits.
+    let token = CancelToken::new();
+    let mut accept = Box::pin(conn.accept_bi(Some(token.clone())));
+    assert!(
+        std::future::poll_fn(|cx| std::task::Poll::Ready(accept.as_mut().poll(cx)))
+            .await
+            .is_pending()
+    );
+    token.cancel();
+    assert!(matches!(bounded(accept).await, Err(IrohError::Cancelled)));
+
+    // Use up the peer's stream credit (the bind default is 64), so the next open waits.
+    let mut held = Vec::new();
+    for _ in 0..64 {
+        held.push(bounded(conn.open_bi(None)).await.unwrap());
+    }
+    let token = CancelToken::new();
+    let mut open = Box::pin(conn.open_bi(Some(token.clone())));
+    assert!(
+        std::future::poll_fn(|cx| std::task::Poll::Ready(open.as_mut().poll(cx)))
+            .await
+            .is_pending()
+    );
+    token.cancel();
+    assert!(matches!(bounded(open).await, Err(IrohError::Cancelled)));
+
+    // The connection is still healthy in both directions.
+    held[0].send.write(b"after cancel".to_vec()).await.unwrap();
+    let peer = bounded(accepted.accept_bi(None)).await.unwrap();
+    assert_eq!(
+        bounded(peer.recv.read(64)).await.unwrap(),
+        Some(b"after cancel".to_vec())
+    );
+    let reverse = bounded(accepted.open_bi(None)).await.unwrap();
+    reverse.send.write(b"reverse".to_vec()).await.unwrap();
+    let local = bounded(conn.accept_bi(None)).await.unwrap();
+    assert_eq!(
+        bounded(local.recv.read(64)).await.unwrap(),
+        Some(b"reverse".to_vec())
+    );
     bounded(client.shutdown()).await;
     bounded(server.shutdown()).await;
 }
