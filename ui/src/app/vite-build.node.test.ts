@@ -251,7 +251,7 @@ it("fetches a locale's co-registered error catalogs in one lazy request", async 
   setOutput(config, { codeSplitting: controlUiCodeSplitting });
   const { output, html } = await buildOutput(config);
   const chunks = output.filter((chunk) => chunk.type === "chunk");
-  const errorsChunk = chunks.find((chunk) => ids[0]! in chunk.modules)!;
+  const errorsChunk = chunks.find((chunk) => Object.hasOwn(chunk.modules, ids[0]!))!;
   expect(ids.every((id) => id in errorsChunk.modules)).toBe(true);
   expect(otherLocale in errorsChunk.modules).toBe(false);
   expect(otherNamespace in errorsChunk.modules).toBe(false);
