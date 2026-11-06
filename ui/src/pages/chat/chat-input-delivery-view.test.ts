@@ -2,7 +2,7 @@
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, expect, it } from "vitest";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { createState } from "./chat-gateway.test-support.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
@@ -12,7 +12,7 @@ import { MessageGroup } from "./components/chat-message-group-view.tsx";
 
 afterEach(cleanupSolid);
 
-it("updates an accessible receipt in place and offers no unsafe retry action", async () => {
+it("updates an accessible receipt in place and offers no unsafe retry action", () => {
   const [delivery, setDelivery] = createSignal<ReturnType<typeof readChatInputDelivery>>(null);
   const container = document.createElement("div");
   document.body.append(container);
@@ -27,9 +27,8 @@ it("updates an accessible receipt in place and offers no unsafe retry action", a
   );
   expect(container.textContent).toBe("");
   setDelivery("unconfirmed");
-  await waitForSolid(() =>
-    expect(container.querySelector("[role=status]")?.textContent).toBe("Delivery unconfirmed"),
-  );
+  flush();
+  expect(container.querySelector("[role=status]")?.textContent).toBe("Delivery unconfirmed");
   expect(container.querySelector("[role=status]")?.getAttribute("data-delivery")).toBe(
     "unconfirmed",
   );
@@ -50,7 +49,7 @@ it("updates an accessible receipt in place and offers no unsafe retry action", a
   container.remove();
 });
 
-it("keeps consecutive same-target steering receipts independently attributable", async () => {
+it("keeps consecutive same-target steering receipts independently attributable", () => {
   const state = createState({
     chatRunId: "active",
     chatMessages: ["a", "b"].map((id, index) => ({
@@ -110,9 +109,7 @@ it("keeps consecutive same-target steering receipts independently attributable",
   deliver("b", "unconfirmed", 1);
   flush();
   expect(container.querySelectorAll(".chat-group")).toHaveLength(1);
-  await waitForSolid(() =>
-    expect(container.querySelectorAll(".chat-input-delivery")).toHaveLength(2),
-  );
+  expect(container.querySelectorAll(".chat-input-delivery")).toHaveLength(2);
   deliver("a", "read", 2);
   flush();
   const receipts = container.querySelectorAll(".chat-input-delivery");

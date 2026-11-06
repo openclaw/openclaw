@@ -4,4 +4,4 @@
 # The real Gateway/model boundary cannot be replaced by ACK or helper-only tests;
 # layout/hover coverage guards names, actions, and receipt-arrival geometry.
 # Runtime proof and measured durations are recorded in PR #193910.
-891
+910
