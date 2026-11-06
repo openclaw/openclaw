@@ -17,6 +17,7 @@ import {
 import { createControlUiE2eArtifactDir } from "../../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../../ui/src/test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../../ui/src/test-helpers/control-ui-e2e-readiness.ts";
+import { qualifyDetailsSubagentsWarmState } from "../lib/control-ui-bench-warm-state.ts";
 import { installPaneChromeProbe } from "../lib/control-ui-pane-chrome-probe.ts";
 import { stopChild } from "../lib/gateway-bench-child.ts";
 import { freeProofPort, startWarmReloadAdmission } from "./warm-reload-admission.ts";
@@ -769,6 +770,7 @@ const results: Array<{
   route: "chat" | "dashboard";
   coldReset: unknown;
   warmCache: Awaited<ReturnType<typeof inspectWarmCache>> | null;
+  detailsSubagentsWarmState: Awaited<ReturnType<typeof qualifyDetailsSubagentsWarmState>>;
   runs: Array<Awaited<ReturnType<typeof captureReload>>>;
 }> = [];
 try {
@@ -1105,6 +1107,7 @@ try {
             route,
             coldReset,
             warmCache: null as Awaited<ReturnType<typeof inspectWarmCache>> | null,
+            detailsSubagentsWarmState: null,
             runs: [
               await captureReload(
                 page,
@@ -1138,14 +1141,6 @@ try {
             !(await page.locator(".chat-details:visible").count())
           ) {
             await details.first().click();
-          }
-          if (route === "chat") {
-            for (const child of fixture.fixtureSummary.ordinaryChildren) {
-              await page
-                .locator(".chat-details .chat-subagent-activity__row")
-                .getByText(child.label, { exact: true })
-                .waitFor({ state: "visible" });
-            }
           }
           if (values["composer-controls"]) {
             const model = page.locator("[data-chat-model-select]:visible").first();
@@ -1190,11 +1185,23 @@ try {
               .waitFor({ state: "visible" });
           }
           const target = fixture.fixtureSummary.targets[route === "chat" ? 0 : 1]!;
+          if (route === "chat" && fixture.fixtureSummary.ordinaryChildren.length > 0) {
+            const qualified = await page.waitForFunction(qualifyDetailsSubagentsWarmState, {
+              sessionKey: target.key,
+              rows: fixture.fixtureSummary.ordinaryChildren,
+            });
+            results.at(-1)!.detailsSubagentsWarmState = await qualified.jsonValue();
+            await qualified.dispose();
+          }
           const cache = await inspectWarmCache(page, target.key);
           results.at(-1)!.warmCache = cache;
           await writeFile(
             path.join(arm.directory, route, "warm-cache.json"),
-            JSON.stringify(cache, null, 2),
+            JSON.stringify(
+              { ...cache, detailsSubagentsWarmState: results.at(-1)!.detailsSubagentsWarmState },
+              null,
+              2,
+            ),
           );
           if (reloads > 0 && cache.targetSnapshots === 0) {
             throw new Error(
