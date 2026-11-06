@@ -653,10 +653,10 @@ export type ChatDetailsDesktopCompositionProps = Omit<Props, "desktop"> & {
 /** Desktop entry point: one scroll body and the native Progress owner after Outputs. */
 export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositionProps) {
   // Native section roots commit independently; admit cached activity before any sibling paints.
-  const prepared = createMemo(() =>
+  const prepared = createMemo<boolean>(() =>
     props.presented &&
     props.props?.cachedDetails?.subagents?.rows.some((row) => row.listed === false)
-      ? preloadChatSubagentActivity()
+      ? preloadChatSubagentActivity().then(() => true)
       : true,
   );
   onSettled(() => props.onReady?.());
