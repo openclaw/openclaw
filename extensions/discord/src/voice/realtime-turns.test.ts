@@ -719,7 +719,10 @@ defineDiscordVoiceTests(
       expect(controlRealtimeVoiceAgentRunMock).not.toHaveBeenCalled();
       expect(agentCommandMock).not.toHaveBeenCalled();
 
-      bridgeParams?.onTranscript?.("user", "What's your take on rebuilding everything?", true);
+      await emitFinalRealtimeUserTranscript(
+        bridgeParams,
+        "What's your take on rebuilding everything?",
+      );
 
       await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledTimes(1));
       expect(controlRealtimeVoiceAgentRunMock).not.toHaveBeenCalled();
