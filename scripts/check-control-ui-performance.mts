@@ -69,12 +69,12 @@ const controlUiPerformanceBudgets = {
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
-  // Separately indexed field selectors cut Usage style CPU by 20–24%.
-  // Measured total CSS is 323,426 B gzip / 1,670,773 B raw; retain 64 B headroom.
+  // Separately indexed class lists avoid universal selector buckets.
+  // Main's 323,552 B gzip / 1,672,385 B raw measurement retains 64 B headroom.
   // Patrick approved compact Template preview growth (2026-11-05):
   // +1,386 B gzip / +4,379 B raw; preserve existing headroom.
-  totalCssGzipBytes: 324_876,
-  totalCssRawBytes: 1_675_216,
+  totalCssGzipBytes: 325_002,
+  totalCssRawBytes: 1_676_828,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
