@@ -1,12 +1,14 @@
 import { sql } from "kysely";
 import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import { hashText, type MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
+import { MEMORY_INDEX_CJK_FTS_TABLE } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import { isPostgresSqlConnection } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   runSqliteImmediateTransactionSync,
+  tableExists,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import {
   writeMemoryChunks,
@@ -375,13 +377,36 @@ export class MemorySourceIndexKernel {
     this.deleteVectors(pathname, source, ids, cleanup);
     // Recall metadata and provenance cascade; the body FTS trigger follows rowids.
     for (let offset = 0; offset < ids.length; offset += SOURCE_WRITE_BATCH_SIZE) {
+      const batch = ids.slice(offset, offset + SOURCE_WRITE_BATCH_SIZE);
+      // The companion Han-bigram rows key on the canonical chunk rowid, so
+      // they have to go before the canonical rows disappear.
+      this.deleteCjkBigramRows(batch);
       executeSqliteQuerySync(
         this.database,
         getNodeSqliteKysely<SourceIndexDatabase>(this.database)
           .deleteFrom("memory_index_chunks")
-          .where("id", "in", ids.slice(offset, offset + SOURCE_WRITE_BATCH_SIZE)),
+          .where("id", "in", batch),
       );
     }
+  }
+
+  /** Remove the companion rows that belong to the given canonical chunk ids. */
+  private deleteCjkBigramRows(ids: readonly string[]): void {
+    if (
+      ids.length === 0 ||
+      isPostgresSqlConnection(this.database) ||
+      !tableExists(this.database, MEMORY_INDEX_CJK_FTS_TABLE)
+    ) {
+      return;
+    }
+    this.database
+      .prepare(
+        `DELETE FROM ${MEMORY_INDEX_CJK_FTS_TABLE} WHERE "rowid" IN (` +
+          `SELECT chunk_rowid FROM memory_index_chunks WHERE id IN (${ids
+            .map(() => "?")
+            .join(", ")}))`,
+      )
+      .run(...ids);
   }
 
   private deleteVectors(
@@ -443,6 +468,19 @@ export class MemorySourceIndexKernel {
 
   private clear(pathname: string, source: MemorySource): void {
     this.deleteVectors(pathname, source);
+    // The companion Han-bigram rows key on the canonical chunk rowid, so they
+    // have to go before the canonical rows disappear.
+    if (
+      !isPostgresSqlConnection(this.database) &&
+      tableExists(this.database, MEMORY_INDEX_CJK_FTS_TABLE)
+    ) {
+      this.database
+        .prepare(
+          `DELETE FROM ${MEMORY_INDEX_CJK_FTS_TABLE} WHERE "rowid" IN (` +
+            "SELECT chunk_rowid FROM memory_index_chunks WHERE path = ? AND source = ?)",
+        )
+        .run(pathname, source);
+    }
     executeSqliteQuerySync(
       this.database,
       getNodeSqliteKysely<SourceIndexDatabase>(this.database)

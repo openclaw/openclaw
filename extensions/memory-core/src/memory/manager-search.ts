@@ -21,6 +21,7 @@ import {
   tokenizeFtsQuery,
 } from "./keyword-query.js";
 import {
+  buildCompanionSearchSql,
   projectMemorySearchRow,
   resolveSnippetProjection,
   type MemorySearchRow,
@@ -323,6 +324,8 @@ function planPathKeywordSearch(params: {
 export async function searchKeyword(params: {
   db: DatabaseSync;
   ftsTable: string;
+  /** Companion Han-bigram index table, when the feature is enabled. */
+  cjkBigramTable?: string;
   query: string;
   ftsTokenizer?: "unicode61" | "trigram";
   limit: number;
@@ -339,8 +342,76 @@ export async function searchKeyword(params: {
     ftsTokenizer: params.ftsTokenizer,
     canonicalVariants: true,
     matchAny: params.matchAny,
+    cjkBigram: true,
   });
-  if (!plan.matchQuery && plan.substringTerms.length === 0) {
+  const cjkTable = params.cjkBigramTable;
+  const planWithoutCjkBigram = () =>
+    planKeywordSearch({
+      query: params.query,
+      ftsTokenizer: params.ftsTokenizer,
+      canonicalVariants: true,
+      matchAny: params.matchAny,
+    });
+  // Without the companion table the short Han terms keep their substring plan
+  // so the query still recalls what it recalled before.
+  let effectivePlan = !cjkTable && plan.cjkBigramQuery ? planWithoutCjkBigram() : plan;
+  if (!effectivePlan.matchQuery && effectivePlan.cjkBigramQuery && cjkTable) {
+    // The companion bigram index is the only leg that can rank a
+    // two-character Han term, so it owns this query outright.
+    const terms = effectivePlan.substringTerms;
+    const filter = buildSubstringFilter(terms, "c.text", params.matchAny);
+    if (terms.length > 0) {
+      registerSubstringSqlFunction(params.db, terms);
+    }
+    const sourceFilter = buildSqliteMemorySourceFilter(params.sourceFilter, "c");
+    const mixedOr = Boolean(params.matchAny && terms.length > 0);
+    try {
+      const sql = buildCompanionSearchSql({
+        cjkTable,
+        filter,
+        sourceFilterSql: sourceFilter.sql,
+        mixedOr,
+      });
+      const queryParams = mixedOr
+        ? [
+            effectivePlan.cjkBigramQuery,
+            ...sourceFilter.params,
+            params.limit,
+            ...terms,
+            ...sourceFilter.params,
+            params.limit,
+            params.limit,
+          ]
+        : [effectivePlan.cjkBigramQuery, ...terms, ...sourceFilter.params, params.limit];
+      const rows = params.db.prepare(sql).all(...queryParams);
+      // SAFETY: SQLite returns row records matching the requested SELECT columns.
+      const typedRows = rows as Array<MemorySearchRow & { rank: number | null }>;
+      return typedRows.map((row) => {
+        const textScore = typeof row.rank === "number" ? bm25RankToScore(row.rank) : 0;
+        const score = params.boostFallbackRanking
+          ? scoreFallbackKeywordResult({
+              queryMatchers: uniqueStrings(normalizeSearchTokens(params.query)).map((token) => ({
+                word: literalSearchMatcher(token, true),
+                substring: literalSearchMatcher(token),
+              })),
+              path: row.path,
+              text: row.text,
+              ftsScore: textScore,
+            })
+          : textScore;
+        return Object.assign(projectMemorySearchRow(row, params.snippetMaxChars, score), {
+          textScore,
+          hasBodyMatch: true as const,
+        });
+      });
+    } catch (error) {
+      // A missing or unreadable companion index must not lose recall: the
+      // substring plan still finds the same documents, just unranked.
+      console.warn(`memory search: CJK bigram index query failed: ${String(error)}`);
+      effectivePlan = planWithoutCjkBigram();
+    }
+  }
+  if (!effectivePlan.matchQuery && effectivePlan.substringTerms.length === 0) {
     return [];
   }
 
@@ -406,9 +477,9 @@ export async function searchKeyword(params: {
   };
 
   const { rows, usedMatch } = loadKeywordRowsWithFallback(
-    plan,
+    effectivePlan,
     loadRows,
-    () => plan.tokens,
+    () => effectivePlan.tokens,
     "memory search: FTS5 MATCH failed, falling back to substring search",
   );
 

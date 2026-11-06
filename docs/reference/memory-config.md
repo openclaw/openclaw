@@ -830,10 +830,18 @@ Built-in memory indexes live in each agent's OpenClaw SQLite database at
 | Key                   | Type     | Default     | Description                               |
 | --------------------- | -------- | ----------- | ----------------------------------------- |
 | `store.fts.tokenizer` | `string` | `unicode61` | FTS5 tokenizer (`unicode61` or `trigram`) |
+| `store.fts.cjk`       | `string` | unset       | Companion CJK index mode (`bigram`)       |
 
 With `trigram`, query terms shorter than three characters use substring matching,
 so short terms such as `AI` and `UK` remain searchable. Longer terms keep
 full-text matching, including in queries that also contain short terms.
+
+Substring matching confirms recall but carries no BM25 score, so the result
+order of a short-term query stays driven by the vector leg. Set
+`store.fts.cjk: "bigram"` to add a companion index that stores a character
+bigram encoded copy of the chunk text, which keeps two-character Chinese terms
+indexable and BM25-ranked. The companion index is derived state: enabling it
+rebuilds only the FTS leg and never re-embeds.
 
 ---
 
