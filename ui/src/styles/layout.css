@@ -4100,60 +4100,82 @@ html.openclaw-native-web-chrome
 
 /* Connection feedback belongs inside the application canvas, not a second app shell. */
 .gateway-connection-view {
-  display: grid;
-  place-items: center;
+  position: relative;
   min-height: 100%;
-  padding: 48px 32px;
 }
+/* Every status page shares one anatomy: a left-aligned column whose title holds a fixed
+   height a little above centre, so it never jumps between states. */
 .gateway-connection-view__body {
-  width: min(100%, 480px);
-  padding-bottom: 9vh;
+  position: absolute;
+  top: 34%;
+  left: 50%;
+  width: min(440px, calc(100% - 48px));
+  transform: translateX(-50%);
 }
-.gateway-connection-view__mark {
-  display: grid;
-  place-items: center;
-  width: 48px;
-  height: 48px;
-  margin-bottom: 28px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--bg-elevated);
-  color: var(--accent);
-}
-.gateway-connection-view__mark .session-run-spinner {
-  width: 22px;
-  height: 22px;
-}
-
 .gateway-connection-view h1 {
+  position: relative;
   margin: 0;
-  font-size: clamp(24px, 2.5vw, 32px);
-  line-height: 1.2;
-  letter-spacing: -0.035em;
+  color: var(--text-strong);
+  font-size: 22px;
+  line-height: 28px;
+  letter-spacing: -0.01em;
   font-weight: 600;
+  text-wrap: balance;
+}
+/* The session spinner hangs in the title's margin, so the text never moves. */
+.gateway-connection-view__spin.session-run-spinner {
+  position: absolute;
+  top: 7px;
+  left: -26px;
+  width: 14px;
+  height: 14px;
 }
 .gateway-connection-view__description {
-  margin: 16px 0 0;
-  max-width: 42ch;
+  margin: 6px 0 0;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.7;
+  font-size: 14px;
+  line-height: 21px;
+  text-wrap: pretty;
 }
 .gateway-connection-view__actions {
-  min-height: 40px;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 28px;
+  gap: 8px;
+  margin-top: 20px;
+}
+.gateway-connection-view__actions:empty {
+  display: none;
+}
+.gateway-connection-view__actions .btn {
+  height: 32px;
+  padding: 0 14px;
+  font-size: 13px;
+  font-weight: 500;
 }
 
-@media (max-width: 640px) {
-  .gateway-connection-view {
-    padding: 32px 24px;
+@media (pointer: coarse) {
+  .gateway-connection-view__actions .btn {
+    height: 36px;
+    padding: 0 16px;
+    font-size: 14px;
   }
+}
+
+@media (max-width: 768px) {
   .gateway-connection-view__body {
-    padding-bottom: 6vh;
+    top: 30%;
+    right: 24px;
+    left: 24px;
+    width: auto;
+    transform: none;
+  }
+  .gateway-connection-view h1 {
+    font-size: 20px;
+    line-height: 26px;
+  }
+  .gateway-connection-view__spin.session-run-spinner {
+    display: none;
   }
 }
 

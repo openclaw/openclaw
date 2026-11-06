@@ -44,24 +44,23 @@ export function GatewayConnectionView(props: {
       data-connection-state={state()}
     >
       <div class="gateway-connection-view__body">
-        {/* Only a busy screen shows the status tile; a settled one leads with its title. */}
-        <Show when={busy()}>
-          <div class="gateway-connection-view__mark" aria-hidden="true">
-            <span class="session-run-spinner" />
-          </div>
-        </Show>
-        <h1 id="gateway-connection-title">{t("connection.workspace." + state() + ".title")}</h1>
+        <h1 id="gateway-connection-title">
+          <Show when={busy()}>
+            <span class="gateway-connection-view__spin session-run-spinner" aria-hidden="true" />
+          </Show>
+          {t("connection.workspace." + state() + ".title")}
+        </h1>
         <p class="gateway-connection-view__description" role="status" aria-live="polite">
           {t("connection.workspace." + state() + ".description")}
         </p>
         <div class="gateway-connection-view__actions">
           <Show when={canRetry()}>
-            <button class="btn" type="button" onClick={() => props.onRetry()}>
+            <button class="btn primary" type="button" onClick={() => props.onRetry()}>
               {t("connection.workspace.tryAgain")}
             </button>
           </Show>
           <Show when={state() === "reload"}>
-            <button class="btn" type="button" onClick={() => void props.onReload()}>
+            <button class="btn primary" type="button" onClick={() => void props.onReload()}>
               {t("connection.workspace.reloadAction")}
             </button>
           </Show>

@@ -7,14 +7,14 @@ const reload = async () => true;
 
 const states: Array<[GatewayStatus, string, string | null]> = [
   ["connecting", "Connecting to OpenClaw", null],
-  ["starting", "OpenClaw is waking up", null],
+  ["starting", "OpenClaw is starting", null],
   ["restarting", "OpenClaw is restarting", null],
   ["reconnecting", "Still connecting", null],
   ["suspending", "OpenClaw is pausing", null],
   ["suspended", "OpenClaw is paused", null],
   ["restoring", "Welcome back", null],
   ["offline", "Couldn’t reach the Gateway", "Try again"],
-  ["reload-required", "OpenClaw was updated", "Reload page"],
+  ["reload-required", "OpenClaw was updated", "Reload"],
 ];
 
 it.each(states)("pairs %s copy with an actionable control", (kind, title, action) => {

@@ -1380,14 +1380,14 @@ const startupEnglish = {
     workspace: {
       header: "OpenClaw",
       tryAgain: "Try again",
-      reloadAction: "Reload page",
+      reloadAction: "Reload",
       connecting: {
         title: "Connecting to OpenClaw",
         description: "Your workspace opens as soon as the Gateway answers.",
       },
       starting: {
-        title: "OpenClaw is waking up",
-        description: "Your workspace opens when it’s ready.",
+        title: "OpenClaw is starting",
+        description: "Hang on while the Gateway gets ready.",
       },
       restarting: {
         title: "OpenClaw is restarting",
