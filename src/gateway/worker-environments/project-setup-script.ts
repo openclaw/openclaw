@@ -110,7 +110,7 @@ const path = require("node:path");
 const os = require("node:os");
 const crypto = require("node:crypto");
 const { spawnSync } = require("node:child_process");
-const manifestScript = ${JSON.stringify(REMOTE_WORKSPACE_MANIFEST_JS)};
+const manifestScript = (inspectOnly ? 'process.argv[3] += "-read-only";' : "") + ${JSON.stringify(REMOTE_WORKSPACE_MANIFEST_JS)};
 process.umask(0o077);
 const machineHome = fs.realpathSync(os.homedir());
 let setupPath = process.env.PATH;
@@ -142,7 +142,7 @@ const git = (root, args) => {
   return result.stdout.trim();
 };
 const manifest = (root, baseCommit = input.baseCommit, priorRefs = [], manifestHome = machineHome) => {
-  const result = spawnSync(process.execPath, ["-e", manifestScript, root, baseCommit, inspectOnly ? "eligible-read-only" : "eligible", ...priorRefs.map((ref) => ref.slice(7))], { env: { ...env, HOME: manifestHome }, encoding: "utf8", timeout: 600000, maxBuffer: 262144 });
+  const result = spawnSync(process.execPath, ["-e", manifestScript, root, baseCommit, "eligible", ...priorRefs.map((ref) => ref.slice(7))], { env: { ...env, HOME: manifestHome }, encoding: "utf8", timeout: 600000, maxBuffer: 262144 });
   if (result.status !== 0 || !/^sha256:[a-f0-9]{64}$/.test(result.stdout.trim())) throw new Error("Prepared project manifest verification failed: " + (result.stderr?.trim() || result.error?.message || result.status));
   return result.stdout.trim();
 };
