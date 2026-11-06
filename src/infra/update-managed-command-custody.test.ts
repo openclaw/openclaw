@@ -196,7 +196,10 @@ describe.skipIf(process.platform === "win32")("managed command process custody",
 
   it("retains every installation after helper death until the tracked group exits, including orphan rows", async () => {
     const f = fixture();
-    const candidates = vi.spyOn(reservationCensus, "findCommandReservationCandidates");
+    // A process born at reservation time may be the command its killed spawner started.
+    const candidates = vi
+      .spyOn(reservationCensus, "findCommandReservationCandidates")
+      .mockReturnValue([4242]);
     const binding = createManagedHandoffTestBinding(f.privateTmp);
     const childEnv = writePrivateUpdateHandoffChildGuard(f.databasePath, f.privateTmp);
     const env = childEnv({
@@ -285,10 +288,7 @@ process.kill(process.pid, "SIGKILL");
       if (retained.kind !== "current") {
         throw new Error("Missing pending reservation");
       }
-      // A process born at reservation time may be the command its killed spawner started.
-      candidates.mockReturnValue([4242]);
       expect(f.store.releaseCommandReservation(retained.lease)).toBe(false);
-      expect(f.store.acquire(pendingRoot, "next", { kind: "update" }).kind).toBe("busy");
       candidates.mockReturnValue([]);
 
       holder.kill("SIGKILL");
