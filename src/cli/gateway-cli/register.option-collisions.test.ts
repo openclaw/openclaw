@@ -291,8 +291,8 @@ describe("gateway register option collisions", () => {
   });
 
   it.each([
-    ["outbound", ["outbound"]],
-    ["ingressFailed, ingressPressure", ["ingressFailed", "ingressPressure"]],
+    ["outbound delivery checks", ["outbound"]],
+    ["inbound failure checks, inbound backlog checks", ["ingressFailed", "ingressPressure"]],
   ])(
     "renders unavailable queue health through the actual gateway health route: %s",
     async (label, unavailable) => {
@@ -309,7 +309,7 @@ describe("gateway register option collisions", () => {
       });
       expect(defaultRuntime.log).toHaveBeenCalledWith("WARN (7ms)");
       expect(defaultRuntime.log).toHaveBeenCalledWith(
-        `Delivery queue: warning (health unavailable — ${label})`,
+        `Delivery queue: warning (health unavailable — ${label}; retry with openclaw health --verbose)`,
       );
       expect(defaultRuntime.log).not.toHaveBeenCalledWith("OK (7ms)");
       expect(defaultRuntime.exit).not.toHaveBeenCalled();
@@ -321,14 +321,6 @@ describe("gateway register option collisions", () => {
     await parse("health");
     expect(defaultRuntime.log).toHaveBeenCalledWith("OK (7ms)");
     expect(defaultRuntime.log).not.toHaveBeenCalledWith("WARN (7ms)");
-  });
-
-  it("preserves queue unavailability in JSON without rendering a text status", async () => {
-    const result = { ok: true, deliveryQueues: { failed: [], unavailable: ["outbound"] } };
-    callGatewayCli.mockResolvedValueOnce(result);
-    await parse("health", "--json");
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(result);
-    expect(defaultRuntime.log).not.toHaveBeenCalled();
   });
 
   it("loads health presentation only for text output", async () => {

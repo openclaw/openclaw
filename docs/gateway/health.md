@@ -486,8 +486,12 @@ If a queue-health read fails, `deliveryQueues.unavailable` identifies the unavai
 read (`outbound`, `ingressFailed`, or `ingressPressure`). The endpoint remains
 available, but an empty fallback is not a successful zero count. Both
 `openclaw health` and `openclaw gateway health` report the queue warning; the
-Gateway command uses a `WARN` headline instead of green `OK`. Healthy output and
-the JSON response are unchanged. Raw storage errors, message IDs, and content are not returned.
+Gateway command uses a `WARN` headline instead of green `OK`. The warning names
+the affected check and suggests `openclaw health --verbose` to retry diagnostics,
+not message delivery. Normal healthy text output is unchanged. JSON remains a
+snapshot passthrough: failed reads add the optional `deliveryQueues.unavailable`
+field and may include `deliveryQueues` where it was previously omitted. Raw
+storage errors, message IDs, and content are not returned.
 A permanent terminal receipt still does not prove delivery or acknowledge an
 incident. These diagnostics alone do not authorize deletion or blind retry, and
 do not create automatic owner follow-up or a global stop for other work.
