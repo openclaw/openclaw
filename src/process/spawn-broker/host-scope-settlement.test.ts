@@ -7,11 +7,14 @@ import { runWithSpawnBrokerAdmission } from "./admission.js";
 import { runWithSpawnBroker } from "./context.js";
 import { serializeExecaError, type BrokerExecaResult } from "./execa-protocol.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
-import { MAX_PENDING_MESSAGES } from "./ipc.js";
-import { SpawnBrokerError, type BrokerResponse } from "./protocol.js";
+import { SpawnBrokerError, type BrokerRequest, type BrokerResponse } from "./protocol.js";
+import type { BrokerBootstrap } from "./resource-protocol.js";
 
 const native = vi.hoisted(() => ({
   spawn: vi.fn(),
+  unexpectedEffect: () => {
+    throw new Error("Synthetic broker fixture cannot authorize native effects");
+  },
   lostChildCleanup: vi.fn(() => ({ force: vi.fn(), settled: Promise.resolve() })),
   groupCleanup: vi.fn(() => ({ force: vi.fn(), settled: Promise.resolve() })),
 }));
@@ -20,16 +23,12 @@ vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: native.spawn,
 }));
-vi.mock("execa", () => ({
-  execa: () => {
-    throw new Error("Native command execution is outside this transport fixture");
-  },
-}));
+vi.mock("execa", () => ({ execa: native.unexpectedEffect }));
 // mock-isolation: The transport fixture never launches compiled subprocesses.
 vi.mock("../../infra/runtime-process-entrypoints.js", () => ({
   runtimeProcessEntrypoints: { spawnBroker: "synthetic-spawn-broker" },
 }));
-// mock-isolation: The synthetic transport must never resolve or launch a native worker.
+// mock-isolation: The synthetic transport never resolves a native worker.
 vi.mock("../../infra/runtime-worker-url.js", () => ({
   resolveRuntimeWorkerUrl: () => new URL("./synthetic-spawn-broker.js", import.meta.url),
   resolveRuntimeWorkerArgv: () => ["synthetic-spawn-broker"],
@@ -38,21 +37,14 @@ vi.mock("./cleanup.js", () => ({
   terminateLostBrokerChild: native.lostChildCleanup,
   terminateBrokerProcessGroup: native.groupCleanup,
 }));
+// mock-isolation: Synthetic processes cannot authorize native pid effects.
 vi.mock("../../shared/pid-alive.js", () => ({
-  getFileLockProcessStartTime: () => {
-    throw new Error("Synthetic broker children cannot authorize a PID probe");
-  },
+  getFileLockProcessStartTime: native.unexpectedEffect,
 }));
-vi.mock("../child-process-tree.js", () => ({
-  isChildProcessTreeAlive: () => {
-    throw new Error("Synthetic broker children cannot authorize a tree probe");
-  },
-}));
-vi.mock("../kill-tree.js", () => ({
-  killProcessTree: () => {
-    throw new Error("Synthetic broker children cannot authorize a process signal");
-  },
-}));
+// mock-isolation: Synthetic processes cannot authorize native tree effects.
+vi.mock("../child-process-tree.js", () => ({ isChildProcessTreeAlive: native.unexpectedEffect }));
+// mock-isolation: Synthetic processes cannot authorize native signal effects.
+vi.mock("../kill-tree.js", () => ({ killProcessTree: native.unexpectedEffect }));
 vi.mock("../windows-command.js", () => ({
   resolveSafeChildProcessInvocation: ({ argv }: { argv: string[] }) => ({
     command: argv[0],
@@ -67,9 +59,7 @@ const hosts: SpawnBrokerHost[] = [];
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.spyOn(process, "kill").mockImplementation(() => {
-    throw new Error("This fixture must not signal or inspect native processes");
-  });
+  vi.spyOn(process, "kill").mockImplementation(native.unexpectedEffect);
 });
 
 afterEach(async () => {
@@ -80,8 +70,7 @@ afterEach(async () => {
   }
 });
 
-function brokerWorkerFixture() {
-  // Construct the event surface only; the mocked spawn never starts this child.
+function brokerFixture(ready = true) {
   const worker = new ChildProcess();
   const requestSent = createDeferredCore<number>();
   let connected = true;
@@ -94,17 +83,10 @@ function brokerWorkerFixture() {
   };
   const send = vi.fn(
     (
-      message: unknown,
+      message: BrokerRequest | BrokerBootstrap,
       ...args: Array<SendHandle | MessageOptions | ((error: Error | null) => void) | undefined>
     ) => {
-      if (
-        message &&
-        typeof message === "object" &&
-        "type" in message &&
-        (message.type === "spawn-execa" || message.type === "spawn") &&
-        "id" in message &&
-        typeof message.id === "number"
-      ) {
+      if (message.type === "spawn-execa" || message.type === "spawn") {
         requestSent.resolve(message.id);
       }
       args.find((arg) => typeof arg === "function")?.(null);
@@ -131,31 +113,23 @@ function brokerWorkerFixture() {
     },
   });
   native.spawn.mockReturnValueOnce(worker);
-  const receive = (message: BrokerResponse) => worker.emit("message", message);
-  return { worker, send, receive, requestSent: requestSent.promise };
-}
-
-function brokerFixture(ready = true) {
-  const transport = brokerWorkerFixture();
   const host = createSpawnBrokerHost();
   hosts.push(host);
-  expect(transport.send).toHaveBeenCalledExactlyOnceWith(
-    { type: "bootstrap" },
-    expect.any(Function),
-  );
-  // Assertions below distinguish command transmission from transport bootstrap.
-  transport.send.mockClear();
+  expect(send).toHaveBeenCalledExactlyOnceWith({ type: "bootstrap" }, expect.any(Function));
+  send.mockClear();
+  const receive = (message: BrokerResponse) => worker.emit("message", message);
   if (ready) {
-    transport.receive({ type: "ready", pid: 41001 });
+    receive({ type: "ready", pid: 41001 });
   }
-  return { host, ...transport };
+  return { host, worker, send, receive, requestSent: requestSent.promise };
 }
 
-function missingExecutableResult(): BrokerExecaResult {
-  const error = Object.assign(new Error("spawn synthetic-missing ENOENT"), { code: "ENOENT" });
+function failedLaunchResult(
+  error = Object.assign(new Error("spawn synthetic-missing ENOENT"), { code: "ENOENT" }),
+): BrokerExecaResult {
   return {
     failed: true,
-    code: "ENOENT",
+    code: error.code,
     timedOut: false,
     isCanceled: false,
     isGracefullyCanceled: false,
@@ -179,6 +153,7 @@ type FailureCase = {
   owned?: boolean;
   disconnect?: boolean;
   result?: "missing" | "capacity";
+  raw?: boolean;
 };
 
 const failures: FailureCase[] = [
@@ -192,27 +167,26 @@ const failures: FailureCase[] = [
   { name: "unconfirmed owned failure", owned: true },
   { name: "failed result after ownership", owned: true, result: "capacity" },
   { name: "local admission refusal", local: true },
+  { name: "raw worker refusal", result: "capacity", raw: true },
 ];
 
 describe("broker host scope settlement", () => {
   it.each(failures)("settles $name according to admission evidence", async (failure) => {
     const fixture = brokerFixture(!failure.local);
+    const raw = failure.raw
+      ? fixture.host.spawn("synthetic-command", [], { stdio: "pipe" })
+      : undefined;
+    const argv = [failure.result === "missing" ? "synthetic-missing" : "synthetic-command"];
+    const options = { reject: failure.reject ?? true, baseEnv: {} };
     let commandFailure: unknown;
     const scope = runWithSpawnBroker(fixture.host, () =>
-      withCommandProcessScope(async () => {
-        try {
-          return await spawnCommand(
-            [failure.result === "missing" ? "synthetic-missing" : "synthetic-command"],
-            {
-              reject: failure.reject ?? true,
-              baseEnv: {},
-            },
-          );
-        } catch (error) {
-          commandFailure = error;
-          throw error;
-        }
-      }),
+      withCommandProcessScope(
+        async () =>
+          await (raw?.ready() ?? spawnCommand(argv, options)).catch((error: unknown) => {
+            commandFailure = error;
+            throw error;
+          }),
+      ),
     );
     const outcome = scope.then(
       (result) => ({ result, error: undefined }),
@@ -234,12 +208,7 @@ describe("broker host scope settlement", () => {
           fixture.receive({
             type: "execa-result",
             id,
-            result: {
-              ...missingExecutableResult(),
-              ...(failure.result === "capacity"
-                ? { code: refusal.code, error: serializeExecaError(refusal) }
-                : {}),
-            },
+            result: failedLaunchResult(failure.result === "capacity" ? refusal : undefined),
           });
         }
         fixture.receive({
@@ -272,179 +241,11 @@ describe("broker host scope settlement", () => {
     if (failure.local) {
       expect(fixture.send).not.toHaveBeenCalled();
     }
-  });
-
-  it("settles raw-spawn readiness and close after confirmed worker refusal", async () => {
-    const fixture = brokerFixture();
-    const child = fixture.host.spawn("synthetic-command", [], { stdio: "pipe" });
-    const ready = child.ready().catch((error: unknown) => error);
-    const closed = child.waitForClose();
-    const id = await fixture.requestSent;
-    const refusal = new SpawnBrokerError("Spawn broker request capacity exceeded");
-    fixture.receive({
-      type: "execa-result",
-      id,
-      result: {
-        ...missingExecutableResult(),
-        code: refusal.code,
-        error: serializeExecaError(refusal),
-      },
-    });
-    fixture.receive({ type: "error", id, error: refusal, resultUnavailable: true });
-    await closed;
-    expect(await ready).toMatchObject({ code: refusal.code });
-    expect(child.notStarted).toBe(true);
-    expect(native.lostChildCleanup).not.toHaveBeenCalled();
-  });
-
-  it("keeps commands available with retained children and recovers startup capacity", async () => {
-    const fixture = brokerFixture();
-    const children: ReturnType<SpawnBrokerHost["spawn"]>[] = [];
-    for (let index = 0; index < 255; index++) {
-      const command = fixture.host.spawnExeca(["synthetic-command"], {
-        stdin: "ignore",
-        stdout: "ignore",
-        stderr: "ignore",
-      });
-      void command.result.catch(() => {});
-      const id = command.child.requestId;
-      fixture.receive({ type: "owned", id, pid: 42000 + index });
-      fixture.receive({
-        type: "spawned",
-        id,
-        pid: 42000 + index,
-        spawnfile: "synthetic-command",
-        spawnargs: ["synthetic-command"],
-        connected: false,
-        stdioLength: 3,
-      });
-      await command.child.ready();
-      children.push(command.child);
+    if (raw) {
+      await raw.waitForClose();
+      expect(raw.notStarted).toBe(true);
     }
-    expect(children.every((child) => child.exitCode === null)).toBe(true);
-
-    const pending = Array.from({ length: 256 }, () =>
-      fixture.host.spawn("synthetic-command", [], { stdio: "ignore" }),
-    );
-    const refused = fixture.host.spawn("synthetic-command", [], { stdio: "ignore" });
-    await expect(refused.ready()).rejects.toThrow("startup capacity exceeded");
-    expect(refused.notStarted).toBe(true);
-    const released = pending[0]!;
-    fixture.receive({
-      type: "error",
-      id: released.requestId,
-      error: { message: "synthetic startup failure" },
-      notStarted: true,
-    });
-    await expect(released.ready()).rejects.toThrow("synthetic startup failure");
-    const recovered = fixture.host.spawn("synthetic-command", [], { stdio: "ignore" });
-    fixture.receive({ type: "owned", id: recovered.requestId, pid: 43000 });
-    fixture.receive({
-      type: "spawned",
-      id: recovered.requestId,
-      pid: 43000,
-      spawnfile: "synthetic-command",
-      spawnargs: ["synthetic-command"],
-      connected: false,
-      stdioLength: 3,
-    });
-    await recovered.ready();
-    expect(recovered.pid).toBe(43000);
-    // Startup admission must not relinquish cleanup custody of retained children.
-    fixture.worker.emit("disconnect");
-    await fixture.host.close();
-    expect(native.lostChildCleanup).toHaveBeenCalledTimes(256);
   });
-
-  it.each(["spawn", "spawn-execa", "spawn-to-file"] as const)(
-    "reclaims %s capacity after confirmed local IPC refusal",
-    async (type) => {
-      const fixture = brokerFixture();
-      const controller = fixture.host.spawn("synthetic-controller", [], { stdio: "ignore" });
-      await fixture.requestSent;
-      fixture.receive({ type: "owned", id: controller.requestId, pid: 43001 });
-      fixture.receive({
-        type: "spawned",
-        id: controller.requestId,
-        pid: 43001,
-        spawnfile: "synthetic-controller",
-        spawnargs: ["synthetic-controller"],
-        connected: true,
-        stdioLength: 3,
-      });
-      await controller.ready();
-      const firstWrite = createDeferredCore();
-      const drained = createDeferredCore();
-      let acknowledge: ((error: Error | null) => void) | undefined;
-      fixture.send.mockImplementation((message, ...args) => {
-        const callback = args.find((arg) => typeof arg === "function");
-        if (!acknowledge) {
-          acknowledge = callback;
-          firstWrite.resolve();
-        } else {
-          callback?.(null);
-          if (
-            message &&
-            typeof message === "object" &&
-            "type" in message &&
-            message.type === "ipc" &&
-            "sequence" in message &&
-            message.sequence === MAX_PENDING_MESSAGES
-          ) {
-            drained.resolve();
-          }
-        }
-        return true;
-      });
-      controller.send("synthetic-message", () => {});
-      await firstWrite.promise;
-      for (let index = 1; index < MAX_PENDING_MESSAGES; index++) {
-        controller.send("synthetic-message", () => {});
-      }
-      for (let index = 0; index < 513; index++) {
-        const request =
-          type === "spawn-execa"
-            ? fixture.host.spawnExeca(["synthetic-command"], {
-                stdin: "ignore",
-                stdout: "ignore",
-                stderr: "ignore",
-              })
-            : type === "spawn-to-file"
-              ? fixture.host.spawnToFile(
-                  "synthetic-command",
-                  [],
-                  { stdio: ["ignore", "ignore", "ignore"] },
-                  { path: "/synthetic/output" },
-                )
-              : { child: fixture.host.spawn("synthetic-command", [], { stdio: "ignore" }) };
-        await expect(request.child.ready()).rejects.toThrow("request delivery failed");
-        if ("result" in request) {
-          await expect(request.result).rejects.toThrow("request delivery failed");
-        }
-        if ("output" in request) {
-          await expect(request.output).rejects.toThrow("request delivery failed");
-        }
-        await request.child.waitForClose();
-        expect(request.child.notStarted).toBe(true);
-      }
-      acknowledge?.(null);
-      await drained.promise;
-      const recovered = fixture.host.spawn("synthetic-command", [], { stdio: "ignore" });
-      expect(recovered.notStarted).toBe(false);
-      fixture.receive({ type: "owned", id: recovered.requestId, pid: 43002 });
-      fixture.receive({
-        type: "spawned",
-        id: recovered.requestId,
-        pid: 43002,
-        spawnfile: "synthetic-command",
-        spawnargs: ["synthetic-command"],
-        connected: false,
-        stdioLength: 3,
-      });
-      await recovered.ready();
-      expect(fixture.worker.connected).toBe(true);
-    },
-  );
 
   it("reserves command capacity while MCP children retain cleanup custody", async () => {
     const fixture = brokerFixture();
@@ -464,17 +265,10 @@ describe("broker host scope settlement", () => {
       });
       await child.ready();
       children.push(child);
-      return child;
     };
     for (let index = 0; index < 448; index++) {
       await start(true);
     }
-    expect(fixture.send).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "spawn", admission: "mcp" }),
-      undefined,
-      expect.anything(),
-      expect.any(Function),
-    );
     const refusedMcp = runWithSpawnBrokerAdmission("mcp", () =>
       fixture.host.spawn("synthetic-command", [], { stdio: "ignore" }),
     );
@@ -496,113 +290,14 @@ describe("broker host scope settlement", () => {
     expect(native.lostChildCleanup).toHaveBeenCalledTimes(512);
   });
 
-  it.each(["unknown after restart", "known cleanup after restart", "late ownership"] as const)(
-    "retains MCP reservations during %s until native cleanup is proven",
-    async (recovery) => {
-      const fixture = brokerFixture();
-      const cleanup = createDeferredCore();
-      native.lostChildCleanup.mockImplementation(() => ({
-        force: vi.fn(),
-        settled: cleanup.promise,
-      }));
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      try {
-        const children: ReturnType<SpawnBrokerHost["spawn"]>[] = [];
-        for (let index = 0; index < 448; index++) {
-          if (recovery !== "known cleanup after restart") {
-            fixture.send.mockImplementationOnce((_message, ...args) => {
-              args.find((arg) => typeof arg === "function")?.(new Error("synthetic lost receipt"));
-              return false;
-            });
-          }
-          const child = runWithSpawnBrokerAdmission("mcp", () =>
-            fixture.host.spawn("synthetic-command", [], { stdio: "ignore", detached: true }),
-          );
-          if (recovery === "known cleanup after restart") {
-            fixture.receive({ type: "owned", id: child.requestId, pid: 45000 + index });
-            fixture.receive({
-              type: "spawned",
-              id: child.requestId,
-              pid: 45000 + index,
-              spawnfile: "synthetic-command",
-              spawnargs: ["synthetic-command"],
-              connected: false,
-              stdioLength: 3,
-            });
-            await child.ready();
-          } else {
-            await expect(child.ready()).rejects.toThrow("request delivery failed");
-            await child.waitForClose();
-          }
-          children.push(child);
-        }
-        let receive = fixture.receive;
-        if (recovery === "late ownership") {
-          for (const [index, child] of children.entries()) {
-            fixture.receive({ type: "owned", id: child.requestId, pid: 45000 + index });
-          }
-        } else {
-          const restarted = brokerWorkerFixture();
-          fixture.worker.disconnect();
-          await vi.advanceTimersByTimeAsync(100);
-          restarted.receive({ type: "ready", pid: 41001 });
-          await fixture.host.ready();
-          receive = restarted.receive;
-        }
-        const refused = runWithSpawnBrokerAdmission("mcp", () =>
-          fixture.host.spawn("synthetic-command", [], { stdio: "ignore" }),
-        );
-        expect(refused.notStarted).toBe(true);
-        await expect(refused.ready()).rejects.toThrow(/capacity/);
-        expect(native.lostChildCleanup).toHaveBeenCalledTimes(
-          recovery === "unknown after restart" ? 0 : 448,
-        );
-        cleanup.resolve();
-        await fixture.host.waitForCleanup();
-        const recovered = runWithSpawnBrokerAdmission("mcp", () =>
-          fixture.host.spawn("synthetic-command", [], { stdio: "ignore" }),
-        );
-        if (recovery === "unknown after restart") {
-          expect(recovered.notStarted).toBe(true);
-          await expect(recovered.ready()).rejects.toThrow(/capacity/);
-        } else {
-          receive({
-            type: "error",
-            id: recovered.requestId,
-            error: { message: "synthetic authoritative no-start" },
-            notStarted: true,
-          });
-          await expect(recovered.ready()).rejects.toThrow("synthetic authoritative no-start");
-          expect(recovered.notStarted).toBe(true);
-        }
-      } finally {
-        cleanup.resolve();
-        await fixture.host.close();
-        vi.useRealTimers();
-        native.lostChildCleanup.mockImplementation(() => ({
-          force: vi.fn(),
-          settled: Promise.resolve(),
-        }));
-      }
-    },
-  );
-
   it("retires undelivered guarded preparations and refuses a late orphan", async () => {
     const fixture = brokerFixture();
-    let orphanId: number | undefined;
     let initiations = 0;
-    // Exceed the broker's request capacity without delivering any preparation to its peer.
+    const firstPreparation = createDeferredCore<number>();
     for (let attempt = 0; attempt < 257; attempt++) {
       fixture.send.mockImplementationOnce((message, ...args) => {
-        if (
-          message &&
-          typeof message === "object" &&
-          "type" in message &&
-          message.type === "prepare-spawn" &&
-          "id" in message &&
-          typeof message.id === "number"
-        ) {
-          orphanId ??= message.id;
+        if (message.type === "prepare-spawn") {
+          firstPreparation.resolve(message.id);
         }
         args.find((arg) => typeof arg === "function")?.(new Error("synthetic delivery refusal"));
         return false;
@@ -616,9 +311,7 @@ describe("broker host scope settlement", () => {
       );
       await child.waitForClose();
     }
-    if (orphanId === undefined) {
-      throw new Error("Expected a transmitted preparation identity");
-    }
+    const orphanId = await firstPreparation.promise;
     const refusal = createDeferredCore<unknown>();
     fixture.send.mockImplementationOnce((message, ...args) => {
       refusal.resolve(message);

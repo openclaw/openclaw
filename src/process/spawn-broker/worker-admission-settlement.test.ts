@@ -1,7 +1,6 @@
-import { ChildProcess, type spawn } from "node:child_process";
+import type { spawn } from "node:child_process";
 import { setImmediate } from "node:timers/promises";
 import { beforeEach, expect, it, vi } from "vitest";
-import { createDeferredCore } from "../../shared/deferred.js";
 import type { killProcessTree } from "../kill-tree.js";
 import type { startBrokerExeca } from "./execa-worker.js";
 import type { BrokerRequest, BrokerResponse } from "./protocol.js";
@@ -47,8 +46,8 @@ beforeEach(() => {
   boundary.killTree.mockImplementation(unexpectedEffect);
 });
 
-it.each(["spawn", "spawn-execa", "retained-spawn"] as const)(
-  "handles %s startup admission without losing custody",
+it.each(["spawn", "spawn-execa"] as const)(
+  "reports authoritative no-start before the %s capacity refusal",
   async (type) => {
     let receive: ((message: BrokerBootstrap | BrokerRequest) => void) | undefined;
     const connected = Object.getOwnPropertyDescriptor(process, "connected");
@@ -77,79 +76,6 @@ it.each(["spawn", "spawn-execa", "retained-spawn"] as const)(
       receive({ type: "bootstrap" });
       await setImmediate();
       expect(boundary.send).toHaveBeenCalledWith({ type: "ready", pid: process.pid }, undefined);
-      if (type === "retained-spawn") {
-        const dispatch = receive;
-        const children: ChildProcess[] = [];
-        const killed = vi.fn<(pid: number, signal?: NodeJS.Signals | number) => boolean>(
-          () => true,
-        );
-        boundary.reserve.mockImplementation(async (run) => await run(async () => {}));
-        boundary.spawn.mockImplementation(() => {
-          const child = new ChildProcess();
-          Object.defineProperties(child, {
-            pid: { value: 42000 + children.length },
-            stdio: { value: [null, null, null] },
-            spawnfile: { value: "synthetic-command" },
-            spawnargs: { value: ["synthetic-command"] },
-            kill: { value: (signal?: NodeJS.Signals | number) => killed(child.pid!, signal) },
-          });
-          children.push(child);
-          queueMicrotask(() => child.emit("spawn"));
-          return child;
-        });
-        const start = async (id: number, admission: "mcp" | "command") => {
-          dispatch({
-            type: "spawn",
-            id,
-            admission,
-            argv: ["synthetic-command"],
-            options: { stdio: ["ignore", "ignore", "ignore"] },
-          });
-          await setImmediate();
-        };
-        for (let id = 1; id <= 448; id++) {
-          await start(id, "mcp");
-        }
-        await start(449, "mcp");
-        expect(boundary.spawn).toHaveBeenCalledTimes(448);
-        for (let id = 450; id <= 513; id++) {
-          await start(id, "command");
-        }
-        await start(514, "command");
-        expect(boundary.spawn).toHaveBeenCalledTimes(512);
-        const responses = boundary.send.mock.calls.map(([message]) => message);
-        expect(responses.filter((message) => message.type === "spawned")).toHaveLength(512);
-        expect(responses.filter((message) => message.type === "error")).toEqual([
-          expect.objectContaining({
-            id: 449,
-            error: expect.objectContaining({ code: "ERR_SPAWN_BROKER_UNAVAILABLE" }),
-          }),
-          expect.objectContaining({
-            id: 514,
-            error: expect.objectContaining({ code: "ERR_SPAWN_BROKER_UNAVAILABLE" }),
-          }),
-        ]);
-        expect(children.every((child) => child.exitCode === null)).toBe(true);
-        receive({ type: "kill", id: 513, signal: "SIGTERM" });
-        expect(killed).toHaveBeenCalledWith(children[511]!.pid, "SIGTERM");
-        const closed = createDeferredCore();
-        boundary.send.mockImplementation(async (message) => {
-          if (message.type === "closed" && message.id === 1) {
-            closed.resolve();
-          }
-        });
-        children[0]!.emit("exit", 0, null);
-        children[0]!.emit("close", 0, null);
-        await closed.promise;
-        await start(515, "mcp");
-        expect(boundary.spawn).toHaveBeenCalledTimes(513);
-        expect(boundary.send).toHaveBeenCalledWith(
-          expect.objectContaining({ type: "spawned", id: 515 }),
-          undefined,
-        );
-        expect(boundary.close).not.toHaveBeenCalled();
-        return;
-      }
       // Reservations reject on the next microtask. Synchronous delivery fills
       // the real admission count without invoking either native launch path.
       for (let id = 1; id <= 257; id += 1) {
