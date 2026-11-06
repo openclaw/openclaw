@@ -366,13 +366,12 @@ export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () 
           { signal: abort.signal, retainSentResultOnAbort: true },
         );
         requireLive();
-        const handoff = {
+        const handoff: JsonValue = {
           root_pub: ctx.link.rootPub,
           binding: ctx.binding,
           cert,
         };
-        // SAFETY: the handoff holds only JSON values: strings and signed statements.
-        const sealed = await sealHandoff(a.secret, a.transcript, handoff as unknown as JsonValue);
+        const sealed = await sealHandoff(a.secret, a.transcript, handoff);
         requireLive();
         await send(a, "sealed", sealed);
         drop(id, true);
