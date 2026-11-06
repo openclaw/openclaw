@@ -1,4 +1,9 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import {
+  readSqliteDatabaseScopedWriteTokenForPath,
+  sqliteSessionIdWriteScope,
+} from "../../infra/sqlite-database-admission.js";
 import {
   assertAgentDatabaseTerminalOpenAllowed,
   revalidateAgentDatabaseTerminalOpenAsync,
@@ -25,6 +30,7 @@ import {
 import { readRestoredSessionTranscriptInWorker } from "./session-cold-storage-read.js";
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
 import type { SessionTranscriptContextSelection } from "./session-history-read.types.js";
+import { getSessionTranscriptHydrationCaller } from "./session-transcript-hydration-caller.js";
 import type { SessionTranscriptMaintenanceRead } from "./session-transcript-hydration.types.js";
 import { readSessionTranscriptCohort } from "./session-transcript-read-cohort.js";
 import {
@@ -34,6 +40,7 @@ import {
 } from "./session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
 import {
+  historyLane,
   targetDiscoveryLane,
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
@@ -45,6 +52,8 @@ import {
   type SessionTranscriptCurrentTurnEntryRead,
   type SessionTranscriptCurrentTurnEntryRequest,
 } from "./session-transcript-worker.types.js";
+import { collectSessionEntryLookupKeys } from "./store-entry.js";
+import { cloneTranscriptView } from "./transcript-snapshot.js";
 import {
   captureSessionTranscriptTargetBinding,
   type CapturedSessionTranscriptTargetBinding,
@@ -53,6 +62,14 @@ import {
   readOwnedSessionTranscriptEntry,
   readOwnedSessionTranscriptState,
 } from "./transcript-write-context.js";
+
+type PendingHydration = {
+  promise: Promise<PreparedSessionTranscriptHydration>;
+  signal?: AbortSignal;
+  readers: number;
+};
+// Only in-flight reads share transport work; completed snapshots belong to the actor replica.
+const pendingHydrations = new WeakMap<SessionHistoryWorkerLane, Map<string, PendingHydration>>();
 
 type SessionTranscriptHydrationReader = {
   target: CapturedSessionTranscriptTargetBinding;
@@ -83,6 +100,7 @@ export function prepareSessionTranscriptHydration(
   signal?: AbortSignal,
   lane?: SessionHistoryWorkerLane,
 ): SessionTranscriptHydrationReader {
+  const caller = getSessionTranscriptHydrationCaller();
   const memory = captureSessionActorTranscriptRead(source, signal);
   if (memory) {
     const version = () => ({ generation: null, rawSeq: null, updatedAt: null });
@@ -222,6 +240,15 @@ export function prepareSessionTranscriptHydration(
       assertAgentDatabaseTerminalOpenAllowed(databasePath);
     }
   };
+  const readState = (resolved?: ResolvedTranscriptReadScope) =>
+    readOwnedSessionTranscriptState(target) ??
+    (resolved?.sessionKey
+      ? readSessionActorTranscriptStateFromReplica({
+          path: resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved)),
+          sessionId: resolved.sessionId,
+          sessionKey: resolved.sessionKey,
+        })
+      : undefined);
   const retainedRead = (
     selection?: NonNullable<SessionEntryCohortRequest["transcript"]>,
     resolved?: ResolvedTranscriptReadScope,
@@ -229,15 +256,7 @@ export function prepareSessionTranscriptHydration(
     if (!contextLimits || "compaction" in contextLimits) {
       return undefined;
     }
-    const hot =
-      readOwnedSessionTranscriptState(target) ??
-      (resolved?.sessionKey
-        ? readSessionActorTranscriptStateFromReplica({
-            path: resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved)),
-            sessionId: resolved.sessionId,
-            sessionKey: resolved.sessionKey,
-          })
-        : undefined);
+    const hot = readState(resolved);
     if (!hot) {
       return undefined;
     }
@@ -276,11 +295,14 @@ export function prepareSessionTranscriptHydration(
     }
     return prepared;
   };
-  const retainRead = (prepared: PreparedSessionTranscriptHydration) => {
+  const retainRead = (
+    prepared: PreparedSessionTranscriptHydration,
+    resolved?: ResolvedTranscriptReadScope,
+  ) => {
     if (prepared.kind !== "bounded" || !contextLimits || "compaction" in contextLimits) {
       return;
     }
-    const hot = readOwnedSessionTranscriptState(target);
+    const hot = readState(resolved);
     if (!hot) {
       return;
     }
@@ -295,22 +317,82 @@ export function prepareSessionTranscriptHydration(
       retainSessionActorTranscriptReplica(hot, retained);
     }
   };
+  const readPrepared = async (
+    owner: SessionHistoryWorkerDatabase,
+    input: Parameters<SessionHistoryWorkerDatabase["readTranscript"]>[0],
+    readerLane = lane ?? historyLane,
+  ): Promise<PreparedSessionTranscriptHydration> => {
+    const resolved = input.resolvedScope;
+    const retained = input.compaction ? undefined : retainedRead(input.transcript, resolved);
+    if (retained) {
+      return retained;
+    }
+    // Full exports stream into caller-owned channels; compaction also carries live entry facts.
+    if (!contextLimits || "compaction" in contextLimits || input.compaction) {
+      return owner.readTranscript(input, signal);
+    }
+    const load = () =>
+      owner.readTranscript(input, signal).then((prepared) => {
+        retainRead(prepared, resolved);
+        return prepared;
+      });
+    const revision = readSqliteDatabaseScopedWriteTokenForPath(
+      resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved)),
+      [
+        ...(resolved.sessionKey ? collectSessionEntryLookupKeys(resolved.sessionKey) : []),
+        sqliteSessionIdWriteScope(resolved.sessionId),
+      ],
+    );
+    if (!revision) {
+      return load();
+    }
+    const pending = pendingHydrations.get(readerLane) ?? new Map<string, PendingHydration>();
+    pendingHydrations.set(readerLane, pending);
+    const key = JSON.stringify({ ...input, caller: undefined, revision });
+    let shared = pending.get(key);
+    if (!shared) {
+      const promise = load();
+      shared = { promise, signal, readers: 0 };
+      pending.set(key, shared);
+      const forget = () => pending.delete(key);
+      void promise.then(forget, forget);
+    }
+    shared.readers++;
+    try {
+      const prepared = await racePromiseWithAbortSignal(
+        shared.promise,
+        signal,
+        (aborted) => aborted.reason,
+      );
+      signal?.throwIfAborted();
+      // Earlier receivers detach before the last receiver takes the original envelope.
+      return shared.readers > 1 ? cloneTranscriptView(prepared) : prepared;
+    } catch (error) {
+      signal?.throwIfAborted();
+      if (shared.signal?.aborted && shared.signal !== signal) {
+        return readPrepared(owner, input, readerLane);
+      }
+      throw error;
+    } finally {
+      shared.readers--;
+    }
+  };
   const read: SessionTranscriptHydrationReader["read"] = async (options) => {
     signal?.throwIfAborted();
     const retained = options?.compaction ? undefined : retainedRead();
     if (retained) {
       return retained;
     }
-    const prepared = await readInOwner<PreparedSessionTranscriptHydration>(
-      async (owner, resolvedScope) =>
-        (options?.compaction ? undefined : retainedRead(undefined, resolvedScope)) ??
-        owner.readTranscript(
-          { target, resolvedScope, limits: contextLimits, admission, ...options },
-          signal,
-        ),
+    return readInOwner<PreparedSessionTranscriptHydration>((owner, resolvedScope) =>
+      readPrepared(owner, {
+        target,
+        resolvedScope,
+        limits: contextLimits,
+        admission,
+        caller,
+        ...options,
+      }),
     );
-    retainRead(prepared);
-    return prepared;
   };
   const readCohort: SessionTranscriptHydrationReader["readCohort"] = contextLimits
     ? (selection, consume) => {
@@ -329,9 +411,9 @@ export function prepareSessionTranscriptHydration(
               () =>
                 readSessionTranscriptCohort(
                   database,
-                  async () =>
-                    retainedRead(selection, resolved) ??
-                    (await owner.readTranscript(
+                  () =>
+                    readPrepared(
+                      owner,
                       {
                         target: scope,
                         resolvedScope: resolved,
@@ -340,11 +422,11 @@ export function prepareSessionTranscriptHydration(
                         admission,
                         transcript: selection,
                         preparedEntry: readOwnedSessionTranscriptEntry(target),
+                        caller,
                       },
-                      signal,
-                    )),
+                      targetDiscoveryLane,
+                    ),
                   (prepared) => {
-                    retainRead(prepared);
                     const consumed = consume(prepared);
                     if (isPromiseLike(consumed)) {
                       void Promise.resolve(consumed).catch(() => {});

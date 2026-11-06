@@ -36,9 +36,9 @@ vi.mock("@openclaw/fs-safe/atomic", async (original) => {
 });
 
 // mock-isolation: DNS setup uses only synthetic zone paths and never writes an operator zone.
-vi.mock("../infra/widearea-dns.js", () => ({
+vi.mock("../infra/widearea-dns.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/widearea-dns.js")>()),
   getWideAreaZonePath: () => testState.zonePath,
-  normalizeWideAreaDomain: (d: string) => d,
   replaceWideAreaZoneFile: vi.fn(),
   resolveWideAreaDiscoveryDomain: () => "openclaw.internal.",
 }));
@@ -62,6 +62,7 @@ const { spawnSync: actualSpawnSync } =
   await vi.importActual<typeof import("node:child_process")>("node:child_process");
 
 import { Command } from "commander";
+import * as tailnet from "../infra/tailnet.js";
 import { replaceWideAreaZoneFile } from "../infra/widearea-dns.js";
 import { defaultRuntime } from "../runtime.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
@@ -72,8 +73,7 @@ function spawnOk(stdout = "") {
 }
 
 function isBrewPrefixProbe(call: unknown[]): boolean {
-  const args = call[1] as string[] | undefined;
-  return call[0] === "brew" && args?.[0] === "--prefix";
+  return call[0] === "brew" && Array.isArray(call[1]) && call[1][0] === "--prefix";
 }
 
 /**
@@ -264,13 +264,11 @@ describe("dns-cli probe bounds", () => {
     vi.restoreAllMocks();
   });
 
-  async function runDnsSetupApply(): Promise<void> {
-    const program = new Command();
-    program.exitOverride();
+  function runDnsSetup(args = ["--domain", domain, "--apply"]) {
+    const program = new Command().exitOverride();
     registerDnsCli(program);
-    // The action gates on process.platform; os.platform() is not consulted.
-    await withMockedPlatform("darwin", () =>
-      program.parseAsync(["node", "openclaw", "dns", "setup", "--domain", domain, "--apply"]),
+    return withMockedPlatform("darwin", () =>
+      program.parseAsync(["node", "openclaw", "dns", "setup", ...args]),
     );
   }
 
@@ -278,9 +276,7 @@ describe("dns-cli probe bounds", () => {
     testState.zonePath = path.join(brewPrefix, "café\x1b[31m\nforged\tzone\r\x00\x85end.db");
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
     const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
-    const program = new Command().exitOverride();
-    registerDnsCli(program);
-    await program.parseAsync(["node", "openclaw", "dns", "setup", "--domain", domain]);
+    await runDnsSetup(["--domain", domain]);
 
     const report = String(log.mock.calls[1]?.[0]);
     expect(log).toHaveBeenCalledWith(expect.stringContaining("DNS setup"));
@@ -298,12 +294,8 @@ describe("dns-cli probe bounds", () => {
   it("does not restart CoreDNS when asynchronous zone publication fails", async () => {
     const failure = new Error("zone publication failed");
     vi.mocked(replaceWideAreaZoneFile).mockRejectedValueOnce(failure);
-    await expect(runDnsSetupApply()).rejects.toBe(failure);
-    expect(spawnSyncMock).not.toHaveBeenCalledWith(
-      "sudo",
-      ["brew", "services", "restart", "coredns"],
-      expect.anything(),
-    );
+    await expect(runDnsSetup()).rejects.toBe(failure);
+    expect(spawnSyncMock.mock.calls.filter(([cmd]) => cmd === "sudo")).toEqual([]);
   });
 
   it("preserves the existing Corefile when its publication fails", async () => {
@@ -314,7 +306,7 @@ describe("dns-cli probe bounds", () => {
     fs.writeFileSync(corefilePath, original);
     failCorefilePublicationWithNoSpace(etcDir);
 
-    await expect(runDnsSetupApply()).rejects.toThrow(/ENOSPC|no space left on device/);
+    await expect(runDnsSetup()).rejects.toThrow(/ENOSPC|no space left on device/);
 
     // The failed publication left the operator's Corefile exactly as it was.
     expect(fs.readFileSync(corefilePath, "utf-8")).toBe(original);
@@ -347,7 +339,7 @@ describe("dns-cli probe bounds", () => {
     });
 
     try {
-      await runDnsSetupApply();
+      await runDnsSetup();
     } finally {
       chownSpy.mockRestore();
     }
@@ -381,7 +373,7 @@ describe("dns-cli probe bounds", () => {
       const policy = actualSpawnSync("ls", ["-lde", corefilePath], { encoding: "utf-8" });
       expect(policy.stdout).toContain("deny read");
 
-      await runDnsSetupApply();
+      await runDnsSetup();
 
       expect(fs.readFileSync(corefilePath, "utf-8")).toBe(
         `.:53 {\n  errors\n}\n\nimport ${importGlob}\n`,
@@ -406,7 +398,7 @@ describe("dns-cli probe bounds", () => {
     fsSafeMock.failPublication = fullDisk;
 
     try {
-      await expect(runDnsSetupApply()).rejects.toBe(fullDisk);
+      await expect(runDnsSetup()).rejects.toBe(fullDisk);
     } finally {
       fsSafeMock.failPublication = null;
     }
@@ -461,7 +453,7 @@ describe("dns-cli probe bounds", () => {
       });
 
       try {
-        await expect(runDnsSetupApply()).rejects.toThrow(/access policy/);
+        await expect(runDnsSetup()).rejects.toThrow(/access policy/);
       } finally {
         spawnSyncMock.mockImplementation(baseImplementation);
       }
@@ -483,7 +475,7 @@ describe("dns-cli probe bounds", () => {
     fs.writeFileSync(corefilePath, ".:53 {\n  errors\n}\n");
     fs.chmodSync(corefilePath, 0o640);
 
-    await runDnsSetupApply();
+    await runDnsSetup();
 
     expect(fs.readFileSync(corefilePath, "utf-8")).toBe(
       `.:53 {\n  errors\n}\n\nimport ${importGlob}\n`,
@@ -500,7 +492,7 @@ describe("dns-cli probe bounds", () => {
     fs.writeFileSync(managedPath, ".:53 {\n  errors\n}\n");
     fs.symlinkSync("managed-Corefile", corefilePath);
 
-    await runDnsSetupApply();
+    await runDnsSetup();
 
     expect(fs.readFileSync(managedPath, "utf-8")).toBe(
       `.:53 {\n  errors\n}\n\nimport ${importGlob}\n`,
@@ -516,7 +508,7 @@ describe("dns-cli probe bounds", () => {
     fs.mkdirSync(etcDir, { recursive: true });
     fs.symlinkSync("managed-Corefile", corefilePath);
 
-    await runDnsSetupApply();
+    await runDnsSetup();
 
     expect(fs.readFileSync(path.join(etcDir, "managed-Corefile"), "utf-8")).toContain(
       `import ${importGlob}`,
@@ -545,7 +537,7 @@ describe("dns-cli probe bounds", () => {
       });
 
       try {
-        await runDnsSetupApply();
+        await runDnsSetup();
       } finally {
         chownSpy.mockRestore();
       }
@@ -594,7 +586,7 @@ describe("dns-cli probe bounds", () => {
       fs.mkdirSync(etcDir, { recursive: true });
       fs.writeFileSync(corefilePath, original);
 
-      await runDnsSetupApply();
+      await runDnsSetup();
       const probeCall = spawnSyncMock.mock.calls.find(isBrewPrefixProbe);
       expect(probeCall?.[2]).toMatchObject({ timeout: 15_000, killSignal: "SIGKILL" });
       const nonProbeCalls = spawnSyncMock.mock.calls.filter((call) => !isBrewPrefixProbe(call));
@@ -629,10 +621,18 @@ describe("dns-cli probe bounds", () => {
       }
       return baseSpawnImplementation?.(cmd, args, opts);
     });
-    return expect(runDnsSetupApply()).rejects.toThrow(
+    return expect(runDnsSetup()).rejects.toThrow(
       timeout
         ? "brew --prefix failed: timed out after 15 seconds (signal SIGKILL)"
         : "sudo brew services restart coredns failed: signal SIGTERM",
     );
+  });
+
+  it("reports missing tailnet IP before starting setup", async () => {
+    vi.spyOn(tailnet, "pickPrimaryTailnetIPv4").mockReturnValue(undefined);
+    await expect(runDnsSetup()).rejects.toMatchObject({
+      humanOutput: "no tailnet IP detected; check that Tailscale is running on this machine",
+    });
+    expect(spawnSyncMock).not.toHaveBeenCalled();
   });
 });

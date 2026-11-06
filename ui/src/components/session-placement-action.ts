@@ -123,7 +123,8 @@ export async function moveSessionFromMenu(params: {
     context.gateway.connectionRevision === revision &&
     context.gateway.snapshot.hello === hello;
   const publishError: (error: unknown) => void =
-    params.publishError ?? ((error) => showToast({ message: formatUiError(error) }));
+    params.publishError ??
+    ((error) => showToast({ severity: "error", message: formatUiError(error) }));
   try {
     const { changeSessionPlacement } = await import("./session-placement.runtime.ts");
     await changeSessionPlacement({

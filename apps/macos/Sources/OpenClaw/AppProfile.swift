@@ -81,7 +81,8 @@ struct AppProfile: Equatable, Sendable {
 
     var defaultGatewayPort: Int {
         guard let name else { return 18789 }
-        // Keep byte-for-byte aligned with src/config/paths.ts resolveGatewayPort so the app and CLI
+        if name == "dev" { return 19001 }
+        // Keep byte-for-byte aligned with src/cli/profile-utils.ts resolveProfileGatewayPort so the app and CLI
         // connect to the same profile Gateway.
         var hash: UInt32 = 2_166_136_261
         for byte in name.utf8 {

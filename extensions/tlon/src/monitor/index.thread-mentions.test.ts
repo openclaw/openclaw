@@ -266,6 +266,31 @@ it("applies explicit and automatic citation scopes", async () => {
     });
   }
 });
+it("keeps non-owner citations to their source channel when cross-channel citations are off", async () => {
+  const nest = "chat/~zod/citations";
+  const listed = "chat/~zod/announcements";
+  for (const auto of [false, true]) {
+    configureTlon({
+      autoDiscoverChannels: auto,
+      crossChannelCitations: false,
+      ownerShip: "~nec",
+      dmAllowlist: ["~bus"],
+      defaultAuthorizedShips: ["~bus"],
+      groupChannels: [nest, listed],
+    });
+    await runMonitor(async () => {
+      for (const row of [
+        ["channels", "~bus", nest, true, true],
+        ["channels", "~bus", listed, true, false],
+        ["channels", "~bus", "diary/~private/notes", true, false],
+        ["chat", "~bus", nest, true, false],
+        ["chat", "~nec", "diary/~private/notes", true, true],
+      ] as const) {
+        await checkCitationCase(nest, row);
+      }
+    });
+  }
+});
 const ownerNotices = () =>
   JSON.stringify(
     sseClientMock.poke.mock.calls.filter(([payload]) => payload.mark === "chat-dm-action"),

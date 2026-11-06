@@ -6,7 +6,7 @@ import {
   nativeHistoryMessage,
   nativeHistorySeq,
 } from "./chat-pane-history.test-support.ts";
-import { handleChatInputHistoryKey, resetChatInputHistoryNavigation } from "./input-history.ts";
+import { handleChatInputHistoryKey } from "./input-history.ts";
 
 it("refreshes composer recall after leaving a round", async () => {
   const request = vi.fn(async () => ({
@@ -18,13 +18,11 @@ it("refreshes composer recall after leaving a round", async () => {
   const { pane, state } = createNativeShowEarlierPane(request);
   state.currentSessionId = "session-id";
   state.chatMessage = "Draft to retain";
-  state.chatLocalInputHistoryBySession = {};
-  resetChatInputHistoryNavigation(state);
-  const press = (key: "ArrowUp" | "ArrowDown") =>
+  const press = (key: "ArrowUp" | "ArrowDown", caret = 0) =>
     handleChatInputHistoryKey(state, {
       key,
-      selectionStart: 0,
-      selectionEnd: 0,
+      selectionStart: caret,
+      selectionEnd: caret,
       altKey: false,
       ctrlKey: false,
       metaKey: false,
@@ -53,10 +51,12 @@ it("refreshes composer recall after leaving a round", async () => {
 
   expect(press("ArrowUp").handled).toBe(true);
   expect(state.chatMessage).toBe("message 3");
+  expect(press("ArrowUp", 1).handled).toBe(false);
+  expect(press("ArrowDown", 1).handled).toBe(false);
   expect(press("ArrowUp").handled).toBe(true);
   expect(state.chatMessage).toBe("message 1");
-  expect(press("ArrowDown").handled).toBe(true);
+  expect(press("ArrowDown", state.chatMessage.length).handled).toBe(true);
   expect(state.chatMessage).toBe("message 3");
-  expect(press("ArrowDown").handled).toBe(true);
+  expect(press("ArrowDown", state.chatMessage.length).handled).toBe(true);
   expect(state.chatMessage).toBe("Draft to retain");
 });

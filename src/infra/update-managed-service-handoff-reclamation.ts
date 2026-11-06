@@ -349,9 +349,8 @@ export async function prepareManagedHandoffRepair(
       env,
       metadata?.facts.runIds[0],
     );
-    // An interrupted cancelled-custody claim existed only after that family's grace
-    // elapsed. Count from the cancelled source, not the claim; the claim's own
-    // process and the census remain checked.
+    // A resumed claim retains the cancelled family's activity and census scope;
+    // its own process identity is checked too.
     let facts = await inspectManagedHandoffRepairFacts(
       sourceLease.version === 4 ? sourceLease : previous,
       sourceLease.version === 4
@@ -359,11 +358,18 @@ export async function prepareManagedHandoffRepair(
         : discovered,
       metadata?.facts,
       familyExited(previous),
+      processState,
     );
     const retainedChildren = children.filter((child) => child.key !== previous.key);
     for (const child of retainedChildren) {
       const childFacts = await readManagedHandoffRepairFacts(child, env);
-      facts = await inspectManagedHandoffRepairFacts(child, childFacts, facts, familyExited(child));
+      facts = await inspectManagedHandoffRepairFacts(
+        child,
+        childFacts,
+        facts,
+        familyExited(child),
+        processState,
+      );
     }
     // Keep the original child key with its existing recovery metadata after
     // promoting an orphan to the installation's exclusive repair claim.
@@ -470,6 +476,9 @@ async function prepareCancelledCustodyRepair(
         ...family.flatMap((lease) => [lease.helper, lease.executor]),
       ],
     },
+    undefined,
+    false,
+    processState,
   );
   facts.timeoutMs = Math.max(facts.timeoutMs ?? 0, timeoutMs ?? 0) || null;
   const retired = family.filter((lease) => lease.key !== origin.key);

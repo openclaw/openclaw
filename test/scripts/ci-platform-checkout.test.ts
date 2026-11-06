@@ -440,6 +440,10 @@ it.concurrent.for([
       "scripts/ci-static-step.sh": "workflow static-step script\n",
       "scripts/ci-collect-checks.sh": "workflow collect-checks script\n",
       "scripts/macos-native-runtime-artifact.mjs": "workflow native runtime artifact script\n",
+      ...readFiles([
+        "scripts/lib/process-memory.mts",
+        "packages/normalization-core/src/mountinfo-path.ts",
+      ]),
     };
     const nodeSetupScripts = readFiles(["scripts/lib/pnpm-lockfile-documents.mjs"]);
     const platformScripts = {
@@ -595,10 +599,20 @@ it.concurrent.for([
           mkdirSync(path.dirname(staleAction), { recursive: true });
           writeFileSync(staleAction, "name: stale platform action\n");
         }
+        let configuredGit = git;
+        if (kind === "linux-node" && workflow === "same") {
+          configuredGit = path.join(root, "configured-git");
+          // Bound re-entry so a leaked fixture PATH fails instead of spawning recursively.
+          writeFileSync(
+            configuredGit,
+            '#!/bin/sh\n[ "${CI_FIXTURE_GIT_FORWARDING:-}" != 1 ] || exit 87\nexport CI_FIXTURE_GIT_FORWARDING=1\nexec git "$@"\n',
+            { mode: 0o755 },
+          );
+        }
         writeFileSync(
           path.join(root, "fixture-options.json"),
           JSON.stringify({
-            localGit: { git, remote: source },
+            localGit: { git: configuredGit, remote: source },
             fetchResults: [0, 0],
             cooperativeTrees: true,
             env: {

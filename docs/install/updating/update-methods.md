@@ -428,6 +428,18 @@ Check `openclaw update status` for unfinished plugin upgrades and their repair
 commands. Normal CLI commands and Gateway startup do not apply deferred plugin
 migrations.
 
+OpenClaw 2026.10.10 can report `spawnSync node ETIMEDOUT` while probing SQLite
+headers in a large state directory. Candidate safety checks do not replace the
+installed updater's backup implementation: its original-state capture and update
+backup discovery still use the installed code, including its retained runtime.
+Selecting a candidate with the batched probe does not repair that running updater.
+Use the manual procedure above for the first hop. If the old backup command also
+times out, stop the Gateway and other state writers and take a verified filesystem
+or volume snapshot covering the state, config, credentials, and configured agent
+and workspace directories before replacing the package. Do not copy only the main
+file of a live SQLite database or edit installed distribution files to bypass the
+probe.
+
 On any platform, the published OpenClaw 2026.9.3 and 2026.9.4 updaters can exhaust
 their fixed 30-second baseline package-fingerprint budget before replacing any
 files. They then report `Installation recovery is unverified`,
@@ -436,6 +448,19 @@ even when the installed tree is unchanged.
 A newer candidate cannot repair the updater already running. Install the target
 release once with the manual procedure above. Published OpenClaw 2026.9.5 and
 later include the baseline-timeout fallback.
+
+The published OpenClaw 2026.9.7 and 2026.9.8 updaters can fail at `package-swap`
+with `Package publication recovery permissions are unsafe` once
+`.openclaw.package-activation-<key>.control` exists beside the package. An earlier
+update or failed attempt leaves that receipt, so each retry fails the same way.
+These updaters hard-link its `operation.sqlite` journal into their retained runtime
+during the update and remove the extra link when that runtime is cleaned up.
+Afterward the journal shows owner-only permissions and one link, so tightening
+permissions, `openclaw doctor --fix`, and `openclaw update repair` do not prevent
+the next attempt from failing. A newer candidate cannot repair the updater already
+running. Install the target release once with the manual
+procedure above and keep the receipt; later updaters replace it themselves.
+Published OpenClaw 2026.9.9 and later keep the receipt out of their retained runtime.
 
 Gateways with installation-replacement detection also check the installed build
 on their maintenance tick. If the running and installed builds differ, the

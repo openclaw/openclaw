@@ -1,3 +1,4 @@
+import type { CyberAccessProgram } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { ReplyToMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
@@ -36,5 +37,26 @@ export type SessionsSpawnToolOptions = {
   swarmCollector?: boolean;
   /** Backend-derived parent incarnation; never sourced from model arguments. */
   expectedParentSessionId?: string;
+  /** Host-owned sessions_create mode: a visible session without supervision or completion. */
+  independent?: boolean;
   signal?: AbortSignal;
 } & SpawnedToolContext;
+
+type VisibleSessionsSpawnOptions = SessionsSpawnToolOptions & {
+  onSpawnEffectsStart?: () => void;
+  assertActive?: () => void;
+};
+
+export type VisibleSessionSpawnParams = {
+  raw: Record<string, unknown>;
+  task: string;
+  taskName?: string;
+  label: string;
+  runtime: "subagent" | "acp";
+  requestedAgentId?: string;
+  runTimeoutSeconds?: number;
+  sandbox: "inherit" | "require";
+  expectsCompletionMessage: boolean;
+  cyberAccessProgram?: CyberAccessProgram;
+  options?: VisibleSessionsSpawnOptions;
+};

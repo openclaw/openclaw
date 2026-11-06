@@ -42,7 +42,7 @@ describe("Workshop discovery contract", () => {
           path.join(workspace, "skills"),
         ] as const;
         const config = {
-          plugins: { enabled: false },
+          plugins: { allow: ["skill-workshop"] },
           agents: { entries: { main: { agentDir } } },
           skills: { load: { watch: false, extraDirs: [roots[0]] } },
         };
@@ -96,7 +96,7 @@ describe("Workshop discovery contract", () => {
         const root = path.join(agentDir, "workshop-skills");
         await writeSkill(root, "gateway-procedure", "Gateway-only procedure");
         const config = {
-          plugins: { enabled: false },
+          plugins: { allow: ["skill-workshop"] },
           agents: { entries: { main: { agentDir } } },
           skills: { load: { watch: false } },
         };

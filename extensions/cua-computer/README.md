@@ -20,6 +20,9 @@ You also need a vision-capable model and tool policy that permits computer use.
 See the [computer use guide](https://docs.openclaw.ai/nodes/computer-use) for host
 requirements, pairing, and permissions.
 
+Window observations request structured accessibility elements from CUA Driver.
+Use the returned element references with their observation to target controls.
+
 ## Native session expiry
 
 Before dispatching computer input or capture, the native adapter checks its trusted

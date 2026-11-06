@@ -2,7 +2,7 @@ import {
   prepareHarnessNativeMcpAppPreview,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { CodexAppServerClient } from "./client.js";
 import { createCodexNativeMcpAppResultDetailsPreparer } from "./native-mcp-app.js";
 import { retainSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
@@ -23,7 +23,17 @@ vi.mock("./shared-client.js", async (importOriginal) => ({
     client ? ownedClients.get(client) : undefined,
   ),
 }));
-beforeEach(() => vi.mocked(retainSharedCodexAppServerClientIfCurrent).mockClear());
+beforeEach(() => {
+  vi.mocked(retainSharedCodexAppServerClientIfCurrent).mockClear();
+  vi.useFakeTimers();
+  onTestFinished(async () => {
+    try {
+      await vi.runOnlyPendingTimersAsync();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
 
 function createAttempt(enabled = true): EmbeddedRunAttemptParams {
   return {

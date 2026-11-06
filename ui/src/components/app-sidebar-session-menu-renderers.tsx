@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo } from "solid-js";
 import { pathForRoute } from "../app-route-paths.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
+import { registerSessionMenuEnglish } from "../i18n/locales/en-session-menu.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
@@ -33,12 +34,15 @@ import { SidebarSessionFilterPopover } from "./sidebar-session-filter-popover.ts
 import { Icon } from "./solid/icon.tsx";
 import type { MenuEntry, MenuItem } from "./solid/menu.tsx";
 import { Picker } from "./solid/select-picker.tsx";
-import { SettingsSegmented, SettingsToggle } from "./solid/settings-ui.tsx";
+import { SettingsSegmented } from "./solid/settings-ui.tsx";
 import {
   SidebarMenuRadioItem,
   SidebarOwnerFilter,
   SidebarOwnerOptions,
 } from "./solid/sidebar-owner-filter.tsx";
+import { SwitchIndicator } from "./solid/switch.tsx";
+
+registerSessionMenuEnglish();
 
 type SidebarSessionGroupMenuAction =
   | "group-defaults"
@@ -308,9 +312,7 @@ export function renderSidebarSessionSortMenuForMenus(
       onClick={() => onChange(!checked())}
     >
       <span>{label()}</span>
-      <span inert aria-hidden="true">
-        <SettingsToggle checked={checked()} ariaLabel={label()} onChange={() => undefined} />
-      </span>
+      <SwitchIndicator checked={checked()} size="sm" />
     </button>
   );
   return (

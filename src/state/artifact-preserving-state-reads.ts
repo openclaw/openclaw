@@ -1,8 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isPathInside } from "@openclaw/fs-safe/path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
-import { SqliteSnapshotCleanupError } from "../infra/sqlite-readonly-location-cleanup.js";
+import {
+  throwSqliteLifecycleErrors,
+  SqliteSnapshotCleanupError,
+} from "../infra/sqlite-lifecycle-errors.js";
 import type { PreparedSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
@@ -19,6 +21,20 @@ export const artifactPreservingReads = resolveGlobalSingleton(
       | false
     >(),
 );
+
+const liveStateReads = resolveGlobalSingleton(
+  Symbol.for("openclaw.liveStateReads"),
+  () => new AsyncLocalStorage<boolean>(),
+);
+
+/** Select live runtime state bytes without changing an inspection's side-effect policy. */
+export function withLiveStateReads<T>(operation: () => T): T {
+  return liveStateReads.run(true, operation);
+}
+
+export function isLiveStateRead(): boolean {
+  return liveStateReads.getStore() === true;
+}
 
 /**
  * `agentDatabases` makes every agent-database read a private whole-file copy. It is for
@@ -43,7 +59,7 @@ export function withArtifactPreservingStateReads(
     privateRoots: new Set<string>(),
     snapshots: new Map<string, PreparedSqliteReadOnlyLocation>(),
   };
-  const finish = (value: unknown, errors: unknown[] = []) => {
+  const closeReaders = (errors: unknown[]) => {
     for (const close of scope.readers) {
       try {
         close();
@@ -51,9 +67,26 @@ export function withArtifactPreservingStateReads(
         errors.push(error);
       }
     }
+  };
+  const finish = (value: unknown, errors: unknown[] = []) => {
+    closeReaders(errors);
     for (const snapshot of scope.snapshots.values()) {
       try {
         if (!snapshot.cleanup()) {
+          throw new SqliteSnapshotCleanupError("SQLite inspection snapshot cleanup failed.");
+        }
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    throwSqliteLifecycleErrors(errors, "Artifact-preserving inspection and cleanup failed.");
+    return value;
+  };
+  const finishAsync = async (value: unknown, errors: unknown[] = []) => {
+    closeReaders(errors);
+    for (const snapshot of scope.snapshots.values()) {
+      try {
+        if (!(await snapshot.cleanupAsync())) {
           throw new SqliteSnapshotCleanupError("SQLite inspection snapshot cleanup failed.");
         }
       } catch (error) {
@@ -70,7 +103,7 @@ export function withArtifactPreservingStateReads(
     return finish(undefined, [error]);
   }
   return isPromiseLike(result)
-    ? Promise.resolve(result).then(finish, (error: unknown) => finish(undefined, [error]))
+    ? Promise.resolve(result).then(finishAsync, (error: unknown) => finishAsync(undefined, [error]))
     : finish(result);
 }
 

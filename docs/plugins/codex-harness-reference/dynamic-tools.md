@@ -100,6 +100,9 @@ Set `codexDynamicToolsLoading: "direct"` only when connecting to a custom
 Codex app-server that cannot search deferred dynamic tools or when debugging
 the full tool payload.
 
+For supported checks before inference, see
+[Codex pre-turn verification](/plugins/codex-harness/commands#verify-tool-access-before-a-codex-turn).
+
 ## Protected conversation continuity
 
 While native work protects a thread, OpenClaw retains its accepted tool declarations.

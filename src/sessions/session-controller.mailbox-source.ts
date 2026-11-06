@@ -1,8 +1,10 @@
+import type { FollowupQueueDisposition } from "../auto-reply/get-reply-options.types.js";
 /** Exact input identity and custody; scheduling remains with the mailbox selector. */
 import type { FollowupRun, QueueSettings } from "../auto-reply/reply/queue/types.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { notifyGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
+import { diagnosticLogger } from "../logging/diagnostic-runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -35,6 +37,7 @@ export function bindSessionControllerSource(
   input.sourceAdapter?.signal?.throwIfAborted();
   input.source = source;
   source.controllerInput = input;
+  notifyGatewayWorkMetricsChanged();
 }
 
 export function isSessionControllerSourceQueued(input: SessionControllerInput): boolean {
@@ -109,27 +112,32 @@ export function beginSessionControllerSourceInjection(
       return;
     }
     finished = true;
-    const mustConsume = consumed || pending.accepted === true;
+    if (!consumed && (input.retirementRequested || input.abortSignal.aborted)) {
+      diagnosticLogger.warn(
+        "steering followup unavailable: source cancelled or retired",
+        diagnosticIdentity,
+      );
+    }
     logSessionControllerPhase({
       ...diagnosticIdentity,
       phase: "injection-outcome",
       status: "settled",
-      reason: mustConsume ? "consumed" : "declined",
+      reason: consumed ? "consumed" : "declined",
     });
     input.injection = undefined;
     input.phase = phase;
-    pending.settle(mustConsume);
+    pending.settle(consumed);
     if (
-      mustConsume ||
+      consumed ||
       !options.keepOrderOnDecline ||
       input.retirementRequested ||
       input.abortSignal.aborted
     ) {
-      settleSessionControllerSourceInjectionOrder(input, mustConsume);
+      settleSessionControllerSourceInjectionOrder(input, consumed);
     } else {
       input.injectionAttempted = undefined;
     }
-    if (mustConsume || input.retirementRequested || input.abortSignal.aborted) {
+    if (consumed || input.retirementRequested || input.abortSignal.aborted) {
       retireSessionControllerInput(input);
     } else {
       input.mailbox.wake();
@@ -190,12 +198,8 @@ export function beginSessionControllerSourceInjection(
       if (!started || finished || input.injection !== pending) {
         return;
       }
-      // A later rejection cannot undo observed ownership. False alone does not
-      // prove safe replay: an indeterminate final outcome still consumes input.
-      pending.accepted = pending.accepted === true || accepted;
       if (accepted) {
-        // The native owner now holds this input ahead of any later steer and it can
-        // never be replayed, so successors need not wait for its transcript commit.
+        // Native acceptance releases successors; final settlement alone decides replay custody.
         // Native commits can depend on later input, e.g. an answer to a pending question.
         settleSessionControllerSourceInjectionOrder(input, true);
       }
@@ -529,6 +533,7 @@ export function holdSessionControllerSourceWithdrawal(
 function notifySessionControllerSourceAbandonment(
   run: Pick<FollowupRun, "turnAdoptionLifecycle">,
   state: SessionControllerSourceCustody,
+  dropReason?: FollowupQueueDisposition,
 ): void | Promise<void> {
   const prior = state.abandonment;
   if (prior) {
@@ -540,7 +545,10 @@ function notifySessionControllerSourceAbandonment(
   const notification: NonNullable<SessionControllerSourceCustody["abandonment"]> = {};
   state.abandonment = notification;
   try {
-    const completion = run.turnAdoptionLifecycle?.onAbandoned?.();
+    const completion =
+      dropReason && run.turnAdoptionLifecycle?.onDropped
+        ? run.turnAdoptionLifecycle.onDropped(dropReason)
+        : run.turnAdoptionLifecycle?.onAbandoned?.();
     if (completion) {
       notification.completion = Promise.resolve(completion);
       void notification.completion.catch(() => {});
@@ -556,7 +564,7 @@ function notifySessionControllerSourceAbandonment(
 export function completeSessionControllerSourceLifecycle(
   run: Pick<FollowupRun, "turnAdoptionLifecycle" | "controllerInput" | "controllerClaim">,
   state: SessionControllerSourceCustody,
-  disposition?: "consumed",
+  disposition?: "consumed" | { kind: "dropped"; reason: FollowupQueueDisposition },
 ): void {
   if (state.completed) {
     return;
@@ -581,7 +589,11 @@ export function completeSessionControllerSourceLifecycle(
     try {
       abandonment =
         disposition !== "consumed" && !state.adopted
-          ? notifySessionControllerSourceAbandonment(run, state)
+          ? notifySessionControllerSourceAbandonment(
+              run,
+              state,
+              typeof disposition === "object" ? disposition.reason : undefined,
+            )
           : undefined;
     } catch (error) {
       return afterFailure(error);

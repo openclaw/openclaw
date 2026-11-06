@@ -25,6 +25,10 @@ waiting does not cancel the shared launch. Stopping or resetting the browser
 does cancel it. If startup exhausts its own budget, the error names the profile
 and startup deadline; inspect the browser startup logs before retrying.
 
+OpenClaw never starts an `attachOnly` CDP browser, but it waits up to about 30 seconds for one
+that is listening and still starting, without spending the action timeout. If the endpoint refuses
+the connection, the operation fails immediately: start the browser or its socket, then retry.
+
 ## Inspection times out but screenshots work
 
 Snapshots and page-text reads use a browser automation connection that can become

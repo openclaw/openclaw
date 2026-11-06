@@ -22,6 +22,10 @@ import {
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import { sessionToolOverridesEqual } from "../../config/sessions/session-tool-overrides.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -54,6 +58,8 @@ const targetScopes = resolveGlobalSingleton(
           authority: PreparedCommandOwnerAuthority;
           requester: CommandOwnerRequester;
         };
+        /** A scheduled job's recorded requester; see `requesterOwner` on capture. */
+        requesterOwner?: SessionEventRequesterOwner;
         deletion?: { agentId: string; isBlocked: () => boolean };
       }
     >(),
@@ -106,6 +112,12 @@ export async function captureSessionEventTargetForHost(
      * The identity comes from the host-owned caller, never from the producer.
      */
     retainRequesterOwner?: true;
+    /**
+     * The host names the work's originating requester from its own record (a scheduled
+     * job's requester). The turn holds owner tools only while `assertCurrent` passes; a
+     * requester without it is a known non-owner caller, so no session-principal fallback.
+     */
+    requesterOwner?: SessionEventRequesterOwner;
   } = {},
 ): Promise<SessionEventTarget> {
   const operatorAuthority = options.operatorAuthority;
@@ -232,10 +244,13 @@ export async function captureSessionEventTargetForHost(
     targetScopes.set(target, {
       env,
       operatorAuthority,
-      ...(callerAgentMatches &&
-      (resolveRequesterPrincipalKey(caller) || requesterCreatorProfileId(caller?.requesterOrigin))
+      ...(options.requesterOwner ||
+      (callerAgentMatches &&
+        (resolveRequesterPrincipalKey(caller) ||
+          requesterCreatorProfileId(caller?.requesterOrigin)))
         ? { hasOriginatingCaller: true as const }
         : {}),
+      ...(options.requesterOwner ? { requesterOwner: options.requesterOwner } : {}),
       ...(operatorAuthority && options.ownerContinuation ? { ownerContinuation: true } : {}),
       ...(requester?.messageProvider &&
       requester.senderId &&
@@ -353,6 +368,15 @@ export async function prepareSessionEventTargetForHost(
       assertTargetCurrent();
       retained.assertCurrent();
     };
+    Object.assign(assertCurrent, {
+      prepareSessionSourceEffect: composeSessionSourceAssertion(
+        [target.assertCurrent, retained.assertCurrent],
+        (assertSource) => {
+          assertSource();
+          assertCurrent();
+        },
+      ).prepareSessionSourceEffect,
+    });
     assertCurrent();
     return {
       ...retained,
@@ -361,17 +385,28 @@ export async function prepareSessionEventTargetForHost(
         assertTargetCurrent();
         return retained.readSessionSettings();
       },
-      bindCreation: (operation: Parameters<typeof retained.bindCreation>[0]) => {
+      bindCreation: (
+        operation: Parameters<typeof retained.bindCreation>[0],
+      ): SessionSourceAssertion => {
         assertTargetCurrent();
         const assertCreationCurrent = retained.bindCreation(operation, (binding) => {
           // Retain the committed origin even if this attempt stops before model start.
           target.sessionId = binding.sessionId;
           target.lifecycleRevision = binding.lifecycleRevision;
         });
-        return () => {
+        const assertBoundCurrent = () => {
           assertTargetCurrent();
           assertCreationCurrent();
         };
+        return Object.assign(assertBoundCurrent, {
+          prepareSessionSourceEffect: composeSessionSourceAssertion(
+            [target.assertCurrent, assertCreationCurrent],
+            (assertSource) => {
+              assertSource();
+              assertBoundCurrent();
+            },
+          ).prepareSessionSourceEffect,
+        });
       },
     };
   } catch (error) {
@@ -390,6 +425,15 @@ export function readSessionEventTargetOperatorAuthority(
   target: SessionEventTarget,
 ): AdmittedRunOperatorAuthority | undefined {
   return targetScopes.get(target)?.operatorAuthority;
+}
+
+/** A host-recorded requester; owner tools last only while `assertCurrent` passes. */
+export type SessionEventRequesterOwner = Readonly<{ assertCurrent?: () => void }>;
+
+export function readSessionEventTargetRequesterOwner(
+  target: SessionEventTarget,
+): SessionEventRequesterOwner | undefined {
+  return targetScopes.get(target)?.requesterOwner;
 }
 
 /** A captured channel guest still has a caller even without a profile grant. */
@@ -455,6 +499,8 @@ export function combineSessionEventTargetsForHost(
         readSessionEventTargetOwnerContinuation(first) ||
       hasSessionEventOriginatingCaller(target) !== hasSessionEventOriginatingCaller(first) ||
       commandOwnerRequesterKey(target) !== commandOwnerRequesterKey(first) ||
+      readSessionEventTargetRequesterOwner(target) !==
+        readSessionEventTargetRequesterOwner(first) ||
       channelRouteDedupeKey(target.deliveryContext) !== route
     ) {
       throw new Error(

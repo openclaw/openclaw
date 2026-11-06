@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
+import { prepareWorkspaceReconciliation } from "./workspace-manifest-comparison.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import {
@@ -58,6 +59,7 @@ async function workspace(eol = "\n", added = false) {
     bytes,
     base: base.manifest,
     current: current.manifest,
+    reconciliation: prepareWorkspaceReconciliation(base.manifest, current.manifest),
     baseManifestRef: base.manifestRef,
     currentManifestRef: current.manifestRef,
   };

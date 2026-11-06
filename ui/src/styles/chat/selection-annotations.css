@@ -70,9 +70,7 @@ openclaw-chat-comment-pins {
 .chat-comment-preview {
   --openclaw-tooltip-max-width: min(360px, calc(100vw - 24px));
   --openclaw-tooltip-padding: 12px;
-  --openclaw-tooltip-background-color: var(--session-hovercard-surface);
-  --openclaw-tooltip-border-color: var(--border);
-  --openclaw-tooltip-border-radius: var(--radius-lg);
+  --openclaw-tooltip-border-radius: var(--menu-radius);
 }
 
 .chat-comment-preview__scroll {
@@ -156,15 +154,18 @@ openclaw-chat-comment-pins {
   margin-top: 4px;
 }
 
-:is(.chat-comment-preview__scroll, .chat-comment-preview__text--comment)[data-at-start="false"] {
+.chat-comment-preview__scroll[data-at-start="false"],
+.chat-comment-preview__text--comment[data-at-start="false"] {
   --annotation-fade-top: 12px;
 }
 
-:is(.chat-comment-preview__scroll, .chat-comment-preview__text--comment)[data-at-end="false"] {
+.chat-comment-preview__scroll[data-at-end="false"],
+.chat-comment-preview__text--comment[data-at-end="false"] {
   --annotation-fade-bottom: 12px;
 }
 
-:is(.chat-comment-preview__scroll, .chat-comment-preview__text--comment)[data-scrollable="true"] {
+.chat-comment-preview__scroll[data-scrollable="true"],
+.chat-comment-preview__text--comment[data-scrollable="true"] {
   mask-image: linear-gradient(
     to bottom,
     transparent,
@@ -189,10 +190,7 @@ openclaw-chat-comment-pins {
 }
 
 .chat-comment-preview--editable {
-  --openclaw-tooltip-background-color: var(--popover);
   --openclaw-tooltip-padding: 6px;
-  --openclaw-tooltip-border-radius: var(--radius-lg);
-  --openclaw-tooltip-shadow: var(--shadow-md);
 }
 
 .chat-comment-preview--editable .chat-comment-preview__scroll {

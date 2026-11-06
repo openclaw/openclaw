@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuEntry } from "../../../components/solid/menu.tsx";
+import { SwitchIndicator } from "../../../components/solid/switch.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { MicrophonePickerProps } from "../composer-microphone-picker.ts";
 import { realtimeTalkDeviceIssueMessage } from "../talk/input.ts";
@@ -167,20 +168,10 @@ export function MicrophoneMenu(props: {
           label: t("chat.composer.holdToDictate"),
           type: "checkbox",
           checked: props.picker.holdToDictate !== false,
-          class: "chat-talk-input-picker__preference",
+          class: "oc-menu-item--switch chat-talk-input-picker__preference",
           attributes: { "data-chat-talk-preference": "hold-to-dictate" },
           closeOnSelect: false,
-          details: (
-            <span
-              class={[
-                "chat-controls__speed-toggle",
-                { "chat-controls__speed-toggle--active": props.picker.holdToDictate !== false },
-              ]}
-              aria-hidden="true"
-            >
-              <span class="chat-controls__speed-toggle-thumb" />
-            </span>
-          ),
+          details: <SwitchIndicator checked={props.picker.holdToDictate !== false} size="sm" />,
         });
       }
       return entries;

@@ -23,6 +23,7 @@ import { rebalanceRuntimeTestJobs } from "../../scripts/lib/ci-runtime-test-plac
 import { refitTestTimings, type CiTimingRun } from "../../scripts/lib/ci-test-timings-refit.mts";
 import {
   createNativeSoloTimingKey,
+  CI_TIMING_PROFILES,
   ciTestTimingsSchema,
   type CiTestTimings,
   type RuntimePlacementTiming,
@@ -151,11 +152,11 @@ function packedReleaseFixture() {
 
 const measuredFile = "ui/src/e2e/measured.e2e.test.ts";
 const baseline: CiTestTimings = {
-  compactGroupSeconds: { blacksmith: {}, github: {} },
-  runtimePlacementTimings: { blacksmith: [], github: [] },
+  compactGroupSeconds: { blacksmith: {}, github: {}, boat: {} },
+  runtimePlacementTimings: { blacksmith: [], github: [], boat: [] },
   repoE2eFileSeconds: {},
   source: "median of 2 successful main CI runs: 1, 2",
-  toolingFileSeconds: { blacksmith: {}, github: {} },
+  toolingFileSeconds: { blacksmith: {}, github: {}, boat: {} },
   uiE2e: { fileSeconds: { [measuredFile]: 100 }, perFileOverheadSeconds: 0.6 },
   updatedAt: "2026-08-22",
   version: 1,
@@ -165,7 +166,7 @@ const sampleNow = "2026-08-28T12:00:00.000Z";
 const compactBaseline = (
   blacksmith: Record<string, number> = {},
   github: Record<string, number> = {},
-): CiTestTimings => ({ ...baseline, compactGroupSeconds: { blacksmith, github } });
+): CiTestTimings => ({ ...baseline, compactGroupSeconds: { blacksmith, github, boat: {} } });
 
 function expectCompact(
   runs: CiTimingRun[],
@@ -615,11 +616,14 @@ describe("runtime placement observations", () => {
       const weights: Record<string, number> = gateway
         ? { moved: 180, retained: 250, gateway: 30, ordinary: 190 }
         : { moved: 100, retained: 330, spare: 80, ordinary: 50 };
-      const cost = (groups: NodeTestShardGroup[]) =>
-        (gateway ? 60 : 100) + groups.reduce((sum, entry) => sum + weights[entry.shard_name]!, 0);
+      const cost = vi.fn(
+        (groups: NodeTestShardGroup[]) =>
+          (gateway ? 60 : 100) + groups.reduce((sum, entry) => sum + weights[entry.shard_name]!, 0),
+      );
       rebalanceRuntimeTestJobs(jobs, {
         cost,
-        admits: (groups) => groups.length > 0 && cost(groups) <= (gateway ? 360 : 440),
+        admits: (groups, seconds = cost) =>
+          groups.length > 0 && seconds(groups) <= (gateway ? 360 : 440),
         runnerRank: () => 0,
         prepareRecipient: (recipient) =>
           gateway
@@ -642,6 +646,14 @@ describe("runtime placement observations", () => {
             : [["retained"], ["gateway", "moved"]]
           : [["retained"], ["spare"], ["ordinary", "moved"]],
       );
+      if (!gateway) {
+        // Even a losing recipient must use its already-priced envelope for admission.
+        expect(
+          cost.mock.calls.filter(
+            ([groups]) => groups.map((entry) => entry.shard_name).join(",") === "spare,moved",
+          ),
+        ).toHaveLength(1);
+      }
       if (gateway) {
         if (!packed) {
           expect(jobs.map((entry) => entry.predictedSeconds)).toEqual([310, 270]);
@@ -669,6 +681,14 @@ describe("runtime placement observations", () => {
     },
   );
 });
+
+function boatLog(text: string, workers = 2): string {
+  return [
+    `2026-08-27T23:00:00Z OPENCLAW_VITEST_MAX_WORKERS: ${workers}`,
+    `2026-08-27T23:00:00Z [shard:resources] logicalCpuCount=16 totalMemoryBytes=${31 * 1024 ** 3} requested plans=1 admitted plans=1`,
+    text,
+  ].join("\n");
+}
 
 function samplerRun(id: number, overrides: Record<string, unknown> = {}) {
   return {
@@ -762,7 +782,7 @@ global.Date = class extends OriginalDate {
   writeFileSync(
     fakeGh,
     `#!/usr/bin/env node
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(requests)}, JSON.stringify(args) + "\\n");
 const fixture = ${JSON.stringify(fixture)};
@@ -842,6 +862,153 @@ if (args[1] === "--help") {
 }
 
 describe("CI test timing refit", () => {
+  it("refits qualified Boat workloads without repricing or pruning other providers", () => {
+    const group = {
+      shard_name: "boat-workload",
+      configs: ["test/vitest/vitest.infra.config.ts"],
+      includePatterns: ["src/infra/example.test.ts"],
+    };
+    const text = boatLog(
+      [
+        `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups([group])}`,
+        compactLog(40, group.shard_name).replace(
+          `[shard:${group.shard_name}] begin`,
+          `[shard:${group.shard_name}] begin\n2026-08-27T23:00:01Z [shard:${group.shard_name}] [test] preparing runtime runtime before Vitest workers`,
+        ),
+      ].join("\n"),
+    );
+    const previous = compactBaseline({ retained: 80 }, { retained: 90 });
+    previous.compactGroupSeconds.boat = { stale: 100 };
+    const result = refitTestTimings(
+      [1, 2, 3].map((id) =>
+        timingRun(id, [
+          {
+            kind: "compact",
+            text,
+            labels: ["boat-xlarge", "self-hosted", "Linux", "X64"],
+          },
+        ]),
+      ),
+      previous,
+    );
+    expect(result.timings.compactGroupSeconds).toEqual({
+      blacksmith: { retained: 80 },
+      github: { retained: 90 },
+      boat: { "boat-workload": 40 },
+    });
+    expect(result.timings.runtimePlacementTimings.boat).toEqual([
+      {
+        configs: ["test/vitest/vitest.infra.config.ts"],
+        includePatterns: ["src/infra/example.test.ts"],
+        env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+        pretestBuildMode: "runtime",
+        seconds: 40,
+      },
+    ]);
+    expect(result.contributingRunIds.boat).toEqual([1, 2, 3]);
+    expect(result.contributingRunIds.blacksmith).toEqual([]);
+    expect(result.contributingRunIds.github).toEqual([]);
+  });
+
+  it.each([
+    ["missing resources", (text: string) => text.replace(/^.*\[shard:resources\].*\n/mu, "")],
+    ["missing workers", (text: string) => text.replace(/^.*OPENCLAW_VITEST_MAX_WORKERS.*\n/mu, "")],
+    ["different CPU", (text: string) => text.replace("logicalCpuCount=16", "logicalCpuCount=8")],
+    [
+      "multiple plans",
+      (text: string) =>
+        text.replace("requested plans=1 admitted plans=1", "requested plans=2 admitted plans=2"),
+    ],
+    [
+      "different memory",
+      (text: string) => text.replace(String(31 * 1024 ** 3), String(24 * 1024 ** 3)),
+    ],
+    ["duplicate resources", (text: string) => `${text}\n${text}`],
+  ] as const)("does not learn or prune Boat from %s", (_label, mutate) => {
+    const previous = compactBaseline();
+    previous.compactGroupSeconds.boat = { retained: 80 };
+    const result = refitTestTimings(
+      repeatedRuns(mutate(boatLog(compactLog(40))), "boat-xlarge", 3),
+      previous,
+    );
+    expect(result.timings.compactGroupSeconds.boat).toEqual({ retained: 80 });
+    expect(result.contributingRunIds.boat).toEqual([]);
+  });
+
+  it.each(["missing workers", "different CPU"])(
+    "retains Boat history when a complete run also has %s",
+    (reason) => {
+      const previous = compactBaseline();
+      previous.compactGroupSeconds.boat = { retained: 80 };
+      const invalid = boatLog(compactLog(90, "retained"));
+      const text =
+        reason === "missing workers"
+          ? invalid.replace(/^.*OPENCLAW_VITEST_MAX_WORKERS.*\n/mu, "")
+          : invalid.replace("logicalCpuCount=16", "logicalCpuCount=8");
+      const runs = [1, 2, 3].map((id) =>
+        timingRun(id, [
+          { kind: "compact", labels: ["boat-xlarge"], text: boatLog(compactLog(40, "observed")) },
+          { kind: "compact", labels: ["boat-xlarge"], text },
+        ]),
+      );
+      expect(refitTestTimings(runs, previous).timings.compactGroupSeconds.boat).toEqual({
+        observed: 40,
+        retained: 80,
+      });
+    },
+  );
+
+  it("rejects mixed Boat worker ceilings instead of averaging unlike work", () => {
+    const result = refitTestTimings([
+      compactRun(1, boatLog(compactLog(40), 2), "boat-xlarge"),
+      compactRun(2, boatLog(compactLog(60), 4), "boat-xlarge"),
+    ]);
+    expect(result.timings.compactGroupSeconds.boat).toEqual({});
+    expect(result.rejectedWorkerKeys.boat).toEqual(["core-unit-src-security-2"]);
+  });
+
+  it.each(
+    [
+      [],
+      ["boat"],
+      ["boat-small/from=snapshot"],
+      ["boat-large", "ubuntu-24.04"],
+      ["boat-xlarge", "blacksmith-32vcpu-ubuntu-2404"],
+      ["ubuntu-24.04", "self-hosted"],
+      ["ubuntu-24.04", "runson"],
+      ["unknown-runner"],
+      ["blacksmith-4vcpu-ubuntu-2404", "blacksmith-8vcpu-ubuntu-2404"],
+    ].map((labels) => ({ labels })),
+  )("ignores compact and packed measurements from unsupported runners: $labels", ({ labels }) => {
+    const runs = [1, 2].map((id) =>
+      timingRun(id, [
+        { kind: "compact", labels, text: compactLog(40) },
+        { kind: "release-packed", labels, text: packedReleaseFixture().text },
+      ]),
+    );
+    expect(refitTestTimings(runs).timings.compactGroupSeconds).toEqual({
+      blacksmith: {},
+      boat: {},
+      github: {},
+    });
+  });
+
+  it("keeps historical weights when mixed runner inventories omit their old jobs", () => {
+    const previous = compactBaseline({ retained: 80 }, { observed: 10, retained: 90 });
+    const runs = [1, 2, 3].map((id) =>
+      timingRun(id, [
+        timingLog(compactLog(40, "observed"), "ubuntu-24.04"),
+        timingLog(compactLog(50, "native"), "blacksmith-8vcpu-ubuntu-2404"),
+        timingLog(compactLog(900, "retained"), "boat-large/from=snapshot"),
+      ]),
+    );
+    expect(refitTestTimings(runs, previous).timings.compactGroupSeconds).toEqual({
+      blacksmith: { native: 50, retained: 80 },
+      boat: {},
+      github: { observed: 40, retained: 90 },
+    });
+  });
+
   it("learns default Bun spans separately and preserves unobserved Node timing history", () => {
     const previous: CiTestTimings = compactBaseline({ retained: 90, "bun:legacy-subset": 5 });
     const runs = repeatedRuns(
@@ -1113,10 +1280,12 @@ it.todo("retains todo coverage");
     const mixed = refitTestTimings(runs, previous);
     expect(mixed.timings.compactGroupSeconds).toEqual({
       blacksmith: previous.compactGroupSeconds.blacksmith,
+      boat: {},
       github: { [descriptor.timing_key]: 40, "reader-parent": 40 },
     });
     expect(mixed.rejectedWorkerKeys).toEqual({
       blacksmith: ["reader-parent", descriptor.timing_key].toSorted(),
+      boat: [],
       github: [],
     });
     expect(mixed.timings.runtimePlacementTimings.blacksmith).toEqual([
@@ -1250,10 +1419,12 @@ it.todo("retains todo coverage");
     // complete parent. Inventory growth must not erase that measured baseline.
     expect(refitTestTimings(runs, previous).timings.compactGroupSeconds).toEqual({
       blacksmith: { [parentShardName]: 320 },
+      boat: {},
       github: { [parentShardName]: 700 },
     });
     expect(refitTestTimings([runs[0]!]).timings.compactGroupSeconds).toEqual({
       blacksmith: {},
+      boat: {},
       github: {},
     });
   });
@@ -1376,6 +1547,7 @@ it.todo("retains todo coverage");
       const result = refitTestTimings(runs, previous);
       expect(result.timings.compactGroupSeconds).toEqual({
         blacksmith: { observed: 40, retained: 90 },
+        boat: {},
         github: {},
       });
       expect(result.contributingRunIds.blacksmith).toEqual([1, 2, 3]);
@@ -1468,6 +1640,25 @@ describe("CI timing sampler provenance", () => {
     expect(new URL(url, "https://api.github.com").searchParams.get("created")).toBe(
       `2026-08-21T12:00:00.000Z..${sampleNow}`,
     );
+  it("counts qualified Boat main contributors through the sampler and preserves old prices", () => {
+    const fixture = makeFixture({
+      jobs: [1, 2].map((id) =>
+        samplerJob(id * 10, id, {
+          labels: ["boat-xlarge"],
+          log: boatLog(compactLog(40)),
+        }),
+      ),
+      baseline: compactBaseline({ retained: 80 }, { retained: 90 }),
+    });
+    const result = invoke(fixture);
+    expect(result.stdout).toContain("Boat: 2");
+    expect(readTimings(fixture).compactGroupSeconds).toEqual({
+      blacksmith: { retained: 80 },
+      github: { retained: 90 },
+      boat: { "core-unit-src-security-2": 40 },
+    });
+  });
+
   it("skips noncontributing dispatches to discover packed release jobs without repricing partial siblings", () => {
     const { timingKeys, text } = packedReleaseFixture();
     const fixture = makeFixture({
@@ -1515,6 +1706,7 @@ describe("CI timing sampler provenance", () => {
           80,
         ),
       ],
+      boat: [],
       github: [],
     },
   };
@@ -1658,6 +1850,7 @@ describe("CI timing sampler provenance", () => {
     const timings = readTimings(fixture);
     expect(timings.compactGroupSeconds).toEqual({
       blacksmith: { "core-unit-src-security-2": 70, unobserved: 90 },
+      boat: {},
       github: { ...retained.compactGroupSeconds.github, "core-unit-src-security-2": 50 },
     });
     expect(timings.runtimePlacementTimings).toEqual(retained.runtimePlacementTimings);
@@ -1682,11 +1875,13 @@ describe("CI timing sampler provenance", () => {
     );
     expect(refitTestTimings(runs.slice(0, 3)).timings.toolingFileSeconds).toEqual({
       blacksmith: {},
+      boat: {},
       github: {},
     });
     const result = refitTestTimings(runs);
     expect(result.timings.toolingFileSeconds).toEqual({
       blacksmith: { [toolingFile]: 35 },
+      boat: {},
       github: {},
     });
     expect(result.contributingRunIds.toolingBlacksmith).toEqual([3, 4]);
@@ -1957,7 +2152,7 @@ describe("committed CI timing loader", () => {
   function expectLoaded(loader: typeof testTimings, data: CiTestTimings) {
     expect(loader.readUiE2eFileTimings()).toEqual(data.uiE2e);
     expect(loader.readRepoE2eFileTimings()).toEqual(data.repoE2eFileSeconds);
-    for (const profile of ["blacksmith", "github"] as const) {
+    for (const profile of CI_TIMING_PROFILES) {
       expect(loader.readCompactGroupTimings(profile)).toEqual(data.compactGroupSeconds[profile]);
       expect(loader.readToolingFileTimings(profile)).toEqual(data.toolingFileSeconds[profile]);
     }
@@ -1984,10 +2179,15 @@ describe("committed CI timing loader", () => {
   it("reads the repo-relative file once and honors the disable switch even after caching", async () => {
     const data = {
       ...baseline,
-      compactGroupSeconds: { blacksmith: { group: 110 }, github: { group: 181 } },
+      compactGroupSeconds: {
+        blacksmith: { group: 110 },
+        github: { group: 181 },
+        boat: { group: 55 },
+      },
       repoE2eFileSeconds: { "test/example.e2e.test.ts": 90 },
       toolingFileSeconds: {
         blacksmith: { "test/scripts/ci-node-test-plan.test.ts": 300 },
+        boat: { "test/scripts/ci-node-test-plan.test.ts": 75 },
         github: { "test/scripts/ci-node-test-plan.test.ts": 420 },
       },
     };
@@ -2013,10 +2213,12 @@ describe("committed CI timing loader", () => {
             "bun-all:group": 60,
             "dual-all:group": 170,
           },
+          boat: {},
           github: {},
         },
         toolingFileSeconds: {
           blacksmith: { "file.test.ts": 50, "bun-all:file.test.ts": 30 },
+          boat: {},
           github: {},
         },
       }),

@@ -149,6 +149,87 @@ afterAll(async () => {
 });
 
 describeBrowserLayout("form controls and app chrome styles", () => {
+  it("preserves shared field states and forced-colors focus indicators", async () => {
+    await withBrowserPage(desktopContext.newPage(), async (page) => {
+      await setFixture(
+        page,
+        `<main style="padding:24px;display:grid;gap:12px">
+          <label class="field"><span><input id="field" placeholder="Field" /></span></label>
+          <input id="usage" class="usage-query-input" placeholder="Usage query" />
+          <button id="agent" class="agent-select__trigger" type="button">Agent</button>
+          <button id="submenu" class="agent-select__trigger oc-menu-item" type="button" aria-expanded="true" tabindex="-1">Submenu</button>
+        </main>`,
+        'data-theme-mode="light" style="--field-border:#123456;--border-strong:#345678;--field-focus-border:#56789a;--muted:#789abc;--duration-fast:0s"',
+      );
+      const paint = (control: Locator) =>
+        control.evaluate((element) => {
+          const style = getComputedStyle(element);
+          return {
+            border: style.borderTopColor,
+            opacity: style.opacity,
+            cursor: style.cursor,
+            focused: element.matches(":focus-visible"),
+            outline: [style.outlineStyle, style.outlineWidth, style.outlineOffset],
+          };
+        });
+      for (const id of ["field", "usage", "agent"]) {
+        const control = page.locator(`#${id}`);
+        await page.mouse.move(0, 0);
+        expect(await paint(control), `${id} resting`).toMatchObject({
+          border: "rgb(18, 52, 86)",
+          opacity: "1",
+        });
+        await control.hover();
+        expect((await paint(control)).border, `${id} hover`).toBe("rgb(52, 86, 120)");
+        await page.keyboard.press("Tab");
+        await control.focus();
+        expect(await paint(control), `${id} keyboard focus while hovered`).toMatchObject({
+          border: "rgb(86, 120, 154)",
+          focused: true,
+        });
+        expect((await paint(control)).outline[0], `${id} normal focus outline`).toBe("none");
+        await control.evaluate((element) => element.setAttribute("disabled", ""));
+        // Chromium blurs a newly disabled element at its next rendering update, not at once.
+        await expect
+          .poll(() => paint(control), { message: `${id} disabled while hovered` })
+          .toMatchObject({
+            border: "rgb(18, 52, 86)",
+            opacity: "0.5",
+            cursor: "not-allowed",
+          });
+        await control.evaluate((element) => element.removeAttribute("disabled"));
+      }
+      expect(
+        await page
+          .locator("#field")
+          .evaluate((element) => getComputedStyle(element, "::placeholder").color),
+      ).toBe("rgb(120, 154, 188)");
+
+      await page.mouse.move(0, 0);
+      const agent = page.locator("#agent");
+      await agent.evaluate((element) => element.setAttribute("aria-expanded", "true"));
+      await agent.hover();
+      expect((await paint(agent)).border, "expanded trigger resists hover").toBe(
+        "rgb(86, 120, 154)",
+      );
+      expect((await paint(page.locator("#submenu"))).border, "submenu keeps its own paint").toBe(
+        "rgb(18, 52, 86)",
+      );
+
+      await page.emulateMedia({ forcedColors: "active" });
+      await page.locator("#field").focus();
+      expect(
+        (await paint(page.locator("#field"))).outline,
+        "focused field in forced colors",
+      ).toEqual(["solid", "2px", "2px"]);
+      expect((await paint(agent)).outline, "expanded trigger in forced colors").toEqual([
+        "solid",
+        "2px",
+        "2px",
+      ]);
+    });
+  });
+
   it("removes the mask layer from layout when the value is revealed", async () => {
     await withBrowserPage(desktopContext.newPage(), async (page) => {
       await setFixture(
@@ -170,6 +251,29 @@ describeBrowserLayout("form controls and app chrome styles", () => {
       expect(state).toEqual({ hidden: true, display: "none" });
     });
   });
+
+  it.each(["dark", "light"] as const)(
+    "drops the accent from a disabled primary in %s mode",
+    async (theme) => {
+      await withBrowserPage(desktopContext.newPage(), async (page) => {
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        await setFixture(
+          page,
+          `<main style="padding: 24px">
+          <button class="btn" type="button" disabled>Neutral</button>
+          <button class="btn primary" type="button" disabled>Primary</button>
+        </main>`,
+          `data-theme="${theme}" data-theme-mode="${theme}"`,
+        );
+        const paint = (name: string) =>
+          page.getByRole("button", { name, exact: true }).evaluate((button) => {
+            const style = getComputedStyle(button);
+            return [style.backgroundColor, style.borderTopColor, style.color, style.opacity];
+          });
+        expect(await paint("Primary")).toEqual(await paint("Neutral"));
+      });
+    },
+  );
 
   it("keeps MCP remove glyphs proportionate to settings buttons", async () => {
     await withBrowserPage(desktopContext.newPage(), async (page) => {
@@ -384,7 +488,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
         );
 
       const desktop = await measure();
-      expect(desktop.map((row) => row.selectWidth)).toEqual([340, 340]);
+      expect(desktop.map((row) => row.selectWidth)).toEqual([220, 220]);
       expect(desktop.every((row) => row.selectTop === row.buttonTop)).toBe(true);
 
       await page.setViewportSize({ width: 390, height: 800 });
@@ -431,13 +535,12 @@ describeBrowserLayout("form controls and app chrome styles", () => {
       const selects = await page.locator("select.settings-select").evaluateAll((nodes) =>
         nodes.map((node) => {
           const style = getComputedStyle(node as HTMLElement);
+          const icon = getComputedStyle(node as HTMLElement, "::picker-icon");
           return {
             appearance: style.appearance,
             image: style.backgroundImage,
-            paddingRight: Number.parseFloat(style.paddingRight),
-            positionX: style.backgroundPositionX.split(",").map((value) => value.trim()),
-            size: style.backgroundSize.split(",").map((value) => value.trim()),
-            repeat: style.backgroundRepeat.split(",").map((value) => value.trim()),
+            iconWidth: icon.width,
+            iconMask: icon.maskImage,
           };
         }),
       );
@@ -445,13 +548,11 @@ describeBrowserLayout("form controls and app chrome styles", () => {
       expect(selects).toHaveLength(2);
       for (const select of selects) {
         expect(select).toMatchObject({
-          appearance: "none",
-          positionX: ["calc(100% - 18px)", "calc(100% - 14px)"],
-          size: ["5px 5px", "5px 5px"],
-          repeat: ["no-repeat", "no-repeat"],
+          appearance: "base-select",
+          image: "none",
+          iconWidth: "16px",
+          iconMask: expect.stringContaining("svg"),
         });
-        expect(select.image.match(/linear-gradient[(]/g)).toHaveLength(2);
-        expect(select.paddingRight).toBeGreaterThanOrEqual(32);
       }
       const [checkbox, radio, select, text] = await Promise.all(
         [
@@ -469,6 +570,17 @@ describeBrowserLayout("form controls and app chrome styles", () => {
       expect([text, select]).toEqual([38, 38]);
       expect(checkbox).toBeLessThan(38);
       expect(radio).toBeLessThan(38);
+
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      for (const picker of await page.locator(".field select, select.settings-select").all()) {
+        await picker.click();
+        expect(
+          await picker.evaluate(
+            (node) => getComputedStyle(node, "::picker(select)").transitionProperty,
+          ),
+        ).toBe("none");
+        await page.keyboard.press("Escape");
+      }
     });
   });
 
@@ -506,7 +618,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
               <input data-scale data-baseline="16" data-scale-base="12.5" class="settings-sidebar__search-input" value="settings" />
               <div class="sidebar-recent-session sidebar-recent-session--child">
                 <span data-scale data-baseline="12" class="sidebar-recent-session__name">Child session</span>
-                <span data-scale data-baseline="10" class="session-row-trail">3m</span>
+                <span data-scale class="session-row-trail">3m</span>
               </div>
             </div>`
             : `<span data-scale class="nav-item__text">Navigation</span>

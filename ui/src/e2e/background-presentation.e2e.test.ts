@@ -146,8 +146,8 @@ suite.define(() => {
             expect(g.mask).not.toBe("none");
             expect(g.composerBackground).toMatch(/^rgb\(/);
             if (viewport.width === 390) {
-              expect(g.composerLeft - g.canvasLeft).toBeCloseTo(20, 0);
-              expect(g.canvasRight - g.composerRight).toBeCloseTo(20, 0);
+              expect(g.composerLeft - g.canvasLeft).toBeCloseTo(16, 0);
+              expect(g.canvasRight - g.composerRight).toBeCloseTo(16, 0);
             }
             expect(g.bodyWidth).toBeLessThanOrEqual(g.width);
           }

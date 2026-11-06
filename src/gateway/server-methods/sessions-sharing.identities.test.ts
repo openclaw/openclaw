@@ -1,7 +1,10 @@
 import { DatabaseSync } from "node:sqlite";
 import { Value } from "typebox/value";
 import { afterEach, expect, it, vi } from "vitest";
-import { SessionMembersListEvidenceResultSchema } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  SessionMembersListEvidenceResultSchema,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionMemberPermissionLevel } from "../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
@@ -79,6 +82,89 @@ async function sharingSession(sessionKey: string, manager = preparedClient("owne
 const withState = createSharingState(() => setRuntimeConfigSnapshot({}));
 const seedOwned = (key: string, owner = "owner") =>
   seed(key, key, { createdActor: { type: "human", source: "profile", id: owner } });
+
+it("admits current profiles and non-human creators, rejecting orphan human provenance", () =>
+  withState(async () => {
+    const owner = ensureProfileForEmail("sharing-owner@example.test");
+    const member = ensureProfileForEmail("sessionless-member@example.test");
+    const sessionKey = "agent:main:member-admission";
+    await seed(sessionKey, sessionKey, {
+      visibility: "read-only",
+      createdActor: { type: "human", source: "profile", id: owner.id },
+    });
+    const rejected = ["unknown-identity"];
+    for (const incognito of [false, true]) {
+      for (const source of ["channel", "unknown", "profile"] as const) {
+        const id = `${source}-${incognito ? "private" : "durable"}-orphan`;
+        rejected.push(id);
+        await replaceSessionEntry(
+          {
+            agentId: "main",
+            sessionKey: `agent:main:${incognito ? "dashboard:incognito-" : ""}${id}`,
+          },
+          {
+            sessionId: id,
+            updatedAt: 1,
+            ...(incognito ? { incognito: true } : {}),
+            createdActor: { type: "human", source, id },
+          },
+        );
+      }
+    }
+    for (const type of ["agent", "system"] as const) {
+      await seed(`agent:main:${type}-creator`, type, { createdActor: { type, id: type } });
+    }
+    const { invoke } = await sharingSession(sessionKey, identifiedClient(owner.id));
+    const listed = Value.Decode(
+      SessionMembersListEvidenceResultSchema,
+      (await invoke("session.members.listEvidence"))[0]?.[1],
+    );
+    expect(listed.owner).toMatchObject({ id: owner.id });
+    for (const id of rejected) {
+      expect.soft(listed.identities.map((identity) => identity.id)).not.toContain(id);
+      expect.soft(await invoke("session.members.add", { identityId: id })).toEqual([
+        [
+          false,
+          undefined,
+          expect.objectContaining({
+            code: ErrorCodes.INVALID_REQUEST,
+            message: "unknown identity",
+          }),
+        ],
+      ]);
+    }
+    expect
+      .soft((await readSessionMembersInWorker({ agentId: "main", sessionKey })).members)
+      .toEqual([]);
+    for (const identityId of [owner.id, member.id, "agent", "system"]) {
+      expect(await invoke("session.members.add", { identityId })).toEqual([
+        [true, { ok: true, sessionKey, identityId }, undefined],
+      ]);
+      if (identityId === member.id) {
+        expect(
+          await authorizeResolvedSessionMutationAsync({
+            cfg: {},
+            client: identifiedClient(member.id),
+            sessionKey,
+            agentId: "main",
+          }),
+        ).toBeNull();
+      }
+      expect(await invoke("session.members.remove", { identityId })).toEqual([
+        [true, { ok: true, sessionKey, identityId }, undefined],
+      ]);
+    }
+    // Listing historical rows is cleanup evidence, never admission authority.
+    const legacyId = rejected[1]!;
+    addSessionMember({ agentId: "main", sessionKey }, { identityId: legacyId, addedBy: owner.id });
+    expect((await invoke("session.members.listEvidence"))[0]?.[1]).toMatchObject({
+      members: [expect.objectContaining({ identityId: legacyId })],
+      identities: expect.arrayContaining([expect.objectContaining({ id: legacyId })]),
+    });
+    expect((await invoke("session.members.add", { identityId: legacyId }))[0]?.[0]).toBe(false);
+    expect((await invoke("session.members.remove", { identityId: legacyId }))[0]?.[0]).toBe(true);
+    expect((await readSessionMembersInWorker({ agentId: "main", sessionKey })).members).toEqual([]);
+  }));
 
 it("lists sharing evidence and adds members independently of placement display failures", () =>
   withState(async () => {
@@ -383,7 +469,8 @@ it("refuses membership evidence after a published foreign ownership change", asy
 
 it("refuses revoked managers and dirty membership at the worker commit grant", () =>
   withState(async () => {
-    await seedOwned("agent:main:sharing-guest", "guest");
+    const guest = ensureProfileForEmail("sharing-guest@example.test");
+    await seedOwned("agent:main:sharing-guest", guest.id);
     for (const [method, change] of [
       ["session.members.add", "caller"],
       ["session.members.remove", "role"],
@@ -421,7 +508,7 @@ it("refuses revoked managers and dirty membership at the worker commit grant", (
       try {
         // Add a new member or remove an existing one so rollback has an observable result.
         await expect(
-          invoke(method, { identityId: method === "session.members.add" ? "guest" : "owner" }),
+          invoke(method, { identityId: method === "session.members.add" ? guest.id : "owner" }),
         ).rejects.toThrow(
           change === "dirty"
             ? "Session access facts are unavailable"

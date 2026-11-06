@@ -7,7 +7,10 @@ import {
   type Tracer,
 } from "@opentelemetry/api";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
-import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
+import {
+  normalizeDiagnosticTraceContext,
+  normalizeDiagnosticValue,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
@@ -15,11 +18,7 @@ import type {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { redactOtelAttributes } from "./service-attributes.js";
 import { MAX_RETAINED_TRUSTED_SPAN_CONTEXTS } from "./service-constants.js";
-import {
-  contextForTraceContext,
-  normalizedTrustedTraceContext,
-  normalizeTraceContext,
-} from "./service-trace-context.js";
+import { contextForTraceContext, normalizedTrustedTraceContext } from "./service-trace-context.js";
 
 export function createDiagnosticsTraceRuntime(tracer: Tracer) {
   const activeTrustedSpans = new Map<string, ReturnType<typeof tracer.startSpan>>();
@@ -72,7 +71,7 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     );
   };
   const trustedTraceContext = (evt: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) =>
-    metadata.trusted ? normalizeTraceContext(evt.trace) : undefined;
+    metadata.trusted ? normalizeDiagnosticTraceContext(evt.trace) : undefined;
   // Internal-dispatcher events are linkable on their own; everything else defers to
   // the shared trusted-trace-context rule, which also accepts an untrusted payload
   // whose trace context came from OpenClaw-owned scope (metadata.trustedTraceContext).
@@ -81,7 +80,7 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     metadata: DiagnosticEventMetadata,
   ) =>
     metadata.internal
-      ? normalizeTraceContext(evt.trace)
+      ? normalizeDiagnosticTraceContext(evt.trace)
       : normalizedTrustedTraceContext(evt, metadata);
   const trustedSpanAliasOwner = (evt: DiagnosticEventPayload): string | undefined =>
     "runId" in evt ? evt.runId || undefined : undefined;

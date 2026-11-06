@@ -32,6 +32,7 @@ import {
   type UpdateCommandExecutor,
 } from "./update-command-executor.js";
 import type { InitializedUpdate } from "./update-command-initialization.js";
+import { runMutableUpdateRecovery } from "./update-command-mutable-signals.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
 import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
 import type { StagedPackageInstallUpdate } from "./update-command-package.js";
@@ -44,11 +45,7 @@ import {
   resolveUpdateCommandAdmissionRoot,
 } from "./update-command-run.js";
 import { preflightUpdateCommandSchemas, previewUpdateCommand } from "./update-command-schema.js";
-import {
-  resolveServiceRefreshEnv,
-  withOwnedManagedUpdateEnv,
-  withUpdateInProgressEnv,
-} from "./update-command-service-env.js";
+import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-command-service-env.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 import { resolveUpdateCommandTarget } from "./update-command-target.js";
 
@@ -144,6 +141,7 @@ async function updateCommandWithRuntime(
               prepared,
               recoveryState,
               invocationCwd,
+              env,
               (opts, presentation, executor) =>
                 updateCommandInternal(
                   opts,
@@ -200,21 +198,16 @@ async function updateCommandInternal(
   const admissionStepTimeoutMs =
     prepared.timeoutMs ?? admittedRun.defaultStepTimeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
 
-  let target = initialization?.target;
-  const selectTarget = () =>
-    resolveUpdateCommandTarget(
+  const target =
+    initialization?.target ??
+    (await resolveUpdateCommandTarget(
       opts,
       recoveryState,
       invocationCwd,
       prepared,
       executor,
       admissionStepTimeoutMs,
-    );
-  if (!target) {
-    target = initialization
-      ? await withOwnedManagedUpdateEnv(initialization.env, selectTarget)
-      : await selectTarget();
-  }
+    ));
   if (!target) {
     return;
   }
@@ -497,6 +490,9 @@ async function updateCommandInternal(
 
     const execution = await executeMutableUpdate({
       ...target,
+      ...(packageInstallTarget
+        ? { updateInstallKind: "package" as const, packageInstallTarget }
+        : { updateInstallKind: "git" as const }),
       callerLegacyConfigPlan: initialization?.callerLegacyConfigPlan,
       installKind,
       timeoutMs,
@@ -569,49 +565,58 @@ async function updateCommandInternal(
     const rollbackBlockedReason =
       opts.recovery || failedBeforeMutation
         ? undefined
-        : await inspectActivatedUpdateState({
-            result,
-            root,
-            packageUpdateNodeRunner,
-            schemaVersions: execution.schemaVersions,
-            candidateSchemaVersions: execution.candidateSchemaVersions,
-            config: finalization.configSnapshot.config,
-            env: ownedManagedUpdateContext?.env ?? run.env,
-            timeoutMs: updateStepTimeoutMs,
-          });
+        : await runMutableUpdateRecovery(() =>
+            inspectActivatedUpdateState({
+              result,
+              root,
+              packageUpdateNodeRunner,
+              schemaVersions: execution.schemaVersions,
+              candidateSchemaVersions: execution.candidateSchemaVersions,
+              config: finalization.configSnapshot.config,
+              env: ownedManagedUpdateContext?.env ?? run.env,
+              timeoutMs: updateStepTimeoutMs,
+            }),
+          );
     run.executorFence?.assertCurrent();
     if (opts.recovery || rollbackBlockedReason) {
       // Only candidate code may reopen migrated state, including during reporting and cleanup.
       recoveryState.ledgerHandoffOwned = true;
       const assertRollbackCurrent = createUpdateCommandFinalizationFence(finalization);
-      const continued = await continueMigratedUpdateInFreshProcess(
-        { ...finalization, rollbackBlockedReason },
-        progress.pendingSteps,
+      const continued = await runMutableUpdateRecovery(() =>
+        continueMigratedUpdateInFreshProcess(
+          { ...finalization, rollbackBlockedReason },
+          progress.pendingSteps,
+        ),
       );
       if (continued.databaseRollbackAvailable && finalization.databaseBackup) {
-        const restored = await restoreFailedUpdateDatabases({
-          backup: finalization.databaseBackup,
-          result: continued.result,
-          runId: run.runId,
-          env: ownedManagedUpdateContext?.env ?? run.env,
-          assertCurrent: assertRollbackCurrent,
-          progress,
-        });
+        const backup = finalization.databaseBackup;
+        const restored = await runMutableUpdateRecovery(() =>
+          restoreFailedUpdateDatabases({
+            backup,
+            result: continued.result,
+            runId: run.runId,
+            env: ownedManagedUpdateContext?.env ?? run.env,
+            assertCurrent: assertRollbackCurrent,
+            progress,
+          }),
+        );
         if (!restored) {
           throw new UpdateCommandPendingRecoveryFailure(
             continued.result,
             continued.result.steps.at(-1)?.stderrTail ?? undefined,
           );
         }
-        await finishUpdate(
-          { ...finalization, result: continued.result },
-          {
-            beforeFinalization: async () => {
-              await progress.flushLedgerWrites();
-              recoveryState.ledgerHandoffOwned = false;
-              presentation.resume();
+        await runMutableUpdateRecovery(() =>
+          finishUpdate(
+            { ...finalization, result: continued.result },
+            {
+              beforeFinalization: async () => {
+                await progress.flushLedgerWrites();
+                recoveryState.ledgerHandoffOwned = false;
+                presentation.resume();
+              },
             },
-          },
+          ),
         );
         return;
       }
@@ -621,12 +626,14 @@ async function updateCommandInternal(
       }
       return;
     }
-    await finishUpdate(finalization, {
-      beforeFinalization: async () => {
-        await progress.flushLedgerWrites();
-        presentation.resume();
-      },
-    });
+    await runMutableUpdateRecovery(() =>
+      finishUpdate(finalization, {
+        beforeFinalization: async () => {
+          await progress.flushLedgerWrites();
+          presentation.resume();
+        },
+      }),
+    );
   };
 
   return await withUpdateCandidateAdmission(

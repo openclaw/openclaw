@@ -245,11 +245,14 @@ withholding the tool result. Register cleanup with its `onAcquired` callback;
 keep real cancellation active until cleanup releases it. Set
 `releaseBeforeResultWhenIdle: true` on the acquired resources when ordinary
 operation cleanup must complete before returning a result; accepted tracked
-work still returns its logical result without waiting for admission. This retains resources,
-not permission: queued work must still revalidate its original run, caller,
-expiry, and commit guards. Timeout, abort, and failed outcomes must close their
-operation immediately. Manual automation admission uses the existing per-call
-mutation receipt to join only activation, not the scheduled payload's lifetime.
+work still returns its logical result without waiting for admission. Resource retention
+grants no permission: work must still satisfy its owner's run, caller, expiry,
+and commit guards. Timeout, abort, and failed outcomes must close their operation immediately.
+Manual automation requests require current caller authority through durable enqueue;
+accepted runs launch under the job's scheduled authority and final eligibility checks.
+Their existing per-call mutation receipt joins only activation, not the scheduled
+payload's lifetime. Event ingress retains its claim guard until transfer, and
+on-exit watchers retain their source guard until the exit is consumed.
 
 After the last policy filter, schema quarantine, and native registration
 intersection, call `finalizeAgentToolAvailability(tools, options?)` from

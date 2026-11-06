@@ -23,6 +23,7 @@ import {
   createApplicationGatewaySnapshot,
 } from "../test-helpers/application-context-fixtures.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
+import { sidebarBootSnapshot } from "../test-helpers/sidebar-boot-snapshot.test-support.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { parseSidebarSnapshot, type SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 import { createSidebarSnapshot } from "./sidebar-snapshot.ts";
@@ -34,29 +35,11 @@ const scope = {
 };
 const sessionKey = `scope:${JSON.stringify([scope.gatewayScope, scope.recoveryScope])}\u0000agent:main:cedar`;
 const model: SidebarSnapshotModel = {
-  routingDefaults: { mainKey: "main", scope: "per-sender" },
-  roster: null,
-  mode: "roster",
-  navigationView: "sessions",
-  pages: [],
-  pageScopeId: null,
-  pinnedSessions: [],
+  ...sidebarBootSnapshot(null),
   entries: ["route:usage"],
-  sections: [],
-  cards: [],
-  collapsedAgentIds: [],
-  collapsedSections: [],
-  plugins: [],
-  onlineUsers: [],
-  onlineCounts: [],
-  peopleSortMode: "presence",
-  peopleStatusFilter: "all",
-  peoplePresenceFilter: "online",
-  offlineUsers: [],
   ownerId: "profile-a",
   involvingMe: true,
   footer: { id: "profile-a", name: "Juniper" },
-  brand: { name: "Synthetic workspace", avatar: null, icon: "mark", environment: null },
 };
 
 function fixture(initialAgentId = "main", initialPageScopeId: string | null = null) {
@@ -190,15 +173,18 @@ describe("sidebar snapshot lifecycle", () => {
     return { ...test, store };
   }
 
-  it("shares one boot read with route rows and retires both displays on invalidation", async () => {
+  it("shares one boot read and prunes a deleted row without retiring unrelated sidebar display", async () => {
     const store = new SessionSnapshotStore();
     store.connect();
     disposers.push(() => store.disconnect());
     const roster = {
       agentId: "main",
       result: sessionsResult(
-        [{ key: "agent:main:cedar", kind: "direct", displayName: "Cedar" }],
-        1,
+        [
+          { key: "agent:main:cedar", kind: "direct", displayName: "Cedar" },
+          { key: "agent:main:birch", kind: "direct", displayName: "Birch" },
+        ],
+        2,
       ),
       groups: [],
       groupSettings: [],
@@ -242,8 +228,12 @@ describe("sidebar snapshot lifecycle", () => {
     expect(test.host.sidebarSnapshot).toEqual(saved);
     expect(read).toHaveBeenCalledOnce();
     await deleteStoredChatSnapshot(sessionKey);
-    expect(test.host.sidebarSnapshot).toBeNull();
-    expect(sessions.state.result).toBeNull();
+    expect(test.host.sidebarSnapshot?.brand).toEqual(model.brand);
+    expect(test.host.sidebarSnapshot?.roster?.result.sessions.map(({ key }) => key)).toEqual([
+      "agent:main:birch",
+    ]);
+    expect(sessions.state.result?.sessions.map(({ key }) => key)).toEqual(["agent:main:birch"]);
+    expect(sessions.state.resultCached).toBe(true);
   });
 
   it.each(["before", "after"] as const)(
@@ -421,37 +411,41 @@ describe("sidebar snapshot lifecycle", () => {
   });
 
   it.each(["incomplete-roster", "transcript", "scope-change"] as const)(
-    "bounds a stalled handoff and retires it on %s",
+    "retains a stalled %s handoff until readiness or scope retirement",
     async (boundary) => {
       const test = await warmFixture();
-      test.foreground.foregroundReady = false;
+      test.foreground.foregroundReady = boundary !== "transcript";
       test.publish();
-      if (boundary !== "incomplete-roster") {
+      if (boundary === "transcript") {
         void test.settle();
       }
       test.snapshotOwner.synchronize();
-      await vi.advanceTimersByTimeAsync(2999);
+      await vi.advanceTimersByTimeAsync(4000);
       expect(test.host.sidebarSnapshot).toEqual(model);
       if (boundary === "scope-change") {
         test.publish({ selfUser: { id: "profile-b" } });
+      } else {
+        void test.settle();
+        test.foreground.foregroundReady = true;
+        test.snapshotOwner.synchronize();
       }
-      await vi.advanceTimersByTimeAsync(1);
       expect(test.host.sidebarSnapshot).toBeNull();
       expect(test.capture).not.toHaveBeenCalled();
     },
   );
 
-  it("starts a new handoff deadline after reconnecting", async () => {
+  it("keeps cached rows through reconnect until the fresh roster settles", async () => {
     const test = await warmFixture();
     test.publish();
-    await vi.advanceTimersByTimeAsync(2999);
+    await vi.advanceTimersByTimeAsync(4000);
     test.publish({ phase: "reconnecting" });
-    await vi.advanceTimersByTimeAsync(3001);
+    await vi.advanceTimersByTimeAsync(4000);
     test.publish();
     expect(test.host.sidebarSnapshot).toEqual(model);
-    await vi.advanceTimersByTimeAsync(2999);
+    await vi.advanceTimersByTimeAsync(4000);
     expect(test.host.sidebarSnapshot).toEqual(model);
-    await vi.advanceTimersByTimeAsync(1);
+    void test.settle();
+    test.snapshotOwner.synchronize();
     expect(test.host.sidebarSnapshot).toBeNull();
     expect(test.capture).not.toHaveBeenCalled();
   });
@@ -508,6 +502,20 @@ describe("sidebar snapshot lifecycle", () => {
     },
   );
 
+  it("keeps an unchanged saved projection through handoff and repeated capture", async () => {
+    const test = await warmFixture();
+    const write = vi.spyOn(SessionSnapshotStore.prototype, "writeSidebar");
+    test.publish();
+    void test.settle();
+    test.snapshotOwner.synchronize();
+    for (let index = 0; index < 20; index += 1) {
+      await capture(test.snapshotOwner);
+    }
+    expect(test.host.sidebarSnapshot).toBeNull();
+    expect(write).not.toHaveBeenCalled();
+    expect(test.snapshotOwner.read().saved).toBe(true);
+  });
+
   it("cancels pending capture when its account scope retires", async () => {
     const test = await warmFixture();
     void test.settle();
@@ -519,6 +527,44 @@ describe("sidebar snapshot lifecycle", () => {
     expect(
       await test.store.readSidebar(sidebarSnapshotScopeKey(scope), parseSidebarSnapshot),
     ).toBeNull();
+  });
+
+  it("cancels a scheduled stale capture when another tab deletes a session", async () => {
+    const live: SidebarSnapshotModel = {
+      ...model,
+      roster: bootRosterSchema.parse({
+        agentId: "main",
+        result: sessionsResult(
+          [
+            { key: "agent:main:cedar", kind: "direct", displayName: "Cedar" },
+            { key: "agent:main:birch", kind: "direct", displayName: "Birch" },
+          ],
+          2,
+        ),
+        groups: [],
+        groupSettings: [],
+        sectionOrder: [],
+      }),
+    };
+    const test = fixture();
+    test.snapshotOwner.connect();
+    disposers.push(() => test.snapshotOwner.disconnect());
+    test.publish();
+    const saved = test.settle(live);
+    await capture(test.snapshotOwner);
+    await saved;
+    test.capture.mockClear();
+
+    test.snapshotOwner.capture();
+    await deleteStoredChatSnapshot(sessionKey);
+    // Cross-tab retirement may precede this tab's live roster update.
+    await vi.advanceTimersByTimeAsync(500);
+    const store = new SessionSnapshotStore();
+    store.connect();
+    disposers.push(() => store.disconnect());
+    const retained = await store.readSidebar(sidebarSnapshotScopeKey(scope), parseSidebarSnapshot);
+    expect(retained?.roster?.result.sessions.map(({ key }) => key)).toEqual(["agent:main:birch"]);
+    expect(test.capture).not.toHaveBeenCalled();
   });
 
   it("does not report an unchanged model saved while its write is pending", async () => {
@@ -597,8 +643,8 @@ describe("sidebar snapshot lifecycle", () => {
             `scope:${JSON.stringify([scope.gatewayScope, scope.recoveryScope])}\u0000`,
           )
         : deleteStoredChatSnapshot(sessionKey, kind === "cache-eviction" ? kind : undefined));
-      expect(test.host.sidebarSnapshot).toEqual(kind === "cache-eviction" ? model : null);
-      expect(test.snapshotOwner.read().saved).toBe(kind === "cache-eviction");
+      expect(test.host.sidebarSnapshot).toEqual(kind === "account" ? null : model);
+      expect(test.snapshotOwner.read().saved).toBe(kind !== "account");
     },
   );
 
@@ -612,7 +658,11 @@ describe("sidebar snapshot lifecycle", () => {
     expect(test.host.sidebarSnapshot).toBeNull();
   });
 
-  it("discards the boot scope before an asynchronous session deletion completes", async () => {
+  it("keeps the boot scope while an unrelated asynchronous session deletion completes", async () => {
+    const store = new SessionSnapshotStore();
+    store.connect();
+    disposers.push(() => store.disconnect());
+    await store.writeSidebar(sidebarSnapshotScopeKey(scope), model, parseSidebarSnapshot);
     const test = fixture();
     const deletion = createDeferred();
     const stop = subscribeSnapshotInvalidation(() => deletion.promise);
@@ -621,7 +671,9 @@ describe("sidebar snapshot lifecycle", () => {
     try {
       test.snapshotOwner.connect();
       disposers.push(() => test.snapshotOwner.disconnect());
-      expect(test.snapshotOwner.read().pending).toBe(false);
+      await test.restored;
+      expect(test.host.sidebarSnapshot).toEqual(model);
+      expect(test.snapshotOwner.read().saved).toBe(true);
     } finally {
       stop();
       deletion.resolve();

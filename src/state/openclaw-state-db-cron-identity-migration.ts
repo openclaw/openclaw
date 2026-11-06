@@ -303,10 +303,12 @@ export function migrateCronDefaultStoreIdentity(
       storeKey = options.legacyDefaultStoreKey;
     } else {
       const inventory = readCronStorePartitionInventoryInDatabase(db, options.sourceTables);
-      storeKey = resolveUnboundCronDefaultStoreKey(inventory, options.legacyDefaultStoreKey);
+      storeKey =
+        resolveUnboundCronDefaultStoreKey(inventory, options.legacyDefaultStoreKey) ??
+        (inventory.length === 1 ? inventory[0]?.storeKey : undefined);
     }
   }
-  // An old moved store has no provable default. Doctor can bind an explicit inventory choice.
+  // Multiple moved partitions remain untouched; startup reports the retained inventory.
   if (storeKey === undefined) {
     return false;
   }

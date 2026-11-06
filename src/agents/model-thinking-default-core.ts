@@ -11,6 +11,7 @@ import { resolveAgentEntry } from "./agent-scope-config.js";
 import { createBundledStaticCatalogModelResolver } from "./embedded-agent-runner/model.static-catalog.js";
 import { mergeConfiguredThinkingLevelMap } from "./model-catalog-metadata.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import { withoutOverriddenThinkingProfile } from "./model-compat-catalog.js";
 import { resolveModelExtraParamSources } from "./model-extra-params.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 
@@ -55,7 +56,7 @@ export function buildThinkingCatalog(params: {
     return configured.with(index, {
       ...listed,
       thinkingLevelMap: mergeConfiguredThinkingLevelMap(row, listed),
-      compat: { ...row.compat, ...listed.compat },
+      compat: { ...withoutOverriddenThinkingProfile(row.compat, listed.compat), ...listed.compat },
     });
   }
   const entry: ModelCatalogEntry = {
