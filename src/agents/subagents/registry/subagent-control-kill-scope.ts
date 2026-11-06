@@ -9,7 +9,10 @@ import {
 } from "../../../infra/agent-events.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
-import { getCurrentSessionControllerOwner } from "../../../sessions/session-controller.context.js";
+import {
+  getCurrentSessionControllerOwner,
+  isCurrentSessionControllerTurnInput,
+} from "../../../sessions/session-controller.context.js";
 import {
   SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
   waitForSessionControllerSettlement,
@@ -574,6 +577,7 @@ export async function withSubagentKillScope<T>(
     }
     if (
       capturedExecution &&
+      !isCurrentSessionControllerTurnInput(capturedExecution.execution.input) &&
       (!currentOperation || currentOperation !== capturedExecution.execution.input.claim?.operation)
     ) {
       try {
