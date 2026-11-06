@@ -80,10 +80,10 @@ suite.define(() => {
       await expectBrowser(statusTrigger).toBeFocused();
       await expectBrowser(statusTrigger).toHaveAccessibleName("Status: Live");
 
-      // Focus alone must open the tooltip, not just move the focus ring.
-      await expectBrowser(page.locator("openclaw-tooltip[open]")).toHaveCount(1);
-      await expectBrowser(page.getByRole("tooltip")).toContainText("Status: Live");
-
+      // The previous tooltip can still be animating closed after keyboard focus moves.
+      const openTooltip = page.locator("openclaw-tooltip[open]");
+      await expectBrowser(openTooltip).toHaveCount(1);
+      await expectBrowser(openTooltip.getByRole("tooltip")).toContainText("Status: Live");
       await expectBrowser(statusTrigger).toHaveAccessibleDescription("Status: Live");
 
       await captureUiProof(suite, page, "status-badge-keyboard", "focused.png");

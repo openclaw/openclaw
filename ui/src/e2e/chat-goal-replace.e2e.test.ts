@@ -10,7 +10,7 @@ const suite = createControlUiE2eSuite({ name: "Control UI goal replacement" });
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
-  it("confirms replacement from the literal command and Goal picker without restarting the goal", async () => {
+  it("confirms replacement from Goal shorthand and the picker without restarting the goal", async () => {
     const artifacts = captureProof ? createControlUiE2eArtifactDir("goal-replace") : undefined;
     if (artifacts) {
       console.log("Goal replacement screenshots:", artifacts);
@@ -70,7 +70,8 @@ suite.define(() => {
           ]);
         }
         await exactButton(dialog, "Cancel").click();
-        expect(await input.inputValue()).toBe(`/goal ${proposed}`);
+        expect(await input.inputValue()).toBe(proposed);
+        expect(await page.locator(".agent-chat__goal-mode").count()).toBe(1);
         expect(await gateway.getRequests(method)).toHaveLength(0);
         if (artifacts) {
           await captureFrame(artifacts, "cancelled.png", page.locator("body"), [card, input]);
@@ -212,7 +213,8 @@ suite.define(() => {
           ]);
         }
         await exactButton(dialog, "Cancel").click();
-        expect(await input.inputValue()).toBe("/goal " + proposal);
+        expect(await input.inputValue()).toBe(proposal);
+        expect(await page.locator(".agent-chat__goal-mode").count()).toBe(1);
         expect(await gateway.getRequests(method)).toHaveLength(0);
         expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
         if (artifacts) {
@@ -222,6 +224,7 @@ suite.define(() => {
           ]);
         }
         // The ordinary picker must remain usable while the same turn is executing.
+        await exactButton(page, "Cancel goal entry").click();
         await input.fill("/goal");
         await input.press("Enter");
         await page.locator(".agent-chat__goal-mode").waitFor();
