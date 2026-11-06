@@ -1766,7 +1766,7 @@ jobs:
         id: oidc_publish
         if: steps.publication_evidence.outputs.publish_route == 'npm-oidc' && steps.npm_package_version.outputs.already_published != 'true'
         env:
-          DEFER_AUTH_FOR_CORE: ${{ inputs.defer_registry_verification && inputs.release_publish_run_id != '' }}
+          DEFER_AUTH_FOR_CORE: ${{ inputs.defer_registry_verification && needs.validate_release_publish_approval.outputs.parent_approval == 'receipt' }}
           EXTENSION_ID: ${{ matrix.plugin.extensionId }}
           GH_TOKEN: ${{ github.token }}
           PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
@@ -1847,7 +1847,7 @@ jobs:
             workflow: {
               ref: env.OPENCLAW_RELEASE_TOOLING_FULL_REF,
               sha: env.OPENCLAW_RELEASE_TOOLING_SHA,
-              runId: env.GITHUB_RUN_ID,
+              runId: Number(env.GITHUB_RUN_ID),
               runAttempt: Number(env.GITHUB_RUN_ATTEMPT),
             },
             parent: {

@@ -382,7 +382,11 @@ it("defers registry visibility only after a publish with a final parent verifier
   const parsed = workflow();
   const publish = parsed.jobs?.publish_plugins_npm;
   expect(parsed.on?.workflow_dispatch?.inputs?.defer_registry_verification?.default).toBe(false);
-  expect(step(publish, "Publish with trusted publisher").id).toBe("oidc_publish");
+  const oidcPublish = step(publish, "Publish with trusted publisher");
+  expect(oidcPublish.id).toBe("oidc_publish");
+  expect(oidcPublish.env?.DEFER_AUTH_FOR_CORE).toBe(
+    "${{ inputs.defer_registry_verification && needs.validate_release_publish_approval.outputs.parent_approval == 'receipt' }}",
+  );
   expect(step(publish, "Publish approved bootstrap tarball").id).toBe("bootstrap_publish");
   expect(publish?.strategy?.["fail-fast"]).toBe(false);
   const deferredUpload = step(publish, "Upload deferred trusted-publisher checkpoint");
@@ -616,6 +620,7 @@ fs.appendFileSync(process.env.EVENTS, JSON.stringify({ command: "npm", args, byt
         expect(JSON.parse(readFileSync(join(root, checkpoints[0]!), "utf8"))).toMatchObject({
           kind: "openclaw-plugin-npm-deferred-auth",
           reason: "npm-oidc-eneedauth",
+          workflow: { runId: 84, runAttempt: 1 },
           parent: { runId: 42, runAttempt: 1 },
           sourceSha: targetSha,
           package: { name: "@openclaw/test-plugin", publishTag },
