@@ -49,8 +49,10 @@ const coreGraphNames = [
 const checks = (...tasks: string[]) => ({
   include: tasks.map((task) => ({ check_name: `check-${task}`, task, runner: "unused" })),
 });
-function selectLint(mode: "affected" | "none" | "full" = "none") {
-  const roots = mode === "affected" ? ["extensions/discord"] : [];
+function selectLint(
+  mode: "affected" | "none" | "full" = "none",
+  roots = mode === "affected" ? ["extensions/discord"] : [],
+) {
   vi.mocked(resolveCiExtensionLintSelection).mockResolvedValue({
     mode: mode === "full" ? "full" : "selected",
     extensionRoots: roots,
@@ -161,6 +163,13 @@ it.each([
     expect(row.requires_sdk_declarations === true).toBe(hasExtensions);
   }
   const central = JSON.parse(plan.central_lint_selection_json);
+  if (runnerProfile === "github" && mode === "full") {
+    expect(plan.lint_core_matrix.include).toHaveLength(5);
+    expect(central.fullExtensionStripes).toBeUndefined();
+    expect(
+      payloads.flatMap((payload) => payload.fullExtensionStripes ?? []).toSorted((a, b) => a - b),
+    ).toEqual([1, 2, 3, 4, 5, 6]);
+  }
   expect(central.fullGroups).toEqual(
     runnerProfile === "blacksmith" ? ["core", "scripts"] : ["scripts"],
   );
@@ -185,6 +194,19 @@ it.each([
       }
     }
   }
+});
+it("retains central extension lint when no other SDK consumer is selected", async () => {
+  selectLint("affected", ["extensions/cohere"]);
+  const plan = await createPlan({
+    runnerProfile: "github",
+    extensionLintMode: "affected",
+    preserveFullChecks: true,
+    checkMatrix: checks("lint"),
+    lintCoreMatrix: stripeMatrix(5),
+    lintExtensionMatrix: stripeMatrix(6),
+  });
+  expect(JSON.parse(plan.central_lint_selection_json).extensionStripes).toEqual([6]);
+  expect(plan.lint_core_matrix.include.some((row) => row.requires_sdk_declarations)).toBe(false);
 });
 it.each([
   ["src/config/sessions/session-input-actor.ts", true, false],
