@@ -15,7 +15,8 @@ const GITHUB_READ_PARAMETERS = {
       type: "string",
       minLength: 1,
       maxLength: 4096,
-      description: "Public github.com issue, pull request, commit, or Actions workflow-job URL.",
+      description:
+        "GitHub item/job URL, or https://api.github.com/repos/OWNER/REPO/code-scanning/analyses?ref=REF, analyses/ID, or sarifs/UUID.",
     },
     refresh: {
       type: "boolean",
@@ -73,7 +74,7 @@ export default definePluginEntry({
           name: "github_read",
           label: "Read GitHub",
           description:
-            "Read a known public GitHub issue, pull request, commit, or Actions workflow-job URL. Returns the description, bounded discussion and review comments, file changes, PR checks, or the bounded end of a completed job log with its run and commit identity. Inspect partial and truncation flags before treating the result as complete. The Gateway reads GitHub; no credentials or network access are needed in the sandbox. Does not search or modify GitHub.",
+            "Read a known public GitHub issue, pull request, commit, Actions workflow-job URL, or a fixed api.github.com Code Scanning analyses/SARIF-status URL. Protected diagnostics require a managed GitHub identity and Code scanning alerts read access. Analysis lists require a ref query and accept page. Returns the description, bounded discussion and review comments, file changes, PR checks, or the bounded end of a completed job log with its run and commit identity. Inspect partial and truncation flags before treating the result as complete. The Gateway reads GitHub; no credentials or network access are needed in the sandbox. Does not search or modify GitHub.",
           parameters: GITHUB_READ_PARAMETERS,
           async execute(_toolCallId, input, signal) {
             context.assertInvocationCurrent();
@@ -81,7 +82,7 @@ export default definePluginEntry({
             const parsed = parseGitHubReadParams(input);
             if (!parsed) {
               throw new Error(
-                "Provide a public github.com issue, pull request, commit, or Actions workflow-job URL.",
+                "Provide a GitHub item/job URL or a supported Code Scanning analyses/SARIF-status API URL.",
               );
             }
             const document = await api.runtime.gateway.request(

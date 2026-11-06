@@ -36,6 +36,7 @@ import {
   type GitHubTarget,
   type GitHubReadTarget,
   type GitHubJobTarget,
+  type GitHubCodeScanningTarget,
 } from "./targets.js";
 import { githubPreviewView, githubChangeMetadata } from "./view-model.js";
 type GitHubComment = NonNullable<ControlUiLinkReaderDocument["comments"]>[number];
@@ -565,7 +566,7 @@ export function loadGitHubDetail(
   refresh?: boolean,
 ): Promise<GitHubDocument>;
 export function loadGitHubDetail(
-  target: GitHubJobTarget,
+  target: GitHubJobTarget | GitHubCodeScanningTarget,
   identity?: ControlUiGitHubPreviewIdentity,
   fetchImpl?: typeof fetch,
   refresh?: boolean,
@@ -584,6 +585,11 @@ export function loadGitHubDetail(
   refresh = false,
   section?: GitHubDetailSection,
 ): Promise<ControlUiLinkReaderDocument> {
+  if (target.kind === "code-scanning") {
+    return import("./code-scanning.js").then(({ loadGitHubCodeScanning }) =>
+      loadGitHubCodeScanning(target, identity, fetchImpl),
+    );
+  }
   if (target.kind === "job") {
     const load = async (selected: ControlUiGitHubPreviewIdentity | undefined) => {
       const { loadGitHubJobLog } = await import("./job-logs.js");
