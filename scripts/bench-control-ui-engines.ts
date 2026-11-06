@@ -22,6 +22,10 @@ import {
   resolvePlaywrightChromiumExecutablePath,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
+import {
+  mapControlUiAllocationProfile,
+  summarizeControlUiAllocations,
+} from "./lib/control-ui-allocation-profile.ts";
 import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";
 import { controlUiBenchOrder } from "./lib/control-ui-bench-order.ts";
 import {
@@ -129,6 +133,7 @@ const { values } = parseArgs({
     "cpu-only": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
     "native-audit": { type: "boolean", default: false },
+    allocations: { type: "boolean", default: false },
     "mutation-audit": { type: "boolean", default: false },
     "cpu-throttle": { type: "string", default: "1" },
     "memory-soak-rounds": { type: "string", default: "10" },
@@ -206,6 +211,17 @@ if (
   (engines.includes("webkit") || values.trace || values["cpu-only"] || values["cpu-profile"])
 ) {
   throw new Error("--native-audit requires Chromium and a separate run from other profiling modes");
+}
+if (
+  values.allocations &&
+  (engines.includes("webkit") ||
+    values.trace ||
+    values["cpu-only"] ||
+    values["cpu-profile"] ||
+    values["native-audit"] ||
+    values["mutation-audit"])
+) {
+  throw new Error("--allocations requires Chromium and a separate run from other profiling modes");
 }
 const artifactDir = createControlUiE2eArtifactDir("engines", values.output);
 const viewports = [
@@ -310,6 +326,10 @@ type Observation = {
   metrics?: EngineMetrics;
   pageMetrics?: ControlUiPageObservation;
   native?: ReturnType<typeof summarizeControlUiNativeTrace>;
+  allocations?: ReturnType<typeof summarizeControlUiAllocations> & {
+    mappedFrames: number;
+    unmappedFrames: number;
+  };
   mutations?: ControlUiMutationAudit;
   pixels?: Awaited<ReturnType<typeof compareControlUiScreenshots>>;
   computedTheme?: Record<string, string>;
@@ -455,6 +475,7 @@ try {
           "./lib/control-ui-mutation-audit.ts",
           "./lib/control-ui-cold-load-trace.ts",
           "./lib/control-ui-cpu-census.ts",
+          "./lib/control-ui-allocation-profile.ts",
           "./lib/control-ui-engine-boot-scenarios.ts",
           "./lib/control-ui-engine-completed-run-scenarios.ts",
           "./lib/control-ui-engine-idle-scenarios.ts",
@@ -513,20 +534,23 @@ try {
     cpuOnly: values["cpu-only"],
     cpuProfile: values["cpu-profile"],
     nativeAudit: values["native-audit"],
+    allocations: values.allocations,
     mutationAudit: values["mutation-audit"],
     cpuThrottle,
     memorySoakRounds,
-    collection: values["mutation-audit"]
-      ? "MutationObserver over document/open shadow roots and formatter wrappers; diagnostic overhead, not timing proof. Pixel differences include caret/animation changes. Child-content identity is sampled at observer delivery."
-      : values["native-audit"]
-        ? "Chromium native timeline, V8 samples and LayerTree; diagnostic instrumentation, not timing proof"
-        : values["cpu-profile"]
-          ? "V8 sampled self-time census; diagnostic attribution, not timing proof"
-          : values.trace
-            ? "Playwright tracing and engine Inspector/Profiler; overhead included"
-            : values["cpu-only"]
-              ? "WebKit smoothed utilization diagnostic (not action CPU) and Chromium CDP thread CPU; no timeline or script profiler"
-              : "Untraced wall time; Chromium CDP counters only, unavailable WebKit counters are null",
+    collection: values.allocations
+      ? "V8 sampled allocations including major/minor-GC collected objects; diagnostic overhead, not timing proof"
+      : values["mutation-audit"]
+        ? "MutationObserver over document/open shadow roots and formatter wrappers; diagnostic overhead, not timing proof. Pixel differences include caret/animation changes. Child-content identity is sampled at observer delivery."
+        : values["native-audit"]
+          ? "Chromium native timeline, V8 samples and LayerTree; diagnostic instrumentation, not timing proof"
+          : values["cpu-profile"]
+            ? "V8 sampled self-time census; diagnostic attribution, not timing proof"
+            : values.trace
+              ? "Playwright tracing and engine Inspector/Profiler; overhead included"
+              : values["cpu-only"]
+                ? "WebKit smoothed utilization diagnostic (not action CPU) and Chromium CDP thread CPU; no timeline or script profiler"
+                : "Untraced wall time; Chromium CDP counters only, unavailable WebKit counters are null",
     order:
       "Serial network profile and engine order alternates each pair; configuration/bundle positions rotate and reverse across pairs; fresh browser context per observation",
     acceptance:
@@ -644,7 +668,7 @@ try {
               }));
             const page = await context.newPage();
             page.setDefaultTimeout(scenario.id.startsWith("chat-actions-") ? 15_000 : 30_000);
-            const traceAction = values.trace && !scenario.navigation;
+            const traceAction = (values.trace || values["native-audit"]) && !scenario.navigation;
             const errors: Array<{ message: string; phase: string }> = [];
             let phase = "setup";
             page.on("pageerror", (error: Error) => {
@@ -804,7 +828,7 @@ try {
                 { ...fixture, awaitInitialRoster: false },
                 {
                   requestHandlers: { ...defaults, ...scenario.createRequestHandlers?.(defaults) },
-                  afterInitScript: scenario.initScript,
+                  afterInitScript: `${scenario.initScript ?? ""}\n//# sourceURL=openclaw-bench://test-helpers/mock-gateway.js\n`,
                 },
               );
               if (networkProfile.httpLatencyMs) {
@@ -921,6 +945,7 @@ try {
                 cpuOnly: values["cpu-only"],
                 cpuProfile: values["cpu-profile"],
                 nativeAudit: values["native-audit"],
+                allocations: values.allocations,
               });
               phase = "measurement";
               const start = performance.now();
@@ -1006,6 +1031,18 @@ try {
               measurement = undefined;
               const captured = await activeMeasurement.stop();
               observation.metrics = captured.metrics;
+              if (captured.allocations) {
+                const mapped = await mapControlUiAllocationProfile(captured.allocations, {
+                  assetBaseUrl: `${slot.server.baseUrl}/assets/`,
+                  assetDirectory: path.join(slot.directory, "assets"),
+                });
+                await writeJson(`${artifactPrefix}.heapprofile`, mapped.profile);
+                observation.allocations = {
+                  ...summarizeControlUiAllocations(mapped.profile),
+                  mappedFrames: mapped.mappedFrames,
+                  unmappedFrames: mapped.unmappedFrames,
+                };
+              }
               if (observation.idle) {
                 observation.idle.after = await readEngineIdleState(page);
                 const { before: idleBefore, after } = observation.idle;

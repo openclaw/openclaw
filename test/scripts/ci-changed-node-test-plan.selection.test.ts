@@ -177,6 +177,7 @@ it.each(
   ["packages", "extensions"].flatMap((root) => [false, true].map((deleted) => ({ root, deleted }))),
 )("selects resolved $root subpaths independently (deleted: $deleted)", ({ root, deleted }) => {
   const changed = `${root}/subject/src/value.ts`;
+  const companion = `${root}/subject/src/value.test.ts`;
   const manifest = `${root}/subject/package.json`;
   const cwd = fixture({
     [manifest]: JSON.stringify({
@@ -188,6 +189,8 @@ it.each(
       },
     }),
     [changed]: "export const value = 1;",
+    [companion]: 'import "./value.js";',
+    [`${root}/subject/src/value.test-support.ts`]: "export {};",
     [`${root}/subject/scripts/generate.mjs`]: "export {};",
     [`${root}/subject/src/other.ts`]: "export const other = 1;",
     [`${root}/subject/src/index.ts`]: 'export * from "./bridge.js";',
@@ -202,8 +205,13 @@ it.each(
   if (deleted) {
     fs.unlinkSync(path.join(cwd, changed));
   }
-  expect(select(cwd, [changed])).toEqual(expected);
+  expect(select(cwd, [changed])).toEqual([companion, ...expected]);
+  expect(select(cwd, [changed, companion])).toEqual([companion, ...expected]);
   const all = [...expected, "src/readers/other.test.ts"].toSorted();
   expect(select(cwd, [manifest])).toEqual(all);
+  expect(select(cwd, [changed, `${root}/subject/src/value.test-support.ts`])).toEqual([
+    companion,
+    ...all,
+  ]);
   expect(select(cwd, [`${root}/subject/scripts/generate.mjs`])).toEqual(all);
 });

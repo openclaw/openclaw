@@ -1605,7 +1605,7 @@ async function prepareCron(page: Page) {
   }
 }
 
-async function settingsSection(
+export async function settingsSection(
   page: Page,
   path: string,
   routeId: "appearance" | "connection" | "notifications",

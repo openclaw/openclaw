@@ -46,6 +46,7 @@ const repositoryScriptEntries = [
   "test/fixtures/beam-live-handoff-client/beam.mjs",
   // Their source headers document standalone benchmark and measurement commands.
   "scripts/bench-android-release-history.mts!",
+  "scripts/bench-ios-release-note-overlap.mjs!",
   "scripts/bench-mobile-release-dependencies.mjs!",
   "scripts/bench-duplicate-paragraphs.mts!",
   "scripts/bench-plugin-catalog.ts!",
@@ -139,6 +140,7 @@ const repositoryScriptEntries = [
   "scripts/bench-control-ui-engines.ts!",
   // Its companion guide invokes the same-document aged-tab census by path.
   "scripts/bench-control-ui-aged-tab.ts!",
+  "scripts/bench-control-ui-aged-tab-compare.ts!",
   // The opt-in projection benchmark builds its browser fixture through this CLI.
   "scripts/build-control-ui-projection-fixture.mts!",
   // The reactive graph guide invokes this isolated diagnostic build by path.
