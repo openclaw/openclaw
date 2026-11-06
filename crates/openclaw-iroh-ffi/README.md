@@ -47,14 +47,15 @@ Zero keep-alive is rejected. `None` disables relays, useful for local tests.
 `alpns` lists accepted protocols; outbound-only nodes can pass an empty list.
 The only relay map entry is the supplied relay, with iroh's Minimal preset.
 
-| Handle             | Operations                                                                                                                                         |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Endpoint`         | `id()`, `boundSockets()`, async `connect(endpointId, alpn, relayUrl, directAddrs)`, async `accept()`, async `watchHomeRelay()`, async `shutdown()` |
-| `Connection`       | `remoteId()`, async `openBi()` / `acceptBi()`, `setMaxConcurrentBiStreams(count)`, `close(code, reason)`, async `closed()`                         |
-| `BiStream`         | `send: SendStream`, `recv: RecvStream`                                                                                                             |
-| `SendStream`       | async `write(data)`, `finish()`, `reset(code)`                                                                                                     |
-| `RecvStream`       | async `read(max)`, `stop(code)`                                                                                                                    |
-| `HomeRelayWatcher` | async `next()`                                                                                                                                     |
+| Handle             | Operations                                                                                                                                                 |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Endpoint`         | `id()`, `boundSockets()`, async `connect(endpointId, alpn, relayUrl, directAddrs, cancel)`, async `accept()`, async `watchHomeRelay()`, async `shutdown()` |
+| `Connection`       | `remoteId()`, async `openBi()` / `acceptBi()`, `setMaxConcurrentBiStreams(count)`, `close(code, reason)`, async `closed()`                                 |
+| `BiStream`         | `send: SendStream`, `recv: RecvStream`                                                                                                                     |
+| `SendStream`       | async `write(data)`, `finish()`, `reset(code)`                                                                                                             |
+| `RecvStream`       | async `read(max)`, `stop(code)`                                                                                                                            |
+| `HomeRelayWatcher` | async `next()`                                                                                                                                             |
+| `CancelToken`      | `CancelToken()` constructor, `cancel()` (idempotent; passed to `connect`)                                                                                  |
 
 IDs are bare lowercase hex (without `iroh:`); direct addresses are numeric socket
 addresses, not hostnames. ALPN bytes are `openclaw/tunnel/1`. Stream bytes are Swift
@@ -90,8 +91,11 @@ on the retained runtime and survives foreign cancellation or endpoint drop.
 those calls behind an indefinite read/write. Calls on one half serialize. Cancelling
 a partially completed `write` does not roll bytes back: reset that half or shut down
 the endpoint rather than retrying the same write. UniFFI 0.31.2 Swift does not
-propagate `Task.cancel()` into Rust: use a cancellation handler that explicitly
-initiates endpoint shutdown or stream stop/reset. Last connection-handle release
+propagate `Task.cancel()` into Rust. For a single dial, pass a `CancelToken` to
+`connect` and call `cancel()` from the task's cancellation handler; that dial fails
+with `Cancelled` and the endpoint stays usable. For streams, use stop/reset; for a
+whole route, shut down the endpoint. Kotlin coroutine cancellation already frees the
+Rust future, so Kotlin callers may omit the token. Last connection-handle release
 closes that connection; retain it while using its streams. Foreign task cancellation
 must be paired with endpoint shutdown when retiring an entire route.
 

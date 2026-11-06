@@ -1,4 +1,4 @@
-use openclaw_iroh_ffi::{BiStream, CloseKind, Connection, Endpoint, IrohError, bind};
+use openclaw_iroh_ffi::{BiStream, CancelToken, CloseKind, Connection, Endpoint, IrohError, bind};
 use std::{
     future::Future,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
@@ -42,7 +42,7 @@ async fn pair() -> (
     let client = endpoint(2).await;
     let (outgoing, incoming) = bounded(async {
         tokio::join!(
-            client.connect(server.id(), ALPN.to_vec(), None, loopback(&server)),
+            client.connect(server.id(), ALPN.to_vec(), None, loopback(&server), None),
             server.accept()
         )
     })
@@ -166,6 +166,7 @@ async fn stop_reset_and_shutdown_interrupt_blocked_operations() {
         ALPN.to_vec(),
         None,
         vec![unused.local_addr().unwrap().to_string()],
+        None,
     ));
     assert!(
         std::future::poll_fn(|cx| std::task::Poll::Ready(connect.as_mut().poll(cx)))
@@ -203,6 +204,59 @@ async fn rejects_invalid_bind_inputs_and_read_bounds() {
     let (local, _peer) = streams(&conn, &accepted).await;
     assert!(local.recv.read(0).await.is_err());
     assert!(local.recv.read((1 << 20) + 1).await.is_err());
+    bounded(client.shutdown()).await;
+    bounded(server.shutdown()).await;
+}
+
+#[tokio::test]
+async fn cancel_token_aborts_one_dial_and_keeps_the_endpoint_usable() {
+    let server = endpoint(4).await;
+    let client = endpoint(5).await;
+    // An unused loopback UDP address guarantees a handshake that cannot complete.
+    let unused = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let token = CancelToken::new();
+    let mut connect = Box::pin(client.connect(
+        endpoint(6).await.id(),
+        ALPN.to_vec(),
+        None,
+        vec![unused.local_addr().unwrap().to_string()],
+        Some(token.clone()),
+    ));
+    assert!(
+        std::future::poll_fn(|cx| std::task::Poll::Ready(connect.as_mut().poll(cx)))
+            .await
+            .is_pending()
+    );
+    token.cancel();
+    token.cancel();
+    assert!(matches!(bounded(connect).await, Err(IrohError::Cancelled)));
+    // An already-cancelled token fails a new dial immediately.
+    assert!(matches!(
+        bounded(client.connect(
+            server.id(),
+            ALPN.to_vec(),
+            None,
+            loopback(&server),
+            Some(token)
+        ))
+        .await,
+        Err(IrohError::Cancelled)
+    ));
+    let (outgoing, incoming) = bounded(async {
+        tokio::join!(
+            client.connect(
+                server.id(),
+                ALPN.to_vec(),
+                None,
+                loopback(&server),
+                Some(CancelToken::new())
+            ),
+            server.accept()
+        )
+    })
+    .await;
+    assert_eq!(outgoing.unwrap().remote_id(), server.id());
+    assert!(incoming.unwrap().is_some());
     bounded(client.shutdown()).await;
     bounded(server.shutdown()).await;
 }
