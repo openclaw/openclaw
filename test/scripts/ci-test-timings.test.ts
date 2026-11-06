@@ -1940,7 +1940,7 @@ describe("CI timing sampler provenance", () => {
     expect(requests.some((url) => /\/runs\/1\d\d\/attempts\//u.test(url))).toBe(false);
   });
 
-  it.each(["release", "tooling"])(
+  it.each(["release", "explicit tooling"])(
     "keeps failed %s workflows out of the sampling cohort",
     (source) => {
       const failed = samplerRun(9, {
@@ -1951,7 +1951,7 @@ describe("CI timing sampler provenance", () => {
         jobs: [...pair().jobs, samplerJob(91, 9)],
         ...(source === "release" ? { releaseRuns: [failed] } : { toolingRuns: [failed] }),
       });
-      reject(fixture, "conclusion", false);
+      reject(fixture, "conclusion", false, false, 2, source === "release" ? [] : [9]);
       expect(fixture.requestUrls().some((url) => url.includes("/runs/9/"))).toBe(false);
     },
   );
