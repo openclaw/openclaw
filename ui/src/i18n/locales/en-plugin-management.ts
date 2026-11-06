@@ -150,6 +150,12 @@ const enPluginManagement = {
     auditReview: "Review",
     recommendedPrompts: {
       label: "Recommended prompts",
+      enableTitle: "Enable {name} before opening chat?",
+      installTitle: "Install {name} before opening chat?",
+      activationWarning:
+        "Activating a plugin can start background services, including screen capture or mail watchers, and replace your active memory provider. Review its settings first if needed. The prompt will open as an unsent draft.",
+      enableContinue: "Enable and continue",
+      installContinue: "Install and continue",
     },
     compatibilityDeprecatedDated:
       "Uses OpenClaw APIs that retire on {date}. It keeps working until then; check for a plugin update.",

@@ -213,14 +213,49 @@ describe("PostgreSQL conformance selection", () => {
     [["src/infra/database-engine/open.ts"], true],
     [["src/commands/doctor-database-port-migrations.ts"], true],
     [["src/infra/database-engine/matrix-roots.postgres.test.ts"], true],
+    [["src/infra/database-engine/deleted.test.ts"], true],
+    [["src/infra/database-engine/deleted.test.ts", "src/unrelated/renamed.test.ts"], true],
+    [["src/infra/database-engine/unrelated.spec.ts"], false],
     [["src/transcripts/meeting-chronology.postgres.test.ts"], true],
+    [["src/new-owner/future.postgres.test.ts"], true],
     [["src/infra/postgres-sync/locks.test.ts"], true],
+    [["src/infra/postgres-sync/nested/renamed.spec.ts"], true],
+    [["src/infra/exec-approvals-native.test.ts"], true],
+    [["src/infra/client-credential-update.test.ts"], true],
+    [["src/infra/update-managed-service-handoff-engine.test.ts"], true],
     [["src/infra/sql-connection.ts"], true],
     [["src/infra/sql-query-compiler.ts"], true],
     [["src/infra/kysely-sync.ts"], true],
     [["src/infra/kysely-sync-queries.ts"], true],
     [["src/infra/sqlite-transaction.ts"], true],
     [["extensions/workboard/src/store.test.ts"], true],
+    [["extensions/workboard/src/nested/renamed.spec.ts"], true],
+    [["test/scripts/generate-postgres-schema.test.ts"], true],
+    [["extensions/logbook/src/postgres-store.test.ts"], true],
+    [["extensions/team-reports/src/postgres-store.test.ts"], true],
+    [["src/gateway/server.hooks.test.ts"], false],
+    [["src/config/sessions/artifacts.test.ts"], false],
+    [["extensions/memory-core/src/config.test.ts"], false],
+    [["extensions/team-reports/src/store-read-budget.test.ts"], false],
+    [["src/agents/harness/context-engine-turn-outbox.test.ts"], false],
+    [["src/state/openclaw-agent-db-disposal.test.ts"], false],
+    [["src/gateway/server-test-support.ts"], true],
+    [["src/gateway/server.hooks.test.ts", "src/gateway/server.ts"], true],
+    [
+      ["src/gateway/server.hooks.test.ts"],
+      false,
+      { eventName: "workflow_dispatch", releaseGate: true },
+    ],
+    [
+      ["src/infra/exec-approvals-native.test.ts"],
+      true,
+      { eventName: "workflow_dispatch", releaseGate: true },
+    ],
+    [
+      ["src/infra/database-engine/deleted.test.ts"],
+      true,
+      { eventName: "workflow_dispatch", releaseGate: true },
+    ],
     [["src/config/zod-schema.database.ts"], true],
     [["scripts/test-database-conformance.mjs"], true],
     [[".github/actions/postgres-conformance/action.yml"], true],
@@ -243,11 +278,58 @@ describe("PostgreSQL conformance selection", () => {
       eventName: "pull_request",
       changedPaths,
       targetFiles: ["scripts/test-database-conformance.mjs"],
+      changedPlannerDependencies: [
+        "scripts/lib/postgres-conformance-shards.mts",
+        "scripts/lib/changed-path-facts.mjs",
+      ],
       ...options,
     });
     expect(result.status, result.output).toBe(0);
     expect(result.outputs.run_postgres_conformance).toBe(String(selected));
   });
+
+  it.each([
+    { label: "missing module", source: null, error: "" },
+    { label: "missing export", source: "export {};", error: "" },
+    {
+      label: "undefined export",
+      source: "export const isPostgresConformanceTestTarget = undefined;",
+      error: "test ownership must be a function",
+    },
+    {
+      label: "malformed export",
+      source: "export const isPostgresConformanceTestTarget = 0;",
+      error: "test ownership must be a function",
+    },
+    {
+      label: "failed import",
+      source: 'throw new Error("postgres ownership import failed");',
+      error: "postgres ownership import failed",
+    },
+  ])(
+    "retains old PostgreSQL admission only for an absent capability: $label",
+    ({ source, error }) => {
+      const result = runCiManifestFixture({
+        bundledPlanner: true,
+        runNode: false,
+        eventName: "pull_request",
+        changedPaths: ["src/gateway/server.hooks.test.ts"],
+        targetFiles: ["scripts/test-database-conformance.mjs"],
+        changedPlannerSource: `
+        import { writeFileSync } from "node:fs";
+        ${source === null ? "" : `writeFileSync(new URL("./postgres-conformance-shards.mts", import.meta.url), ${JSON.stringify(source)});`}
+        export const createChangedNodeTestShards = () => [];
+      `,
+      });
+      expect(result.status, result.output).toBe(error ? 1 : 0);
+      if (error) {
+        expect(result.output).toContain(error);
+        expect(result.outputs.run_postgres_conformance).toBeUndefined();
+      } else {
+        expect(result.outputs.run_postgres_conformance).toBe("true");
+      }
+    },
+  );
 });
 
 function resolveSelectedUiIncludes(encoded: string): string[][] {
@@ -4608,6 +4690,68 @@ describe("ci workflow guards", () => {
     );
 
     it.each([
+      { paths: ["apps/android/app/src/main/Example.kt"], phone: true, wear: false },
+      { paths: ["apps/android/wear/src/test/ExampleTest.kt"], phone: false, wear: true },
+      {
+        paths: [
+          "apps/android/app/src/main/Example.kt",
+          "apps/android/wear/src/test/ExampleTest.kt",
+        ],
+        phone: true,
+        wear: true,
+      },
+      { paths: ["apps/android/wear/src/main/res/values/strings.xml"], phone: true, wear: true },
+      { paths: ["apps/android/wear-shared/src/main/Example.kt"], phone: true, wear: true },
+      { paths: ["apps/android/build.gradle.kts"], phone: true, wear: true },
+      { paths: ["apps/android/app/src/main/Missing.kt"], phone: true, wear: true, missing: true },
+      { paths: ["apps/android/app/src/main/Example.kt"], phone: true, wear: true, scheduled: true },
+    ])(
+      "preserves Android owners for $paths",
+      ({ paths, phone, wear, missing = false, scheduled = false }) => {
+        const eventName = scheduled ? "schedule" : "pull_request";
+        const manifest = runCiManifestFixture({
+          bundledPlanner: true,
+          androidCiCapabilities: true,
+          eventName,
+          changedPaths: paths,
+          targetFiles: missing ? [] : paths,
+          scopeEnv: { OPENCLAW_CI_RUN_ANDROID: "true" },
+        });
+        expect(manifest.status, manifest.output).toBe(0);
+        const rows = readJsonOutput(manifest.outputs, "android_matrix").include;
+        const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+          eventName,
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          preflightOutputs: manifest.outputs,
+        };
+        const tasks = rows.flatMap((row: Record<string, unknown>) => {
+          const result = runAndroidTask(row, context);
+          expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+          return result.tasks;
+        });
+        expect(tasks.includes(":app:testPlayDebugUnitTest")).toBe(phone);
+        expect(tasks.includes(":app:testThirdPartyDebugUnitTest")).toBe(phone);
+        expect(tasks.includes(":wear:testDebugUnitTest")).toBe(wear);
+        expect(tasks.filter((task: string) => task === ":app:lintThirdPartyDebug")).toHaveLength(1);
+        expect(tasks.filter((task: string) => task === ":app:lintPlayDebug")).toHaveLength(1);
+        expect(
+          runAndroidTask(
+            rows[0],
+            context,
+            phone ? ":app:testPlayDebugUnitTest" : ":wear:testDebugUnitTest",
+          ).status,
+        ).not.toBe(0);
+        if (phone && !wear) {
+          const lintOwner = rows.find(
+            (row: Record<string, unknown>) => row.app_lint === "third-party",
+          );
+          expect(runAndroidTask(lintOwner, context, ":app:lintThirdPartyDebug").status).not.toBe(0);
+        }
+      },
+    );
+
+    it.each([
       { paths: ["apps/android/benchmark/src/main/Example.kt"], build: true },
       { paths: ["apps/android/build.gradle.kts"], build: true },
       { paths: ["apps/android/app/build.gradle.kts"], build: true },
@@ -6490,9 +6634,21 @@ describe("ci workflow guards", () => {
       expect(result.status, result.output).toBe(0);
     }
     expect(forkPrevious.outputs.shared_sdk_declarations).toBe("false");
-    expect(forkShared.outputs.shared_sdk_declarations).toBe("false");
+    expect(forkShared.outputs.shared_sdk_declarations).toBe("true");
+    const forkOldPlanner = runCiManifestFixture({
+      ...fork,
+      targetFiles: ["scripts/ci-sdk-declarations.mts"],
+      checkPlanSource: "export {};\n",
+    });
+    expect(forkOldPlanner.status, forkOldPlanner.output).toBe(0);
+    expect(forkOldPlanner.outputs.shared_sdk_declarations).toBe("false");
+    expect(forkOldPlanner.outputs.check_additional_matrix).toBe(
+      forkPrevious.outputs.check_additional_matrix,
+    );
     const forkRows = JSON.parse(forkPrevious.outputs.check_additional_matrix!).include;
-    expect(JSON.parse(forkShared.outputs.check_additional_matrix!).include).toEqual(forkRows);
+    expect(JSON.parse(forkShared.outputs.check_additional_matrix!).include).toEqual(
+      forkRows.filter((row: { group: string }) => row.group !== "extension-package-boundary"),
+    );
     for (const authorAssociation of ["OWNER", "NONE"]) {
       for (const runAttempt of [1, 2]) {
         expect(
@@ -6505,6 +6661,16 @@ describe("ci workflow guards", () => {
         ).toBe(runAttempt === 1 ? "blacksmith-16vcpu-ubuntu-2404" : "ubuntu-24.04");
       }
     }
+    for (const [profile, timeout] of [
+      ["hybrid", 30],
+      ["github", 40],
+    ] as const) {
+      expect(
+        evaluateWorkflow(producer["timeout-minutes"], {
+          preflightOutputs: { runner_profile: profile },
+        }),
+      ).toBe(timeout);
+    }
     expect(producer.needs).toEqual(["preflight"]);
     expect(workflow.jobs["check-additional-shard"].needs).toEqual(["preflight"]);
     expect(workflow.jobs["check-test-types-hosted-core-shard"].needs).toEqual([
@@ -6516,6 +6682,34 @@ describe("ci workflow guards", () => {
       "check-plan",
       "check-extension-package-boundary",
     ]);
+    const coreLint = workflow.jobs["check-lint-hosted-core-shard"];
+    expect(coreLint.needs).toEqual(["preflight", "check-plan", "check-extension-package-boundary"]);
+    const coreRestores = coreLint.steps.filter(
+      (step: WorkflowStep) =>
+        step.uses === "./.ci-harness/.github/actions/sdk-declarations" &&
+        String(step.with?.mode).startsWith("restore"),
+    );
+    for (const sharing of ["true", "false"]) {
+      for (const needsSdk of [true, false]) {
+        const selected = coreRestores.filter((step: WorkflowStep) =>
+          evaluateWorkflowCondition(expectDefined(step.if, "SDK restore condition"), {
+            eventName: "pull_request",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            matrix: { requires_sdk_declarations: needsSdk },
+            preflightOutputs: {
+              shared_sdk_declarations: sharing,
+              runner_profile: "github",
+              cache_mode: "read",
+            },
+          }),
+        );
+        expect(selected.map((step: WorkflowStep) => step.with?.mode)).toEqual([
+          sharing === "true" && needsSdk ? "restore-run" : "restore-main",
+        ]);
+        expect(selected[0]?.["continue-on-error"]).not.toBe(true);
+      }
+    }
     const steps = producer.steps as WorkflowStep[];
     expect(
       requiredWorkflowStep(steps, "Check selected package boundaries")?.env?.OPENCLAW_CI_SHARED_SDK,
@@ -6598,7 +6792,7 @@ describe("ci workflow guards", () => {
       "needs.preflight.outputs.cache_mode != 'off' && matrix.group == 'extension-package-boundary' && steps.extension-boundary-inputs.outputs.enabled == 'true'",
     );
     expect(hostedCoreCache.if).toBe(
-      "needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.runner_profile == 'github' && !inputs.release_gate",
+      "(needs.preflight.outputs.shared_sdk_declarations != 'true' || matrix.requires_sdk_declarations != true) && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.runner_profile == 'github' && !inputs.release_gate",
     );
     for (const cache of [hostedLintCache, hostedCoreCache]) {
       expect(cache.uses).toBe("./.ci-harness/.github/actions/sdk-declarations");
@@ -13693,6 +13887,16 @@ describe("shared test-source check execution", () => {
     ["packages/example/src/shared.test-support.ts"],
     ["ui/src/shared.test-support.ts"],
     ["src/selection.test.ts", "config/test-lines-allocations/selection-proof.txt"],
+    [
+      "src/selection.ts",
+      "src/selection.test.ts",
+      "config/test-lines-allocations/selection-proof.txt",
+    ],
+    [
+      "ui/src/selection.ts",
+      "ui/src/selection.test.ts",
+      "config/test-lines-allocations/selection-proof.txt",
+    ],
   ])("keeps full guards and selects compiler consumers for %j", (...changedPaths) => {
     const graphs = ["core", "extensions-test"];
     const manifest = runManifest(changedPaths, graphs);
@@ -13730,6 +13934,11 @@ describe("shared test-source check execution", () => {
     ["test/helpers/shared.ts"],
     ["src/shared.test-support.d.ts"],
     ["src/shared.test-support.ts", "src/runtime.ts"],
+    [
+      "src/shared.test-support.ts",
+      "src/runtime.ts",
+      "config/test-lines-allocations/selection-proof.txt",
+    ],
     ["src/shared.test-support.ts", "tsconfig.json"],
     ["src/shared.test-support.ts", "src/config/settings.json"],
     ["unknown/shared.test-support.ts"],
@@ -13909,4 +14118,35 @@ describe("extension lint PR admission", () => {
       );
     },
   );
+});
+
+it.each([
+  { paths: ["skills/model-usage/scripts/model_usage.py"], expected: ["skills/model-usage"] },
+  { paths: ["skills/skill-creator/scripts/quick_validate.py"], expected: ["skills/skill-creator"] },
+  {
+    paths: [
+      "skills/model-usage/scripts/model_usage.py",
+      "skills/skill-creator/scripts/quick_validate.py",
+    ],
+    expected: ["skills/model-usage", "skills/skill-creator"],
+  },
+  { paths: ["skills/pyproject.toml"], expected: ["skills"] },
+  { paths: ["skills/unknown/scripts/module.py"], expected: ["skills"] },
+  { paths: ["skills/model-usage/scripts/missing.py"], expected: ["skills"], missing: true },
+  {
+    paths: ["skills/model-usage/scripts/model_usage.py", "scripts/example.mjs"],
+    expected: ["skills"],
+  },
+  { paths: ["skills/model-usage/scripts/model_usage.py"], expected: ["skills"], full: true },
+  { paths: null, expected: ["skills"], full: true },
+])("routes Python checks to $expected", ({ paths, expected, full = false, missing = false }) => {
+  const result = runCiManifestFixture({
+    bundledPlanner: true,
+    eventName: full ? "schedule" : "pull_request",
+    changedPaths: paths,
+    targetFiles: missing ? [] : (paths ?? []),
+    scopeEnv: { OPENCLAW_CI_RUN_SKILLS_PYTHON: "true" },
+  });
+  expect(result.status, result.output).toBe(0);
+  expect(readJsonOutput(result.outputs, "skills_python_targets_json")).toEqual(expected);
 });

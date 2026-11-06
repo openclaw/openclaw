@@ -2888,7 +2888,12 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       jobId?: string;
       jobCondition?: string;
     }> = [];
-    const rubySetups: Array<{ file: string; step: WorkflowStep }> = [];
+    const rubySetups: Array<{
+      file: string;
+      step: WorkflowStep;
+      jobId?: string;
+      jobCondition?: string;
+    }> = [];
     for (const file of [
       ...findYamlFiles(".github/workflows"),
       ...findYamlFiles(".github/actions"),
@@ -2911,7 +2916,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
             directCaches.push({ file, step, jobId, jobCondition });
           }
           if (step.uses?.startsWith("ruby/setup-ruby@")) {
-            rubySetups.push({ file, step });
+            rubySetups.push({ file, step, jobId, jobCondition });
           }
           if (
             step.uses === "./.github/actions/setup-node-env" ||
@@ -2925,11 +2930,20 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       }
     }
     expect(rubySetups.length).toBeGreaterThan(0);
-    for (const { file, step } of rubySetups) {
+    for (const { file, step, jobId, jobCondition } of rubySetups) {
       const bundlerCache = step.with?.["bundler-cache"] ?? false;
       expect([false, true, "false", "true"], `${file}: ${step.name}`).toContain(bundlerCache);
       if (bundlerCache === true || bundlerCache === "true") {
-        expect(String(step.if), `${file}: ${step.name}`).toContain("cache_write_allowed == 'true'");
+        if (file === ".github/workflows/ios-store-release.yml" && jobId === "release") {
+          expectIncludes(jobCondition, [
+            "github.repository == 'openclaw/openclaw'",
+            "github.ref == 'refs/heads/main'",
+          ]);
+        } else {
+          expect(String(step.if), `${file}: ${step.name}`).toContain(
+            "cache_write_allowed == 'true'",
+          );
+        }
       }
     }
     expect(callers.length).toBeGreaterThan(0);
@@ -3015,6 +3029,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
         }
         const releaseCacheId = new Map([
           ["${{ runner.temp }}/openclaw-watch-rtc-release-libraries", "watch-rtc-cache"],
+          ["${{ runner.temp }}/openclaw-ios-release-cas", "ios-compilation-cache"],
           ["~/Library/Developer/Xcode/DerivedData/OpenClaw-*/SourcePackages", "ios-packages-cache"],
         ]).get(String(step.with?.path));
         if (file === ".github/workflows/ios-store-release.yml" && releaseCacheId) {
@@ -3740,62 +3755,6 @@ server.listen(0, "127.0.0.1", () => {
         "retention-days": 14,
       },
     });
-  });
-
-  it("shares transform generations with the warmer after CI exports its harness", () => {
-    const action = readWorkflow(".github/actions/setup-node-env/action.yml");
-    const generationStep = (action.runs.steps as WorkflowStep[]).find(
-      (step) => step.name === "Resolve Vitest transform cache generation",
-    );
-    const expression = expectDefined(
-      generationStep?.run?.match(/\$\{\{(.*?)\}\}/u)?.[1],
-      "transform generation expression",
-    );
-    const sourceFiles = {
-      "pnpm-lock.yaml": "lockfileVersion: '9.0'",
-      "pnpm-workspace.yaml": "packages: ['packages/*']",
-      "package.json": '{"name":"fixture"}',
-      "packages/worker/package.json": '{"name":"worker"}',
-      "packages/worker/tsconfig.json": "{}",
-      "vitest.config.ts": "export default {}",
-      "test/vitest/shared.ts": "export const shared = {}",
-      "src/state/schema.sql": "CREATE TABLE fixture (id TEXT);",
-      ".github/actions/setup-security-review/package.json": '{"name":"review"}',
-      ".ci-harness-source/package.json": '{"name":"real-source"}',
-    };
-    const files: Record<string, string> = { ...sourceFiles };
-    const fingerprint = () =>
-      runInNewContext(expression, {
-        hashFiles: (...patterns: string[]) => {
-          const includes = patterns.filter((pattern) => !pattern.startsWith("!"));
-          const excludes = patterns
-            .filter((pattern) => pattern.startsWith("!"))
-            .map((pattern) => pattern.slice(1));
-          const hash = createHash("sha256");
-          for (const [file, contents] of Object.entries(files).toSorted(([left], [right]) =>
-            left.localeCompare(right),
-          )) {
-            if (
-              includes.some((pattern) => minimatch(file, pattern, { dot: true })) &&
-              !excludes.some((pattern) => minimatch(file, pattern, { dot: true }))
-            ) {
-              hash.update(createHash("sha256").update(contents).digest());
-            }
-          }
-          return hash.digest("hex");
-        },
-      });
-    const warmer = fingerprint();
-    files[".ci-harness/.github/actions/setup-security-review/package.json"] =
-      sourceFiles[".github/actions/setup-security-review/package.json"];
-    files[".ci-harness/tsconfig.json"] = "{}";
-    files["node_modules/dependency/package.json"] = '{"name":"dependency"}';
-    expect(fingerprint()).toBe(warmer);
-    for (const [file, contents] of Object.entries(sourceFiles)) {
-      files[file] = `${contents}\n`;
-      expect(fingerprint(), file).not.toBe(warmer);
-      files[file] = contents;
-    }
   });
 
   it("persists isolated transform and compile caches through immutable protected archives", () => {

@@ -491,10 +491,11 @@ describe("transcript projection", () => {
       msg("assistant", "needle", 1_000, { __openclaw: { id: "matching-row" } }),
     ]);
     props.chatBubbleMode = true;
-    const read = vi.fn(() => 700);
+    const heights = new Proxy<Record<string, number>>({}, { get: () => 700 });
+    const read = vi.fn(() => heights);
     props.widgetLayout = {
-      read,
-      readRows: () => undefined,
+      read: (key) => heights[key],
+      readRows: read,
       write: vi.fn(),
       writeRows: vi.fn(),
       invalidateRow: vi.fn(),
@@ -540,7 +541,7 @@ describe("transcript projection", () => {
     const build = vi.spyOn(chatThreadBuild, "buildChatItems");
     const project = () => {
       projectSession(props, transcript);
-      return state.transcriptRenderContext.turnMediaMessages
+      return state.transcriptRenderContext.threadMediaMessages
         ?.values()
         .next()
         .value?.map(({ message }) => message);

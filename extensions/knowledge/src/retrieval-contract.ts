@@ -37,6 +37,12 @@ const locator = Type.Object({
   start_line: Type.Optional(Type.Integer()),
   end_line: Type.Optional(Type.Integer()),
 });
+const viaDescription =
+  "Set with matches=[superseded]: the query matched this earlier, superseded record, not the returned one, which is its current replacement. Pins the matched revision.";
+const Via = Type.Object(
+  { id: text(96), title: text(500), path: text(500), revision: Type.Integer(), hash: text(64) },
+  { description: viaDescription },
+);
 const hit = Type.Object({
   record: Summary,
   citation: Type.Object({
@@ -61,6 +67,7 @@ const hit = Type.Object({
     truncated: Type.Boolean(),
   }),
   matches: Type.Array(text(20), { maxItems: 4 }),
+  via: Type.Optional(Via),
   score: Type.Union([Type.Number(), Type.Null()]),
   attribution: text(1000),
   assertionOrigin: text(30),
@@ -87,6 +94,9 @@ export const CompactHit = Type.Object(
       text: text(200),
     }),
     matches: Type.Array(text(20), { maxItems: 4 }),
+    via: Type.Optional(
+      Type.Pick(Via, ["id", "title", "revision"], { description: viaDescription }),
+    ),
   },
   { additionalProperties: false },
 );
