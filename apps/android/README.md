@@ -236,6 +236,41 @@ cd apps/android
 
 ## Build / Run
 
+### OpenClaw ID native transport
+
+Phone APK/AAB builds compile `crates/openclaw-iroh-ffi` from the checked-in source
+and lockfile through its canonical `scripts/build-android.sh`. Gradle includes
+the crate's checked-in generated Kotlin wrapper and Android initialization helper,
+and registers the native build as a generated JNI source producer. Both store
+flavors and debug/release packaging require all four native libraries; there is
+no optional prebuilt or skip-native packaging path. JNA 5.19.1 and coroutines
+1.11.0 remain the app's existing dependencies.
+
+Provision Rust 1.99.0, cargo-ndk 3.5.4, NDK 28.2.13676358, Python 3, Bash, and the
+four Rust Android targets described in
+[`PACKAGING.md`](../../crates/openclaw-iroh-ffi/PACKAGING.md) before building.
+Set `ANDROID_NDK_HOME` to that NDK directory. Gradle selects Rust 1.99.0 and invokes
+the source build; it does not provision these prerequisites. Missing native build
+prerequisites fail packaging rather than silently omitting the transport.
+
+The native producer is attached only to JNI packaging, not `preBuild`. JVM-only
+tests such as `:app:testPlayDebugUnitTest` compile the Kotlin sources without
+cross-compiling Android Rust libraries; transport unit tests must inject their
+native boundary rather than load an Android `.so` on the host. Native loading,
+release shrinking, APK ZIP alignment, and runtime behavior on a 16 KiB device
+still need a provisioned Android validation lane.
+
+**Distribution license audit remains open.** The bundled `iroh` notice includes
+its additional Tailscale BSD notice, but is not a complete Rust dependency notice
+inventory. Before distributing this transport, complete the four-target locked
+transitive audit (including default portmapper dependencies), bundle all required
+license/copyright notices, and provide the MPL-2.0 source-availability notices for
+UniFFI and attohttpc. Cargo SPDX metadata alone does not satisfy these obligations;
+some locked crate archives omit their declared license texts. See the crate's
+[license release gates](../../crates/openclaw-iroh-ffi/PACKAGING.md#licenses-and-release-gates).
+
+### App build prerequisites
+
 Install the repository's Node.js and pnpm dependencies before building. Gradle
 builds the shared Mermaid renderer automatically and packages its local assets
 with the app; no CDN or Gateway renderer is needed.
@@ -548,9 +583,10 @@ and trust high-water marks use the existing Keystore-backed credential store;
 Forget removes that target's node key. A removed or unadmitted node stops retrying
 and requires a new invitation from the owner.
 
-Native transport packaging is required. A development build without the shared
-native adapter reports that the transport is unavailable rather than dialing the
-logical hostname directly. JNI loading, native keep-alive, ABI packaging,
+Native transport packaging is required. The process Application installs the
+native Android context lazily before the first node bind. Native loading failures
+stop the connection rather than dialing the logical hostname directly.
+JNI loading, native keep-alive, ABI packaging,
 Keystore behavior, foreground-service recovery, and the invitation UI require
 Android build/device qualification; pure JVM tests do not establish those claims.
 

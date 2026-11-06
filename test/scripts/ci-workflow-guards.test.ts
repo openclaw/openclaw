@@ -2097,6 +2097,36 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     const gradleCacheStep = requiredWorkflowStep(action.runs.steps, "Setup Gradle cache");
     const javaStep = requiredWorkflowStep(action.runs.steps, "Setup Java");
     const installStep = requiredWorkflowStep(action.runs.steps, "Install Android SDK packages");
+    const rustStep = requiredWorkflowStep(action.runs.steps, "Install Rust JNI toolchain");
+    expect(rustStep.env?.RUSTUP_TOOLCHAIN).toBe("1.99.0");
+    expectIncludes(rustStep.run, [
+      'echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"',
+      'rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal',
+      "--target aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android",
+      "cargo install cargo-ndk --version 3.5.4 --locked",
+      'echo "RUSTUP_TOOLCHAIN=$RUSTUP_TOOLCHAIN" >> "$GITHUB_ENV"',
+    ]);
+    expectIncludes(installStep.run, [
+      '"ndk;28.2.13676358"',
+      'echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/28.2.13676358" >> "${GITHUB_ENV}"',
+    ]);
+    const codeqlSteps = readWorkflow(".github/workflows/codeql-android-critical-security.yml").jobs
+      .android.steps;
+    const codeqlSetup = requiredWorkflowStep(codeqlSteps, "Setup Android toolchain");
+    expect(codeqlSetup.uses).toBe("./.github/actions/setup-android-toolchain");
+    const codeqlBuild = requiredWorkflowStep(codeqlSteps, "Build Android for CodeQL");
+    expect(codeqlSteps.indexOf(codeqlSetup)).toBeLessThan(codeqlSteps.indexOf(codeqlBuild));
+    expect(codeqlBuild.env?.JAVA_HOME).toBe(
+      "${{ steps.android-toolchain.outputs.gradle-java-home }}",
+    );
+    const nativeSteps = readWorkflow(".github/workflows/iroh-ffi.yml").jobs.build.steps;
+    expect(requiredWorkflowStep(nativeSteps, "Setup Android toolchain")).toMatchObject({
+      if: "matrix.platform == 'android'",
+      uses: "./.github/actions/setup-android-toolchain",
+    });
+    expect(requiredWorkflowStep(nativeSteps, "Install Rust").if).toBe(
+      "matrix.platform != 'android'",
+    );
 
     expect(javaStep.uses).toBe("actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad");
     expect(javaStep.with).toMatchObject({

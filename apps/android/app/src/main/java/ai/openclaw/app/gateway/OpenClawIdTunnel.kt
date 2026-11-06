@@ -89,8 +89,8 @@ internal class OpenClawIdTunnel(
       val key = verifiedServerKey()
       checkActive()
       // The binding adapter must close late results after coroutine cancellation.
-      val result = withTimeout(5_000) { endpoint.connect(key) }
-      connected = result
+      // Retain ownership inside the timeout too: cancellation can win its return handoff.
+      val result = withTimeout(5_000) { endpoint.connect(key).also { connected = it } }
       checkActive()
       coroutineScope {
         val closed = async { result.closed() }
