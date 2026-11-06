@@ -68,6 +68,7 @@ import {
   resolveSqliteSessionTranscriptReadFence,
   runWithSessionTranscriptReadFence,
 } from "./session-transcript-read-fence.js";
+import { visitTranscriptEventRows } from "./session-transcript-snapshot-digest.js";
 import {
   readTranscriptPayload,
   transcriptEventJsonSql,
@@ -570,20 +571,9 @@ export function readTranscriptEventRows(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
 ): SqliteTranscriptSnapshotRow[] {
-  return readHotSessionTranscriptSnapshot(database, sessionId, "raw rows", () => {
-    const rows = executeSqliteQuerySync(
-      database.db,
-      getSessionKysely(database.db)
-        .selectFrom("transcript_events")
-        .select(["event_json", "event_zstd", "event_utf8_bytes", "seq"])
-        .where("session_id", "=", sessionId)
-        .orderBy("seq", "asc"),
-    ).rows;
-    return rows.map((row) => ({
-      eventJson: readTranscriptPayload(row),
-      seq: sqliteNumber(row.seq),
-    }));
-  });
+  const rows: SqliteTranscriptSnapshotRow[] = [];
+  visitTranscriptEventRows(database, sessionId, (row) => rows.push(row));
+  return rows;
 }
 
 /** Reads exact transcript storage rows for guarded doctor rewrites. */

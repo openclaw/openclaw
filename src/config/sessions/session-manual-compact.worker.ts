@@ -11,11 +11,6 @@ import {
   readSessionEntryRow,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import {
-  readTranscriptEventRows,
-  assertSqliteTranscriptSnapshotUnchanged,
-  type SqliteTranscriptSnapshotRow,
-} from "./session-accessor.sqlite-read.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-publication.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { replaceSqliteTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
@@ -33,19 +28,24 @@ import type {
   SessionSourceValidation,
 } from "./session-source-authority.js";
 import { createSessionSourceConversationMatches } from "./session-source-conversation-matches.js";
+import {
+  readTranscriptEventRowsDigest,
+  assertSqliteTranscriptDigestUnchanged,
+  type SqliteTranscriptSnapshotDigest,
+} from "./session-transcript-snapshot-digest.js";
 
 /** Compare the retained user data before replacing its transcript and accounting together. */
 function applyManualCompactInTransaction(
   database: OpenClawAgentDatabase,
   scope: ResolvedTranscriptScope,
   input: {
-    rows: readonly SqliteTranscriptSnapshotRow[];
+    snapshot: SqliteTranscriptSnapshotDigest;
     entries: SqliteLifecycleTargetSnapshot;
     events: TranscriptEvent[];
     nowMs?: number;
   },
 ) {
-  assertSqliteTranscriptSnapshotUnchanged(database, scope.sessionId, input.rows);
+  assertSqliteTranscriptDigestUnchanged(database, scope.sessionId, input.snapshot);
   const current = readSessionEntrySelectionSnapshot(database, scope.sessionKey, true);
   assertLifecycleTargetSnapshotUnchanged(
     input.entries,
@@ -100,12 +100,12 @@ export function compactManualTranscript(
   const sourceMatches = createSessionSourceConversationMatches(input.sources);
   using source = prepareSessionColdSourceGuard(context.options, input.sources, sourceMatches);
   const database = context.open();
-  const rows = readTranscriptEventRows(database, input.scope.sessionId);
   const entries =
     input.entries ?? readSessionEntrySelectionSnapshot(database, input.scope.sessionKey, true);
-  // Decode and normalize before acquiring the write transaction; commit compares the original bytes.
+  // Decode and normalize before acquiring the write transaction; commit rechecks their byte/sequence fingerprint.
   const selected = selectManualCompactTranscriptLines(
-    rows.map((row) => row.eventJson),
+    (visit) =>
+      readTranscriptEventRowsDigest(database, input.scope.sessionId, (row) => visit(row.eventJson)),
     input.maxLines,
   );
   const events = selected.result.compacted
@@ -128,7 +128,7 @@ export function compactManualTranscript(
       };
       if (selected.result.compacted) {
         const identity = applyManualCompactInTransaction(current, input.scope, {
-          rows,
+          snapshot: selected.snapshot,
           entries,
           events,
           nowMs: input.nowMs,
