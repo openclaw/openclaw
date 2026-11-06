@@ -2003,14 +2003,20 @@ openclaw-approvals-page .data-table-pagination__info {
   background: color-mix(in srgb, var(--text) var(--surface-hover-amount), transparent);
 }
 
-.approval-log__request {
+.approval-log__request-wrap {
   grid-column: 1;
+  display: block;
+  min-width: 0;
+}
+
+.approval-log__request {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 /* The open row wraps the request in place instead of repeating it below. */
+[aria-expanded="true"] > .approval-log__request-wrap .approval-log__request,
 [aria-expanded="true"] > .approval-log__request {
   overflow: visible;
   overflow-wrap: anywhere;

@@ -125,6 +125,7 @@ const enApprovals = {
     invalidResponse: "Couldn’t load approval history. Try again.",
     unknown: "Unknown",
     notApplicable: "N/A",
+    warningLabel: "Warning",
     fields: {
       kind: "Kind",
       source: "Source",
