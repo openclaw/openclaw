@@ -94,6 +94,7 @@ export function messageMatchesSearchQuery(
 }
 
 type ChatMessagePreview = {
+  runId?: string;
   preview: CanvasToolPreview;
   text: string | null;
   timestamp: number | null;
@@ -125,6 +126,7 @@ function readChatMessagePreview(toolMessage: Record<string, unknown>): ChatMessa
     const card = cards[index];
     if (card?.preview?.kind === "canvas") {
       return {
+        runId: card.runId,
         preview: card.preview,
         text: card.outputText ?? null,
         timestamp: rawMessageTimestamp(toolMessage),

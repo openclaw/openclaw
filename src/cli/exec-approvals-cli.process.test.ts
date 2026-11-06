@@ -1,7 +1,7 @@
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { writeFixtureJson } from "./cli-fixtures.test-support.js";
+import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 import { getCliProcessTestTimeout, runCliProcessChild } from "./cli-process-child.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -10,9 +10,7 @@ async function runApprovalsCliProcess(args: string[]) {
   const root = tempDirs.make("openclaw-approvals-process-");
   const stateDir = path.join(root, "state");
   const configPath = path.join(stateDir, "openclaw.json");
-  const { mkdir } = await import("node:fs/promises");
-  await mkdir(stateDir, { recursive: true });
-  await writeFixtureJson(configPath, { logging: { consoleStyle: "json", level: "silent" } });
+  writeJsonFile(configPath, { logging: { consoleStyle: "json", level: "silent" } });
   return runCliProcessChild({
     nodeArgs: ["--import", "tsx", "src/entry.ts", ...args],
     env: {

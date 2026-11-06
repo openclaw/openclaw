@@ -144,16 +144,14 @@ describe("readLastGatewayErrorLine", () => {
 const FIFO = Symbol("writerless FIFO");
 const blocked = "gateway start blocked";
 const bindError = "failed to bind gateway socket";
-for (const [name, platform, stdout, stderr, expected] of [
-  ["stdout FIFO", "linux", FIFO, bindError, bindError],
-  ["stderr FIFO", "linux", blocked, FIFO, blocked],
+for (const [name, stdout, stderr, expected] of [
+  ["stdout FIFO", FIFO, bindError, bindError],
+  ["stderr FIFO", blocked, FIFO, blocked],
 ] as const) {
   it.skipIf(process.platform === "win32" && (stdout === FIFO || stderr === FIFO))(name, () => {
     const root = makeTempStateDir();
     const env = { HOME: root, OPENCLAW_STATE_DIR: path.join(root, "state") };
-    const paths = (
-      platform === "darwin" ? resolveGatewaySupervisorLogPaths : resolveGatewayLogPaths
-    )(env);
+    const paths = resolveGatewayLogPaths(env);
     fs.mkdirSync(paths.logDir, { recursive: true });
     for (const key of ["stdoutPath", "stderrPath"] as const) {
       const value = key === "stdoutPath" ? stdout : stderr;
@@ -162,11 +160,6 @@ for (const [name, platform, stdout, stderr, expected] of [
       } else if (value !== undefined) {
         fs.writeFileSync(paths[key], value);
       }
-    }
-    if (platform === "darwin") {
-      const stateLogs = resolveGatewayLogPaths(env);
-      fs.mkdirSync(stateLogs.logDir, { recursive: true });
-      fs.writeFileSync(stateLogs.stderrPath, `${bindError} stale\n`);
     }
     // Bound native FIFO opens outside the test worker, including on a regressed reader.
     const probe = spawnSync(
@@ -177,7 +170,7 @@ for (const [name, platform, stdout, stderr, expected] of [
         "-e",
         `
         import { readLastGatewayErrorLine } from ${JSON.stringify(new URL("./diagnostics.ts", import.meta.url).href)};
-        console.log(JSON.stringify(await readLastGatewayErrorLine(${JSON.stringify(env)}, { platform: ${JSON.stringify(platform)} })));
+        console.log(JSON.stringify(await readLastGatewayErrorLine(${JSON.stringify(env)}, { platform: "linux" })));
       `,
       ],
       { encoding: "utf8", timeout: 5_000 },

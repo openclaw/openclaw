@@ -38,6 +38,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { quoteCliArg } from "../quote-cli-arg.js";
 import * as shared from "./shared.js";
 import * as doctorChild from "./update-command-doctor-child.js";
@@ -737,7 +738,7 @@ it.each(["settlement", "database writes", "reporting failure"] as const)(
                   },
                 },
               });
-              return { stdout: "", stderr: "", code: 0 };
+              return createCommandResult();
             }
             return {
               stdout: "Doctor busy",
