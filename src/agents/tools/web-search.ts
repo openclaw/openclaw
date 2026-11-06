@@ -1,9 +1,5 @@
-/**
- * web_search built-in tool.
- *
- * Runs the configured runtime provider and returns normalized cached search results.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { WebSearchProviderToolExecutionContext } from "../../plugins/web-provider-types.js";
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import { runtimeWebSecretOwnerId } from "../../secrets/runtime-web-secret-owner.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.types.js";
@@ -78,11 +74,9 @@ const WebSearchSchema = {
 } satisfies Record<string, unknown>;
 
 function isWebSearchDisabled(config?: OpenClawConfig): boolean {
-  const search = config?.tools?.web?.search;
-  return Boolean(search && typeof search === "object" && search.enabled === false);
+  return config?.tools?.web?.search?.enabled === false;
 }
 
-/** Creates the `web_search` tool, or `null` when web search is disabled by config. */
 export function createWebSearchTool(options?: {
   config?: OpenClawConfig;
   enabled?: boolean;
@@ -90,6 +84,8 @@ export function createWebSearchTool(options?: {
   sandboxed?: boolean;
   runtimeWebSearch?: RuntimeWebSearchMetadata;
   lateBindRuntimeConfig?: boolean;
+  modelSelection?: WebSearchProviderToolExecutionContext["modelSelection"];
+  assertInvocationCurrent?: () => void;
 }): AnyAgentTool | null {
   if (options?.enabled === false || isWebSearchDisabled(options?.config)) {
     return null;
@@ -134,6 +130,8 @@ export function createWebSearchTool(options?: {
         runtimeWebSearch,
         preferRuntimeProviders,
         args: toolArgs,
+        modelSelection: options?.modelSelection,
+        assertCurrent: options?.assertInvocationCurrent,
         signal,
       }).catch((error: unknown) => {
         signal?.throwIfAborted();

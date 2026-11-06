@@ -2,7 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
-import { waitForPidFile } from "../helpers/process-wait.js";
+import {
+  fixtureReceiptClientSource,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { withinTest } from "../helpers/promise.js";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const configs = [
@@ -61,6 +66,7 @@ export type ReportFixtureMode =
 /** Tiny native configs shared by regression tests and retained operator proofs. */
 export function createVitestReportFixture(
   root: string,
+  observation: { receipts: FixtureReceiptChannel; signal: AbortSignal },
   evidence = path.join(root, "reports"),
   compileCache = path.join(root, "node-compile-cache"),
 ) {
@@ -69,6 +75,17 @@ export function createVitestReportFixture(
   const write = (file: string, contents: string) => {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, contents);
+  };
+  const writeConfig = (file: string, name: string, source: string, fsModuleCache = false) => {
+    // Vitest initializes root caches even when every leaf disables caching, and
+    // --clearCache deletes configured paths regardless of the enable flag.
+    write(
+      file,
+      `${source}
+config.cacheDir = ${JSON.stringify(path.join(root, "vite-" + name))};
+Object.assign(config.test, {cache:false, fsModuleCache:${fsModuleCache}, fsModuleCachePath:${JSON.stringify(path.join(root, "fs-cache-" + name))}});
+export default config;`,
+    );
   };
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH,
@@ -90,7 +107,6 @@ export function createVitestReportFixture(
     NODE_COMPILE_CACHE: compileCache,
     COREPACK_ENABLE_NETWORK: "0",
     GIT_OPTIONAL_LOCKS: "0",
-    CI: "1",
     NO_COLOR: "1",
     FORCE_COLOR: "0",
     TZ: "UTC",
@@ -114,11 +130,16 @@ export function createVitestReportFixture(
       report?: boolean;
       configOutput?: boolean;
       crashSignal?: "SIGABRT" | "SIGKILL";
+      finalIndexFailure?: boolean;
+      env?: NodeJS.ProcessEnv;
     } = {},
   ) => {
     const deadline = performance.now() + 45000;
-    if (mode === "config-load-once") {
-      // Give the cache regression a private default root, never shared dependencies.
+    if (
+      ["config-load-once", "serial", "grouped", "grouped-conflict"].includes(mode) ||
+      mode.startsWith("nested-shared-leaf")
+    ) {
+      // Cache regressions must never use the checkout as their deletion target.
       const modules = path.join(root, "node_modules");
       fs.mkdirSync(modules);
       fs.symlinkSync(
@@ -128,6 +149,7 @@ export function createVitestReportFixture(
       );
       write(path.join(root, "package.json"), '{"private":true,"type":"module"}');
       write(path.join(modules, ".vitest-cache/canary"), "another cache owner");
+      write(path.join(modules, ".vite/canary"), "another result-cache owner");
       write(
         path.join(modules, ".vitest-cache/_metadata.json"),
         '{"lockfileHash":"unrelated-owner"}',
@@ -140,6 +162,24 @@ export function createVitestReportFixture(
       );
     }
     const output = path.join(evidence, "result.json");
+    if (options.finalIndexFailure) {
+      const preload = path.join(root, "final-index-failure.mjs");
+      write(
+        preload,
+        `import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+const write = fs.writeFileSync;
+fs.writeFileSync = (file, data, ...args) => {
+  if (String(file).endsWith("/index.json") && typeof data === "string" && JSON.parse(data).complete) {
+    write(String(file) + ".final-write-attempt", data);
+    throw new Error("owned final index write failure");
+  }
+  return write(file, data, ...args);
+};
+syncBuiltinESMExports();`,
+      );
+      env.NODE_OPTIONS = `--import=${pathToFileURL(preload).href}`;
+    }
     const ready = path.join(root, "ready");
     if (options.configOutput) {
       write(path.join(root, "config-coverage/canary"), "retained");
@@ -172,6 +212,7 @@ if(output&&path.basename(path.dirname(output))==='1'&&process.argv.some(arg=>arg
       write(path.join(env.HOME!, "canary"), "synthetic caller home\n");
     }
     const isParallel = ["parallel", "batch-parallel", "failure", "overlap"].includes(mode);
+    const releaseAfterBeta = ["parallel", "batch-parallel", "automatic"].includes(mode);
     const testFiles =
       mode === "automatic"
         ? [
@@ -198,15 +239,18 @@ ${mode === "child-write" && index === 0 ? `if(!merging&&output)fs.mkdirSync(outp
 ${mode === "watchdog" && index === 0 ? "if(!merging&&output&&path.basename(path.dirname(output))==='1'){await new Promise(()=>setInterval(()=>{},1000));}" : ""}
 ${["missing", "corrupt"].includes(mode) && index === 0 ? `if(!merging)process.once('exit',()=>{const file=${mode === "missing" ? "output" : "process.argv.find(arg=>arg.startsWith('--outputFile.blob='))?.slice('--outputFile.blob='.length)"};if(file&&fs.existsSync(file)){fs.copyFileSync(file,file+'.native-original');${mode === "missing" ? "fs.unlinkSync(file)" : "fs.writeFileSync(file,'owned corruption')"};}});` : ""}
 `;
-      write(
+      writeConfig(
         path.join(root, configs[index]!),
+        name,
         prelude +
-          `export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join(root, "vite-" + name))},${mode === "config-load-once" ? `plugins:[{name:'derive-project-name',config(){return {test:{name:${JSON.stringify(name)}}}}}],` : ""}test:{name:${mode === "config-load-once" ? "undefined" : mode === "identity" ? `merging?'changed-${name}':'${name}'` : JSON.stringify(name)},include:[${mode === "empty" ? "'absent.test.ts'" : JSON.stringify(testFiles[index])}],${mode === "empty" ? "passWithNoTests:true," : ""}${mode === "ignored-unhandled" ? "dangerouslyIgnoreUnhandledErrors:true," : ""}pool:${mode === "pool-identity" ? "merging?'threads':'forks'" : "'forks'"},maxWorkers:1,fileParallelism:false,cache:false,${mode === "config-load-once" ? `fsModuleCache:true,fsModuleCachePath:${JSON.stringify(path.join(root, "fs-cache-" + name))},` : "fsModuleCache:false,"}teardownTimeout:1000,${["metadata", "coverage-missing"].includes(mode) ? "coverage:{provider:'v8',include:['covered.ts'],reporter:['json','lcov']}," : ""}${options.configOutput ? `coverage:{enabled:true,provider:'v8',reportsDirectory:${JSON.stringify(path.join(root, "config-coverage"))}},reporters:[['json',{outputFile:${JSON.stringify(path.join(evidence, "config-output.json"))}}]],` : ""}${mode === "tuple" ? `reporters:[['json',{outputFile:${JSON.stringify(path.join(evidence, "tuple.json"))}}]],` : ""}}};`,
+          `const config = {root:${JSON.stringify(root)},${mode === "config-load-once" ? `plugins:[{name:'derive-project-name',config(){return {test:{name:${JSON.stringify(name)}}}}}],` : ""}test:{name:${mode === "config-load-once" ? "undefined" : mode === "identity" ? `merging?'changed-${name}':'${name}'` : JSON.stringify(name)},include:[${mode === "empty" ? "'absent.test.ts'" : JSON.stringify(testFiles[index])}],${mode === "empty" ? "passWithNoTests:true," : ""}${mode === "ignored-unhandled" ? "dangerouslyIgnoreUnhandledErrors:true," : ""}pool:${mode === "pool-identity" ? "merging?'threads':'forks'" : "'forks'"},maxWorkers:1,fileParallelism:false,teardownTimeout:1000,${["metadata", "coverage-missing"].includes(mode) ? "coverage:{provider:'v8',include:['covered.ts'],reporter:['json','lcov']}," : ""}${options.configOutput ? `coverage:{enabled:true,provider:'v8',reportsDirectory:${JSON.stringify(path.join(root, "config-coverage"))}},reporters:[['json',{outputFile:${JSON.stringify(path.join(evidence, "config-output.json"))}}]],` : ""}${mode === "tuple" ? `reporters:[['json',{outputFile:${JSON.stringify(path.join(evidence, "tuple.json"))}}]],` : ""}}};`,
+        mode === "config-load-once",
       );
       const failure =
         (["failure", "batch-failure"].includes(mode) && index === 1) ||
         (["fail-fast", "batch-fail-fast"].includes(mode) && index === 0);
       const body = `import fs from 'node:fs';import {test,expect,describe,afterAll} from 'vitest';
+${releaseAfterBeta || (["cancel", "batch-cancel"].includes(mode) && index === 0) ? fixtureReceiptClientSource(observation.receipts.endpoint) : ""}
 ${realHomeReplay ? "import {homedir} from 'node:os';" : ""}
 ${["metadata", "coverage-missing"].includes(mode) ? "import {classify} from './covered';" : ""}
 let attempt=0;
@@ -214,11 +258,11 @@ test('${name}/one',${mode === "retry" && index === 0 ? "{retry:1}," : ""}async()
  fs.appendFileSync(${JSON.stringify(events)},JSON.stringify({name:'${name}/one',pid:process.pid})+'\\n');
  ${mode === "automatic" ? `expect(fs.existsSync(${JSON.stringify(output)})).toBe(false);` : ""}
  ${realHomeReplay ? `expect(process.env.HOME).toBe(${JSON.stringify(env.HOME)});expect(homedir()).toBe(${JSON.stringify(env.HOME)});` : ""}
- ${["parallel", "batch-parallel", "automatic"].includes(mode) && index === 0 ? `const {waitForFile}=await import(${JSON.stringify(path.join(repoRoot, "test/helpers/process-wait.ts"))});await waitForFile(${JSON.stringify(done)},15000);` : ""}
- ${["cancel", "batch-cancel"].includes(mode) && index === 0 ? `fs.writeFileSync(${JSON.stringify(ready)},String(process.pid));await new Promise(()=>setInterval(()=>{},1000));` : ""}
+ ${releaseAfterBeta && index === 0 ? `await awaitRelease(${JSON.stringify(ready)},'beta-done');` : ""}
+ ${["cancel", "batch-cancel"].includes(mode) && index === 0 ? `fs.writeFileSync(${JSON.stringify(ready)},String(process.pid));sendReceipt(${JSON.stringify(ready)},'ready');await new Promise(()=>setInterval(()=>{},1000));` : ""}
  ${["unhandled", "ignored-unhandled"].includes(mode) && index === 1 ? "void Promise.reject(new Error('owned unhandled rejection'));await new Promise(resolve=>setImmediate(resolve));" : ""}
  ${["metadata", "coverage-missing"].includes(mode) ? `expect(classify(${index})).toMatchInlineSnapshot(${JSON.stringify(index === 0 ? '"zero"' : '"one"')});` : mode === "overlap" ? "expect(0, 'independent failure pid='+process.pid).toBe(1);" : mode === "retry" && index === 0 ? "expect(++attempt).toBe(2);" : `expect(1).toBe(${failure ? 2 : 1});`}
- ${index === 1 ? `fs.writeFileSync(${JSON.stringify(done)},'done');` : ""}
+ ${index === 1 ? `fs.writeFileSync(${JSON.stringify(done)},'done');${releaseAfterBeta ? `sendReceipt(${JSON.stringify(done)},'done');` : ""}` : ""}
 });
 ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/skip',()=>{});test.todo('beta/todo');"}`;
       write(path.join(root, testFiles[index]!), body);
@@ -237,17 +281,20 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       mode === "automatic" ? testFiles : mode === "single" ? [configs[0]!] : [...configs];
     if (mode === "grouped" || mode === "grouped-conflict") {
       const leaf = "test/vitest/vitest.alpha.config.ts";
-      write(
+      writeConfig(
         path.join(root, leaf),
-        `export default {test:{name:'alpha',include:[${JSON.stringify(path.join(root, "alpha.test.ts"))}],pool:'threads',maxWorkers:1,cache:false,fsModuleCache:false}};`,
+        "grouped-alpha",
+        `const config = {test:{name:'alpha',include:[${JSON.stringify(path.join(root, "alpha.test.ts"))}],pool:'threads',maxWorkers:1}};`,
       );
-      write(
+      writeConfig(
         path.join(root, configs[1]!),
-        `export default {test:{name:'beta',include:[${JSON.stringify(mode === "grouped-conflict" ? path.join(root, "beta.test.ts") : "beta.test.ts")}],pool:'forks',maxWorkers:1,cache:false,fsModuleCache:false}};`,
+        "beta",
+        `const config = {test:{name:'beta',include:[${JSON.stringify(mode === "grouped-conflict" ? path.join(root, "beta.test.ts") : "beta.test.ts")}],pool:'forks',maxWorkers:1}};`,
       );
-      write(
+      writeConfig(
         path.join(root, configs[0]!),
-        `export default {root:${JSON.stringify(root)},test:{projects:${JSON.stringify([leaf, configs[1]])}}};`,
+        "alpha",
+        `const config = {root:${JSON.stringify(root)},test:{projects:${JSON.stringify([leaf, configs[1]])}}};`,
       );
     }
     if (mode.startsWith("nested-shared-leaf")) {
@@ -258,33 +305,40 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       const other = path.join(root, "test/vitest/vitest.other.config.ts");
       const changedRoot = path.join(root, "changed-root");
       fs.mkdirSync(changedRoot);
-      write(
+      writeConfig(
         alpha,
-        `import fs from 'node:fs';const merging=process.argv.includes('--mergeReports');if(merging)fs.appendFileSync(${JSON.stringify(configLoads)},'alpha\\n');export default {root:${JSON.stringify(root)},plugins:[{name:'derive-alpha-identity',enforce:'post',config(){const root=merging&&${JSON.stringify(mode === "nested-shared-leaf-root-drift")}?${JSON.stringify(changedRoot)}:${JSON.stringify(root)};return {root,test:{root,name:merging&&${JSON.stringify(mode === "nested-shared-leaf-name-drift")}?'changed-alpha':'alpha',pool:'threads'}}}}],test:{include:[${JSON.stringify(path.join(root, "alpha.test.ts"))}],maxWorkers:1,fileParallelism:false,cache:false,fsModuleCache:false}};`,
+        "nested-alpha",
+        `import fs from 'node:fs';const merging=process.argv.includes('--mergeReports');if(merging)fs.appendFileSync(${JSON.stringify(configLoads)},'alpha\\n');const config = {root:${JSON.stringify(root)},plugins:[{name:'derive-alpha-identity',enforce:'post',config(){const root=merging&&${JSON.stringify(mode === "nested-shared-leaf-root-drift")}?${JSON.stringify(changedRoot)}:${JSON.stringify(root)};return {root,test:{root,name:merging&&${JSON.stringify(mode === "nested-shared-leaf-name-drift")}?'changed-alpha':'alpha',pool:'threads'}}}}],test:{include:[${JSON.stringify(path.join(root, "alpha.test.ts"))}],maxWorkers:1,fileParallelism:false}};`,
       );
-      write(
+      writeConfig(
         beta,
-        `import fs from 'node:fs';const merging=process.argv.includes('--mergeReports');if(merging)fs.appendFileSync(${JSON.stringify(configLoads)},'beta\\n');export default {root:${JSON.stringify(root)},test:{name:'beta',include:[${JSON.stringify(path.join(root, "beta.test.ts"))}],projects:[${JSON.stringify(beta)}],pool:'forks',maxWorkers:1,fileParallelism:false,cache:false,fsModuleCache:false}};`,
+        "nested-beta",
+        `import fs from 'node:fs';const merging=process.argv.includes('--mergeReports');if(merging)fs.appendFileSync(${JSON.stringify(configLoads)},'beta\\n');const config = {root:${JSON.stringify(root)},test:{name:'beta',include:[${JSON.stringify(path.join(root, "beta.test.ts"))}],projects:[${JSON.stringify(beta)}],pool:'forks',maxWorkers:1,fileParallelism:false}};`,
       );
-      write(
+      writeConfig(
         inner,
-        `export default {root:${JSON.stringify(root)},test:{name:'inner',projects:[${JSON.stringify(alpha)}]}};`,
+        "nested-inner",
+        `const config = {root:${JSON.stringify(root)},test:{name:'inner',projects:[${JSON.stringify(alpha)}]}};`,
       );
-      write(
+      writeConfig(
         outer,
-        `export default {root:${JSON.stringify(root)},test:{name:'outer',projects:[${JSON.stringify(inner)}]}};`,
+        "nested-outer",
+        `const config = {root:${JSON.stringify(root)},test:{name:'outer',projects:[${JSON.stringify(inner)}]}};`,
       );
-      write(
+      writeConfig(
         other,
-        `export default {root:${JSON.stringify(root)},test:{name:'other',projects:[${JSON.stringify(alpha)}]}};`,
+        "nested-other",
+        `const config = {root:${JSON.stringify(root)},test:{name:'other',projects:[${JSON.stringify(alpha)}]}};`,
       );
-      write(
+      writeConfig(
         path.join(root, configs[0]!),
-        `export default {root:${JSON.stringify(root)},test:{projects:[${JSON.stringify(outer)}]}};`,
+        "alpha",
+        `const config = {root:${JSON.stringify(root)},test:{projects:[${JSON.stringify(outer)}]}};`,
       );
-      write(
+      writeConfig(
         path.join(root, configs[1]!),
-        `export default {root:${JSON.stringify(root)},test:{projects:[${JSON.stringify(other)},${JSON.stringify(beta)}]}};`,
+        "beta",
+        `const config = {root:${JSON.stringify(root)},test:{projects:[${JSON.stringify(other)},${JSON.stringify(beta)}]}};`,
       );
     }
     if (mode === "chunks") {
@@ -295,9 +349,10 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
           `import {test,expect} from 'vitest';test('chunk/${String(i).padStart(2, "0")}',()=>expect(1).toBe(1));`,
         );
       }
-      write(
+      writeConfig(
         path.join(root, "test/vitest/vitest.extension-telegram.config.ts"),
-        `import fs from 'node:fs';const file=process.env.OPENCLAW_VITEST_INCLUDE_FILE;export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join(root, "vite-chunks"))},test:{name:'chunks',include:file?JSON.parse(fs.readFileSync(file,'utf8')):${JSON.stringify(files)},pool:'forks',maxWorkers:1,cache:false,fsModuleCache:false}};`,
+        "chunks",
+        `import fs from 'node:fs';const file=process.env.OPENCLAW_VITEST_INCLUDE_FILE;const config = {root:${JSON.stringify(root)},test:{name:'chunks',include:file?JSON.parse(fs.readFileSync(file,'utf8')):${JSON.stringify(files)},pool:'forks',maxWorkers:1}};`,
       );
       env.OPENCLAW_VITEST_INCLUDE_FILE = path.join(root, "includes.json");
       write(env.OPENCLAW_VITEST_INCLUDE_FILE, JSON.stringify(files));
@@ -354,10 +409,41 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
         ...args,
       ];
     }
+    if (options.entry === "batch-cli" && options.finalIndexFailure) {
+      const plan = {
+        extensionCount: 2,
+        extensionIds: ["alpha", "beta"],
+        estimatedCost: 2,
+        hasTests: true,
+        testFileCount: 2,
+        planGroups: configs.map((config, i) => ({
+          config: path.join(root, config),
+          estimatedCost: 1,
+          extensionIds: [i ? "beta" : "alpha"],
+          roots: [path.join(root, i ? "beta.test.ts" : "alpha.test.ts")],
+          testFileCount: 1,
+        })),
+      };
+      const owner = pathToFileURL(path.join(repoRoot, "scripts/lib/extension-test-plan.mts")).href;
+      const fixture = pathToFileURL(path.join(root, "batch-plan.mjs")).href;
+      write(
+        path.join(root, "batch-plan.mjs"),
+        `export * from ${JSON.stringify(owner)};
+export function resolveExtensionBatchPlan() { return ${JSON.stringify(plan)}; }`,
+      );
+      const preload = path.join(root, "batch-plan-loader.mjs");
+      write(
+        preload,
+        `import { registerHooks } from "node:module";
+registerHooks({ resolve(specifier, context, nextResolve) {
+  const resolved = nextResolve(specifier, context);
+  return resolved.url === ${JSON.stringify(owner)} && context.parentURL !== ${JSON.stringify(fixture)} ? {...resolved, url: ${JSON.stringify(fixture)}} : resolved;
+}});`,
+      );
+      env.NODE_OPTIONS += ` --import=${pathToFileURL(preload).href}`;
+    }
     if (options.entry === "batch-cli") {
       command = [
-        "--import",
-        path.join(repoRoot, "node_modules/tsx/dist/loader.mjs"),
         path.join(repoRoot, "scripts/test-extension-batch.mts"),
         "alpha,beta",
         "--",
@@ -384,7 +470,7 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       const entry = path.join(root, "batch.mts");
       write(
         entry,
-        `import {runExtensionBatchPlan} from ${JSON.stringify(path.join(repoRoot, "scripts/test-extension-batch.mts"))};process.exitCode=await runExtensionBatchPlan(${JSON.stringify(plan)},{vitestArgs:${JSON.stringify(args)}});`,
+        `import {runExtensionBatchPlan} from ${JSON.stringify(path.join(repoRoot, "scripts/test-extension-batch-run.mts"))};process.exitCode=await runExtensionBatchPlan(${JSON.stringify(plan)},{vitestArgs:${JSON.stringify(args)}});`,
       );
       command = ["--import", path.join(repoRoot, "node_modules/tsx/dist/loader.mjs"), entry];
     }
@@ -398,20 +484,25 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       );
       command.unshift("--import", preload);
     }
-    const childEnv = {
-      ...env,
-      // V8 coverage needs fresh compilation; other phases can share private bytecode.
-      NODE_DISABLE_COMPILE_CACHE: ["metadata", "coverage-missing"].includes(mode) ? "1" : undefined,
-      OPENCLAW_TEST_PROJECTS_PARALLEL: mode === "automatic" ? "" : isParallel ? "2" : "1",
-      OPENCLAW_TEST_PROJECTS_SERIAL: mode === "automatic" ? "" : isParallel ? "0" : "1",
-      OPENCLAW_EXTENSION_BATCH_PARALLEL: isParallel ? "2" : "1",
-      OPENCLAW_VITEST_FS_MODULE_CACHE_PATH:
-        mode === "automatic" ? "" : env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH,
-      OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT:
-        mode === "automatic" ? path.join(root, "automatic-cache") : undefined,
-      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS:
-        mode === "watchdog" ? "1500" : env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS,
-    };
+    const childEnv = testRunnerFixtureEnv(
+      {
+        // V8 coverage needs fresh compilation; other phases can share private bytecode.
+        NODE_DISABLE_COMPILE_CACHE: ["metadata", "coverage-missing"].includes(mode)
+          ? "1"
+          : undefined,
+        OPENCLAW_TEST_PROJECTS_PARALLEL: mode === "automatic" ? "" : isParallel ? "2" : "1",
+        OPENCLAW_TEST_PROJECTS_SERIAL: mode === "automatic" ? "" : isParallel ? "0" : "1",
+        OPENCLAW_EXTENSION_BATCH_PARALLEL: isParallel ? "2" : "1",
+        OPENCLAW_VITEST_FS_MODULE_CACHE_PATH:
+          mode === "automatic" ? "" : env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH,
+        OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT:
+          mode === "automatic" ? path.join(root, "automatic-cache") : undefined,
+        OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS:
+          mode === "watchdog" ? "1500" : env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS,
+        ...options.env,
+      },
+      env,
+    );
     let executable = process.execPath;
     if (process.platform === "linux" && options.crashSignal === "SIGABRT") {
       // Preserve an inherited zero hard limit; raising it needs OS authority we do not own.
@@ -444,11 +535,44 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       Math.max(0, deadline - performance.now()),
     );
     try {
+      if (releaseAfterBeta) {
+        // A deliberate early crash still returns its native outcome. Successful
+        // beta writes its durable record first, even if completion overtakes its receipt.
+        await withinTest(
+          Promise.race([observation.receipts.waitFor(done, "done"), completion]),
+          observation.signal,
+        );
+        if (fs.existsSync(done)) {
+          observation.receipts.release(ready, "beta-done");
+        }
+      }
       if (["cancel", "batch-cancel"].includes(mode)) {
-        await waitForPidFile(ready, 15000);
+        const readyWasWritten = () => {
+          const pid = fs.existsSync(ready)
+            ? Number.parseInt(fs.readFileSync(ready, "utf8"), 10)
+            : Number.NaN;
+          return Number.isInteger(pid) && pid > 0;
+        };
+        // The durable PID precedes the receipt; command completion may overtake delivery.
+        const settled = completion.then(
+          () => {
+            if (!readyWasWritten()) {
+              throw new Error(`timeout waiting for pid in ${ready}`);
+            }
+          },
+          (error: unknown) => {
+            if (!readyWasWritten()) {
+              throw error;
+            }
+          },
+        );
+        await withinTest(
+          Promise.race([observation.receipts.waitFor(ready, "ready"), settled]),
+          observation.signal,
+        );
         child.kill("SIGTERM");
       }
-      const result = await completion;
+      const result = await withinTest(completion, observation.signal);
       write(path.join(evidence, "stdout.log"), stdout);
       write(path.join(evidence, "stderr.log"), stderr);
       write(
@@ -469,6 +593,9 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       const reportSet = stderr.match(/\[test\] native report set: (.+)/u)?.[1];
       return { ...result, stdout, stderr, output, reportSet };
     } finally {
+      if (releaseAfterBeta) {
+        observation.receipts.release(ready, "beta-done");
+      }
       clearTimeout(timeout);
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGTERM");

@@ -1,3 +1,4 @@
+import { FsSafeError } from "@openclaw/fs-safe/errors";
 import type { Root } from "@openclaw/fs-safe/root";
 import { watch, type WatchSubscription } from "@openclaw/fs-safe/watch";
 import {
@@ -8,7 +9,9 @@ import { createDeferredCore } from "../src/shared/deferred.ts";
 import {
   createSourceTargetDiscovery,
   excludeSourceTarget,
+  hashSourceFile,
   sourceTargetPaths,
+  type SourceFile,
   type SourceTargetGroup,
 } from "./watch-node-source-targets.mts";
 
@@ -26,7 +29,6 @@ export type WatcherFactory = (paths: string[], options: WatchOptions) => Watcher
 type Observation = {
   group: SourceTargetGroup;
   signature: string;
-  baseline: boolean;
   subscription: WatchSubscription;
 };
 
@@ -41,7 +43,9 @@ export function createSourceObserver(paths: string[], options: WatchOptions) {
   const pollIntervalMs = resolveFsObservationIntervalMs(options.env);
   let closing: Promise<void> | undefined;
   let active: Promise<void> | undefined;
-  let pending = false;
+  let rediscover = false;
+  const dirtyFiles = new Set<string>();
+  let files: Map<string, SourceFile> | undefined;
   let announced = false;
 
   function close(): Promise<void> {
@@ -102,7 +106,6 @@ export function createSourceObserver(paths: string[], options: WatchOptions) {
         if (existing.signature !== signature) {
           existing.group = group;
           existing.signature = signature;
-          existing.baseline = true;
           await existing.subscription.setScopes(group.scopes);
         }
         continue;
@@ -110,7 +113,6 @@ export function createSourceObserver(paths: string[], options: WatchOptions) {
       const entry: Observation = {
         group,
         signature,
-        baseline: true,
         subscription: watch(group.authority, {
           scopes: group.scopes,
           mode,
@@ -118,27 +120,25 @@ export function createSourceObserver(paths: string[], options: WatchOptions) {
           signal: lifetime.signal,
           exclude: (candidate) => excludeSourceTarget(entry.group, candidate, options.ignored),
           onInvalidate(hint) {
-            // Every admission has a baseline, including setScopes. Rediscover
-            // links created during admission without restarting for the baseline.
-            if (entry.baseline && hint.reason === "reconcile" && !hint.changes) {
-              entry.baseline = false;
-              request();
-              return;
-            }
-            if (!hint.changes || hint.changes.some((change) => change.type === "structural")) {
-              request();
-            }
+            // Overflow and admission baselines request a read, never a restart.
             if (!hint.changes) {
-              options.onChange();
+              request();
               return;
             }
             for (const change of hint.changes) {
-              const changed = sourceTargetPaths(entry.group, change.path).find(
+              const names = sourceTargetPaths(entry.group, change.path).filter(
                 (lexical) => !options.ignored(lexical),
               );
-              if (changed !== undefined) {
-                options.onChange(changed);
+              if (
+                names.length &&
+                (change.type === "structural" ||
+                  names.some((name) => files?.get(name)?.authority !== entry.group.authority))
+              ) {
+                request();
                 return;
+              }
+              if (names.length) {
+                request(names);
               }
             }
           },
@@ -154,24 +154,64 @@ export function createSourceObserver(paths: string[], options: WatchOptions) {
     }
   }
 
-  function request() {
+  function request(changedNames?: Iterable<string>) {
     if (closing) {
       return;
     }
-    pending = true;
+    if (!changedNames) {
+      rediscover = true;
+      dirtyFiles.clear();
+    } else if (!rediscover) {
+      for (const name of changedNames) {
+        dirtyFiles.add(name);
+      }
+    }
     if (active) {
       return;
     }
     active = Promise.resolve()
       .then(async () => {
-        while (pending) {
+        while (rediscover || dirtyFiles.size) {
           if (closing) {
             break;
           }
-          pending = false;
-          let groups: SourceTargetGroup[];
+          const full = rediscover;
+          rediscover = false;
+          const names = [...dirtyFiles];
+          dirtyFiles.clear();
+          let groups: SourceTargetGroup[] | undefined;
+          let current: Map<string, SourceFile>;
           try {
-            groups = await discovery.discover(lifetime.signal);
+            if (full) {
+              groups = await discovery.discover(lifetime.signal);
+              current = new Map(groups.flatMap((group) => [...group.files]));
+            } else {
+              current = new Map(files);
+              for (const name of names) {
+                const file = current.get(name);
+                if (!file) {
+                  request();
+                  break;
+                }
+                try {
+                  const hash = await hashSourceFile(file.authority, file.relative, lifetime.signal);
+                  current.set(name, { ...file, hash });
+                } catch (error) {
+                  if (
+                    !(error instanceof FsSafeError) ||
+                    !["not-found", "not-file", "path-mismatch", "symlink"].includes(error.code)
+                  ) {
+                    throw error;
+                  }
+                  request();
+                  break;
+                }
+              }
+              // A structural hint can retire a selected alias while its old file is being read.
+              if (rediscover) {
+                continue;
+              }
+            }
           } catch (error) {
             if (error !== lifetime.signal.reason) {
               failures.add(error);
@@ -179,24 +219,36 @@ export function createSourceObserver(paths: string[], options: WatchOptions) {
             throw error;
           }
           lifetime.signal.throwIfAborted();
-          await install(groups);
-        }
-        if (!closing) {
+          const previous = files;
+          const changed =
+            previous &&
+            [...new Set([...previous.keys(), ...current.keys()])].find(
+              (name) => previous.get(name)?.hash !== current.get(name)?.hash,
+            );
+          files = current;
+          if (groups) {
+            await install(groups);
+          }
+          lifetime.signal.throwIfAborted();
+          if (changed !== undefined) {
+            options.onChange(changed);
+          }
           if (!announced) {
+            // Admission does not wait for later invalidations to stop arriving.
             announced = true;
             const modes = new Set(
               [...observations.values()].map(({ subscription }) => subscription.health().mode),
             );
             options.onLog?.(`Watching sources (${[...modes].join(", ")}).`);
+            readiness.resolve();
           }
-          readiness.resolve();
         }
       })
       .catch(fail)
       .finally(() => {
         active = undefined;
-        if (pending && !closing) {
-          request();
+        if ((rediscover || dirtyFiles.size) && !closing) {
+          request(dirtyFiles);
         }
       });
   }

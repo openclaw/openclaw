@@ -25,20 +25,6 @@ import {
   type listWorkSessions,
 } from "./work-sessions.js";
 
-type TeamReportsHttpOptions = {
-  basePath: string;
-  displayTimezone: string;
-  sessionRouting: () => Pick<PageContext, "controlUiBasePath" | "mainKey">;
-  workSessions: typeof listWorkSessions;
-  /** The plugin's shipped `assets` directory; the dist bundle flattens `src/`, so callers resolve it from the plugin root. */
-  assetsDir: string;
-  getStore: () => TeamReportsStore | undefined;
-  status: () => Promise<unknown>;
-  health: () => Promise<TeamReportsHealth>;
-  orgs: () => string[];
-  people: () => Person[];
-};
-
 const assets = new Map<string, Buffer>();
 
 function readAsset(assetsDir: string, name: "crab.avif" | "icon.png"): Buffer {
@@ -125,7 +111,19 @@ function visiblePeople(configured: Person[], recentReports: ReportPerson[]): Per
   );
 }
 
-export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
+export function createTeamReportsHttpHandler(options: {
+  basePath: string;
+  displayTimezone: string;
+  sessionRouting: () => Pick<PageContext, "controlUiBasePath" | "mainKey">;
+  workSessions: typeof listWorkSessions;
+  /** The plugin's shipped `assets` directory; the dist bundle flattens `src/`, so callers resolve it from the plugin root. */
+  assetsDir: string;
+  getStore: () => TeamReportsStore | undefined | Promise<TeamReportsStore | undefined>;
+  status: () => Promise<unknown>;
+  health: () => Promise<TeamReportsHealth>;
+  orgs: () => string[];
+  people: () => Person[];
+}) {
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     const nonce = randomBytes(16).toString("base64url");
     const send = async (
@@ -179,7 +177,7 @@ export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
         },
       );
     }
-    const store = options.getStore();
+    const store = await options.getStore();
     if (!store) {
       return send(
         503,

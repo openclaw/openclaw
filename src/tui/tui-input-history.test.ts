@@ -17,7 +17,7 @@ describe("createEditorSubmitHandler", () => {
     onSubmit("/models");
 
     expect(editor.addToHistory).toHaveBeenCalledWith("/models");
-    expect(handleCommand).toHaveBeenCalledWith("/models");
+    expect(handleCommand).toHaveBeenCalledWith("/models", expect.any(Function));
     expect(sendMessage).not.toHaveBeenCalled();
   });
 });

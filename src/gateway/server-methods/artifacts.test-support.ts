@@ -1,21 +1,46 @@
-import { expect } from "vitest";
+import { assert, expect } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { selectSessionArtifacts } from "../session-artifact-read.js";
+import type { prepareSessionMutationFacts } from "../session-sharing-preparation.js";
+import { resolveSessionStoreIdentity } from "../session-store-key.js";
+import type { SessionTranscriptVisitor } from "../session-transcript-read.types.js";
 import { expectRecordFields } from "../test-helpers.assertions.js";
 
 type ResponderCalls = Array<{ ok: boolean; payload?: unknown; error?: unknown }>;
 type ArtifactListPayload = { artifacts?: Array<Record<string, unknown>> };
 
+/** Transcript-format fixtures; access and lifetime suites retain the real facts owner. */
+export function artifactFixtureSessionFacts(
+  params: Parameters<typeof prepareSessionMutationFacts>[0],
+) {
+  const { agentId, canonicalKey } = resolveSessionStoreIdentity(params);
+  const storageTarget = { agentId, canonicalKey, storePath: "/tmp/sessions.json" };
+  return {
+    storageTarget,
+    bindCreation() {},
+    release() {},
+    readCurrent: () => ({
+      target: {
+        ...storageTarget,
+        storeKey: canonicalKey,
+        storeKeys: [canonicalKey],
+        entry: { sessionId: "sess-main" },
+      },
+      membership: new Set<string>(),
+      sourceAgentId: agentId,
+      sourcePath: storageTarget.storePath,
+    }),
+  };
+}
+
 export function withArtifactFixtureReader(
   actual: typeof import("../session-transcript-readers.js"),
-  visitSessionMessagesAsync: typeof actual.visitSessionMessagesAsync,
+  visitSessionMessagesAsync: SessionTranscriptVisitor["visitSessionMessagesAsync"],
 ) {
   return {
     ...actual,
-    visitSessionMessagesAsync,
-    readSessionArtifacts: (
-      scope: Parameters<typeof selectSessionArtifacts>[0],
-      query: Parameters<typeof selectSessionArtifacts>[1],
-    ) =>
+    readSessionArtifacts: (...[scope, query]: Parameters<typeof actual.readSessionArtifacts>) =>
       selectSessionArtifacts(scope, query, {
         visitSessionMessagesAsync,
         readSessionMessagesPageWithStatsAsync: actual.readSessionMessagesPageWithStatsAsync,
@@ -23,7 +48,8 @@ export function withArtifactFixtureReader(
   };
 }
 
-export function runtimeContext(config: Record<string, unknown>) {
+export function runtimeContext(config: OpenClawConfig) {
+  setRuntimeConfigSnapshot(config);
   return { getRuntimeConfig: () => config };
 }
 
@@ -81,12 +107,10 @@ export function resultImageMessage() {
 }
 
 export function requireNonEmptyString(value: unknown, message: string): string {
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(message);
-  }
+  assert(typeof value === "string" && value.length > 0, message);
   return value;
 }
 
-export function expectFields(value: unknown, expected: Record<string, unknown>): void {
+export const expectFields = (value: unknown, expected: Record<string, unknown>): void => {
   expectRecordFields(value, "fields", expected);
-}
+};

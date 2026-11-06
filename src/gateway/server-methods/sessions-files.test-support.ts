@@ -1,98 +1,170 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { expect, vi } from "vitest";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import { afterAll, expect, vi } from "vitest";
+import { reserveTestPortListener } from "../../test-utils/port-claims.js";
+import { handleArtifactDownloadHttpRequest } from "../artifact-downloads.js";
+import { createSandboxHostHttpRequestHandler } from "../mcp-app-sandbox-http.js";
+import type {
+  GatewayClient,
+  GatewayRequestHandlerOptions,
+  GatewayRequestHandlers,
+} from "./types.js";
 
-type SessionFilesMethod =
-  | "sessions.files.list"
-  | "sessions.files.get"
-  | "sessions.files.set"
-  | "sessions.files.reveal";
+type SessionFilesOperation =
+  | "list"
+  | "get"
+  | "download"
+  | "assets"
+  | "preview"
+  | "preview.release"
+  | "set"
+  | "reveal";
+type SessionFilesMethod = `sessions.files.${SessionFilesOperation}`;
 
 type ResponderCall = { ok: boolean; payload?: unknown; error?: unknown };
 type ReturnValueMock = { mockReturnValue: (value: unknown) => unknown };
 
-export const IMAGE_PREVIEW_FIXTURES = [
-  {
-    format: "AVIF",
-    mimeType: "image/avif",
-    bytes: Buffer.from([
-      0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x69, 0x66, 0x00, 0x00, 0x00,
-      0x00, 0x61, 0x76, 0x69, 0x66,
-    ]),
-  },
-  { format: "GIF", mimeType: "image/gif", bytes: Buffer.from("GIF89a", "ascii") },
-  {
-    format: "JPEG",
-    mimeType: "image/jpeg",
-    bytes: Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]),
-  },
-  {
-    format: "PNG",
-    mimeType: "image/png",
-    bytes: Buffer.from(
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
-      "base64",
-    ),
-  },
-  {
-    format: "WebP",
-    mimeType: "image/webp",
-    bytes: Buffer.concat([Buffer.from("RIFF", "ascii"), Buffer.alloc(4), Buffer.from("WEBP")]),
-  },
-] as const;
-
 export const TEXT_PREVIEW_FIXTURES = [
   { format: "RTF", mimeType: "application/rtf", content: "{\\rtf1\\ansi hello}" },
   { format: "XML", mimeType: "text/xml", content: '<?xml version="1.0"?><root/>' },
-  { format: "WebVTT", mimeType: "text/vtt", content: "WEBVTT\n\n00:00.000 --> 00:01.000\nHi" },
-  { format: "vCard", mimeType: "text/vcard", content: "BEGIN:VCARD\nVERSION:4.0\nEND:VCARD\n" },
-  {
-    format: "iCalendar",
-    mimeType: "text/calendar",
-    content: "BEGIN:VCALENDAR\nVERSION:2.0\nEND:VCALENDAR\n",
-  },
-  {
-    format: "registry",
-    mimeType: "application/x-ms-regedit",
-    content: "REGEDIT4\r\n\r\n[HKEY_CURRENT_USER\\Software]",
-  },
-  {
-    format: "ASCII STL",
-    mimeType: "model/stl",
-    content: "solid test\nfacet normal 0 0 0\nendfacet\nendsolid test\n",
-  },
 ] as const;
-
-function createResponder() {
-  const calls: ResponderCall[] = [];
-  const respond: RespondFn = (ok, payload, error) => {
-    calls.push({ ok, payload, error });
-  };
-  return { calls, respond };
-}
 
 export function createSessionFilesHandlerInvoker(handlers: GatewayRequestHandlers) {
   return async (
     method: SessionFilesMethod,
     params: Record<string, unknown>,
     context: Record<string, unknown> = {},
+    options: Partial<
+      Pick<
+        GatewayRequestHandlerOptions,
+        "client" | "withSessionTurnAuthority" | "sessionMutationAuthorization"
+      >
+    > = {},
   ) => {
-    const responder = createResponder();
+    const calls: ResponderCall[] = [];
     await handlers[method]?.({
       req: { type: "req", id: method, method, params: {} },
       params,
       client: null,
       isWebchatConnect: () => false,
-      respond: responder.respond,
+      respond: (ok, payload, error) => {
+        calls.push({ ok, payload, error });
+      },
       context: {
-        getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
+        getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
         ...context,
       } as never,
+      ...options,
     });
-    return responder.calls;
+    return calls;
+  };
+}
+
+export function createSessionFileDownloadClient() {
+  const controller = new AbortController();
+  const client: GatewayClient = {
+    connId: "session-file-reader",
+    connectionSignal: controller.signal,
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      scopes: ["operator.admin"],
+      client: { id: "test", version: "test", platform: "test", mode: "test" },
+    },
+  };
+  return {
+    client,
+    fetch: (url: string, method?: string, headers?: Record<string, string>) =>
+      fetchSessionFileDownload(client, url, method, headers),
+    [Symbol.dispose]: () => controller.abort(),
+  };
+}
+
+export function createSessionFilesClient(
+  invoke: ReturnType<typeof createSessionFilesHandlerInvoker>,
+  defaults: () => {
+    sessionKey: string;
+    context?: Record<string, unknown>;
+    options?: Parameters<typeof invoke>[3];
+  },
+) {
+  const request = (
+    method: SessionFilesOperation,
+    params: string | Record<string, unknown> = {},
+    context?: Record<string, unknown>,
+    options?: Parameters<typeof invoke>[3],
+  ) => {
+    const current = defaults();
+    return invoke(
+      `sessions.files.${method}`,
+      {
+        [method === "reveal" ? "key" : "sessionKey"]: current.sessionKey,
+        ...(typeof params === "string" ? { path: params } : params),
+      },
+      context ?? current.context,
+      options ?? current.options,
+    );
+  };
+  return {
+    request,
+    ok: async (...args: Parameters<typeof request>) => expectOkPayload(await request(...args)),
+    error: async (...args: Parameters<typeof request>) => expectError(await request(...args)),
+  };
+}
+
+const downloadClients = new Set<GatewayClient>();
+let downloadServer:
+  | ReturnType<typeof reserveTestPortListener<ReturnType<typeof createServer>>>
+  | undefined;
+afterAll(async () => {
+  if (downloadServer) {
+    const server = await downloadServer;
+    server.listener.closeAllConnections();
+    await server.releaseListener();
+    await server.claim.release();
+  }
+});
+
+export async function openSessionFileDownload(
+  client: GatewayClient,
+  url: string,
+  init?: RequestInit,
+) {
+  downloadClients.clear();
+  downloadClients.add(client);
+  downloadServer ??= reserveTestPortListener({
+    offsets: [0],
+    createListener: () =>
+      createServer((req, res) => {
+        void (async () => {
+          if (
+            !(await handleArtifactDownloadHttpRequest(req, res, {
+              clients: downloadClients,
+              basePath: "",
+            }))
+          ) {
+            await createSandboxHostHttpRequestHandler({ clients: downloadClients })(req, res);
+          }
+        })();
+      }),
+  });
+  const { claim } = await downloadServer;
+  return fetch("http://127.0.0.1:" + claim.port + url, init);
+}
+
+export async function fetchSessionFileDownload(
+  client: GatewayClient,
+  url: string,
+  method = "GET",
+  headers?: Record<string, string>,
+) {
+  const result = await openSessionFileDownload(client, url, { method, headers });
+  return {
+    response: { statusCode: result.status, getHeader: (name: string) => result.headers.get(name) },
+    body: method === "HEAD" ? undefined : new Uint8Array(await result.arrayBuffer()),
   };
 }
 
@@ -109,16 +181,7 @@ export function expectError(calls: ResponderCall[]): Record<string, any> {
 }
 
 export function assistantToolCall(name: string, args: Record<string, unknown>) {
-  return {
-    role: "assistant",
-    content: [
-      {
-        type: "toolCall",
-        name,
-        arguments: args,
-      },
-    ],
-  };
+  return { role: "assistant", content: [{ type: "toolCall", name, arguments: args }] };
 }
 
 export function visibleMessageEvent(message: unknown, seq: number) {
@@ -166,14 +229,14 @@ export function prepareSessionFilesTest(
   mocks: {
     execOpenPath: ReturnValueMock & { mockResolvedValue: (value: unknown) => unknown };
     loadSessionEntry: ReturnValueMock;
-    readSessionTranscriptVisibleMessageDeltaCore: ReturnValueMock & { mockReset: () => unknown };
+    readDelta: ReturnValueMock & { mockReset: () => unknown };
     resolveAgentWorkspaceDir: ReturnValueMock;
     resolveDefaultAgentId: ReturnValueMock;
   },
   mockVisibleMessages: (messages: unknown[]) => void,
 ): string {
   vi.clearAllMocks();
-  mocks.readSessionTranscriptVisibleMessageDeltaCore.mockReset();
+  mocks.readDelta.mockReset();
   const workspaceRoot = createWorkspaceFixture("openclaw-session-files-test-");
   mocks.resolveDefaultAgentId.mockReturnValue("main");
   mocks.resolveAgentWorkspaceDir.mockReturnValue(workspaceRoot);
@@ -197,17 +260,14 @@ function createSessionEntryFixture(
   workspaceRoot: string,
   sessionId: string,
   storePath = path.join(workspaceRoot, ".sessions.json"),
+  sessionFile = `${sessionId}.jsonl`,
 ) {
   return {
     agentId: "main",
     canonicalKey: "agent:main:main",
     cfg: {},
     storePath,
-    entry: {
-      sessionId,
-      sessionFile: `${sessionId}.jsonl`,
-      spawnedCwd: workspaceRoot,
-    },
+    entry: { sessionId, sessionFile, spawnedCwd: workspaceRoot },
   };
 }
 
@@ -217,16 +277,13 @@ export function useSqliteSession(
   sessionId: string,
   storePath = path.join(workspaceRoot, `${sessionId}.sqlite`),
 ): string {
-  loadSessionEntry.mockReturnValue({
-    agentId: "main",
-    canonicalKey: "agent:main:main",
-    cfg: {},
-    storePath,
-    entry: {
+  loadSessionEntry.mockReturnValue(
+    createSessionEntryFixture(
+      workspaceRoot,
       sessionId,
-      sessionFile: `sqlite:main:${sessionId}:${storePath}`,
-      spawnedCwd: workspaceRoot,
-    },
-  });
+      storePath,
+      `sqlite:main:${sessionId}:${storePath}`,
+    ),
+  );
   return storePath;
 }

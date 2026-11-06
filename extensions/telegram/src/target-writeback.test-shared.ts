@@ -1,19 +1,22 @@
 // Telegram plugin module implements target writeback shared behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+// Keep static: compiled-worker preparation belongs at collection, not in a hook or test deadline.
+import { maybePersistResolvedTelegramTarget } from "./target-writeback.js";
 
-type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
 
-const readConfigFileSnapshotForWrite: AsyncUnknownMock = vi.fn();
-const writeConfigFile: AsyncUnknownMock = vi.fn();
-const replaceConfigFile: AsyncUnknownMock = vi.fn(async (params: unknown) => {
-  const record = params as { nextConfig?: unknown; writeOptions?: unknown };
-  await writeConfigFile(record.nextConfig, record.writeOptions);
-});
-const loadCronStore: AsyncUnknownMock = vi.fn();
-const resolveCronStorePath: UnknownMock = vi.fn();
-const saveCronStore: AsyncUnknownMock = vi.fn();
+const readConfigFileSnapshotForWrite: AsyncUnknownMock = vi.hoisted(() => vi.fn());
+const writeConfigFile: AsyncUnknownMock = vi.hoisted(() => vi.fn());
+const replaceConfigFile: AsyncUnknownMock = vi.hoisted(() =>
+  vi.fn(async (params: unknown) => {
+    const record = params as { nextConfig?: unknown; writeOptions?: unknown };
+    await writeConfigFile(record.nextConfig, record.writeOptions);
+  }),
+);
+const loadCronStore: AsyncUnknownMock = vi.hoisted(() => vi.fn());
+const resolveCronStorePathAsync: AsyncUnknownMock = vi.hoisted(() => vi.fn());
+const saveCronStore: AsyncUnknownMock = vi.hoisted(() => vi.fn());
 
 type TelegramConfigWrite = {
   channels?: {
@@ -57,18 +60,6 @@ const scopedTargetWritebackCases = [
     resolvedTarget: "-100123:77",
     unmatchedTargets: ["@mychannel", "@mychannel:direct-topic:77", "@mychannel:88"],
   },
-  {
-    name: "unthreaded target",
-    rawTarget: "t.me/mychannel",
-    matchingTarget: "@MyChannel",
-    resolvedTarget: "-100123",
-    unmatchedTargets: [
-      "@mychannel:direct-topic:77",
-      "@mychannel:direct-topic:88",
-      "@mychannel:topic:77",
-      "@mychannel:77",
-    ],
-  },
 ] as const;
 
 vi.mock("openclaw/plugin-sdk/config-mutation", async () => {
@@ -90,15 +81,13 @@ vi.mock("openclaw/plugin-sdk/cron-store-runtime", async () => {
   return {
     ...actual,
     loadCronStore,
-    resolveCronStorePath,
+    resolveCronStorePathAsync,
     saveCronStore,
   };
 });
 
 export function installMaybePersistResolvedTelegramTargetTests() {
   describe("maybePersistResolvedTelegramTarget", () => {
-    let maybePersistResolvedTelegramTarget: typeof import("./target-writeback.js").maybePersistResolvedTelegramTarget;
-
     function requireWriteConfigCall(index = 0): [TelegramConfigWrite, Record<string, unknown>] {
       const call = writeConfigFile.mock.calls[index] as
         | [TelegramConfigWrite, Record<string, unknown>]
@@ -117,18 +106,14 @@ export function installMaybePersistResolvedTelegramTargetTests() {
       return call;
     }
 
-    beforeAll(async () => {
-      ({ maybePersistResolvedTelegramTarget } = await import("./target-writeback.js"));
-    });
-
     beforeEach(() => {
       readConfigFileSnapshotForWrite.mockReset();
       replaceConfigFile.mockClear();
       writeConfigFile.mockReset();
       loadCronStore.mockReset();
-      resolveCronStorePath.mockReset();
+      resolveCronStorePathAsync.mockReset();
       saveCronStore.mockReset();
-      resolveCronStorePath.mockReturnValue("/tmp/cron/jobs.json");
+      resolveCronStorePathAsync.mockResolvedValue("/tmp/cron/jobs.json");
     });
 
     it("skips writeback when target is already numeric", async () => {

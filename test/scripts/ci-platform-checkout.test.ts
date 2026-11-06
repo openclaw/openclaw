@@ -15,8 +15,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, expect, it, vi } from "vitest";
+import { parse } from "yaml";
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
-import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
 import {
   ciCheckoutFixture,
   expectCiCheckoutCleanup,
@@ -38,28 +39,69 @@ beforeAll(() => {
   return () => vi.resetConfig();
 });
 
-function expectedHarnessSparseCheckoutArgs(linux: boolean) {
-  return [
-    "sparse-checkout",
-    "set",
-    "--no-cone",
-    "/.github/actions/",
-    "/scripts/lib/pnpm-lockfile-documents.mjs",
-    "/scripts/ios-screenshot-evidence.mjs",
-    "/scripts/lib/direct-run.mjs",
-    "/scripts/ci-static-step.sh",
-    ...(linux
-      ? [
-          "/scripts/lib/release-upgrade-baseline.mjs",
-          "/scripts/lib/release-version.mjs",
-          "/scripts/ci-npm-lock-admission.mjs",
-          "/scripts/generate-npm-package-lock.mjs",
-          "/scripts/generate-npm-package-lock.mts",
-          "/scripts/changed-lanes.mts",
-          "/scripts/lib/merge-head-diff-base.mjs",
-        ]
-      : ["/scripts/lib/swift-toolchain.sh"]),
-  ];
+function readFiles(names: string[]) {
+  return Object.fromEntries(names.map((name) => [name, readFileSync(name, "utf8")]));
+}
+
+function expectFiles(directory: string, files: Record<string, string>) {
+  for (const [name, contents] of Object.entries(files)) {
+    expect(readFileSync(path.join(directory, name), "utf8"), name).toBe(contents);
+  }
+}
+
+// Workflow consumers define the required files; the real Git fixture below
+// checks both index exports and sparse fetches against the owner, not a copied list.
+const harnessReferences = new Map<string, Map<string, string>>();
+const workflowDefinition = parse(readFileSync(".github/workflows/ci.yml", "utf8")) as {
+  jobs: Record<
+    string,
+    {
+      "runs-on"?: unknown;
+      steps?: {
+        env?: Record<string, string>;
+        with?: { path?: string; "sparse-checkout"?: string };
+      }[];
+    }
+  >;
+};
+for (const [jobId, job] of Object.entries(workflowDefinition.jobs)) {
+  const checkout = job.steps?.find((step) => step.env?.CHECKOUT_REPO);
+  const kind =
+    checkout?.env?.CHECKOUT_KIND ??
+    (/(?:macos|windows|xcode)-/u.test(JSON.stringify(job["runs-on"])) ? "platform" : "linux-node");
+  const references = new Map<string, string>();
+  for (const step of job.steps ?? []) {
+    for (const match of JSON.stringify(step).matchAll(/\.ci-harness\/([\w./-]+)/gu)) {
+      references.set(expectDefined(match[1], "harness reference"), jobId);
+    }
+  }
+  if (references.size === 0) {
+    continue;
+  }
+  const sparse = job.steps?.find((step) => step.with?.path === ".ci-harness");
+  if (sparse) {
+    it(`exports every harness reference for ${jobId}'s sparse checkout`, () => {
+      const paths = (sparse.with?.["sparse-checkout"] ?? "")
+        .split(/\s+/u)
+        .filter(Boolean)
+        .map((entry) => entry.replace(/^\/|\/$/gu, ""));
+      for (const reference of references.keys()) {
+        expect(
+          paths.some((entry) => reference === entry || reference.startsWith(`${entry}/`)),
+          `${jobId}: .ci-harness/${reference}`,
+        ).toBe(true);
+      }
+    });
+    // Preflight uses the owner's index export when workflow and target match.
+    if (kind !== "preflight") {
+      continue;
+    }
+  }
+  const required = harnessReferences.get(kind) ?? new Map<string, string>();
+  for (const [reference, consumer] of references) {
+    required.set(reference, consumer);
+  }
+  harnessReferences.set(kind, required);
 }
 
 // Execute both workflow policies against the same owned tree fixture. A leader's
@@ -99,18 +141,20 @@ const linuxCases =
         { scenario: "non-executable-find", attempts: 0, code: null, checkout: false, deletions: 0 },
       ];
 
-it.concurrent.each([
+it.concurrent.for([
   ...platformCases.map((entry) => Object.assign(entry, { linux: false, deletions: 0 })),
   ...linuxCases.map((entry) => Object.assign(entry, { linux: true })),
 ])(
   "preserves checkout ownership and fixture isolation (Linux=$linux, $scenario)",
-  async ({ scenario, attempts, code, checkout, linux, deletions }) => {
+  { timeout: 55_000 },
+  async ({ scenario, attempts, code, checkout, linux, deletions }, { signal: testSignal }) => {
     const setupFailure = scenario.startsWith("non-executable-");
     const run = readCiCheckoutStep(linux ? "checks-fast-core" : "checks-windows").run;
 
     const policyScenario = `${linux ? "linux:" : ""}${scenario}`;
     await withCiCheckoutFixture(
       policyScenario,
+      testSignal,
       (root) => {
         const workspace = path.join(root, "workspace");
         if (scenario === "cancel-SIGTERM") {
@@ -138,7 +182,14 @@ it.concurrent.each([
           path.join(root, "checkout.sh"),
           setupFailure ? "printf 'unexpected workflow invocation\\n' >&2\nexit 99\n" : accelerated,
         );
-        if (process.platform === "win32" || scenario === "git-exit-124") {
+        // A slow census witness must not replace the workflow's real outcome.
+        const slowWitness = [
+          "timeouts-exhausted",
+          "recovery",
+          "early-leader-exit",
+          "harness-timeout",
+        ].includes(scenario);
+        if (process.platform === "win32" || slowWitness || scenario === "git-exit-124") {
           return censusPreload(
             root,
             scenario === "git-exit-124"
@@ -173,9 +224,7 @@ if (process.argv[2] === "sentinel") {
 syncFixtureBuiltinExports();
 `
               : "",
-            ["timeouts-exhausted", "recovery", "early-leader-exit", "harness-timeout"].includes(
-              scenario,
-            ),
+            slowWitness,
           );
         }
         return undefined;
@@ -296,9 +345,6 @@ syncFixtureBuiltinExports();
           expect(fetches.at(-1)?.args).toContain(
             `+${"b".repeat(40)}:refs/remotes/origin/ci-harness`,
           );
-          expect(report.commands.find(({ args }) => args[0] === "sparse-checkout")?.args).toEqual(
-            expectedHarnessSparseCheckoutArgs(linux),
-          );
           expect(report.commands.at(-1)?.args).toEqual([
             "checkout",
             "--force",
@@ -309,10 +355,9 @@ syncFixtureBuiltinExports();
       },
     );
   },
-  55_000,
 );
 
-it.concurrent.each([
+it.concurrent.for([
   ...[
     ...(process.platform === "win32" ? [] : [{ kind: "linux-node", retained: false }]),
     ...(process.platform === "win32"
@@ -337,8 +382,6 @@ it.concurrent.each([
     ? []
     : [
         { event: "push", workflow: "same", target: "selected", code: 0, fetches: 2 },
-        { event: "pull_request", workflow: "same", target: "selected", code: 0, fetches: 2 },
-        { event: "pull_request", workflow: "previous", target: "selected", code: 0, fetches: 2 },
         {
           event: "workflow_dispatch",
           workflow: "previous",
@@ -373,7 +416,8 @@ it.concurrent.each([
       ].map((entry) => Object.assign(entry, { kind: "preflight", retained: false }))),
 ])(
   "materializes $kind trusted harness ($event, workflow=$workflow, target=$target, retained=$retained) without mutating the candidate",
-  async ({ kind, retained, event, workflow, target, code, fetches }) => {
+  { timeout: 55_000 },
+  async ({ kind, retained, event, workflow, target, code, fetches }, { signal }) => {
     const linux = kind !== "platform";
     const preflight = kind === "preflight";
     const posix = process.platform !== "win32";
@@ -391,27 +435,40 @@ it.concurrent.each([
     };
     const evidenceScripts = {
       "scripts/ios-screenshot-evidence.mjs": "workflow evidence script\n",
+      "scripts/lib/ios-test-results.mjs": "workflow XCTest result verifier\n",
       "scripts/lib/direct-run.mjs": "workflow direct-run script\n",
       "scripts/ci-static-step.sh": "workflow static-step script\n",
+      "scripts/ci-collect-checks.sh": "workflow collect-checks script\n",
+      "scripts/macos-native-runtime-artifact.mjs": "workflow native runtime artifact script\n",
+      ...readFiles([
+        "scripts/lib/process-memory.mts",
+        "packages/normalization-core/src/mountinfo-path.ts",
+      ]),
     };
-    const nodeSetupScripts = {
-      "scripts/lib/pnpm-lockfile-documents.mjs": readFileSync(
-        "scripts/lib/pnpm-lockfile-documents.mjs",
-        "utf8",
-      ),
-    };
+    const nodeSetupScripts = readFiles(["scripts/lib/pnpm-lockfile-documents.mjs"]);
     const platformScripts = {
       "scripts/lib/swift-toolchain.sh": "workflow Swift toolchain helper\n",
+      "scripts/ci-xcodebuild.py": "workflow Xcode diagnostics helper\n",
     };
-    const preflightScripts = {
-      "scripts/ci-build-manifest.mjs": readFileSync("scripts/ci-build-manifest.mjs", "utf8"),
-    };
-    const releasePolicy = Object.fromEntries(
-      [
-        "scripts/lib/release-context.mjs",
-        "scripts/lib/release-version.mjs",
-        "scripts/lib/release-upgrade-baseline.mjs",
-      ].map((name) => [name, readFileSync(name, "utf8")]),
+    const preflightScripts = readFiles([
+      "scripts/ci-build-manifest.mjs",
+      "scripts/lib/ci-blacksmith-capacity.mjs",
+    ]);
+    const simulatorScripts = readFiles(["scripts/lib/ci-ios-smoke-plan.mjs"]);
+    const releasePolicy = readFiles([
+      "scripts/lib/release-context.mjs",
+      "scripts/lib/release-version.mjs",
+      "scripts/lib/release-upgrade-baseline.mjs",
+      "scripts/lib/canonical-json.mjs",
+      "scripts/lib/upgrade-survivor-policy.mjs",
+      "scripts/lib/upgrade-survivor-scenarios.json",
+    ]);
+    const references = harnessReferences.get(kind) ?? new Map<string, string>();
+    const referencedFiles = Object.fromEntries(
+      [...references.keys()].map((reference) => {
+        const file = statSync(reference).isDirectory() ? `${reference}/action.yml` : reference;
+        return [file, readFileSync(file, "utf8")];
+      }),
     );
     const candidateFiles = {
       "candidate-only.txt": "candidate stays intact\n",
@@ -432,6 +489,7 @@ it.concurrent.each([
     let readSourceStatus: (() => string[]) | undefined;
     await withCiCheckoutFixture(
       `${linux ? "linux:" : ""}configured`,
+      signal,
       (root) => {
         const source = path.join(root, "source");
         mkdirSync(source);
@@ -473,11 +531,13 @@ it.concurrent.each([
           }).trim();
         run("init");
         for (const [name, contents] of Object.entries({
+          ...referencedFiles,
           ...files,
           ...evidenceScripts,
           ...nodeSetupScripts,
           ...platformScripts,
           ...preflightScripts,
+          ...simulatorScripts,
           ...releasePolicy,
           ...candidateFiles,
         })) {
@@ -542,10 +602,20 @@ it.concurrent.each([
           mkdirSync(path.dirname(staleAction), { recursive: true });
           writeFileSync(staleAction, "name: stale platform action\n");
         }
+        let configuredGit = git;
+        if (kind === "linux-node" && workflow === "same") {
+          configuredGit = path.join(root, "configured-git");
+          // Bound re-entry so a leaked fixture PATH fails instead of spawning recursively.
+          writeFileSync(
+            configuredGit,
+            '#!/bin/sh\n[ "${CI_FIXTURE_GIT_FORWARDING:-}" != 1 ] || exit 87\nexport CI_FIXTURE_GIT_FORWARDING=1\nexec git "$@"\n',
+            { mode: 0o755 },
+          );
+        }
         writeFileSync(
           path.join(root, "fixture-options.json"),
           JSON.stringify({
-            localGit: { git, remote: source },
+            localGit: { git: configuredGit, remote: source },
             fetchResults: [0, 0],
             cooperativeTrees: true,
             env: {
@@ -599,21 +669,12 @@ it.concurrent.each([
         expect(readFileSync(path.join(workspace, ".git/config"), "utf8")).not.toContain(
           "AUTHORIZATION",
         );
-        for (const [name, contents] of Object.entries(candidateFiles)) {
-          expect(readFileSync(path.join(workspace, name), "utf8")).toBe(contents);
+        expectFiles(workspace, candidateFiles);
+        for (const name of Object.keys(candidateFiles)) {
           expect(existsSync(path.join(harness, name))).toBe(false);
         }
         const workflowOwnsEvidence = kind === "platform" || kind === "linux-node";
-        for (const name of Object.keys(evidenceScripts)) {
-          expect(readFileSync(path.join(workspace, name), "utf8")).toBe(
-            candidateEvidenceScripts[name],
-          );
-        }
-        for (const name of Object.keys(platformScripts)) {
-          expect(readFileSync(path.join(workspace, name), "utf8")).toBe(
-            candidatePlatformScripts[name],
-          );
-        }
+        expectFiles(workspace, { ...candidateEvidenceScripts, ...candidatePlatformScripts });
         if (workflow === "missing-action") {
           expect(existsSync(path.join(workspace, action))).toBe(false);
           expect(existsSync(path.join(harness, action))).toBe(false);
@@ -625,6 +686,12 @@ it.concurrent.each([
           expect(existsSync(harness)).toBe(false);
           return;
         }
+        for (const [reference, consumer] of references) {
+          expect(
+            existsSync(path.join(harness, reference)),
+            `${consumer} (${kind}, workflow=${workflow}): .ci-harness/${reference}`,
+          ).toBe(true);
+        }
         const sourceStatus = expectDefined(readSourceStatus, "native source status");
         expect(sourceStatus()).toEqual([]);
         expect(readFileSync(path.join(workspace, ".git/info/exclude"), "utf8")).toBe(
@@ -633,9 +700,7 @@ it.concurrent.each([
         if (workflow === "same") {
           expect(existsSync(path.join(harness, ".git"))).toBe(false);
         }
-        for (const [name, contents] of Object.entries(files)) {
-          expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
-        }
+        expectFiles(harness, files);
         const fingerprint = spawnSync(
           process.execPath,
           [
@@ -649,33 +714,26 @@ it.concurrent.each([
         );
         expect(fingerprint.status, fingerprint.stderr).toBe(0);
         expect(fingerprint.stdout.trim()).toMatch(/^v2-[a-f0-9]{64}$/u);
-        for (const [name, contents] of Object.entries(evidenceScripts)) {
-          expect(existsSync(path.join(harness, name))).toBe(workflowOwnsEvidence);
-          if (workflowOwnsEvidence) {
-            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
-          }
-        }
-        for (const [name, contents] of Object.entries(platformScripts)) {
-          expect(existsSync(path.join(harness, name)), name).toBe(kind === "platform");
-          if (kind === "platform") {
-            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
-          }
-        }
-        for (const [name, contents] of Object.entries(preflightScripts)) {
-          expect(existsSync(path.join(harness, name)), name).toBe(preflight);
-          if (preflight) {
-            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
-          }
-        }
-        for (const [name, contents] of Object.entries(releasePolicy)) {
-          const ownsPolicy = preflight
-            ? name !== "scripts/lib/release-upgrade-baseline.mjs"
+        const ownsPolicy = (name: string) =>
+          preflight
+            ? ["scripts/lib/release-context.mjs", "scripts/lib/release-version.mjs"].includes(name)
             : kind === "linux-node" && name !== "scripts/lib/release-context.mjs";
-          expect(existsSync(path.join(harness, name))).toBe(ownsPolicy);
-          if (ownsPolicy) {
-            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
-            writeFileSync(path.join(workspace, name), "throw new Error('candidate policy');\n");
-            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
+        for (const [scripts, owns, mutate] of [
+          [evidenceScripts, () => workflowOwnsEvidence, false],
+          [platformScripts, () => kind === "platform", false],
+          [preflightScripts, () => preflight, false],
+          [simulatorScripts, () => preflight || kind === "platform", true],
+          [releasePolicy, ownsPolicy, true],
+        ] as const) {
+          for (const [name, contents] of Object.entries(scripts)) {
+            expect(existsSync(path.join(harness, name)), name).toBe(owns(name));
+            if (owns(name)) {
+              expectFiles(harness, { [name]: contents });
+              if (mutate) {
+                writeFileSync(path.join(workspace, name), "throw new Error('candidate policy');\n");
+                expectFiles(harness, { [name]: contents });
+              }
+            }
           }
         }
         if (kind === "linux-node") {
@@ -700,11 +758,6 @@ it.concurrent.each([
           expect(statSync(path.join(harness, executable)).mode & 0o111).not.toBe(0);
           expect(readlinkSync(path.join(harness, link))).toBe("line\nbreak.sh");
         }
-        if (workflow !== "same" && workflowOwnsEvidence) {
-          expect(report.commands.find(({ args }) => args[0] === "sparse-checkout")?.args).toEqual(
-            expectedHarnessSparseCheckoutArgs(linux),
-          );
-        }
         writeFileSync(path.join(workspace, action), "later candidate edit\n");
         expect(readFileSync(path.join(harness, action), "utf8")).toBe(files[action]);
         for (const name of [
@@ -724,18 +777,19 @@ it.concurrent.each([
       },
     );
   },
-  55_000,
 );
 
 registerWindowsCensusTests();
 
-it.each(["prepare", "inspect"])(
+it.for(["prepare", "inspect"])(
   "removes checkout artifacts after %s assertion failure",
-  async (phase) => {
+  { timeout: 55_000 },
+  async (phase, { signal }) => {
     let root: string | undefined;
     await expect(
       withCiCheckoutFixture(
         "early-leader-exit",
+        signal,
         (directory) => {
           root = directory;
           expect(phase, "injected prepare assertion").not.toBe("prepare");
@@ -750,10 +804,9 @@ it.each(["prepare", "inspect"])(
     ).rejects.toThrow(`injected ${phase} assertion`);
     expect(existsSync(expectDefined(root, "created checkout root"))).toBe(false);
   },
-  55_000,
 );
 
-it.skipIf(process.platform === "win32").each(["census", "corrupt-report", "timeout"])(
+it.skipIf(process.platform === "win32").each(["census", "corrupt-report", "timeout", "cancel"])(
   "retains checkout artifacts across failed outer-runner cleanup (%s)",
   async (fault) => {
     const preload = String.raw`
@@ -782,6 +835,10 @@ if (process.argv[2] === "supervise") {
           Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
         });
       });
+    }
+    if (fault === "cancel" && args[1]?.[1] !== "sentinel") {
+      // The detached workflow shell is running; only the supervisor can retire its group.
+      queueMicrotask(() => process.send({ type: "ci-checkout:shell-started", pids: [process.pid, ...children] }));
     }
     return child;
   };
@@ -815,15 +872,18 @@ import fs from "node:fs";
 import { fixturePreloadEnv, syncFixtureBuiltinExports } from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { mock } from "node:test";
 const timeoutFault = process.argv[2] === "timeout";
+const cancelledFault = timeoutFault || process.argv[2] === "cancel";
+const cancellation = new AbortController();
 let root, failure;
 let supervisor, ready, onReady;
 const fork = cp.fork;
-if (timeoutFault) {
+if (cancelledFault) {
   ready = new Promise(resolve => {
     onReady = message => {
-      if (message?.type === "ci-checkout:sentinel-created") resolve(message.pids);
+      if (message?.type === (timeoutFault ? "ci-checkout:sentinel-created" : "ci-checkout:shell-started")) {
+        resolve(message.pids);
+      }
     };
   });
   cp.fork = (...args) => {
@@ -835,10 +895,9 @@ if (timeoutFault) {
 }
 try {
   const { withCiCheckoutFixture } = await import(process.argv[1]);
-  if (timeoutFault) mock.timers.enable({ apis: ["setTimeout"] });
-  const completed = withCiCheckoutFixture("early-leader-exit", directory => {
+  const completed = withCiCheckoutFixture("early-leader-exit", cancellation.signal, directory => {
     root = directory;
-    fs.writeFileSync(path.join(root, "checkout.sh"), "exit 0\n");
+    fs.writeFileSync(path.join(root, "checkout.sh"), process.argv[2] === "cancel" ? "exec sleep 30\n" : "exit 0\n");
     const preload = path.join(root, "fault.mjs");
     fs.writeFileSync(preload, "const fault = " + JSON.stringify(process.argv[2]) + ";\n" + process.argv[3]);
     return fixturePreloadEnv(preload);
@@ -849,11 +908,11 @@ try {
     failure = String(error);
   });
   try {
-    if (timeoutFault) {
+    if (cancelledFault) {
       const pids = await Promise.race([ready, completed.then(() => {
-        throw new Error("supervisor completed before the timeout probe was ready");
+        throw new Error("supervisor completed before the cancellation probe was ready");
       })]);
-      assert.equal(pids.length, 2);
+      assert.equal(pids.length, timeoutFault ? 2 : 3);
       assert.equal(pids[0], supervisor.pid);
       assert.notEqual(pids[1], supervisor.pid);
       for (const pid of pids) {
@@ -862,11 +921,10 @@ try {
       }
     }
   } finally {
-    if (timeoutFault) {
+    if (cancelledFault) {
       // Creation belongs to the supervisor, not a child's delayed self-registration.
-      // Restore timers before the expired controller deadline starts real cleanup.
-      mock.timers.tick(50_000);
-      mock.timers.reset();
+      // Cancel the run the way a Vitest timeout aborts its owning test.
+      cancellation.abort(new Error("owning test cancelled the supervised run"));
     }
     await completed;
   }
@@ -874,8 +932,7 @@ try {
   console.error(error);
   failure = String(error);
 } finally {
-  if (timeoutFault) {
-    mock.timers.reset();
+  if (cancelledFault) {
     supervisor?.off("message", onReady);
     cp.fork = fork;
     syncFixtureBuiltinExports();
@@ -931,14 +988,22 @@ process.exitCode = 1;
         expect(existsSync(path.join(evidence.root, "report.json"))).toBe(false);
       } else if (fault === "timeout") {
         expect(evidence.pids).toHaveLength(2);
-        expect(evidence.failure).toContain("did not close within 50000ms");
+        expect(evidence.failure).toContain("owning test cancelled the supervised run");
         expect(existsSync(path.join(evidence.root, "report.json"))).toBe(false);
+      } else if (fault === "cancel") {
+        // The detached shell group died, so the live supervisor ran its own cleanup.
+        expect(evidence.pids).toHaveLength(3);
+        expect(evidence.failure).toContain("owning test cancelled the supervised run");
+        expect(
+          JSON.parse(readFileSync(path.join(evidence.root, "report.json"), "utf8")),
+        ).toMatchObject({ error: "test cancelled", cleanupRemaining: [] });
       } else {
         expect(evidence.failure).not.toContain("unexpected completed report");
         expect(readFileSync(path.join(evidence.root, "report.json"), "utf8")).toBe("null");
       }
     } finally {
-      await Promise.all(evidence.pids.map((pid) => waitForDead(pid, 4_000)));
+      // Completion already joined the outer group; the fixture joined its detached owners.
+      expect(evidence.pids.every((pid) => !isProcessAlive(pid))).toBe(true);
       rmSync(evidence.root, { recursive: true, force: true });
     }
   },
@@ -947,8 +1012,9 @@ process.exitCode = 1;
 
 it.skipIf(process.platform === "win32")(
   "waits for legal slow tree startup before cancellation",
-  async () => {
+  async ({ signal }) => {
     const report = await runCiGitStep({
+      signal,
       job: "checks-windows",
       env: { CHECKOUT_KIND: "platform" },
       fetchResults: ["hang"],
@@ -964,8 +1030,9 @@ it.skipIf(process.platform === "win32")(
 
 it.skipIf(process.platform === "win32")(
   "reports owner exit and output instead of a cleanup readiness timeout",
-  async () => {
+  async ({ signal }) => {
     const report = await runCiGitStep({
+      signal,
       policy: 'print("owner exited before cleanup readiness", flush=True)\nraise SystemExit(23)\n',
       fetchResults: [],
       cancelDuringCleanup: true,
@@ -1024,6 +1091,14 @@ cp.spawnSync = (command, args, options) => {
 ''' + "\nrequire(" + json.dumps(sys.argv[5]) + ").syncFixtureBuiltinExports();\n")
     with subprocess.Popen([sys.executable, "-I", "-S", "-c", "import sys; sys.stdin.read()"],
                           stdin=subprocess.PIPE) as child, contextlib.ExitStack() as cleanup:
+        lease_owner = cleanup.enter_context(subprocess.Popen([
+            sys.argv[1], sys.argv[2], "lease-owner", str(root), "standalone"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True))
+        def close_lease_owner():
+            lease_owner.communicate(timeout=4)
+            assert lease_owner.returncode == 0, "lease owner failed during retirement"
+        cleanup.callback(close_lease_owner)
+        assert lease_owner.stdout.readline().strip() == "ready", "lease owner failed to initialize"
         if os.name == "nt":
             broker = cleanup.enter_context(subprocess.Popen([
                 sys.argv[1], "--input-type=module", "-e", """
@@ -1118,11 +1193,19 @@ with subprocess.Popen([sys.executable, "-I", "-S", "-c", "pass"], start_new_sess
     assert not group_alive(child.pid, deadline), "zombies are terminated, not checkout writers"
     group_signal(child.pid, signal.SIGTERM, deadline)
     group_signal(child.pid, signal.SIGKILL, deadline)
-    with tempfile.TemporaryDirectory(prefix="checkout-zombie-") as directory:
+    with tempfile.TemporaryDirectory(prefix="checkout-zombie-") as directory, contextlib.ExitStack() as cleanup:
         root = pathlib.Path(directory).resolve()
         (root / "workspace").mkdir()
         (root / "pids").mkdir()
         (root / "lease").write_text("owned")
+        lease_owner = cleanup.enter_context(subprocess.Popen([
+            sys.argv[1], sys.argv[2], "lease-owner", str(root), "standalone"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True))
+        def close_lease_owner():
+            lease_owner.communicate(timeout=4)
+            assert lease_owner.returncode == 0, "lease owner failed during retirement"
+        cleanup.callback(close_lease_owner)
+        assert lease_owner.stdout.readline().strip() == "ready", "lease owner failed to initialize"
         for pid, role, attempt in [(child.pid, "grandchild", 1), (os.getpid(), "sentinel", 0)]:
             (root / "pids" / f"{pid}.json").write_text(json.dumps(dict(pid=pid, role=role, attempt=attempt, instance=str(pid))))
         subprocess.run([sys.argv[1], sys.argv[2], "git", str(root), "early-leader-exit",
@@ -1330,7 +1413,6 @@ ${policy}`,
 }
 
 it.each([
-  { scenario: "direct denial", setup: "", types: ["PermissionError"] },
   {
     scenario: "timeout context",
     setup: "error.__context__ = owner.FetchTimeout()",

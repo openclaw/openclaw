@@ -60,8 +60,8 @@ const TRANSCRIPT_PROGRESS_SUPPRESSED_TOOL_NAMES = new Set([
   "typing",
 ]);
 
-export function shouldEmitTranscriptToolProgress(toolName: unknown): boolean {
-  const normalized = typeof toolName === "string" ? toolName.trim().toLowerCase() : "";
+export function shouldEmitTranscriptToolProgress(toolName: string): boolean {
+  const normalized = toolName.trim().toLowerCase();
   return Boolean(normalized && !TRANSCRIPT_PROGRESS_SUPPRESSED_TOOL_NAMES.has(normalized));
 }
 
@@ -69,6 +69,7 @@ export type ToolTranscriptCallInput = {
   id: string;
   name: string;
   arguments?: unknown;
+  hideFromChannelProgress?: boolean;
 };
 
 export type ToolTranscriptResultInput = {
@@ -95,7 +96,6 @@ export class CodexToolProgressProjection {
   private readonly echoesByItem = new Map<string, ToolProgressEchoState>();
   private readonly resultSummaryItemIds = new Set<string>();
   private readonly resultOutputItemIds = new Set<string>();
-  private readonly resultOutputStreamedItemIds = new Set<string>();
   private readonly transcriptProgressSuppressedIds = new Set<string>();
   private readonly resultOutputDeltaState = new Map<
     string,
@@ -104,7 +104,7 @@ export class CodexToolProgressProjection {
   private readonly output = new NativeToolOutputAccumulator("Codex");
   private readonly metas = new Map<string, EmbeddedRunAttemptResult["toolMetas"][number]>();
   private readonly sideEffectingNativeIds = new Set<string>();
-  private readonly sideEffectingDynamicIds = new Set<string>();
+  private hasDynamicSideEffects = false;
   private readonly transcriptProgressCallIds = new Set<string>();
   readonly approvalTimeoutKinds = new Map<string, CodexApprovalKind>();
   private lastNativeToolError: EmbeddedRunAttemptResult["lastToolError"];
@@ -132,7 +132,7 @@ export class CodexToolProgressProjection {
   }
 
   get hasPotentialSideEffects(): boolean {
-    return this.sideEffectingNativeIds.size > 0 || this.sideEffectingDynamicIds.size > 0;
+    return this.sideEffectingNativeIds.size > 0 || this.hasDynamicSideEffects;
   }
 
   approvalTimeoutExplanation(itemId: string, status: NativeToolStatus): string | undefined {
@@ -202,9 +202,7 @@ export class CodexToolProgressProjection {
     } else if (this.lastNativeToolError?.mutatingAction !== true) {
       this.lastNativeToolError = undefined;
     }
-    if (params.sideEffectEvidence === true) {
-      this.sideEffectingDynamicIds.add(params.callId);
-    }
+    this.hasDynamicSideEffects ||= params.sideEffectEvidence === true;
   }
 
   handleOutputDelta(params: JsonObject, toolName: string): void {
@@ -249,7 +247,6 @@ export class CodexToolProgressProjection {
       state.truncated = true;
     }
     this.resultOutputDeltaState.set(itemId, state);
-    this.resultOutputStreamedItemIds.add(itemId);
     this.emitToolResultMessage({
       itemId,
       text: formatNativeToolOutput(
@@ -346,7 +343,7 @@ export class CodexToolProgressProjection {
     if (!this.params.onToolResult || !this.shouldEmitToolOutput()) {
       return;
     }
-    if (this.resultOutputItemIds.has(item.id) || this.resultOutputStreamedItemIds.has(item.id)) {
+    if (this.resultOutputItemIds.has(item.id) || this.resultOutputDeltaState.has(item.id)) {
       return;
     }
     const toolName = itemName(item);
@@ -382,13 +379,12 @@ export class CodexToolProgressProjection {
     const existing = this.metas.get(item.id);
     const terminalStatus = auditNativeToolTerminalStatus(item);
     const isError =
-      typeof existing?.isError === "boolean"
-        ? existing.isError
-        : terminalStatus === "completed"
-          ? false
-          : terminalStatus === "failed" || terminalStatus === "blocked"
-            ? true
-            : undefined;
+      existing?.isError ??
+      (terminalStatus === "completed"
+        ? false
+        : terminalStatus === "failed" || terminalStatus === "blocked"
+          ? true
+          : undefined);
     this.metas.set(item.id, {
       toolName,
       ...(meta ? { meta } : {}),
@@ -397,13 +393,20 @@ export class CodexToolProgressProjection {
     });
   }
 
+  recordToolFailure(id: string, toolName: string, sideEffectEvidence = false): void {
+    this.metas.set(id, { ...this.metas.get(id), toolName, isError: true });
+    if (sideEffectEvidence) {
+      this.sideEffectingNativeIds.add(id);
+    }
+  }
+
   recordTranscriptCall(params: ToolTranscriptCallInput): void {
-    if (!shouldEmitTranscriptToolProgress(params.name)) {
+    if (params.hideFromChannelProgress || !shouldEmitTranscriptToolProgress(params.name)) {
       this.transcriptProgressSuppressedIds.add(params.id);
     } else {
       this.transcriptProgressSuppressedIds.delete(params.id);
+      this.emitTranscriptToolCallProgress(params);
     }
-    this.emitTranscriptToolCallProgress(params);
   }
 
   matchesEcho(text: string): boolean {
@@ -465,7 +468,9 @@ export class CodexToolProgressProjection {
           }),
           ...(params.isError === true ? { isError: true } : {}),
         }),
-      ).catch(() => {});
+      ).catch(() => {
+        // Optional progress delivery must not fail an otherwise successful turn.
+      });
     } catch {
       // Tool progress delivery is best-effort and should not affect the turn.
     }
@@ -491,7 +496,7 @@ export class CodexToolProgressProjection {
 
   private emitTranscriptToolCallProgress(params: ToolTranscriptCallInput): void {
     // Successful cards use the typed plan stream after the write completes.
-    if (params.name === "progress_card" || !shouldEmitTranscriptToolProgress(params.name)) {
+    if (params.name === "progress_card") {
       return;
     }
     this.transcriptProgressCallIds.add(params.id);
@@ -505,7 +510,7 @@ export class CodexToolProgressProjection {
       !this.params.onToolResult ||
       !this.shouldEmitToolResult() ||
       this.resultSummaryItemIds.has(params.id) ||
-      this.resultOutputStreamedItemIds.has(params.id)
+      this.resultOutputDeltaState.has(params.id)
     ) {
       return;
     }
@@ -538,7 +543,7 @@ export class CodexToolProgressProjection {
       !this.params.onToolResult ||
       !this.shouldEmitToolOutput() ||
       this.resultOutputItemIds.has(params.id) ||
-      this.resultOutputStreamedItemIds.has(params.id)
+      this.resultOutputDeltaState.has(params.id)
     ) {
       return;
     }

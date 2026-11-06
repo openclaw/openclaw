@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { z } from "zod";
+import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { formatInstallationTargetCommand } from "../cli/installation-target-format.js";
 import { resolveSubprocessExitCode } from "../cli/subprocess-exit-code.js";
 import {
@@ -70,13 +71,15 @@ export async function prepareUpdateFailureTriage(params: {
   mode: "interactive" | "json" | "non-interactive";
   runtime: RuntimeEnv;
   invocationCwd?: string;
+  /** Invoking operator snapshot, captured before entering the managed service environment. */
+  operatorEnv?: NodeJS.ProcessEnv;
 }): Promise<(invocation: UpdateTriageInvocation) => Promise<UpdateTriageResult>> {
   const { mode, runtime } = params;
   if (mode !== "interactive") {
     return (invocation) => runUpdateFailureTriage({ ...invocation, mode, runtime });
   }
   const invocationCwd = params.invocationCwd ?? tryProcessCwd();
-  const operatorEnv = resolveServiceRefreshEnv(process.env, invocationCwd);
+  const operatorEnv = resolveServiceRefreshEnv(params.operatorEnv ?? process.env, invocationCwd);
   const operatorHome = resolveOsHomeDir(operatorEnv);
   const { triageCommand } = await import("../commands/triage.js");
   const prepared: PreparedTriage = {
@@ -127,7 +130,7 @@ async function runPreparedUpdateFailureTriage(
   log(
     prepared.mode === "interactive"
       ? "Update failed. Entering triage..."
-      : "Update failed. Preparing triage diagnostics...",
+      : "Preparing triage diagnostics...",
   );
   let contextPath: string | undefined;
   try {
@@ -178,6 +181,14 @@ async function runPreparedUpdateFailureTriage(
       if (!isCurrent()) {
         return { status: "cancelled" };
       }
+      log(`Saved failure diagnostics: ${contextPath}`);
+      log(
+        `To start a repair agent, run ${formatInstallationTargetCommand(
+          ["openclaw", "triage", "--run", "--update-result", contextPath],
+          installationTarget,
+          { env: targetEnv },
+        )}`,
+      );
       const root = params.target.root ?? (await params.resolveRoot?.());
       const entryPath = await resolveGatewayInstallEntrypoint(root);
       if (!isCurrent()) {
@@ -187,14 +198,19 @@ async function runPreparedUpdateFailureTriage(
         throw new Error("The installed OpenClaw entrypoint is unavailable.");
       }
       const args = [
-        entryPath,
         "triage",
         "--update-result",
         contextPath,
         prepared.mode === "json" ? "--json" : "--non-interactive",
       ];
       const nodeRunner = params.target.nodeRunner ?? process.execPath;
-      const result = await runCommandWithTimeout([nodeRunner, ...args], {
+      const invocation = resolveOpenClawCliInvocation({
+        execPath: nodeRunner,
+        entryPath,
+        execArgv: [],
+        args,
+      });
+      const result = await runCommandWithTimeout([invocation.command, ...invocation.args], {
         cwd: root,
         baseEnv: {},
         env,
@@ -233,6 +249,9 @@ async function runPreparedUpdateFailureTriage(
         const reason = scrubDoctorErrorMessage(redactSupportString(report.bundleError, redaction));
         hint += `\nDiagnostics export unavailable: ${reason}`;
       }
+    }
+    if (prepared.mode !== "interactive") {
+      log("Triage diagnostics saved; no repair agent was started.");
     }
     return { status: "completed", hint };
   } catch (error) {

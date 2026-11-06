@@ -1,12 +1,16 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   loadOpenClawPlugins,
   resetPluginLoaderTestStateForTest,
 } from "../../../plugins/loader.test-fixtures.js";
+import { captureGatewayRootWorkReleaseObserver } from "../../../process/gateway-work-admission.js";
 import { createVoiceProviderFixture } from "../../../talk/provider-discovery.test-fixtures.js";
 import { listRealtimeVoiceProviders } from "../../../talk/provider-registry.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
+import { createApprovalClient } from "../../server-methods/approval-request.test-support.js";
 import { callGatewayHandler } from "../../server-methods/skills.test-helpers.js";
 import { talkHandlers } from "./index.js";
 
@@ -16,24 +20,40 @@ afterAll(cleanupPluginLoaderFixturesForTest);
 describe("Talk catalog provider discovery", () => {
   it("includes configured realtime candidates missing from the active registry", async () => {
     const { cfg, env } = createVoiceProviderFixture();
-    cfg.plugins = {
-      ...cfg.plugins,
-      entries: {
-        ...cfg.plugins?.entries,
-        "voice-call": {
-          config: { realtime: { providers: { "configured-voice": { ready: true } } } },
-        },
-      },
-    };
+    cfg.talk = { realtime: { providers: { "configured-voice": { ready: true } } } };
     await withEnvAsync(env, async () => {
       const registry = loadOpenClawPlugins({ config: cfg, onlyPluginIds: ["active-voice"] });
+      const activeProvider = expectDefined(
+        registry.realtimeVoiceProviders[0],
+        "active provider fixture",
+      ).provider;
+      const isConfigured = expectDefined(activeProvider.isConfigured, "fixture readiness hook");
+      const catalogReleased = createDeferred<"settled" | "reset">();
+      activeProvider.isConfigured = (context) => {
+        expectDefined(
+          captureGatewayRootWorkReleaseObserver(),
+          "catalog refresh must own root work admission",
+        )(catalogReleased.resolve);
+        return isConfigured(context);
+      };
+      const context = { getRuntimeConfig: () => cfg };
+      const client = createApprovalClient({
+        connId: "catalog-reader",
+        clientId: "cli",
+        scopes: ["operator.read"],
+      });
+      expect(
+        await callGatewayHandler(talkHandlers, "talk.catalog", {}, { context, client }),
+      ).toMatchObject({
+        ok: false,
+        error: { retryable: true, details: { reason: "talk-catalog-warming" } },
+      });
+      expect(await catalogReleased.promise).toBe("settled");
       const result = await callGatewayHandler(
         talkHandlers,
         "talk.catalog",
         {},
-        {
-          context: { getRuntimeConfig: () => cfg },
-        },
+        { context, client },
       );
 
       expect(result).toMatchObject({
@@ -50,9 +70,13 @@ describe("Talk catalog provider discovery", () => {
           },
         },
       });
-      expect(listRealtimeVoiceProviders(cfg)).toEqual(
-        registry.realtimeVoiceProviders.map((entry) => entry.provider),
-      );
+      expect(listRealtimeVoiceProviders(cfg).map((provider) => provider.id)).toEqual([
+        "active-voice",
+        "configured-voice",
+      ]);
+      expect(registry.realtimeVoiceProviders.map((entry) => entry.provider.id)).toEqual([
+        "active-voice",
+      ]);
     });
   });
 });

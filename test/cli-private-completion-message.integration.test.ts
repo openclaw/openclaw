@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { persistAuthProfileBatch } from "../src/agents/auth-profiles/upsert-with-lock.js";
 import { refreshPreparedModelRuntimeSnapshots } from "../src/agents/prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../src/agents/prepared-model-runtime.test-support.js";
 import * as runtimePlugins from "../src/agents/runtime-plugins.js";
@@ -19,14 +20,13 @@ import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../src/gateway/
 import { getActiveMcpLoopbackRuntime } from "../src/gateway/mcp-http.loopback-runtime.js";
 import {
   disconnectGatewayClient,
-  getGatewayE2ePortBlock,
   startGatewayWithClient,
 } from "../src/gateway/test-helpers.e2e.js";
 import { createPluginRegistry } from "../src/plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
 import { createPluginRuntime } from "../src/plugins/runtime/index.js";
 import { createPluginRecord } from "../src/plugins/status.test-fixtures.js";
-import type { CliBackendPlugin } from "../src/plugins/types.js";
+import type { CliBackendPlugin, ProviderPlugin } from "../src/plugins/types.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -35,7 +35,7 @@ import { loadBundledPluginFacade } from "../src/test-utils/bundled-plugin-public
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
-// Attached devices are outside this completion journey.
+// mock-isolation: Attached devices are outside this completion journey.
 vi.mock("../src/agents/node-exec-availability.js", () => ({
   loadNodeExecAvailability: async () => ({ cacheKey: "no-nodes", isAvailable: () => false }),
 }));
@@ -44,6 +44,7 @@ const chatId = "555000111";
 const telegramToken = "8000000001:AAHsyntheticPrivateCompletionToken01";
 const modelId = "claude-sonnet-4-6";
 const modelRef = `anthropic/${modelId}`;
+const profileId = "anthropic:private-completion";
 const requesterKey = "agent:main:private-cli-completion";
 const parentMarker = "PRIVATE-CLI-PARENT-TURN";
 const childTask = "Reply exactly PRIVATE-CLI-CHILD-RESULT and nothing else.";
@@ -62,13 +63,16 @@ const record = (entry) =>
   appendFileSync(new URL("./turns.jsonl", import.meta.url), JSON.stringify(entry) + "\n");
 const configPath = process.argv.includes("--mcp-config") ? argument("--mcp-config") : undefined;
 const server = configPath
-  ? JSON.parse(readFileSync(configPath, "utf8")).mcpServers?.openclaw
+  ? JSON.parse(configPath.startsWith("{") ? configPath : readFileSync(configPath, "utf8"))
+      .mcpServers?.openclaw
   : undefined;
 const headers = Object.fromEntries(Object.entries(server?.headers ?? {}).map(([name, value]) => [
   name,
   value.replace(/\$\{([^}]+)\}/g, (_, key) => process.env[key] ?? ""),
 ]));
 let sequence = 0;
+let promptCallback;
+const pendingHooks = new Map();
 const rpc = async (method, params) => {
   const response = await fetch(server.url, {
     method: "POST",
@@ -85,27 +89,49 @@ const textOf = (content) =>
 createInterface({ input: process.stdin }).on("line", (line) => {
   const message = JSON.parse(line);
   if (message.type === "control_request") {
+    if (message.request?.subtype === "initialize") {
+      promptCallback = message.request.hooks?.UserPromptSubmit?.[0]?.hookCallbackIds?.[0];
+    }
     send({ type: "control_response", response: {
       subtype: "success", request_id: message.request_id, response: {},
     } });
+    return;
+  }
+  if (message.type === "control_response") {
+    const id = message.response.request_id;
+    pendingHooks.get(id)?.(message.response.response);
+    pendingHooks.delete(id);
     return;
   }
   if (message.type !== "user") return;
   void (async () => {
     const sessionId = message.session_id || argument("--session-id");
     send({ type: "system", subtype: "init", session_id: sessionId, tools: [] });
-    const prompt = textOf(message.message?.content);
+    const userText = textOf(message.message?.content);
+    if (!promptCallback) throw new Error("Missing UserPromptSubmit hook");
+    // Completion events arrive through the real runner's per-turn hook context.
+    const context = await new Promise((resolve) => {
+      const requestId = "prompt-" + ++sequence;
+      pendingHooks.set(requestId, resolve);
+      send({ type: "control_request", request_id: requestId, request: {
+        subtype: "hook_callback", callback_id: promptCallback,
+        input: { hook_event_name: "UserPromptSubmit", prompt: userText },
+      } });
+    });
+    const prompt = userText + "\n" + (context?.hookSpecificOutput?.additionalContext ?? "");
     const turn = { kind: "other", mcp: Boolean(server), calls: [] };
     let result = "NO_REPLY";
     if (prompt.includes(${JSON.stringify(childTask)})) {
       turn.kind = "child";
       result = ${JSON.stringify(childResult)};
-    } else if (prompt.includes(${JSON.stringify(parentMarker)})) {
+    } else if (prompt.includes(${JSON.stringify(parentMarker)}) &&
+        !prompt.includes(${JSON.stringify(childResult)})) {
       turn.kind = "parent";
       const spawned = await rpc("tools/call", { name: "sessions_spawn", arguments: {
         task: ${JSON.stringify(childTask)}, label: "private child", completionTarget: "parent",
       } });
-      turn.calls.push({ name: "sessions_spawn", status: spawned.status, result: spawned.body?.result });
+      turn.calls.push({ name: "sessions_spawn", status: spawned.status, result: spawned.body?.result,
+        error: spawned.body?.error });
       result = ${JSON.stringify(parentReply)};
     } else if (prompt.includes(${JSON.stringify(childResult)})) {
       turn.kind = "completion";
@@ -113,6 +139,19 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         const listed = await rpc("tools/list");
         turn.tools = (listed.body?.result?.tools ?? []).map((tool) => tool.name);
         if (turn.tools.includes("message")) {
+          if (process.env.PRIVATE_COMPLETION_CHECK_SOURCE === "1") {
+            for (const [probe, args] of [
+              ["other-chat", { action: "send", target: "555000222" }],
+              ["other-thread", { action: "send", threadId: "999" }],
+              ["non-send", { action: "delete", messageId: "700" }],
+            ]) {
+              const rejected = await rpc("tools/call", { name: "message", arguments: {
+                message: "Forbidden relay: " + ${JSON.stringify(childResult)}, ...args,
+              } });
+              turn.calls.push({ name: "message", probe, status: rejected.status,
+                result: rejected.body?.result, error: rejected.body?.error });
+            }
+          }
           if (process.env.PRIVATE_COMPLETION_REVOKE_URL) {
             const revoked = await fetch(process.env.PRIVATE_COMPLETION_REVOKE_URL, {
               method: "POST",
@@ -146,7 +185,13 @@ type Turn = {
   mcp: boolean;
   tools?: string[];
   revoked?: number;
-  calls: Array<{ name: string; status: number; result?: { isError?: boolean }; error?: unknown }>;
+  calls: Array<{
+    name: string;
+    probe?: string;
+    status: number;
+    result?: { isError?: boolean; content?: Array<{ type: string; text?: string }> };
+    error?: unknown;
+  }>;
 };
 type TelegramCall = { method: string; chatId?: string; text?: string };
 type Scenario = {
@@ -154,13 +199,19 @@ type Scenario = {
   deny?: boolean;
   gate?: boolean;
   revoke?: boolean;
+  codingProfile?: boolean;
 };
 
 const scenarios: Scenario[] = [
   { title: "relays the private completion through exactly one Telegram send" },
-  { title: "sends nothing when the operator denies message", deny: true },
+  { title: "relays the private completion under the coding profile", codingProfile: true },
+  { title: "sends nothing when the operator denies message", deny: true, codingProfile: true },
   { title: "sends nothing when Telegram disables the send action", gate: true },
-  { title: "rejects a revoked completion grant before Telegram sends", revoke: true },
+  {
+    title: "rejects a revoked completion grant before Telegram sends",
+    revoke: true,
+    codingProfile: true,
+  },
 ];
 
 async function installPrivateCompletionRuntime(params: {
@@ -168,16 +219,20 @@ async function installPrivateCompletionRuntime(params: {
   childPath: string;
   cleanup: Array<() => void | Promise<void>>;
 }) {
-  const [{ buildAnthropicCliBackend }, { telegramPlugin }] = await Promise.all([
-    loadBundledPluginFacade<{ buildAnthropicCliBackend: () => CliBackendPlugin }>({
-      pluginId: "anthropic",
-      artifactBasename: "api.js",
-    }),
-    loadBundledPluginFacade<{ telegramPlugin: ChannelPlugin }>({
-      pluginId: "telegram",
-      artifactBasename: "api.js",
-    }),
-  ]);
+  const [{ buildAnthropicCliBackend, buildAnthropicProvider }, { telegramPlugin }] =
+    await Promise.all([
+      loadBundledPluginFacade<{
+        buildAnthropicCliBackend: () => CliBackendPlugin;
+        buildAnthropicProvider: () => ProviderPlugin;
+      }>({
+        pluginId: "anthropic",
+        artifactBasename: "api.js",
+      }),
+      loadBundledPluginFacade<{ telegramPlugin: ChannelPlugin }>({
+        pluginId: "telegram",
+        artifactBasename: "api.js",
+      }),
+    ]);
   const owner = createPluginRegistry({
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     runtime: createPluginRuntime(),
@@ -190,6 +245,7 @@ async function installPrivateCompletionRuntime(params: {
     if (id === "telegram") {
       api.registerChannel({ plugin: { ...telegramPlugin, status: undefined } });
     } else {
+      api.registerProvider(buildAnthropicProvider());
       const backend = buildAnthropicCliBackend();
       api.registerCliBackend({
         ...backend,
@@ -201,6 +257,12 @@ async function installPrivateCompletionRuntime(params: {
   params.cleanup.push(() => resetPluginRuntimeStateForTest());
   vi.spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandle").mockImplementation(
     (_params, onPrimaryRegistry) => {
+      onPrimaryRegistry?.(owner.registry);
+      return owner.registry;
+    },
+  );
+  vi.spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandleAsync").mockImplementation(
+    async (_params, onPrimaryRegistry) => {
       onPrimaryRegistry?.(owner.registry);
       return owner.registry;
     },
@@ -297,7 +359,9 @@ describe("private parent completion on a CLI requester", () => {
             const fields = body ? (JSON.parse(body) as Record<string, unknown>) : {};
             const call: TelegramCall = {
               method,
-              ...(fields.chat_id !== undefined ? { chatId: String(fields.chat_id) } : {}),
+              ...(typeof fields.chat_id === "string" || typeof fields.chat_id === "number"
+                ? { chatId: String(fields.chat_id) }
+                : {}),
               ...(typeof fields.text === "string" ? { text: fields.text } : {}),
             };
             telegram.push(call);
@@ -331,13 +395,13 @@ describe("private parent completion on a CLI requester", () => {
           "PRIVATE_COMPLETION_REVOKE_URL",
           scenario.revoke ? `${providerOrigin}/revoke-grant` : undefined,
         );
+        const checkSource = scenario.codingProfile === true && !scenario.deny;
+        vi.stubEnv("PRIVATE_COMPLETION_CHECK_SOURCE", checkSource ? "1" : undefined);
 
-        const gatewayPort = await getGatewayE2ePortBlock();
         const gatewayToken = "synthetic-private-completion-gateway-token";
         const cfg: OpenClawConfig = {
           gateway: {
             mode: "local",
-            port: gatewayPort,
             auth: { mode: "token", token: gatewayToken },
             controlUi: { enabled: false },
           },
@@ -357,7 +421,7 @@ describe("private parent completion on a CLI requester", () => {
             providers: {
               anthropic: {
                 api: "anthropic-messages",
-                baseUrl: "https://api.anthropic.com",
+                baseUrl: providerOrigin,
                 apiKey: "synthetic-unused-model-key",
                 models: [
                   {
@@ -373,9 +437,14 @@ describe("private parent completion on a CLI requester", () => {
               },
             },
           },
+          auth: {
+            profiles: { [profileId]: { provider: "anthropic", mode: "token" } },
+            order: { anthropic: [profileId] },
+          },
           tools: {
             toolSearch: false,
             alsoAllow: ["sessions_spawn"],
+            ...(scenario.codingProfile ? { profile: "coding" } : {}),
             ...(scenario.deny ? { deny: ["message"] } : {}),
           },
           plugins: { allow: ["anthropic", "telegram"], slots: { memory: "none" } },
@@ -393,14 +462,24 @@ describe("private parent completion on a CLI requester", () => {
         };
         await writeFile(configPath, JSON.stringify(cfg));
         setRuntimeConfigSnapshot(cfg, cfg);
-        await ensureMcpLoopbackServer(0);
+        await persistAuthProfileBatch({
+          profiles: [
+            {
+              profileId,
+              credential: {
+                type: "token",
+                provider: "anthropic",
+                token: "synthetic-private-completion",
+              },
+            },
+          ],
+        });
+        await ensureMcpLoopbackServer();
         cleanup.push(() => closeMcpLoopbackServer());
         expectDefined(getActiveMcpLoopbackRuntime(), "task-owned MCP runtime");
         await installPrivateCompletionRuntime({ cfg, childPath, cleanup });
         cleanup.push(() => resetPreparedModelRuntimeSnapshotsForTest());
-
         const gateway = await startGatewayWithClient({
-          port: gatewayPort,
           cfg,
           configPath,
           token: gatewayToken,
@@ -431,14 +510,26 @@ describe("private parent completion on a CLI requester", () => {
           { expectFinal: true, timeoutMs: 60_000 },
         );
 
+        turns = await readTurns(turnsPath);
+        const spawn = turns.find((turn) => turn.kind === "parent")?.calls[0];
+        expect(spawn?.status, diagnostics()).toBe(200);
+        expect(spawn?.error, diagnostics()).toBeUndefined();
+        expect(spawn?.result?.isError, diagnostics()).toBe(false);
+        const spawnText = spawn?.result?.content?.find((part) => part.type === "text")?.text;
+        expect(JSON.parse(spawnText ?? "null"), diagnostics()).toMatchObject({
+          status: "accepted",
+        });
+
         const child = await waitFor(
           "the hidden child completion",
-          async () =>
-            listSubagentRunsForRequester(requesterKey).find(
+          async () => {
+            turns = await readTurns(turnsPath);
+            return listSubagentRunsForRequester(requesterKey).find(
               (run) =>
                 run.completion?.resultText?.includes(childResult) === true &&
                 run.execution.outcome?.status === "ok",
-            ),
+            );
+          },
           diagnostics,
         );
         const completion = await waitFor(
@@ -450,28 +541,47 @@ describe("private parent completion on a CLI requester", () => {
           diagnostics,
         );
         turns = await readTurns(turnsPath);
-        const spawn = turns.find((turn) => turn.kind === "parent")?.calls[0];
-        expect(spawn?.result?.isError, diagnostics()).toBe(false);
         expect(child.completionTarget, diagnostics()).toBe("parent");
 
         const childSends = telegram.filter(
           (call) => call.method.startsWith("send") && call.text?.includes(childResult),
         );
-        const messageCall = completion.calls.find((call) => call.name === "message");
+        const messageCall = completion.calls.find((call) => call.name === "message" && !call.probe);
         if (scenario.deny) {
-          // A denied completion runs tool-free: no MCP grant, no message call, no send.
+          // The requester can retain other tools, but an explicit message deny still wins.
           expect(completion.tools ?? [], diagnostics()).not.toContain("message");
           expect(messageCall, diagnostics()).toBeUndefined();
         } else {
-          expect(completion.tools, diagnostics()).toEqual(["message"]);
+          expect(completion.tools, diagnostics()).toContain("message");
+          // Local Claude completions retain their requester tools alongside the
+          // source-bound message allowance, including under a restrictive profile.
+          expect(completion.tools, diagnostics()).toContain("sessions_spawn");
           if (scenario.revoke) {
             expect(revocations, diagnostics()).toEqual([true]);
-            expect(messageCall?.result, diagnostics()).toBeUndefined();
+            expect(messageCall?.status, diagnostics()).toBe(401);
           } else if (scenario.gate) {
             expect(messageCall?.result?.isError, diagnostics()).toBe(true);
           } else {
             expect(messageCall?.result?.isError, diagnostics()).toBe(false);
           }
+        }
+        if (checkSource) {
+          const probes = completion.calls.filter((call) => call.probe);
+          expect(
+            probes.map((call) => call.probe),
+            diagnostics(),
+          ).toEqual(["other-chat", "other-thread", "non-send"]);
+          for (const probe of probes) {
+            expect(probe.result?.isError, diagnostics()).toBe(true);
+            expect(
+              probe.result?.content?.map((part) => part.text ?? "").join("\n"),
+              diagnostics(),
+            ).toContain("Completion source replies");
+          }
+          expect(
+            telegram.filter((call) => call.method === "deleteMessage"),
+            diagnostics(),
+          ).toEqual([]);
         }
         expect(childSends, diagnostics()).toEqual(
           scenario.deny || scenario.gate || scenario.revoke

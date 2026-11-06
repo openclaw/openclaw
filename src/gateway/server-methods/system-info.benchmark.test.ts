@@ -18,6 +18,7 @@ vi.mock("../../infra/advertised-lan-host.js", async (importOriginal) => ({
 import { systemHandlers } from "./system.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const report = (result: Record<string, unknown>) => console.log(JSON.stringify(result));
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -35,13 +36,13 @@ it.runIf(process.env.OPENCLAW_SYSTEM_INFO_BENCH === "1")(
     let responses = 0;
     const request = {
       params: {},
-      respond: () => {
-        responses++;
-      },
+      respond: () => responses++,
+      client: { connect: { scopes: ["operator.admin"] } },
       context: { getRuntimeConfig: () => config },
     } as unknown as GatewayRequestHandlerOptions;
-    let clock = Date.now();
-    vi.spyOn(Date, "now").mockImplementation(() => clock);
+    const measuredNow = performance.now.bind(performance);
+    let clockOffset = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => measuredNow() + clockOffset);
     for (let i = 0; i < 10; i++) {
       await handler(request);
     }
@@ -50,24 +51,22 @@ it.runIf(process.env.OPENCLAW_SYSTEM_INFO_BENCH === "1")(
       const cpuSamples: number[] = [];
       for (let round = 0; round < 5; round++) {
         const cpuStart = process.cpuUsage();
-        const start = performance.now();
+        const start = measuredNow();
         for (let i = 0; i < 200; i++) {
-          clock += intervalMs;
+          clockOffset += intervalMs;
           await handler(request);
         }
         const cpu = process.cpuUsage(cpuStart);
-        samples.push(((performance.now() - start) * 1000) / 200);
+        samples.push(((measuredNow() - start) * 1000) / 200);
         cpuSamples.push((cpu.user + cpu.system) / 200);
       }
-      console.log(
-        JSON.stringify({
-          kind: "handler",
-          intervalMs,
-          medianUs: samples.toSorted((a, b) => a - b)[2],
-          medianCpuUs: cpuSamples.toSorted((a, b) => a - b)[2],
-          samplesUs: samples,
-        }),
-      );
+      report({
+        kind: "handler",
+        intervalMs,
+        medianUs: samples.toSorted((a, b) => a - b)[2],
+        medianCpuUs: cpuSamples.toSorted((a, b) => a - b)[2],
+        samplesUs: samples,
+      });
     }
     const stateDir = resolveStateDir();
     for (const [name, read] of Object.entries({
@@ -80,21 +79,15 @@ it.runIf(process.env.OPENCLAW_SYSTEM_INFO_BENCH === "1")(
       machineName: () => getMachineDisplayName(),
       mountedDisksWarm: () => readSystemDisks(),
       mountedDisksCold: () => {
-        clock += 60_001;
+        clockOffset += 60_001;
         return readSystemDisks();
       },
     })) {
-      const start = performance.now();
+      const start = measuredNow();
       for (let i = 0; i < 200; i++) {
         await read();
       }
-      console.log(
-        JSON.stringify({
-          kind: "primitive",
-          name,
-          meanUs: ((performance.now() - start) * 1000) / 200,
-        }),
-      );
+      report({ kind: "primitive", name, meanUs: ((measuredNow() - start) * 1000) / 200 });
     }
     expect(responses).toBe(2010);
   },

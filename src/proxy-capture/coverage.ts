@@ -14,13 +14,6 @@ export type DebugProxyCoverageEntry = {
   notes: string;
 };
 
-export type DebugProxyCoverageSummary = {
-  total: number;
-  captured: number;
-  proxyOnly: number;
-  uncovered: number;
-};
-
 const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
   {
     id: "provider-transport-fetch",
@@ -29,7 +22,7 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
     protocols: ["http", "https", "sse"],
     status: "captured",
     notes:
-      "Central provider fetch seam routes through explicit proxy overrides and records request/response payloads.",
+      "Central provider request path routes through explicit proxy overrides and records request/response payloads.",
   },
   {
     id: "discord-rest",
@@ -86,7 +79,7 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
   {
     id: "openai-tts",
     label: "OpenAI text-to-speech",
-    modulePath: "extensions/openai/tts.ts",
+    modulePath: "extensions/openai/speech-provider.ts",
     protocols: ["https"],
     status: "captured",
     notes:
@@ -108,7 +101,7 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
     protocols: ["https"],
     status: "proxy-only",
     notes:
-      "Feishu SDK traffic can inherit ambient proxying, but decrypted request/response capture is not yet wired at the SDK seam.",
+      "Feishu SDK traffic can inherit ambient proxying, but decrypted request/response capture is not yet wired at the SDK integration.",
   },
   {
     id: "feishu-client-ws",
@@ -124,20 +117,17 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
 let warnedCoverageSessionKey: string | null = null;
 
 export function buildDebugProxyCoverageReport() {
-  // Return copies because callers may render/sort/filter entries for CLI output.
-  const entries: DebugProxyCoverageEntry[] = [];
   const counts = { captured: 0, "proxy-only": 0, uncovered: 0 };
   for (const entry of DEBUG_PROXY_COVERAGE_ENTRIES) {
-    entries.push({ ...entry, protocols: [...entry.protocols] });
     counts[entry.status] += 1;
   }
-  const summary: DebugProxyCoverageSummary = {
-    total: entries.length,
+  const summary = {
+    total: DEBUG_PROXY_COVERAGE_ENTRIES.length,
     captured: counts.captured,
     proxyOnly: counts["proxy-only"],
     uncovered: counts.uncovered,
   };
-  return { summary, entries };
+  return { summary, entries: DEBUG_PROXY_COVERAGE_ENTRIES };
 }
 
 export function maybeWarnAboutDebugProxyCoverage(

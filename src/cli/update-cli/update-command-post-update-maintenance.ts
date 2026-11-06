@@ -6,6 +6,8 @@ import {
 import { GatewayServiceAuthorityError } from "../../daemon/service-update-authority.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { adoptCandidateManagedServiceStop } from "../../infra/update-candidate-predecessor-stop.js";
+import { unsafeUpdateRecovery } from "../../infra/update-recovery.js";
+import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -16,12 +18,16 @@ import {
   markControlPlaneUpdateRestartSentinelFailureBestEffort,
   prepareUpdateServiceResult,
   UpdateCommandPendingRecoveryFailure,
+  UpdateCommandFailure,
 } from "./update-command-result.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
-import { tryInstallShellCompletion } from "./update-command-service.js";
-import { createPostUpdateFailureResult } from "./update-command-terminal-publication.js";
+import {
+  maybeStopManagedServiceBeforeMutableUpdate,
+  tryInstallShellCompletion,
+} from "./update-command-service.js";
+import { createPostUpdateExceptionResult } from "./update-command-terminal-publication.js";
 
 export async function preparePostUpdateService(
   params: FinishUpdateParams,
@@ -40,7 +46,7 @@ export async function preparePostUpdateService(
             mode: params.result.mode,
             status: params.result.status,
             runId: run.runId,
-            ledger: { env: run.env },
+            ledger: run,
             root: params.result.root ?? params.root,
             timeoutMs: params.updateStepTimeoutMs,
             assertCurrent,
@@ -52,9 +58,7 @@ export async function preparePostUpdateService(
       );
       assertCurrent();
       params.preManagedServiceStop = stopped;
-      if (restartRequired) {
-        params.shouldRestart = true;
-      }
+      params.shouldRestart ||= restartRequired;
     }
   } catch (error) {
     if (
@@ -89,11 +93,62 @@ export async function preparePostUpdateService(
         cause,
       });
     }
-    const failure = createPostUpdateFailureResult(params, cause);
+    const failure = createPostUpdateExceptionResult(params, cause);
     params.result = failure.result;
     params.failure = { cause, detail: failure.message };
   }
-  return prepareUpdateServiceResult(params);
+  const shouldRestart = prepareUpdateServiceResult(params);
+  if (params.opts.restart === false && !params.shouldRestart && params.opts.run) {
+    assertCurrent();
+    recordUpdateRunStep(
+      params.opts.run.runId,
+      { step: "restart", status: "skipped", endedAtMs: Date.now(), detail: "skipped by operator" },
+      params.opts.run,
+    );
+  }
+  return shouldRestart;
+}
+
+export async function parkPostUpdateService(
+  params: Pick<FinishUpdateParams, "opts" | "updateStepTimeoutMs">,
+  context: {
+    before: PreManagedServiceStop | undefined;
+    root: string;
+    mode: UpdateRunResult["mode"];
+    updateRun: FinishUpdateParams["opts"]["run"];
+    recordPhase: (phase: "activating") => Promise<void>;
+    assertCurrent: () => void;
+    onStopped: (state: PreManagedServiceStop) => void;
+    onPrepared: (state: PreManagedServiceStop) => void;
+  },
+): Promise<PreManagedServiceStop> {
+  const { before } = context;
+  if (!before) {
+    throw new Error("Plugin maintenance lost its update service owner.");
+  }
+  await before.windowsTaskAutoStartRecovery?.complete(true);
+  // Full Doctor owns state migrations; retain this suspension through activation.
+  const stopped = await maybeStopManagedServiceBeforeMutableUpdate({
+    updateRun: context.updateRun,
+    recordPhase: context.recordPhase,
+    assertCurrent: context.assertCurrent,
+    updateInstallKind: context.mode === "git" ? "git" : "package",
+    root: context.root,
+    shouldRestart: true,
+    jsonMode: Boolean(params.opts.json),
+    expectedService: before,
+    phase: "prepare",
+    timeoutMs: params.updateStepTimeoutMs,
+    onStopped: context.onStopped,
+  });
+  context.assertCurrent();
+  context.onPrepared(stopped);
+  before.windowsTaskAutoStartRecovery = stopped.windowsTaskAutoStartRecovery;
+  if (stopped.blockMessage || !stopped.stopped) {
+    throw new Error(stopped.blockMessage ?? "Gateway could not be parked for plugin maintenance.");
+  }
+  stopped.windowsTaskAutoStartRecovery?.beginMutation();
+  return stopped;
 }
 
 /** Shell integration changes follow settled restart and health recovery. */
@@ -103,12 +158,25 @@ export async function completePostUpdateMaintenance(
   assertCurrent: () => void,
   context: {
     root: string;
+    activationVerified: boolean;
     sentinel: Omit<
       Parameters<typeof markControlPlaneUpdateRestartSentinelFailureBestEffort>[0],
       "reason"
     >;
   },
 ): Promise<{ result: UpdateRunResult; detail: string } | undefined> {
+  const startedAt = performance.now();
+  using _ = {
+    [Symbol.dispose]() {
+      result.steps.push({
+        name: "post-update-maintenance-timing",
+        command: "openclaw update",
+        cwd: context.root,
+        durationMs: Math.round(performance.now() - startedAt),
+        exitCode: 0,
+      });
+    },
+  };
   await tryInstallShellCompletion({
     root: context.root,
     jsonMode: Boolean(params.opts.json),
@@ -125,6 +193,13 @@ export async function completePostUpdateMaintenance(
     return undefined;
   }
   defaultRuntime.error(retirement.error);
+  if (context.activationVerified) {
+    throw new UpdateCommandFailure(
+      { ...result, status: "error", reason: "wrapper-retirement-failed" },
+      1,
+      retirement.error,
+    );
+  }
   await markControlPlaneUpdateRestartSentinelFailureBestEffort({
     ...context.sentinel,
     reason: "wrapper-retirement-failed",
@@ -135,20 +210,64 @@ export async function completePostUpdateMaintenance(
   };
 }
 
+export async function settlePostUpdateWindowsAutoStartFailure(
+  params: Pick<FinishUpdateParams, "root">,
+  finalResult: UpdateRunResult,
+  result: Pick<UpdateRunResult, "status" | "reason">,
+  cause: unknown,
+  readStopped: () => PreManagedServiceStop | undefined,
+): Promise<{ cause: unknown }> {
+  let failure = cause;
+  try {
+    await readStopped()?.windowsTaskAutoStartRecovery?.complete(false);
+  } catch (cleanupError) {
+    failure = new AggregateError(
+      [cause, cleanupError],
+      `Windows task restoration and compensation failed: ${formatErrorMessage(cause)}; ${formatErrorMessage(cleanupError)}`,
+    );
+  }
+  defaultRuntime.error(`Failed to restore Windows Scheduled Task autostart: ${String(failure)}`);
+  finalResult.status = "error";
+  finalResult.reason =
+    result.status === "error" ? result.reason : "windows-task-autostart-restore-failed";
+  finalResult.recovery = unsafeUpdateRecovery(finalResult.recovery);
+  finalResult.steps = finalResult.steps.concat({
+    name: "windows-task-autostart-recovery",
+    command: "openclaw update",
+    cwd: finalResult.root ?? params.root,
+    durationMs: 0,
+    exitCode: 1,
+    stderrTail: formatErrorMessage(failure),
+  });
+  return { cause: failure };
+}
+
 export async function resumePostUpdateWindowsAutoStart(
   params: Pick<FinishUpdateParams, "root" | "updateStepTimeoutMs">,
   result: UpdateRunResult,
-  stopped: PreManagedServiceStop | undefined,
+  readStopped: () => PreManagedServiceStop | undefined,
+  callbacks?: {
+    onFailure: (cause: unknown) => Promise<unknown>;
+  },
 ): Promise<void> {
-  await stopped?.windowsTaskAutoStartRecovery?.restore(
-    true,
-    createWindowsTaskAutoStartGuard({
-      root:
-        result.recovery?.packageRollbackVerified && stopped.serviceUpdateVerdict?.kind === "owned"
-          ? stopped.serviceUpdateVerdict.root
-          : (result.root ?? params.root),
-      before: stopped,
-      timeoutMs: params.updateStepTimeoutMs,
-    }),
-  );
+  try {
+    const stopped = readStopped();
+    await stopped?.windowsTaskAutoStartRecovery?.restore(
+      true,
+      createWindowsTaskAutoStartGuard({
+        root:
+          result.recovery?.packageRollbackVerified && stopped.serviceUpdateVerdict?.kind === "owned"
+            ? stopped.serviceUpdateVerdict.root
+            : (result.root ?? params.root),
+        before: stopped,
+        timeoutMs: params.updateStepTimeoutMs,
+      }),
+    );
+  } catch (cause) {
+    if (!callbacks) {
+      throw cause;
+    }
+    // The attempted restore already failed; reporting must not attempt it again.
+    await callbacks.onFailure(cause);
+  }
 }

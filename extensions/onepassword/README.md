@@ -15,10 +15,9 @@ approval, or deny access; approval is the default policy.
 
 Keep the service-account token in the credentials file described by the guide,
 not in plugin configuration. Scope the service account to the required items.
-Requested secret values are visible to the model for that execution; the
-plugin redacts its own persisted tool result but cannot prevent the model from
-copying a value into later output. Keep access reasons non-sensitive because
-they are recorded in the audit history.
+Requested secret values are visible to the model and stored in the session
+transcript. The model may also copy a value into later output. Keep access
+reasons non-sensitive because they are recorded in the audit history.
 
 `openclaw onepassword status` reports local readiness without fetching a secret.
 `openclaw onepassword audit` shows recent access outcomes. Installation does

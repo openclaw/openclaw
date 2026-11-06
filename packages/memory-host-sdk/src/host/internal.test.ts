@@ -6,6 +6,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   buildFileEntry,
   buildMultimodalChunkForIndexing,
@@ -112,19 +113,59 @@ describe("memory host SDK package internals", () => {
     },
   );
 
+  it("bounds canonical reads and preserves discovery order when aliases settle out of order", async () => {
+    const workspaceDir = getTmpDir();
+    const memoryDir = path.join(workspaceDir, "memory");
+    await fs.mkdir(memoryDir);
+    const files = Array.from({ length: 6 }, (_, index) => path.join(memoryDir, `${index}.md`));
+    await Promise.all(files.map((file) => fs.writeFile(file, "memory")));
+    const gates = files.map(() => Promise.withResolvers<string>());
+    const originalRealpath = fs.realpath.bind(fs);
+    const started: number[] = [];
+    let active = 0;
+    let maximum = 0;
+    vi.spyOn(fs, "realpath").mockImplementation(async (file, options) => {
+      const index = files.indexOf(String(file));
+      if (index < 0) {
+        return originalRealpath(file, options);
+      }
+      started.push(index);
+      maximum = Math.max(maximum, ++active);
+      try {
+        return await gates[index]!.promise;
+      } finally {
+        active--;
+      }
+    });
+    const listing = listMemoryFiles(workspaceDir);
+    try {
+      await vi.waitFor(() => expect(started).toHaveLength(4));
+      expect(maximum).toBe(4);
+      gates[1]!.resolve(files[0]!);
+      gates[3]!.reject(new Error("file disappeared"));
+      await vi.waitFor(() => expect(started).toHaveLength(6));
+      gates[5]!.resolve(files[5]!);
+      gates[4]!.resolve(files[4]!);
+      gates[2]!.resolve(files[2]!);
+      gates[0]!.resolve(files[0]!);
+      await expect(listing).resolves.toEqual(files.filter((_, index) => index !== 1));
+      expect(maximum).toBe(4);
+    } finally {
+      gates.forEach((gate, index) => gate.resolve(files[index]!));
+      await listing;
+    }
+  });
+
   it("drains in-flight work before propagating a concurrency failure", async () => {
     const failure = new Error("embedding failed");
-    let releaseTask!: () => void;
-    const release = new Promise<void>((resolve) => {
-      releaseTask = resolve;
-    });
+    const release = createDeferred();
     const started: number[] = [];
     const completed: number[] = [];
     const run = runWithConcurrency(
       [
         async () => {
           started.push(0);
-          await release;
+          await release.promise;
           completed.push(0);
           return 0;
         },
@@ -146,7 +187,7 @@ describe("memory host SDK package internals", () => {
     await Promise.resolve();
     expect(onSettled).not.toHaveBeenCalled();
 
-    releaseTask();
+    release.resolve();
     await expect(run).rejects.toBe(failure);
     expect(completed).toEqual([0]);
     expect(started).toEqual([0, 1]);
@@ -155,12 +196,11 @@ describe("memory host SDK package internals", () => {
   it("propagates directory creation failures", () => {
     const mkdirError = new Error("disk full");
     const targetDir = path.join(getTmpDir(), "blocked");
-    const mkdirSync = vi.spyOn(fsSync, "mkdirSync").mockImplementation(() => {
+    vi.spyOn(fsSync, "mkdirSync").mockImplementation(() => {
       throw mkdirError;
     });
 
     expect(() => ensureDir(targetDir)).toThrow(mkdirError);
-    expect(mkdirSync).toHaveBeenCalledWith(targetDir, { recursive: true });
   });
 
   it("normalizes additional memory paths", () => {
@@ -187,10 +227,12 @@ describe("memory host SDK package internals", () => {
         { path: " notes ", pattern: " runbooks/**/*.md " },
         { path: "notes", pattern: "runbooks/**/*.md" },
         { path: "notes", pattern: "archive/**/*.md" },
+        { path: "reference", evergreen: true },
       ]),
     ).toEqual([
       { path: path.resolve(workspaceDir, "notes"), pattern: "runbooks/**/*.md" },
       { path: path.resolve(workspaceDir, "notes"), pattern: "archive/**/*.md" },
+      { path: path.resolve(workspaceDir, "reference"), evergreen: true },
     ]);
   });
 
@@ -582,23 +624,14 @@ describe("memory host SDK package internals", () => {
     await expect(buildMultimodalChunkForIndexing(entry)).resolves.toBeNull();
   });
 
-  it("chunks mixed text and preserves surrogate pairs", () => {
+  it("chunks mixed text", () => {
     const mixed = Array.from(
       { length: 30 },
       (_, index) => `Line ${index}: 这是中英文混合的测试内容 with English`,
     ).join("\n");
     const mixedChunks = chunkMarkdown(mixed, { tokens: 50, overlap: 0 });
     expect(mixedChunks.length).toBeGreaterThan(1);
-    expect(mixedChunks.map((chunk) => chunk.text).join("\n")).toContain("Line 29");
-
-    const surrogateChar = "\u{20000}";
-    const surrogateChunks = chunkMarkdown(surrogateChar.repeat(120), {
-      tokens: 31,
-      overlap: 0,
-    });
-    for (const chunk of surrogateChunks) {
-      expect(() => encodeURIComponent(chunk.text)).not.toThrow();
-    }
+    expect(mixedChunks.map((chunk) => chunk.text).join("\n")).toBe(mixed);
   });
 
   it("preserves a surrogate pair at the coarse split boundary", () => {

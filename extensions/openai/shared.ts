@@ -5,43 +5,54 @@ import {
 } from "openclaw/plugin-sdk/lazy-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-metadata";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { classifyOpenAIBaseUrl, isOpenAICodexBaseUrl, OPENAI_API_BASE_URL } from "./base-url.js";
+import {
+  normalizeOptionalString,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  classifyOpenAIBaseUrl,
+  isOpenAIApiBaseUrl,
+  isOpenAICodexBaseUrl,
+  OPENAI_API_BASE_URL,
+} from "./base-url.js";
 import { buildOpenAIReplayPolicy } from "./replay-policy.js";
 import { TOKEN_SHARING_AUTH_FLOW } from "./token-sharing.js";
-import { resolveOpenAITransportTurnState } from "./transport-policy.js";
 
-export const OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS = 272_000;
+const DEFAULT_OPENAI_WS_DEGRADE_COOLDOWN_MS = 60_000;
+const AZURE_PROVIDER_IDS = new Set(["azure-openai", "azure-openai-responses"]);
 
-export function resolveConfiguredOpenAIBaseUrl(cfg: OpenClawConfig | undefined): string {
-  return normalizeOptionalString(cfg?.models?.providers?.openai?.baseUrl) ?? OPENAI_API_BASE_URL;
-}
-
-function hasSupportedOpenAIResponsesTransport(
-  transport: unknown,
-): transport is "auto" | "sse" | "websocket" | "websocket-cached" {
-  return (
-    transport === "auto" ||
-    transport === "sse" ||
-    transport === "websocket" ||
-    transport === "websocket-cached"
+function isAzureOpenAIBaseUrl(baseUrl?: string): boolean {
+  return normalizeLowercaseStringOrEmpty(URL.parse(baseUrl?.trim() ?? "")?.hostname).endsWith(
+    ".openai.azure.com",
   );
 }
 
-function defaultOpenAIResponsesExtraParams(
-  extraParams: Record<string, unknown> | undefined,
-  options?: { transport?: "auto" | "sse" | "websocket" | "websocket-cached" },
-): Record<string, unknown> | undefined {
-  const hasSupportedTransport = hasSupportedOpenAIResponsesTransport(extraParams?.transport);
-  const defaultTransport = options?.transport ?? "auto";
-  if (hasSupportedTransport) {
-    return extraParams;
-  }
+function normalizeIdentityValue(value: string): string {
+  return value
+    .trim()
+    .replace(/[\r\n]+/g, " ")
+    .slice(0, 160);
+}
 
-  return {
-    ...extraParams,
-    transport: defaultTransport,
-  };
+function usesKnownNativeOpenAIRoute(provider: string, baseUrl?: string): boolean {
+  const normalizedProvider = normalizeProviderId(provider);
+  if (!normalizedProvider) {
+    return false;
+  }
+  if (normalizedProvider === "openai") {
+    return !baseUrl || isOpenAIApiBaseUrl(baseUrl) || isOpenAICodexBaseUrl(baseUrl);
+  }
+  if (AZURE_PROVIDER_IDS.has(normalizedProvider)) {
+    return !baseUrl || isAzureOpenAIBaseUrl(baseUrl);
+  }
+  return false;
+}
+
+export const OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS = 272_000;
+export const OPENAI_CODEX_GPT_61_SOL_CONTEXT_TOKENS = 500_000;
+
+export function resolveConfiguredOpenAIBaseUrl(cfg: OpenClawConfig | undefined): string {
+  return normalizeOptionalString(cfg?.models?.providers?.openai?.baseUrl) ?? OPENAI_API_BASE_URL;
 }
 
 type OpenAIResponsesProviderHooks = Pick<
@@ -76,7 +87,14 @@ export function buildOpenAIResponsesProviderHooks(options?: {
       (supportsPromptCacheKey ??
         (classifyOpenAIBaseUrl(baseUrl) === "platform" || isOpenAICodexBaseUrl(baseUrl))),
     buildReplayPolicy: buildOpenAIReplayPolicy,
-    prepareExtraParams: (ctx) => defaultOpenAIResponsesExtraParams(ctx.extraParams, options),
+    prepareExtraParams: ({ extraParams }) => {
+      const transport = extraParams?.transport;
+      return ["auto", "sse", "websocket", "websocket-cached"].some(
+        (candidate) => candidate === transport,
+      )
+        ? extraParams
+        : { ...extraParams, transport: options?.transport ?? "auto" };
+    },
     wrapStreamFn: wrapOpenAIResponsesProviderStreamFn,
     wrapSimpleCompletionStreamFn: (ctx) =>
       ctx.auth?.mode === "oauth" && ctx.auth.authFlow === TOKEN_SHARING_AUTH_FLOW
@@ -86,6 +104,44 @@ export function buildOpenAIResponsesProviderHooks(options?: {
             nativeWebSearchAllowedByToolPolicy: false,
           })
         : undefined,
-    resolveTransportTurnState: resolveOpenAITransportTurnState,
+    resolveTransportTurnState: (ctx) => {
+      if (!usesKnownNativeOpenAIRoute(ctx.provider, ctx.model?.baseUrl)) {
+        return undefined;
+      }
+      const sessionId = ctx.sessionId ? normalizeIdentityValue(ctx.sessionId) : undefined;
+      const sessionHeaders = sessionId
+        ? { "x-client-request-id": sessionId, "x-openclaw-session-id": sessionId }
+        : undefined;
+      if (!sessionHeaders) {
+        return ctx.transport === "websocket"
+          ? { websocket: { degradeCooldownMs: DEFAULT_OPENAI_WS_DEGRADE_COOLDOWN_MS } }
+          : undefined;
+      }
+
+      const turnId = normalizeIdentityValue(ctx.turnId);
+      const attempt = String(Math.max(1, ctx.attempt));
+
+      return {
+        headers: {
+          ...sessionHeaders,
+          "x-openclaw-turn-id": turnId,
+          "x-openclaw-turn-attempt": attempt,
+        },
+        metadata: {
+          openclaw_session_id: sessionHeaders["x-openclaw-session-id"] ?? "",
+          openclaw_turn_id: turnId,
+          openclaw_turn_attempt: attempt,
+          openclaw_transport: ctx.transport,
+        },
+        ...(ctx.transport === "websocket"
+          ? {
+              websocket: {
+                headers: sessionHeaders,
+                degradeCooldownMs: DEFAULT_OPENAI_WS_DEGRADE_COOLDOWN_MS,
+              },
+            }
+          : {}),
+      };
+    },
   };
 }

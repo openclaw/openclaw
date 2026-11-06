@@ -91,16 +91,14 @@ actor DiagnosticsFileLog {
             try fm.removeItem(at: oldest)
         }
 
-        if self.maxBackups > 1 {
-            for idx in stride(from: self.maxBackups - 1, through: 1, by: -1) {
-                let src = self.rotatedURL(index: idx)
-                let dst = self.rotatedURL(index: idx + 1)
-                if fm.fileExists(atPath: src.path) {
-                    if fm.fileExists(atPath: dst.path) {
-                        try fm.removeItem(at: dst)
-                    }
-                    try fm.moveItem(at: src, to: dst)
+        for idx in stride(from: self.maxBackups - 1, through: 1, by: -1) {
+            let src = self.rotatedURL(index: idx)
+            let dst = self.rotatedURL(index: idx + 1)
+            if fm.fileExists(atPath: src.path) {
+                if fm.fileExists(atPath: dst.path) {
+                    try fm.removeItem(at: dst)
                 }
+                try fm.moveItem(at: src, to: dst)
             }
         }
 

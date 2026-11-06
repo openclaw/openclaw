@@ -4,7 +4,6 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import { collectBaseArrayPaths } from "../../../../src/config/patch-replace-paths.js";
 import { t } from "../../i18n/index.ts";
 import { registerMcpEnglish } from "../../i18n/locales/en-mcp.ts";
-import { formatUiError } from "../format-error.ts";
 import type { RuntimeConfigCapability } from "./runtime-config-capability.ts";
 
 registerMcpEnglish();
@@ -216,31 +215,22 @@ export async function patchMcpServers(
     buildPatch: (servers: Readonly<Record<string, unknown>>) => McpServersPatchBuildResult;
     note: string;
   },
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  try {
-    await runtimeConfig.ensureLoaded();
-    const patched = await runtimeConfig.patchFromSnapshot((base) => {
-      const servers = asRecord(asRecord(base.mcp)?.servers) ?? {};
-      const built = options.buildPatch(servers);
-      return "error" in built
-        ? built
-        : {
-            options: {
-              raw: { mcp: { servers: built.patch } },
-              note: options.note,
-              ...(built.replacePaths?.length ? { replacePaths: built.replacePaths } : {}),
-            },
-          };
-    });
-    if (!patched) {
-      return {
-        ok: false,
-        error: runtimeConfig.state.lastError ?? t("mcpServers.configUnavailable"),
-      };
-    }
-    await runtimeConfig.refresh();
-    return { ok: true };
-  } catch (error) {
-    return { ok: false, error: formatUiError(error) };
+): Promise<void> {
+  await runtimeConfig.ensureLoaded();
+  const patched = await runtimeConfig.patchFromSnapshot((base) => {
+    const servers = asRecord(asRecord(base.mcp)?.servers) ?? {};
+    const built = options.buildPatch(servers);
+    return "error" in built
+      ? built
+      : {
+          options: {
+            raw: { mcp: { servers: built.patch } },
+            note: options.note,
+            ...(built.replacePaths?.length ? { replacePaths: built.replacePaths } : {}),
+          },
+        };
+  });
+  if (!patched) {
+    throw new Error(runtimeConfig.state.lastError ?? t("mcpServers.configUnavailable"));
   }
 }

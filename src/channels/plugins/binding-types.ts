@@ -11,16 +11,6 @@ import type {
 import type { ChannelId } from "./types.public.js";
 
 /**
- * Channel id used by configured binding rules.
- */
-export type ConfiguredBindingChannel = ChannelId;
-
-/**
- * Raw binding config entry from OpenClaw config.
- */
-export type ConfiguredBindingRuleConfig = AgentBinding;
-
-/**
  * Stateful target descriptor produced by a binding consumer.
  */
 export type StatefulBindingTargetDescriptor = {
@@ -39,29 +29,34 @@ export type ConfiguredBindingRecordResolution = {
   statefulTarget: StatefulBindingTargetDescriptor;
 };
 
-/**
- * Factory that materializes a configured binding for one account/conversation pair.
- */
-export type ConfiguredBindingTargetFactory = {
-  driverId: string;
-  materialize: (params: {
-    accountId: string;
-    conversation: ChannelConfiguredBindingConversationRef;
-  }) => ConfiguredBindingRecordResolution;
-};
+export type StatefulBindingTargetResetResult =
+  | {
+      ok: true;
+      sessionKey?: string;
+      sessionId?: string;
+      lifecycleRevision?: string;
+      storePath?: string;
+    }
+  | { ok: false; skipped?: boolean; error?: string };
 
 /**
  * Compiled binding rule with provider matcher, target factory, and static target facts.
  */
 export type CompiledConfiguredBinding = {
-  channel: ConfiguredBindingChannel;
+  channel: ChannelId;
   accountPattern?: string;
-  binding: ConfiguredBindingRuleConfig;
+  binding: AgentBinding;
   bindingConversationId: string;
   target: ChannelConfiguredBindingConversationRef;
   agentId: string;
   provider: ChannelConfiguredBindingProvider;
-  targetFactory: ConfiguredBindingTargetFactory;
+  targetFactory: {
+    driverId: string;
+    materialize: (params: {
+      accountId: string;
+      conversation: ChannelConfiguredBindingConversationRef;
+    }) => ConfiguredBindingRecordResolution;
+  };
 };
 
 /**

@@ -14,31 +14,30 @@ function parsePositiveInt(value: string | undefined): number | null {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
-function resolveExplicitVitestWorkerBudget(env: NodeJS.ProcessEnv): number | null {
-  return parsePositiveInt(env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS);
-}
-
-function shouldApplyNativeWorkerBudget(env: NodeJS.ProcessEnv): boolean {
+function resolveNativeWorkerCount(env: NodeJS.ProcessEnv): string | null {
   if (env.RAYON_NUM_THREADS?.trim() && env.TOKIO_WORKER_THREADS?.trim()) {
-    return false;
+    return null;
   }
-  return (
-    env.OPENCLAW_TEST_PROJECTS_SERIAL === "1" || resolveExplicitVitestWorkerBudget(env) !== null
-  );
-}
-
-function resolveNativeWorkerCount(env: NodeJS.ProcessEnv): number {
-  return Math.min(resolveExplicitVitestWorkerBudget(env) ?? 1, 4);
+  const budget = parsePositiveInt(env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS);
+  return env.OPENCLAW_TEST_PROJECTS_SERIAL === "1" || budget !== null
+    ? String(Math.min(budget ?? 1, 4))
+    : null;
 }
 
 /** Applies local Vitest scheduling and native worker budget env. */
 export function resolveVitestProcessEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const baseEnv = resolveLocalVitestEnv(env);
-  if (!shouldApplyNativeWorkerBudget(baseEnv)) {
+  // Node and Chromium fix their default Intl locale at startup, so pin the
+  // locale CI uses; otherwise host locales change formatted test output.
+  const baseEnv: NodeJS.ProcessEnv = {
+    ...resolveLocalVitestEnv(env),
+    LANG: "C.UTF-8",
+    LC_ALL: "C.UTF-8",
+  };
+  const nativeWorkerCount = resolveNativeWorkerCount(baseEnv);
+  if (nativeWorkerCount === null) {
     return baseEnv;
   }
 
-  const nativeWorkerCount = String(resolveNativeWorkerCount(baseEnv));
   return {
     ...baseEnv,
     RAYON_NUM_THREADS: baseEnv.RAYON_NUM_THREADS?.trim() || nativeWorkerCount,
@@ -96,11 +95,11 @@ export const DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS = 30_000;
 /** Longer watchdog timeout for known long-running Vitest configs. */
 export const DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS = 300_000;
 /** Extra-long watchdog timeout for broad configs that can stay silent on macOS. */
-export const DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS = 2_400_000;
+const DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS = 2_400_000;
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS";
 const GATEWAY_VITEST_CONFIG = "test/vitest/vitest.gateway.config.ts";
-export const VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS = new Map([
+const VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS = new Map([
   ["test/vitest/vitest.e2e.config.ts", DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
   // Keep the SDK fixture's E2E silence window while it builds packages with captured output.
   [
@@ -163,20 +162,6 @@ for (const owner of embeddedAgentVitestProjectOwners) {
     DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
   );
 }
-/**
- * Resolves default Node flags for Vitest, including the local Maglev opt-in.
- */
-export function resolveVitestNodeArgs(env: NodeJS.ProcessEnv = process.env): string[] {
-  // Node 24 can join a Sparkplug compiler at process.exit while that compiler
-  // waits for main-thread GC. Keep baseline compilation on the main thread.
-  return [
-    ...(parsePermissiveBooleanToken(env.OPENCLAW_VITEST_ENABLE_MAGLEV) === true
-      ? []
-      : ["--no-maglev"]),
-    "--no-concurrent-sparkplug",
-  ];
-}
-
 /**
  * Reads the explicit no-output watchdog timeout, if configured.
  */

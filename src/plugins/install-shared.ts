@@ -200,9 +200,23 @@ export function emitSuccessfulPluginInstallSecurityEvent(
   });
 }
 
-function buildBlockedInstallResult(params: {
+export function reportBlockedPluginInstall(params: {
   blocked: NonNullable<NonNullable<InstallSecurityScanResult>["blocked"]>;
+  pluginId?: string;
+  mode?: "install" | "update";
+  sourceFamily?: PluginSecuritySourceFamily;
 }): Extract<InstallPluginResult, { ok: false }> {
+  const reason =
+    params.blocked.code === "security_scan_failed"
+      ? "security_scan_failed"
+      : "security_scan_blocked";
+  emitPluginAuditSecurityEvent({
+    outcome: pluginAuditOutcomeForReason(reason),
+    reason,
+    pluginId: params.pluginId,
+    mode: params.mode,
+    sourceFamily: params.sourceFamily,
+  });
   return {
     ok: false,
     error: params.blocked.reason,
@@ -306,18 +320,12 @@ export async function runInstallSourceScan(params: {
   try {
     const scanResult = await params.scan();
     if (scanResult?.blocked) {
-      const reason =
-        scanResult.blocked.code === "security_scan_failed"
-          ? "security_scan_failed"
-          : "security_scan_blocked";
-      emitPluginAuditSecurityEvent({
-        outcome: pluginAuditOutcomeForReason(reason),
-        reason,
+      return reportBlockedPluginInstall({
+        blocked: scanResult.blocked,
         pluginId: params.pluginId,
         mode: params.mode,
         sourceFamily: params.sourceFamily,
       });
-      return buildBlockedInstallResult({ blocked: scanResult.blocked });
     }
     return null;
   } catch (err) {
@@ -359,6 +367,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
     installedDir: string,
   ) => Promise<Extract<InstallPluginResult, { ok: false }> | null>;
   nameEncoder?: (pluginId: string) => string;
+  onPluginArtifactInspect?: PluginInstallArtifactConsentHandler;
   onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
   beforePersistentApply?: () => void;
 }): Promise<InstallPluginResult> {
@@ -386,6 +395,12 @@ export async function installPluginDirectoryIntoExtensions(params: {
   }
 
   if (params.dryRun) {
+    await params.onPluginArtifactInspect?.({
+      pluginId: params.pluginId,
+      ...(params.mode === "update" ? { currentArtifactDir: targetDir } : {}),
+      stagedArtifactDir: params.sourceDir,
+      mode: params.mode,
+    });
     return buildDirectoryInstallResult({
       pluginId: params.pluginId,
       targetDir,
@@ -435,7 +450,11 @@ export async function installPluginDirectoryIntoExtensions(params: {
   const transactionRequest = resolvePluginInstallTransactionRequest(params);
   const installRes = await runtime.installPackageDir(
     transactionRequest
-      ? requestDeferredPackageDirInstall(packageInstallParams, transactionRequest.assertOwned)
+      ? requestDeferredPackageDirInstall(
+          packageInstallParams,
+          transactionRequest.assertOwned,
+          transactionRequest.prepareSettlement,
+        )
       : packageInstallParams,
   );
   if (!installRes.ok) {

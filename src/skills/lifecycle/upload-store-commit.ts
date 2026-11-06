@@ -1,10 +1,6 @@
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../../infra/kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
@@ -16,7 +12,7 @@ import {
   deleteExpiredSkillUploadUnlessLeasedInDatabase,
   readSkillUploadArchiveChunks,
   requireUploadMetadata,
-  selectSkillUploadMetadata,
+  requireUploadMetadataInDatabase,
   type SkillUploadDatabase,
   type SkillUploadMetadataRow,
 } from "./upload-store.sqlite.js";
@@ -100,13 +96,7 @@ export function commitSkillUploadInDatabase(
   const outcome = runOpenClawStateWriteTransaction(({ db }): CommitOutcome => {
     admit?.("transaction");
     const kysely = getNodeSqliteKysely<SkillUploadDatabase>(db);
-    const current = executeSqliteQueryTakeFirstSync(
-      db,
-      selectSkillUploadMetadata(kysely).where("upload_id", "=", uploadId),
-    );
-    if (!current) {
-      throw new SkillUploadRequestError(`upload not found: ${uploadId}`);
-    }
+    const current = requireUploadMetadataInDatabase(db, kysely, uploadId);
     const committedAt = Date.now();
     if (!isFutureDateTimestampMs(current.expires_at, { nowMs: committedAt })) {
       deleteExpiredSkillUploadUnlessLeasedInDatabase(db, { uploadId, nowMs: committedAt });

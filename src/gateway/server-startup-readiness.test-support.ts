@@ -1,20 +1,149 @@
 import { expect, it, vi } from "vitest";
+import { runManagerStartupIdentityReconcile } from "../acp/control-plane/manager.startup-identity-reconcile.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import {
   createAgentDatabaseInspectionRefusal,
   recordAgentDatabaseAdmissions,
 } from "../state/agent-database-admission.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-method-policy.js";
+import type { GatewayStartupModuleMocks } from "./server-startup-module-mocks.test-support.js";
 import type { startGatewayPostAttachRuntime } from "./server-startup-post-attach.js";
+import type { postAttachMocks } from "./server-startup-post-attach.mocks.test-support.js";
 import { logGatewayReady } from "./server-startup-readiness.js";
+import type { startGatewaySidecars } from "./server-startup-sidecars.js";
 import type { GatewayStartupTrace } from "./server-startup-trace.js";
 import type { ReadinessChecker } from "./server/readiness.js";
 
 type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntime>[0];
 
+export function createStartupMethodUnlocker(unavailableGatewayMethods: Set<string>) {
+  return () => {
+    for (const method of STARTUP_UNAVAILABLE_GATEWAY_METHODS) {
+      unavailableGatewayMethods.delete(method);
+    }
+  };
+}
+
 export function registerGatewayStartupReadinessTests(params: {
-  start: typeof startGatewayPostAttachRuntime;
+  start: (
+    params: PostAttachParams,
+    runtimeDeps?: GatewayStartupModuleMocks,
+  ) => ReturnType<typeof startGatewayPostAttachRuntime>;
   createParams: (overrides?: Partial<PostAttachParams>) => PostAttachParams;
+  createRuntimeDeps: () => GatewayStartupModuleMocks;
+  path: (...parts: string[]) => string;
+  expectAutonomousSidecarsNotStarted: () => void;
+  startSidecars: (
+    overrides: Partial<Parameters<typeof startGatewaySidecars>[0]>,
+  ) => Promise<number>;
+  waitForState: (assertion: () => void) => Promise<unknown>;
+  acpMocks: Pick<
+    typeof postAttachMocks,
+    "getAcpRuntimeBackend" | "reconcilePendingSessionIdentities"
+  >;
 }): void {
+  it.each([
+    { name: "I/O failure", error: new Error("EIO: session scan failed") },
+    { name: "parse failure", error: new SyntaxError("invalid session metadata") },
+    { name: "successful empty scan", error: null },
+  ])("keeps ACP startup non-fatal and reports $name", async ({ error }) => {
+    const log = { warn: vi.fn() };
+    const cfg = {
+      hooks: { internal: { enabled: false } },
+      acp: { enabled: true, backend: "acpx" },
+    };
+    params.acpMocks.getAcpRuntimeBackend.mockReturnValue({ id: "acpx", runtime: {} });
+    params.acpMocks.reconcilePendingSessionIdentities.mockImplementationOnce(() =>
+      runManagerStartupIdentityReconcile({
+        cfg,
+        deps: {
+          listAcpSessions: async () => {
+            if (error) {
+              throw error;
+            }
+            return [];
+          },
+        },
+        withSessionActor: vi.fn(),
+        resolveSession: vi.fn(),
+        ensureRuntimeHandle: vi.fn(),
+        reconcileRuntimeSessionIdentifiers: vi.fn(),
+      }),
+    );
+
+    await params.startSidecars({ cfg, log });
+    await params.waitForState(() => {
+      expect(params.acpMocks.reconcilePendingSessionIdentities).toHaveBeenCalledOnce();
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    });
+    if (error) {
+      expect(log.warn).toHaveBeenCalledExactlyOnceWith(
+        expect.stringMatching(/acp startup identity reconcile .*checked=0 resolved=0 failed=1/),
+      );
+    } else {
+      expect(log.warn).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each([true, false])(
+    "admits update canary readiness only for attributed plugin failures (attributed=%s)",
+    async (attributed) => {
+      const error = "synthetic registration failure";
+      const diagnostic = {
+        level: "error" as const,
+        message: error,
+        ...(attributed ? { pluginId: "startup-fixture" } : {}),
+      };
+      const pluginRegistry = createEmptyPluginRegistry();
+      pluginRegistry.plugins.push(
+        createPluginRecord({
+          id: "startup-fixture",
+          source: params.path("startup-fixture", "index.js"),
+          status: "error",
+          error,
+        }),
+      );
+      pluginRegistry.diagnostics.push({ ...diagnostic });
+      const onStartupPluginsLoaded =
+        vi.fn<NonNullable<PostAttachParams["onStartupPluginsLoaded"]>>();
+      const onSidecarsReady = vi.fn();
+      const startupParams = params.createParams({
+        updateCanary: true,
+        pluginRegistry: createEmptyPluginRegistry(),
+        loadStartupPlugins: async () => ({ pluginRegistry, gatewayMethods: ["ping"] }),
+        onStartupPluginsLoaded,
+        onSidecarsReady,
+      });
+      const runtimeDeps = params.createRuntimeDeps();
+      const startup = params.start(startupParams, runtimeDeps);
+      if (attributed) {
+        await startup;
+      } else {
+        await expect(startup).rejects.toThrow(
+          "Candidate plugin registry reported an unattributed error",
+        );
+      }
+      expect(onSidecarsReady).toHaveBeenCalledTimes(Number(attributed));
+      expect(startupParams.unlockStartupMethods).toHaveBeenCalledTimes(Number(attributed));
+      const published = onStartupPluginsLoaded.mock.lastCall?.[0].pluginRegistry;
+      expect(published?.plugins).toMatchObject([
+        {
+          id: "startup-fixture",
+          status: "error",
+          activated: true,
+          error,
+        },
+      ]);
+      expect(published?.diagnostics).toEqual([diagnostic]);
+      expect(startupParams.startChannels).not.toHaveBeenCalled();
+      params.expectAutonomousSidecarsNotStarted();
+      expect(runtimeDeps.createGatewayUpdateCheck).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([false, true])(
     "does not announce readiness while a core agent is refused (canary=%s)",
     async (updateCanary) => {
@@ -22,6 +151,7 @@ export function registerGatewayStartupReadinessTests(params: {
         updateCanary,
         getReadiness: () => ({
           ready: false,
+          coreReady: false,
           failing: ["agent-database:main"],
           uptimeMs: 0,
         }),

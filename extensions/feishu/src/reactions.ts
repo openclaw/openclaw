@@ -42,9 +42,6 @@ export async function addReactionFeishu(params: {
   return { reactionId };
 }
 
-/**
- * Remove a reaction from a message.
- */
 export async function removeReactionFeishu(params: {
   cfg: ClawdbotConfig;
   messageId: string;
@@ -64,9 +61,6 @@ export async function removeReactionFeishu(params: {
   assertFeishuApiSuccess(response, "Feishu remove reaction failed");
 }
 
-/**
- * List all reactions for a message.
- */
 export async function listReactionsFeishu(params: {
   cfg: ClawdbotConfig;
   messageId: string;

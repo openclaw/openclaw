@@ -1,9 +1,10 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { isRecord } from "../../utils.js";
 import { isStringOption } from "../../utils/string-readers.js";
 
-const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "on-exit", "stream"] as const;
+const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "on-exit", "stream", "event"] as const;
 const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "script", "command"] as const;
 const CRON_FLAT_PAYLOAD_KEYS = [
   "message",
@@ -16,6 +17,8 @@ const CRON_FLAT_PAYLOAD_KEYS = [
   "timeoutSeconds",
   "toolBudget",
   "lightContext",
+  "includeReasoning",
+  "skipIfScratchEmpty",
   "allowUnsafeExternalContent",
 ] as const;
 const CRON_FLAT_SCHEDULE_KEYS = [
@@ -37,6 +40,8 @@ const CRON_FLAT_SCHEDULE_KEYS = [
   "match",
   "batchMs",
   "maxBatchBytes",
+  "source",
+  "options",
 ] as const;
 const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   "name",
@@ -45,6 +50,8 @@ const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   "owner",
   "schedule",
   "pacing",
+  "activeHours",
+  "idleOnly",
   "trigger",
   "sessionTarget",
   "wakeMode",
@@ -61,6 +68,28 @@ const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   "sessionTargetName",
   ...CRON_FLAT_PAYLOAD_KEYS,
   ...CRON_FLAT_SCHEDULE_KEYS,
+]);
+
+// Only object-valued CronJobSchema fields accept dotted paths; scalar names
+// such as "nightly.report" must not become nested objects.
+const CRON_NESTABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
+  "activeHours",
+  "delivery",
+  "failureAlert",
+  "owner",
+  "pacing",
+  "activeHours",
+  "idleOnly",
+  "payload",
+  "schedule",
+  "trigger",
+]);
+
+/** Path segments that would reach Object.prototype when assigned while nesting. */
+const CRON_UNSAFE_KEY_SEGMENTS: ReadonlySet<string> = new Set([
+  "__proto__",
+  "constructor",
+  "prototype",
 ]);
 
 function isCronScheduleKind(value: unknown): value is (typeof CRON_SCHEDULE_KINDS)[number] {
@@ -128,6 +157,16 @@ function setScheduleAtMs(schedule: Record<string, unknown>, value: unknown): voi
 function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
   const schedule = isRecord(value.schedule) ? { ...value.schedule } : {};
 
+  if (
+    (schedule.command !== undefined || value.command !== undefined) &&
+    !isCronScheduleKind(schedule.kind) &&
+    !isCronScheduleKind(value.kind)
+  ) {
+    throw new Error(
+      'A command schedule needs an explicit schedule.kind. Read the full automations schema and WATCH OUTPUT example before retrying. For a stream, use kind:"stream" and command as an argv array.',
+    );
+  }
+
   if (schedule.atMs !== undefined) {
     setScheduleAtMs(schedule, schedule.atMs);
     delete schedule.atMs;
@@ -164,7 +203,6 @@ function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
   for (const [kind, target, sources] of [
     ["every", "everyMs", ["everyMs", "every"]],
     ["cron", "expr", ["cron", "expr"]],
-    ["on-exit", "command", ["command"]],
   ] as const) {
     // Consume only the first alias; conflicting fields remain for Gateway validation.
     const moved = sources.some((source) => moveDefinedField(value, schedule, source, target));
@@ -172,6 +210,8 @@ function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
       schedule.kind = kind;
     }
   }
+
+  moveDefinedField(value, schedule, "command");
 
   for (const key of [
     "anchorMs",
@@ -182,6 +222,8 @@ function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
     "match",
     "batchMs",
     "maxBatchBytes",
+    "source",
+    "options",
   ] as const) {
     moveDefinedField(value, schedule, key);
   }
@@ -199,8 +241,6 @@ function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
       schedule.kind = "every";
     } else if (schedule.expr !== undefined) {
       schedule.kind = "cron";
-    } else if (schedule.command !== undefined) {
-      schedule.kind = "on-exit";
     }
   }
 
@@ -233,6 +273,8 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
         isNonEmptyString(payload.thinking) ||
         (typeof payload.timeoutSeconds === "number" && isNonEmptyString(payload.text)) ||
         typeof payload.lightContext === "boolean" ||
+        typeof payload.includeReasoning === "boolean" ||
+        typeof payload.skipIfScratchEmpty === "boolean" ||
         typeof payload.allowUnsafeExternalContent === "boolean" ||
         (payload.fallbacks !== undefined && isStringArrayOrNull(payload.fallbacks));
       if (hasAgentTurnSignal) {
@@ -259,10 +301,69 @@ function repairPaddedCronKeys(value: Record<string, unknown>): void {
   }
 }
 
-/** Converts model-friendly cron tool shorthands into the nested gateway job/patch shape. */
-export function canonicalizeCronToolObject(
+// Strip only paired quotes around the whole dotted key, before splitting it.
+function stripCronKeyQuotes(segment: string): string {
+  if (segment.length >= 2) {
+    const first = segment[0];
+    if ((first === '"' || first === "'") && segment.endsWith(first)) {
+      return segment.slice(1, -1);
+    }
+  }
+  return segment;
+}
+
+// Recover dotted fields without overwriting canonical objects or hiding conflicts.
+function nestDottedCronKey(
   value: Record<string, unknown>,
-): Record<string, unknown> {
+  key: string,
+  entry: unknown,
+  canonicalRoots: ReadonlySet<string>,
+): "recovered" | "conflict" | "ignored" {
+  const segments = stripCronKeyQuotes(key.trim())
+    .split(".")
+    .map((segment) => segment.trim());
+  if (segments[0] === "job") {
+    segments.shift();
+  }
+  const [root, ...rest] = segments;
+  if (rest.length === 0 || !root || !CRON_NESTABLE_OBJECT_KEYS.has(root)) {
+    return "ignored";
+  }
+  if (segments.some((segment) => !segment || CRON_UNSAFE_KEY_SEGMENTS.has(segment))) {
+    return "ignored";
+  }
+  let cursor = value;
+  for (const [index, segment] of segments.entries()) {
+    const last = index === segments.length - 1;
+    if (segment in cursor) {
+      if (last) {
+        return "conflict";
+      }
+      const child = cursor[segment];
+      if (!isRecord(child)) {
+        return "conflict";
+      }
+      // Drop keys shadowed by explicit canonical objects. Newly recovered
+      // objects still accept sibling dotted fields from this pass.
+      if (canonicalRoots.has(root)) {
+        return "recovered";
+      }
+      cursor = child;
+      continue;
+    }
+    if (last) {
+      cursor[segment] = entry;
+      return "recovered";
+    }
+    const child: Record<string, unknown> = {};
+    cursor[segment] = child;
+    cursor = child;
+  }
+  return "recovered";
+}
+
+/** Converts model-friendly cron tool shorthands into the nested gateway job/patch shape. */
+function canonicalizeCronToolObject(value: Record<string, unknown>): Record<string, unknown> {
   const unwrapped = isRecord(value.data) ? value.data : isRecord(value.job) ? value.job : value;
   const next = { ...unwrapped };
   repairPaddedCronKeys(next);
@@ -313,23 +414,35 @@ export function isEmptyRecoveredCronPatch(value: unknown): boolean {
 }
 
 /** Recovers cron job or patch fields that a model flattened beside the action arguments. */
-export function recoverCronObjectFromFlatParams(params: Record<string, unknown>): {
+function recoverCronObjectFromFlatParams(params: Record<string, unknown>): {
   found: boolean;
   value: Record<string, unknown>;
 } {
   const value: Record<string, unknown> = {};
-  let found = false;
   for (const key of Object.keys(params)) {
     if (CRON_RECOVERABLE_OBJECT_KEYS.has(key) && params[key] !== undefined) {
       value[key] = params[key];
-      found = true;
     }
   }
-  return { found, value: canonicalizeCronToolObject(value) };
+  // Dotted keys run as a second pass so a canonical sibling always wins,
+  // whatever the key order the model happened to emit.
+  const canonicalRoots = new Set(Object.keys(value));
+  for (const key of Object.keys(params)) {
+    if (CRON_RECOVERABLE_OBJECT_KEYS.has(key) || params[key] === undefined) {
+      continue;
+    }
+    const outcome = nestDottedCronKey(value, key, params[key], canonicalRoots);
+    if (outcome === "conflict") {
+      // Ambiguous input: preserve the literal key so strict gateway validation
+      // rejects the conflict instead of one value silently winning.
+      value[key] = params[key];
+    }
+  }
+  return { found: Object.keys(value).length > 0, value: canonicalizeCronToolObject(value) };
 }
 
 /** Checks whether a recovered flat object has enough schedule/payload signal to create a job. */
-export function hasCronCreateSignal(value: Record<string, unknown>): boolean {
+function hasCronCreateSignal(value: Record<string, unknown>): boolean {
   return (
     value.schedule !== undefined ||
     value.at !== undefined ||
@@ -341,4 +454,43 @@ export function hasCronCreateSignal(value: Record<string, unknown>): boolean {
     value.message !== undefined ||
     value.text !== undefined
   );
+}
+
+export function prepareCronToolArguments(args: unknown): unknown {
+  if (
+    !isRecord(args) ||
+    (args.action !== "add" && args.action !== "update") ||
+    args.job === undefined ||
+    isRecord(args.job)
+  ) {
+    return args;
+  }
+  const parsedJob = typeof args.job === "string" ? safeParseJsonRecord(args.job) : undefined;
+  if (parsedJob) {
+    return { ...args, job: parsedJob };
+  }
+  const prepared = { ...args };
+  readCronToolJob(prepared, args.action);
+  // Execution must still recognize a recovered update and reject empty patches.
+  prepared.job = undefined;
+  return prepared;
+}
+
+export function readCronToolJob(params: Record<string, unknown>, action: "add" | "update") {
+  let recovered = false;
+  // Models sometimes flatten job fields beside action; create requires a schedule/payload signal.
+  if (!isRecord(params.job) || Object.keys(params.job).length === 0) {
+    const synthetic = recoverCronObjectFromFlatParams(params);
+    if (synthetic.found && (action === "update" || hasCronCreateSignal(synthetic.value))) {
+      params.job = synthetic.value;
+      recovered = true;
+    }
+  }
+  if (!isRecord(params.job)) {
+    throw new Error("job required: provide an object or usable flat job fields");
+  }
+  return {
+    job: canonicalizeCronToolObject(params.job),
+    recovered,
+  };
 }

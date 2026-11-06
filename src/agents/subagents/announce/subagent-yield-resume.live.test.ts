@@ -8,11 +8,11 @@ import type { CommandLaneSnapshot } from "../../../process/command-queue.types.j
 import { runCommandWithTimeout } from "../../../process/exec.js";
 import { isLiveTestEnabled } from "../../live-test-helpers.js";
 import { createSubagentsTool } from "../../tools/subagents-tool.js";
+import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publication.js";
 import {
   countPendingDescendantRuns,
   listSubagentRunsForRequester,
 } from "../registry/subagent-registry-read.js";
-import { onSubagentRegistryPersisted } from "../registry/subagent-registry-state.js";
 import {
   boundedCount,
   commandOutcomes,
@@ -546,7 +546,8 @@ describeLive("OpenAI subagent yield and operator resume stress", () => {
   it.each(["timeout", "cancellation", "service_failure"] as const)(
     "reports a child's %s truthfully while preserving its successful sibling",
     async (interruption) => {
-      await runWithLiveSubagentGateway({}, async ({ gates, start, record, interrogate }) => {
+      await runWithLiveSubagentGateway({}, async (context) => {
+        const { gates, start, record, interrogate, waitForDescendantSettlement } = context;
         const id = randomUUID().replaceAll("-", "");
         const parentKey = `agent:main:live-${interruption}:${id}`;
         const marker = `OUTCOME_${id}`;
@@ -630,7 +631,7 @@ describeLive("OpenAI subagent yield and operator resume stress", () => {
             | { runId: string; requestedAt: number; pendingRequests: number }
             | undefined;
           // The production persistence event observes the claim before admission draining.
-          const unsubscribe = onSubagentRegistryPersisted(() => {
+          const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
             if (claimObserved) {
               return;
             }
@@ -752,9 +753,7 @@ describeLive("OpenAI subagent yield and operator resume stress", () => {
           expect(reply, "late cancelled stdout is not a delivered result").not.toContain(
             lateResult,
           );
-          await until("all child obligations settled", async () =>
-            (await countPendingDescendantRuns(parentKey, () => {})) === 0 ? true : undefined,
-          );
+          await waitForDescendantSettlement(parentKey);
           const finalMessages = await history(parentKey);
           expect(finalReplies(finalMessages, marker)).toHaveLength(1);
           expect(successfulYields(finalMessages)).toBeGreaterThan(0);

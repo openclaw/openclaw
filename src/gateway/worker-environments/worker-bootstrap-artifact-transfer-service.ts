@@ -1,14 +1,11 @@
 import {
   createArtifactTransferService,
-  type ArtifactTransferOptions,
   type TransferArtifact,
 } from "./artifact-transfer-service.js";
 import { workerBootstrapOperationTimeoutMs } from "./bootstrap-timeouts.js";
 
-export function createWorkerBootstrapArtifactTransferService(
-  options: ArtifactTransferOptions = {},
-) {
-  const transfer = createArtifactTransferService(options);
+export function createWorkerBootstrapArtifactTransferService() {
+  const transfer = createArtifactTransferService();
   return {
     ...transfer,
     prepare(params: {
@@ -24,8 +21,9 @@ export function createWorkerBootstrapArtifactTransferService(
         ttlMs: workerBootstrapOperationTimeoutMs({
           tarballBytes: params.transferBytes ?? params.artifact.tarballBytes,
         }),
-        // Proxies can finish receiving an archive before resetting the node's connection.
-        maxServes: 3,
+        // Allow frequent ranged resumes without granting unlimited artifact replays.
+        // The size-derived lifetime and live owner still bound every serial serve.
+        maxServes: 256,
       });
     },
   };

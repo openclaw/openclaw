@@ -9,7 +9,16 @@ on:
     paths: &validation_paths
       - ".github/workflows/node-runtime-conformance.yml"
       - "crates/**"
+      - ".cargo/**"
+      - "rust-toolchain*"
+      - "rustfmt.toml"
+      - ".rustfmt.toml"
+      - "clippy.toml"
+      - ".clippy.toml"
+      - ".gitattributes"
+      - "test/fixtures/node-sidecar-*.json"
       - "packages/gateway-protocol/src/index.ts"
+      - "packages/gateway-protocol/src/version.ts"
       - "packages/gateway-protocol/src/schema/nodes.ts"
       - "packages/gateway-protocol/src/validator-registry.ts"
       - "src/gateway/node-command-policy.ts"
@@ -29,6 +38,7 @@ on:
       - "scripts/lib/**"
       - "test/vitest/**"
       - "vitest*.ts"
+      - "ui/config/control-ui-solid.ts"
       - "tsconfig*.json"
       - "node-version.mjs"
       - ".npmrc"
@@ -36,14 +46,22 @@ on:
       - "patches/**"
       - "package.json"
       - "pnpm-lock.yaml"
-      - "src/gateway/node-command-policy-mobile.ts"
       - "src/infra/node-commands.ts"
       - "packages/normalization-core/**"
+      - "!crates/openclaw-node-host/SIDECAR_PROTOCOL.md"
+      # Standalone Cargo workspace, not part of the shared crates/ build.
+      - "!crates/openclaw-iroh-node/**"
+      - "!patches/README.md"
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
     paths: *validation_paths
 
 concurrency:
-  group: node-runtime-conformance-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
+  # Passive draft events must not cancel useful validation; conversion intentionally does.
+  group: >-
+    ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && github.event.action != 'converted_to_draft'
+      && format('{0}-passive-draft-{1}', github.workflow, github.run_id)
+      || format('node-runtime-conformance-{0}-{1}', github.event_name, github.event.pull_request.number || github.sha) }}
   cancel-in-progress: true
 
 permissions:
@@ -55,25 +73,26 @@ env:
 
 jobs:
   scope:
-    if: github.event_name == 'schedule' && github.repository == 'openclaw/openclaw'
+    if: (github.event_name == 'schedule' && github.repository == 'openclaw/openclaw') || (github.event_name == 'pull_request' && !github.event.pull_request.draft)
     runs-on: ubuntu-24.04
     outputs:
-      changed: ${{ steps.scope.outputs.changed }}
+      changed: ${{ steps.pr_scope.outputs.changed || steps.scope.outputs.changed }}
+      rust_changed: ${{ steps.pr_scope.outputs.rust_changed || steps.rust_scope.outputs.changed }}
     steps:
       - name: Checkout scheduled admission
+        if: github.event_name == 'schedule'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: .github/actions/detect-scheduled-changes
           persist-credentials: false
-      - name: Detect scheduled input changes
+      - name: Detect scheduled TypeScript input changes
+        if: github.event_name == 'schedule'
         id: scope
         uses: ./.github/actions/detect-scheduled-changes
         with:
-          proof-jobs: |
-            TypeScript contracts
-            Rust workspace
+          proof-jobs: TypeScript contracts
           # Reuse is stricter than event admission: include transitive source and tool inputs.
-          paths: |
+          paths: &typescript_inputs |
             .github/workflows/node-runtime-conformance.yml
             .github/actions/detect-scheduled-changes/**
             .github/actions/setup-node-env/**
@@ -90,14 +109,84 @@ jobs:
             scripts/**
             test/**
             vitest*.ts
+            ui/config/control-ui-solid.ts
             tsconfig*.json
             src/**
             packages/**
             crates/**
+      - name: Detect scheduled Rust input changes
+        if: github.event_name == 'schedule'
+        id: rust_scope
+        uses: ./.github/actions/detect-scheduled-changes
+        with:
+          proof-jobs: Rust workspace
+          # Cargo consumes protocol versions and shared fixtures without a Node setup.
+          paths: &rust_inputs |
+            .github/workflows/node-runtime-conformance.yml
+            .github/actions/detect-scheduled-changes/**
+            crates/**
+            packages/gateway-protocol/src/version.ts
+            test/fixtures/**
+            .cargo/**
+            rust-toolchain*
+            rustfmt.toml
+            .rustfmt.toml
+            clippy.toml
+            .clippy.toml
+            .gitattributes
+
+      - name: Select pull request contract owners
+        if: github.event_name == 'pull_request'
+        id: pr_scope
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          TYPESCRIPT_INPUTS: *typescript_inputs
+          RUST_INPUTS: *rust_inputs
+        with:
+          script: |
+            const { matchesGlob } = require('node:path');
+            let changed = true;
+            let rustChanged = true;
+            try {
+              const { base, head } = context.payload.pull_request;
+              if (![base?.sha, head?.sha].every(sha => /^[a-f0-9]{40}$/.test(sha ?? ''))) {
+                throw new Error('missing exact pull request revisions');
+              }
+              const { data } = await github.rest.repos.compareCommitsWithBasehead({
+                ...context.repo, basehead: `${base.sha}...${head.sha}`,
+              });
+              // The compare endpoint caps files at 300; incomplete evidence keeps both proofs.
+              if (!Array.isArray(data.files) || !data.files.length || data.files.length >= 300) {
+                throw new Error('missing or capped changed files');
+              }
+              const paths = data.files.flatMap(file => {
+                if (!['added', 'modified', 'renamed', 'copied', 'changed', 'unchanged'].includes(file.status) ||
+                    typeof file.filename !== 'string' || !file.filename ||
+                    (file.status === 'renamed' && !file.previous_filename) ||
+                    (file.previous_filename !== undefined && typeof file.previous_filename !== 'string')) {
+                  throw new Error('unsupported changed file');
+                }
+                return [file.filename, file.previous_filename].filter(Boolean);
+              });
+              const typescript = process.env.TYPESCRIPT_INPUTS.trim().split('\n');
+              const rust = process.env.RUST_INPUTS.trim().split('\n');
+              const matches = (path, patterns) => patterns.some(pattern => matchesGlob(path, pattern));
+              // UI source and test-line budgets have their own CI owners.
+              const independent = ['ui/src/**', 'config/test-lines-allocations/*.txt'];
+              if (paths.some(path => !matches(path, typescript) && !matches(path, rust) && !matches(path, independent))) {
+                throw new Error('unknown contract input');
+              }
+              changed = paths.some(path => matches(path, typescript));
+              rustChanged = paths.some(path => matches(path, rust));
+            } catch {
+              core.warning('Contract owner lookup incomplete; running both proofs.');
+            }
+            core.setOutput('changed', changed);
+            core.setOutput('rust_changed', rustChanged);
 
   typescript:
     needs: scope
-    if: ${{ !cancelled() && (github.event_name != 'schedule' || needs.scope.outputs.changed == 'true') && (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name != 'schedule' || needs.scope.outputs.changed == 'true') && (github.event_name != 'pull_request' || needs.scope.outputs.changed != 'false') && (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') }}
     name: TypeScript contracts
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -125,7 +214,7 @@ jobs:
 
   rust:
     needs: scope
-    if: ${{ !cancelled() && (github.event_name != 'schedule' || needs.scope.outputs.changed == 'true') && (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name != 'schedule' || needs.scope.outputs.rust_changed == 'true') && (github.event_name != 'pull_request' || needs.scope.outputs.rust_changed != 'false') && (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') }}
     name: Rust workspace
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -139,28 +228,27 @@ jobs:
           submodules: false
 
       - name: Install Rust
-        run: rustup toolchain install 1.93.0 --profile minimal --component clippy,rustfmt
+        run: rustup toolchain install 1.99.0 --profile minimal --component clippy,rustfmt
 
       - name: Cache Cargo
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            crates/target
-          key: node-runtime-${{ runner.os }}-${{ hashFiles('crates/Cargo.lock') }}
-          restore-keys: |
-            node-runtime-${{ runner.os }}-
+          # Keep reusable dependencies, not stale workspace binaries or incremental state.
+          prefix-key: node-runtime
+          workspaces: crates -> target
+          cache-bin: "false"
+          cache-workspace-crates: "false"
+          cmd-format: rustup run 1.99.0 {0}
 
       - name: Check formatting
-        run: cargo +1.93.0 fmt --manifest-path crates/Cargo.toml --all -- --check
+        run: cargo +1.99.0 fmt --manifest-path crates/Cargo.toml --all -- --check
 
       - name: Run tests
-        run: cargo +1.93.0 test --manifest-path crates/Cargo.toml --workspace --locked --all-targets
+        run: cargo +1.99.0 test --manifest-path crates/Cargo.toml --workspace --locked --all-targets
 
       - name: Run Clippy
         run: >-
-          cargo +1.93.0 clippy
+          cargo +1.99.0 clippy
           --manifest-path crates/Cargo.toml
           --workspace
           --locked
@@ -172,7 +260,7 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
         run: >-
-          cargo +1.93.0 doc
+          cargo +1.99.0 doc
           --manifest-path crates/Cargo.toml
           --workspace
           --locked

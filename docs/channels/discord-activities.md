@@ -87,7 +87,7 @@ Keep normal gateway authentication enabled. Only the Activity prefix is public, 
   </Step>
 </Steps>
 
-Core validates and wraps the widget document before handing it to Discord. The presenter accepts HTML source up to 48 KiB, stores the canonical composed document, and always labels the Activity button **Open widget**. The standard `show_widget` pin, name, tab, size, frame, ordering, and capability fields remain available because dashboard state stays core-owned. Registered non-HTML widget kinds are not offered when Discord is the only available presentation route.
+Core validates and wraps the widget document before handing it to Discord. The presenter accepts HTML source up to 48 KiB, stores the final composed document, and always labels the Activity button **Open widget**. The standard `show_widget` pin, name, tab, size, frame, ordering, and capability fields remain available because dashboard state stays core-owned. Registered non-HTML widget kinds are not offered when Discord is the only available presentation route.
 
 ## Security model
 

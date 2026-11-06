@@ -118,6 +118,18 @@ enum GatewayWebSocketTestSupport {
         return Data(json.utf8)
     }
 
+    static func errorResponseData(
+        id: String,
+        code: String,
+        message: String,
+        details: [String: Any]) throws -> Data
+    {
+        try JSONSerialization.data(withJSONObject: [
+            "type": "res", "id": id, "ok": false,
+            "error": ["code": code, "message": message, "details": details],
+        ])
+    }
+
     static func connectAuthFailureData(
         id: String,
         detailCode: String,
@@ -177,13 +189,13 @@ enum GatewayWebSocketTestSupport {
         return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     }
 
-    static func okResponseData(id: String) -> Data {
+    static func okResponseData(id: String, payload: String = #"{"ok":true}"#) -> Data {
         let json = """
         {
           "type": "res",
           "id": "\(id)",
           "ok": true,
-          "payload": { "ok": true }
+          "payload": \(payload)
         }
         """
         return Data(json.utf8)

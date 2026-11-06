@@ -4,116 +4,118 @@ import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as brokerReply from "../../infra/sqlite-worker-broker-reply.js";
-import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
-import type { WorkerSessionTurnClaim } from "./placement-record.js";
-import {
-  createWorkerSessionPlacementStore,
-  type WorkerSessionPlacementStore,
-} from "./placement-store.js";
+import { usePlacementStoreFixture } from "./placement-store-fixture.test-support.js";
+import { sessionIdentity } from "./placement-suite.test-support.js";
 import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 
-let placements: WorkerSessionPlacementStore;
-let stateDir: string;
-const session = {
-  sessionId: "tools-worker-session",
-  agentId: "main",
-  sessionKey: "agent:main:tools-worker-session",
-};
+const session = sessionIdentity("tools-worker-session");
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
     await closeStateDatabaseForTest();
     cleanup();
   }),
 );
+const h = usePlacementStoreFixture(
+  () => tempDirs.make("openclaw-session-tools-worker-"),
+  beforeAll,
+);
 beforeAll(async () => {
-  stateDir = tempDirs.make("openclaw-session-tools-worker-");
-  const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
-  placements = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
-  await advancePlacementFixtureToActive(placements, database, session);
+  await advancePlacementFixtureToActive(h.store, h.database, session);
 });
 afterEach(() => vi.restoreAllMocks());
-const claim = (name: string) =>
-  placements.claimTurn({
+async function claim(name: string) {
+  const source = await h.store.claimTurn({
     ...session,
     claimId: `claim-${name}`,
     runId: `run-${name}`,
     owner: { kind: "worker", environmentId: "environment-placement-claim-close", ownerEpoch: 7 },
   });
-const operation = (source: WorkerSessionTurnClaim) => ({
-  sourceSessionId: source.sessionId,
-  sourceClaimId: source.claimId,
-  toolCallId: "call",
-  requestDigest: "digest",
-});
-const begin = (source: WorkerSessionTurnClaim) => ({
-  claim: source,
-  toolName: "sessions_send" as const,
-  toolCallId: "call",
-  requestDigest: "digest",
-});
+  return h.toolTurn(source);
+}
 
-it("seals admission immediately and drains accepted work without host SQLite", async () => {
-  const source = await claim("drain");
+it("seals admission and drains durable receipts despite a lost completion reply", async () => {
+  const turn = await claim("drain");
   const observed = observeHostDataSql();
   try {
-    await placements.authorizeWorkerTurnTools(source, [" sessions_send "]);
-    expect(placements.isWorkerTurnToolAuthorized(source, "sessions_send")).toBe(true);
-    expect(await placements.beginWorkerSessionToolOperation(begin(source))).toMatchObject({
+    await turn.authorize([" sessions_send "]);
+    expect(turn.authorized()).toBe(true);
+    expect(turn.authorized("sessions_spawn")).toBe(false);
+    expect(await turn.begin()).toMatchObject({
       kind: "execute",
+      operationSeed: expect.any(String),
     });
-    const closing = placements.closeWorkerTurnToolState(source);
-    expect(placements.isWorkerTurnToolAuthorized(source, "sessions_send")).toBe(false);
+    expect(await turn.begin()).toEqual({ kind: "in-progress" });
+    const closing = turn.close();
+    expect(turn.authorized()).toBe(false);
     expect(
-      await placements.beginWorkerSessionToolOperation({ ...begin(source), toolCallId: "late" }),
-    ).toEqual({ kind: "unauthorized" });
-    expect(
-      await placements.completeWorkerSessionToolOperation({
-        ...operation(source),
-        resultJson: "{}",
+      await h.store.beginWorkerSessionToolOperation({
+        ...turn.request,
+        toolCallId: "late",
+        requestDigest: "late-digest",
       }),
-    ).toBe(true);
+    ).toEqual({ kind: "unauthorized" });
+    const verifyCorruption = corruptReply(
+      (value) => value.changed === true && value.toolNames === undefined,
+    );
+    expect(await turn.complete('{"status":"ok"}')).toBe(true);
+    verifyCorruption();
     await closing;
-    await placements.releaseTurn(source);
+    await turn.release();
     expect(observed.queries).toEqual([]);
   } finally {
     observed.restore();
   }
+  expect(turn.authorized()).toBe(false);
+  for (const table of ["worker_turn_tool_authorities", "worker_session_tool_operations"]) {
+    const row = h.database.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get();
+    expect(row).toEqual({ count: 0 });
+  }
 });
 
 it("checks live admission at commit and keeps a refused operation replayable", async () => {
-  const source = await claim("guard");
-  await placements.authorizeWorkerTurnTools(source, ["sessions_send"]);
+  const turn = await claim("guard");
+  await turn.authorize();
   let revoked = false;
-  const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-  vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
+  const createAdmission = admission.createSqliteWorkerOperationAdmission;
+  vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
     (admit, attachment) =>
       createAdmission((request, grant) => {
-        if (request.stage === "commit") {
-          revoked = true;
-        }
+        revoked ||= request.stage === "commit";
         admit(request, grant);
       }, attachment),
   );
   await expect(
-    placements.beginWorkerSessionToolOperation(begin(source), () => {
+    turn.begin(() => {
       if (revoked) {
         throw new Error("synthetic tool caller revoked");
       }
     }),
   ).rejects.toThrow("synthetic tool caller revoked");
-  expect(await placements.beginWorkerSessionToolOperation(begin(source))).toMatchObject({
-    kind: "execute",
-  });
-  await placements.abandonWorkerSessionToolOperation(operation(source));
-  await placements.closeWorkerTurnToolState(source);
-  await placements.releaseTurn(source);
+  expect(await turn.begin()).toMatchObject({ kind: "execute" });
+  await turn.abandon();
 });
 
-function corruptReply(matches: (value: Record<string, unknown>) => boolean) {
+function loseNextAdmissionOutcome() {
+  vi.spyOn(admission, "observeSqliteWorkerCommittedFacts").mockImplementationOnce(() => {});
+  const createAdmission = admission.createSqliteWorkerOperationAdmission;
+  vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
+    (admit, attachment) => ({
+      ...createAdmission(admit, attachment),
+      committed: undefined,
+      settlement: { kind: "unknown" as const },
+    }),
+  );
+  return corruptReply();
+}
+
+function corruptReply(
+  matches: (value: Record<string, unknown>) => boolean = (value) =>
+    isRecord(value.result) && value.result.kind === "execute",
+) {
   const receive = brokerReply.receiveSqliteWorkerReply;
   let corrupted = false;
   vi.spyOn(brokerReply, "receiveSqliteWorkerReply").mockImplementation((slot, reply, owner) => {
@@ -135,118 +137,57 @@ function corruptReply(matches: (value: Record<string, unknown>) => boolean) {
   return () => expect(corrupted).toBe(true);
 }
 
-it("delivers committed terminal receipts even after the worker reply is lost", async () => {
-  const source = await claim("receipt");
-  await placements.authorizeWorkerTurnTools(source, ["sessions_send"]);
-  await placements.beginWorkerSessionToolOperation(begin(source));
-  const verifyCorruption = corruptReply(
-    (value) => value.changed === true && value.toolNames === undefined,
-  );
-  expect(
-    await placements.completeWorkerSessionToolOperation({ ...operation(source), resultJson: "{}" }),
-  ).toBe(true);
-  verifyCorruption();
-  await placements.closeWorkerTurnToolState(source);
-  await placements.releaseTurn(source);
-});
-
 it("reports an uncertain admission to teardown instead of waiting for an unowned operation", async () => {
-  const source = await claim("unknown");
-  await placements.authorizeWorkerTurnTools(source, ["sessions_send"]);
-  const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-  vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
-    (admit, attachment) => {
-      const admission = createAdmission(admit, attachment);
-      return {
-        ...admission,
-        get committed() {
-          return undefined;
-        },
-        get settlement() {
-          return { kind: "unknown" as const };
-        },
-      };
-    },
-  );
-  const verifyCorruption = corruptReply(
-    (value) => isRecord(value.result) && value.result.kind === "execute",
-  );
-  await expect(placements.beginWorkerSessionToolOperation(begin(source))).rejects.toThrow();
+  const turn = await claim("unknown");
+  await turn.authorize();
+  const verifyCorruption = loseNextAdmissionOutcome();
+  await expect(turn.begin()).rejects.toThrow();
   verifyCorruption();
-  expect(placements.isWorkerTurnToolAuthorized(source, "sessions_send")).toBe(false);
-  await expect(placements.closeWorkerTurnToolState(source)).rejects.toThrow(
-    "restart recovery is required",
-  );
+  expect(turn.authorized()).toBe(false);
+  await expect(turn.close()).rejects.toThrow("restart recovery is required");
   // Fixture recovery settles the exact retained row; production retains it for restart recovery.
-  await placements.abandonWorkerSessionToolOperation(operation(source));
-  await placements.closeWorkerTurnToolState(source);
-  await placements.releaseTurn(source);
+  await turn.abandon();
 });
 
 it("cannot fence a reopened owner's same-byte grant with a delayed uncertain outcome or stale close", async () => {
-  const source = await claim("reopened");
-  await placements.authorizeWorkerTurnTools(source, ["sessions_send"]);
-  const previous = placements;
-  const failed = createDeferredCore();
+  const turn = await claim("reopened");
+  await turn.authorize();
+  const { source } = turn;
+  const previous = h.store;
+  const failed = createDeferredCore<unknown>();
   const deliver = createDeferredCore();
-  let originalError: unknown;
   const runOperation = stateWorker.runOpenClawStateWorkerOperation;
   vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementationOnce(
-    async (context, request, options) => {
-      try {
-        return await runOperation(context, request, options);
-      } catch (error) {
-        originalError = error;
-        failed.resolve();
+    (context, request, options) =>
+      runOperation(context, request, options).catch(async (error: unknown) => {
+        failed.resolve(error);
         await deliver.promise;
         throw error;
-      }
-    },
+      }),
   );
-  const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-  vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
-    (admit, attachment) => {
-      const admission = createAdmission(admit, attachment);
-      return {
-        ...admission,
-        get committed() {
-          return undefined;
-        },
-        get settlement() {
-          return { kind: "unknown" as const };
-        },
-      };
-    },
-  );
-  const verifyCorruption = corruptReply(
-    (value) => isRecord(value.result) && value.result.kind === "execute",
-  );
-  const pending = previous.beginWorkerSessionToolOperation(begin(source));
+  const verifyCorruption = loseNextAdmissionOutcome();
+  const pending = turn.begin();
   try {
-    await failed.promise;
+    const originalError = await failed.promise;
     await closeStateDatabaseForTest();
-    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
-    placements = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
-    await placements.recoverWorkerSessionToolOperationsAfterRestart();
-    await placements.releaseTurn(source);
+    h.open();
+    await h.store.recoverWorkerSessionToolOperationsAfterRestart();
+    await h.store.releaseTurn(source);
     const successor = await claim("reopened");
-    expect(successor).toEqual(source);
-    await placements.authorizeWorkerTurnTools(successor, ["sessions_send"]);
+    await successor.authorize();
+    expect(successor.source).toEqual(source);
     const staleClose = previous.closeWorkerTurnToolAdmission(source);
-    expect(placements.isWorkerTurnToolAuthorized(successor, "sessions_send")).toBe(true);
+    expect(successor.authorized()).toBe(true);
     await expect(staleClose).rejects.toThrow();
-    await placements.beginWorkerSessionToolOperation(begin(successor));
+    await successor.begin();
     deliver.resolve();
     await expect(pending).rejects.toBe(originalError);
     verifyCorruption();
-    expect(placements.isWorkerTurnToolAuthorized(successor, "sessions_send")).toBe(true);
-    const closing = placements.closeWorkerTurnToolState(successor);
-    await placements.completeWorkerSessionToolOperation({
-      ...operation(successor),
-      resultJson: "{}",
-    });
+    expect(successor.authorized()).toBe(true);
+    const closing = successor.close();
+    await successor.complete();
     await closing;
-    await placements.releaseTurn(successor);
+    await successor.release();
   } finally {
     deliver.resolve();
     await Promise.allSettled([pending]);

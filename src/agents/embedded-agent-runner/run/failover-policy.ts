@@ -1,6 +1,6 @@
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
-import type { FailoverReason } from "../../embedded-agent-helpers.js";
 import { isCliTerminalStopCode } from "../../failover-error.js";
+import type { FailoverReason } from "../../failover/signal.js";
 
 type ProfileDecision = {
   action: "rotate_profile" | "surface_error";
@@ -18,30 +18,28 @@ type RetryLimitDecisionParams = {
   failoverReason: FailoverReason | null;
 };
 
-type PromptDecisionParams = {
-  stage: "prompt";
+type ProfileDecisionParams = {
   allowFormatRetry?: boolean;
-  externalAbort: boolean;
   fallbackConfigured: boolean;
-  failoverCode?: string;
   failoverFailure: boolean;
   failoverReason: FailoverReason | null;
   harnessOwnsTransport?: boolean;
-  promptTimeoutFallbackSafe?: boolean;
-  timedOutByRunBudget?: boolean;
   profileRotated: boolean;
 };
 
-type AssistantDecisionParams = {
+type PromptDecisionParams = ProfileDecisionParams & {
+  stage: "prompt";
+  externalAbort: boolean;
+  failoverCode?: string;
+  promptTimeoutFallbackSafe?: boolean;
+  timedOutByRunBudget?: boolean;
+};
+
+type AssistantDecisionParams = ProfileDecisionParams & {
   stage: "assistant";
-  allowFormatRetry?: boolean;
   terminal: AgentRunAttemptTerminal;
   signalOwnedInterruption?: boolean;
-  fallbackConfigured: boolean;
-  failoverFailure: boolean;
-  failoverReason: FailoverReason | null;
-  harnessOwnsTransport?: boolean;
-  profileRotated: boolean;
+  errorMessage?: string;
 };
 
 type RunFailoverDecisionParams =
@@ -49,22 +47,11 @@ type RunFailoverDecisionParams =
   | PromptDecisionParams
   | AssistantDecisionParams;
 
-function isTerminalFormatFailure(params: {
-  allowFormatRetry?: boolean;
-  failoverFailure: boolean;
-  failoverReason: FailoverReason | null;
-}): boolean {
+function isTerminalFormatFailure(
+  params: Pick<ProfileDecisionParams, "allowFormatRetry" | "failoverFailure" | "failoverReason">,
+): boolean {
   return (
     params.failoverFailure && params.failoverReason === "format" && params.allowFormatRetry !== true
-  );
-}
-
-function shouldRotatePrompt(params: PromptDecisionParams): boolean {
-  return (
-    params.failoverFailure &&
-    params.failoverReason !== "timeout" &&
-    params.failoverReason !== "tls_certificate" &&
-    !isTerminalFormatFailure(params)
   );
 }
 
@@ -83,9 +70,6 @@ function isConcreteNonTimeoutAssistantFailure(params: AssistantDecisionParams): 
 }
 
 function shouldRotateAssistant(params: AssistantDecisionParams): boolean {
-  if (params.terminal.kind === "timeout" && params.terminal.source === "run_budget") {
-    return false;
-  }
   const timeoutFailure = isAssistantTimeoutFailure(params);
   const harnessOwnedTimeout =
     params.harnessOwnsTransport && (timeoutFailure || params.failoverReason === "timeout");
@@ -131,16 +115,14 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
       reason !== "format" &&
       reason !== "session_expired"
     ) {
-      return {
-        action: "fallback_model",
-        reason,
-      };
+      return { action: "fallback_model", reason };
     }
-    return {
-      action: "return_error_payload",
-    };
+    return { action: "return_error_payload" };
   }
   const surfaceError = { action: "surface_error" as const, reason: params.failoverReason };
+  let shouldRotate: boolean;
+  let shouldFallback: boolean;
+  let fallbackReason: FailoverReason = params.failoverReason ?? "unknown";
 
   if (params.stage === "prompt") {
     // Plugin harnesses can forward CLI terminal codes through failover normalization;
@@ -163,57 +145,60 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
       }
       return surfaceError;
     }
-    if (!params.profileRotated && shouldRotatePrompt(params)) {
-      return {
-        action: "rotate_profile",
-        reason: params.failoverReason,
-      };
+    shouldFallback = params.failoverFailure && !isTerminalFormatFailure(params);
+    shouldRotate =
+      shouldFallback &&
+      params.failoverReason !== "timeout" &&
+      params.failoverReason !== "route_unavailable" &&
+      params.failoverReason !== "tls_certificate";
+  } else {
+    if (
+      params.signalOwnedInterruption ||
+      ((params.terminal.kind === "aborted" || params.terminal.kind === "timeout") &&
+        params.terminal.source === "external") ||
+      isTerminalFormatFailure(params)
+    ) {
+      return surfaceError;
     }
-    if (params.fallbackConfigured && params.failoverFailure && !isTerminalFormatFailure(params)) {
-      return {
-        action: "fallback_model",
-        reason: params.failoverReason ?? "unknown",
-      };
+    if (params.terminal.kind === "timeout" && params.terminal.source === "run_budget") {
+      // This attempt spent its budget; only a replay-safe prompt can move to
+      // the next configured model. The caller owns replay and settlement checks.
+      return params.terminal.phase === "prompt" &&
+        !params.harnessOwnsTransport &&
+        params.fallbackConfigured
+        ? { action: "fallback_model", reason: "timeout" }
+        : { action: "continue_normal" };
     }
-    return surfaceError;
+    // Model absence is shared by credentials; account and plan denials still rotate.
+    if (
+      params.failoverFailure &&
+      (params.failoverReason === "tls_certificate" ||
+        params.failoverReason === "route_unavailable" ||
+        (params.failoverReason === "model_not_found" &&
+          /\b(?:unknown model|invalid model|model[_\-\s]?not[_\-\s]?found|is not a valid model id|models?[/\s:].{0,120}?(?:not found|does not exist|retired|deprecated|no longer available)|[\w./:@-]+ was retired at \d{4}-\d{2}-\d{2}|no endpoints found for)\b/i.test(
+            params.errorMessage ?? "",
+          ) &&
+          !/\b(?:access|permissions?|accounts?|plans?|tiers?|subscriptions?|memberships?|entitlements?|unauthorized|forbidden)\b/i.test(
+            params.errorMessage ?? "",
+          )))
+    ) {
+      return params.fallbackConfigured
+        ? { action: "fallback_model", reason: fallbackReason }
+        : surfaceError;
+    }
+    shouldRotate = shouldRotateAssistant(params);
+    if (!shouldRotate) {
+      return { action: "continue_normal" };
+    }
+    shouldFallback = true;
+    if (!isConcreteNonTimeoutAssistantFailure(params) && isAssistantTimeoutFailure(params)) {
+      fallbackReason = "timeout";
+    }
   }
-
-  if (
-    params.signalOwnedInterruption ||
-    ((params.terminal.kind === "aborted" || params.terminal.kind === "timeout") &&
-      params.terminal.source === "external") ||
-    isTerminalFormatFailure(params)
-  ) {
-    return surfaceError;
+  if (!params.profileRotated && shouldRotate) {
+    return { action: "rotate_profile", reason: params.failoverReason };
   }
-  if (params.failoverFailure && params.failoverReason === "tls_certificate") {
-    return params.fallbackConfigured
-      ? {
-          action: "fallback_model",
-          reason: "tls_certificate",
-        }
-      : surfaceError;
-  }
-  const assistantShouldRotate = shouldRotateAssistant(params);
-  if (!params.profileRotated && assistantShouldRotate) {
-    return {
-      action: "rotate_profile",
-      reason: params.failoverReason,
-    };
-  }
-  if (assistantShouldRotate && params.fallbackConfigured) {
-    return {
-      action: "fallback_model",
-      reason:
-        !isConcreteNonTimeoutAssistantFailure(params) && isAssistantTimeoutFailure(params)
-          ? "timeout"
-          : (params.failoverReason ?? "unknown"),
-    };
-  }
-  if (!assistantShouldRotate) {
-    return {
-      action: "continue_normal",
-    };
-  }
-  return surfaceError;
+  return shouldFallback && params.fallbackConfigured
+    ? { action: "fallback_model", reason: fallbackReason }
+    : surfaceError;
 }

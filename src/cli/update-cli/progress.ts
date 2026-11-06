@@ -1,12 +1,15 @@
 import { spinner } from "@clack/prompts";
 import { UPDATE_RUN_PHASES } from "../../../packages/gateway-protocol/src/update-run-vocabulary.js";
+import { clearActiveProgressLine } from "../../../packages/terminal-core/src/progress-line.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
+import { isStateDatabaseMaintenanceContention } from "../../infra/gateway-state-owner-record.js";
 import { formatUpdateDoctorLintFinding } from "../../infra/update-doctor-lint.js";
 import { formatUpdateFailureFact } from "../../infra/update-failure-facts-format.js";
 import { writeUpdateRunReportArtifact } from "../../infra/update-failure-report-artifact.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
+import { getUpdateRunForProgressAsync } from "../../infra/update-run-reader.js";
 import {
   toPublicUpdateRun,
   updateStepDiagnostics,
@@ -17,9 +20,11 @@ import {
   renderUpdateRunReport,
   updateRunReportInputFromResult,
 } from "../../infra/update-run-report.js";
-import { isFailedUpdateStep } from "../../infra/update-run-step.js";
+import { isFailedUpdateStep, projectUpdateRunResultSteps } from "../../infra/update-run-step.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import { formatJsonConsoleLine, getConsoleSettings } from "../../logging/console.js";
+import { isLogLevelEnabled } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateCommandOptions } from "./shared.js";
 
@@ -30,14 +35,37 @@ const activeUpdateProgress = new Map<
   {
     finish: (record: UpdateRunRecord | undefined) => void;
     pause: () => void;
+    suspendForDoctor: () => Promise<() => void>;
   }
 >();
+
+/**
+ * Update Doctor children take exclusive SQLite custody of shared state. Any open
+ * parent reader blocks that lock, so observation stops, and its in-flight read
+ * settles, before the caller closes parent handles and spawns the child.
+ */
+export async function suspendUpdateProgressForDoctor(runId: string): Promise<() => void> {
+  return (await activeUpdateProgress.get(runId)?.suspendForDoctor()) ?? (() => {});
+}
 const UPDATE_PROGRESS_POLL_MS = 250;
 const UPDATE_STEP_NOTICE_MS = 30_000;
 
+/** Child phase facts stay visible while schema changes defer ledger observation. */
+export function createUpdateDoctorProgress(): ((line: string) => void) | undefined {
+  const settings = getConsoleSettings();
+  if (!isLogLevelEnabled("info", settings.level)) {
+    return undefined;
+  }
+  return (message) => {
+    const line =
+      settings.style === "json" ? formatJsonConsoleLine({ level: "info", message }) : message;
+    clearActiveProgressLine();
+    process.stderr.write(`${line}\n`);
+  };
+}
+
 // These CLI-only callbacks can render the row just committed by their ledger owner.
 export type UpdateDisplayProgress = {
-  onHeartbeat?: UpdateStepProgress["onHeartbeat"];
   onStepStart?: (
     step: Parameters<NonNullable<UpdateStepProgress["onStepStart"]>>[0],
     record?: UpdateRunRecord,
@@ -56,15 +84,6 @@ type ProgressController = {
   dispose: () => void;
 };
 
-function readDisplayRecord(runId: string, env?: NodeJS.ProcessEnv, source = "report") {
-  try {
-    return getUpdateRun(runId, { env });
-  } catch (error) {
-    defaultRuntime.error(`Update ${source} history unavailable: ${formatErrorMessage(error)}`);
-    return undefined;
-  }
-}
-
 export function createUpdateProgress(
   enabled: boolean,
   run?: UpdateCommandOptions["run"],
@@ -76,33 +95,33 @@ export function createUpdateProgress(
   let currentSpinner: ReturnType<typeof spinner> | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let stepNotice: ReturnType<typeof setInterval> | undefined;
-  let currentPhase: UpdateRunPhase | undefined;
+  let currentRecord: UpdateRunRecord | undefined;
+  let pendingRead: AbortController | undefined;
+  let pendingPoll: Promise<void> | undefined;
+  let polling = true;
   let observation: "active" | "suspended" | "disposed" = "active";
   const seenPhases = new Set<UpdateRunPhase>();
   const stop = () => {
-    if (stepNotice) {
-      clearInterval(stepNotice);
-      stepNotice = undefined;
-    }
+    clearInterval(stepNotice);
+    stepNotice = undefined;
     currentSpinner?.clear();
     currentSpinner = null;
   };
   const clearTimer = () => {
-    if (timer) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
+    clearTimeout(timer);
+    timer = undefined;
   };
-  // Candidate migrations can advance the ledger beyond this process's reader.
-  // Step callbacks and final cleanup must respect the same fence as the timer.
-  const read = () =>
-    observation === "active" && run ? readDisplayRecord(run.runId, run.env, "progress") : undefined;
+  const pausePolling = () => {
+    polling = false;
+    clearTimer();
+    pendingRead?.abort();
+  };
   const renderRecord = (record: UpdateRunRecord | undefined) => {
     // Doctor's unbound spinner does not observe ledger phases, even after a write.
     if (observation !== "active" || !run || !record) {
       return;
     }
-    currentPhase = record.phase;
+    currentRecord = record;
     // A child process can cross several phases between reads. Replay the recorded
     // timeline rather than losing fast transitions or inferring unobserved phases.
     for (const phase of UPDATE_RUN_PHASES) {
@@ -128,7 +147,7 @@ export function createUpdateProgress(
     } finally {
       if (terminal) {
         observation = "disposed";
-        clearTimer();
+        pausePolling();
         if (run && activeUpdateProgress.get(run.runId)?.finish === finalize) {
           activeUpdateProgress.delete(run.runId);
         }
@@ -136,32 +155,81 @@ export function createUpdateProgress(
       stop();
     }
   };
-  const poll = () => {
+  const poll = async () => {
     timer = undefined;
-    const record = read();
-    renderRecord(record);
-    if (record?.status === "running") {
-      // The CLI owns this poll only for its active operation; fresh-process
-      // finalization and gateway verification write the same ledger row.
-      timer = setTimeout(poll, UPDATE_PROGRESS_POLL_MS);
-      timer.unref?.();
+    if (!polling || pendingRead || observation !== "active" || !run) {
+      return;
+    }
+    const controller = new AbortController();
+    pendingRead = controller;
+    try {
+      const record = await getUpdateRunForProgressAsync(
+        run.runId,
+        { env: run.env },
+        controller.signal,
+      );
+      // Activation can retire this reader while its native query is settling.
+      if (!controller.signal.aborted) {
+        if (!currentRecord || !record || record.updatedAtMs >= currentRecord.updatedAtMs) {
+          renderRecord(record);
+        }
+        polling = record?.status === "running";
+      }
+    } catch (error) {
+      // Doctor children hold their own custody; observation waits without borrowing it.
+      if (!controller.signal.aborted && !isStateDatabaseMaintenanceContention(error)) {
+        polling = false;
+        defaultRuntime.error(`Update progress history unavailable: ${formatErrorMessage(error)}`);
+      }
+    } finally {
+      pendingRead = undefined;
+      if (polling && observation === "active") {
+        timer = setTimeout(startPoll, UPDATE_PROGRESS_POLL_MS);
+        timer.unref?.();
+      }
+    }
+  };
+  const startPoll = () => {
+    pendingPoll = poll();
+  };
+  const suspend = () => {
+    if (observation === "active") {
+      observation = "suspended";
+      currentRecord = undefined;
+      pausePolling();
+      stop();
+    }
+  };
+  const resume = () => {
+    if (observation === "suspended") {
+      observation = "active";
+      polling = true;
+      startPoll();
     }
   };
   if (run) {
-    // Register only after initial observation so failed setup leaves no callback.
-    poll();
+    startPoll();
     activeUpdateProgress.set(run.runId, {
       finish: finalize,
       pause: () => {
-        clearTimer();
+        pausePolling();
         stop();
+      },
+      suspendForDoctor: async () => {
+        // Another owner's suspension stays theirs to resume.
+        if (observation !== "active") {
+          return () => {};
+        }
+        suspend();
+        await pendingPoll;
+        return resume;
       },
     });
   }
   const progress: UpdateDisplayProgress = {
     onStepStart: (step, record) => {
-      finalize(record ?? read(), false);
-      const label = currentPhase ? `${currentPhase} — ${step.name}` : step.name;
+      finalize(record ?? currentRecord, false);
+      const label = currentRecord ? `${currentRecord.phase} — ${step.name}` : step.name;
       if (process.stdout.isTTY) {
         currentSpinner = spinner({ indicator: "timer" });
         currentSpinner.start(theme.accent(label));
@@ -177,7 +245,7 @@ export function createUpdateProgress(
       }
     },
     onStepComplete: (step, record) => {
-      finalize(record ?? read(), false);
+      finalize(record ?? currentRecord, false);
       printStep(step);
     },
   };
@@ -185,21 +253,9 @@ export function createUpdateProgress(
   return {
     progress,
     stop,
-    suspend: () => {
-      if (observation === "active") {
-        observation = "suspended";
-        currentPhase = undefined;
-        clearTimer();
-        stop();
-      }
-    },
-    resume: () => {
-      if (observation === "suspended") {
-        observation = "active";
-        poll();
-      }
-    },
-    dispose: () => finalize(read(), true),
+    suspend,
+    resume,
+    dispose: () => finalize(currentRecord, true),
   };
 }
 
@@ -211,7 +267,14 @@ function printStep(step: Omit<UpdateStepResult, "cwd">): void {
       : step.signal
         ? ` — interrupted (${step.signal})`
         : "";
-  defaultRuntime.log(`  ${formatStepStatus(step)} ${step.name}${termination} ${duration}`);
+  const statusIcon = step.advisory
+    ? theme.warn("!")
+    : !isFailedUpdateStep(step)
+      ? theme.success("\u2713")
+      : step.exitCode === null
+        ? theme.warn("?")
+        : theme.error("\u2717");
+  defaultRuntime.log(`  ${statusIcon} ${step.name}${termination} ${duration}`);
   for (const finding of step.doctorLintFindings ?? []) {
     defaultRuntime.log(`    ${formatUpdateDoctorLintFinding(finding)}`);
   }
@@ -233,7 +296,10 @@ function printStep(step: Omit<UpdateStepResult, "cwd">): void {
     ? [step.stdoutTail, step.stderrTail]
     : updateStepDiagnostics(step).tails;
   for (const output of tails) {
-    for (const line of (output ?? "").trimEnd().split("\n").slice(-10)) {
+    for (const line of (output ?? "")
+      .trimEnd()
+      .split("\n")
+      .slice(step.termination === "signal" ? -80 : -10)) {
       if (line.trim()) {
         defaultRuntime.log(`    ${color(line)}`);
       }
@@ -241,17 +307,8 @@ function printStep(step: Omit<UpdateStepResult, "cwd">): void {
   }
 }
 
-function formatStepStatus(step: Omit<UpdateStepResult, "cwd">): string {
-  return step.advisory
-    ? theme.warn("!")
-    : !isFailedUpdateStep(step)
-      ? theme.success("\u2713")
-      : step.exitCode === null
-        ? theme.warn("?")
-        : theme.error("\u2717");
-}
-
-export async function printResult(
+/** Prepare history and report artifacts while the caller still owns terminal effects. */
+export async function prepareResult(
   result: UpdateRunResult,
   opts: UpdateCommandOptions,
   reportHints: {
@@ -259,8 +316,11 @@ export async function printResult(
     nextAction?: string;
     record?: UpdateRunRecord;
     readHistory?: boolean;
+    writeArtifacts?: boolean;
   } = {},
-): Promise<void> {
+  assertCurrent?: () => void,
+): Promise<(additionalSteps?: readonly UpdateStepResult[]) => void> {
+  assertCurrent?.();
   const finalizeProgress = result.runId ? activeUpdateProgress.get(result.runId) : undefined;
   // Retire polling before waiting for report IO, including detached recovery.
   finalizeProgress?.pause();
@@ -268,44 +328,83 @@ export async function printResult(
   let report: ReturnType<typeof renderUpdateRunReport> | undefined;
   const readRun =
     result.runId && !reportHints.record && reportHints.readHistory !== false
-      ? () => readDisplayRecord(result.runId!, opts.run?.env)
+      ? () => {
+          assertCurrent?.();
+          try {
+            return getUpdateRun(result.runId!, { env: opts.run?.env });
+          } catch (error) {
+            defaultRuntime.error(`Update report history unavailable: ${formatErrorMessage(error)}`);
+            return undefined;
+          }
+        }
       : undefined;
   // The artifact owner reads under its lock and reconciles after publication.
   // Captured and detached reports never reopen retained history.
   const renderReport = (current?: UpdateRunRecord) => {
+    assertCurrent?.();
     run = reportHints.record ?? current;
-    finalizeProgress?.finish(run);
     report = renderUpdateRunReport(updateRunReportInputFromResult(result, run), {
       ...reportHints,
       mode: result.mode === "unknown" ? run?.target.kind : result.mode,
+      markdownLimit: Infinity,
     });
     return report;
   };
-  const reportPath = await writeUpdateRunReportArtifact({
-    result,
-    report: renderReport,
-    readRun,
-    env: opts.run?.env,
-    detached: reportHints.readHistory === false,
-  }).catch((error: unknown) => {
-    defaultRuntime.error(`Update report could not be saved: ${formatErrorMessage(error)}`);
-    return undefined;
-  });
+  const reportPath =
+    reportHints.writeArtifacts === false
+      ? undefined
+      : await writeUpdateRunReportArtifact({
+          result,
+          report: renderReport,
+          record: reportHints.record,
+          readRun,
+          env: opts.run?.env,
+          detached: reportHints.readHistory === false,
+          assertCurrent,
+        }).catch((error: unknown) => {
+          assertCurrent?.();
+          defaultRuntime.error(`Update report could not be saved: ${formatErrorMessage(error)}`);
+          return undefined;
+        });
+  assertCurrent?.();
   report ??= renderReport(readRun?.());
-  if (opts.json) {
-    defaultRuntime.writeJson({
-      ...result,
-      ...(run ? { run: toPublicUpdateRun(run) } : {}),
-      reportPath,
-    });
-    return;
-  }
-  defaultRuntime.log("");
-  defaultRuntime.log(theme.heading(report.headline));
-  if (reportPath) {
-    defaultRuntime.log(`Report: ${reportPath}`);
-  }
-  for (const line of report.lines) {
-    defaultRuntime.log(line);
-  }
+  const preparedReport = report;
+  return (additionalSteps = []) => {
+    // Optional post-success maintenance runs after executor settlement. Its
+    // diagnostics enrich captured output without reopening history or changing
+    // the update's already prepared outcome/report artifact.
+    const reportedResult = additionalSteps.length
+      ? { ...result, steps: [...result.steps, ...additionalSteps] }
+      : result;
+    const reportedRun = run ? projectUpdateRunResultSteps(run, additionalSteps) : undefined;
+    const outputReport = additionalSteps.length
+      ? renderUpdateRunReport(updateRunReportInputFromResult(reportedResult, reportedRun), {
+          ...reportHints,
+          mode: result.mode === "unknown" ? run?.target.kind : result.mode,
+          markdownLimit: Infinity,
+        })
+      : preparedReport;
+    finalizeProgress?.finish(reportedRun);
+    if (opts.json) {
+      defaultRuntime.writeJson({
+        ...reportedResult,
+        ...(reportedRun ? { run: toPublicUpdateRun(reportedRun) } : {}),
+        reportPath,
+      });
+      return;
+    }
+    defaultRuntime.log("");
+    defaultRuntime.log(theme.heading(outputReport.headline));
+    if (reportPath) {
+      defaultRuntime.log(`Report: ${reportPath}`);
+    }
+    for (const line of outputReport.lines) {
+      defaultRuntime.log(line);
+    }
+  };
+}
+
+export async function printResult(...args: Parameters<typeof prepareResult>): Promise<void> {
+  const emit = await prepareResult(...args);
+  emit();
 }

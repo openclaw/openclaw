@@ -1,24 +1,22 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { writeFixtureJson } from "./cli-fixtures.test-support.js";
 
 export async function writeCompletionPluginFixture(root: string) {
   const pluginDir = path.join(root, "plugin");
   const configPath = path.join(root, "openclaw.json");
   const marker = path.join(root, "action.json");
   await fs.mkdir(pluginDir);
-  await fs.writeFile(
-    path.join(pluginDir, "package.json"),
-    JSON.stringify({
-      name: "completion-options-fixture",
-      version: "1.0.0",
-      type: "module",
-      openclaw: { extensions: ["./index.js"] },
-    }),
-  );
-  await fs.writeFile(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify({ id: "completion-options-fixture", configSchema: { type: "object" } }),
-  );
+  await writeFixtureJson(path.join(pluginDir, "package.json"), {
+    name: "completion-options-fixture",
+    version: "1.0.0",
+    type: "module",
+    openclaw: { extensions: ["./index.js"] },
+  });
+  await writeFixtureJson(path.join(pluginDir, "openclaw.plugin.json"), {
+    id: "completion-options-fixture",
+    configSchema: { type: "object" },
+  });
   await fs.writeFile(
     path.join(pluginDir, "index.js"),
     `import fs from "node:fs";
@@ -41,18 +39,15 @@ export default function register(api) {
   })) });
 }`,
   );
-  await fs.writeFile(
-    configPath,
-    JSON.stringify({
-      logging: { file: path.join(root, "cli.log"), level: "silent", consoleLevel: "silent" },
-      plugins: {
-        allow: ["completion-options-fixture"],
-        load: { paths: [pluginDir] },
-        slots: { memory: "none" },
-        entries: { "completion-options-fixture": { enabled: true } },
-      },
-    }),
-  );
+  await writeFixtureJson(configPath, {
+    logging: { file: path.join(root, "cli.log"), level: "silent", consoleLevel: "silent" },
+    plugins: {
+      allow: ["completion-options-fixture"],
+      load: { paths: [pluginDir] },
+      slots: { memory: "none" },
+      entries: { "completion-options-fixture": { enabled: true } },
+    },
+  });
   return {
     marker,
     env: {

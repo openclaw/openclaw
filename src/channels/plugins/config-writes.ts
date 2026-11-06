@@ -11,9 +11,6 @@ import {
   type ConfigWriteTargetLike,
 } from "./config-write-policy-shared.js";
 
-/**
- * Target affected by a channel config write.
- */
 export type ConfigWriteTarget = ConfigWriteTargetLike;
 
 export const authorizeConfigWrite: (params: {
@@ -31,9 +28,6 @@ export const formatConfigWriteDeniedMessage: (params: {
   fallbackChannelId?: string | null;
 }) => string = formatConfigWriteDeniedMessageShared;
 
-/**
- * Infers the channel config write target from a config path.
- */
 export function resolveConfigWriteTargetFromPath(path: string[]): ConfigWriteTarget {
   return resolveConfigWriteTargetFromPathShared({
     path,
@@ -41,9 +35,6 @@ export function resolveConfigWriteTargetFromPath(path: string[]): ConfigWriteTar
   });
 }
 
-/**
- * Checks whether a gateway client can bypass channel config write policy.
- */
 export function canBypassConfigWritePolicy(params: {
   channel?: string | null;
   gatewayClientScopes?: string[] | null;

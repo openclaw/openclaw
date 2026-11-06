@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { prepareDoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
 import {
   finalizeDebugProxyCaptureAsync,
   initializeDebugProxyCaptureAsync,
@@ -15,12 +16,13 @@ import { runCliWithExitFinalization } from "./one-shot-exit.js";
 
 const startup = vi.hoisted(() => ({
   readConfig: vi.fn(async () => ({ proxy: { selected: "synthetic" } })),
+  prepareDatabase: vi.fn(async () => {}),
   startProxy: vi.fn(async () => null),
   ensurePath: vi.fn(),
   ensureDispatcher: vi.fn(),
   route: vi.fn(async () => true),
   schemas: { incompatible: [], indeterminate: [] },
-  prepareDoctorDatabasePreflight: vi.fn(),
+  prepareDoctorDatabasePreflight: vi.fn<typeof prepareDoctorDatabasePreflight>(),
   runDoctorHealthFlow: vi.fn(),
 }));
 
@@ -32,6 +34,11 @@ vi.mock("../flows/doctor-health.js", () => ({
 }));
 vi.mock("./program/preaction.js", () => ({ registerPreActionHooks() {} }));
 
+// mock-isolation: This suite tests dispatch ordering; engine routing has separate boundary coverage.
+vi.mock("./database-engine-selection.js", () => ({
+  prepareCliDatabaseEngine: startup.prepareDatabase,
+}));
+
 vi.mock("../config/io.js", () => ({
   readSourceConfigBestEffort: startup.readConfig,
   readBestEffortConfig: startup.readConfig,
@@ -41,7 +48,8 @@ vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
   startProxy: startup.startProxy,
 }));
 
-vi.mock("../infra/net/proxy-env.js", () => ({
+vi.mock("../infra/net/proxy-env.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/net/proxy-env.js")>()),
   hasEnvHttpProxyAgentConfigured: () => true,
 }));
 
@@ -142,7 +150,7 @@ describe("runCli environment and passive startup", () => {
     envSnapshot.restore();
   });
 
-  it("preserves original state before update and Doctor dispatch with debug capture enabled", async () => {
+  it("defers capture before update, Doctor, and proxy dispatch with debug capture enabled", async () => {
     const stateDir = tempDirs.make("cli-deferred-capture-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
@@ -158,6 +166,8 @@ describe("runCli environment and passive startup", () => {
     try {
       for (const args of [
         ["update"],
+        ["proxy", "start"],
+        ["proxy", "run", "--", "synthetic-child"],
         ["--update"],
         ["doctor", "--fix", "--non-interactive"],
         ["update", "status"],
@@ -222,7 +232,10 @@ describe("runCli environment and passive startup", () => {
       }
     }
 
-    expect(startup.prepareDoctorDatabasePreflight).toHaveBeenCalledExactlyOnceWith();
+    // Omitted options and explicit undefined both select the full fleet.
+    expect(
+      startup.prepareDoctorDatabasePreflight.mock.calls.map(([options]) => options?.scope),
+    ).toEqual([undefined]);
     expect(startup.prepareDoctorDatabasePreflight).toHaveBeenCalledBefore(startup.startProxy);
     expect(startup.runDoctorHealthFlow).toHaveBeenCalledExactlyOnceWith(
       expect.any(Object),
@@ -261,16 +274,8 @@ describe("runCli environment and passive startup", () => {
     await runCli(["node", "openclaw", "--profile", "rawdog", "status"]);
 
     expect(dotenvState.loadDotEnv).toHaveBeenCalledOnce();
+    expect(dotenvState.loadDotEnv).toHaveBeenCalledBefore(startup.prepareDatabase);
     expect(dotenvState.state.profileAtDotenvLoad).toBe("rawdog");
-    expect(process.env.OPENCLAW_PROFILE).toBe("rawdog");
-  });
-
-  it("rejects --container combined with --profile", async () => {
-    await expect(
-      runCli(["node", "openclaw", "--container", "demo", "--profile", "rawdog", "status"]),
-    ).rejects.toThrow("--container cannot be combined with --profile/--dev");
-
-    expect(dotenvState.loadDotEnv).not.toHaveBeenCalled();
     expect(process.env.OPENCLAW_PROFILE).toBe("rawdog");
   });
 

@@ -1,17 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import { slackHuddlesConfig } from "./config.js";
-import { createSlackHuddlesNodeInvokePolicy } from "./node-invoke-policy.js";
+import { slackHuddlesPlugin } from "../index.js";
 
 describe("Slack huddles node invoke policy", () => {
   it("normalizes channel input and forwards only configured audio commands", async () => {
-    const config = slackHuddlesConfig.resolveConfig({
+    const config = slackHuddlesPlugin.config.resolveConfig({
       chrome: {
         audioInputCommand: ["trusted-input"],
         audioOutputCommand: ["trusted-output"],
       },
     });
     const invokeNode = vi.fn(async () => ({ ok: true as const }));
-    const policy = createSlackHuddlesNodeInvokePolicy(config);
+    const policy = slackHuddlesPlugin.createNodePolicy(config);
     const result = await policy.handle({
       command: "slackhuddles.chrome",
       config: {},
@@ -40,7 +39,7 @@ describe("Slack huddles node invoke policy", () => {
 
   it("rejects a Slack message permalink before invoking the paired node", async () => {
     const invokeNode = vi.fn(async () => ({ ok: true as const }));
-    const policy = createSlackHuddlesNodeInvokePolicy(slackHuddlesConfig.resolveConfig({}));
+    const policy = slackHuddlesPlugin.createNodePolicy(slackHuddlesPlugin.config.resolveConfig({}));
     expect(
       await policy.handle({
         command: "slackhuddles.chrome",

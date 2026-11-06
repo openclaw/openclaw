@@ -47,11 +47,7 @@ function parsePsCpuTimeMs(raw: string): number | null {
 }
 
 function parsePsRssBytes(raw: string): number | null {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const rssKiB = parseStrictFiniteNumber(trimmed);
+  const rssKiB = parseStrictFiniteNumber(raw);
   if (rssKiB === undefined || rssKiB < 0) {
     return null;
   }
@@ -67,23 +63,6 @@ function readLinuxProcessRssBytes(pid: number): number | null {
   } catch {
     return null;
   }
-}
-
-function parseWindowsProcessCpuTimeMs(params: {
-  kernelModeTime: unknown;
-  userModeTime: unknown;
-}): number | null {
-  const kernelModeTime = asNonNegativeFiniteNumber(parseStrictFiniteNumber(params.kernelModeTime));
-  const userModeTime = asNonNegativeFiniteNumber(parseStrictFiniteNumber(params.userModeTime));
-  if (kernelModeTime === undefined || userModeTime === undefined) {
-    return null;
-  }
-  return Math.round((kernelModeTime + userModeTime) / 10_000);
-}
-
-function parseWindowsWorkingSetBytes(raw: unknown): number | null {
-  const parsed = asNonNegativeFiniteNumber(parseStrictFiniteNumber(raw));
-  return parsed === undefined ? null : Math.round(parsed);
 }
 
 function parseWindowsProcessTreeSnapshot(raw: string): ProcessTreeSnapshot | null {
@@ -115,17 +94,15 @@ function parseWindowsProcessTreeSnapshot(raw: string): ProcessTreeSnapshot | nul
     children.push(pid);
     childrenByParent.set(ppid, children);
 
-    const cpuMs = parseWindowsProcessCpuTimeMs({
-      kernelModeTime: entry.KernelModeTime,
-      userModeTime: entry.UserModeTime,
-    });
-    if (cpuMs !== null) {
-      cpuByPid.set(pid, cpuMs);
+    const kernelModeTime = asNonNegativeFiniteNumber(parseStrictFiniteNumber(entry.KernelModeTime));
+    const userModeTime = asNonNegativeFiniteNumber(parseStrictFiniteNumber(entry.UserModeTime));
+    if (kernelModeTime !== undefined && userModeTime !== undefined) {
+      cpuByPid.set(pid, Math.round((kernelModeTime + userModeTime) / 10_000));
     }
 
-    const rssBytes = parseWindowsWorkingSetBytes(entry.WorkingSetSize);
-    if (rssBytes !== null) {
-      rssByPid.set(pid, rssBytes);
+    const rssBytes = asNonNegativeFiniteNumber(parseStrictFiniteNumber(entry.WorkingSetSize));
+    if (rssBytes !== undefined) {
+      rssByPid.set(pid, Math.round(rssBytes));
     }
   }
 

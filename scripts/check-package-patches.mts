@@ -4,21 +4,30 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import YAML from "yaml";
 import { pnpmLockfileDocuments } from "./lib/pnpm-lockfile-documents.mjs";
+import { runAsScript } from "./lib/ts-guard-utils.mts";
 
 const ALLOWED_PATCHED_DEPENDENCIES = new Map([
-  ["@openclaw/proxyline@0.3.12", "patches/@openclaw__proxyline@0.3.12.patch"],
-  ["chrome-devtools-mcp@1.9.0", "patches/chrome-devtools-mcp@1.9.0.patch"],
-  ["@awesome.me/webawesome@3.13.0", "patches/@awesome.me__webawesome@3.13.0.patch"],
+  ["@homebridge/ciao@1.3.12", "patches/@homebridge__ciao@1.3.12.patch"],
+  ["proper-lockfile@4.1.2", "patches/proper-lockfile@4.1.2.patch"],
+  ["@clawdbot/lobster@2026.10.1", "patches/@clawdbot__lobster@2026.10.1.patch"],
+  ["apache-arrow@21.2.0", "patches/apache-arrow@21.2.0.patch"],
+  ["@shinyoshiaki/binary-data@0.6.1", "patches/@shinyoshiaki__binary-data@0.6.1.patch"],
+  ["@openclaw/crabline@0.2.0", "patches/@openclaw__crabline@0.2.0.patch"],
+  ["playwright-core@1.64.1", "patches/playwright-core@1.64.1.patch"],
+  ["minizlib@3.1.0", "patches/minizlib@3.1.0.patch"],
+  ["tar@7.5.22", "patches/tar@7.5.22.patch"],
+  ["chrome-devtools-mcp@1.12.0", "patches/chrome-devtools-mcp@1.12.0.patch"],
   ["@novnc/novnc@1.7.0", "patches/@novnc__novnc@1.7.0.patch"],
-  ["vitest@5.0.1", "patches/vitest@5.0.1.patch"],
+  ["@solidjs/web@2.0.0-rc.18", "patches/@solidjs__web@2.0.0-rc.18.patch"],
+  ["@solidjs/signals@2.0.0-rc.18", "patches/@solidjs__signals@2.0.0-rc.18.patch"],
+  ["vitest@5.0.5", "patches/vitest@5.0.5.patch"],
   ["baileys@7.0.0-rc12", "patches/baileys@7.0.0-rc12.patch"],
   ["baileys@7.0.0-rc13", "patches/baileys@7.0.0-rc13.patch"],
   ["baileys@7.0.0-rc14", "patches/baileys@7.0.0-rc14.patch"],
-  ["matrix-js-sdk@42.4.0", "patches/matrix-js-sdk@42.4.0.patch"],
+  ["matrix-js-sdk@44.0.0", "patches/matrix-js-sdk@44.0.0.patch"],
   ["ghostty-web@0.4.0", "patches/ghostty-web@0.4.0.patch"],
 ]);
 
@@ -121,9 +130,6 @@ function collectPatchFileViolations(cwd: string, violations: PackagePatchViolati
   }
 }
 
-/**
- * Collects disallowed package patch declarations and patch files.
- */
 export function collectPackagePatchViolations(cwd = process.cwd()) {
   const violations: PackagePatchViolation[] = [];
   collectWorkspacePatchViolations(cwd, violations);
@@ -133,9 +139,6 @@ export function collectPackagePatchViolations(cwd = process.cwd()) {
   return violations;
 }
 
-/**
- * Runs the package patch guard.
- */
 export async function main() {
   const violations = collectPackagePatchViolations();
   if (violations.length === 0) {
@@ -154,9 +157,4 @@ export async function main() {
   process.exitCode = 1;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch((error: unknown) => {
-    console.error(error);
-    process.exit(1);
-  });
-}
+runAsScript(import.meta.url, main);

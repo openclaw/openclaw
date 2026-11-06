@@ -1,7 +1,5 @@
 #!/usr/bin/env node
 
-// Reports transitive npm package manifest risks such as lifecycle scripts,
-// exotic specs, and recently published versions.
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
@@ -19,7 +17,6 @@ import {
 const INSTALL_LIFECYCLE_SCRIPTS = ["preinstall", "install", "postinstall", "prepare"];
 const RECENTLY_PUBLISHED_VERSION_TYPE = "recently-published-version";
 const NPM_PACKUMENT_ACCEPT_HEADER = "application/json";
-/** Maximum npm packument response size accepted by the risk scanner. */
 const NPM_PACKUMENT_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const NPM_PACKUMENT_FETCH_TIMEOUT_MS = 60_000;
 
@@ -65,16 +62,6 @@ export async function readBoundedNpmRegistryText(
     formatTooLargeMessage: (_label: string, bytes: number) =>
       `npm registry response exceeded ${bytes} bytes`,
   });
-}
-
-function packageVersionsFromPayload(payload: unknown): PackageVersion[] {
-  return Object.entries(asRecord(payload)).flatMap(([packageName, versions]) =>
-    Array.isArray(versions)
-      ? versions.flatMap((version) =>
-          typeof version === "string" ? [{ packageName, version }] : [],
-        )
-      : [],
-  );
 }
 
 async function loadWorkspaceRiskSettings(rootDir: string) {
@@ -588,17 +575,17 @@ export function renderTransitiveManifestRiskMarkdownReport(report: ManifestRiskR
   return `${lines.join("\n")}\n`;
 }
 
-async function runTransitiveManifestRiskReport(
-  rootDir = process.cwd(),
-  fetchImpl = fetch,
-  now = new Date(),
-) {
-  const lockfileText = await readFile(path.join(rootDir, "pnpm-lock.yaml"), "utf8");
+export async function main(argv = process.argv.slice(2)) {
+  const options = parseReportCliArgs(argv);
+  const fetchImpl = fetch;
+  const now = new Date();
+  const lockfileText = await readFile(path.join(options.rootDir, "pnpm-lock.yaml"), "utf8");
   const payload = createBulkAdvisoryPayload(collectAllResolvedPackagesFromLockfile(lockfileText));
-  const packageVersions = packageVersionsFromPayload(payload);
-  const settings = await loadWorkspaceRiskSettings(rootDir);
-  return createTransitiveManifestRiskReport({
-    packageVersions,
+  const settings = await loadWorkspaceRiskSettings(options.rootDir);
+  const report = await createTransitiveManifestRiskReport({
+    packageVersions: Object.entries(payload).flatMap(([packageName, versions]) =>
+      versions.map((version) => ({ packageName, version })),
+    ),
     now,
     minimumReleaseAgeMinutes: settings.minimumReleaseAgeMinutes,
     minimumReleaseAgeExclude: settings.minimumReleaseAgeExclude,
@@ -610,11 +597,6 @@ async function runTransitiveManifestRiskReport(
         registryBaseUrl: resolveRegistryBaseUrl(),
       }),
   });
-}
-
-export async function main(argv = process.argv.slice(2)) {
-  const options = parseReportCliArgs(argv);
-  const report = await runTransitiveManifestRiskReport(options.rootDir);
   await writeReportArtifact(options.jsonPath, `${JSON.stringify(report, null, 2)}\n`);
   await writeReportArtifact(
     options.markdownPath,

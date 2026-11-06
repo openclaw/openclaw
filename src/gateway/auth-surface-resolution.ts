@@ -1,9 +1,8 @@
-// Gateway auth surface resolver.
 // Centralizes credential precedence for probes and interactive clients.
 import type { OpenClawConfig } from "../config/types.js";
 import { createGatewayCredentialPlan } from "./credential-planner.js";
 import { trimToUndefined, type ExplicitGatewayAuth } from "./credentials.js";
-import { resolveConfiguredSecretInputWithFallback } from "./resolve-configured-secret-input-string.js";
+import { resolveCanonicalConfiguredSecretInputWithFallback } from "./resolve-configured-secret-input-string.js";
 import {
   readGatewaySecretInputValue,
   type SupportedGatewaySecretInputPath,
@@ -23,7 +22,7 @@ function createGatewayCredentialResolver(params: {
   diagnostics: GatewayCredentialDiagnostic[];
 }) {
   return async (path: SupportedGatewaySecretInputPath) => {
-    const resolved = await resolveConfiguredSecretInputWithFallback({
+    const resolved = await resolveCanonicalConfiguredSecretInputWithFallback({
       config: params.config,
       env: params.env,
       value: readGatewaySecretInputValue(params.config, path),

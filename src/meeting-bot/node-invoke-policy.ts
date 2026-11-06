@@ -4,10 +4,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
-import type {
-  OpenClawPluginNodeInvokePolicy,
-  OpenClawPluginNodeInvokePolicyResult,
-} from "../plugins/plugin-registration.types.js";
+import type { OpenClawPluginNodeInvokePolicy } from "../plugins/plugin-registration.types.js";
 import type { MeetingAudioBackendSelection } from "./audio-backend.js";
 import { isMeetingAudioBase64 } from "./audio-base64.js";
 import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
@@ -38,9 +35,7 @@ export type MeetingBrowserNodePolicyOptions = {
   start: MeetingBrowserNodeStartConfig;
 };
 
-type PolicyDecision =
-  | { approved: true; params: Record<string, unknown> }
-  | { approved: false; result: OpenClawPluginNodeInvokePolicyResult };
+type PolicyDecision = { ok: true; params: Record<string, unknown> } | ReturnType<typeof denied>;
 
 function copyCommand(command: string[] | undefined): string[] | undefined {
   return command && command.length > 0 ? [...command] : undefined;
@@ -90,7 +85,7 @@ function denied(options: MeetingBrowserNodePolicyOptions, message: string) {
 }
 
 function approved(params: Record<string, unknown>): PolicyDecision {
-  return { approved: true, params };
+  return { ok: true, params };
 }
 
 function buildStartParams(
@@ -101,20 +96,14 @@ function buildStartParams(
   try {
     url = options.normalizeUrl(params.url);
   } catch (error) {
-    return {
-      approved: false,
-      result: denied(
-        options,
-        error instanceof Error ? error.message : `${options.commandName} start requires url`,
-      ),
-    };
+    return denied(
+      options,
+      error instanceof Error ? error.message : `${options.commandName} start requires url`,
+    );
   }
   const mode = readNonEmptyString(params.mode);
   if (mode && !options.supportedModes.has(mode)) {
-    return {
-      approved: false,
-      result: denied(options, `${options.commandName} start mode is unsupported: ${mode}`),
-    };
+    return denied(options, `${options.commandName} start mode is unsupported: ${mode}`);
   }
   const startParams: Record<string, unknown> = {
     action: "start",
@@ -135,10 +124,7 @@ function denyMissing(
   action: string,
   field: string,
 ): PolicyDecision {
-  return {
-    approved: false,
-    result: denied(options, `${options.commandName} ${action} requires ${field}`),
-  };
+  return denied(options, `${options.commandName} ${action} requires ${field}`);
 }
 
 function buildForwardParams(
@@ -168,13 +154,10 @@ function buildForwardParams(
         try {
           forwarded.url = options.normalizeUrl(url);
         } catch (error) {
-          return {
-            approved: false,
-            result: denied(
-              options,
-              error instanceof Error ? error.message : `${options.commandName} ${action} url`,
-            ),
-          };
+          return denied(
+            options,
+            error instanceof Error ? error.message : `${options.commandName} ${action} url`,
+          );
         }
       }
       if (mode) {
@@ -185,19 +168,7 @@ function buildForwardParams(
       }
       return approved(forwarded);
     }
-    case "pullAudio": {
-      const forwarded: Record<string, unknown> = { action };
-      const bridgeId = readNonEmptyString(params.bridgeId);
-      const timeoutMs = readPositiveNumber(params.timeoutMs);
-      if (!bridgeId) {
-        return denyMissing(options, action, "bridgeId");
-      }
-      forwarded.bridgeId = bridgeId;
-      if (timeoutMs) {
-        forwarded.timeoutMs = timeoutMs;
-      }
-      return approved(forwarded);
-    }
+    case "pullAudio":
     case "pushAudio":
     case "clearAudio": {
       const forwarded: Record<string, unknown> = { action };
@@ -206,15 +177,16 @@ function buildForwardParams(
       if (!bridgeId) {
         return denyMissing(options, action, "bridgeId");
       }
+      if (action === "pullAudio") {
+        const timeoutMs = readPositiveNumber(params.timeoutMs);
+        return approved({ action, bridgeId, ...(timeoutMs ? { timeoutMs } : {}) });
+      }
       if (action === "pushAudio") {
         if (!base64) {
           return denyMissing(options, action, "base64");
         }
         if (!isMeetingAudioBase64(base64)) {
-          return {
-            approved: false,
-            result: denied(options, "base64 must be a valid audio payload"),
-          };
+          return denied(options, "base64 must be a valid audio payload");
         }
       }
       forwarded.bridgeId = bridgeId;
@@ -223,10 +195,7 @@ function buildForwardParams(
       }
       const outputGeneration = asSafeIntegerInRange(params.outputGeneration, { min: 0 });
       if (params.outputGeneration !== undefined && outputGeneration === undefined) {
-        return {
-          approved: false,
-          result: denied(options, "outputGeneration must be a non-negative safe integer"),
-        };
+        return denied(options, "outputGeneration must be a non-negative safe integer");
       }
       if (outputGeneration !== undefined) {
         forwarded.outputGeneration = outputGeneration;
@@ -258,12 +227,10 @@ export function createMeetingBrowserNodeInvokePolicy(
       const decision =
         action === "start"
           ? buildStartParams(params, options)
-          : (buildForwardParams(params, options) ?? {
-              approved: false as const,
-              result: denied(options, `unsupported ${options.commandName} action`),
-            });
-      if (!decision.approved) {
-        return decision.result;
+          : (buildForwardParams(params, options) ??
+            denied(options, `unsupported ${options.commandName} action`));
+      if (!decision.ok) {
+        return decision;
       }
       return await ctx.invokeNode({ params: decision.params });
     },

@@ -1,7 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WorkerToolSurface } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { bindBeforeToolCallMetadata } from "../agents/before-tool-call-metadata.js";
+import { setMcpCodeModeGuestResult } from "../agents/mcp-content.js";
+import { markToolExecutionRefused } from "../agents/tool-effect-receipt.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { WorkerConnection } from "./worker-connection.js";
 
 export function createWorkerGatewayToolProxies(
@@ -50,12 +53,25 @@ export function createWorkerGatewayToolProxies(
           if (!response.ok) {
             throw new Error(response.error.message);
           }
-          return { ...response.payload, details: response.payload.details };
+          const { mcpGuestResult, mcpBlockedReason, ...payload } = response.payload;
+          const result = { ...payload, details: payload.details };
+          if (!entry.plugin?.mcp) {
+            return result;
+          }
+          if (mcpBlockedReason !== undefined) {
+            return markToolExecutionRefused(result, { kind: "blocked", reason: mcpBlockedReason });
+          }
+          return mcpGuestResult !== undefined
+            ? setMcpCodeModeGuestResult(result, mcpGuestResult)
+            : result;
         } finally {
           signal?.removeEventListener("abort", cancel);
         }
       },
     };
+    if (entry.plugin) {
+      setPluginToolMeta(tool, entry.plugin);
+    }
     // The retained Gateway implementation owns before/after hooks for this call.
     bindBeforeToolCallMetadata(tool, {
       sourceTool: { ...tool },

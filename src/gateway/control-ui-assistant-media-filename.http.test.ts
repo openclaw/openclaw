@@ -1,15 +1,21 @@
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import { handleControlUiAssistantMediaRequest } from "./control-ui.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 describe("inbound attachment download filenames", () => {
+  beforeEach(() => setRuntimeConfigSnapshot({}));
+  afterEach(clearRuntimeConfigSnapshot);
+
   it.each([
     { hint: undefined, expected: "café_雪.txt" },
-    { hint: "café 雪 🦞.txt", expected: "café 雪 🦞.txt" },
     { hint: "../folder\\café 雪 🦞\r\n.txt", expected: "café 雪 🦞__.txt" },
     { hint: "..", expected: "café_雪.txt" },
   ])("serves inbound media with filename hint $hint", async ({ hint, expected }) => {

@@ -1,4 +1,3 @@
-// Shared session cost and usage accounting type contracts.
 import type { NormalizedUsage } from "../agents/usage.js";
 import type { Usage } from "../llm/types.js";
 export type {
@@ -20,10 +19,11 @@ export type UsageCostTranscriptFile = {
   inode?: number;
   eventCount?: number;
   maxSeq?: number;
+  generation?: string | null;
+  cold?: boolean;
 };
 
 export type ParsedTranscriptEntry = {
-  message: Record<string, unknown>;
   role?: "user" | "assistant";
   timestamp?: Date;
   durationMs?: number;
@@ -69,6 +69,7 @@ export type CostUsageSummary = {
     pendingFiles: number;
     staleFiles: number;
     refreshedAt?: number;
+    partial?: { reason: "aggregate-boundary"; message: string };
   };
 };
 

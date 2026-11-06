@@ -6,6 +6,7 @@ import codexPlugin from "../../extensions/codex/index.js";
 import {
   dualRoutes,
   routeResolverFactory,
+  mockRouteResolverFactory,
 } from "../../src/agents/model-auth-availability.test-support.js";
 import { createModelCatalogDecisions } from "../../src/agents/model-catalog-decisions.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
@@ -14,7 +15,7 @@ import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 
 describe("registered Codex runtime choices", () => {
-  it.each(["api_key", "oauth", "token"] as const)(
+  it.each(["api_key", "oauth"] as const)(
     "keeps native %s authentication with its registered harness",
     async (mode) => {
       await withOpenClawTestState(
@@ -53,19 +54,29 @@ describe("registered Codex runtime choices", () => {
             preparedSyntheticAuthComplete: true,
             pluginRegistry: registry,
             isCurrent: () => true,
-            routeResolverFactory: routeResolverFactory(dualRoutes),
           };
+          mockRouteResolverFactory(routeResolverFactory(dualRoutes));
           const owner = createModelCatalogDecisions({
             ...params,
             preparedRuntimeAuthModes: { codex: { source: "native", mode } },
           });
 
-          expect(await owner.runtimeChoices(entry)).toEqual(["codex"]);
+          expect(owner.runtimeChoices(entry)).toEqual(["codex"]);
+          mockRouteResolverFactory(routeResolverFactory(dualRoutes));
           expect(
-            await createModelCatalogDecisions({
+            createModelCatalogDecisions({
               ...params,
               preparedRuntimeAuthModes: {},
             }).runtimeChoices(entry),
+          ).toBeUndefined();
+          const observedEntry = { ...entry, nativeRuntime: "codex" };
+          mockRouteResolverFactory(routeResolverFactory(dualRoutes));
+          expect(
+            createModelCatalogDecisions({
+              ...params,
+              snapshot: { entries: [observedEntry], routeVariants: [observedEntry] },
+              preparedRuntimeAuthModes: {},
+            }).runtimeChoices(observedEntry),
           ).toEqual([]);
         },
       );

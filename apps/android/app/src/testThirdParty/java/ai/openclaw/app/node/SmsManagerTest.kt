@@ -1,5 +1,6 @@
 package ai.openclaw.app.node
 
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -11,7 +12,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SmsManagerTest {
-  private val json = SmsManager.JsonConfig
+  private val json = Json
 
   private fun smsMessage(
     id: Long,
@@ -36,7 +37,7 @@ class SmsManagerTest {
 
   @Test
   fun parseParamsRejectsEmptyPayload() {
-    val result = SmsManager.parseParams("", json)
+    val result = SmsManager.parseParams("")
     assertTrue(result is SmsManager.ParseResult.Error)
     val error = result as SmsManager.ParseResult.Error
     assertEquals("INVALID_REQUEST: paramsJSON required", error.error)
@@ -44,7 +45,7 @@ class SmsManagerTest {
 
   @Test
   fun parseParamsRejectsInvalidJson() {
-    val result = SmsManager.parseParams("not-json", json)
+    val result = SmsManager.parseParams("not-json")
     assertTrue(result is SmsManager.ParseResult.Error)
     val error = result as SmsManager.ParseResult.Error
     assertEquals("INVALID_REQUEST: expected JSON object", error.error)
@@ -52,7 +53,7 @@ class SmsManagerTest {
 
   @Test
   fun parseParamsRejectsNonObjectJson() {
-    val result = SmsManager.parseParams("[]", json)
+    val result = SmsManager.parseParams("[]")
     assertTrue(result is SmsManager.ParseResult.Error)
     val error = result as SmsManager.ParseResult.Error
     assertEquals("INVALID_REQUEST: expected JSON object", error.error)
@@ -60,16 +61,15 @@ class SmsManagerTest {
 
   @Test
   fun parseParamsRejectsMissingTo() {
-    val result = SmsManager.parseParams("{\"message\":\"Hi\"}", json)
+    val result = SmsManager.parseParams("{\"message\":\"Hi\"}")
     assertTrue(result is SmsManager.ParseResult.Error)
     val error = result as SmsManager.ParseResult.Error
     assertEquals("INVALID_REQUEST: 'to' phone number required", error.error)
-    assertEquals("Hi", error.message)
   }
 
   @Test
   fun parseParamsRejectsMissingMessage() {
-    val result = SmsManager.parseParams("{\"to\":\"+1234\"}", json)
+    val result = SmsManager.parseParams("{\"to\":\"+1234\"}")
     assertTrue(result is SmsManager.ParseResult.Error)
     val error = result as SmsManager.ParseResult.Error
     assertEquals("INVALID_REQUEST: 'message' text required", error.error)
@@ -78,16 +78,16 @@ class SmsManagerTest {
 
   @Test
   fun parseParamsTrimsToField() {
-    val result = SmsManager.parseParams("{\"to\":\"  +1555  \",\"message\":\"Hello\"}", json)
+    val result = SmsManager.parseParams("{\"to\":\"  +1555  \",\"message\":\"Hello\"}")
     assertTrue(result is SmsManager.ParseResult.Ok)
     val ok = result as SmsManager.ParseResult.Ok
-    assertEquals("+1555", ok.params.to)
-    assertEquals("Hello", ok.params.message)
+    assertEquals("+1555", ok.to)
+    assertEquals("Hello", ok.message)
   }
 
   @Test
   fun parseQueryParamsDefaultsWhenPayloadEmpty() {
-    val result = SmsManager.parseQueryParams(null, json)
+    val result = SmsManager.parseQueryParams(null)
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
     assertEquals(25, ok.params.limit)
@@ -98,7 +98,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsRejectsInvalidJson() {
-    val result = SmsManager.parseQueryParams("not-json", json)
+    val result = SmsManager.parseQueryParams("not-json")
     assertTrue(result is SmsManager.QueryParseResult.Error)
     val error = result as SmsManager.QueryParseResult.Error
     assertEquals("INVALID_REQUEST: expected JSON object", error.error)
@@ -106,7 +106,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsRejectsInvertedTimeRange() {
-    val result = SmsManager.parseQueryParams("{\"startTime\":200,\"endTime\":100}", json)
+    val result = SmsManager.parseQueryParams("{\"startTime\":200,\"endTime\":100}")
     assertTrue(result is SmsManager.QueryParseResult.Error)
     val error = result as SmsManager.QueryParseResult.Error
     assertEquals("INVALID_REQUEST: startTime must be less than or equal to endTime", error.error)
@@ -114,7 +114,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsClampsLimitAndOffset() {
-    val result = SmsManager.parseQueryParams("{\"limit\":999,\"offset\":-5}", json)
+    val result = SmsManager.parseQueryParams("{\"limit\":999,\"offset\":-5}")
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
     assertEquals(200, ok.params.limit)
@@ -138,7 +138,6 @@ class SmsManagerTest {
           "offset": 2
         }
         """.trimIndent(),
-        json,
       )
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
@@ -157,7 +156,6 @@ class SmsManagerTest {
   fun buildPayloadJsonEscapesFields() {
     val payload =
       SmsManager.buildPayloadJson(
-        json = json,
         ok = false,
         to = "+1\"23",
         error = "SMS_SEND_FAILED: \"nope\"",
@@ -172,7 +170,6 @@ class SmsManagerTest {
   fun buildQueryPayloadJsonIncludesCountAndMessages() {
     val payload =
       SmsManager.buildQueryPayloadJson(
-        json = json,
         ok = true,
         messages =
           listOf(
@@ -210,7 +207,6 @@ class SmsManagerTest {
   fun buildQueryPayloadJsonIncludesErrorOnFailure() {
     val payload =
       SmsManager.buildQueryPayloadJson(
-        json = json,
         ok = false,
         messages = emptyList(),
         error = "SMS_QUERY_FAILED: nope",
@@ -225,7 +221,6 @@ class SmsManagerTest {
   fun buildQueryPayloadJsonIncludesMmsMetadataWhenProvided() {
     val payload =
       SmsManager.buildQueryPayloadJson(
-        json = json,
         ok = true,
         messages = listOf(smsMessage(id = 1L, date = 1000L)),
         queryMetadata =
@@ -259,7 +254,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsAcceptsEmptyPayload() {
-    val result = SmsManager.parseQueryParams(null, json)
+    val result = SmsManager.parseQueryParams(null)
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
     assertEquals(25, ok.params.limit)
@@ -268,7 +263,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsRejectsNonObjectJson() {
-    val result = SmsManager.parseQueryParams("[]", json)
+    val result = SmsManager.parseQueryParams("[]")
     assertTrue(result is SmsManager.QueryParseResult.Error)
     val error = result as SmsManager.QueryParseResult.Error
     assertEquals("INVALID_REQUEST: expected JSON object", error.error)
@@ -276,7 +271,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsParsesLimitAndOffset() {
-    val result = SmsManager.parseQueryParams("{\"limit\":10,\"offset\":5}", json)
+    val result = SmsManager.parseQueryParams("{\"limit\":10,\"offset\":5}")
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
     assertEquals(10, ok.params.limit)
@@ -285,7 +280,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsClampsLimitRange() {
-    val result = SmsManager.parseQueryParams("{\"limit\":300}", json)
+    val result = SmsManager.parseQueryParams("{\"limit\":300}")
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
     assertEquals(200, ok.params.limit)
@@ -293,7 +288,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsParsesPhoneNumber() {
-    val result = SmsManager.parseQueryParams("{\"phoneNumber\":\"+1234567890\"}", json)
+    val result = SmsManager.parseQueryParams("{\"phoneNumber\":\"+1234567890\"}")
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
     assertEquals("+1234567890", ok.params.phoneNumber)
@@ -301,7 +296,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsParsesContactName() {
-    val result = SmsManager.parseQueryParams("{\"contactName\":\"lixuankai\"}", json)
+    val result = SmsManager.parseQueryParams("{\"contactName\":\"lixuankai\"}")
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
     assertEquals("lixuankai", ok.params.contactName)
@@ -309,7 +304,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsParsesKeyword() {
-    val result = SmsManager.parseQueryParams("{\"keyword\":\"test\"}", json)
+    val result = SmsManager.parseQueryParams("{\"keyword\":\"test\"}")
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
     assertEquals("test", ok.params.keyword)
@@ -317,7 +312,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsParsesTimeRange() {
-    val result = SmsManager.parseQueryParams("{\"startTime\":1000,\"endTime\":2000}", json)
+    val result = SmsManager.parseQueryParams("{\"startTime\":1000,\"endTime\":2000}")
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
     assertEquals(1000L, ok.params.startTime)
@@ -326,7 +321,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsParsesType() {
-    val result = SmsManager.parseQueryParams("{\"type\":1}", json)
+    val result = SmsManager.parseQueryParams("{\"type\":1}")
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
     assertEquals(1, ok.params.type)
@@ -334,7 +329,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsParsesReadStatus() {
-    val result = SmsManager.parseQueryParams("{\"isRead\":true}", json)
+    val result = SmsManager.parseQueryParams("{\"isRead\":true}")
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
     assertEquals(true, ok.params.isRead)
@@ -342,7 +337,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsIncludeMmsDefaultsFalse() {
-    val result = SmsManager.parseQueryParams("{}", json)
+    val result = SmsManager.parseQueryParams("{}")
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
     assertFalse(ok.params.includeMms)
@@ -350,7 +345,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsParsesIncludeMmsTrue() {
-    val result = SmsManager.parseQueryParams("{\"includeMms\":true}", json)
+    val result = SmsManager.parseQueryParams("{\"includeMms\":true}")
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
     assertTrue(ok.params.includeMms)
@@ -358,7 +353,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsParsesConversationReviewTrue() {
-    val result = SmsManager.parseQueryParams("{\"conversationReview\":true}", json)
+    val result = SmsManager.parseQueryParams("{\"conversationReview\":true}")
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
     assertTrue(ok.params.conversationReview)
@@ -510,111 +505,86 @@ class SmsManagerTest {
   }
 
   @Test
-  fun upsertTopDateCandidatesKeepsDescendingOrderAndBounds() {
-    val candidates = mutableListOf<Pair<String, SmsMessage>>()
-    val max = 2
+  fun mixedCandidatesKeepDescendingOrderAndBounds() {
+    val candidates = SmsManager.MixedByPhoneCandidates(maxCandidates = 2, reviewMode = false)
 
-    SmsManager.upsertTopDateCandidates(candidates, "sms:1", smsMessage(id = 1L, date = 1700L), max)
-    SmsManager.upsertTopDateCandidates(candidates, "sms:2", smsMessage(id = 2L, date = 2000L), max)
-    SmsManager.upsertTopDateCandidates(candidates, "sms:3", smsMessage(id = 3L, date = 1500L), max)
+    candidates.add("sms:1", smsMessage(id = 1L, date = 1700L))
+    candidates.add("sms:2", smsMessage(id = 2L, date = 2000L))
+    candidates.add("sms:3", smsMessage(id = 3L, date = 1500L))
 
-    assertEquals(listOf(2L, 1L), candidates.map { it.second.id })
-    assertEquals(listOf(2000L, 1700L), candidates.map { it.second.date })
+    val page = candidates.page(SmsManager.QueryParams())
+    assertEquals(listOf(2L, 1L), page.map { it.id })
+    assertEquals(listOf(2000L, 1700L), page.map { it.date })
   }
 
   @Test
-  fun upsertTopDateCandidatesSupportsDefaultMixedPathBoundedWindow() {
+  fun mixedCandidatesSupportDefaultBoundedWindow() {
     val params = SmsManager.QueryParams(limit = 3, offset = 2, includeMms = true, phoneNumber = "+15551234567")
-    val candidates = mutableListOf<Pair<String, SmsMessage>>()
-    val max = params.offset + params.limit
+    val candidates = SmsManager.MixedByPhoneCandidates(params.offset + params.limit, reviewMode = false)
 
-    SmsManager.upsertTopDateCandidates(candidates, "sms:1", smsMessage(id = 1L, date = 1000L), max)
-    SmsManager.upsertTopDateCandidates(candidates, "sms:2", smsMessage(id = 2L, date = 2000L), max)
-    SmsManager.upsertTopDateCandidates(candidates, "sms:3", smsMessage(id = 3L, date = 3000L), max)
-    SmsManager.upsertTopDateCandidates(candidates, "sms:4", smsMessage(id = 4L, date = 4000L), max)
-    SmsManager.upsertTopDateCandidates(candidates, "sms:5", smsMessage(id = 5L, date = 5000L), max)
-    SmsManager.upsertTopDateCandidates(candidates, "sms:6", smsMessage(id = 6L, date = 6000L), max)
+    candidates.add("sms:1", smsMessage(id = 1L, date = 1000L))
+    candidates.add("sms:2", smsMessage(id = 2L, date = 2000L))
+    candidates.add("sms:3", smsMessage(id = 3L, date = 3000L))
+    candidates.add("sms:4", smsMessage(id = 4L, date = 4000L))
+    candidates.add("sms:5", smsMessage(id = 5L, date = 5000L))
+    candidates.add("sms:6", smsMessage(id = 6L, date = 6000L))
 
-    assertEquals(5, candidates.size)
-    assertEquals(listOf(6L, 5L, 4L, 3L, 2L), candidates.map { it.second.id })
-    assertEquals(listOf(4000L, 3000L, 2000L), SmsManager.pageByPhoneCandidates(candidates.map { it.second }, params).map { it.date })
+    val retained = candidates.page(SmsManager.QueryParams())
+    assertEquals(5, retained.size)
+    assertEquals(listOf(6L, 5L, 4L, 3L, 2L), retained.map { it.id })
+    assertEquals(listOf(4000L, 3000L, 2000L), candidates.page(params).map { it.date })
   }
 
   @Test
-  fun upsertTopDateCandidatesDedupesBySourceAwareIdentityAndKeepsBestOrdering() {
-    val candidates = mutableListOf<Pair<String, SmsMessage>>()
-    val max = 5
+  fun mixedCandidatesDedupeBySourceAwareIdentityAndKeepBestOrdering() {
+    val candidates = SmsManager.MixedByPhoneCandidates(maxCandidates = 5, reviewMode = false)
 
-    SmsManager.upsertTopDateCandidates(candidates, "sms:1987", smsMessage(id = 1987L, date = 1773950752506L), max)
-    SmsManager.upsertTopDateCandidates(candidates, "sms:1986", smsMessage(id = 1986L, date = 1773899354039L), max)
-    SmsManager.upsertTopDateCandidates(candidates, "sms:1985", smsMessage(id = 1985L, date = 1773872989602L), max)
-    SmsManager.upsertTopDateCandidates(candidates, "sms:1981", smsMessage(id = 1981L, date = 1773790733566L), max)
-    SmsManager.upsertTopDateCandidates(candidates, "sms:1976", smsMessage(id = 1976L, date = 1773784153770L), max)
+    candidates.add("sms:1987", smsMessage(id = 1987L, date = 1773950752506L, transportType = "sms"))
+    candidates.add("sms:1986", smsMessage(id = 1986L, date = 1773899354039L, transportType = "sms"))
+    candidates.add("sms:1985", smsMessage(id = 1985L, date = 1773872989602L, transportType = "sms"))
+    candidates.add("sms:1981", smsMessage(id = 1981L, date = 1773790733566L, transportType = "sms"))
+    candidates.add("sms:1976", smsMessage(id = 1976L, date = 1773784153770L, transportType = "sms"))
 
     // same source-aware identity should replace, not duplicate
-    SmsManager.upsertTopDateCandidates(candidates, "sms:1986", smsMessage(id = 1986L, date = 1773899354039L), max)
+    candidates.add("sms:1986", smsMessage(id = 1986L, date = 1773899354039L, transportType = "sms"))
     // different source-aware identity with same raw id must be preserved
-    SmsManager.upsertTopDateCandidates(candidates, "mms:1986", smsMessage(id = 1986L, date = 1773899354038L), max)
+    candidates.add("mms:1986", smsMessage(id = 1986L, date = 1773899354038L, transportType = "mms"))
 
-    assertEquals(5, candidates.size)
-    assertEquals(2, candidates.count { it.second.id == 1986L })
-    assertEquals(listOf("sms:1987", "sms:1986", "mms:1986", "sms:1985", "sms:1981"), candidates.map { it.first })
+    val page = candidates.page(SmsManager.QueryParams())
+    assertEquals(5, page.size)
+    assertEquals(2, page.count { it.id == 1986L })
+    assertEquals(listOf("sms:1987", "sms:1986", "mms:1986", "sms:1985", "sms:1981"), page.map { "${it.transportType}:${it.id}" })
+
+    for (reviewMode in listOf(false, true)) {
+      val tied = SmsManager.MixedByPhoneCandidates(maxCandidates = 2, reviewMode = reviewMode)
+      tied.add("sms:1", smsMessage(id = 1L, date = 1000L, body = "original"))
+      tied.add("mms:1", smsMessage(id = 1L, date = 1000L, body = "MMS", transportType = "mms"))
+      tied.add("sms:1", smsMessage(id = 1L, date = 1000L, body = "replacement"))
+      val expected = if (reviewMode) listOf("replacement", "MMS") else listOf("MMS", "replacement")
+      assertEquals(expected, tied.page(SmsManager.QueryParams()).map { it.body })
+    }
   }
 
   @Test
-  fun collectMixedByPhoneCandidateUsesBoundedCollectorWhenReviewModeDisabled() {
-    val topCandidates = mutableListOf<Pair<String, SmsMessage>>()
-    val materializedCandidates = linkedMapOf<String, SmsMessage>()
+  fun mixedCandidatesUseBoundedCollectorWhenReviewModeDisabled() {
+    val candidates = SmsManager.MixedByPhoneCandidates(maxCandidates = 1, reviewMode = false)
+    candidates.add("sms:1", smsMessage(id = 1L, date = 1000L))
+    candidates.add("mms:2", smsMessage(id = 2L, date = 2000L, transportType = "mms"))
 
-    SmsManager.collectMixedByPhoneCandidate(
-      topCandidates = topCandidates,
-      materializedCandidates = materializedCandidates,
-      identityKey = "sms:1",
-      message = smsMessage(id = 1L, date = 1000L),
-      maxCandidates = 1,
-      reviewMode = false,
-    )
-    SmsManager.collectMixedByPhoneCandidate(
-      topCandidates = topCandidates,
-      materializedCandidates = materializedCandidates,
-      identityKey = "mms:2",
-      message = smsMessage(id = 2L, date = 2000L, transportType = "mms"),
-      maxCandidates = 1,
-      reviewMode = false,
-    )
-
-    assertEquals(listOf(2L), topCandidates.map { it.second.id })
-    assertTrue(materializedCandidates.isEmpty())
+    assertEquals(listOf(2L), candidates.page(SmsManager.QueryParams()).map { it.id })
   }
 
   @Test
-  fun collectMixedByPhoneCandidateMaterializesFullSetWhenReviewModeEnabled() {
-    val topCandidates = mutableListOf<Pair<String, SmsMessage>>()
-    val materializedCandidates = linkedMapOf<String, SmsMessage>()
+  fun mixedCandidatesMaterializeFullSetWhenReviewModeEnabled() {
+    val candidates = SmsManager.MixedByPhoneCandidates(maxCandidates = 1, reviewMode = true)
+    candidates.add("sms:1", smsMessage(id = 1L, date = 1000L))
+    candidates.add("mms:2", smsMessage(id = 2L, date = 2000L, transportType = "mms"))
 
-    SmsManager.collectMixedByPhoneCandidate(
-      topCandidates = topCandidates,
-      materializedCandidates = materializedCandidates,
-      identityKey = "sms:1",
-      message = smsMessage(id = 1L, date = 1000L),
-      maxCandidates = 1,
-      reviewMode = true,
-    )
-    SmsManager.collectMixedByPhoneCandidate(
-      topCandidates = topCandidates,
-      materializedCandidates = materializedCandidates,
-      identityKey = "mms:2",
-      message = smsMessage(id = 2L, date = 2000L, transportType = "mms"),
-      maxCandidates = 1,
-      reviewMode = true,
-    )
-
-    assertTrue(topCandidates.isEmpty())
-    assertEquals(listOf(1L, 2L), materializedCandidates.values.map { it.id })
+    assertEquals(listOf(2L, 1L), candidates.page(SmsManager.QueryParams()).map { it.id })
   }
 
   @Test
-  fun pageMixedByPhoneCandidatesLetsReviewModeSurfaceOlderRowsBeyondBoundedDefaultWindow() {
+  fun mixedCandidatesReviewModeSurfacesOlderRowsBeyondBoundedDefaultWindow() {
     val params =
       SmsManager.QueryParams(
         limit = 2,
@@ -623,44 +593,33 @@ class SmsManagerTest {
         phoneNumber = "+15551234567",
         conversationReview = true,
       )
-    val topCandidates =
+    val bounded = SmsManager.MixedByPhoneCandidates(maxCandidates = 3, reviewMode = false)
+    val review = SmsManager.MixedByPhoneCandidates(maxCandidates = 3, reviewMode = true)
+    val messages =
       listOf(
-        "sms:9" to smsMessage(id = 9L, date = 9000L),
-        "sms:8" to smsMessage(id = 8L, date = 8000L),
-        "sms:7" to smsMessage(id = 7L, date = 7000L),
-      )
-    val materializedCandidates =
-      linkedMapOf(
         "sms:9" to smsMessage(id = 9L, date = 9000L),
         "sms:8" to smsMessage(id = 8L, date = 8000L),
         "sms:7" to smsMessage(id = 7L, date = 7000L),
         "mms:6" to smsMessage(id = 6L, date = 6000L, transportType = "mms"),
       )
 
-    val defaultPage =
-      SmsManager.pageMixedByPhoneCandidates(
-        topCandidates = topCandidates,
-        materializedCandidates = materializedCandidates,
-        params = params.copy(conversationReview = false),
-        reviewMode = false,
-      )
-    val reviewPage =
-      SmsManager.pageMixedByPhoneCandidates(
-        topCandidates = topCandidates,
-        materializedCandidates = materializedCandidates,
-        params = params,
-        reviewMode = true,
-      )
+    messages.forEach { (identity, message) ->
+      bounded.add(identity, message)
+      review.add(identity, message)
+    }
+    val defaultPage = bounded.page(params.copy(conversationReview = false))
+    val reviewPage = review.page(params)
 
     assertEquals(listOf(7L), defaultPage.map { it.id })
     assertEquals(listOf(7L, 6L), reviewPage.map { it.id })
-    assertEquals(4, materializedCandidates.size)
+    assertEquals(4, review.page(SmsManager.QueryParams()).size)
   }
 
   @Test
-  fun pageByPhoneCandidatesHonorsDeepOffsetAfterStableSort() {
+  fun mixedCandidatesHonorDeepOffsetAfterStableSort() {
     val params = SmsManager.QueryParams(limit = 5, offset = 5, includeMms = true)
-    val candidates =
+    val candidates = SmsManager.MixedByPhoneCandidates(params.offset + params.limit, reviewMode = false)
+    val messages =
       listOf(
         smsMessage(id = 1399L, date = 1741112335720L),
         smsMessage(id = 1976L, date = 1773784153770L),
@@ -670,15 +629,16 @@ class SmsManagerTest {
         smsMessage(id = 1987L, date = 1773950752506L),
       )
 
-    assertEquals(listOf(1399L), SmsManager.pageByPhoneCandidates(candidates, params).map { it.id })
-    assertTrue(SmsManager.pageByPhoneCandidates(candidates, params.copy(offset = 10)).isEmpty())
+    messages.forEach { candidates.add("sms:${it.id}", it) }
+    assertEquals(listOf(1399L), candidates.page(params).map { it.id })
+    assertTrue(candidates.page(params.copy(offset = 10)).isEmpty())
   }
 
   @Test
-  fun upsertTopDateCandidatesNoOpWhenMaxIsZero() {
-    val candidates = mutableListOf<Pair<String, SmsMessage>>()
-    SmsManager.upsertTopDateCandidates(candidates, "sms:1", smsMessage(id = 1L, date = 2000L), 0)
-    assertTrue(candidates.isEmpty())
+  fun mixedCandidatesNoOpWhenMaxIsZero() {
+    val candidates = SmsManager.MixedByPhoneCandidates(maxCandidates = 0, reviewMode = false)
+    candidates.add("sms:1", smsMessage(id = 1L, date = 2000L))
+    assertTrue(candidates.page(SmsManager.QueryParams()).isEmpty())
   }
 
   @Test
@@ -858,7 +818,7 @@ class SmsManagerTest {
   }
 
   @Test
-  fun effectiveSearchParamsRaisesConversationReviewLimitFloor() {
+  fun resolveSearchParamsRaisesConversationReviewLimitFloor() {
     val params =
       SmsManager.QueryParams(
         limit = 5,
@@ -873,16 +833,16 @@ class SmsManagerTest {
         conversationReview = true,
       )
 
-    assertEquals(25, SmsManager.effectiveSearchParams(params).limit)
-    assertEquals(40, SmsManager.effectiveSearchParams(params.copy(limit = 40)).limit)
-    assertEquals(5, SmsManager.effectiveSearchParams(params.copy(conversationReview = false)).limit)
+    assertEquals(25, SmsManager.resolveSearchParams(params, params.phoneNumber).limit)
+    assertEquals(40, SmsManager.resolveSearchParams(params.copy(limit = 40), params.phoneNumber).limit)
+    assertEquals(5, SmsManager.resolveSearchParams(params.copy(conversationReview = false), params.phoneNumber).limit)
 
     val singleResolvedContact = params.copy(phoneNumber = null, contactName = "Leah")
-    assertEquals(25, SmsManager.effectiveSearchParams(singleResolvedContact, listOf("15551234567")).limit)
-    assertEquals(5, SmsManager.effectiveSearchParams(singleResolvedContact, listOf("15551234567", "15557654321")).limit)
+    assertEquals(25, SmsManager.resolveSearchParams(singleResolvedContact, null, listOf("15551234567")).limit)
+    assertEquals(5, SmsManager.resolveSearchParams(singleResolvedContact, null, listOf("15551234567", "15557654321")).limit)
     assertEquals(
-      SmsManager.effectiveSearchParams(params).limit,
-      SmsManager.effectiveSearchParams(singleResolvedContact, listOf("15551234567")).limit,
+      SmsManager.resolveSearchParams(params, params.phoneNumber).limit,
+      SmsManager.resolveSearchParams(singleResolvedContact, null, listOf("15551234567")).limit,
     )
   }
 

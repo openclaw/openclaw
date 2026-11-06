@@ -15,7 +15,7 @@ Adds embedding provider support, including memory search.
 ## Distribution
 
 - Package: `@openclaw/voyage-provider`
-- Install route: npm or ClawHub: `clawhub:@openclaw/voyage-provider`
+- Install route: npm or ClawHub: `@openclaw/voyage-provider`
 
 ## Surface
 

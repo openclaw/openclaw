@@ -7,6 +7,7 @@ import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { sendUpdateResultTelemetry } from "./update-result-telemetry.js";
 import { inspectUpdateRepairDriverAdmission } from "./update-run-activity.js";
 import type { UpdateRunLedgerOptions } from "./update-run-codec.js";
 import type { InterruptedUpdateGatewayObservation } from "./update-run-interruption-health.js";
@@ -21,8 +22,9 @@ import {
 } from "./update-run-interruption-worker.js";
 import { hasStoredUpdateRecovery, readUpdateRunRecord } from "./update-run-read.kernel.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
+import { upsertStep } from "./update-run-step-upsert.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
-import { persistRun, updateRunLedgerSchema, upsertStep } from "./update-run-write.js";
+import { persistRun, updateRunLedgerSchema } from "./update-run-write.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 export { readInstalledUpdateCandidate } from "./update-run-interruption-store.js";
 
@@ -79,21 +81,22 @@ export function recordPostCoreUpdateEvidence(
 
 /** Correct only a proven interrupted completion; all other terminal outcomes remain immutable. */
 export async function reconcileInterruptedUpdateRuns(
-  input: { env?: NodeJS.ProcessEnv; signal?: AbortSignal } = {},
-  onCandidate?: (runId: string) => void,
+  input: { env?: NodeJS.ProcessEnv; signal?: AbortSignal; candidate?: UpdateRunRecord } = {},
 ): Promise<UpdateRunRecord[]> {
   const env = { ...(input.env ?? process.env) };
   const options = { env, path: resolveOpenClawStateSqlitePath(env) };
   const context = captureOpenClawStateWorkerContext(options);
   // A later invocation may have installed the same build. Never attribute its
   // serving result to an older occurrence merely because the versions agree.
-  const expected = await readInterruptedUpdateCandidateAsync(options, context);
+  const expected =
+    "candidate" in input
+      ? input.candidate
+      : await readInterruptedUpdateCandidateAsync(options, context);
   const candidate = expected ? readInstalledUpdateCandidate(expected) : undefined;
   if (!expected || !candidate || !canSettleInterruptedUpdate(expected)) {
     return [];
   }
   input.signal?.throwIfAborted();
-  onCandidate?.(expected.runId);
   const managed = expected.steps.some(
     (step) => step.step === "restarting" && step.status === "completed",
   );
@@ -140,7 +143,7 @@ export async function reconcileInterruptedUpdateRuns(
     observed: InterruptedUpdateGatewayObservation,
   ) => {
     const detail =
-      `Interrupted update settle probe: ${observed.outcome} after ${observed.elapsedMs} ms during ${observed.phase}.` +
+      `Interrupted update settle check: ${observed.outcome} after ${observed.elapsedMs} ms during ${observed.phase}.` +
       (observed.waitOutcome ? ` Health wait: ${observed.waitOutcome}.` : "") +
       (observed.timeout
         ? ` Deadline timed-out after ${observed.timeout.elapsedMs} ms during ${observed.timeout.phase}.`
@@ -153,7 +156,10 @@ export async function reconcileInterruptedUpdateRuns(
             ? " Installed and serving candidate verified."
             : managed
               ? " Continuing without verified completion; will retry. Check openclaw update status."
-              : " No completed managed-service restart was recorded; probing skipped.");
+              : " No completed managed-service restart was recorded; checking skipped.") +
+      (observed.channelWarnings?.length
+        ? ` Channel health warnings: ${observed.channelWarnings.join(", ")}. Run openclaw channels status --probe.`
+        : "");
     const result = await persistInterruptedUpdateObservationAsync(
       context,
       {
@@ -164,6 +170,9 @@ export async function reconcileInterruptedUpdateRuns(
       },
       input.signal,
     );
+    if (result?.accepted && result.updateResult) {
+      void sendUpdateResultTelemetry(result.updateResult, { env });
+    }
     if (result?.accepted || observed.cleanup === "unknown") {
       console.warn(`[openclaw] ${detail}`);
     }

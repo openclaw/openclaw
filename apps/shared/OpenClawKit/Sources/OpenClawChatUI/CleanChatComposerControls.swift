@@ -63,7 +63,7 @@ struct CompactChatAttachmentLabel: View {
 
     var body: some View {
         Image(systemName: "plus")
-            .font(OpenClawChatTypography.display(size: 20, weight: .semibold, relativeTo: .body))
+            .font(.system(size: OpenClawChatTypography.scaled(20), weight: .semibold))
             .foregroundStyle(.secondary)
             .frame(
                 width: self.controlSize,
@@ -242,81 +242,6 @@ struct OpenClawChatAttachmentsStrip: View {
 }
 
 #if !os(macOS)
-struct OpenClawChatAttachmentMenu<ExtraItems: View>: View {
-    @Binding var showsPhotoPicker: Bool
-    @Binding var showsFileImporter: Bool
-    @Binding var showsCameraPicker: Bool
-    let isAttachmentInputEnabled: Bool
-    let extraItems: ExtraItems
-
-    init(
-        showsPhotoPicker: Binding<Bool>,
-        showsFileImporter: Binding<Bool>,
-        showsCameraPicker: Binding<Bool>,
-        isAttachmentInputEnabled: Bool,
-        @ViewBuilder extraItems: () -> ExtraItems)
-    {
-        self._showsPhotoPicker = showsPhotoPicker
-        self._showsFileImporter = showsFileImporter
-        self._showsCameraPicker = showsCameraPicker
-        self.isAttachmentInputEnabled = isAttachmentInputEnabled
-        self.extraItems = extraItems()
-    }
-
-    var body: some View {
-        Menu {
-            Button {
-                self.showsPhotoPicker = true
-            } label: {
-                Label {
-                    Text("Photo Library")
-                        .font(OpenClawChatTypography.body)
-                } icon: {
-                    Image(systemName: "photo.on.rectangle")
-                }
-            }
-            .disabled(!self.isAttachmentInputEnabled)
-
-            #if canImport(UIKit)
-            Button {
-                self.showsCameraPicker = true
-            } label: {
-                Label {
-                    Text("Camera")
-                        .font(OpenClawChatTypography.body)
-                } icon: {
-                    Image(systemName: "camera")
-                }
-            }
-            .disabled(
-                !self.isAttachmentInputEnabled ||
-                    !UIImagePickerController.isSourceTypeAvailable(.camera))
-            #endif
-
-            Button {
-                self.showsFileImporter = true
-            } label: {
-                Label {
-                    Text("File")
-                        .font(OpenClawChatTypography.body)
-                } icon: {
-                    Image(systemName: "folder")
-                }
-            }
-            .disabled(!self.isAttachmentInputEnabled)
-
-            Divider()
-            self.extraItems
-        } label: {
-            CompactChatAttachmentLabel()
-        }
-        .help("Composer options")
-        .accessibilityLabel("Composer options")
-        .accessibilityIdentifier("chat-attachment-picker")
-        .buttonStyle(.plain)
-    }
-}
-
 #if canImport(UIKit)
 struct OpenClawChatCameraPicker: UIViewControllerRepresentable {
     let onImage: @MainActor (UIImage) -> Void
@@ -420,7 +345,7 @@ struct OpenClawChatMicButton: View {
     private var label: some View {
         let showsStop = self.isDictationPending || self.dictationControl?.isActive == true
         return Image(systemName: showsStop ? "stop.fill" : "mic")
-            .font(OpenClawChatTypography.display(size: 17, weight: .medium, relativeTo: .body))
+            .font(.system(size: OpenClawChatTypography.scaled(17), weight: .medium))
             .foregroundStyle(showsStop ? OpenClawChatTheme.accent : .secondary)
             .frame(width: self.controlSize, height: self.controlSize)
             .contentShape(Rectangle())

@@ -64,3 +64,4 @@ export {
   type WhatsAppQaDriverObservedMessage,
   type WhatsAppQaDriverSession,
 } from "./src/qa-driver.runtime.js";
+export { createWhatsAppQaAuthState } from "./src/qa-auth.js";

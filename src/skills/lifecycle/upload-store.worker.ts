@@ -1,9 +1,8 @@
-import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import { requestSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type {
-  OpenClawStateDatabase,
-  OpenClawStateDatabaseOptions,
-} from "../../state/openclaw-state-db.js";
+  WorkerOperationContext,
+  WorkerOperationHandlers,
+} from "../../state/worker-operation-registry.js";
 import { commitSkillUploadInDatabase } from "./upload-store-commit.js";
 import {
   appendSkillUploadChunkInDatabase,
@@ -15,69 +14,33 @@ import {
 } from "./upload-store.kernel.js";
 import { deleteOwnedSkillUpload, renewSkillUploadInstallLease } from "./upload-store.sqlite.js";
 
-type Operation<F extends (...args: never[]) => unknown> = {
-  input: Parameters<F>[0];
-  output: ReturnType<F>;
-};
-export type SkillUploadWorkerOperations = {
-  "skillUploads.begin": Operation<typeof beginSkillUploadInDatabase>;
-  "skillUploads.chunk": Operation<typeof appendSkillUploadChunkInDatabase>;
-  "skillUploads.commit": Operation<typeof commitSkillUploadInDatabase>;
-  "skillUploads.expired": Operation<typeof listExpiredSkillUploadsInDatabase>;
-  "skillUploads.deleteExpired": Operation<typeof deleteExpiredSkillUploadInDatabase>;
-  "skillUploads.claim": Operation<typeof claimSkillUploadInDatabase>;
-  "skillUploads.renew": {
-    input: Omit<Parameters<typeof renewSkillUploadInstallLease>[0], "options">;
-    output: boolean;
-  };
-  "skillUploads.consume": {
-    input: { uploadId: string; owner: string };
-    output: ReturnType<typeof deleteOwnedSkillUpload>;
-  };
-  "skillUploads.release": Operation<typeof releaseSkillUploadInDatabase>;
-};
+const admit = (stage: "transaction" | "commit") =>
+  requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
 
-export function isSkillUploadCommand(command: {
-  type: string;
-  input: unknown;
-}): command is SqliteWorkerCommand<SkillUploadWorkerOperations> {
-  return (
-    command.type === "skillUploads.begin" ||
-    command.type === "skillUploads.chunk" ||
-    command.type === "skillUploads.commit" ||
-    command.type === "skillUploads.expired" ||
-    command.type === "skillUploads.deleteExpired" ||
-    command.type === "skillUploads.claim" ||
-    command.type === "skillUploads.renew" ||
-    command.type === "skillUploads.consume" ||
-    command.type === "skillUploads.release"
-  );
+function withDatabase<Input, Output>(
+  operation: (
+    input: Input,
+    options: Parameters<typeof beginSkillUploadInDatabase>[1],
+    admission?: typeof admit,
+  ) => Output,
+  admission?: typeof admit,
+) {
+  return (input: Input, { open, stateOptions }: WorkerOperationContext): Output =>
+    operation(input, { database: open(), ...stateOptions() }, admission);
 }
 
-export function executeSkillUploadCommand(
-  command: SqliteWorkerCommand<SkillUploadWorkerOperations>,
-  options: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },
-): SkillUploadWorkerOperations[keyof SkillUploadWorkerOperations]["output"] {
-  const admit = (stage: "transaction" | "commit") =>
-    requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
-  switch (command.type) {
-    case "skillUploads.begin":
-      return beginSkillUploadInDatabase(command.input, options, admit);
-    case "skillUploads.chunk":
-      return appendSkillUploadChunkInDatabase(command.input, options, admit);
-    case "skillUploads.commit":
-      return commitSkillUploadInDatabase(command.input, options, admit);
-    case "skillUploads.expired":
-      return listExpiredSkillUploadsInDatabase(command.input, options);
-    case "skillUploads.deleteExpired":
-      return deleteExpiredSkillUploadInDatabase(command.input, options);
-    case "skillUploads.claim":
-      return claimSkillUploadInDatabase(command.input, options);
-    case "skillUploads.renew":
-      return renewSkillUploadInstallLease({ ...command.input, options });
-    case "skillUploads.consume":
-      return deleteOwnedSkillUpload(command.input.uploadId, command.input.owner, options);
-    case "skillUploads.release":
-      return releaseSkillUploadInDatabase(command.input, options);
-  }
-}
+export const skillUploadOperations = {
+  "skillUploads.begin": withDatabase(beginSkillUploadInDatabase, admit),
+  "skillUploads.chunk": withDatabase(appendSkillUploadChunkInDatabase, admit),
+  "skillUploads.commit": withDatabase(commitSkillUploadInDatabase, admit),
+  "skillUploads.expired": withDatabase(listExpiredSkillUploadsInDatabase),
+  "skillUploads.deleteExpired": withDatabase(deleteExpiredSkillUploadInDatabase),
+  "skillUploads.claim": withDatabase(claimSkillUploadInDatabase),
+  "skillUploads.renew": (
+    input: Omit<Parameters<typeof renewSkillUploadInstallLease>[0], "options">,
+    { open, stateOptions },
+  ) => renewSkillUploadInstallLease({ ...input, options: { database: open(), ...stateOptions() } }),
+  "skillUploads.consume": (input: { uploadId: string; owner: string }, { open, stateOptions }) =>
+    deleteOwnedSkillUpload(input.uploadId, input.owner, { database: open(), ...stateOptions() }),
+  "skillUploads.release": withDatabase(releaseSkillUploadInDatabase),
+} satisfies WorkerOperationHandlers;

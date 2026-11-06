@@ -1,7 +1,19 @@
+import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+  pauseVirtualClock,
+  startControlUiE2eServer,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  observeTerminalControllers,
+  readTerminalCanvasState,
+} from "./terminal-controller.test-support.ts";
+import { terminalSession } from "./workspace-terminal.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI terminal runtime isolation",
@@ -10,24 +22,6 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
-
-type BrowserTerminalController = {
-  terminal: {
-    getSelection: () => string;
-    wasmTerm?: {
-      getLine: (row: number) => Array<{ codepoint: number }> | null;
-    };
-  };
-  dispose: () => void;
-  write: (bytes: Uint8Array) => void;
-};
-
-type BrowserTerminalFactory = (options: {
-  autoFit: boolean;
-  parent: HTMLElement;
-  readOnly: boolean;
-  size: { columns: number; rows: number };
-}) => Promise<BrowserTerminalController>;
 
 async function loadRuntime(page: Page): Promise<void> {
   const moduleUrl = new URL("src/components/terminal/terminal-runtime.ts", suite.server.baseUrl)
@@ -55,20 +49,228 @@ async function loadRuntime(page: Page): Promise<void> {
         .openclawTerminalRuntimeModule,
     ),
   );
+  await page.evaluate(() => {
+    (window as RuntimeWindow).createFixtureTerminal = async (style, signal) => {
+      const runtime = await (window as RuntimeWindow).openclawTerminalRuntimeModule;
+      const host = document.body.appendChild(document.createElement("div"));
+      host.style.cssText = style ?? "";
+      try {
+        const controller = await runtime.createIsolatedGhosttyTerminal({
+          parent: host,
+          autoFit: false,
+          readOnly: true,
+          size: { columns: 80, rows: 24 },
+          signal,
+        });
+        return { host, controller };
+      } catch (error) {
+        host.remove();
+        throw error;
+      }
+    };
+  });
 }
 
 suite.define(() => {
+  it("confirms successful terminal selection copies without claiming failed or pending copies", async () => {
+    await suite.withPage(
+      {
+        serviceWorkers: "block",
+        viewport: { width: 1280, height: 900 },
+        permissions: ["clipboard-read", "clipboard-write"],
+      },
+      async ({ page }) => {
+        await observeTerminalControllers(page);
+        const gateway = await installMockGateway(page, {
+          terminalEnabled: true,
+          featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
+          methodResponses: {
+            "terminal.list": {
+              sessions: [{ ...terminalSession("copy-terminal"), attached: true, createdAtMs: 1 }],
+            },
+            "terminal.input": { ok: true },
+            "terminal.resize": { ok: true },
+            "terminal.attach": {
+              agentId: "main",
+              confined: false,
+              cwd: "/workspace",
+              sessionId: "copy-terminal",
+              shell: "/bin/bash",
+              buffer: "$ echo hello\r\nhello\r\n$ ",
+              seq: 23,
+            },
+            "terminal.open": terminalSession("copy-terminal"),
+          },
+        });
+        await page.goto(suite.server.baseUrl + "chat");
+        await waitForControlUiGatewayReady(page);
+        await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+        await page.keyboard.press("Control+Backquote");
+        const panel = page
+          .locator("openclaw-terminal-panel")
+          .filter({ has: page.locator(".tp-host") });
+        await panel.locator(".tp-session.is-current").click();
+        const canvas = panel.locator("canvas");
+        await canvas.waitFor();
+        await gateway.waitForRequest("terminal.open");
+        const output = "$ echo hello\r\nhello\r\n$ ";
+        await gateway.emitGatewayEvent("terminal.data", {
+          sessionId: "copy-terminal",
+          seq: output.length,
+          data: output,
+        });
+        await page.clock.install();
+        await pauseVirtualClock(page);
+        const drag = async () => {
+          const bounds = await canvas.boundingBox();
+          if (!bounds) {
+            throw new Error("Terminal canvas is not visible");
+          }
+          // The real terminal renderer owns cell metrics; use its public dimensions.
+          const metrics = await readTerminalCanvasState(canvas);
+          await page.mouse.move(bounds.x + 1, bounds.y + metrics.cellHeight * 1.5);
+          await page.mouse.down();
+          await page.mouse.move(
+            bounds.x + metrics.cellWidth * 4.5,
+            bounds.y + metrics.cellHeight * 1.5,
+            {
+              steps: 5,
+            },
+          );
+          await page.mouse.up();
+        };
+        await drag();
+        expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("hello");
+        await page.clock.runFor(32);
+
+        const toast = page.locator('.app-toast[role="status"]');
+        expect(await toast.textContent()).toContain("Copied to clipboard");
+        expect(await toast.getAttribute("aria-live")).toBe("polite");
+
+        expect(await panel.evaluate((element) => element.contains(document.activeElement))).toBe(
+          true,
+        );
+        await page.keyboard.type("pwd");
+        expect(await gateway.getRequests("terminal.input")).toEqual(
+          expect.arrayContaining(
+            ["p", "w", "d"].map((data) =>
+              expect.objectContaining({
+                params: { sessionId: "copy-terminal", data },
+              }),
+            ),
+          ),
+        );
+        await page.clock.runFor(1_000);
+        await drag();
+        await page.clock.runFor(1_100);
+        expect(await toast.getAttribute("data-active")).toBe("true");
+        expect(await toast.count()).toBe(1);
+        await page.clock.runFor(1_500);
+        expect(await toast.count()).toBe(0);
+
+        await page.getByRole("button", { name: "Dock to bottom", exact: true }).click();
+        await panel.locator(".tp-host canvas:visible").waitFor();
+        await page.clock.runFor(32);
+        await drag();
+        expect(await toast.textContent()).toContain("Copied to clipboard");
+
+        await page.clock.runFor(2_500);
+
+        // Retain the real API for the first copy above; control only the transport
+        // outcomes below, not the terminal's selection/copy/notification handlers.
+        await page.evaluate(() => {
+          const state = {
+            fallback: false,
+            fallbackCalls: 0,
+            writes: 0,
+            settle: undefined as (() => void) | undefined,
+          };
+          Object.assign(window, { terminalClipboard: state });
+          Object.defineProperty(navigator.clipboard, "writeText", {
+            configurable: true,
+            value: () => {
+              state.writes++;
+              return Promise.reject(new DOMException("Clipboard denied", "NotAllowedError"));
+            },
+          });
+          document.execCommand = () => {
+            state.fallbackCalls++;
+            return state.fallback;
+          };
+        });
+        await drag();
+        expect(
+          await page.evaluate(() => (window as ClipboardWindow).terminalClipboard.fallbackCalls),
+        ).toBe(1);
+        expect(await toast.count()).toBe(0);
+        await page.evaluate(() => {
+          (window as ClipboardWindow).terminalClipboard.fallback = true;
+        });
+        await drag();
+        expect(
+          await page.evaluate(() => (window as ClipboardWindow).terminalClipboard.fallbackCalls),
+        ).toBe(2);
+        expect(await toast.textContent()).toContain("Copied to clipboard");
+        await page.clock.runFor(2_500);
+        expect(await toast.count()).toBe(0);
+
+        await page.evaluate(() => {
+          const state = (window as ClipboardWindow).terminalClipboard;
+          Object.defineProperty(navigator.clipboard, "writeText", {
+            configurable: true,
+            value: () => {
+              state.writes++;
+              return new Promise<void>((resolve) => {
+                state.settle = resolve;
+              });
+            },
+          });
+        });
+        await drag();
+        expect(
+          await page.evaluate(() => (window as ClipboardWindow).terminalClipboard.writes),
+        ).toBe(3);
+        expect(await toast.count()).toBe(0);
+        await page.evaluate(() => (window as ClipboardWindow).terminalClipboard.settle!());
+        expect(await toast.textContent()).toContain("Copied to clipboard");
+        await page.clock.runFor(2_500);
+        await drag();
+        // A clipboard write settling after its terminal is hidden must not notify
+        // whichever conversation/tool has replaced that terminal.
+        await panel.getByRole("button", { name: "Hide terminal", exact: true }).click();
+        await canvas.waitFor({ state: "hidden" });
+        await page.evaluate(() => (window as ClipboardWindow).terminalClipboard.settle!());
+        expect(await toast.count()).toBe(0);
+
+        // The chrome-free terminal has its own toast host, including narrow screens.
+        await page.clock.resume();
+        await page.setViewportSize({ width: 420, height: 800 });
+        await page.emulateMedia({ colorScheme: "dark" });
+        // A fresh mock document has no server-side PTY roster to restore.
+        await page.evaluate(() => sessionStorage.removeItem("openclaw.terminal.sessions.v1"));
+        await page.goto(suite.server.baseUrl + "focus/terminal");
+        await canvas.waitFor();
+        await page.evaluate(() => navigator.clipboard.writeText("before focus selection"));
+        await gateway.emitGatewayEvent("terminal.data", {
+          sessionId: "copy-terminal",
+          seq: output.length,
+          data: output,
+        });
+        await panel.locator(".tabstrip-tab.is-live").waitFor();
+        // Font completion refits the terminal before the drag samples its cell geometry.
+        await page.evaluate(() => document.fonts.ready.then(() => undefined));
+        await pauseVirtualClock(page);
+        await drag();
+        expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("hello");
+        expect(await toast.textContent()).toContain("Copied to clipboard");
+      },
+    );
+  });
   it("keeps app-handled keys out of terminal input without suppressing terminal controls", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       await loadRuntime(page);
       const result = await page.evaluate(async () => {
-        const runtime = await (
-          window as unknown as {
-            openclawTerminalRuntimeModule: Promise<
-              typeof import("../components/terminal/terminal-runtime.ts")
-            >;
-          }
-        ).openclawTerminalRuntimeModule;
+        const runtime = await (window as RuntimeWindow).openclawTerminalRuntimeModule;
         const host = document.body.appendChild(document.createElement("div"));
         const input: string[] = [];
         const controller = await runtime.createIsolatedGhosttyTerminal({
@@ -122,27 +324,9 @@ suite.define(() => {
       const sentinel = "CLOSE_RESET_SENTINEL";
       const result = await page.evaluate(
         async ({ staleText }) => {
-          const runtimeModule = await (
-            window as unknown as Window & {
-              openclawTerminalRuntimeModule: Promise<{
-                createIsolatedGhosttyTerminal: BrowserTerminalFactory;
-              }>;
-            }
-          ).openclawTerminalRuntimeModule;
-          const createTerminal = async () => {
-            const host = document.createElement("div");
-            host.style.height = "400px";
-            host.style.width = "800px";
-            document.body.append(host);
-            const controller = await runtimeModule.createIsolatedGhosttyTerminal({
-              autoFit: false,
-              parent: host,
-              readOnly: true,
-              size: { columns: 80, rows: 24 },
-            });
-            return { controller, host };
-          };
-          const lineText = (controller: BrowserTerminalController) =>
+          const createTerminal = () =>
+            (window as RuntimeWindow).createFixtureTerminal("width:800px;height:400px");
+          const lineText = (controller: GhosttyTerminalController) =>
             (controller.terminal.wasmTerm?.getLine(0) ?? [])
               .map((cell) =>
                 cell.codepoint > 0 && cell.codepoint <= 0x10ffff
@@ -198,44 +382,33 @@ suite.define(() => {
       let finalDocumentListeners: string[] = [];
       try {
         await page.evaluate(async () => {
-          const runtime = await (window as RuntimeWindow).openclawTerminalRuntimeModule;
-          const host = document.body.appendChild(document.createElement("div"));
-          host.style.cssText = "width:800px;height:400px";
-          const controller = await runtime.createIsolatedGhosttyTerminal({
-            parent: host,
-            autoFit: false,
-            readOnly: true,
-            size: { columns: 80, rows: 24 },
-          });
+          const { host, controller } = await (window as RuntimeWindow).createFixtureTerminal(
+            "width:800px;height:400px",
+          );
           controller.write(new TextEncoder().encode("MEMORY_LIFETIME_SENTINEL"));
           (window as RuntimeWindow).liveTerminal = { host, controller };
         });
         const liveDocumentListeners = await documentListeners();
         expect(liveDocumentListeners.length).toBeGreaterThan(emptyDocumentListeners.length);
         await page.evaluate(async () => {
-          const runtime = await (window as RuntimeWindow).openclawTerminalRuntimeModule;
           for (let index = 0; index < 3; index++) {
-            const host = document.body.appendChild(document.createElement("div"));
             const abort = new AbortController();
+            const { host, controller } = await (window as RuntimeWindow).createFixtureTerminal(
+              "",
+              abort.signal,
+            );
             try {
-              const controller = await runtime.createIsolatedGhosttyTerminal({
-                parent: host,
-                autoFit: false,
-                readOnly: true,
-                signal: abort.signal,
-                size: { columns: 80, rows: 24 },
-              });
+              controller.write(new TextEncoder().encode("DISPOSED_TERMINAL"));
+            } finally {
               try {
-                controller.write(new TextEncoder().encode("DISPOSED_TERMINAL"));
-              } finally {
                 if (index === 1) {
                   abort.abort();
                 }
                 controller.dispose();
                 controller.dispose();
+              } finally {
+                host.remove();
               }
-            } finally {
-              host.remove();
             }
           }
           (window as RuntimeWindow).liveTerminal!.controller.write(
@@ -281,9 +454,25 @@ suite.define(() => {
     });
   });
 });
+type ClipboardWindow = typeof window & {
+  terminalClipboard: {
+    fallback: boolean;
+    fallbackCalls: number;
+    writes: number;
+    settle?: () => void;
+  };
+};
+
 type RuntimeWindow = typeof window & {
   openclawTerminalRuntimeModule: Promise<
     typeof import("../components/terminal/terminal-runtime.ts")
   >;
-  liveTerminal?: { host: HTMLElement; controller: BrowserTerminalController };
+  liveTerminal?: { host: HTMLElement; controller: GhosttyTerminalController };
+  createFixtureTerminal: (
+    style?: string,
+    signal?: AbortSignal,
+  ) => Promise<{
+    host: HTMLElement;
+    controller: GhosttyTerminalController;
+  }>;
 };

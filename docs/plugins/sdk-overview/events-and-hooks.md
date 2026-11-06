@@ -23,6 +23,12 @@ semantics.
 
 ## Hook decision semantics
 
+`before_model_resolve` can return `fallbacksOverride: string[]` alongside
+`providerOverride` and `modelOverride`. An explicit list replaces the run's fallback
+chain; `[]` disables model fallback. The first defined value for each field wins in
+descending priority order, with registration order breaking ties. See
+[Local model routing](/plugins/hooks/prompt-and-session#restrict-a-run-to-local-models).
+
 `before_install` is a plugin-runtime lifecycle hook, not the operator install
 policy surface. Use `security.installPolicy` when an allow/warn/block decision must
 cover CLI and Gateway-backed install or update paths.

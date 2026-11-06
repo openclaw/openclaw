@@ -28,7 +28,7 @@ export const workerProtocolIdentifier = (label: string, maxChars = 256) =>
   );
 
 export const WorkerGatewayNamespace = workerProtocolIdentifier("gatewayNamespace").refine(
-  (value) => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(value),
+  (value) => /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(value),
   { error: "INVALID_REQUEST: gatewayNamespace must be a safe bounded path component" },
 );
 
@@ -37,11 +37,10 @@ export function hasExactOwnKeys(
   required: readonly string[],
   optional: readonly string[] = [],
 ): boolean {
-  const allowed = new Set([...required, ...optional]);
   return (
     required.every((key) => Object.hasOwn(value, key)) &&
     optional.every((key) => Object.hasOwn(value, key) || !Reflect.has(value, key)) &&
-    Object.keys(value).every((key) => allowed.has(key))
+    Object.keys(value).every((key) => required.includes(key) || optional.includes(key))
   );
 }
 

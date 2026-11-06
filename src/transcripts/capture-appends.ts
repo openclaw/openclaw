@@ -1,5 +1,6 @@
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import type { TranscriptAppendScheduler } from "./store-worker-contract.js";
+import type { TranscriptAppendScheduler } from "./store-worker.types.js";
 
 type AppendOutcome = { ok: true } | { ok: false; error: unknown };
 
@@ -42,12 +43,7 @@ export function createTranscriptCaptureAppends(assertCurrent: () => void) {
     async drain(): Promise<void> {
       const outcomes = await Promise.all(pending);
       const failures = outcomes.flatMap((outcome) => (outcome.ok ? [] : [outcome.error]));
-      if (failures.length === 1) {
-        throw failures[0];
-      }
-      if (failures.length > 1) {
-        throw new AggregateError(failures, "Accepted transcript appends failed");
-      }
+      throwCollectedErrors(failures, "Accepted transcript appends failed");
     },
   };
 }

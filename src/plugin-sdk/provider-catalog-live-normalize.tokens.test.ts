@@ -1,5 +1,6 @@
 // Plugin SDK tests cover vendor token-limit field mapping in live discovery.
 import { describe, expect, it } from "vitest";
+import { model as makeCatalogModel } from "../agents/model-catalog-fixtures.test-support.js";
 import { buildOpenAICompatibleLiveModels } from "./provider-catalog-live-normalize.internal.js";
 import type { ModelProviderConfig } from "./provider-model-shared.js";
 
@@ -21,16 +22,7 @@ describe("live discovery vendor token-limit fields", () => {
       [{ id: "transport-only", object: "model", context_window: 262_144 }],
       {
         ...fallback,
-        models: [
-          {
-            id: "transport-only",
-            name: "Transport only",
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            maxTokens: 8192,
-          },
-        ],
+        models: [makeCatalogModel("transport-only", "Transport only", { maxTokens: 8192 })],
       },
     );
 
@@ -70,9 +62,15 @@ describe("live discovery vendor token-limit fields", () => {
     expect(model?.maxTokens).toBe(32_000);
   });
 
-  it("keeps the previous defaults when a row advertises no limits", () => {
+  it("uses the shared output default when a row advertises no limits", () => {
     const model = firstModel({ id: "bare-model" });
     expect(model?.contextWindow).toBe(128_000);
-    expect(model?.maxTokens).toBe(8192);
+    expect(model?.maxTokens).toBe(32_768);
+  });
+
+  it("keeps half of a small advertised window for input", () => {
+    const model = firstModel({ id: "small-model", context_length: 32_768 });
+    expect(model?.contextWindow).toBe(32_768);
+    expect(model?.maxTokens).toBe(16_384);
   });
 });

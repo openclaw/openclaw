@@ -1,6 +1,7 @@
 import type {
   WorkboardBoardSummary,
   WorkboardCard,
+  WorkboardCardCursor,
   WorkboardPriority,
   WorkboardStatus,
   WorkboardTemplateId,
@@ -51,13 +52,7 @@ export type WorkboardDispatchSummary = {
 
 export type WorkboardRefreshSource = "initial" | "manual" | "live";
 
-export type WorkboardHealthKey =
-  | "running"
-  | "blocked"
-  | "stale"
-  | "readyUnassigned"
-  | "missingProof"
-  | "failedAttempts";
+export type WorkboardHealthKey = "stale" | "missingProof";
 
 export type WorkboardBulkDialog =
   | { kind: "delete"; cardIds: string[]; observedCards: WorkboardCard[] }
@@ -78,6 +73,7 @@ export type WorkboardUiState = {
   mutationReadiness: "ready" | "canonical_reload_required" | "stale_edit_draft";
   error: string | null;
   cards: WorkboardCard[];
+  nextCursor: WorkboardCardCursor | null;
   boards: WorkboardBoardSummary[];
   statuses: readonly WorkboardStatus[];
   lastDispatchSummary: WorkboardDispatchSummary | null;
@@ -86,7 +82,7 @@ export type WorkboardUiState = {
   searchOpen: boolean;
   priorityFilter: Set<WorkboardPriority>;
   statusFilter: Set<WorkboardStatus>;
-  attentionFilter: Set<"stale" | "missingProof">;
+  attentionFilter: Set<WorkboardHealthKey>;
   donePeriod: "all" | "week";
   agentFilter: string;
   boardFilter: string;

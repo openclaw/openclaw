@@ -130,15 +130,16 @@ extension OpenClawChatComposer {
         .disabled(self.viewModel.isUpdatingSessionSettings)
     }
 
-    private func modelOptions(_ models: [OpenClawChatModelChoice]) -> some View {
+    func modelOptions(_ models: [OpenClawChatModelChoice], showsDefaultBadge: Bool = true) -> some View {
         ForEach(models) { model in
             let unavailable = self.viewModel.modelUnavailableDescription(model)
-            let defaultBadge = self.viewModel.isDefaultModel(model) ? String(localized: "Default") : nil
+            let defaultBadge = showsDefaultBadge && self.viewModel.isDefaultModel(model)
+                ? String(localized: "Default") : nil
             self.modelMenuOption(
                 [model.displayLabel, model.capabilityDescription, unavailable, defaultBadge].compactMap(\.self)
                     .filter { !$0.isEmpty }.joined(separator: " — "),
                 selectionID: model.selectionID)
-                .disabled(self.viewModel.isModelUnavailable(model))
+                .disabled(unavailable != nil)
                 .accessibilityHint(unavailable ?? "")
         }
     }
@@ -152,7 +153,7 @@ extension OpenClawChatComposer {
                 Label {
                     Text(verbatim: title)
                 } icon: {
-                    Image(systemName: "checkmark").accessibilityHidden(true)
+                    Image(systemName: "checkmark")
                 }
             } else {
                 Text(verbatim: title)

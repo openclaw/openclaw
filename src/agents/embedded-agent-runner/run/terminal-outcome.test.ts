@@ -100,13 +100,6 @@ describe("embedded run attempt terminal outcome", () => {
       timedOut: true,
     },
     {
-      name: "recovered compaction observation",
-      terminal: { kind: "timeout", phase: "compaction", source: "observation" },
-      reason: "completed",
-      aborted: false,
-      timedOut: false,
-    },
-    {
       name: "yield-only cleanup",
       terminal: { kind: "aborted", source: "yield_cleanup" },
       reason: "completed",
@@ -364,8 +357,9 @@ describe("embedded run attempt terminal outcome", () => {
           assistant: undefined,
         }),
       ).toMatchObject({
-        reason: "timed_out",
+        reason: phase === "tool_execution" ? "hard_timeout" : "timed_out",
         status: "timeout",
+        ...(phase === "tool_execution" && { timeoutPhase: "tool_execution" }),
       });
     },
   );

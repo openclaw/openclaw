@@ -1,4 +1,5 @@
 import type { ScopeUpgradeResult } from "../../packages/gateway-protocol/src/index.js";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { getPairedDevice, getPendingDevicePairing } from "../infra/device-pairing.js";
 import type { GatewayScheduler, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
@@ -14,6 +15,10 @@ type UpgradeOwner = {
   publicKey: string;
 };
 
+type ScopeUpgradeWaitResult =
+  | ScopeUpgradeResult
+  | { status: "insufficient-scopes"; requestId: string };
+
 type UpgradeEntry = {
   requestId: string;
   owner: UpgradeOwner;
@@ -22,7 +27,7 @@ type UpgradeEntry = {
   initialApprovedAtMs?: number;
   expiresAtMs: number;
   resolutionHint?: "approved" | "rejected";
-  resultPromise?: Promise<ScopeUpgradeResult | null>;
+  resultPromise?: Promise<ScopeUpgradeWaitResult | null>;
   wake: Deferred;
 };
 
@@ -39,6 +44,19 @@ export class ScopeUpgradeCoordinator {
 
   constructor(scheduler: GatewayScheduler) {
     this.scheduler = scheduler.scope();
+    // Observer reads end at the scheduler fence; received execution can retain
+    // its authority until restart recovery has been recorded.
+    if (this.scheduler.signal.aborted) {
+      void this.close();
+    } else {
+      this.scheduler.signal.addEventListener(
+        "abort",
+        () => {
+          void this.close();
+        },
+        { once: true },
+      );
+    }
   }
 
   private bindGatewayLifetime(): void {
@@ -129,7 +147,7 @@ export class ScopeUpgradeCoordinator {
     wake.resolve();
   }
 
-  async wait(requestId: string, owner: UpgradeOwner): Promise<ScopeUpgradeResult | null> {
+  async wait(requestId: string, owner: UpgradeOwner): Promise<ScopeUpgradeWaitResult | null> {
     const entry = this.entries.get(requestId);
     if (!entry || !sameOwner(entry.owner, owner)) {
       return null;
@@ -143,10 +161,14 @@ export class ScopeUpgradeCoordinator {
         }
       });
     }
-    return await racePromiseWithAbortSignal(entry.resultPromise, getAsyncWorkSignal());
+    const observerSignal = getAsyncWorkSignal();
+    return await racePromiseWithAbortSignal(
+      entry.resultPromise,
+      observerSignal ? AbortSignal.any([observerSignal, this.work.signal]) : this.work.signal,
+    );
   }
 
-  private async waitForResult(entry: UpgradeEntry): Promise<ScopeUpgradeResult | null> {
+  private async waitForResult(entry: UpgradeEntry): Promise<ScopeUpgradeWaitResult | null> {
     while (!this.work.isClosing) {
       if (this.scheduler.now() >= entry.expiresAtMs) {
         this.scheduleCleanup(entry);
@@ -165,13 +187,9 @@ export class ScopeUpgradeCoordinator {
         DURABLE_RECONCILE_INTERVAL_MS,
         Math.max(0, entry.expiresAtMs - this.scheduler.now()),
       );
-      const timer = setTimeout(wake.resolve, delayMs);
-      timer.unref();
       try {
-        await wake.promise;
+        await raceWithTimeout(wake.promise, delayMs, wake.resolve, { ref: false });
       } finally {
-        // A durable notification or close also owns cancellation of the losing timer.
-        clearTimeout(timer);
         if (entry.wake === wake) {
           entry.wake = createDeferredCore();
         }
@@ -180,7 +198,7 @@ export class ScopeUpgradeCoordinator {
     return null;
   }
 
-  private async readDurableResult(entry: UpgradeEntry): Promise<ScopeUpgradeResult | null> {
+  private async readDurableResult(entry: UpgradeEntry): Promise<ScopeUpgradeWaitResult | null> {
     const pending = await getPendingDevicePairing(entry.requestId);
     if (this.work.isClosing || pending) {
       return null;
@@ -196,24 +214,29 @@ export class ScopeUpgradeCoordinator {
     const approvedEvidence =
       entry.resolutionHint === "approved" ||
       (token?.token !== entry.initialToken && paired?.approvedAtMs !== entry.initialApprovedAtMs);
-    const approved =
-      paired?.publicKey === entry.owner.publicKey &&
-      token !== undefined &&
-      token.revokedAtMs === undefined &&
-      approvedEvidence &&
-      roleScopesAllow({
+    if (
+      paired?.publicKey !== entry.owner.publicKey ||
+      token === undefined ||
+      token.revokedAtMs !== undefined ||
+      !approvedEvidence
+    ) {
+      return { status: "rejected", requestId: entry.requestId };
+    }
+    if (
+      !roleScopesAllow({
         role: "operator",
         requestedScopes: entry.requestedScopes,
         allowedScopes: token.scopes,
-      });
-    return approved
-      ? {
-          status: "approved",
-          requestId: entry.requestId,
-          deviceToken: token.token,
-          scopes: token.scopes,
-        }
-      : { status: "rejected", requestId: entry.requestId };
+      })
+    ) {
+      return { status: "insufficient-scopes", requestId: entry.requestId };
+    }
+    return {
+      status: "approved",
+      requestId: entry.requestId,
+      deviceToken: token.token,
+      scopes: token.scopes,
+    };
   }
 
   private scheduleCleanup(entry: UpgradeEntry, delayMs = TERMINAL_GRACE_MS): void {

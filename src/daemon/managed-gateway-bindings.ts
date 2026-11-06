@@ -1,8 +1,8 @@
 /** Bind discovered native service selectors without granting lifecycle authority. */
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
-import { listManagedOpenClawGatewayServices, type ExtraGatewayService } from "./inspect.js";
+import { resolveGatewayProfileSuffix } from "./constants.js";
+import { listManagedOpenClawGatewayServices } from "./inspect.js";
 import type { LoadedLaunchAgentState } from "./launchd-runtime.js";
 import { resolveTaskName } from "./schtasks-layout.js";
 import type { GatewayServiceEnv, SystemdServiceReadTarget } from "./service-types.js";
@@ -51,7 +51,7 @@ export async function readManagedGatewayBindingState(
 
 function bindingSelectorKey(binding: ManagedGatewayBinding): string {
   return [
-    normalizeDiscoveredProfile(binding.env.OPENCLAW_PROFILE),
+    resolveGatewayProfileSuffix(binding.env.OPENCLAW_PROFILE),
     binding.scope ?? binding.systemdReadTarget?.scope ?? "",
     binding.systemdReadTarget?.unitPath ?? "",
     binding.launchAgentPlistPath ?? "",
@@ -62,14 +62,6 @@ function bindingSelectorKey(binding: ManagedGatewayBinding): string {
     binding.env.OPENCLAW_LAUNCHD_LABEL ?? "",
     binding.env.OPENCLAW_WINDOWS_TASK_NAME ?? "",
   ].join("\0");
-}
-
-function normalizeDiscoveredProfile(value: string | undefined): string {
-  const trimmed = value?.trim();
-  if (!trimmed || normalizeLowercaseStringOrEmpty(trimmed) === "default") {
-    return "default";
-  }
-  return trimmed;
 }
 
 function hostBindingEnv(
@@ -98,55 +90,6 @@ function profileEnvFields(profile: string): GatewayServiceEnv {
   return profile === "default" ? {} : { OPENCLAW_PROFILE: profile };
 }
 
-function detailPath(prefix: string, detail: string): string | undefined {
-  if (!detail.startsWith(prefix)) {
-    return undefined;
-  }
-  return detail.slice(prefix.length).trim();
-}
-
-function bindingFromSystemdService(
-  svc: ExtraGatewayService,
-  env: Record<string, string | undefined>,
-): ManagedGatewayBinding {
-  const unitPath = detailPath("unit:", svc.detail);
-  const unitName = resolveSystemdTemplateInstanceName(svc.label, {
-    OPENCLAW_SYSTEMD_UNIT: svc.label,
-  });
-  const systemdReadTarget = unitPath ? { scope: svc.scope, unitName, unitPath } : undefined;
-  return {
-    scope: svc.scope,
-    ...(systemdReadTarget ? { systemdReadTarget } : {}),
-    env: hostBindingEnv(env, { OPENCLAW_SYSTEMD_UNIT: unitName }),
-  };
-}
-
-function bindingFromLaunchdService(
-  svc: ExtraGatewayService,
-  env: Record<string, string | undefined>,
-): ManagedGatewayBinding {
-  const plistPath = detailPath("plist:", svc.detail);
-  return {
-    scope: svc.scope,
-    ...(plistPath ? { launchAgentPlistPath: plistPath } : {}),
-    env: hostBindingEnv(env, { OPENCLAW_LAUNCHD_LABEL: svc.label }),
-  };
-}
-
-function bindingFromWindowsTask(
-  name: string,
-  profile: string,
-  env: Record<string, string | undefined>,
-): ManagedGatewayBinding {
-  return {
-    scope: "system",
-    env: hostBindingEnv(env, {
-      ...profileEnvFields(profile),
-      OPENCLAW_WINDOWS_TASK_NAME: name.replace(/^\\+/, "").trim() || name,
-    }),
-  };
-}
-
 /**
  * Enumerate installed managed Gateway selectors for runtime mutation checks.
  */
@@ -166,23 +109,43 @@ export async function discoverManagedGatewayBindings(
   };
 
   if (options.includeInvoking) {
-    push({ env });
+    const { hasSystemdManager } = await import("./systemd-loaded-unit-inventory.js");
+    // A container without either manager has no invoking native owner to inspect.
+    // Installed definitions are still inventoried below; failed manager reads stay unknown.
+    if (
+      process.platform !== "linux" ||
+      (await hasSystemdManager("user", env)) ||
+      (await hasSystemdManager("system", env))
+    ) {
+      push({ env });
+    }
   }
   try {
-    const { services, errors } = await listManagedOpenClawGatewayServices(env, {
-      requireComplete: true,
-    });
+    const { services, errors } = await listManagedOpenClawGatewayServices(env);
     if (options.requireComplete && errors.length > 0) {
       throw new Error("Managed Gateway inventory could not be completely inspected.");
     }
     // Best-effort callers retain known bindings; automatic writers require complete discovery.
     for (const svc of services) {
       if (svc.platform === "linux") {
-        push(bindingFromSystemdService(svc, env));
+        const unitName = resolveSystemdTemplateInstanceName(svc.label, {
+          OPENCLAW_SYSTEMD_UNIT: svc.label,
+        });
+        push({
+          scope: svc.scope,
+          ...(svc.sourcePath
+            ? { systemdReadTarget: { scope: svc.scope, unitName, unitPath: svc.sourcePath } }
+            : {}),
+          env: hostBindingEnv(env, { OPENCLAW_SYSTEMD_UNIT: unitName }),
+        });
         continue;
       }
       if (svc.platform === "darwin") {
-        push(bindingFromLaunchdService(svc, env));
+        push({
+          scope: svc.scope,
+          ...(svc.sourcePath ? { launchAgentPlistPath: svc.sourcePath } : {}),
+          env: hostBindingEnv(env, { OPENCLAW_LAUNCHD_LABEL: svc.label }),
+        });
         continue;
       }
       if (svc.windowsProfile === undefined) {
@@ -196,13 +159,18 @@ export async function discoverManagedGatewayBindings(
         });
         continue;
       }
-      push(bindingFromWindowsTask(svc.label, svc.windowsProfile, env));
+      push({
+        scope: "system",
+        env: hostBindingEnv(env, {
+          ...profileEnvFields(svc.windowsProfile),
+          OPENCLAW_WINDOWS_TASK_NAME: svc.label.replace(/^\\+/, "").trim() || svc.label,
+        }),
+      });
     }
   } catch (error) {
     if (options.requireComplete || hasCommandProcessCleanupError(error)) {
       throw error;
     }
-    return results;
   }
 
   return results;

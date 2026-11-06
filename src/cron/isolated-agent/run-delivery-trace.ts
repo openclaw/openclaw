@@ -1,6 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveStaticSessionMcpServerNames } from "../../agents/agent-bundle-mcp-runtime-config.js";
-import { resolveCodexMcpToolOverridesForAgent } from "../../agents/cli-runner/bundle-mcp-codex.js";
 import { wrapUntrustedPromptDataBlock } from "../../agents/sanitize-for-prompt.js";
 /** Delivery planning, prompt policy, and delivery trace construction for cron runs. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -10,13 +8,10 @@ import type {
   SourceDeliveryVisibleDelivery,
 } from "../../infra/outbound/source-delivery-plan.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { resolveCronDeliveryDefaultsScope } from "../delivery-defaults.js";
+import { resolveCronDeliveryPlan, type CronDeliveryPlan } from "../delivery-plan.js";
+import { hasExplicitCronDeliveryTarget } from "../delivery-target-validation.js";
 import {
-  hasExplicitCronDeliveryTarget,
-  resolveCronDeliveryPlan,
-  type CronDeliveryPlan,
-} from "../delivery-plan.js";
-import {
-  createCronRunDiagnosticsFromError,
   createCronRunDiagnosticsFromMissingWebSearchProvider,
   toolsAllowRequestsWebSearch,
 } from "../run-diagnostics.js";
@@ -28,7 +23,7 @@ import type {
   CronDeliveryTraceTarget,
   CronJob,
   CronRunDiagnostics,
-  CronToolsAllowProvenance,
+  CronStoredJob,
 } from "../types.js";
 import { logWarn } from "./run.runtime.js";
 import { resolveCronSourceDeliveryPlan } from "./source-delivery-plan.js";
@@ -149,6 +144,7 @@ export function buildCronDeliveryTrace(params: {
   sourceDeliveryOutcome: SourceDeliveryOutcome;
   fallbackUsed: boolean;
   delivered?: boolean;
+  receipts?: CronDeliveryTrace["receipts"];
 }): CronDeliveryTrace {
   // Trace both intended and resolved targets so run logs can explain fallback
   // delivery without leaking provider-specific raw routing internals.
@@ -172,6 +168,7 @@ export function buildCronDeliveryTrace(params: {
     intended,
     ...(resolved ? { resolved } : {}),
     ...(messageToolSentTo.length > 0 ? { messageToolSentTo } : {}),
+    ...(params.receipts?.length ? { receipts: params.receipts } : {}),
     fallbackUsed: params.fallbackUsed,
     delivered: params.delivered,
   };
@@ -183,39 +180,19 @@ export async function createCronToolsAllowPreflightDiagnostics(params: {
   provider: string;
   model: string;
   modelApi?: string;
+  modelBaseUrl?: string;
+  modelParams?: Record<string, unknown>;
   agentId?: string;
   agentDir?: string;
-  workspaceDir: string;
   sessionKey?: string;
   agentPayload: Extract<CronJob["payload"], { kind: "agentTurn" }> | null;
-  agentRuntime?: string;
-  toolsAllowProvenance?: CronToolsAllowProvenance;
 }): Promise<CronRunDiagnostics | undefined> {
   const toolsAllow = params.agentPayload?.toolsAllow;
-  if (params.agentPayload?.toolsAllowIsDefault === true) {
-    const hasEnabledStaticMcp =
-      resolveStaticSessionMcpServerNames({
-        workspaceDir: params.workspaceDir,
-        cfg: params.cfg,
-        toolOverrides: resolveCodexMcpToolOverridesForAgent(params.cfg, {
-          agentId: params.agentId,
-          toolOverrides: undefined,
-        }),
-      }).length > 0;
-    if (
-      params.agentRuntime === "codex" &&
-      hasEnabledStaticMcp &&
-      params.toolsAllowProvenance?.source !== "final-executable-surface"
-    ) {
-      return createCronRunDiagnosticsFromError(
-        "cron-preflight",
-        `This automation's inherited tool cap predates final configured-MCP capture, so it continues with its stored finite tools and may omit MCP capabilities. Reauthorize in place with an exact explicit cap: openclaw automations edit ${params.jobId} --tools <tool,...>.`,
-        { severity: "warn" },
-      );
-    }
-    return undefined;
-  }
-  if (!toolsAllowRequestsWebSearch(toolsAllow)) {
+  // An automatic creator snapshot never asked for web_search; it only recorded it.
+  if (
+    params.agentPayload?.toolsAllowIsDefault === true ||
+    !toolsAllowRequestsWebSearch(toolsAllow)
+  ) {
     return undefined;
   }
   try {
@@ -225,6 +202,8 @@ export async function createCronToolsAllowPreflightDiagnostics(params: {
         config: params.cfg,
         modelProvider: params.provider,
         modelApi: params.modelApi,
+        modelBaseUrl: params.modelBaseUrl,
+        modelParams: params.modelParams,
         modelId: params.model,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
@@ -245,7 +224,7 @@ export async function createCronToolsAllowPreflightDiagnostics(params: {
       lateBindRuntimeConfig: true,
     });
     const { hasUsableWebSearchProvider } = await webSearchRuntimeLoader.load();
-    const hasWebSearchProvider = hasUsableWebSearchProvider({
+    const hasWebSearchProvider = await hasUsableWebSearchProvider({
       config,
       agentDir: params.agentDir,
       runtimeWebSearch,
@@ -266,10 +245,13 @@ export async function createCronToolsAllowPreflightDiagnostics(params: {
 /** Resolves the delivery plan and concrete target for one isolated cron run. */
 export async function resolveCronDeliveryContext(params: {
   cfg: OpenClawConfig;
-  job: CronJob;
+  job: CronStoredJob;
   agentId: string;
 }) {
-  const deliveryPlan = resolveCronDeliveryPlan(params.job);
+  const deliveryPlan = resolveCronDeliveryPlan(
+    params.job,
+    resolveCronDeliveryDefaultsScope(params.cfg.cron, params.job, params.agentId),
+  );
   const {
     buildDeliveryFormatPrompt,
     resolveDeliveryTarget,
@@ -295,6 +277,8 @@ export async function resolveCronDeliveryContext(params: {
           ...deliveryPlan,
           sessionTarget:
             params.job.payload.kind === "agentTurn" ? params.job.sessionTarget : undefined,
+          sourceConversation:
+            deliveryPlan.mode === "announce" ? params.job.sourceConversation : undefined,
           // Match preview's sessionTarget precedence: custom jobs resolve their own
           // delivery session rather than the creator's last conversation.
           sessionKey: resolveCronDeliverySessionKey(params.job),

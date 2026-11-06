@@ -1,32 +1,30 @@
 import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import type { AgentSandboxConfig } from "../config/types.agents-shared.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
 import { resolveAttemptWorkspaceSandbox, resolveHarnessWorkspace } from "./workspace-sandbox.js";
 
+const sandboxConfig = (sandbox: AgentSandboxConfig) => ({ agents: { defaults: { sandbox } } });
+const runParams = (workspaceDir: string, sessionId = "execution") => ({
+  workspaceDir,
+  sessionId,
+  sessionKey: "agent:main:" + sessionId,
+  agentId: "main",
+});
+
 it("keeps cwd authority with the selected local or remote workspace owner", () => {
-  const sandbox = createSandboxTestContext({
-    overrides: {
-      workspaceSource: "managed-worktree",
-      workspaceDir: "/private",
-      workspaceAccess: "rw",
-    },
-  });
+  const sandbox = createSandboxTestContext({ overrides: { workspaceSource: "managed-worktree" } });
   const prepared = {
     effectiveCwd: "/private",
     effectiveWorkspace: "/private",
     resolvedWorkspace: "/canonical",
-    effectiveFsWorkspaceOnly: true,
     sessionPermissionRoot: "/private",
-    sessionPermissionPolicy: undefined,
     sandbox,
-    sandboxReport: { mode: "all" as const, sandboxed: true },
-    sandboxSessionKey: "guest",
-    sessionAgentId: "main",
   };
   expect(() =>
     resolveHarnessWorkspace("/canonical", { cwd: "/outside" }, prepared, sandbox),
@@ -42,176 +40,126 @@ it("keeps cwd authority with the selected local or remote workspace owner", () =
 });
 
 it("refuses a retired admitted run before creating or preparing its workspace", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-retired-workspace-"));
-  const workspaceDir = path.join(root, "must-not-exist");
-  try {
+  await withOpenClawTestState({ label: "retired-workspace" }, async (state) => {
+    const workspaceDir = state.path("must-not-exist");
     await expect(
       resolveAttemptWorkspaceSandbox({
-        workspaceDir,
-        sessionId: "retired",
-        sessionKey: "agent:main:retired",
-        agentId: "main",
+        ...runParams(workspaceDir, "retired"),
         config: { agents: { entries: { main: { workspace: workspaceDir } } } },
         admittedRunContext: { operationalRunInstance: { runId: "retired", instanceId: "retired" } },
       }),
     ).rejects.toThrow("active admitted run");
     await expect(fs.stat(workspaceDir)).rejects.toMatchObject({ code: "ENOENT" });
-  } finally {
-    await fs.rm(root, { recursive: true, force: true });
-  }
+  });
 });
 
-it.each(["ro", "rw"] as const)(
-  "keeps writable policy with the %s placement without preparing its paths locally",
-  async (workspaceAccess) => {
-    await withOpenClawTestState({ label: "placement-workspace-policy" }, async (state) => {
-      const remoteWorkspace = state.path("remote-execution-only");
-      const preparation = resolveAttemptWorkspaceSandbox({
-        workspaceDir: state.workspaceDir,
-        sessionId: "remote-policy",
-        sessionKey: "agent:main:remote-policy",
-        agentId: "main",
-        requireWritableSandbox: true,
-        requireWorkspaceOnly: true,
-        config: {
-          agents: { defaults: { sandbox: { mode: "all", backend: "unavailable-fixture" } } },
+it("keeps writable placement policy without preparing its paths locally", async () => {
+  await withOpenClawTestState({ label: "placement-workspace-policy" }, async (state) => {
+    const remoteWorkspace = state.path("remote-execution-only");
+    const preparation = resolveAttemptWorkspaceSandbox({
+      ...runParams(state.workspaceDir, "remote-policy"),
+      requireWorkspaceOnly: true,
+      config: sandboxConfig({ mode: "all", backend: "unavailable-fixture" }),
+      placementSandbox: createSandboxTestContext({
+        overrides: {
+          workspaceDir: remoteWorkspace,
+          agentWorkspaceDir: remoteWorkspace,
+          containerWorkdir: "/native/guest",
         },
-        placementSandbox: createSandboxTestContext({
-          overrides: {
-            workspaceDir: remoteWorkspace,
-            agentWorkspaceDir: remoteWorkspace,
-            containerWorkdir: "/native/guest",
-            workspaceAccess,
-          },
-        }),
-      });
-      if (workspaceAccess === "ro") {
-        await expect(preparation).rejects.toThrow(
-          "sandbox workspace is not read-write; collection review skipped",
-        );
-      } else {
-        await expect(preparation).resolves.toMatchObject({
-          effectiveWorkspace: state.workspaceDir,
-          effectiveCwd: state.workspaceDir,
-          effectiveFsWorkspaceOnly: true,
-          sandbox: null,
-        });
-      }
-      await expect(fs.stat(remoteWorkspace)).rejects.toMatchObject({ code: "ENOENT" });
+      }),
     });
-  },
-);
+    await expect(preparation).resolves.toMatchObject({
+      effectiveWorkspace: state.workspaceDir,
+      effectiveCwd: state.workspaceDir,
+      effectiveFsWorkspaceOnly: true,
+      sandbox: null,
+    });
+    await expect(fs.stat(remoteWorkspace)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
 
 it.each(["realpath", "mkdir"] as const)(
   "rejects workspace preparation revoked during %s",
   async (boundary) => {
     await withOpenClawTestState({ label: "workspace-preparation-authority" }, async (state) => {
       const config = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
-      const admission = prepareSystemAgentRunAdmission(
-        config,
-        `workspace-preparation-${boundary}`,
-        "main",
-        "workspace-preparation-test",
-      );
+      const admission = prepareSystemAgentRunAdmission(config, boundary, "main", "test");
       const admittedRunContext = await admission.admit("embedded");
-      const mkdir = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
-      const realpath = vi.spyOn(fs, "realpath");
+      using scope = { close: admission.close, [Symbol.dispose]: admission.close };
+      using mkdir = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
+      using realpath = vi.spyOn(fs, "realpath");
       if (boundary === "realpath") {
         realpath.mockImplementationOnce(async () => {
-          admission.close();
+          scope.close();
           return state.workspaceDir;
         });
       } else {
         mkdir.mockImplementationOnce(async () => {
-          admission.close();
+          scope.close();
           return undefined;
         });
       }
-      try {
-        await expect(
-          resolveAttemptWorkspaceSandbox({
-            config,
-            agentId: "main",
-            sessionId: "workspace-preparation",
-            sessionKey: "agent:main:workspace-preparation",
-            workspaceDir: state.workspaceDir,
-            placementSandbox: createSandboxTestContext(),
-            admittedRunContext,
-          }),
-        ).rejects.toThrow("admitted run authority is no longer active");
-        // A revoked path lookup must not admit the following directory mutation.
-        expect(mkdir).toHaveBeenCalledOnce();
-      } finally {
-        mkdir.mockRestore();
-        realpath.mockRestore();
-        admission.close();
-      }
+      await expect(
+        resolveAttemptWorkspaceSandbox({
+          config,
+          ...runParams(state.workspaceDir, "workspace-preparation"),
+          placementSandbox: createSandboxTestContext(),
+          admittedRunContext,
+        }),
+      ).rejects.toThrow("admitted run authority is no longer active");
+      // A revoked path lookup must not admit the following directory mutation.
+      expect(mkdir).toHaveBeenCalledOnce();
     });
   },
 );
 
-it("reports the selected sandbox policy without duplicate workspace creation", async () => {
+it.each([false, true])("uses independent policy session (required=%s)", async (required) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const sessionKey = "agent:main:optional";
+    const identity = "UNMATERIALIZED_SANDBOX_IDENTITY";
+    await captureRuntimeConfigAsyncReader()();
+    const sessionId = required ? "required" : "optional";
+    const sessionKey = "agent:main:" + sessionId;
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey },
-      { sessionId: "optional", updatedAt: 1, sandboxMode: "off" },
+      {
+        sessionId,
+        updatedAt: 1,
+        sandboxMode: "off",
+        ...(required ? { sandbox: "required" as const } : {}),
+      },
     );
-    const mkdir = vi.spyOn(fs, "mkdir");
-    try {
-      const prepared = await resolveAttemptWorkspaceSandbox({
-        agentId: "main",
-        sessionKey: "agent:main:execution",
-        sandboxSessionKey: sessionKey,
-        sessionId: "execution",
-        workspaceDir: state.workspaceDir,
-        config: { agents: { defaults: { sandbox: { mode: "all" } } } },
-      });
-      expect(prepared.sandbox).toBeNull();
-      expect(prepared.sandboxReport).toEqual({ mode: "all", sandboxed: false });
-      expect(mkdir.mock.calls.filter(([dir]) => dir === state.workspaceDir)).toHaveLength(1);
-    } finally {
-      mkdir.mockRestore();
-    }
-  });
-});
-
-it("enforces required sandboxing for an independent policy session even when mode is off", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const sessionKey = "agent:main:required";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      { sessionId: "required", updatedAt: 1, sandbox: "required", sandboxMode: "off" },
-    );
-    await expect(
+    const prepare = () =>
       resolveAttemptWorkspaceSandbox({
-        agentId: "main",
-        sessionKey: "agent:main:execution",
+        ...runParams(state.workspaceDir),
         sandboxSessionKey: sessionKey,
-        sessionId: "execution",
-        workspaceDir: state.workspaceDir,
-        config: {
-          agents: {
-            defaults: {
-              sandbox: {
-                mode: "off",
-                backend: "ssh",
-                ssh: {
-                  target: "sandbox@example.invalid",
-                  identityData: {
-                    source: "env",
-                    provider: "default",
-                    id: "UNMATERIALIZED_SANDBOX_IDENTITY",
-                  },
-                },
-              },
+        config: sandboxConfig({
+          mode: required ? "off" : "all",
+          ...(required && {
+            backend: "ssh",
+            ssh: {
+              target: "sandbox@example.invalid",
+              identityData: { source: "env" as const, provider: "default", id: identity },
             },
-          },
-        },
-      }),
-    ).rejects.toMatchObject({
-      code: "sandbox_provisioning",
-      cause: { code: "SECRET_SURFACE_UNAVAILABLE", ownerId: "agent-sandbox:main" },
+          }),
+        }),
+      });
+    if (required) {
+      await expect(prepare()).rejects.toMatchObject({
+        code: "sandbox_provisioning",
+        cause: { code: "SECRET_SURFACE_UNAVAILABLE", ownerId: "agent-sandbox:main" },
+      });
+      return;
+    }
+    using mkdir = vi.spyOn(fs, "mkdir");
+    const observed = observeHostDataSql();
+    using sql = { queries: observed.queries, [Symbol.dispose]: observed.restore };
+    expect(await prepare()).toMatchObject({
+      sandbox: null,
+      sandboxReport: { mode: "all", sandboxed: false },
     });
+    expect(mkdir.mock.calls.filter(([dir]) => dir === state.workspaceDir)).toHaveLength(1);
+    expect(
+      sql.queries.filter((query) => /\bsession_(?:nodes|windows|participants)\b/.test(query)),
+    ).toEqual([]);
   });
 });

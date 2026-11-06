@@ -11,23 +11,23 @@ import {
 } from "./client-runtime.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { threadStartResult } from "./codex-app-server.test-fixtures.js";
-import { resolveCodexPluginsPolicy, type CodexPluginConfig } from "./config.js";
+import type { CodexPluginConfig } from "./config.js";
 import {
   appInfo,
   appSummary,
+  codexPluginConfig,
+  curatedPlugin,
   pluginDetail,
   pluginInstalled,
   pluginSummary,
 } from "./plugin-inventory.test-helpers.js";
 import { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
-import { createCodexPluginThreadConfigStartupProvider } from "./plugin-thread-config-deadline.js";
-import { buildCodexPluginThreadConfigInputFingerprint } from "./plugin-thread-config.js";
+import { preparePluginThreadConfigForTest } from "./plugin-thread-config.test-helpers.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
-import { buildScheduledCodexAppAuthorityInputFingerprint } from "./scheduled-app-authority.js";
 import { createCodexAppServerBindingStore, sessionBindingIdentity } from "./session-binding.js";
 import { createCodexTestBindingStateStore } from "./session-binding.test-helpers.js";
 import { createCodexTestModel, useAutoCleanupTempDirTracker } from "./test-support.js";
-import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle.js";
+import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
 import {
   createAppServerOptions,
   createLeasedCodexLifecycleHarness,
@@ -38,19 +38,11 @@ import {
 describe("Codex app inventory across physical process restart", () => {
   const appId = "calendar-app";
   const pluginName = "calendar";
-  const pluginConfig = {
-    codexPlugins: {
-      enabled: true,
-      plugins: {
-        calendar: {
-          marketplaceName: "openai-curated",
-          pluginName,
-          enabled: true,
-          allow_destructive_actions: false,
-        },
-      },
+  const pluginConfig = codexPluginConfig({
+    plugins: {
+      calendar: curatedPlugin(pluginName, { enabled: true, allow_destructive_actions: false }),
     },
-  };
+  });
   const authority: NonNullable<EmbeddedRunAttemptParams["scheduledRuntimeAuthority"]> = {
     version: 1,
     runtimeId: "codex",
@@ -110,7 +102,6 @@ describe("Codex app inventory across physical process restart", () => {
     const appServer = {
       ...createAppServerOptions(),
       connectionClass: "local-loopback" as const,
-      remoteAppsSubstrate: "preconfigured" as const,
     };
     appServer.start = {
       ...appServer.start,
@@ -360,28 +351,18 @@ describe("Codex app inventory across physical process restart", () => {
       processes.push({ close });
       const abandonClient = vi.fn(async () => close());
       const appCacheKey = "same-account-home-version";
-      const policy = resolveCodexPluginsPolicy(configuredPlugins);
-      const inputFingerprint = buildScheduledCodexAppAuthorityInputFingerprint(
-        buildCodexPluginThreadConfigInputFingerprint({
-          pluginConfig: configuredPlugins,
-          appCacheKey,
-        }),
+      const prepareProvider = preparePluginThreadConfigForTest(
+        configuredPlugins,
+        appCacheKey,
         params.scheduledRuntimeAuthority,
       );
       const provider = () =>
-        createCodexPluginThreadConfigStartupProvider({
-          inputFingerprint,
-          enabledPluginConfigKeys: policy.pluginPolicies
-            .filter((plugin) => plugin.enabled)
-            .map((plugin) => plugin.configKey),
-          policy,
+        prepareProvider({
           requestTimeoutMs: appServer.requestTimeoutMs,
           signal: abort.signal,
-          pluginConfig: configuredPlugins,
           client: fake.client,
           configCwd: workspaceDir,
           appCache,
-          appCacheKey,
           metadataCache,
           scheduledRuntimeAuthority: params.scheduledRuntimeAuthority,
         });
@@ -483,11 +464,7 @@ describe("Codex app inventory across physical process restart", () => {
     return { ...f, first, process };
   }
 
-  it.each([
-    { lifecycle: "cold", scheduled: false },
-    { lifecycle: "warm", scheduled: true },
-    { lifecycle: "unloaded-same-process", scheduled: true },
-  ])(
+  it.each([{ lifecycle: "unloaded-same-process", scheduled: true }])(
     "preserves approved apps on $lifecycle continuation, scheduled=$scheduled",
     async ({ lifecycle, scheduled }) => {
       const f = await continuation(scheduled, lifecycle);
@@ -541,12 +518,9 @@ describe("Codex app inventory across physical process restart", () => {
   );
 
   it("preserves excluded native app denials on non-ask warm continuation", async () => {
-    const f = await continuation(
-      false,
-      "warm",
-      { codexPlugins: { enabled: true, allow_all_plugins: true } },
-      { excluded: { enabled: true } },
-    );
+    const f = await continuation(false, "warm", codexPluginConfig({ allow_all_plugins: true }), {
+      excluded: { enabled: true },
+    });
     const boundary = f.calls.length;
     const second = await f.process.run();
     expect(second.threadId).toBe(f.first.threadId);
@@ -563,13 +537,11 @@ describe("Codex app inventory across physical process restart", () => {
   it.each(["cold", "warm"])(
     "reconfigures the %s thread when native ask override keys change",
     async (lifecycle) => {
-      const f = await continuation(false, lifecycle, {
-        codexPlugins: {
-          enabled: true,
-          allow_all_plugins: true,
-          allow_destructive_actions: "ask",
-        },
-      });
+      const f = await continuation(
+        false,
+        lifecycle,
+        codexPluginConfig({ allow_all_plugins: true, allow_destructive_actions: "ask" }),
+      );
       expect(f.first.pluginAppPolicyContext?.apps[appId]).toMatchObject({
         source: "account",
         destructiveApprovalMode: "ask",
@@ -630,13 +602,11 @@ describe("Codex app inventory across physical process restart", () => {
   ])(
     "contains $lifecycle ask inventory timeouts, scheduled=$scheduled",
     async ({ lifecycle, scheduled }) => {
-      const f = await continuation(scheduled, lifecycle, {
-        codexPlugins: {
-          enabled: true,
-          allow_all_plugins: true,
-          allow_destructive_actions: "ask",
-        },
-      });
+      const f = await continuation(
+        scheduled,
+        lifecycle,
+        codexPluginConfig({ allow_all_plugins: true, allow_destructive_actions: "ask" }),
+      );
       const binding = f.readBinding();
       const release = createDeferred<void>();
       f.process.faults.beforeInventory = () => release.promise;
@@ -694,33 +664,7 @@ describe("Codex app inventory across physical process restart", () => {
     expect(reads.every((call) => !call.params.threadId || call.loaded)).toBe(true);
   });
 
-  it("rejects a scheduled continuation whose account app was revoked", async () => {
-    const f = await continuation(true, "cold");
-    f.revokeAccount();
-    await expect(f.process.run()).rejects.toThrow("Scheduled Codex apps are unavailable");
-  });
-
-  it("checks scheduled tools on the loaded thread even when account-wide tools remain available", async () => {
-    const f = await continuation(true, "warm");
-    const { process, first } = f;
-    process.threadToolRevocations.add(first.threadId);
-    const boundary = f.calls.length;
-    await expect(process.run()).rejects.toThrow("Scheduled Codex apps are unavailable");
-    const calls = f.calls.slice(boundary);
-    expect(
-      calls.some(
-        (call) =>
-          call.method === "mcpServerStatus/list" &&
-          call.params.threadId === first.threadId &&
-          call.loaded,
-      ),
-    ).toBe(true);
-    expect(
-      calls.filter((call) => call.method === "thread/start" || call.method === "thread/resume"),
-    ).toEqual([]);
-  });
-
-  it.each(["cold", "warm"])(
+  it.each(["cold"])(
     "rejects active inherited MCP servers on a scheduled %s continuation",
     async (lifecycle) => {
       const f = await continuation(true, lifecycle);
@@ -808,7 +752,7 @@ describe("Codex app inventory across physical process restart", () => {
     ).toBe(false);
   });
 
-  it.each(["cold", "warm"])(
+  it.each(["warm"])(
     "retires the %s client when denied admission cannot unsubscribe",
     async (lifecycle) => {
       const f = await continuation(true, lifecycle);

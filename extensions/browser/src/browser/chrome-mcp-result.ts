@@ -1,4 +1,3 @@
-// Parses Chrome MCP tool results and formats redacted tool failures.
 import path from "node:path";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
@@ -11,7 +10,6 @@ import { redactCdpUrl } from "./cdp.helpers.js";
 import {
   CHROME_CONNECTION_TOOL_ERROR_RE,
   DEVTOOLS_ACTIVE_PORT_RE,
-  STALE_SELECTED_PAGE_ERROR,
   type ChromeMcpStructuredPage,
   type ChromeMcpToolResult,
   type NormalizedChromeMcpProfileOptions,
@@ -93,10 +91,11 @@ function normalizeSnapshotFields(record: Record<string, unknown>): ChromeMcpSnap
   };
 }
 
-function normalizeSnapshotNode(value: unknown): ChromeMcpSnapshotNode | null {
-  const rootRecord = asNullableRecord(value);
+export function extractSnapshot(result: ChromeMcpToolResult): ChromeMcpSnapshotNode {
+  const structured = extractStructuredContent(result);
+  const rootRecord = asNullableRecord(structured.snapshot);
   if (!rootRecord) {
-    return null;
+    throw new Error("Chrome MCP snapshot response was missing structured snapshot data.");
   }
   const root = normalizeSnapshotFields(rootRecord);
   const pending = [{ record: rootRecord, node: root }];
@@ -118,15 +117,6 @@ function normalizeSnapshotNode(value: unknown): ChromeMcpSnapshotNode | null {
     current.node.children = children;
   }
   return root;
-}
-
-export function extractSnapshot(result: ChromeMcpToolResult): ChromeMcpSnapshotNode {
-  const structured = extractStructuredContent(result);
-  const snapshot = normalizeSnapshotNode(structured.snapshot);
-  if (!snapshot) {
-    throw new Error("Chrome MCP snapshot response was missing structured snapshot data.");
-  }
-  return snapshot;
 }
 
 function extractMessageText(result: ChromeMcpToolResult): string {
@@ -188,10 +178,6 @@ export function formatChromeMcpToolErrorMessage(params: {
     );
   }
   return detail;
-}
-
-export function shouldReconnectForToolError(name: string, message: string): boolean {
-  return name === "list_pages" && message.includes(STALE_SELECTED_PAGE_ERROR);
 }
 
 export function extractJsonMessage(result: ChromeMcpToolResult): unknown {

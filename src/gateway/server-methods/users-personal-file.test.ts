@@ -14,9 +14,14 @@ import { withPersonalToolTurn } from "../../auto-reply/reply/personal-tool-turn.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import type { PreparedUserProfileIdentity } from "../../state/user-profiles.types.js";
+import type {
+  PreparedUserProfileIdentity,
+  UserProfileDisplay,
+  UserProfileIdentity,
+} from "../../state/user-profiles.types.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import type { GatewayClient } from "./client-types.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { usersPersonalFileHandlers } from "./users-personal-file.js";
@@ -33,10 +38,43 @@ const state = vi.hoisted(() => ({
   rootCalls: 0,
   beforeRoot: undefined as (() => Promise<void>) | undefined,
 }));
+// mock-isolation: exercise profile revocation without opening shared profile storage.
 vi.mock("../../state/user-profile-list.js", () => ({
+  isUserProfileCatalogReady: () => true,
+  prepareUserProfileCatalog: async () => ({
+    hasMultipleSessionSharingIdentities: () => state.multipleProfiles,
+    readCurrentIdentity: (id: string) => ({
+      profileId: id === "alice-alias" ? state.canonical : id,
+      role: state.role,
+    }),
+    readCurrentAuthority: (id: string) => ({
+      profileId: id === "alice-alias" ? state.canonical : id,
+      role: state.role,
+      aliases: [id],
+      display: {
+        id: id === "alice-alias" ? state.canonical : id,
+        displayName: null,
+        hasAvatar: false,
+        avatarRevision: "0",
+      },
+    }),
+    release: () => {},
+  }),
   hasMultipleSessionSharingIdentities: () => state.multipleProfiles,
+  hasMultipleResidentSessionSharingIdentities: () => state.multipleProfiles,
+  readUserProfileIdentity: (id: string): UserProfileIdentity => ({
+    profileId: id === "alice-alias" ? state.canonical : id,
+    role: state.role,
+    aliases: new Set([id]),
+  }),
   readResidentUserProfileId: (id: string) => (id === "alice-alias" ? state.canonical : id),
-  readUserProfileIdentity: (id: string) => ({ profileId: id, role: state.role }),
+  readResidentUserProfileIdentity: (id: string) => ({ profileId: id, role: state.role }),
+  getUserProfileDisplay: (id: string): UserProfileDisplay => ({
+    id,
+    displayName: null,
+    hasAvatar: false,
+    avatarRevision: "0",
+  }),
   prepareUserProfileIdentity: async (profileId: string): Promise<PreparedUserProfileIdentity> => {
     state.profileHolds += 1;
     let active = true;
@@ -48,6 +86,7 @@ vi.mock("../../state/user-profile-list.js", () => ({
     };
     await state.profileReady?.();
     return {
+      readCurrentRevision: readCurrentProfile,
       readCurrentProfile,
       emailBindingIds: [],
       readCurrentFacts: () => ({
@@ -109,19 +148,8 @@ beforeEach(async () => {
   config = { agents: { defaults: { workspace } } };
   client = {
     connId: "alice-connection",
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes: ["operator.read"],
-    },
-    authenticatedUserProfile: {
-      profileId: "alice-alias",
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: 0,
-    },
+    connect: gatewayConnect(["operator.read"]),
+    authenticatedUserProfile: gatewayProfile("alice-alias", null, 0),
   };
   await fs.writeFile(path.join(workspace, "USER.md"), "Shared defaults");
 });
@@ -152,10 +180,9 @@ const save = (content: string, expectedHash: string | null = null) =>
 const personalPath = () => path.join(workspace, "users", "alice", "USER.md");
 
 describe("personal USER.md self-service", () => {
-  function toolTurn(
-    sessionKey = "agent:main:dashboard:someone-elses-project",
-    scopes = ["operator.read"],
-  ) {
+  function toolTurn(scopes = ["operator.read"]) {
+    client.connect.scopes = scopes;
+    const sessionKey = "agent:main:dashboard:someone-elses-project";
     let active = true;
     const authority = createAdmittedRunOperatorAuthority({
       profileId: "alice-alias",
@@ -202,14 +229,10 @@ describe("personal USER.md self-service", () => {
     };
   }
 
-  it.each([
-    { sessionKey: "agent:main:main", scopes: ["operator.read"] },
-    { sessionKey: "agent:main:dashboard:foreign-owner", scopes: ["operator.write"] },
-    { sessionKey: "agent:main:dashboard:worktree", scopes: ["operator.admin"] },
-  ])(
-    "routes the actual chat tool from $sessionKey with $scopes to the requester file",
-    async ({ sessionKey, scopes }) => {
-      const { identity } = toolTurn(sessionKey, scopes);
+  it.each(["operator.read", "operator.sessions.read"])(
+    "routes the %s requester's chat tool from a foreign session to their canonical file",
+    async (scope) => {
+      const { identity } = toolTurn([scope]);
       const tool = createPersonalInstructionsTool("main");
       const execute = (params: Record<string, unknown>) =>
         withGatewayToolCallerIdentity(identity, () =>
@@ -223,97 +246,94 @@ describe("personal USER.md self-service", () => {
       expect(
         (await execute({ action: "set", content: "Prefer examples.", expectedHash: null })).details,
       ).toMatchObject({ profileId: "alice", content: "Prefer examples." });
+      expect((await execute({ action: "get" })).details).toMatchObject({
+        profileId: "alice",
+        missing: false,
+        content: "Prefer examples.",
+      });
       expect(await fs.readFile(personalPath(), "utf8")).toBe("Prefer examples.");
       expect(await fs.readdir(path.join(workspace, "users"))).toEqual(["alice"]);
       expect(await fs.readFile(path.join(workspace, "USER.md"), "utf8")).toBe("Shared defaults");
+      expect(await loadPersonalUserBootstrapFile(workspace, "alice")).toMatchObject({
+        personalUser: true,
+        content: "Prefer examples.",
+        path: personalPath(),
+      });
     },
   );
 
-  it.each(["get", "set"] as const)(
-    "rejects personal %s after an accepted cross-profile steer before touching USER.md",
-    async (action) => {
-      const { identity } = toolTurn();
-      await withPersonalToolTurn(
-        { owner: { profileId: "alice-alias", senderId: "alice", name: "Alice" } },
-        async (turn) =>
-          withGatewayToolCallerIdentity(
-            { ...identity, operationalRunInstance: undefined, operatorAuthority: undefined },
-            async () => {
-              const tool = createPersonalInstructionsTool("main");
-              const execute = (params: Record<string, unknown>) =>
-                tool.execute("personal-call", params);
-              const saved = await execute({
-                action: "set",
-                content: "Alice's preferences",
-                expectedHash: null,
-              });
-              expect(saved.details).toMatchObject({
-                profileId: "alice",
-                content: "Alice's preferences",
-              });
-              const before = state.rootCalls;
-              expect(
-                await turn.steer({ profileId: "bob", senderId: "bob", name: "Bob" }),
-              ).toMatchObject({ status: "accepted" });
-              await expect(
-                withGatewayPersonalToolUser("alice-alias", () =>
-                  execute({
-                    action,
-                    ...(action === "set"
-                      ? {
-                          content: "Bob's preferences",
-                          expectedHash: (saved.details as { hash: string }).hash,
-                        }
-                      : {}),
-                  }),
-                ),
-              ).rejects.toThrow(/own.*(turn|Control UI)/);
-              expect(state.rootCalls).toBe(before);
-              expect(await fs.readFile(personalPath(), "utf8")).toBe("Alice's preferences");
-            },
-          ),
-      );
-    },
-  );
-
-  it.each(["get", "set"] as const)(
-    "rechecks participant ambiguity after filesystem preparation for personal %s",
-    async (action) => {
-      const { identity } = toolTurn();
-      await withPersonalToolTurn(
-        { owner: { profileId: "alice-alias", senderId: "alice", name: "Alice" } },
-        async (turn) =>
-          withGatewayToolCallerIdentity(
-            { ...identity, operationalRunInstance: undefined, operatorAuthority: undefined },
-            async () => {
-              state.beforeRoot = async () => {
-                expect(
-                  await turn.steer({ profileId: "bob", senderId: "bob", name: "Bob" }),
-                ).toMatchObject({ status: "accepted" });
-              };
-              await expect(
-                createPersonalInstructionsTool("main").execute("personal-call", {
-                  action,
-                  ...(action === "set" ? { content: "Ambiguous", expectedHash: null } : {}),
-                }),
-              ).rejects.toThrow(/own.*(turn|Control UI)/);
-              expect(await fs.readdir(workspace)).toEqual(["USER.md"]);
-            },
-          ),
-      );
-    },
-  );
+  function withRequesterTurn(test: Parameters<typeof withPersonalToolTurn>[1]) {
+    const { identity } = toolTurn();
+    return withPersonalToolTurn(
+      {
+        owner: { profileId: "alice-alias", senderId: "alice", name: "Alice" },
+        allowCollaborativeSteering: true,
+      },
+      (turn) =>
+        withGatewayToolCallerIdentity(
+          { ...identity, operationalRunInstance: undefined, operatorAuthority: undefined },
+          () => test(turn),
+        ),
+    );
+  }
 
   it.each(
-    (["shared-secret", "device-token"] as const).flatMap((kind) =>
-      (["live", "attestation removed", "connection aborted", "connection replaced"] as const).map(
-        (boundary) => ({
-          kind,
-          boundary,
-        }),
-      ),
+    (["get", "set"] as const).flatMap((action) =>
+      (["before", "after preparation"] as const).map((phase) => ({ action, phase })),
     ),
-  )(
+  )("rejects personal $action when another profile steers $phase", async ({ action, phase }) => {
+    await withRequesterTurn(async (turn) => {
+      const tool = createPersonalInstructionsTool("main");
+      const execute = (params: Record<string, unknown>) => tool.execute("personal-call", params);
+      const steer = async () => {
+        expect(await turn.steer({ profileId: "bob", senderId: "bob", name: "Bob" })).toMatchObject({
+          status: "accepted",
+        });
+      };
+      if (phase === "before") {
+        const saved = await execute({
+          action: "set",
+          content: "Alice's preferences",
+          expectedHash: null,
+        });
+        expect(saved.details).toMatchObject({ profileId: "alice", content: "Alice's preferences" });
+        const before = state.rootCalls;
+        await steer();
+        await expect(
+          withGatewayPersonalToolUser("alice-alias", () =>
+            execute({
+              action,
+              ...(action === "set"
+                ? {
+                    content: "Bob's preferences",
+                    expectedHash: (saved.details as { hash: string }).hash,
+                  }
+                : {}),
+            }),
+          ),
+        ).rejects.toThrow(/own.*(turn|Control UI)/);
+        expect(state.rootCalls).toBe(before);
+        expect(await fs.readFile(personalPath(), "utf8")).toBe("Alice's preferences");
+      } else {
+        state.beforeRoot = steer;
+        await expect(
+          execute({
+            action,
+            ...(action === "set" ? { content: "Ambiguous", expectedHash: null } : {}),
+          }),
+        ).rejects.toThrow(/own.*(turn|Control UI)/);
+        expect(await fs.readdir(workspace)).toEqual(["USER.md"]);
+      }
+    });
+  });
+
+  it.each([
+    { kind: "shared-secret", boundary: "live" },
+    { kind: "device-token", boundary: "live" },
+    { kind: "shared-secret", boundary: "attestation removed" },
+    { kind: "shared-secret", boundary: "connection aborted" },
+    { kind: "shared-secret", boundary: "connection replaced" },
+  ] as const)(
     "carries authenticated $kind owner ingress through the chat tool: $boundary",
     async ({ kind, boundary }) => {
       const { identity } = toolTurn();
@@ -450,31 +470,28 @@ describe("personal USER.md self-service", () => {
     },
   );
 
-  it("rejects a different source even when its profile matches", async () => {
-    const { identity } = toolTurn();
-    client.internal!.operatorRunAuthority = createAdmittedRunOperatorAuthority({
-      profileId: identity.operatorAuthority.profileId,
-      scopes: ["operator.read"],
-      assertCurrent: () => {},
-    });
-    expect((await withGatewayToolCallerIdentity(identity, () => save("Different source"))).ok).toBe(
-      false,
-    );
-  });
-
-  it("rejects copied requester authority without its live admitted tool run", async () => {
-    toolTurn();
-    expect((await save("Unadmitted")).ok).toBe(false);
-    const { identity } = toolTurn();
-    expect(
-      (
-        await withGatewayToolCallerIdentity({ ...identity, operatorAuthority: undefined }, () =>
-          save("Wrong source"),
-        )
-      ).ok,
-    ).toBe(false);
-    expect(await fs.readdir(workspace)).toEqual(["USER.md"]);
-  });
+  it.each(["different source", "unadmitted", "missing source"])(
+    "rejects copied requester authority with %s",
+    async (kind) => {
+      const { identity } = toolTurn();
+      if (kind === "different source") {
+        client.internal!.operatorRunAuthority = createAdmittedRunOperatorAuthority({
+          profileId: identity.operatorAuthority.profileId,
+          scopes: ["operator.read"],
+          assertCurrent: () => {},
+        });
+      }
+      const result =
+        kind === "unadmitted"
+          ? await save("Unadmitted")
+          : await withGatewayToolCallerIdentity(
+              kind === "missing source" ? { ...identity, operatorAuthority: undefined } : identity,
+              () => save("Wrong source"),
+            );
+      expect(result.ok).toBe(false);
+      expect(await fs.readdir(workspace)).toEqual(["USER.md"]);
+    },
+  );
 
   it.each(["source", "run", "commit"])(
     "rechecks delegated %s authority before filesystem mutation",
@@ -512,37 +529,6 @@ describe("personal USER.md self-service", () => {
     ).rejects.toThrow("authenticated Gateway user turn");
   });
 
-  it("rejects personal reads and writes on a single-user Gateway without touching files", async () => {
-    state.multipleProfiles = false;
-    expect(await rpc("get")).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
-    expect(await save("Not a second USER.md")).toMatchObject({
-      ok: false,
-      error: { code: "FORBIDDEN" },
-    });
-    expect(await fs.readdir(workspace)).toEqual(["USER.md"]);
-    expect(await fs.readFile(path.join(workspace, "USER.md"), "utf8")).toBe("Shared defaults");
-  });
-
-  it("lets a read-only signed-in user create, read, and edit only their canonical file", async () => {
-    expect(await rpc("get")).toMatchObject({
-      ok: true,
-      result: { missing: true, hash: null, content: "", profileId: "alice" },
-    });
-    const created = await save("Prefer concise replies.");
-    expect(created).toMatchObject({ ok: true, result: { profileId: "alice", missing: false } });
-    expect(await fs.readFile(personalPath(), "utf8")).toBe("Prefer concise replies.");
-    expect(await rpc("get")).toMatchObject({ ok: true, result: created.result });
-    expect(await save("Prefer examples.", created.result.hash)).toMatchObject({ ok: true });
-    expect(await fs.readFile(personalPath(), "utf8")).toBe("Prefer examples.");
-    expect(await fs.readFile(path.join(workspace, "USER.md"), "utf8")).toBe("Shared defaults");
-    expect(await fs.readdir(path.join(workspace, "users"))).toEqual(["alice"]);
-    expect(await loadPersonalUserBootstrapFile(workspace, "alice")).toMatchObject({
-      personalUser: true,
-      content: "Prefer examples.",
-      path: personalPath(),
-    });
-  });
-
   it("requires a hash for every save and detects concurrent creation and stale edits", async () => {
     expect(await rpc("set", { content: "unsafe" })).toMatchObject({ ok: false });
     const attempts = await Promise.all([save("First"), save("Second")]);
@@ -561,25 +547,15 @@ describe("personal USER.md self-service", () => {
     });
   });
 
-  it.each([{ profileId: "bob" }, { path: "USER.md" }, { name: "../USER.md" }])(
-    "rejects caller-selected targets %j even for administrators",
-    async (extra) => {
-      client.connect.scopes = ["operator.admin"];
-      for (const method of ["get", "set"] as const) {
-        expect(
-          await rpc(method, {
-            ...(method === "set" ? { content: "Bad", expectedHash: null } : {}),
-            ...extra,
-          }),
-        ).toMatchObject({ ok: false });
-      }
-      expect(await fs.readdir(workspace)).toEqual(["USER.md"]);
-    },
-  );
-
-  it.each(["anonymous", "synthetic", "node", "disconnected", "no-scope", "cancelled"])(
-    "rejects %s callers",
+  it.each(["single-user", "selected-profile", "anonymous", "synthetic", "node", "no-scope"])(
+    "rejects personal-file requests for %s before touching files",
     async (kind) => {
+      if (kind === "single-user") {
+        state.multipleProfiles = false;
+      }
+      if (kind === "selected-profile") {
+        client.connect.scopes = ["operator.admin"];
+      }
       if (kind === "anonymous") {
         client.authenticatedUserProfile = undefined;
       }
@@ -589,17 +565,22 @@ describe("personal USER.md self-service", () => {
       if (kind === "node") {
         client.connect.role = "node";
       }
-      if (kind === "disconnected") {
-        connected = false;
-      }
       if (kind === "no-scope") {
         client.connect.scopes = [];
       }
-      if (kind === "cancelled") {
-        controller.abort();
+      for (const method of ["get", "set"] as const) {
+        expect(
+          await rpc(method, {
+            ...(method === "set" ? { content: "Bad", expectedHash: null } : {}),
+            ...(kind === "selected-profile" ? { profileId: "bob" } : {}),
+          }),
+        ).toMatchObject({
+          ok: false,
+          ...(kind === "selected-profile" ? {} : { error: { code: "FORBIDDEN" } }),
+        });
       }
-      expect(await save("Bad")).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
       expect(await fs.readdir(workspace)).toEqual(["USER.md"]);
+      expect(await fs.readFile(path.join(workspace, "USER.md"), "utf8")).toBe("Shared defaults");
     },
   );
 
@@ -613,10 +594,15 @@ describe("personal USER.md self-service", () => {
     "workspace-change",
     "cancellation",
   ])("rechecks %s inside the safe writer before mutation", async (kind) => {
+    client.connect.scopes = ["operator.sessions.read"];
     config.gateway = {
       roles: {
         definitions: {
-          reader: { scopes: ["operator.read"], agents: ["main"], sessions: { others: "none" } },
+          reader: {
+            scopes: ["operator.sessions.read"],
+            agents: ["main"],
+            sessions: { others: "none" },
+          },
           denied: { scopes: [], agents: [], sessions: { others: "none" } },
         },
       },

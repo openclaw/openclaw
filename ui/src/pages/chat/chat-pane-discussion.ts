@@ -1,11 +1,13 @@
 import type { SessionDiscussionInfo } from "../../../../packages/gateway-protocol/src/index.js";
-import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import type { ChatDiscussionPanelSource } from "./chat-pane-panel-source.ts";
 import { ChatPaneSessionMenu } from "./chat-pane-session-menu.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
-import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 import { closeSlot, openSlot } from "./sidebar-layout.ts";
+
+registerChatSessionEnglish();
 
 export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
   // Probe once per session activation; transient failures stay uncached so the
@@ -15,11 +17,15 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
     if (
       !state?.connected ||
       !state.client ||
-      this.sessionDiscussionStates.has(sessionKey) ||
+      this.sessionDiscussion.snapshot.states.has(sessionKey) ||
       // One in-flight probe per key: a rapid A→B→A switch must not start a
       // second probe whose slower twin could later overwrite the fresh result.
       this.sessionDiscussionProbes.has(sessionKey) ||
-      isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.discussion.info") !== true
+      !canCallGatewayMethod(
+        this.context.gateway.snapshot,
+        "session.discussion.info",
+        "operator.read",
+      )
     ) {
       return;
     }
@@ -35,8 +41,7 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
       if (generation !== this.connectionGeneration) {
         return;
       }
-      this.sessionDiscussionStates.set(sessionKey, info.state);
-      this.requestUpdate();
+      this.sessionDiscussion.record(sessionKey, info.state);
     } catch {
       // Leave unprobed: the action stays hidden and a later switch retries.
     } finally {
@@ -46,80 +51,46 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
       if (
         generation !== this.connectionGeneration &&
         this.state?.sessionKey === sessionKey &&
-        !this.sessionDiscussionStates.has(sessionKey)
+        !this.sessionDiscussion.snapshot.states.has(sessionKey)
       ) {
         void this.probeSessionDiscussion(sessionKey);
       }
     }
   }
 
-  protected buildSessionDiscussionPanel(
+  protected sessionDiscussionSource(
     state: NonNullable<typeof this.state>,
     sessionKey: string,
-  ): SessionDiscussionPanelConfig | null {
-    if (!state.connected || !state.client) {
+  ): ChatDiscussionPanelSource | null {
+    if (
+      !state.connected ||
+      !state.client ||
+      !canCallGatewayMethod(
+        this.context.gateway.snapshot,
+        "session.discussion.info",
+        "operator.read",
+      )
+    ) {
       return null;
     }
-    const canOpen =
-      hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
-      isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.discussion.open") === true;
-    const contentGeneration = this.connectionGeneration;
-    const cached = this.sessionDiscussionPanels.get(sessionKey);
-    if (cached?.generation === contentGeneration && cached.canOpen === canOpen) {
-      cached.config.openUrl = this.sessionDiscussionOpenUrls.get(sessionKey) ?? null;
-      return cached.config;
-    }
-    const request = async (
-      method: "session.discussion.info" | "session.discussion.open",
-      key: string,
-    ) => {
-      if (!state.connected || !state.client) {
-        throw new Error(t("chat.sessionDiscussion.disconnected"));
-      }
-      return state.client.request<SessionDiscussionInfo>(method, {
-        sessionKey: key,
-        agentId: resolveChatAgentId(state),
-      });
-    };
-    const config: SessionDiscussionPanelConfig = {
+    return {
+      owner: this,
+      state,
       sessionKey,
-      canOpen,
-      openUrl: this.sessionDiscussionOpenUrls.get(sessionKey) ?? null,
-      loadInfo: (key) => request("session.discussion.info", key),
-      openDiscussion: (key) => request("session.discussion.open", key),
-      onStateChange: (key, discussionState, openUrl) => {
-        // Panels created under a previous connection may report late; their
-        // state belongs to the old provider and must not touch the new cache.
-        if (contentGeneration !== this.connectionGeneration) {
-          return;
-        }
-        this.sessionDiscussionStates.set(key, discussionState);
-        const isCurrentSession = state.sessionKey.trim() === key;
-        if (isCurrentSession) {
-          this.sessionDiscussionOpenUrls.set(key, openUrl);
-        }
-        if (discussionState === "none") {
-          this.sessionDiscussionOpenUrls.delete(key);
-        }
-        if (discussionState === "none" && isCurrentSession) {
-          state.updateSidebarLayout(closeSlot(state.sidebarLayout, "discussion"));
-          return;
-        }
-        state.requestUpdate();
-      },
+      generation: this.connectionGeneration,
+      canOpen: canCallGatewayMethod(
+        this.context.gateway.snapshot,
+        "session.discussion.open",
+        "operator.write",
+      ),
+      openUrl: this.sessionDiscussion.snapshot.openUrls.get(sessionKey) ?? null,
     };
-    this.sessionDiscussionPanels.set(sessionKey, {
-      generation: contentGeneration,
-      canOpen,
-      config,
-    });
-    return config;
   }
 
-  protected openSessionDiscussionSlot(): boolean {
+  protected openSessionDiscussionSlot(): void {
     const state = this.state;
     if (!state) {
-      return false;
+      return;
     }
     const opened = openSlot(state.sidebarLayout, "discussion");
     const discussionPanel = opened.columns
@@ -129,37 +100,27 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
     if (discussionPanel) {
       state.updateSidebarActivePanel(discussionPanel.id);
     }
-    return true;
   }
 
-  protected resolveSessionDiscussionAction(): {
-    active: boolean;
-    label: string;
-    onToggle: () => void;
-  } | null {
+  protected resolveSessionDiscussionAction() {
     const state = this.state;
     const sessionKey = state?.sessionKey.trim() ?? "";
-    const known = sessionKey ? this.sessionDiscussionStates.get(sessionKey) : undefined;
+    const known = sessionKey ? this.sessionDiscussion.snapshot.states.get(sessionKey) : undefined;
     if (
-      !state?.connected ||
-      !state.client ||
+      !state ||
       !sessionKey ||
       known === undefined ||
       known === "none" ||
-      isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.discussion.info") !== true
+      !this.sessionDiscussionSource(state, sessionKey)
     ) {
-      return null;
-    }
-    if (!this.buildSessionDiscussionPanel(state, sessionKey)) {
       return null;
     }
     const active = state.sidebarLayout.columns.some((column) =>
       column.panels.some((panel) => panel.slot === "discussion"),
     );
-    const label = t(active ? "chat.sessionDiscussion.hide" : "chat.sessionDiscussion.show");
     return {
       active,
-      label,
+      label: t(active ? "chat.sessionDiscussion.hide" : "chat.sessionDiscussion.show"),
       onToggle: () =>
         active
           ? this.commitSidebarLayout(closeSlot(state.sidebarLayout, "discussion"))

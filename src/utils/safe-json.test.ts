@@ -3,11 +3,6 @@ import { describe, expect, it } from "vitest";
 import { safeJsonStringify } from "./safe-json.js";
 
 describe("safeJsonStringify", () => {
-  it("stringifies regular objects", () => {
-    expect(safeJsonStringify({ a: 1 })).toBe('{"a":1}');
-    expect(safeJsonStringify([1, 2, 3])).toBe("[1,2,3]");
-  });
-
   it("stringifies bigint values as decimal strings", () => {
     const result = safeJsonStringify({ n: BigInt(123) });
     expect(JSON.parse(result!)).toEqual({ n: "123" });

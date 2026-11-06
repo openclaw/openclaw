@@ -1,8 +1,9 @@
-import { randomUUID } from "node:crypto";
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   callGatewayMock,
   resetSubagentsConfigOverride,
@@ -16,13 +17,20 @@ import { createPerSenderSessionConfig } from "./test-helpers/session-config.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 
 describe("subagents scope isolation", () => {
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-subagents-scope-");
   let storePath = "";
-  beforeEach(() => {
-    resetSubagentRegistryForTests();
+  beforeEach(async () => {
+    await resetSubagentRegistryForTests();
     resetSubagentsConfigOverride();
     callGatewayMock.mockReset();
-    storePath = path.join(os.tmpdir(), `openclaw-subagents-scope-${randomUUID()}.json`);
-    setSubagentsConfigOverride({ session: createPerSenderSessionConfig({ store: storePath }) });
+    storePath = path.join(sessionDirs.make(), "sessions.sqlite");
+    const config = { session: createPerSenderSessionConfig({ store: storePath }) };
+    setSubagentsConfigOverride(config);
+    setRuntimeConfigSnapshot(config);
+  });
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
   });
 
   it.each([
@@ -37,7 +45,7 @@ describe("subagents scope isolation", () => {
       { childSessionKey: siblingKey, requesterSessionKey: "agent:main:main" },
     ];
     const now = Date.now();
-    const store: Record<string, unknown> = {
+    const store: Record<string, SessionEntry> = {
       [callerKey]: { sessionId: role, updatedAt: now, spawnedBy: "agent:main:main" },
     };
     for (const [index, run] of runs.entries()) {
@@ -47,9 +55,11 @@ describe("subagents scope isolation", () => {
         spawnedBy: run.requesterSessionKey,
       };
     }
-    fs.writeFileSync(storePath, JSON.stringify(store), "utf-8");
+    for (const [sessionKey, entry] of Object.entries(store)) {
+      await replaceSessionEntry({ agentId: "main", sessionKey, storePath }, entry);
+    }
     for (const [index, run] of runs.entries()) {
-      addSubagentRunForTests({
+      await addSubagentRunForTests({
         ...run,
         runId: `run-${index}`,
         requesterDisplayKey: run.requesterSessionKey,

@@ -7,6 +7,7 @@ import {
   publicationObservationJson,
   publicationPendingAuthority,
   validatePublicationSourceBinding,
+  type PublicationObservationCollection,
   type PublicationSourceFact,
 } from "./full-release-publication-contract.mjs";
 import { compareAscii } from "./lib/canonical-json.mjs";
@@ -15,32 +16,19 @@ import {
   observeClawHubPackage,
   type ClawHubPackageObservation,
 } from "./lib/plugin-clawhub-release.ts";
-import {
-  collectPluginReleasePlan,
-  observeNpmPackage,
-  type NpmPackageObservation,
-} from "./lib/plugin-npm-release.ts";
+import { collectPluginReleasePlan, observeNpmPackage } from "./lib/plugin-npm-release.ts";
 import { collectExtensionPackageJsonCandidates } from "./lib/plugin-publication-candidates.ts";
 import { collectPublishablePluginPackagesFromCandidates } from "./lib/plugin-publication-collector.ts";
 
 const MAX_NPM_NAMES = 1024;
 const MAX_RESPONSE_BYTES = 128 * 1024 * 1024;
-const MAX_COLLECTION_MS = 300_000;
+// Keep registry pressure bounded while allowing the all-publishable roster to
+// absorb transient ClawHub retries without exhausting the admission window.
+const MAX_COLLECTION_MS = 600_000;
+const OBSERVATION_CONCURRENCY = 8;
 const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u;
 
-type NpmRead = {
-  name: string;
-  version: string | null;
-  required: boolean;
-  observedAt: string;
-} & (
-  | { outcome: "observed"; state: NpmPackageObservation }
-  | { outcome: "unavailable"; error: string }
-);
-type ClawHubRead = {
-  name: string;
-  version: string;
-  observedAt: string;
+type ClawHubRead = PublicationObservationCollection["clawhub"][number] & {
   state: ClawHubPackageObservation;
 };
 
@@ -111,7 +99,7 @@ async function collectObservations(params: {
   const onTerminate = () => controller.abort(new Error("Publication observations cancelled."));
   let bytesConsumed = 0;
   const bodyCleanups = new Set<Promise<void>>();
-  const npm = new Map<string, NpmRead>();
+  const npm = new Map<string, PublicationObservationCollection["npm"][number]>();
   const clawhub = new Map<string, ClawHubRead>();
   const requiredNpm = roster.filter((entry) => entry.targets.includes("npm"));
   const requiredClawHub = roster.filter((entry) => entry.targets.includes("clawhub"));
@@ -148,6 +136,7 @@ async function collectObservations(params: {
     permitted.add(base);
     permitted.add(`${base}/trusted-publisher`);
     permitted.add(`${base}/versions/${encodeURIComponent(entry.version)}`);
+    permitted.add(`${base}/versions/${encodeURIComponent(entry.version)}/publication`);
   }
   // The two required registries share one task pool. Each task's retries/body
   // finish before its slot is released; advisory-only tasks start afterward.
@@ -244,12 +233,7 @@ async function collectObservations(params: {
     signal.throwIfAborted();
     await delay(ms, undefined, { signal: readSignal() });
   };
-  const pendingAuthority: Array<{
-    registry: "npm" | "clawhub";
-    name: string;
-    action: string;
-    status: "unresolved";
-  }> = [];
+  const pendingAuthority: PublicationObservationCollection["pendingAuthority"] = [];
   const readNpm = async (name: string, version: string | null) => {
     if (npm.has(name)) {
       throw new Error("Duplicate logical npm observation.");
@@ -322,7 +306,7 @@ async function collectObservations(params: {
     assertActive();
     const result = await runTasksWithConcurrency({
       tasks,
-      limit: 8,
+      limit: OBSERVATION_CONCURRENCY,
       errorMode: "stop",
       onTaskError: (error) => controller.abort(error),
     });
@@ -392,6 +376,8 @@ async function collectObservations(params: {
           bootstrapCandidates: [],
           missingTrustedPublisher: [],
           skippedPublished: [],
+          pendingPublication: [],
+          failedPublication: [],
           warnings: [],
         };
     assertActive();
@@ -422,11 +408,20 @@ async function collectObservations(params: {
           warnings: npmPlan.warnings,
         },
         clawhub: {
-          all: entries(clawhubPlan.all),
+          all: clawhubPlan.all.map(
+            ({ packageName: name, version, alreadyPublished, publication }) => ({
+              name,
+              version,
+              alreadyPublished,
+              publication,
+            }),
+          ),
           candidates: names(clawhubPlan.candidates),
           bootstrapCandidates: names(clawhubPlan.bootstrapCandidates),
           missingTrustedPublisher: names(clawhubPlan.missingTrustedPublisher),
           skippedPublished: names(clawhubPlan.skippedPublished),
+          pendingPublication: names(clawhubPlan.pendingPublication),
+          failedPublication: names(clawhubPlan.failedPublication),
           warnings: clawhubPlan.warnings,
         },
       },

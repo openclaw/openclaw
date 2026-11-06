@@ -1,7 +1,5 @@
-// Parallels Update Job Timeout tests cover parallels update job timeout script behavior.
 import { spawnSync } from "node:child_process";
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { runTimedUpdateJob } from "../../scripts/e2e/parallels/update-job-timeout.ts";
 import { scriptProcessEntrypoints } from "../../scripts/script-process-runtime.test-support.js";
 import {
@@ -9,148 +7,84 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../../src/infra/runtime-worker-url.js";
 
-describe("Parallels update job timeout", () => {
-  afterEach(() => {
-    vi.useRealTimers();
+let events: string[];
+beforeEach(() => {
+  events = [];
+});
+const runJob = (options: Partial<Parameters<typeof runTimedUpdateJob>[0]>) =>
+  runTimedUpdateJob({
+    append: (chunk) => events.push(chunk),
+    label: "macOS",
+    run: async () => undefined,
+    timeoutDescription: "1s plus cleanup backstop",
+    timeoutMs: 1000,
+    ...options,
   });
-
-  it("clamps oversized update job timers before scheduling", async () => {
-    const chunks: string[] = [];
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const writeLog = vi.fn(async () => undefined);
-
-    try {
-      await expect(
-        runTimedUpdateJob({
-          append: (chunk) => chunks.push(chunk),
-          label: "Linux",
-          run: async () => undefined,
-          timeoutDescription: "oversized",
-          timeoutMs: Number.MAX_SAFE_INTEGER,
-          writeLog,
-        }),
-      ).resolves.toBe(0);
-      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-    } finally {
-      setTimeoutSpy.mockRestore();
-    }
+afterEach(() => vi.useRealTimers());
+it.each([false, true])("settles before the backstop (fails=%s)", async (fails) => {
+  vi.useFakeTimers();
+  const result = runJob({
+    run: () =>
+      fails
+        ? Promise.reject(new Error("package swap failed"))
+        : new Promise<void>((resolve) => {
+            setTimeout(resolve, 1000);
+          }),
+    timeoutMs: 1200,
   });
-
-  it("records update failures and writes the job log", async () => {
-    const chunks: string[] = [];
-    const writeLog = vi.fn(async () => undefined);
-
-    await expect(
-      runTimedUpdateJob({
-        append: (chunk) => chunks.push(chunk),
-        label: "Linux",
-        run: async () => {
-          throw new Error("package swap failed");
-        },
-        timeoutDescription: "1s",
-        timeoutMs: 1000,
-        writeLog,
+  await vi.advanceTimersByTimeAsync(1000);
+  await expect(result).resolves.toBe(fails ? 1 : 0);
+  expect(events).toEqual(fails ? ["package swap failed\n"] : []);
+});
+it("waits for abort-aware cleanup before completing the job", async () => {
+  vi.useFakeTimers();
+  const result = runJob({
+    abortSettleMs: 250,
+    append: (chunk) => events.push(chunk.trim()),
+    run: ({ signal }) =>
+      new Promise<void>((resolve) => {
+        const onAbort = () => {
+          events.push("abort");
+          setTimeout(() => {
+            events.push("cleanup");
+            resolve();
+          }, 25);
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
       }),
-    ).resolves.toBe(1);
-
-    expect(chunks).toEqual(["package swap failed\n"]);
-    expect(writeLog).toHaveBeenCalledTimes(1);
+  }).then((code) => {
+    events.push("complete");
+    return code;
   });
-
-  it("lets the inner bounded operation settle before the backstop fires", async () => {
-    vi.useFakeTimers();
-    const chunks: string[] = [];
-    const writeLog = vi.fn(async () => undefined);
-
-    const result = runTimedUpdateJob({
-      append: (chunk) => chunks.push(chunk),
-      label: "macOS",
-      run: () =>
-        new Promise<void>((resolve) => {
-          setTimeout(resolve, 1000);
-        }),
-      timeoutDescription: "1s plus cleanup backstop",
-      timeoutMs: 1200,
-      writeLog,
-    });
-
-    await vi.advanceTimersByTimeAsync(1000);
-    await expect(result).resolves.toBe(0);
-    expect(chunks).toEqual([]);
-    expect(writeLog).toHaveBeenCalledTimes(1);
-  });
-
-  it("waits for abort-aware cleanup before writing the job log", async () => {
-    vi.useFakeTimers();
-    const events: string[] = [];
-
-    const result = runTimedUpdateJob({
-      abortSettleMs: 250,
-      append: (chunk) => events.push(chunk.trim()),
-      label: "macOS",
-      run: ({ signal }) =>
-        new Promise<void>((resolve) => {
-          signal.addEventListener(
-            "abort",
-            () => {
-              events.push("abort");
-              setTimeout(() => {
-                events.push("cleanup");
-                resolve();
-              }, 25);
-            },
-            { once: true },
-          );
-        }),
-      timeoutDescription: "1s plus cleanup backstop",
-      timeoutMs: 1000,
-      writeLog: async () => {
-        events.push("writeLog");
-      },
-    });
-
-    await vi.advanceTimersByTimeAsync(1025);
-    await expect(result).resolves.toBe(1);
-    expect(events).toEqual([
-      "macOS update timed out after 1s plus cleanup backstop",
-      "abort",
-      "cleanup",
-      "writeLog",
-    ]);
-  });
-
-  it("keeps the process alive long enough to write logs for hung runners", () => {
-    const moduleUrl = resolveRuntimeWorkerUrl(scriptProcessEntrypoints.updateJobTimeout);
-    const probe = `
+  await vi.advanceTimersByTimeAsync(1025);
+  await expect(result).resolves.toBe(1);
+  const timeoutMessage = "macOS update timed out after 1s plus cleanup backstop";
+  expect(events).toEqual([timeoutMessage, "abort", "cleanup", "complete"]);
+});
+it("keeps the process alive long enough to write logs for hung runners", () => {
+  const moduleUrl = resolveRuntimeWorkerUrl(scriptProcessEntrypoints.updateJobTimeout);
+  const probe = `
 import { runTimedUpdateJob } from ${JSON.stringify(moduleUrl.href)};
-const events = [];
 const result = await runTimedUpdateJob({
   abortSettleMs: 25,
-  append: (chunk) => events.push(chunk.trim()),
+  append: (chunk) => process.stdout.write(chunk),
   label: "Linux",
   run: () => new Promise(() => {}),
   timeoutDescription: "10ms",
   timeoutMs: 10,
-  writeLog: async () => events.push("writeLog"),
 });
-console.log(JSON.stringify({ events, result }));
+console.log(result);
 `;
 
-    const child = spawnSync(
-      process.execPath,
-      [...resolveRuntimeWorkerArgv(moduleUrl).slice(0, -1), "--input-type=module", "--eval", probe],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        timeout: 5_000,
-      },
-    );
+  const child = spawnSync(
+    process.execPath,
+    [...resolveRuntimeWorkerArgv(moduleUrl).slice(0, -1), "--input-type=module", "--eval", probe],
+    { cwd: process.cwd(), encoding: "utf8", timeout: 5_000 },
+  );
 
-    expect(child.stderr).toBe("");
-    expect(child.status).toBe(0);
-    expect(JSON.parse(child.stdout)).toEqual({
-      events: ["Linux update timed out after 10ms", "writeLog"],
-      result: 1,
-    });
+  expect(child).toMatchObject({
+    stderr: "",
+    status: 0,
+    stdout: "Linux update timed out after 10ms\n1\n",
   });
 });

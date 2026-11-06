@@ -1,19 +1,31 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
-import type { RetainedOperation, RetainedOutcome } from "../infra/retained-operation.js";
+import type { DatabaseSync } from "node:sqlite";
+import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
+import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
+import { getStateDatabaseSchemaLease } from "../infra/gateway-state-owner.js";
+import { statIfExists } from "../infra/path-existence.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
+import { hasVerifiedLiveSqliteOwner } from "../infra/sqlite-live-owner.js";
 import { retainSnapshotTempDirectory } from "../infra/sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyLocationFromOwnedDatabase } from "../infra/sqlite-readonly-location.js";
 import type {
   AsyncPreparedSqliteReadOnlyLocation,
   RetainedSqliteSnapshotPreparation,
 } from "../infra/sqlite-readonly-location.types.js";
-import { startSqliteReadOnlyLocationAsync } from "../infra/sqlite-snapshot-source.js";
+import { runSqliteReadOnlyOperation } from "../infra/sqlite-readonly-worker.js";
 import {
-  assertExistingDatabaseIdentity,
-  type DatabaseFileIdentity,
-} from "../infra/sqlite-worker-identity.js";
-import { createDeferredCore } from "../shared/deferred.js";
+  captureReusableSqliteSource,
+  leaseReusableSqliteSnapshot,
+  publishReusableSqliteSnapshot,
+} from "../infra/sqlite-snapshot-reuse.js";
+import {
+  prepareSqliteReadOnlyLocationAwaited,
+  startSqliteReadOnlyLocationAsync,
+} from "../infra/sqlite-snapshot-source.js";
+import type { DatabaseFileIdentity } from "../infra/sqlite-worker-identity.js";
+import { isUpdateRunAdmissionReadCommand } from "../infra/update-run-admission.types.js";
 import {
   borrowOpenClawStateDatabaseForAsyncRead,
   retainOpenClawStateDatabaseForIndependentRead,
@@ -21,440 +33,264 @@ import {
   registerOpenClawStateDatabaseAsyncResource,
 } from "./openclaw-state-db-cache.js";
 import { canReadWarmNativeSourceIndependently } from "./openclaw-state-db-readonly-reuse.js";
-import { existingPathOrUndefined } from "./openclaw-state-db.paths.js";
-import { observeReadOutcome, type OpenClawStateReadReceipt } from "./openclaw-state-read-error.js";
 import { captureOpenClawStateReadSource } from "./openclaw-state-read-worker.js";
 import type {
   OpenClawStateReadAuthority,
   OpenClawStateReadCommand,
   OpenClawStateReadOptions,
+  OpenClawStateReadOutcome,
+  OpenClawStateReadReceipt,
   OpenClawStateReadReply,
   ReadResource,
   RetainedReadScope,
 } from "./openclaw-state-read.types.js";
 import type { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
+import {
+  hydrateOpenClawStateWorkerError,
+  retainOpenClawStateWorkerErrorPayload,
+} from "./openclaw-state-worker-error.js";
 
-type ReadResult = OpenClawStateReadReply | undefined;
-export type OpenClawStateReadCompletion =
-  | { kind: "retained"; operation: RetainedOperation<ReadResult> }
-  | { kind: "awaited-only"; result: Promise<ReadResult> };
+export type OpenClawStateReadCompletion = Promise<OpenClawStateReadReply | undefined>;
+
+export type StateReadReply<Type extends OpenClawStateReadCommand["type"]> = Extract<
+  OpenClawStateReadReply,
+  { ok: true }
+> & { type: Type };
+
+export function isStateReadReply<Type extends OpenClawStateReadCommand["type"]>(
+  reply: OpenClawStateReadReply,
+  type: Type,
+): reply is StateReadReply<Type> {
+  return reply.ok && reply.type === type;
+}
+
+/**
+ * Reads repeat far more often than this owner commits, and each backup copies the whole
+ * file. A retained owner of a replaced path keeps its own bytes, so it never shares them.
+ */
+async function prepareOwnedStateReadImage(
+  database: DatabaseSync,
+  pathname: string,
+  expectedIdentity: DatabaseFileIdentity | undefined,
+  authority: { assertCurrent: () => void },
+  signal: AbortSignal,
+) {
+  const lease =
+    expectedIdentity && !database.isTransaction
+      ? leaseReusableSqliteSnapshot(pathname, expectedIdentity, { logicalReader: true })
+      : undefined;
+  if (lease) {
+    return lease;
+  }
+  const source = expectedIdentity ? captureReusableSqliteSource(pathname) : undefined;
+  const prepared = await prepareSqliteReadOnlyLocationFromOwnedDatabase(
+    database,
+    authority.assertCurrent,
+    signal,
+    "async",
+  );
+  return source
+    ? publishReusableSqliteSnapshot(pathname, source, prepared, () => prepared.cleanupAsync(), {
+        logicalOnly: true,
+      })
+    : prepared;
+}
 
 type Selection = {
   pathname: string;
   snapshot?: {
+    postgresSnapshot?: string;
     location: string;
     cleanupRoot?: string;
-    assertCurrent?(): void;
-    release?(): void;
+    release?(): void | Promise<void>;
   };
   scopes: RetainedReadScope[];
   context: ReturnType<typeof captureOpenClawStateReadWorkerContext>;
   preserveArtifacts: boolean;
   preferIndependentWarmRead?: true;
+  snapshotPreparation?: "awaited";
+  onChunk?: OpenClawStateReadOptions["onChunk"];
+  onChunkAsync?: OpenClawStateReadOptions["onChunkAsync"];
   controller: AbortController;
   signal: AbortSignal;
+  callerSignal?: AbortSignal;
   receipt: OpenClawStateReadReceipt;
   mapError: OpenClawStateReadOptions["mapError"];
 };
 
-/** Owns query admission and release together, so a later reader can release an earlier slot. */
+/** One async owner joins the query and native cleanup before releasing its snapshot. */
 export function startOpenClawStateReadOperation(
   command: OpenClawStateReadCommand,
   selection: Selection,
 ): OpenClawStateReadCompletion {
-  const {
-    pathname,
-    snapshot,
-    scopes,
-    context,
-    preserveArtifacts,
-    preferIndependentWarmRead,
-    controller,
-    signal,
-    receipt,
-  } = selection;
-  const resume = AsyncLocalStorage.snapshot();
-  const result = createDeferredCore<ReadResult>();
-  void result.promise.catch(() => undefined);
-  let outcome: RetainedOutcome<ReadResult> = { status: "pending" };
-  let source: ReturnType<typeof captureOpenClawStateReadSource> | undefined;
-  let transport:
-    | ReturnType<ReturnType<typeof captureOpenClawStateReadSource>["createTransport"]>
-    | undefined;
+  const { pathname, snapshot, scopes, context, preserveArtifacts, controller, signal, receipt } =
+    selection;
+  type ReadTransport = ReturnType<
+    ReturnType<typeof captureOpenClawStateReadSource>["createTransport"]
+  >;
+  let transport: ReadTransport | undefined;
   let unregisterSource: (() => void) | undefined;
-  let unregister: (() => void) | undefined;
   let borrowed: ReturnType<typeof retainOpenClawStateDatabaseForIndependentRead>;
   let prepared: AsyncPreparedSqliteReadOnlyLocation | undefined;
   let preparation: RetainedSqliteSnapshotPreparation | undefined;
+  let retirement: Promise<void> | undefined;
   let preparationClose: RetainedOperation<void> | undefined;
-  let startPreparedCleanup: (() => RetainedOperation<boolean>) | undefined;
+  let snapshotCleanup: RetainedOperation<boolean> | undefined;
+  let startSnapshotCleanup: (() => RetainedOperation<boolean>) | undefined;
   let releasePreparedSource: (() => void) | undefined;
-  let expectedIdentity: string | undefined;
-  let expectedSourceIdentity: DatabaseFileIdentity | undefined;
-  let awaitedOnly = false;
-  let producerSettled = false;
-  let value: ReadResult;
-  const errors: unknown[] = [];
-  const acceptanceErrors: unknown[] = [];
-  let producerStep: (() => boolean) | undefined;
-  let cleanupStep: (() => boolean) | undefined;
-  let cleanupAttempt: ReturnType<typeof createDeferredCore<void>> | undefined;
-  let transportStopped = false;
+  let closing: Promise<void> | undefined;
   let cleaned = false;
-  let validated = false;
-  let servicing = false;
-
-  const assertReadLifetime = () => {
-    signal.throwIfAborted();
-    context.maintenanceScope?.assertAdmission();
-    context.admission.assertCurrent();
-    snapshot?.assertCurrent?.();
-    borrowed?.assertCurrent();
-    if (expectedIdentity !== undefined) {
-      assertExistingDatabaseIdentity(pathname, expectedIdentity);
-    }
-    if (expectedSourceIdentity) {
-      assertExistingDatabaseIdentity(
-        pathname,
-        expectedSourceIdentity.key,
-        expectedSourceIdentity.birthtime,
-      );
-    }
-    if (scopes.some((scope) => !scope.active)) {
-      throw new Error("Shared-state read scope is closed");
-    }
-  };
   const authority: OpenClawStateReadAuthority = {
     signal,
     assertCurrent() {
-      assertReadLifetime();
+      signal.throwIfAborted();
+      context.maintenanceScope?.assertAdmission();
+      context.admission.assertCurrent();
       openClawStateDatabaseCache.assertOpenClawStateDatabaseOpenAllowed(pathname, "cached-read");
     },
   };
 
-  function settle(cleanupErrors: unknown[] = []) {
-    if (outcome.status !== "pending") {
+  const closeTransport = async () => {
+    if (!transport) {
       return;
     }
+    retirement ??= transport.startClose();
     try {
-      throwSqliteLifecycleErrors(
-        [
-          ...errors,
-          ...[...new Set(acceptanceErrors)].filter((error) => !errors.includes(error)),
-          ...cleanupErrors,
-        ],
-        "Shared-state read and cleanup failed",
-      );
-      outcome = { status: "fulfilled", value };
-      result.resolve(value);
+      await retirement;
     } catch (error) {
-      let mapped: unknown;
-      try {
-        mapped = selection.mapError ? selection.mapError(error, receipt.phase) : error;
-      } catch (mappingError) {
-        mapped = mappingError;
-      }
-      outcome = { status: "rejected", error: mapped };
-      result.reject(mapped);
+      retirement = undefined;
+      throw error;
     }
-  }
+  };
 
-  function finishCleanup(error?: { error: unknown }) {
-    const attempt = cleanupAttempt;
-    cleanupAttempt = undefined;
-    cleanupStep = undefined;
-    if (error) {
-      attempt?.reject(error.error);
-    } else {
-      attempt?.resolve();
-    }
-    if (producerSettled) {
-      settle(error ? [error.error] : []);
-    }
-  }
-
-  function release() {
-    if (!validated) {
-      validated = true;
-      try {
-        authority.assertCurrent();
-      } catch (error) {
-        acceptanceErrors.push(error);
-      }
-    }
-    borrowed?.release();
-    borrowed = undefined;
-    snapshot?.release?.();
-    cleaned = true;
-    unregister?.();
-    for (const scope of scopes) {
-      scope.resources.delete(resource);
-    }
-    unregisterSource?.();
-    finishCleanup();
-  }
-
-  function acceptCleanup(success: boolean) {
-    if (!success) {
-      throw new Error(
-        `Shared-state read snapshot cleanup failed: ${prepared?.cleanupRoot ?? pathname}`,
-      );
-    }
-    prepared = undefined;
-    startPreparedCleanup = undefined;
-    closePreparation();
-  }
-
-  function startPreparationClose(): RetainedOperation<void> | undefined {
-    if (!preparation) {
-      return undefined;
-    }
-    if (!preparationClose || preparationClose.read().status === "rejected") {
-      preparationClose = preparation.startClose();
-      void preparationClose.result.then(service, service);
-    }
-    return preparationClose;
-  }
-
-  function closePreparation() {
-    const closing = startPreparationClose();
-    if (!closing) {
-      release();
-      return;
-    }
-    waitRetained("cleanup", closing, () => {
-      preparation = undefined;
-      preparationClose = undefined;
-      release();
-    });
-  }
-
-  function cleanupPrepared() {
-    if (!prepared) {
-      closePreparation();
-      return;
-    }
-    releasePreparedSource?.();
-    if (startPreparedCleanup) {
-      waitRetained("cleanup", startPreparedCleanup(), acceptCleanup);
-    } else {
-      // Native backup cleanup is genuinely awaited; only its query/transport tail is serviceable.
-      const pending = prepared.cleanupAsync();
-      cleanupStep = undefined;
-      void pending.then(
-        (success) =>
-          resume(() => {
-            try {
-              acceptCleanup(success);
-            } catch (error) {
-              finishCleanup({ error });
-            }
-            service();
-          }),
-        (error: unknown) =>
-          resume(() => {
-            finishCleanup({ error });
-            service();
-          }),
-      );
-    }
-  }
-
-  function waitProducer() {
-    cleanupStep = () => {
-      if (!producerSettled) {
-        if (signal.aborted) {
-          const closing = startPreparationClose();
-          closing?.service();
-          const joined = closing?.read();
-          if (joined?.status === "rejected") {
-            throw joined.error;
-          }
-        }
-        return false;
-      }
-      cleanupStep = undefined;
-      cleanupPrepared();
-      return true;
-    };
-  }
-
-  function cleanup(): Promise<void> {
+  const cleanup = (): Promise<void> => {
     if (cleaned) {
       return Promise.resolve();
     }
-    if (cleanupAttempt) {
-      return cleanupAttempt.promise;
-    }
-    const attempt = createDeferredCore();
-    void attempt.promise.catch(() => undefined);
-    cleanupAttempt = attempt;
-    try {
-      if (!transportStopped && transport) {
-        // Stop the transport before joining its producer; failed stops retain custody for retry.
-        waitRetained("cleanup", transport.startClose(), () => {
-          transportStopped = true;
-          waitProducer();
-        });
-      } else {
-        waitProducer();
+    return (closing ??= (async () => {
+      await closeTransport();
+      releasePreparedSource?.();
+      releasePreparedSource = undefined;
+      if (prepared) {
+        snapshotCleanup = startSnapshotCleanup?.();
+        const removed = snapshotCleanup
+          ? await snapshotCleanup.result
+          : await prepared.cleanupAsync();
+        if (!removed) {
+          throw new Error(
+            `Shared-state read snapshot cleanup failed: ${prepared.cleanupRoot ?? pathname}`,
+          );
+        }
+        prepared = undefined;
+        snapshotCleanup = undefined;
       }
-    } catch (error) {
-      finishCleanup({ error });
-    }
-    service();
-    return attempt.promise;
+      if (preparation) {
+        preparationClose ??= preparation.startClose();
+        try {
+          await preparationClose.result;
+        } catch (error) {
+          preparationClose = undefined;
+          throw error;
+        }
+        preparation = undefined;
+        preparationClose = undefined;
+      }
+      borrowed?.release();
+      await snapshot?.release?.();
+      cleaned = true;
+      unregister();
+      unregisterSource?.();
+      for (const scope of scopes) {
+        scope.resources.delete(resource);
+      }
+    })().finally(() => {
+      closing = undefined;
+    }));
+  };
+  const resource: ReadResource = {
+    async close() {
+      controller.abort(new Error("Shared-state read admission closed"));
+      // Pending preparation must stop, but a published snapshot still belongs to its reader.
+      if (!prepared) {
+        preparationClose ??= preparation?.startClose();
+      }
+      await closeTransport();
+      // The public result reports query failures; shutdown still joins native cleanup.
+      await producer.catch(() => undefined);
+      await cleanup();
+    },
+  };
+  const unregister = registerOpenClawStateDatabaseAsyncResource({
+    async close(identity) {
+      if (
+        !identity ||
+        identity.key === context.admission.identity.key ||
+        identity.canonicalPath === context.admission.identity.canonicalPath
+      ) {
+        await resource.close();
+      }
+    },
+  });
+  context.maintenanceScope?.own(resource, "shared-resources", () => resource.close());
+  for (const scope of scopes) {
+    scope.resources.add(resource);
   }
 
-  function finishProducer(error?: { error: unknown }) {
-    producerStep = undefined;
-    producerSettled = true;
-    if (error) {
-      errors.push(error.error);
+  function consume(read: OpenClawStateReadOutcome): OpenClawStateReadReply {
+    const admitted =
+      "error" in read
+        ? read.sourceAdmitted
+        : read.value.type !== "admit" && read.value.sourceAdmitted;
+    if (admitted === true) {
+      receipt.phase = "read";
+    } else if (admitted === false && receipt.phase !== "read") {
+      receipt.phase = "before-read";
     }
-    void cleanup();
+    if ("error" in read) {
+      throw read.error;
+    }
+    if (admitted === true) {
+      borrowed?.observe();
+    }
+    return read.value;
   }
 
-  function service() {
-    if (servicing) {
-      return;
-    }
-    servicing = true;
-    try {
-      resume(() => {
-        let changed: boolean;
-        do {
-          try {
-            changed = producerStep?.() ?? false;
-          } catch (error) {
-            finishProducer({ error });
-            changed = true;
-          }
-          try {
-            changed = (cleanupStep?.() ?? false) || changed;
-          } catch (error) {
-            finishCleanup({ error });
-            changed = true;
-          }
-        } while (changed);
-      });
-    } finally {
-      servicing = false;
-    }
-  }
-
-  function waitRetained<T>(
-    lane: "producer" | "cleanup",
-    operation: RetainedOperation<T>,
-    accept: (value: T) => void,
-  ) {
-    const step = () => {
-      operation.service();
-      const next = operation.read();
-      if (next.status === "pending") {
-        return false;
-      }
-      if (lane === "producer") {
-        producerStep = undefined;
-      } else {
-        cleanupStep = undefined;
-      }
-      if (next.status === "rejected") {
-        throw next.error;
-      }
-      accept(next.value);
-      return true;
-    };
-    if (lane === "producer") {
-      producerStep = step;
-    } else {
-      cleanupStep = step;
-    }
-    void operation.result.then(service, service);
-  }
-
-  function query() {
-    if (!snapshot && !prepared) {
-      expectedIdentity = context.admission.identity.key;
-    }
+  async function query(selectedTransport: ReadTransport) {
     if (prepared) {
-      authority.assertCurrent();
       releasePreparedSource = retainSnapshotTempDirectory(
         prepared.cleanupRoot ?? path.dirname(prepared.location),
       );
     }
-    // The transport checks current authority at dispatch, including after a queue wait.
-    receipt.phase = "unobserved";
-    if (!transport) {
-      throw new Error("Shared-state read transport is unavailable");
-    }
-    waitRetained(
-      "producer",
-      transport.startRead(
-        {
-          context,
-          location: prepared?.location ?? snapshot?.location ?? pathname,
-          checkFreshAdmission: !borrowed,
-          expectedIdentity,
-          snapshotRoot: prepared?.cleanupRoot ?? snapshot?.cleanupRoot,
-        },
-        authority,
-      ),
-      (readOutcome) => {
-        observeReadOutcome(receipt, readOutcome);
-        const admitted =
-          "error" in readOutcome
-            ? readOutcome.sourceAdmitted
-            : readOutcome.value.type !== "admit" && readOutcome.value.sourceAdmitted;
-        try {
-          authority.assertCurrent();
-          if (admitted) {
-            borrowed?.observe();
-          }
-        } catch (error) {
-          if (!("error" in readOutcome)) {
-            throw error;
-          }
-          acceptanceErrors.push(error);
-        }
-        if ("error" in readOutcome) {
-          throw readOutcome.error;
-        }
-        value = readOutcome.value;
-        finishProducer();
+    receipt.phase = command.type === "admit" ? "before-read" : "unobserved";
+    const read = selectedTransport.startRead(
+      {
+        context,
+        location: prepared?.location ?? snapshot?.location ?? pathname,
+        checkFreshAdmission: !borrowed,
+        expectedIdentity:
+          (!snapshot && !prepared) || snapshot?.location === pathname
+            ? context.admission.identity.key
+            : undefined,
+        snapshotRoot: prepared?.cleanupRoot ?? snapshot?.cleanupRoot,
+        postgresSnapshot: snapshot?.postgresSnapshot,
       },
+      authority,
     );
+    return consume(await read);
   }
 
-  const resource: ReadResource = {
-    close() {
-      controller.abort(new Error("Shared-state read admission closed"));
-      return resume(cleanup);
-    },
-  };
-
-  try {
-    source = captureOpenClawStateReadSource();
-    transport = source.createTransport(command);
-    unregister = registerOpenClawStateDatabaseAsyncResource({
-      async close(identity) {
-        if (
-          !identity ||
-          identity.key === context.admission.identity.key ||
-          identity.canonicalPath === context.admission.identity.canonicalPath
-        ) {
-          await resource.close();
-        }
-      },
-    });
-    context.maintenanceScope?.own(resource, "shared-resources", () => resource.close());
-    for (const scope of scopes) {
-      scope.resources.add(resource);
-    }
-    unregisterSource = source.own(service, () => resource.close());
-    assertReadLifetime();
-    if (snapshot) {
-      openClawStateDatabaseCache.assertOpenClawStateDatabaseOpenAllowed(pathname, "cached-read");
+  async function run(): OpenClawStateReadCompletion {
+    const source = captureOpenClawStateReadSource();
+    const selectedTransport = source.createTransport(
+      command,
+      selection.onChunk,
+      selection.onChunkAsync,
+      selection.snapshotPreparation === "awaited",
+    );
+    transport = selectedTransport;
+    unregisterSource = source.own(() => resource.close());
+    if (command.type === "admit") {
+      return query(selectedTransport);
     }
     const native =
       !snapshot && preserveArtifacts
@@ -467,72 +303,133 @@ export function startOpenClawStateReadOperation(
         : undefined);
     const independentWarmSource =
       native &&
-      preferIndependentWarmRead &&
+      selection.preferIndependentWarmRead &&
       canReadWarmNativeSourceIndependently(
         native.database,
         pathname,
         context.admission.identity.key,
       );
-    if (!snapshot && !borrowed && !existingPathOrUndefined(pathname)) {
-      finishProducer();
-    } else if (native && !independentWarmSource) {
-      awaitedOnly = true;
-      void prepareSqliteReadOnlyLocationFromOwnedDatabase(
+    if (!snapshot && !borrowed && !(await statIfExists(pathname))) {
+      authority.assertCurrent();
+      return undefined;
+    }
+    if (!snapshot && preserveArtifacts && !independentWarmSource) {
+      const currentMetadata =
+        (command.type === "plugins.metadata.read" ||
+          command.type === "config.health.read" ||
+          isUpdateRunAdmissionReadCommand(command)) &&
+        !context.existingSchemaPath &&
+        !context.maintenanceScope &&
+        !getStateDatabaseSchemaLease(pathname) &&
+        (!native ||
+          (!isPostgresSqlConnection(native.database.db) &&
+            canReadWarmNativeSourceIndependently(
+              native.database,
+              pathname,
+              context.admission.identity.key,
+            ))) &&
+        (hasVerifiedLiveSqliteOwner(pathname) || readSqliteDatabaseCleanClose(pathname));
+      if (!native || currentMetadata) {
+        await selectedTransport.startValidateFresh(context, authority);
+      }
+      if (currentMetadata) {
+        // Metadata reads pin the admitted source in a child before copying a warm
+        // writer's unrelated state. Replaced paths and retained/private snapshots
+        // keep their original recovery owner; the native borrow lasts through close.
+        authority.assertCurrent();
+        const inspected = await runSqliteReadOnlyOperation(
+          pathname,
+          { type: "startupMetadata.readCurrent", input: command },
+          {
+            source: "canonical",
+            expectedIdentity: context.admission.identity.key,
+            env: context.environment,
+            signal,
+          },
+        );
+        authority.assertCurrent();
+        if (inspected) {
+          const result = inspected.value;
+          if (!result.ok) {
+            const error = new Error("Startup metadata inspection failed");
+            retainOpenClawStateWorkerErrorPayload(error, result.error);
+            return consume({
+              error: hydrateOpenClawStateWorkerError(error, { includeOrdinary: true }),
+              sourceAdmitted: result.sourceAdmitted,
+            });
+          }
+          return consume({
+            value: {
+              ok: true,
+              sourceAdmitted: true,
+              ...result.result,
+            },
+          });
+        }
+      }
+    }
+    if (native && !independentWarmSource) {
+      if (isPostgresSqlConnection(native.database.db)) {
+        requireNativeDatabaseFile("postgres", "file-snapshot");
+      }
+      prepared = await prepareOwnedStateReadImage(
         native.database.db,
-        authority.assertCurrent,
-        authority.signal,
-        "async",
-      ).then(
-        (location) =>
-          resume(() => {
-            try {
-              prepared = location;
-              query();
-            } catch (error) {
-              finishProducer({ error });
-            }
-            service();
-          }),
-        (error: unknown) =>
-          resume(() => {
-            finishProducer({ error });
-            service();
-          }),
+        pathname,
+        canReadWarmNativeSourceIndependently(
+          native.database,
+          pathname,
+          context.admission.identity.key,
+        )
+          ? context.admission.identity
+          : undefined,
+        authority,
+        signal,
       );
     } else if (!snapshot && preserveArtifacts && !independentWarmSource) {
-      expectedSourceIdentity = { key: context.admission.identity.key };
-      authority.assertCurrent();
-      waitRetained("producer", transport.startValidateFresh(context, authority), () => {
-        authority.assertCurrent();
+      const sourceIdentity = { key: context.admission.identity.key };
+      if (selection.snapshotPreparation === "awaited") {
+        prepared = await prepareSqliteReadOnlyLocationAwaited(pathname, {
+          signal,
+          expectedSourceIdentity: sourceIdentity,
+          reuse: true,
+          allowLiveOwner:
+            command.type === "plugins.metadata.read" &&
+            context.maintenanceScope?.ownsSchemaMaintenance !== true &&
+            !getStateDatabaseSchemaLease(pathname),
+        });
+      } else {
         preparation = startSqliteReadOnlyLocationAsync(pathname, {
-          preserveSourceArtifacts: preserveArtifacts,
-          signal: authority.signal,
-          expectedSourceIdentity,
+          preserveSourceArtifacts: true,
+          signal,
+          expectedSourceIdentity: sourceIdentity,
+          reuse: true,
         });
-        waitRetained("producer", preparation, (location) => {
-          prepared = location;
-          startPreparedCleanup = () => location.startCleanup();
-          query();
-        });
-      });
-    } else {
-      query();
+        const location = await preparation.result;
+        prepared = location;
+        startSnapshotCleanup = () => location.startCleanup();
+      }
     }
-  } catch (error) {
-    finishProducer({ error });
+    return query(selectedTransport);
   }
-  service();
-  return awaitedOnly
-    ? { kind: "awaited-only", result: result.promise }
-    : {
-        kind: "retained",
-        operation: {
-          result: result.promise,
-          read: () => outcome,
-          service() {
-            source?.service();
-            service();
-          },
-        },
-      };
+
+  const producer = run();
+  return (async () => {
+    let value: OpenClawStateReadReply | undefined;
+    const errors: unknown[] = [];
+    try {
+      value = await producer;
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      await cleanup();
+    } catch (error) {
+      errors.push(error);
+    }
+    throwSqliteLifecycleErrors(errors, "Shared-state read and cleanup failed");
+    selection.callerSignal?.throwIfAborted();
+    return value;
+  })().catch((error: unknown) => {
+    throw selection.mapError ? selection.mapError(error, receipt.phase) : error;
+  });
 }

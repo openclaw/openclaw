@@ -170,14 +170,7 @@ export function createPreCryptoDirectDmAuthorizer(params: {
       return "allow";
     }
     if (access.decision === "pairing") {
-      if (params.issuePairingChallenge) {
-        // Pairing challenges happen before decrypting the DM payload; keep this branch
-        // side-effect free apart from the explicit reply hook.
-        await params.issuePairingChallenge({
-          senderId: input.senderId,
-          reply: input.reply,
-        });
-      }
+      await params.issuePairingChallenge?.({ senderId: input.senderId, reply: input.reply });
       return "pairing";
     }
     params.onBlocked?.({

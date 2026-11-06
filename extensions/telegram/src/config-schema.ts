@@ -5,7 +5,7 @@ import {
   buildChannelAccountSchemaParts,
   buildGroupEntrySchema,
   ChannelPreviewStreamingConfigSchema,
-  ChannelStreamingPreviewSchema,
+  ChannelThreadBindingsSchema,
   DmPolicySchema,
   GroupPolicySchema,
   ProviderCommandsSchema,
@@ -80,9 +80,6 @@ const TelegramCapabilitiesSchema = z.union([
     })
     .strict(),
 ]);
-const TelegramPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
-  preview: ChannelStreamingPreviewSchema.optional(),
-}).strict();
 const TelegramErrorPolicySchema = z.enum(["always", "once", "silent"]).optional();
 const TelegramTopicSchema = z
   .object({
@@ -170,7 +167,7 @@ const validateTelegramCustomCommands = (
 const { accountShape, rootPolicyShape } = buildChannelAccountSchemaParts({
   capabilities: TelegramCapabilitiesSchema.optional(),
   defaultTo: z.union([z.string(), z.number()]).optional(),
-  streaming: TelegramPreviewStreamingConfigSchema.optional(),
+  streaming: ChannelPreviewStreamingConfigSchema.optional(),
 });
 
 const TelegramAccountSchemaBase = z
@@ -225,7 +222,7 @@ const TelegramAccountSchemaBase = z
       ])
       .optional()
       .describe(
-        "Webhook forwarding endpoint. Omitted keeps 127.0.0.1:8787; set false after moving the reverse proxy to the Gateway webhook route.",
+        "Explicit webhook forwarding endpoint. Doctor pins existing proxy endpoints once; remove the pin after moving the proxy to the Gateway, or set false to disable inherited forwarding.",
       ),
     webhookCertPath: z
       .string()
@@ -246,16 +243,7 @@ const TelegramAccountSchemaBase = z
       })
       .strict()
       .optional(),
-    threadBindings: z
-      .object({
-        enabled: z.boolean().optional(),
-        idleHours: z.number().nonnegative().optional(),
-        maxAgeHours: z.number().nonnegative().optional(),
-        spawnSessions: z.boolean().optional(),
-        defaultSpawnContext: z.enum(["isolated", "fork"]).optional(),
-      })
-      .strict()
-      .optional(),
+    threadBindings: ChannelThreadBindingsSchema.optional(),
     ...buildChannelReactionShape({
       notificationModes: ["off", "own", "all"],
       reactionLevels: ["off", "ack", "minimal", "extensive"],

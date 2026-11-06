@@ -1,6 +1,7 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
+import type { CodexStdioChild } from "./stdio-worker.js";
 
 export type OrphanFixtureStart = {
   kind: "start";
@@ -11,7 +12,7 @@ export type OrphanFixtureRequest = OrphanFixtureStart | { kind: "close"; child: 
 export type OrphanFixtureTree = { parent: number; child: number; descendant: number };
 
 const fixture = fileURLToPath(import.meta.url);
-const children = new Map<number, ChildProcessWithoutNullStreams>();
+const children = new Map<number, CodexStdioChild>();
 async function startTree(request: OrphanFixtureStart): Promise<OrphanFixtureTree> {
   const { createStdioTransport } = await import("./transport-stdio.js");
   const native = request.mode === "native";
@@ -111,9 +112,11 @@ if (process.argv[2] === "child") {
           children.delete(request.child);
           process.send!("closed");
         } else {
-          // Registration captures each store's environment; starts must remain serial.
+          // Registration captures each store's environment and inspection reads this
+          // owner's PATH and proc-safe native mode; starts must remain serial.
           process.env.OPENCLAW_STATE_DIR = request.stateDir;
           process.env.PATH = request.env.PATH;
+          process.env.PROC_SAFE_NATIVE = request.env.PROC_SAFE_NATIVE ?? "auto";
           process.send!(await startTree(request));
         }
       } catch (error) {

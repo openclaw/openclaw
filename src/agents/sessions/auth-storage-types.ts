@@ -12,7 +12,7 @@ export type OAuthCredential = {
   type: "oauth";
 } & OAuthCredentials;
 
-export type TokenCredential = {
+type TokenCredential = {
   type: "token";
   token: string;
   expires?: number;

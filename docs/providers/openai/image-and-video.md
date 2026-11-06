@@ -16,6 +16,9 @@ ChatGPT (SIWC) cannot authorize this tool. Codex OAuth here means an OpenClaw
 model auth profile; signing in only to a native Codex user home does not supply
 `image_generate` with a credential.
 
+Direct Images API generation and editing preserve provider-reported token usage
+in result metadata, including text/image breakdowns and zero-valued counters.
+
 | Capability                | OpenAI API key                     | Codex OAuth                          |
 | ------------------------- | ---------------------------------- | ------------------------------------ |
 | Model ref                 | `openai/gpt-image-2`               | `openai/gpt-image-2`                 |
@@ -97,6 +100,12 @@ The aspect ratio must be between 1:3 and 3:1.
 
 ### Other Image Models
 
+OpenClaw maps size and aspect-ratio hints to the selected model's supported
+dimensions. GPT Image 1.x uses `1024x1024`, `1536x1024`, or `1024x1536`.
+Explicit `dall-e-2` and `dall-e-3` overrides use their legacy size limits;
+OpenAI has retired these models, so this does not restore public API access.
+Custom deployment names retain their endpoint's geometry behavior.
+
 For a transparent-background request, call `image_generate` with
 `model: "openai/gpt-image-1.5"`, `outputFormat: "png"` or `"webp"`, and
 `background: "transparent"`; the older `openai.background` provider option is
@@ -129,6 +138,9 @@ For ChatGPT/Codex OAuth installs, keep the same `openai/gpt-image-2` ref. When
 an `openai` OAuth profile is configured, OpenClaw resolves that stored OAuth
 access token and sends image requests through the Codex Responses backend; it
 does not first try `OPENAI_API_KEY` or silently fall back to an API key.
+That Responses request runs on `gpt-6-astra`. If your ChatGPT plan rejects that
+model, OpenClaw retries with each `openai/*` model in `agents.defaults.model`
+(primary, then fallbacks), so configure a model your plan supports there.
 Configure `models.providers.openai` explicitly with an API key, custom base
 URL, or Azure endpoint when you want the direct OpenAI Images API route
 instead. If that custom image endpoint is on a trusted LAN/private address,

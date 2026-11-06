@@ -35,129 +35,138 @@ function createInvocation(params: Partial<Parameters<typeof createQaEvidenceInvo
   return createQaEvidenceInvocation({ scenarios: [scenario], channel: null, launch, ...params });
 }
 
+type Invocation = ReturnType<typeof createInvocation>;
+function complete(owner: Invocation, id: string, status: "pass" | "fail") {
+  owner.complete(id, { status, entries: [entry(status)] });
+}
+function record(owner: Invocation, status: "pass" | "fail", index = 0, retryOf?: string | null) {
+  const id = owner.begin(index, retryOf);
+  complete(owner, id, status);
+  owner.select(index, id);
+  return id;
+}
+function family() {
+  const parent = createInvocation();
+  return { parent, child: createInvocation({ anchors: parent.anchors }) };
+}
+function snapshot(owner: Invocation) {
+  return owner.snapshot(snapshotOptions);
+}
+function outcomes(summary: ReturnType<typeof snapshot>) {
+  return projectQaEvidenceScenarioOutcomes(summary).map((item) => item.status);
+}
+function importSelected(parent: Invocation, child: Invocation, id: string | null) {
+  parent.importChild(0, snapshot(child));
+  parent.select(0, id);
+}
+
 describe("evidence invocation owner", () => {
-  it("reconciles admitted open observations before and after child selection without rewriting history", () => {
+  it("isolates continuation, imported child evidence, and returned observations", () => {
     const parent = createInvocation();
-    const child = createInvocation({ anchors: parent.anchors });
+    const first = record(parent, "fail");
+    const continuation = parent.childInput(0);
+    const child = createInvocation({ anchors: parent.anchors, continuation });
+    continuation.entries[0]!.test.title = "mutated continuation";
+    continuation.occurrences.find((item) => item.id === first)!.launch.source.ref = "mutated";
+    const second = record(child, "pass");
+    const input = snapshot(child);
+    const expected = snapshot(child);
+    parent.importChild(0, input);
+    input.entries[1]!.result.status = "fail";
+    input.occurrences.find((item) => item.id === second)!.launch.source.ref = "mutated";
+    parent.select(0, second);
+    expect(snapshot(parent)).toEqual(expected);
+    expect(expected.entries[0]!.test.title).toBe("Synthetic check");
+    expect(expected.occurrences.every((item) => item.launch.source.ref === "source-A")).toBe(true);
+    const selected = parent.selectedObservation(0)!;
+    selected.occurrence.launch.source.ref = "mutated output";
+    selected.entries[0]!.result.status = "fail";
+    const output = snapshot(parent);
+    output.occurrences[0]!.parentCell!.scenarioId = "mutated output";
+    expect(snapshot(parent)).toEqual(expected);
+  });
+
+  it("reconciles admitted open observations before and after child selection without rewriting history", () => {
+    const { parent, child } = family();
     const comparison = child.begin(0, null);
-    parent.importChild(0, child.snapshot(snapshotOptions));
-    parent.select(0, null);
+    importSelected(parent, child, null);
     expect(parent.childInput(0).occurrences.at(-1)?.terminalStatus).toBeNull();
-    const first = child.begin(0, null);
-    child.complete(first, { status: "pass", entries: [entry("pass")] });
-    child.select(0, first);
-    parent.importChild(0, child.snapshot(snapshotOptions));
-    parent.select(0, first);
+    const first = record(child, "pass", 0, null);
+    importSelected(parent, child, first);
     child.complete(comparison, { status: "pass", entries: [{ ...entry("pass"), coverage: [] }] });
     child.select(0, comparison);
-    parent.importChild(0, child.snapshot(snapshotOptions));
-    parent.select(0, comparison);
-    const second = child.begin(0, null);
-    child.complete(second, { status: "fail", entries: [entry("fail")] });
-    child.select(0, second);
-    parent.importChild(0, child.snapshot(snapshotOptions));
-    parent.select(0, second);
-    expect(parent.snapshot(snapshotOptions)).toEqual(child.snapshot(snapshotOptions));
-    const before = parent.snapshot(snapshotOptions);
+    importSelected(parent, child, comparison);
+    const second = record(child, "fail", 0, null);
+    importSelected(parent, child, second);
+    expect(snapshot(parent)).toEqual(snapshot(child));
+    const before = snapshot(parent);
     const changed = structuredClone(before);
     changed.occurrences.find((item) => item.id === comparison)!.terminalStatus = "fail";
-    expect(() => parent.importChild(0, changed)).toThrow(/completed or immutable/);
-    expect(parent.snapshot(snapshotOptions)).toEqual(before);
+    parent.select(0, parent.importChild(0, changed));
+    expect(snapshot(parent)).toEqual(before);
   });
 
   it("rejects changed launch facts while completing an open child without partial admission", () => {
-    const parent = createInvocation();
-    const child = createInvocation({ anchors: parent.anchors });
+    const { parent, child } = family();
     const id = child.begin(0);
-    parent.importChild(0, child.snapshot(snapshotOptions));
-    parent.select(0, null);
-    const before = parent.snapshot(snapshotOptions);
-    child.complete(id, { status: "pass", entries: [entry("pass")] });
+    importSelected(parent, child, null);
+    const before = snapshot(parent);
+    complete(child, id, "pass");
     child.select(0, id);
-    const changed = child.snapshot(snapshotOptions);
+    const changed = snapshot(child);
     changed.occurrences.find((item) => item.id === id)!.launch.source.ref = "other-source";
-    expect(() => parent.importChild(0, changed)).toThrow(/immutable/);
-    expect(parent.snapshot(snapshotOptions)).toEqual(before);
+    expect(() => parent.importChild(0, changed)).toThrow(/foreign/);
+    expect(snapshot(parent)).toEqual(before);
   });
 
   it("continues only the captured instance and retains its retry history", () => {
     const parent = createInvocation({ scenarios: [scenario, scenario] });
-    const first = parent.begin(1);
-    parent.complete(first, { status: "fail", entries: [entry("fail")] });
-    parent.select(1, first);
-    const before = parent.snapshot(snapshotOptions);
+    const first = record(parent, "fail", 1);
+    const before = snapshot(parent);
     const continuation = parent.childInput(1);
-    const child = createInvocation({
-      anchors: [parent.anchors[1]!],
-      continuation,
-    });
-    const second = child.begin(0);
-    child.complete(second, { status: "pass", entries: [entry("pass")] });
-    const selected = child.select(0, second);
-    const childResult = child.snapshot(snapshotOptions);
-    expect(parent.importChild(1, childResult)).toBe(selected);
-    expect(parent.snapshot(snapshotOptions)).toEqual(before);
-    parent.select(1, selected);
-    const final = parent.snapshot(snapshotOptions);
+    const child = createInvocation({ anchors: [parent.anchors[1]!], continuation });
+    const second = record(child, "pass");
+    const childResult = snapshot(child);
+    expect(parent.importChild(1, childResult)).toBe(second);
+    expect(snapshot(parent)).toEqual(before);
+    parent.select(1, second);
+    const final = snapshot(parent);
     expect(final.occurrences.find((item) => item.id === first)).toEqual(
       before.occurrences.find((item) => item.id === first),
     );
     expect(final.occurrences.find((item) => item.id === second)?.retryOf).toBe(first);
-    expect(projectQaEvidenceScenarioOutcomes(final).map((item) => item.status)).toEqual([
-      null,
-      "pass",
-    ]);
+    expect(outcomes(final)).toEqual([null, "pass"]);
     expect(getEffectiveQaEvidenceEntries(final).map((row) => row.result.status)).toEqual(["pass"]);
     expect(final.entries).toHaveLength(2);
     expect(continuation.entries).toEqual(before.entries);
   });
 
-  it("preserves the parent and pending import when a selected failure would become ineffective", () => {
+  it("rejects publication when a selected failure would become ineffective", () => {
     const parent = createInvocation();
-    const first = parent.begin(0);
-    parent.complete(first, { status: "fail", entries: [entry("fail")] });
-    parent.select(0, first);
-    const before = parent.snapshot(snapshotOptions);
-    const child = createInvocation({
-      anchors: parent.anchors,
-      continuation: before,
-    });
-    const retry = child.begin(0);
-    child.complete(retry, { status: "pass", entries: [entry("pass")] });
-    child.select(0, retry);
-    const input = child.snapshot(snapshotOptions);
+    const first = record(parent, "fail", 0);
+    const before = snapshot(parent);
+    const child = createInvocation({ anchors: parent.anchors, continuation: before });
+    record(child, "pass", 0);
+    const input = snapshot(child);
     parent.importChild(0, input);
-    expect(() => parent.select(0, first)).toThrow(/selected observation is ineffective/);
-    expect(parent.snapshot(snapshotOptions)).toEqual(before);
-    expect(parent.importChild(0, input)).toBe(retry);
-    parent.select(0, retry);
-    expect(projectQaEvidenceScenarioOutcomes(parent.snapshot(snapshotOptions))[0]).toMatchObject({
-      occurrenceId: retry,
-      status: "pass",
-    });
+    parent.select(0, first);
+    expect(() => snapshot(parent)).toThrow(/selected observation is ineffective/);
   });
 
   it("accepts an identical pending replay after another instance appends and retains insertion order", () => {
     const parent = createInvocation({ scenarios: [scenario, scenario] });
     const child = createInvocation({ anchors: [parent.anchors[0]!] });
-    const first = child.begin(0);
-    child.complete(first, { status: "pass", entries: [entry("pass")] });
-    child.select(0, first);
-    const input = child.snapshot(snapshotOptions);
+    const first = record(child, "pass", 0);
+    const input = snapshot(child);
     parent.importChild(0, input);
-    const other = parent.begin(1);
-    parent.complete(other, { status: "fail", entries: [entry("fail")] });
-    parent.select(1, other);
-    const beforeReplay = parent.snapshot(snapshotOptions);
+    const other = record(parent, "fail", 1);
+    const beforeReplay = snapshot(parent);
     expect(parent.importChild(0, input)).toBe(first);
-    expect(parent.snapshot(snapshotOptions)).toEqual(beforeReplay);
+    expect(snapshot(parent)).toEqual(beforeReplay);
     parent.select(0, first);
-    const final = parent.snapshot(snapshotOptions);
+    const final = snapshot(parent);
     expect(final.entries.map((row) => row.binding.occurrenceId)).toEqual([first, other]);
-    expect(projectQaEvidenceScenarioOutcomes(final).map((item) => item.status)).toEqual([
-      "pass",
-      "fail",
-    ]);
+    expect(outcomes(final)).toEqual(["pass", "fail"]);
   });
 
   it.each(["pass", "fail"] as const)(
@@ -192,12 +201,10 @@ describe("evidence invocation owner", () => {
     },
   );
 
-  it("rejects continued scheduling and immutable row substitution without partial import", () => {
+  it("rejects continued scheduling changes and retains captured rows during continuation", () => {
     const parent = createInvocation();
-    const first = parent.begin(0);
-    parent.complete(first, { status: "fail", entries: [entry("fail")] });
-    parent.select(0, first);
-    const before = parent.snapshot(snapshotOptions);
+    record(parent, "fail", 0);
+    const before = snapshot(parent);
     expect(() =>
       createInvocation({
         launch: { ...launch, proofClass: "live-provider" },
@@ -212,27 +219,23 @@ describe("evidence invocation owner", () => {
         continuation: before,
       }),
     ).toThrow(/count/);
-    const child = createInvocation({
-      anchors: parent.anchors,
-      continuation: before,
-    });
-    const retry = child.begin(0);
-    child.complete(retry, { status: "pass", entries: [entry("pass")] });
-    child.select(0, retry);
-    const changed = child.snapshot(snapshotOptions);
+    const child = createInvocation({ anchors: parent.anchors, continuation: before });
+    const retry = record(child, "pass", 0);
+    const changed = snapshot(child);
     changed.entries[0]!.test.title = "rewritten history";
-    expect(() => parent.importChild(0, changed)).toThrow(/existing observation/);
-    expect(parent.snapshot(snapshotOptions)).toEqual(before);
+    parent.importChild(0, changed);
+    expect(snapshot(parent)).toEqual(before);
+    parent.select(0, retry);
+    expect(snapshot(parent).entries[0]?.test.title).toBe("Synthetic check");
   });
 
   it("captures explicit assertion declarations before launch without using later catalog mutations", () => {
-    const declarations = [
-      {
-        id: "observed-reply",
-        meaning: "the reply reached the selected account",
-        coverage: entry("pass").coverage,
-      },
-    ];
+    const assertion = {
+      id: "observed-reply",
+      meaning: "the reply reached the selected account",
+      coverage: entry("pass").coverage,
+    };
+    const declarations = [structuredClone(assertion)];
     const invocation = createInvocation({
       scenarios: [{ ...scenario, assertions: declarations }],
     });
@@ -249,13 +252,7 @@ describe("evidence invocation owner", () => {
       ],
     });
     invocation.select(0, id);
-    expect(invocation.snapshot(snapshotOptions).occurrences.at(-1)?.assertions).toEqual([
-      {
-        id: "observed-reply",
-        meaning: "the reply reached the selected account",
-        coverage: entry("pass").coverage,
-      },
-    ]);
+    expect(snapshot(invocation).occurrences.at(-1)?.assertions).toEqual([assertion]);
   });
 
   it("captures scheduling before execution and never reconstructs assertions from v2 labels", () => {
@@ -286,22 +283,17 @@ describe("evidence invocation owner", () => {
   });
 
   it("retains a passing child while only the parent selects its missing-result failure", () => {
-    const parent = createInvocation();
-    const child = createInvocation({ anchors: parent.anchors });
-    const childAttempt = child.begin(0);
-    child.complete(childAttempt, { status: "pass", entries: [entry("pass")] });
-    child.select(0, childAttempt);
-    expect(parent.importChild(0, child.snapshot(snapshotOptions))).toBe(childAttempt);
-    expect(
-      projectQaEvidenceScenarioOutcomes(parent.snapshot(snapshotOptions))[0]?.status,
-    ).toBeNull();
+    const { parent, child } = family();
+    const childAttempt = record(child, "pass", 0);
+    expect(parent.importChild(0, snapshot(child))).toBe(childAttempt);
+    expect(projectQaEvidenceScenarioOutcomes(snapshot(parent))[0]?.status).toBeNull();
     const missingResult = parent.begin(0);
     parent.complete(missingResult, {
       status: "fail",
       entries: [{ ...entry("fail"), coverage: [] }],
     });
     parent.select(0, missingResult);
-    const final = parent.snapshot(snapshotOptions);
+    const final = snapshot(parent);
     expect(projectQaEvidenceScenarioOutcomes(final)[0]).toMatchObject({
       occurrenceId: missingResult,
       status: "fail",
@@ -310,11 +302,11 @@ describe("evidence invocation owner", () => {
     expect(() => parent.complete(missingResult, { status: "fail", entries: [] })).toThrow(
       /only once/,
     );
-    expect(parent.importChild(0, child.snapshot(snapshotOptions))).toBe(childAttempt);
-    expect(parent.snapshot(snapshotOptions)).toEqual(final);
+    expect(parent.importChild(0, snapshot(child))).toBe(childAttempt);
+    expect(snapshot(parent)).toEqual(final);
   });
 
-  it("rejects an explicit retry of a blocked observation", () => {
+  it("rejects publication of an explicit retry of a blocked observation", () => {
     const status = "blocked";
     const invocation = createInvocation();
     const first = invocation.begin(0, null);
@@ -324,8 +316,9 @@ describe("evidence invocation owner", () => {
     });
     invocation.select(0, first);
     const second = invocation.begin(0, first);
-    invocation.complete(second, { status: "pass", entries: [entry("pass")] });
-    expect(() => invocation.select(0, second)).toThrow(/retry selection/);
+    complete(invocation, second, "pass");
+    invocation.select(0, second);
+    expect(() => snapshot(invocation)).toThrow(/retry selection/);
   });
 
   it.each([
@@ -334,16 +327,13 @@ describe("evidence invocation owner", () => {
   ] as const)(
     "rejects child %s substitution instead of combining unrelated facts",
     (dimension, replacement) => {
-      const parent = createInvocation();
-      const child = createInvocation({ anchors: parent.anchors });
-      const id = child.begin(0);
-      child.complete(id, { status: "pass", entries: [entry("pass")] });
-      child.select(0, id);
-      const evidence = child.snapshot(snapshotOptions);
+      const { parent, child } = family();
+      const id = record(child, "pass");
+      const evidence = snapshot(child);
       const observation = evidence.occurrences.find((candidate) => candidate.id === id)!;
       Object.assign(observation.launch, { [dimension]: replacement });
       expect(() => parent.importChild(0, evidence)).toThrow(/foreign or repeated/);
-      expect(parent.snapshot(snapshotOptions).entries).toEqual([]);
+      expect(snapshot(parent).entries).toEqual([]);
     },
   );
 });

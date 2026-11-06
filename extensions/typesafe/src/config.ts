@@ -1,3 +1,4 @@
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "typebox";
 
 const LOCAL_BASE_URL_PATTERN =
@@ -26,23 +27,59 @@ export const ConfigSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export type RuntimeConfig = { apiKey?: string; baseUrl?: string; timeoutMs: number };
+type RuntimeSnapshot = ReturnType<OpenClawPluginApi["runtime"]["config"]["current"]>;
+type ModelProviderConfig = NonNullable<NonNullable<RuntimeSnapshot["models"]>["providers"]>[string];
+export type RuntimeConfig = {
+  apiKey?: string;
+  baseUrl?: string;
+  providerConfig?: ModelProviderConfig;
+  credentialsUnavailable?: boolean;
+  timeoutMs: number;
+};
+export const HOSTED_ORIGIN = "https://api.typesafe.ai";
+
+/** Model providers configure the API root; origin-only System One URLs imply /v1. */
+export function providerBaseUrl(value: string | undefined): string {
+  const parsed = value ? URL.parse(value) : null;
+  if (
+    !parsed ||
+    !["http:", "https:"].includes(parsed.protocol) ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    throw new Error(
+      "Invalid models.providers.typesafe.baseUrl; use an HTTP(S) API base URL without credentials, query, or fragment.",
+    );
+  }
+  parsed.pathname = parsed.pathname.replace(/\/+$/, "") || "/v1";
+  return parsed.toString().replace(/\/+$/, "");
+}
+
+export function usesHostedEndpoint(config: Pick<RuntimeConfig, "baseUrl">): boolean {
+  return !config.baseUrl || new URL(config.baseUrl).origin === HOSTED_ORIGIN;
+}
+
+export function hasCredentials(config: RuntimeConfig): boolean {
+  return !config.credentialsUnavailable && Boolean(config.baseUrl || config.apiKey);
+}
 
 /** A configured endpoint grants access to one loopback origin, never arbitrary private hosts. */
 export function localBaseUrl(value: unknown): string | undefined {
   if (value === undefined) {
     return undefined;
   }
-  try {
-    if (typeof value !== "string" || value !== value.trim() || !localBaseUrlPattern.test(value)) {
-      throw new Error();
-    }
-    return new URL(value).origin;
-  } catch {
+  const parsed =
+    typeof value === "string" && value === value.trim() && localBaseUrlPattern.test(value)
+      ? URL.parse(value)
+      : null;
+  if (!parsed) {
     throw new Error(
       "Invalid TypeSafe baseUrl; use an http(s) loopback origin without a path, credentials, query, or fragment.",
     );
   }
+  return parsed.origin;
 }
 
 /** Validate runtime settings and recognize materialized credentials without resolving inputs. */

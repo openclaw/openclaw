@@ -24,13 +24,13 @@ private final class DashboardCookieNavigationObserver: NSObject, WKNavigationDel
     }
 }
 
-@Suite(.serialized, .timeLimit(.minutes(1)))
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardBrowserSessionTests {
     private func session(
         _ token: String,
         subject: String = "fixture-account",
-        expiresAt: Date = Date().addingTimeInterval(300)) throws -> GatewayBrowserSession
+        expiresAt: Date = .fixtureSessionExpiry) throws -> GatewayBrowserSession
     {
         try GatewayBrowserSession(
             origin: #require(URL(string: "https://gateway.example/")),
@@ -52,7 +52,7 @@ struct DashboardBrowserSessionTests {
         controller.webView.navigationDelegate = observer
 
         controller.show(url: url, auth: controller.auth)
-        try await DashboardTestWait.state("navigation cookies") {
+        try await TestWait.state("navigation cookies") {
             observer.cookiesAtNavigation != nil
         }
         let cookies = try #require(observer.cookiesAtNavigation)
@@ -264,7 +264,7 @@ struct DashboardBrowserSessionTests {
                 })
                 let other = try #require(windows.first { $0.target != target }?.controller)
                 #expect(other.webView.configuration.websiteDataStore === primaryStore)
-                try await DashboardTestWait.state("profile page content") {
+                try await TestWait.state("profile page content") {
                     await (try? opened.webView.evaluateJavaScript("document.body.innerText")) as? String == "Ready"
                 }
                 _ = try await opened.webView.evaluateJavaScript(
@@ -274,7 +274,7 @@ struct DashboardBrowserSessionTests {
                     name: MacGatewayProfileStore.didChangeNotification,
                     object: nil,
                     userInfo: [MacGatewayProfileStore.changedProfileIDKey: "first-open"])
-                try await DashboardTestWait.state("renamed profile snapshot") {
+                try await TestWait.state("renamed profile snapshot") {
                     opened.gatewaySnapshot?.gateways.first(where: { $0.id == target.bridgeID })?.name == "Renamed"
                 }
                 #expect(opened.gatewaySnapshot?.gateways.first { $0.id == target.bridgeID }?.name == "Renamed")
@@ -319,7 +319,7 @@ struct DashboardBrowserSessionTests {
             audience: "fixture",
             subject: "account",
             token: "synthetic",
-            expiresAt: Date().addingTimeInterval(300))
+            expiresAt: .fixtureSessionExpiry)
         let existingStore = WKWebsiteDataStore.nonPersistent()
         let manager = DashboardManager._testMake(
             websiteDataStore: existingStore,
@@ -544,10 +544,10 @@ struct DashboardBrowserSessionTests {
         let store = DashboardBrowserSessionStore(dataStore: .nonPersistent())
         let controller = self.controller(url: session.origin, store: store, lease: store.lease(for: session))
         defer { controller.closeDashboard() }
-        #expect(!controller.hasCurrentBrowserSession)
+        #expect(!controller.documentHost.hasCurrentBrowserSession)
         controller.invalidateBrowserSession(error: .expired)
         var text = ""
-        try await DashboardTestWait.state("expired session message") {
+        try await TestWait.state("expired session message") {
             text = await (try? controller.webView.evaluateJavaScript("document.body.innerText")) as? String ?? ""
             return text.contains("Connection")
         }
@@ -808,5 +808,13 @@ struct DashboardEmbedCookieTests {
         let next = try self.session(host: "gateway.example.com", subject: "another-account")
         try await store.lease(for: next).prepare(for: next.origin, in: WKUserContentController())
         #expect(await store.dataStore.httpCookieStore.allCookies().map(\.domain) == ["gateway.example.com"])
+    }
+}
+
+extension Date {
+    /// Synthetic browser sessions outlive the CI job, so a starved runner cannot expire a
+    /// session in a test that is not about expiry.
+    static var fixtureSessionExpiry: Date {
+        Date().addingTimeInterval(24 * 60 * 60)
     }
 }

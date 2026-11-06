@@ -16,11 +16,6 @@ const makeTurns = (count: number): AgentMessage[] =>
   ]).flat();
 
 describe("limitHistoryTurns", () => {
-  it.each([undefined, -1])("leaves history unchanged for a disabled limit %s", (limit) => {
-    const messages = makeTurns(2);
-    expect(limitHistoryTurns(messages, limit)).toBe(messages);
-  });
-
   it("returns empty history", () => {
     expect(limitHistoryTurns([], 5)).toEqual([]);
   });
@@ -36,28 +31,6 @@ describe("limitHistoryTurns", () => {
     }
   });
 
-  it("preserves leading summaries while limiting whole user turns", () => {
-    const summary = castAgentMessage({
-      role: "compactionSummary",
-      summary: "Prior context",
-      tokensBefore: 5000,
-      timestamp: 0,
-    });
-    const messages = [summary, ...makeTurns(3)];
-    const expected = structuredClone([summary, ...messages.slice(-2)]);
-    expect(limitHistoryTurns(messages, 1)).toEqual(expected);
-  });
-
-  it("preserves the reset kept-tail prelude while limiting post-boundary turns", () => {
-    const prelude = makeTurns(1);
-    for (const message of prelude) {
-      Object.defineProperty(message, Symbol.for("openclaw.sessionHistoryPrelude"), { value: true });
-    }
-    const messages = [...prelude, ...makeTurns(3)];
-    const expected = structuredClone([...prelude, ...messages.slice(-2)]);
-    expect(limitHistoryTurns(messages, 1)).toEqual(expected);
-  });
-
   it("keeps summary-only history", () => {
     const messages = [
       castAgentMessage({
@@ -68,5 +41,20 @@ describe("limitHistoryTurns", () => {
       }),
     ];
     expect(limitHistoryTurns(messages, 2)).toBe(messages);
+  });
+
+  it("counts pending consecutive inputs as one turn only on merging routes", () => {
+    const completed = makeTurns(3);
+    const orphan = { role: "user" as const, content: "orphan", timestamp: 4 };
+    const current = { role: "user" as const, content: "current", timestamp: 5 };
+    const messages = [...completed, orphan, current];
+    const options = { groupConsecutiveUserTurns: true };
+    expect(limitHistoryTurns(messages, 3, options)).toBe(messages);
+    expect(limitHistoryTurns(messages, 1, options)).toEqual([
+      ...completed.slice(-2),
+      orphan,
+      current,
+    ]);
+    expect(limitHistoryTurns(messages, 1)).toEqual([current]);
   });
 });

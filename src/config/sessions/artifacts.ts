@@ -1,39 +1,25 @@
-// Session artifact paths, filename classifiers, and archive timestamp helpers.
 // Cleanup, disk-budget, and usage accounting use these predicates to avoid deleting live transcripts.
 
 import { timestampMsToIsoFileStamp } from "@openclaw/normalization-core/number-coercion";
 import { escapeRegExp } from "../../shared/regexp.js";
-import { stripSessionArchiveCompressionSuffix } from "./archive-compression.js";
+import {
+  hasArchiveSuffix,
+  isTrajectoryRuntimeArtifactName,
+  parseUsageCountedSessionIdFromFileName,
+  readSessionArchiveTimestamp,
+  type SessionArchiveReason,
+} from "./transcript-file-names.js";
+export {
+  isCompactionCheckpointTranscriptFileName,
+  isPrimarySessionTranscriptFileName,
+  parseUsageCountedSessionIdFromFileName,
+  type SessionArchiveReason,
+} from "./transcript-file-names.js";
 
-export type SessionArchiveReason = "bak" | "reset" | "deleted";
-
-const ARCHIVE_SUFFIX_RE =
-  /^(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:\.\d{3})?Z)(?:\.([0-9a-f]{32}))?$/;
 const LEGACY_STORE_BACKUP_RE = /^sessions\.json\.bak\.\d+$/;
 const PRE_DOCTOR_REPAIR_RE =
   /\.jsonl\.pre-doctor-(?:branch|openai-codex)-repair-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.bak$/u;
 const MIGRATION_ARCHIVE_RE = /\.migrated(?:\.\d+)?$/u;
-const COMPACTION_CHECKPOINT_TRANSCRIPT_RE =
-  /^(.+)\.checkpoint\.([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.jsonl$/i;
-
-function readSessionArchiveTimestamp(
-  fileName: string,
-  reason: SessionArchiveReason,
-): string | undefined {
-  // Compressed archives carry a trailing .zst; strip it so every classifier
-  // sees one canonical `<id>.jsonl.<reason>.<timestamp>[.<generation>]` shape.
-  const marker = `.${reason}.`;
-  const normalized = stripSessionArchiveCompressionSuffix(fileName);
-  const index = normalized.lastIndexOf(marker);
-  if (index < 0) {
-    return undefined;
-  }
-  return ARCHIVE_SUFFIX_RE.exec(normalized.slice(index + marker.length))?.[1];
-}
-
-function hasArchiveSuffix(fileName: string, reason: SessionArchiveReason): boolean {
-  return readSessionArchiveTimestamp(fileName, reason) !== undefined;
-}
 
 /** Returns true for archived session artifacts and legacy store backup names. */
 export function isSessionArchiveArtifactName(fileName: string): boolean {
@@ -88,16 +74,6 @@ export function isSessionStoreTempArtifactName(fileName: string, storeBasename: 
   return sessionStoreTempPattern(storeBasename).test(fileName);
 }
 
-/** Returns true when a filename is a compaction checkpoint transcript. */
-export function isCompactionCheckpointTranscriptFileName(fileName: string): boolean {
-  return COMPACTION_CHECKPOINT_TRANSCRIPT_RE.test(fileName);
-}
-
-/** Returns true for trajectory runtime jsonl artifacts. */
-function isTrajectoryRuntimeArtifactName(fileName: string): boolean {
-  return fileName.endsWith(".trajectory.jsonl");
-}
-
 export function resolveTrajectoryPath(transcriptPath: string): string | undefined {
   return transcriptPath.endsWith(".jsonl")
     ? `${transcriptPath.slice(0, -".jsonl".length)}.trajectory.jsonl`
@@ -110,18 +86,8 @@ export function resolveTrajectoryPointerPath(transcriptPath: string): string | u
     : undefined;
 }
 
-/** Returns true for any trajectory-related session artifact. */
 export function isTrajectorySessionArtifactName(fileName: string): boolean {
   return isTrajectoryRuntimeArtifactName(fileName) || fileName.endsWith(".trajectory-path.json");
-}
-
-/** Returns true for primary session transcript files that represent live session history. */
-export function isPrimarySessionTranscriptFileName(fileName: string): boolean {
-  return (
-    fileName.endsWith(".jsonl") &&
-    !isTrajectoryRuntimeArtifactName(fileName) &&
-    !isCompactionCheckpointTranscriptFileName(fileName)
-  );
 }
 
 /** Returns true for transcript files counted in usage, including reset/deleted archives. */
@@ -129,34 +95,8 @@ export function isUsageCountedSessionTranscriptFileName(fileName: string): boole
   return parseUsageCountedSessionIdFromFileName(fileName) !== null;
 }
 
-/** Extracts the session id from a usage-counted transcript filename. */
-export function parseUsageCountedSessionIdFromFileName(fileName: string): string | null {
-  if (isPrimarySessionTranscriptFileName(fileName)) {
-    return fileName.slice(0, -".jsonl".length);
-  }
-  const normalized = stripSessionArchiveCompressionSuffix(fileName);
-  for (const reason of ["reset", "deleted"] as const) {
-    const marker = `.jsonl.${reason}.`;
-    const index = normalized.lastIndexOf(marker);
-    if (index > 0 && hasArchiveSuffix(normalized, reason)) {
-      const sessionId = normalized.slice(0, index);
-      return isPrimarySessionTranscriptFileName(`${sessionId}.jsonl`) ? sessionId : null;
-    }
-  }
-  return null;
-}
-
-/** Formats an archive timestamp that is safe for filenames. */
 export function formatSessionArchiveTimestamp(nowMs = Date.now()): string {
   return timestampMsToIsoFileStamp(nowMs);
-}
-
-function restoreSessionArchiveTimestamp(raw: string): string {
-  const [datePart, timePart] = raw.split("T");
-  if (!datePart || !timePart) {
-    return raw;
-  }
-  return `${datePart}T${timePart.replace(/-/g, ":")}`;
 }
 
 export function parseSessionArchiveTimestamp(
@@ -167,6 +107,8 @@ export function parseSessionArchiveTimestamp(
   if (!timestampRaw) {
     return null;
   }
-  const timestamp = Date.parse(restoreSessionArchiveTimestamp(timestampRaw));
+  const timestamp = Date.parse(
+    timestampRaw.slice(0, 11) + timestampRaw.slice(11).replace(/-/g, ":"),
+  );
   return Number.isNaN(timestamp) ? null : timestamp;
 }

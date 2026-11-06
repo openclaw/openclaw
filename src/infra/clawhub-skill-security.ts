@@ -14,11 +14,9 @@ const MAX_SECURITY_VERDICT_BATCH_SIZE = 100;
 const OWNER_QUALIFIED_FALLBACK_CONCURRENCY = 6;
 const NON_SECURITY_VERIFY_REASONS = new Set(["card.missing", "card_missing"]);
 
-type ClawHubExactSkillSecurityTarget = {
-  slug: string;
-  ownerHandle?: string;
-  version: string;
-};
+type ClawHubExactSkillSecurityTarget = Parameters<
+  typeof fetchClawHubSkillSecurityVerdicts
+>[0]["items"][number];
 
 type FetchExactSkillSecurityParams = {
   items: ClawHubExactSkillSecurityTarget[];
@@ -78,14 +76,6 @@ function partitionCompatibleBatches(
   return batches.map((batch) => batch.items);
 }
 
-function readOptionalStringField(value: unknown, field: string): string | undefined {
-  return normalizeOptionalString(readObject(value)?.[field]);
-}
-
-function readOptionalNumberField(value: unknown, field: string): number | undefined {
-  return asFiniteNumber(readObject(value)?.[field]);
-}
-
 function normalizeReason(reason: string | null | undefined): string {
   return normalizeOptionalString(reason)?.toLowerCase() ?? "";
 }
@@ -113,60 +103,6 @@ function mapVerificationSecurity(
   }
   // Older exact-verify responses predate the batched verdict `passed` flag.
   return { ...security, passed: true };
-}
-
-function mapVerificationToVerdict(params: {
-  verification: ClawHubSkillVerificationResponse;
-  target: ClawHubExactSkillSecurityTarget & { ownerHandle: string };
-}): ClawHubSkillSecurityVerdictItem {
-  const skill = readObject(params.verification.skill);
-  const publisher = readObject(params.verification.publisher);
-  const versionRecord = readObject(params.verification.version);
-  const pageUrl = normalizeOptionalString(params.verification.pageUrl);
-  const reasons = params.verification.reasons
-    .map((reason) => normalizeOptionalString(reason))
-    .filter((reason): reason is string => Boolean(reason));
-  const securityStatus = normalizeReason(
-    readOptionalStringField(params.verification.security, "status") ??
-      readOptionalStringField(params.verification.security, "rawStatus"),
-  );
-  const cardOnlyCleanFailure =
-    !params.verification.ok &&
-    securityStatus === "clean" &&
-    hasOnlyNonSecurityVerifyReasons(reasons);
-  const verifiedVersion =
-    normalizeOptionalString(params.verification.version) ??
-    readOptionalStringField(versionRecord, "version");
-  return {
-    ok: cardOnlyCleanFailure ? true : params.verification.ok,
-    decision: cardOnlyCleanFailure ? "pass" : params.verification.decision,
-    reasons: cardOnlyCleanFailure ? [] : reasons,
-    requestedSlug: params.target.slug,
-    requestedOwnerHandle: params.target.ownerHandle,
-    requestedVersion: params.target.version,
-    slug:
-      normalizeOptionalString(params.verification.slug) ?? readOptionalStringField(skill, "slug"),
-    version: verifiedVersion ?? (cardOnlyCleanFailure ? params.target.version : null),
-    displayName:
-      normalizeOptionalString(params.verification.displayName) ??
-      readOptionalStringField(skill, "displayName"),
-    publisherHandle:
-      normalizeOptionalString(params.verification.publisherHandle) ??
-      readOptionalStringField(publisher, "handle"),
-    publisherDisplayName:
-      normalizeOptionalString(params.verification.publisherDisplayName) ??
-      readOptionalStringField(publisher, "displayName"),
-    createdAt:
-      params.verification.createdAt ?? readOptionalNumberField(versionRecord, "createdAt") ?? null,
-    checkedAt: readOptionalNumberField(params.verification.security, "checkedAt") ?? null,
-    ...(pageUrl ? { skillUrl: pageUrl } : {}),
-    ...(pageUrl
-      ? {
-          securityAuditUrl: `${pageUrl}/security-audit?version=${encodeURIComponent(params.target.version)}`,
-        }
-      : {}),
-    security: mapVerificationSecurity(params.verification, cardOnlyCleanFailure),
-  };
 }
 
 function identityFailure(
@@ -264,6 +200,12 @@ export async function fetchExactClawHubSkillSecurityVerdicts(
   params: FetchExactSkillSecurityParams,
 ): Promise<ClawHubSkillSecurityVerdictItem[]> {
   const targets = params.items.map(normalizeTarget);
+  const fetchOptions = {
+    baseUrl: params.baseUrl,
+    token: params.token,
+    ...(params.skipAuth !== undefined ? { skipAuth: params.skipAuth } : {}),
+    timeoutMs: params.timeoutMs,
+  };
   const keys = new Set<string>();
   for (const target of targets) {
     const key = targetKey(target);
@@ -276,11 +218,8 @@ export async function fetchExactClawHubSkillSecurityVerdicts(
   const resolved = new Map<string, ClawHubSkillSecurityVerdictItem>();
   for (const batch of partitionCompatibleBatches(targets)) {
     const response = await fetchClawHubSkillSecurityVerdicts({
+      ...fetchOptions,
       items: batch,
-      baseUrl: params.baseUrl,
-      token: params.token,
-      ...(params.skipAuth !== undefined ? { skipAuth: params.skipAuth } : {}),
-      timeoutMs: params.timeoutMs,
     });
     const correlated = correlateBatchItems(batch, response.items);
     const fallbackLimit = pLimit(OWNER_QUALIFIED_FALLBACK_CONCURRENCY);
@@ -294,20 +233,64 @@ export async function fetchExactClawHubSkillSecurityVerdicts(
         const ownerHandle = target.ownerHandle;
         const fallbackItem =
           ownerHandle && item.error?.code === "skill_not_found"
-            ? await fallbackLimit(async () =>
-                mapVerificationToVerdict({
-                  verification: await fetchClawHubSkillVerification({
-                    slug: target.slug,
-                    ownerHandle,
-                    version: target.version,
-                    baseUrl: params.baseUrl,
-                    token: params.token,
-                    ...(params.skipAuth !== undefined ? { skipAuth: params.skipAuth } : {}),
-                    timeoutMs: params.timeoutMs,
-                  }),
-                  target: { ...target, ownerHandle },
-                }),
-              )
+            ? await fallbackLimit(async () => {
+                const verification = await fetchClawHubSkillVerification({
+                  ...fetchOptions,
+                  slug: target.slug,
+                  ownerHandle,
+                  version: target.version,
+                });
+                const skill = readObject(verification.skill);
+                const publisher = readObject(verification.publisher);
+                const versionRecord = readObject(verification.version);
+                const security = readObject(verification.security);
+                const pageUrl = normalizeOptionalString(verification.pageUrl);
+                const reasons = verification.reasons
+                  .map((reason) => normalizeOptionalString(reason))
+                  .filter((reason): reason is string => Boolean(reason));
+                const securityStatus = normalizeReason(
+                  normalizeOptionalString(security?.status) ??
+                    normalizeOptionalString(security?.rawStatus),
+                );
+                const cardOnlyCleanFailure =
+                  !verification.ok &&
+                  securityStatus === "clean" &&
+                  hasOnlyNonSecurityVerifyReasons(reasons);
+                const verifiedVersion =
+                  normalizeOptionalString(verification.version) ??
+                  normalizeOptionalString(versionRecord?.version);
+                return {
+                  ok: cardOnlyCleanFailure ? true : verification.ok,
+                  decision: cardOnlyCleanFailure ? "pass" : verification.decision,
+                  reasons: cardOnlyCleanFailure ? [] : reasons,
+                  requestedSlug: target.slug,
+                  requestedOwnerHandle: ownerHandle,
+                  requestedVersion: target.version,
+                  slug:
+                    normalizeOptionalString(verification.slug) ??
+                    normalizeOptionalString(skill?.slug),
+                  version: verifiedVersion ?? (cardOnlyCleanFailure ? target.version : null),
+                  displayName:
+                    normalizeOptionalString(verification.displayName) ??
+                    normalizeOptionalString(skill?.displayName),
+                  publisherHandle:
+                    normalizeOptionalString(verification.publisherHandle) ??
+                    normalizeOptionalString(publisher?.handle),
+                  publisherDisplayName:
+                    normalizeOptionalString(verification.publisherDisplayName) ??
+                    normalizeOptionalString(publisher?.displayName),
+                  createdAt:
+                    verification.createdAt ?? asFiniteNumber(versionRecord?.createdAt) ?? null,
+                  checkedAt: asFiniteNumber(security?.checkedAt) ?? null,
+                  ...(pageUrl ? { skillUrl: pageUrl } : {}),
+                  ...(pageUrl
+                    ? {
+                        securityAuditUrl: `${pageUrl}/security-audit?version=${encodeURIComponent(target.version)}`,
+                      }
+                    : {}),
+                  security: mapVerificationSecurity(verification, cardOnlyCleanFailure),
+                };
+              })
             : item;
         return [key, validateVerdictIdentity(target, fallbackItem)] as const;
       }),

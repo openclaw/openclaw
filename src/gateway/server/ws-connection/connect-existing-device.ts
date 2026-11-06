@@ -2,7 +2,6 @@ import { getBoundDeviceBootstrapProfile } from "../../../infra/device-bootstrap.
 import {
   getPairedDevice,
   listEffectivePairedDeviceRoles,
-  updatePairedDeviceMetadata,
   type PairedDevice,
 } from "../../../infra/device-pairing.js";
 import { resolveBootstrapProfileScopesForRole } from "../../../shared/device-bootstrap-profile.js";
@@ -11,7 +10,7 @@ import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import {
   isMobileNodeBootstrapConnect,
   isSetupCodeHandoffBootstrapClient,
-  pairedDeviceAllowsBootstrapOperator,
+  pairedDeviceAllowsBootstrapProfile,
   resolvePairedAccessScopes,
   resolvePinnedClientMetadata,
 } from "./connect-device-metadata.js";
@@ -34,7 +33,6 @@ export async function authorizeExistingGatewayDevice(params: {
     lastSeenAtMs: number;
     lastSeenReason: string;
   };
-  handoffBootstrapProfile: DeviceBootstrapProfile | null;
   requirePairing: (reason: PairingReason, paired: PairedDevice) => Promise<boolean>;
 }): Promise<{ ok: boolean; handoffBootstrapProfile: DeviceBootstrapProfile | null }> {
   const { context, state, paired, devicePublicKey, clientAccessMetadata, requirePairing } = params;
@@ -53,7 +51,7 @@ export async function authorizeExistingGatewayDevice(params: {
     isWebchat,
     isNativeAppUi,
   } = state;
-  let { handoffBootstrapProfile } = params;
+  let { handoffBootstrapProfile } = state;
   const claimedPlatform = connectParams.client.platform;
   const pairedPlatform = paired.platform;
   const claimedDeviceFamily = connectParams.client.deviceFamily;
@@ -99,7 +97,8 @@ export async function authorizeExistingGatewayDevice(params: {
     return { ok: false, handoffBootstrapProfile };
   }
 
-  if (scopes.length > 0) {
+  // The ingress grant owns scopes; this row only pins the signed device identity.
+  if (scopes.length > 0 && !state.remoteIngressPrincipal) {
     const scopesAllowed =
       pairedScopes.length > 0 &&
       roleScopesAllow({ role, requestedScopes: scopes, allowedScopes: pairedScopes });
@@ -128,6 +127,7 @@ export async function authorizeExistingGatewayDevice(params: {
       : null;
   if (
     retryBootstrapHandoffProfile &&
+    retryBootstrapHandoffProfile.roles.includes("operator") &&
     isSetupCodeHandoffBootstrapClient({
       profile: retryBootstrapHandoffProfile,
       client: connectParams.client,
@@ -149,11 +149,14 @@ export async function authorizeExistingGatewayDevice(params: {
       return { ok: false, handoffBootstrapProfile };
     }
     if (
-      pairedDeviceAllowsBootstrapOperator({
-        device: device ? await getPairedDevice(device.id) : null,
-        devicePublicKey,
-        profile: retryBootstrapHandoffProfile,
-      })
+      pairedDeviceAllowsBootstrapProfile(
+        {
+          device: device ? await getPairedDevice(device.id) : null,
+          devicePublicKey,
+          profile: retryBootstrapHandoffProfile,
+        },
+        ["operator"],
+      )
     ) {
       // The setup code is the owner-approved upgrade artifact. Reuse the
       // same handoff after retrying or promoting an existing mobile pairing.
@@ -165,12 +168,16 @@ export async function authorizeExistingGatewayDevice(params: {
   // and same-family mobile OS version labels, but real platform/device-family
   // changes must stay on the approved pairing record.
   if (device) {
-    await updatePairedDeviceMetadata(device.id, {
-      ...clientAccessMetadata,
-      ...(metadataPinning.refreshPairedPlatform
-        ? { platform: metadataPinning.refreshPairedPlatform }
-        : {}),
-    });
+    context.pendingDeviceMetadata = {
+      deviceId: device.id,
+      identity: paired,
+      patch: {
+        ...clientAccessMetadata,
+        ...(metadataPinning.refreshPairedPlatform
+          ? { platform: metadataPinning.refreshPairedPlatform }
+          : {}),
+      },
+    };
   }
   return { ok: true, handoffBootstrapProfile };
 }

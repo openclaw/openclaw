@@ -1,14 +1,8 @@
-import { collectBundledChannelConfigsCore } from "../plugins/bundled-channel-config-metadata.js";
-import { loadPluginManifestRegistryCore as loadPluginManifestRegistryImpl } from "../plugins/manifest-registry.js";
-import {
-  collectChannelSchemaMetadataCore,
-  collectPluginSchemaMetadataCore,
-} from "./channel-config-metadata.js";
-import { buildConfigSchemaCore } from "./schema.js";
-
 /** Runtime facade used by docs baseline generation to keep imports narrow. */
-export const loadPluginManifestRegistry = loadPluginManifestRegistryImpl;
-export const collectBundledChannelConfigs = collectBundledChannelConfigsCore;
-export const collectChannelSchemaMetadata = collectChannelSchemaMetadataCore;
-export const collectPluginSchemaMetadata = collectPluginSchemaMetadataCore;
-export const buildConfigSchema = buildConfigSchemaCore;
+export { collectBundledChannelConfigsCore as collectBundledChannelConfigs } from "../plugins/bundled-channel-config-metadata.js";
+export { loadPluginManifestRegistryCore as loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+export {
+  collectChannelSchemaMetadataCore as collectChannelSchemaMetadata,
+  collectPluginSchemaMetadataCore as collectPluginSchemaMetadata,
+} from "./channel-config-metadata.js";
+export { buildConfigSchemaCore as buildConfigSchema } from "./schema.js";

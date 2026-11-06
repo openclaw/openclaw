@@ -1,14 +1,8 @@
-import { findScenarioOutcome, statusDotClass } from "./ui-render-scenario.js";
+import { findScenarioOutcome } from "./ui-render-scenario.js";
 import { badgeHtml, esc, formatIso } from "./ui-render-utils.js";
-import type { RunnerSelection, TabId, UiState } from "./ui-types.js";
+import type { TabId, UiState } from "./ui-types.js";
 
 const MOCK_MODELS = ["mock-openai/gpt-5.6-luna", "mock-openai/gpt-5.6-luna-alt"];
-
-function deriveSelection(state: UiState): RunnerSelection | null {
-  return state.runnerDraft ?? state.bootstrap?.runner.selection ?? null;
-}
-
-/* ===== Render: Header ===== */
 
 export function renderHeader(state: UiState): string {
   const runner = state.bootstrap?.runner ?? null;
@@ -35,36 +29,9 @@ export function renderHeader(state: UiState): string {
     </header>`;
 }
 
-/* ===== Render: Sidebar ===== */
-
-function renderModelSelect(params: {
-  id: string;
-  label: string;
-  value: string;
-  options: string[];
-  disabled: boolean;
-}): string {
-  const options =
-    !params.options.includes(params.value) && params.value.trim()
-      ? [params.value, ...params.options]
-      : params.options;
-  return `
-    <div class="config-field">
-      <label class="config-label" for="${esc(params.id)}">${esc(params.label)}</label>
-      <select id="${esc(params.id)}"${params.disabled ? " disabled" : ""}>
-        ${options
-          .map(
-            (key) =>
-              `<option value="${esc(key)}"${key === params.value ? " selected" : ""}>${esc(key)}</option>`,
-          )
-          .join("")}
-      </select>
-    </div>`;
-}
-
 export function renderSidebar(state: UiState): string {
   const scenarios = state.bootstrap?.scenarios ?? [];
-  const selection = deriveSelection(state);
+  const selection = state.runnerDraft ?? state.bootstrap?.runner.selection ?? null;
   const runner = state.bootstrap?.runner ?? null;
   const run = state.scenarioRun;
   const isRunning = runner?.status === "running";
@@ -85,6 +52,31 @@ export function renderSidebar(state: UiState): string {
       ? Boolean(selection.profile)
       : Boolean(selection?.scenarioIds.length);
 
+  const renderSelect = (
+    id: string,
+    label: string,
+    value: string | undefined,
+    options: ReadonlyArray<string | readonly [string, string]>,
+  ) => `
+    <div class="config-field">
+      <label class="config-label" for="${esc(id)}">${esc(label)}</label>
+      <select id="${esc(id)}"${isRunning ? " disabled" : ""}>
+        ${options
+          .map((option) => {
+            const [key, text] = typeof option === "string" ? [option, option] : option;
+            return `<option value="${esc(key)}"${key === value ? " selected" : ""}>${esc(text)}</option>`;
+          })
+          .join("")}
+      </select>
+    </div>`;
+  const renderModel = (id: string, label: string, value: string) =>
+    renderSelect(
+      id,
+      label,
+      value,
+      !modelOptions.includes(value) && value.trim() ? [value, ...modelOptions] : modelOptions,
+    );
+
   return `
     <aside class="sidebar${state.sidebarCollapsed ? " is-collapsed" : ""}"${state.sidebarCollapsed || state.activeTab === "evidence" ? " inert" : ""}>
       <div class="sidebar-panel-tabs">
@@ -96,84 +88,46 @@ export function renderSidebar(state: UiState): string {
         state.sidebarPanel === "config"
           ? `<div class="sidebar-section sidebar-panel-body">
               <div class="sidebar-section-title"><h3>Configuration</h3></div>
-              <div class="config-field">
-                <label class="config-label" for="run-profile">Profile</label>
-                <select id="run-profile"${isRunning ? " disabled" : ""}>
-                  ${profiles
-                    .map(
-                      (profile) =>
-                        `<option value="${esc(profile.id)}"${selection?.profile === profile.id ? " selected" : ""}>${esc(profile.id)}</option>`,
-                    )
-                    .join("")}
-                </select>
-              </div>
-              <div class="config-field">
-                <label class="config-label" for="provider-mode">Provider lane</label>
-                <select id="provider-mode"${isRunning ? " disabled" : ""}>
-                  <option value="mock-openai"${selection?.providerMode === "mock-openai" ? " selected" : ""}>Synthetic (mock)</option>
-                  <option value="live-frontier"${selection?.providerMode === "live-frontier" ? " selected" : ""}>Real frontier providers</option>
-                </select>
-              </div>
-              <div class="config-field">
-                <label class="config-label" for="channel-driver">Channel driver</label>
-                <select id="channel-driver"${isRunning ? " disabled" : ""}>
-                  <option value="qa-channel"${selection?.channelDriver === "qa-channel" ? " selected" : ""}>Synthetic QA channel</option>
-                  <option value="crabline"${selection?.channelDriver === "crabline" ? " selected" : ""}>Crabline channel driver</option>
-                  <option value="live"${selection?.channelDriver === "live" ? " selected" : ""}>Real channels</option>
-                </select>
-              </div>
-              <div class="config-field">
-                <label class="config-label" for="execution-channel">Execution channel</label>
-                <select id="execution-channel"${isRunning ? " disabled" : ""}>
-                  <option value=""${selection?.channel ? "" : " selected"}>Catalog/default</option>
-                  ${channels
-                    .map(
-                      (channel) =>
-                        `<option value="${esc(channel)}"${selection?.channel === channel ? " selected" : ""}>${esc(channel)}</option>`,
-                    )
-                    .join("")}
-                </select>
-              </div>
-              <div class="config-field">
-                <label class="config-label" for="evidence-mode">Evidence mode</label>
-                <select id="evidence-mode"${isRunning ? " disabled" : ""}>
-                  <option value="full"${selection?.evidenceMode === "full" ? " selected" : ""}>Full</option>
-                  <option value="slim"${selection?.evidenceMode === "slim" ? " selected" : ""}>Slim</option>
-                </select>
-              </div>
-              <div class="config-field">
-                <label class="config-label" for="runtime-pair">Runtime pair</label>
-                <select id="runtime-pair"${isRunning ? " disabled" : ""}>
-                  <option value=""${selection?.runtimePair ? "" : " selected"}>Single runtime</option>
-                  <option value="openclaw,codex"${selection?.runtimePair ? " selected" : ""}>OpenClaw × Codex</option>
-                </select>
-              </div>
-              <div class="config-field">
-                <label class="config-label" for="runtime-pair-lane">Runtime-pair lane</label>
-                <select id="runtime-pair-lane"${isRunning ? " disabled" : ""}>
-                  <option value=""${selection?.runtimePairLane ? "" : " selected"}>Profile/default</option>
-                  ${(["core", "extended", "soak"] as const)
-                    .map(
-                      (lane) =>
-                        `<option value="${lane}"${selection?.runtimePairLane === lane ? " selected" : ""}>${lane}</option>`,
-                    )
-                    .join("")}
-                </select>
-              </div>
-              ${renderModelSelect({
-                id: "primary-model",
-                label: "Primary model",
-                value: selection?.primaryModel ?? "",
-                options: modelOptions,
-                disabled: isRunning,
-              })}
-              ${renderModelSelect({
-                id: "alternate-model",
-                label: "Alternate model",
-                value: selection?.alternateModel ?? "",
-                options: modelOptions,
-                disabled: isRunning,
-              })}
+              ${renderSelect(
+                "run-profile",
+                "Profile",
+                selection?.profile,
+                profiles.map((profile) => profile.id),
+              )}
+              ${renderSelect("provider-mode", "Provider lane", selection?.providerMode, [
+                ["mock-openai", "Synthetic (mock)"],
+                ["live-frontier", "Real frontier providers"],
+              ])}
+              ${renderSelect("channel-driver", "Channel driver", selection?.channelDriver, [
+                ["qa-channel", "Synthetic QA channel"],
+                ["crabline", "Crabline channel driver"],
+                ["live", "Real channels"],
+              ])}
+              ${renderSelect("execution-channel", "Execution channel", selection?.channel || "", [
+                ["", "Catalog/default"],
+                ...channels,
+              ])}
+              ${renderSelect("evidence-mode", "Evidence mode", selection?.evidenceMode, [
+                ["full", "Full"],
+                ["slim", "Slim"],
+              ])}
+              ${renderSelect(
+                "runtime-pair",
+                "Runtime pair",
+                selection?.runtimePair ? "openclaw,codex" : "",
+                [
+                  ["", "Single runtime"],
+                  ["openclaw,codex", "OpenClaw × Codex"],
+                ],
+              )}
+              ${renderSelect(
+                "runtime-pair-lane",
+                "Runtime-pair lane",
+                selection?.runtimePairLane || "",
+                [["", "Profile/default"], "core", "extended", "soak"],
+              )}
+              ${renderModel("primary-model", "Primary model", selection?.primaryModel ?? "")}
+              ${renderModel("alternate-model", "Alternate model", selection?.alternateModel ?? "")}
               ${
                 selection?.providerMode === "live-frontier"
                   ? `<div class="config-hint">${esc(
@@ -204,7 +158,7 @@ export function renderSidebar(state: UiState): string {
                       return `
                         <label class="scenario-item">
                           <input type="checkbox" data-scenario-toggle-id="${esc(s.id)}"${selectedIds.has(s.id) ? " checked" : ""}${isRunning ? " disabled" : ""} />
-                          <span class="${statusDotClass(status)}"></span>
+                          <span class="scenario-item-dot scenario-item-dot-${status}"></span>
                           <div class="scenario-item-info">
                             <span class="scenario-item-title">${esc(s.title)}</span>
                             <span class="scenario-item-meta">${esc(s.surface)} · ${esc(s.execution?.kind ?? "flow")} · ${esc(s.id)}</span>
@@ -264,8 +218,6 @@ function renderRunStatus(state: UiState): string {
     </div>`;
 }
 
-/* ===== Render: Tab bar ===== */
-
 export function renderTabBar(state: UiState): string {
   const tabs: Array<{ id: TabId; label: string }> = [
     { id: "chat", label: "Chat" },
@@ -286,5 +238,3 @@ export function renderTabBar(state: UiState): string {
       <div class="tab-spacer"></div>
     </nav>`;
 }
-
-/* ===== Render: Chat tab ===== */

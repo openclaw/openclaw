@@ -48,7 +48,7 @@ export function describeIMessageMessageTool({
   const actions = new Set<ChannelMessageActionName>();
   for (const action of IMESSAGE_ACTION_NAMES) {
     const spec = IMESSAGE_ACTIONS[action];
-    if (!spec?.gate || !gate(spec.gate)) {
+    if (!gate(spec.gate)) {
       continue;
     }
     if (privateApiStatus?.available === false) {

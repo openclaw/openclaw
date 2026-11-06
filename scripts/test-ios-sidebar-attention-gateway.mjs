@@ -6,7 +6,7 @@
 import { createServer } from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
 
-const port = 19877;
+const port = Number(process.env.OPENCLAW_IOS_ATTENTION_FIXTURE_PORT ?? 19877);
 const mainKey = "agent:main:main";
 const parentKey = "agent:main:attention-parent";
 const reviewKey = "agent:main:attention-review";
@@ -336,19 +336,37 @@ wss.on("connection", (ws) => {
           durationMs: 1,
           channels: {},
           agents: [],
-          sessions: { count: 3 },
+          sessions: { count: 5 },
         });
         break;
       case "sessions.list":
         reply({
           ts: Date.now(),
-          count: 3,
-          totalCount: 3,
+          count: 5,
+          totalCount: 5,
           offset: 0,
-          nextOffset: 3,
+          nextOffset: 5,
           hasMore: false,
           defaults: {},
           sessions: [
+            {
+              key: "agent:main:snooze-active",
+              sessionId: "synthetic-snooze-active",
+              displayName: "Planning notes",
+              label: "Planning notes",
+              kind: "direct",
+              updatedAt: created,
+            },
+            {
+              key: "agent:main:snooze-later",
+              sessionId: "synthetic-snooze-later",
+              displayName: "Follow-up notes",
+              label: "Follow-up notes",
+              kind: "direct",
+              updatedAt: created - 1000,
+              snoozedAt: created,
+              snoozedUntil: Date.parse("2099-01-05T17:00:00Z"),
+            },
             {
               key: mainKey,
               displayName: "Home",

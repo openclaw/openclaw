@@ -1,14 +1,51 @@
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { markGatewayRestartTrace } from "../../gateway/restart-trace.js";
 import type { GatewayServerOptions, GatewayStartupOperation } from "../../gateway/server-public.js";
+import type { GatewayInstallationReplacement } from "../../gateway/stale-install.js";
+import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { GatewayOwnerSupervisor } from "../../infra/gateway-owner-lease.js";
+import type { GatewayBootLifecycleCompletion } from "../../infra/gateway-boot-lifecycle.js";
+import { acquireGatewayLock } from "../../infra/gateway-lock.js";
+import type { GatewayOwnerSupervisor } from "../../infra/gateway-owner-lease.types.js";
 import type { GatewayRestartEmitter } from "../../infra/restart.js";
 import { SqliteIntegrityWorkerInterruptedError } from "../../infra/sqlite-integrity-worker-error.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { formatCliCommand } from "../command-format.js";
+import { measureGatewayBootstrapStep } from "../startup-trace.js";
+import { resolveGatewayShutdownBudget } from "./run-loop-shutdown-budget.js";
+
+const lifecycleRuntimeLoader = createLazyImportLoader(() => import("./lifecycle.runtime.js"));
+
+/** Prime lifecycle code and acquire initial custody before installing signal handlers. */
+export async function prepareGatewayRunLoop(
+  params: { lockPort?: number; lifecycleLockDeadlineMs?: number },
+  logger: Pick<SubsystemLogger, "info" | "warn">,
+) {
+  // Updates rotate dist chunks; signal handling must retain this exact runtime.
+  const lifecycleRuntime = await measureGatewayBootstrapStep(
+    "cli.bootstrap.lifecycle-runtime",
+    () => lifecycleRuntimeLoader.load(),
+  );
+  const supervisor = lifecycleRuntime.detectGatewayRespawnSupervisorIdentity();
+  const supervisorMode = supervisor?.kind ?? null;
+  const restartDecision = lifecycleRuntime.resolveGatewayRestartDecision();
+  // Resolve the native deadline before acquiring custody that needs final settlement.
+  const startupBudget = await resolveGatewayShutdownBudget(supervisorMode, logger);
+  const lock = await measureGatewayBootstrapStep("cli.bootstrap.gateway-lock", () =>
+    acquireGatewayLock({
+      port: params.lockPort,
+      listenerMode: supervisorMode ? "supervised" : "foreground",
+      supervisor,
+      ...(params.lifecycleLockDeadlineMs !== undefined
+        ? { lifecycleDeadlineMs: params.lifecycleLockDeadlineMs }
+        : {}),
+    }),
+  );
+  return { lifecycleRuntime, supervisor, supervisorMode, restartDecision, startupBudget, lock };
+}
 
 export type GatewayRunLoopStartOptions = Pick<
   GatewayServerOptions,
@@ -16,6 +53,7 @@ export type GatewayRunLoopStartOptions = Pick<
   | "startupStartedAt"
   | "hostLifecycle"
   | "startupOperation"
+  | "exitAfterStartupFailure"
   | "gatewayStateOwner"
 > & { requestHotReloadRecovery?: GatewayRestartEmitter };
 
@@ -37,11 +75,19 @@ export function createGatewayRestartRecovery(
     | { controller: AbortController; settled: ReturnType<GatewayRestartStartupFailureHandler> }
     | undefined;
   return {
+    reportInstallationReplacement(
+      replacement: GatewayInstallationReplacement,
+    ): GatewayBootLifecycleCompletion {
+      logger.error(
+        `${replacement.message} Cannot continue in this process. Run: ${formatCliCommand(supervisor ? "openclaw gateway restart" : "openclaw gateway run")}`,
+      );
+      return { outcome: "planned_restart", reason: "gateway.installation_replaced" };
+    },
     reportStartupFailure(error: unknown, retryFailed: boolean) {
       const stack = error instanceof Error && error.stack ? `\n${error.stack}` : "";
       logger.error(
         `gateway startup failed: ${formatErrorMessage(error)}. ` +
-          `${onFailure && !retryFailed ? "Attempting automatic triage before recovery." : "Automatic recovery is unavailable."}${stack}`,
+          `${onFailure && !retryFailed ? "Attempting automatic startup recovery." : "Automatic recovery is unavailable."}${stack}`,
       );
     },
     reportManualRecovery() {
@@ -68,9 +114,17 @@ export function createGatewayRestartRecovery(
         return false;
       }
       const controller = new AbortController();
+      const settled = Promise.resolve()
+        .then(() => onFailure(error, controller.signal))
+        .catch((recoveryError: unknown) => {
+          if (controller.signal.aborted && isAbortError(recoveryError)) {
+            return undefined;
+          }
+          throw recoveryError;
+        });
       work = {
         controller,
-        settled: Promise.resolve().then(() => onFailure(error, controller.signal)),
+        settled,
       };
       try {
         const completion = await work.settled;
@@ -81,19 +135,15 @@ export function createGatewayRestartRecovery(
           throw error;
         }
         if (completion !== "completed") {
-          logger.info("Automatic triage did not complete a repair; awaiting manual recovery.");
+          logger.info("Automatic startup recovery did not complete; awaiting manual recovery.");
           return false;
         }
-        // Completion proves triage cleanup, not Gateway health. Startup owns that proof.
-        logger.info("Automatic triage completed; retrying Gateway startup once.");
+        logger.info("Automatic startup recovery completed; retrying Gateway startup once.");
         return true;
-      } catch (triageError) {
-        if (controller.signal.aborted) {
-          return false;
-        }
-        logger.error(`Automatic triage failed: ${formatErrorMessage(triageError)}`);
+      } catch (recoveryError) {
+        logger.error(`Automatic startup recovery failed: ${formatErrorMessage(recoveryError)}`);
         if (supervisor) {
-          throw triageError;
+          throw recoveryError;
         }
         return false;
       } finally {
@@ -104,15 +154,19 @@ export function createGatewayRestartRecovery(
 }
 
 export function createGatewayStartupOperations(): {
+  signal: AbortSignal;
   run: GatewayStartupOperation;
   close(): void;
   cancelledWith(error: unknown): boolean;
   failedWith(error: unknown): boolean;
-  stopCompletion?: Promise<void>;
+  acknowledgeHandledFailure(error: unknown): void;
+  getStopCompletion(): Promise<void> | undefined;
+  retainStopCompletion(completion: Promise<void>): void;
   drain(): Promise<void>;
 } {
   const scope = new AsyncWorkScope();
-  let failure: { error: unknown } | undefined;
+  let stopCompletion: Promise<void> | undefined;
+  const failures = new Set<unknown>();
   // A process-group stop can kill a child before its separate admission owner is cancelled.
   const cancelledWith = (error: unknown) =>
     scope.signal.aborted &&
@@ -128,7 +182,7 @@ export function createGatewayStartupOperations(): {
         return await operation(scope.signal);
       } catch (error) {
         if (!cancelledWith(error)) {
-          failure ??= { error };
+          failures.add(error);
         }
         throw error;
       }
@@ -136,15 +190,23 @@ export function createGatewayStartupOperations(): {
   };
   return {
     run,
+    signal: scope.signal,
+    getStopCompletion: () => stopCompletion,
+    retainStopCompletion: (completion: Promise<void>) => {
+      stopCompletion = completion;
+    },
     close: () => scope.beginClose(),
     cancelledWith,
-    failedWith: (error: unknown) => failure !== undefined && failure.error === error,
+    failedWith: (error: unknown) => failures.has(error),
+    acknowledgeHandledFailure: (error: unknown) => {
+      failures.delete(error);
+    },
     async drain() {
       await scope.drain();
       // AsyncWorkScope joins descendants with allSettled; failed cleanup must
       // still make the accepted stop fail rather than certify a clean exit.
-      if (failure) {
-        throw failure.error;
+      if (failures.size > 0) {
+        throw failures.values().next().value;
       }
     },
   };
@@ -154,12 +216,9 @@ export function createGatewayStartupOperations(): {
 export async function prepareGatewayRestartIteration(
   runtime: typeof import("./lifecycle.runtime.js"),
   logger: Pick<SubsystemLogger, "warn">,
+  isCurrent: () => boolean,
 ): Promise<void> {
-  // After an in-process restart (SIGUSR2), reset command-queue lane state.
-  // Interrupted tasks from the previous lifecycle may have left `active`
-  // counts elevated (their finally blocks never ran), permanently blocking
-  // new work from draining. The same boundary also discards stale restart
-  // deferral timers. Execution owners restore only their own durable work.
+  // Retire stale activity counts and timers; execution owners restore durable work.
   const {
     abortActiveCronTaskRuns,
     advanceCronActiveJobGeneration,
@@ -175,9 +234,13 @@ export async function prepareGatewayRestartIteration(
   // Rotation aborts rootless stale owners before reset pumps preserved queues.
   rotateAgentEventLifecycleGeneration();
   advanceCronActiveJobGeneration();
-  abortActiveCronTaskRuns("Gateway restarting.");
+  abortActiveCronTaskRuns();
   const cronTaskDrain = await waitForActiveCronTaskRuns(1_000);
   const cronDrain = await waitForActiveCronJobs(1_000);
+  // A terminal decision made during these joins must not reopen root admission.
+  if (!isCurrent()) {
+    return;
+  }
   if (!cronTaskDrain.drained || !cronDrain.drained) {
     logger.warn(
       `cron run drain timed out during restart lifecycle reset after retiring old cron admission; ${cronTaskDrain.active} task handle(s) and ${cronDrain.active} active marker(s) remain after aborting old cron runs`,
@@ -191,12 +254,13 @@ export async function prepareGatewayRestartIteration(
   resetAllLanes();
   clearRuntimeConfigSnapshot();
   resetGatewayRestartStateForInProcessRestart();
-  // Rent: a failed startup has no server close handle, and restart hooks can
-  // recreate shared slots after close. Reset the same lifecycle before boot.
+  // Failed startup has no close handle; restart hooks can also recreate shared slots.
   try {
     await drainGlobalSingletonLifecycleState("restart");
   } catch (error) {
     logger.warn(`failed to reset ambient runtime state: ${formatErrorMessage(error)}`);
   }
-  markGatewayRestartTrace("restart.next-start");
+  if (isCurrent()) {
+    markGatewayRestartTrace("restart.next-start");
+  }
 }

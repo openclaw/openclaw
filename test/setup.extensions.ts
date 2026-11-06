@@ -2,13 +2,19 @@
 import { afterAll, afterEach, beforeEach, expect, vi } from "vitest";
 import { installSharedTestSetup } from "./setup.shared.js";
 
+const codexAppServerTestPattern = /\/extensions\/codex\/src\/app-server\/.*\.test\.ts$/;
+if (codexAppServerTestPattern.test(expect.getState().testPath?.replaceAll("\\", "/") ?? "")) {
+  // Prepare declarations before collection without binding worker-cpu ahead of file mocks.
+  await import("../src/test-utils/prepare-compiled-subprocesses.js");
+}
+
 const testEnv = installSharedTestSetup({ loadProfileEnv: false });
 let restoreUpstreamLinks: (() => void) | undefined;
 
 beforeEach(async (context) => {
   vi.useRealTimers();
   const testPath = expect.getState().testPath?.replaceAll("\\", "/");
-  if (/\/extensions\/codex\/src\/app-server\/.*\.test\.ts$/.test(testPath ?? "")) {
+  if (codexAppServerTestPattern.test(testPath ?? "")) {
     const { getTrackedWorkerPoolSnapshot } = await vi.importActual<
       typeof import("../src/infra/worker-cpu.js")
     >("../src/infra/worker-cpu.js");
@@ -57,11 +63,11 @@ beforeEach(async (context) => {
     ),
   ]);
   const upsert = vi
-    .spyOn(owner, "upsertSessionUpstreamLink")
-    .mockImplementation(facade.upsertSessionUpstreamLink);
+    .spyOn(owner, "upsertSessionUpstreamLinkWithCurrentSource")
+    .mockImplementation((input, options) => facade.upsertSessionUpstreamLinkAsync(input, options));
   const remove = vi
-    .spyOn(owner, "deleteSessionUpstreamLink")
-    .mockImplementation(facade.deleteSessionUpstreamLink);
+    .spyOn(owner, "deleteSessionUpstreamLinkAsync")
+    .mockImplementation(facade.deleteSessionUpstreamLinkAsync);
   restoreUpstreamLinks = () => {
     upsert.mockRestore();
     remove.mockRestore();

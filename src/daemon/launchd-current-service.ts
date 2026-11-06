@@ -3,26 +3,16 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { getSelfAndAncestorPidsSync } from "../infra/restart-stale-pids.js";
 import { probeLaunchAgentState, resolveLaunchAgentGuiDomain } from "./launchd-runtime.js";
 import { ServiceInspectionError } from "./service-inspection-error.js";
-import { inspectServiceProcessMembershipSync } from "./service-process-membership.js";
-
-function hasNativeLaunchdServiceLabel(
-  label: string,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return [env.LAUNCH_JOB_LABEL, env.LAUNCH_JOB_NAME, env.XPC_SERVICE_NAME].some(
-    (value) => normalizeOptionalString(value) === label,
-  );
-}
+import {
+  inspectServiceProcessMembershipSync,
+  resolveServiceProcessMembershipBlock,
+} from "./service-process-membership.js";
 
 /** Environment hints for launchd identity; inherited markers do not prove ancestry. */
 export function isCurrentProcessLaunchdServiceLabel(
   label: string,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  return hasNativeLaunchdServiceLabel(label, env) || hasOpenClawServiceMarker(label, env);
-}
-
-function hasOpenClawServiceMarker(label: string, env: NodeJS.ProcessEnv): boolean {
   // Detached update/restart handoffs keep OPENCLAW_LAUNCHD_LABEL as the service
   // identity to manage while running outside the job, so the configured label
   // alone never proves membership: a restart that trusted it would schedule a
@@ -30,9 +20,12 @@ function hasOpenClawServiceMarker(label: string, env: NodeJS.ProcessEnv): boolea
   // Managed wrappers inject the service marker; trust it when launchd's own
   // label variables are absent or renamed by the host environment.
   return (
-    normalizeOptionalString(env.OPENCLAW_LAUNCHD_LABEL) === label &&
-    normalizeOptionalString(env.OPENCLAW_SERVICE_MARKER) === "openclaw" &&
-    Boolean(normalizeOptionalString(env.OPENCLAW_SERVICE_KIND))
+    [env.LAUNCH_JOB_LABEL, env.LAUNCH_JOB_NAME, env.XPC_SERVICE_NAME].some(
+      (value) => normalizeOptionalString(value) === label,
+    ) ||
+    (normalizeOptionalString(env.OPENCLAW_LAUNCHD_LABEL) === label &&
+      normalizeOptionalString(env.OPENCLAW_SERVICE_MARKER) === "openclaw" &&
+      Boolean(normalizeOptionalString(env.OPENCLAW_SERVICE_KIND)))
   );
 }
 
@@ -44,15 +37,16 @@ export async function isCurrentProcessInsideLaunchdService(label: string): Promi
     if (ancestors.has(probe.runtime.pid)) {
       return true;
     }
-    const membership = inspectServiceProcessMembershipSync(probe.runtime.pid, "darwin");
-    if (membership === "inside") {
+    const block = resolveServiceProcessMembershipBlock(
+      inspectServiceProcessMembershipSync(probe.runtime.pid, "darwin"),
+      ancestors.has(1),
+      "darwin",
+    );
+    if (block === "inside-gateway-service") {
       return true;
     }
-    if (membership === "unknown") {
-      throw new ServiceInspectionError("service-membership-unverified");
-    }
-    if (!ancestors.has(1)) {
-      throw new ServiceInspectionError("service-ancestry-unverified");
+    if (block) {
+      throw new ServiceInspectionError(block);
     }
     return false;
   }

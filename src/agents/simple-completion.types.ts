@@ -37,7 +37,8 @@ export type PrepareSimpleCompletionModelForAgentParams = {
   agentId: string;
   agentDir?: string;
   modelRef?: string;
-  useUtilityModel?: boolean;
+  /** Prefer utility routing with true; "required" refuses primary fallback when no valid utility or explicit modelRef resolves. */
+  useUtilityModel?: boolean | "required";
   preferredProfile?: string;
   allowMissingApiKeyModes?: ReadonlyArray<ResolvedProviderAuth["mode"]>;
   allowBundledStaticCatalogFallback?: boolean;

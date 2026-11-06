@@ -1,5 +1,8 @@
+import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
+import { createConfigAutoSaveSchedule } from "./config-autosave-schedule.ts";
 import { createConfigDraftDiscard } from "./config-draft-discard.ts";
 import {
   removeConfigFormValue,
@@ -7,6 +10,7 @@ import {
   updateConfigFormValue,
   updateConfigRawValue,
 } from "./config-draft-model.ts";
+import { createConfigExternalSaveStatus } from "./config-external-save-status.ts";
 import { createConfigFieldDiscard } from "./config-field-discard.ts";
 import {
   executeConfigExternalMutation,
@@ -48,32 +52,23 @@ export function createConfigWriteCoordinator({
   resetConfigLoad,
   refreshConnectionState,
   canCallConfigMethod,
-  cancelAppliedRefresh,
-  reconcileAppliedRefresh,
-  disposeAppliedRefresh,
+  appliedRefresh,
   isDisposed,
 }: ConfigWriteCoordinatorContext): ConfigWriteCoordinator {
-  let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let inFlight: ConfigWriteFlight | null = null;
-  let autoSaveTrailing = false;
+  const autoSave = createConfigAutoSaveSchedule(state, CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS, publish);
   let autoSaveDraftConnection: { client: GatewayBrowserClient; epoch: number } | null = null;
   let autoSaveRequiresExplicitSubmit = false;
   // Discard drains writes without resaving the draft it is about to remove.
   let suppressAutoSave = 0;
+  let draftRevision = 0;
   // Disconnect must release drains even when the orphaned transport never settles.
-  let connectionWake: (() => void) | null = null;
-  let connectionWakePromise: Promise<void> = Promise.resolve();
-  const armConnectionWake = () => {
-    connectionWakePromise = new Promise((resolve) => {
-      connectionWake = resolve;
-    });
-  };
-  armConnectionWake();
+  let connectionWake = createDeferredCore();
   // Config writes and restarts must wait for the app updater to settle.
   let writesSuspended = false;
   let refreshWriteAdmission: (() => Promise<void>) | undefined;
-  let writesResumed: (() => void) | null = null;
-  let writesResumedPromise: Promise<void> = Promise.resolve();
+  let writesResumed: Deferred | null = null;
+  const externalSaves = createConfigExternalSaveStatus(state, publish);
   const canDispatchConfigMutation = (method: ConfigMethod): boolean => {
     const allowed = canCallConfigMethod(method);
     if (!allowed && state.connected) {
@@ -103,17 +98,16 @@ export function createConfigWriteCoordinator({
       state.configAutoSaveStatus = "paused";
     }
   };
-  const captureAutoSaveDraftConnection = () => {
-    if (autoSaveRequiresExplicitSubmit) {
+  const captureAutoSaveDraftConnection = (explicit = false) => {
+    if (!explicit && autoSaveRequiresExplicitSubmit) {
       pauseAutoSaveDraftConnection();
       return;
     }
     if (
-      autoSaveDraftConnection ||
       !state.client ||
       !state.connected ||
-      !state.configFormDirty ||
-      state.configFormMode !== "form"
+      state.configFormMode !== "form" ||
+      (!explicit && (autoSaveDraftConnection || !state.configFormDirty))
     ) {
       return;
     }
@@ -121,21 +115,14 @@ export function createConfigWriteCoordinator({
       client: state.client,
       epoch: currentConfigConnectionEpoch(state),
     };
-  };
-  const bindDraftToExplicitSubmit = () => {
-    if (!state.client || !state.connected || state.configFormMode !== "form") {
-      return;
-    }
-    autoSaveDraftConnection = {
-      client: state.client,
-      epoch: currentConfigConnectionEpoch(state),
-    };
-    autoSaveRequiresExplicitSubmit = false;
-    if (state.configAutoSaveStatus === "paused") {
-      state.configAutoSaveStatus = "idle";
+    if (explicit) {
+      autoSaveRequiresExplicitSubmit = false;
+      if (state.configAutoSaveStatus === "paused") {
+        state.configAutoSaveStatus = "idle";
+      }
     }
   };
-  // Stale bases and previous connections require explicit recovery, including teardown.
+  // A retained draft needs a fresh, unchanged base before autosave can resume.
   const canAutoSaveDraft = () =>
     state.configAutoSaveStatus !== "conflict" &&
     state.configRecoveryError === null &&
@@ -155,7 +142,7 @@ export function createConfigWriteCoordinator({
     pauseAutoSaveDraftConnection,
     clearAutoSaveDraftConnection,
     publish,
-    reconcileAppliedRefresh,
+    reconcileAppliedRefresh: appliedRefresh.reconcile,
   });
   const { applySnapshot, unacknowledgedDraftWrite, hasUnacknowledgedDraftWrite } = reconciliation;
   const reconcileAutoSaveDraftConnection = () => {
@@ -165,16 +152,10 @@ export function createConfigWriteCoordinator({
       clearAutoSaveDraftConnection();
     }
   };
-  const cancelScheduledAutoSave = () => {
-    if (autoSaveTimer) {
-      clearTimeout(autoSaveTimer);
-      autoSaveTimer = null;
-    }
-    autoSaveTrailing = false;
-  };
+  const cancelScheduledAutoSave = () => autoSave.cancel();
   const invalidateConfigLoad = () => {
     resetConfigLoad();
-    nextRequestVersion(state, "config");
+    nextRequestVersion(state);
     state.configLoading = false;
   };
   const trackWrite = <T>(
@@ -201,17 +182,17 @@ export function createConfigWriteCoordinator({
           auto ? reconcileAutoSaveDraftConnection : undefined,
         );
         const wantsTrailing =
-          autoSaveTrailing ||
+          autoSave.trailing ||
           (auto &&
             saved &&
             state.configFormDirty &&
             state.configFormMode === "form" &&
-            autoSaveTimer === null);
-        autoSaveTrailing = false;
+            !autoSave.timerPending);
+        autoSave.setTrailing(false);
         if (wantsTrailing && !isDisposed()) {
           runAutoSave();
         } else {
-          reconcileAppliedRefresh();
+          appliedRefresh.reconcile();
         }
       });
     inFlight = flight;
@@ -229,10 +210,10 @@ export function createConfigWriteCoordinator({
     }
     if (inFlight) {
       // Edits during any write fold into one trailing autosave on its new base.
-      autoSaveTrailing = true;
+      autoSave.setTrailing(true);
       return;
     }
-    cancelAppliedRefresh();
+    appliedRefresh.cancel();
     void trackWrite(
       (onSubmitted) =>
         run(() =>
@@ -248,12 +229,9 @@ export function createConfigWriteCoordinator({
     ).catch(() => undefined);
   };
   const flushScheduledAutoSave = () => {
-    if (!autoSaveTimer) {
-      return;
+    if (autoSave.stopTimer()) {
+      runAutoSave();
     }
-    clearTimeout(autoSaveTimer);
-    autoSaveTimer = null;
-    runAutoSave();
   };
   const scheduleAutoSave = () => {
     // Raw JSON5 drafts stay manual; suspended form edits resume after the updater.
@@ -267,14 +245,8 @@ export function createConfigWriteCoordinator({
     ) {
       return;
     }
-    cancelAppliedRefresh();
-    if (autoSaveTimer) {
-      clearTimeout(autoSaveTimer);
-    }
-    autoSaveTimer = setTimeout(() => {
-      autoSaveTimer = null;
-      runAutoSave();
-    }, CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+    appliedRefresh.cancel();
+    autoSave.start(runAutoSave);
   };
   // Drain manual writes and the whole autosave chain before reusing the base hash.
   const drainPendingWrites = async (flushScheduledDraft = false): Promise<void> => {
@@ -288,7 +260,7 @@ export function createConfigWriteCoordinator({
         return;
       }
       // Deregistration releases the drain independently of transport rejection order.
-      await Promise.race([flight.promise, connectionWakePromise]);
+      await Promise.race([flight.promise, connectionWake.promise]);
       if (isDisposed()) {
         return;
       }
@@ -320,11 +292,10 @@ export function createConfigWriteCoordinator({
     }
     const client = state.client;
     const connectionEpoch = currentConfigConnectionEpoch(state);
-    if (options.flushScheduledDraft) {
-      flushScheduledAutoSave();
-    } else {
-      cancelScheduledAutoSave();
-    }
+    const settleScheduledDraft = options.flushScheduledDraft
+      ? flushScheduledAutoSave
+      : cancelScheduledAutoSave;
+    settleScheduledDraft();
     // With no queued write, dispatch synchronously against the captured connection.
     const start = () =>
       run(async () => {
@@ -332,11 +303,7 @@ export function createConfigWriteCoordinator({
           // The Gateway classifies driver liveness and retained recovery before this interlock can open.
           await refreshWriteAdmission();
           if (!writesSuspended) {
-            if (options.flushScheduledDraft) {
-              flushScheduledAutoSave();
-            } else {
-              cancelScheduledAutoSave();
-            }
+            settleScheduledDraft();
           }
         }
         if (inFlight) {
@@ -347,7 +314,7 @@ export function createConfigWriteCoordinator({
             ? currentConfigRead(state)
             : null;
         if (reconnectRead) {
-          await Promise.race([reconnectRead.completion.promise, reconnectRead.invalidated.promise]);
+          await reconnectRead.settled;
         }
         // The updater can claim suspension while the preceding write drains.
         const connected = client && isCurrentConfigConnection(state, client, connectionEpoch);
@@ -386,41 +353,55 @@ export function createConfigWriteCoordinator({
     publish,
     reconcileDraft: reconcileAutoSaveDraftConnection,
   });
+  let pluginGeneration = gateway.snapshot.pluginCapabilities?.generation;
+  let canRead = hasOperatorReadAccess(gateway.snapshot.hello?.auth ?? null);
+  // Transport and authorization changes retire requests even when the client is reused.
   const stopGateway = gateway.subscribe((snapshot) => {
     const clientChanged = state.client !== snapshot.client;
     const connectionChanged = state.connected !== (snapshot.phase === "connected");
+    const nextCanRead = hasOperatorReadAccess(snapshot.hello?.auth ?? null);
+    const accessLost = snapshot.phase === "connected" && canRead && !nextCanRead;
+    if (snapshot.phase === "connected") {
+      canRead = nextCanRead;
+    }
+    const nextPluginGeneration = snapshot.pluginCapabilities?.generation;
+    const pluginsChanged =
+      nextPluginGeneration !== undefined && nextPluginGeneration !== pluginGeneration;
+    pluginGeneration = nextPluginGeneration;
     state.client = snapshot.client;
     state.connected = snapshot.phase === "connected";
     state.applySessionKey = snapshot.sessionKey;
-    if (clientChanged || connectionChanged) {
+    if (clientChanged || connectionChanged || accessLost) {
       const unacknowledged = unacknowledgedDraftWrite();
       fieldDiscard.invalidate();
       reconciliation.retireConnection();
       patches.clear();
+      externalSaves.clear();
       const draftBelongsToPreviousConnection =
         state.configFormDirty || inFlight !== null || unacknowledged !== null;
+      if (clientChanged || inFlight !== null || unacknowledged !== null) {
+        autoSaveDraftConnection = null;
+      }
       resetLoads();
       // A retired flight cannot hold the replacement connection's FIFO.
       explicitOpQueue = null;
-      // Reconnect can reuse the client object; the epoch must still advance.
       invalidateConfigConnection(state);
       cancelScheduledAutoSave();
-      cancelAppliedRefresh();
+      appliedRefresh.cancel();
       if (draftBelongsToPreviousConnection) {
-        // Retain the draft, visibly paused until Save/Apply or reload binds it
-        // to the new connection; silent suspension would make later edits look saved.
+        // Keep the pause visible until the reconnect read proves autosave safe.
         pauseAutoSaveDraftConnection();
       }
       if (inFlight !== null || unacknowledged !== null) {
         // Retain uncertain receipts while releasing drains before transport settlement.
         reconciliation.interrupt(inFlight?.submission ?? unacknowledged);
         inFlight = null;
-        autoSaveTrailing = false;
+        autoSave.setTrailing(false);
       }
       // Re-arm first so resumed drains wait on a pending signal on their next iteration.
       const wake = connectionWake;
-      armConnectionWake();
-      wake?.();
+      connectionWake = createDeferredCore();
+      wake.resolve();
       state.configLoading = false;
       state.configSchemaLoading = false;
       state.configSaving = false;
@@ -428,13 +409,46 @@ export function createConfigWriteCoordinator({
       if (state.configAutoSaveStatus === "saving") {
         state.configAutoSaveStatus = "idle";
       }
-      if (state.connected && state.client) {
+      if (state.connected && state.client && !accessLost) {
         if (reconciliation.interrupted) {
           reconciliation.refreshInterrupted();
-        } else {
-          void refreshDraft(state, refreshConnectionState, publish, reconcileAppliedRefresh);
+        } else if (state.configSnapshot || state.configFormDirty || !state.bootstrapConfig) {
+          const draftConnection = autoSaveDraftConnection;
+          const draftBaseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash ?? null;
+          const client = state.client;
+          const epoch = currentConfigConnectionEpoch(state);
+          void refreshDraft(
+            state,
+            async () => {
+              const loaded = await refreshConnectionState();
+              if (
+                loaded &&
+                isCurrentConfigConnection(state, client, epoch) &&
+                draftConnection !== null &&
+                autoSaveDraftConnection === draftConnection
+              ) {
+                if (
+                  draftConnection.client === client &&
+                  draftBaseHash !== null &&
+                  draftBaseHash === state.configSnapshot?.hash
+                ) {
+                  captureAutoSaveDraftConnection(true);
+                  scheduleAutoSave();
+                  publish();
+                } else {
+                  autoSaveDraftConnection = null;
+                }
+              }
+              return loaded;
+            },
+            publish,
+            appliedRefresh.reconcile,
+          );
         }
       }
+    } else if (pluginsChanged && state.connected && state.configSnapshot) {
+      // Plugin activation changes config validation and schema even without a config write.
+      void refreshDraft(state, refreshConnectionState, publish, appliedRefresh.reconcile);
     }
     publish();
   });
@@ -447,8 +461,7 @@ export function createConfigWriteCoordinator({
         flushScheduledDraft: true,
         canDispatch: () => canDispatchConfigMutation("config.patch"),
       }),
-    cancelAppliedRefresh,
-    reconcileAppliedRefresh,
+    appliedRefresh,
     scheduleAutoSave: () => {
       if (!hasUnacknowledgedDraftWrite()) {
         scheduleAutoSave();
@@ -456,6 +469,7 @@ export function createConfigWriteCoordinator({
     },
   });
   const mutateDraft = (mutation: () => void, path?: Array<string | number>) => {
+    draftRevision++;
     fieldDiscard.invalidate(path);
     mutate(mutation);
     reconcileAutoSaveDraftConnection();
@@ -466,8 +480,8 @@ export function createConfigWriteCoordinator({
       ? Promise.resolve(false)
       : afterPendingWritesSettled(
           async (onSubmitted) => {
-            bindDraftToExplicitSubmit();
-            cancelAppliedRefresh();
+            captureAutoSaveDraftConnection(true);
+            appliedRefresh.cancel();
             try {
               // A drained raw Save may apply; a still-dirty raw draft remains manual-save-only.
               if (mode === "apply" && state.configFormDirty && state.configFormMode === "raw") {
@@ -497,7 +511,7 @@ export function createConfigWriteCoordinator({
               reconcileAutoSaveDraftConnection();
               return saved;
             } finally {
-              reconcileAppliedRefresh();
+              appliedRefresh.reconcile();
             }
           },
           () => false,
@@ -510,22 +524,25 @@ export function createConfigWriteCoordinator({
     removeFormValue: (path) => mutateDraft(() => removeConfigFormValue(state, path), path),
     setRaw: (value) =>
       mutateDraft(() => updateConfigRawValue(state, value, hasUnacknowledgedDraftWrite())),
-    discardFormValue: fieldDiscard.discard,
+    discardFormValue: (path) => {
+      draftRevision++;
+      return fieldDiscard.discard(path);
+    },
     discardDraft: createConfigDraftDiscard({
       state,
+      currentDraftRevision: () => draftRevision,
       invalidateFieldDiscards: fieldDiscard.invalidate,
       hasInFlightWrite: () => inFlight !== null,
       holdAutoSave,
       drainPendingWrites,
-      clearPatches: patches.clear,
+      clearPatches: () => externalSaves.discard(patches.clear),
       run,
       mutate,
       clearDraftConnection: () => {
         reconciliation.clear();
         clearAutoSaveDraftConnection();
       },
-      cancelAppliedRefresh,
-      reconcileAppliedRefresh,
+      appliedRefresh,
     }),
     setWritesSuspended: (suspended, refreshAdmission) => {
       refreshWriteAdmission = refreshAdmission;
@@ -535,13 +552,11 @@ export function createConfigWriteCoordinator({
       writesSuspended = suspended;
       if (suspended) {
         cancelScheduledAutoSave();
-        writesResumedPromise = new Promise((resolve) => {
-          writesResumed = resolve;
-        });
+        writesResumed = createDeferredCore();
       } else {
         const resume = writesResumed;
         writesResumed = null;
-        resume?.();
+        resume?.resolve();
         // Resume pending edits, but an uncertain write still needs explicit recovery.
         if (!hasUnacknowledgedDraftWrite()) {
           scheduleAutoSave();
@@ -572,6 +587,7 @@ export function createConfigWriteCoordinator({
         () => canDispatchConfigMutation("config.set") && (options.canDispatch?.() ?? true),
       ),
     retry: () =>
+      externalSaves.retry() ??
       patches.retry(() =>
         reconciliation.latestSubmission?.operation === "apply" ? writes.apply() : writes.save(),
       ),
@@ -581,6 +597,7 @@ export function createConfigWriteCoordinator({
         return false;
       }
       fieldDiscard.invalidate(["agents"]);
+      draftRevision++;
       const changed = stageDefaultAgentConfigEntry(state, agentId);
       publish();
       reconcileAutoSaveDraftConnection();
@@ -612,7 +629,7 @@ export function createConfigWriteCoordinator({
         if (options.waitForWritesResumed && writesSuspended && !isDisposed()) {
           await refreshWriteAdmission?.();
           if (writesSuspended && !isDisposed()) {
-            await writesResumedPromise;
+            await writesResumed?.promise;
           }
         }
         if (
@@ -625,13 +642,13 @@ export function createConfigWriteCoordinator({
             error: "Connection changed before the configuration update started.",
           };
         }
-        const result = await afterPendingWritesSettled<RuntimeConfigExternalMutationResult<T>>(
+        let result = await afterPendingWritesSettled<RuntimeConfigExternalMutationResult<T>>(
           (onSubmitted) =>
             executeConfigExternalMutation(
               state,
               mutationClient,
               mutationConnectionEpoch,
-              task,
+              externalSaves.track(task, options),
               options,
               () => run(() => refreshConfigAfterMutation(state, { draftWrites: writes }), "config"),
               onSubmitted,
@@ -647,6 +664,7 @@ export function createConfigWriteCoordinator({
           }),
           { flushScheduledDraft: true },
         );
+        result = externalSaves.settle(result, options, mutationClient, mutationConnectionEpoch);
         if (
           !(
             options.waitForWritesResumed &&
@@ -662,10 +680,10 @@ export function createConfigWriteCoordinator({
     dispose() {
       fieldDiscard.invalidate();
       patches.clear();
-      writesResumed?.();
+      writesResumed?.resolve();
       writesResumed = null;
       // Release pending drains; their disposed guard exits the loop.
-      connectionWake?.();
+      connectionWake.resolve();
       // Flush once on teardown, chaining behind any flight for its receipt.
       // Epoch invalidation retires callbacks, not the flush's captured admission checks.
       const client = state.client;
@@ -673,7 +691,7 @@ export function createConfigWriteCoordinator({
         state.connected && client !== null && !writesSuspended && canCallConfigMethod("config.set");
       const pendingFlight = inFlight;
       cancelScheduledAutoSave();
-      disposeAppliedRefresh();
+      appliedRefresh.dispose();
       if (client && pendingFlight) {
         reconciliation.flushDisposedFlight(
           client,

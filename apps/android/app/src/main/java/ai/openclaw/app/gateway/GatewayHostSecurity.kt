@@ -9,15 +9,7 @@ internal fun isLoopbackGatewayHost(
   rawHost: String?,
   allowEmulatorBridgeAlias: Boolean = isAndroidEmulatorRuntime(),
 ): Boolean {
-  var host =
-    rawHost
-      ?.trim()
-      ?.lowercase(Locale.US)
-      ?.trim('[', ']')
-      .orEmpty()
-  if (host.endsWith(".")) {
-    host = host.dropLast(1)
-  }
+  val host = normalizePolicyHost(rawHost)
   val zoneIndex = host.indexOf('%')
   // Scoped IPv6 literals are not stable origin identifiers; reject them for
   // loopback trust instead of guessing which interface the zone names.
@@ -53,15 +45,7 @@ internal fun isLocalCleartextGatewayHost(
   rawHost: String?,
   allowEmulatorBridgeAlias: Boolean = isAndroidEmulatorRuntime(),
 ): Boolean {
-  var host =
-    rawHost
-      ?.trim()
-      ?.lowercase(Locale.US)
-      ?.trim('[', ']')
-      .orEmpty()
-  if (host.endsWith(".")) {
-    host = host.dropLast(1)
-  }
+  var host = normalizePolicyHost(rawHost)
   if (host.isEmpty()) return false
   if (isLoopbackGatewayHost(host, allowEmulatorBridgeAlias = allowEmulatorBridgeAlias)) return true
   if (isMdnsLocalHostname(host)) return true
@@ -77,32 +61,28 @@ internal fun isLocalCleartextGatewayHost(
   parseIpv4Address(host)?.let { ipv4 ->
     val first = ipv4[0].toInt() and 0xff
     val second = ipv4[1].toInt() and 0xff
-    return when {
-      first == 10 -> true
-      first == 172 && second in 16..31 -> true
-      first == 192 && second == 168 -> true
-      first == 169 && second == 254 -> true
-      else -> false
-    }
+    return first == 10 ||
+      (first == 172 && second in 16..31) ||
+      (first == 192 && second == 168) ||
+      (first == 169 && second == 254)
   }
   if (!host.contains(':') || !host.all(::isIpv6LiteralChar)) return false
 
   val address = runCatching { InetAddress.getByName(host) }.getOrNull() ?: return false
-  return when {
-    address.isLinkLocalAddress -> {
-      true
-    }
-
-    address.isSiteLocalAddress -> {
-      true
-    }
-
-    else -> {
+  return address.isLinkLocalAddress || address.isSiteLocalAddress ||
+    run {
       val bytes = address.address
       bytes.size == 16 && (bytes[0].toInt() and 0xfe) == 0xfc
     }
-  }
 }
+
+private fun normalizePolicyHost(rawHost: String?): String =
+  rawHost
+    ?.trim()
+    ?.lowercase(Locale.US)
+    ?.trim('[', ']')
+    .orEmpty()
+    .removeSuffix(".")
 
 private fun isAndroidEmulatorRuntime(): Boolean {
   val fingerprint = Build.FINGERPRINT?.lowercase(Locale.US).orEmpty()
@@ -140,7 +120,6 @@ private fun isMdnsLocalHostname(host: String): Boolean {
   if (host.length > 253) return false
   if (!host.endsWith(".local")) return false
   val labels = host.split('.')
-  if (labels.size < 2 || labels.last() != "local") return false
   return labels.dropLast(1).all(::isDnsHostnameLabel)
 }
 

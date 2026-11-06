@@ -11,26 +11,22 @@ import {
 const PROMOTION_LIST_MARKER_RE = /^(?:\d+\.\s+|[-*+]\s+)/;
 const MANAGED_DREAMING_HEADINGS = new Set(["light sleep", "rem sleep"]);
 
-function normalizeRangeSnippet(lines: string[], startLine: number, endLine: number): string {
-  const startIndex = Math.max(0, startLine - 1);
-  const endIndex = Math.min(lines.length, endLine);
-  if (startIndex >= endIndex) {
-    return "";
-  }
-  return normalizeSnippet(lines.slice(startIndex, endIndex).join(" "));
-}
-
-function normalizeListMarkerFreeRangeSnippet(
+function normalizeRangeSnippet(
   lines: string[],
   startLine: number,
   endLine: number,
+  stripListMarkers = false,
 ): string {
   const startIndex = Math.max(0, startLine - 1);
   const endIndex = Math.min(lines.length, endLine);
   if (startIndex >= endIndex) {
     return "";
   }
-  const strippedLines = lines.slice(startIndex, endIndex).map((line) => {
+  const range = lines.slice(startIndex, endIndex);
+  if (!stripListMarkers) {
+    return normalizeSnippet(range.join(" "));
+  }
+  const strippedLines = range.map((line) => {
     const trimmed = line.trim();
     const withoutMarker = trimmed.replace(PROMOTION_LIST_MARKER_RE, "");
     return { text: withoutMarker, hadListMarker: withoutMarker !== trimmed };
@@ -72,25 +68,9 @@ function buildRelocatedDailyHeadingLookup(lines: string[]): (string | null)[] {
   return headings;
 }
 
-function buildListMarkerFreeMatchSnippet(
-  heading: string | null,
-  listMarkerFreeSnippet: string,
-): string {
-  if (!listMarkerFreeSnippet) {
-    return listMarkerFreeSnippet;
-  }
-  return heading ? normalizeSnippet(`${heading}: ${listMarkerFreeSnippet}`) : listMarkerFreeSnippet;
-}
-
 function targetSnippetHasHeadingContext(targetSnippet: string, bodySnippet: string): boolean {
-  if (!targetSnippet || !bodySnippet || targetSnippet === bodySnippet) {
-    return false;
-  }
   const bodyIndex = targetSnippet.indexOf(bodySnippet);
-  if (bodyIndex <= 0) {
-    return false;
-  }
-  return sliceUtf16Safe(targetSnippet, 0, bodyIndex).trimEnd().endsWith(":");
+  return bodyIndex > 0 && sliceUtf16Safe(targetSnippet, 0, bodyIndex).trimEnd().endsWith(":");
 }
 
 function extractTargetHeadingBodySnippet(
@@ -103,10 +83,9 @@ function extractTargetHeadingBodySnippet(
   if (bodySnippet.startsWith(targetSnippet)) {
     return null;
   }
-  const normalizedBody = normalizeSnippet(bodySnippet);
   for (let separatorIndex = targetSnippet.indexOf(": "); separatorIndex > 0;) {
-    const targetBody = normalizeSnippet(targetSnippet.slice(separatorIndex + 2));
-    if (targetBody && normalizedBody.startsWith(targetBody)) {
+    const targetBody = targetSnippet.slice(separatorIndex + 2);
+    if (targetBody && bodySnippet.startsWith(targetBody)) {
       return targetBody;
     }
     separatorIndex = targetSnippet.indexOf(": ", separatorIndex + 2);
@@ -154,11 +133,12 @@ function relocateCandidateRange(
       const endLine = startIndex + span;
       const snippet = normalizeRangeSnippet(lines, startLine, endLine);
       const comparison = compareCandidateWindow(targetSnippet, snippet);
-      const listMarkerFreeSnippet = normalizeListMarkerFreeRangeSnippet(lines, startLine, endLine);
-      const listMarkerFreeMatchSnippet = buildListMarkerFreeMatchSnippet(
-        headingLookup[startLine] ?? null,
-        listMarkerFreeSnippet,
-      );
+      const listMarkerFreeSnippet = normalizeRangeSnippet(lines, startLine, endLine, true);
+      const heading = headingLookup[startLine];
+      const listMarkerFreeMatchSnippet =
+        heading && listMarkerFreeSnippet
+          ? `${heading}: ${listMarkerFreeSnippet}`
+          : listMarkerFreeSnippet;
       const listMarkerFreeComparison =
         listMarkerFreeSnippet === snippet
           ? 0
@@ -175,33 +155,30 @@ function relocateCandidateRange(
         targetHeadingBodySnippet && listMarkerFreeMatchSnippet !== listMarkerFreeSnippet
           ? compareCandidateWindow(targetHeadingBodySnippet, listMarkerFreeSnippet)
           : 0;
-      const useTargetHeadingBodyContext =
+      let bestComparison = comparison;
+      let matchedSnippet = snippet;
+      if (
         targetHeadingBodyComparison > 0 &&
         targetHeadingBodyComparison >= comparison &&
-        targetHeadingBodyComparison >= listMarkerFreeComparison;
-      const useListMarkerFreeContext =
-        !useTargetHeadingBodyContext &&
+        targetHeadingBodyComparison >= listMarkerFreeComparison
+      ) {
+        bestComparison = targetHeadingBodyComparison;
+        matchedSnippet = listMarkerFreeMatchSnippet;
+      } else if (
         listMarkerFreeContextComparison > comparison &&
-        listMarkerFreeContextComparison >= listMarkerFreeComparison;
-      const useListMarkerFree = !useListMarkerFreeContext && listMarkerFreeComparison > comparison;
-      const bestComparison = useTargetHeadingBodyContext
-        ? targetHeadingBodyComparison
-        : useListMarkerFreeContext
-          ? listMarkerFreeContextComparison
-          : useListMarkerFree
-            ? listMarkerFreeComparison
-            : comparison;
+        listMarkerFreeContextComparison >= listMarkerFreeComparison
+      ) {
+        bestComparison = listMarkerFreeContextComparison;
+        matchedSnippet = listMarkerFreeMatchSnippet;
+      } else if (listMarkerFreeComparison > comparison) {
+        bestComparison = listMarkerFreeComparison;
+        matchedSnippet = targetSnippetHasHeadingContext(targetSnippet, listMarkerFreeSnippet)
+          ? listMarkerFreeMatchSnippet
+          : listMarkerFreeSnippet;
+      }
       if (bestComparison === 0) {
         continue;
       }
-      const matchedSnippet =
-        useTargetHeadingBodyContext || useListMarkerFreeContext
-          ? listMarkerFreeMatchSnippet
-          : useListMarkerFree
-            ? targetSnippetHasHeadingContext(targetSnippet, listMarkerFreeSnippet)
-              ? listMarkerFreeMatchSnippet
-              : listMarkerFreeSnippet
-            : snippet;
       const distance = Math.abs(startLine - candidate.startLine);
       if (
         !bestMatch ||
@@ -252,17 +229,13 @@ function lineRangeOverlapsDreamingFence(
     const oneIndexed = i + 1;
     const isStart = DREAMING_FENCE_START_RE.test(line);
     const isEnd = DREAMING_FENCE_END_RE.test(line);
-    if (isStart || isEnd) {
-      // Marker lines are managed content too; promoting them would leak
-      // dreaming scratchwork into MEMORY.md (#80613).
-      if (oneIndexed >= safeStart && oneIndexed <= safeEnd) {
-        return true;
-      }
-      insideFence = isStart;
-      continue;
-    }
-    if (insideFence && oneIndexed >= safeStart && oneIndexed <= safeEnd) {
+    // Marker lines are managed content too; promoting them would leak
+    // dreaming scratchwork into MEMORY.md (#80613).
+    if ((isStart || isEnd || insideFence) && oneIndexed >= safeStart && oneIndexed <= safeEnd) {
       return true;
+    }
+    if (isStart || isEnd) {
+      insideFence = isStart;
     }
   }
   return false;

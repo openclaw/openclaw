@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { snapshotOwnCronRecord } from "./own-record.js";
 
 const CRON_RUNTIME_AUTHORITY_MAX_BYTES = 64 * 1024;
@@ -90,16 +91,6 @@ function cloneJsonObject(value: unknown): Record<string, JsonValue> | undefined 
     : undefined;
 }
 
-function deepFreezeJson(value: JsonValue): JsonValue {
-  if (value && typeof value === "object") {
-    for (const item of Array.isArray(value) ? value : Object.values(value)) {
-      deepFreezeJson(item);
-    }
-    Object.freeze(value);
-  }
-  return value;
-}
-
 /** Validates the private persisted transport without learning runtime-owned payload semantics. */
 export function normalizeCronRuntimeAuthority(value: unknown): CronRuntimeAuthority | undefined {
   const input = isRecord(value) ? snapshotOwnCronRecord(value) : undefined;
@@ -123,7 +114,7 @@ export function normalizeCronRuntimeAuthority(value: unknown): CronRuntimeAuthor
     version: 1,
     runtimeId,
     namespace,
-    payload: deepFreezeJson(payload) as Readonly<Record<string, unknown>>,
+    payload: freezeJsonSnapshot(payload),
   } as const;
   if (Buffer.byteLength(JSON.stringify(normalized), "utf8") > CRON_RUNTIME_AUTHORITY_MAX_BYTES) {
     return undefined;

@@ -1,13 +1,9 @@
 import { Type } from "typebox";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
+import { requesterProfileSchema } from "../schema/typebox.js";
 
 export const SessionsSendToolSchema = Type.Object({
-  user: Type.Optional(
-    Type.String({
-      description:
-        "The person's requester_profile.id, required when several people have steered this turn.",
-    }),
-  ),
+  user: requesterProfileSchema({ defaultToTurnOwner: true }),
   sessionKey: Type.Optional(Type.String()),
   label: Type.Optional(Type.String({ minLength: 1, maxLength: SESSION_LABEL_MAX_LENGTH })),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
@@ -27,12 +23,32 @@ export const SessionsSendToolSchema = Type.Object({
 const SessionsSendDeliverySchema = Type.Object(
   {
     status: Type.Union([Type.Literal("pending"), Type.Literal("skipped")]),
-    mode: Type.Literal("announce"),
   },
   { additionalProperties: false },
 );
 
 export const SessionsSendOutputSchema = Type.Union([
+  Type.Object(
+    {
+      status: Type.Literal("started"),
+      async: Type.Literal(true),
+      runId: Type.String(),
+      sessionKey: Type.String(),
+      mode: Type.Union([Type.Literal("resume"), Type.Literal("followup")]),
+      retained: Type.Object(
+        {
+          acceptance: Type.Literal("not_accepted"),
+          reason: Type.Literal("plugin_reload_self_hold"),
+          plugins: Type.Array(Type.String()),
+          durability: Type.Literal("process"),
+          continuation: Type.Literal("after_turn"),
+        },
+        { additionalProperties: false },
+      ),
+      message: Type.String(),
+    },
+    { additionalProperties: false },
+  ),
   Type.Object(
     {
       status: Type.Literal("accepted"),
@@ -59,6 +75,17 @@ export const SessionsSendOutputSchema = Type.Union([
       runId: Type.String(),
       status: Type.Union([Type.Literal("error"), Type.Literal("forbidden")]),
       error: Type.String(),
+      selfHold: Type.Optional(
+        Type.Object(
+          {
+            retained: Type.Literal(false),
+            acceptance: Type.Union([Type.Literal("not_accepted"), Type.Literal("uncertain")]),
+            plugins: Type.Array(Type.String()),
+            why: Type.String(),
+          },
+          { additionalProperties: false },
+        ),
+      ),
       sessionKey: Type.Optional(Type.String()),
       sentBeforeError: Type.Optional(Type.Literal(true)),
       watched: Type.Optional(Type.Boolean()),
@@ -105,6 +132,8 @@ export const SessionsSendOutputSchema = Type.Union([
       sessionKey: Type.String(),
       delivery: SessionsSendDeliverySchema,
       reply: Type.String(),
+      replyTruncated: Type.Optional(Type.Literal(true)),
+      note: Type.Optional(Type.String()),
       watched: Type.Optional(Type.Boolean()),
     },
     { additionalProperties: false },

@@ -5,16 +5,20 @@ import type { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins
 vi.mock("../../../browser-lifecycle-cleanup.js", { spy: true });
 vi.mock("../../../context-engine/init.js", { spy: true });
 vi.mock("../../../context-engine/registry.js", { spy: true });
+vi.mock("../../../state/openclaw-state-worker-store.js", { spy: true });
+// mock-isolation: Control tests supply registry handles without discovering installed plugins.
 vi.mock("../../runtime-plugins.js", async () => {
   const { getActivePluginRegistry } = await import("../../../plugins/runtime.js");
   const { createEmptyPluginRegistry } = await import("../../../plugins/registry-empty.js");
+  const loadRegistry = vi.fn<typeof loadAgentRuntimePluginRegistryHandle>(
+    () => getActivePluginRegistry() ?? createEmptyPluginRegistry(),
+  );
   return {
-    loadAgentRuntimePluginRegistryHandle: vi.fn<typeof loadAgentRuntimePluginRegistryHandle>(
-      () => getActivePluginRegistry() ?? createEmptyPluginRegistry(),
-    ),
+    loadAgentRuntimePluginRegistryHandle: loadRegistry,
+    loadAgentRuntimePluginRegistryHandleAsync: async (...args: Parameters<typeof loadRegistry>) =>
+      loadRegistry(...args),
   };
 });
-vi.mock("./subagent-registry-state.js", { spy: true });
 
 vi.mock("../../../config/sessions/session-accessor.sqlite-replacement-projection.js", {
   spy: true,

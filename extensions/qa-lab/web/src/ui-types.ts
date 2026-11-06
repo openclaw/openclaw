@@ -8,7 +8,7 @@ import type {
   QaBusConversationKind,
   QaBusStateSnapshot,
 } from "openclaw/plugin-sdk/qa-channel-protocol";
-import type { QaLabLatestReport, QaLabScenarioOutcome, QaLabScenarioRun } from "../../api.js";
+import type { QaLabLatestReport, QaLabScenarioRun } from "../../api.js";
 import type {
   QaLabExecutionKind,
   QaLabResolvedRunPlan,
@@ -71,7 +71,6 @@ export type Bootstrap = {
   };
 };
 
-export type ScenarioOutcome = QaLabScenarioOutcome;
 type ScenarioRun = QaLabScenarioRun;
 
 export type RunnerSelection = QaLabRunSelection;
@@ -192,20 +191,15 @@ export type UiState = {
   captureProviderFilter: string[];
   captureHostFilter: string[];
   captureSearchText: string;
-  captureHeaderMode: "key" | "all" | "hidden";
-  captureViewMode: "list" | "timeline";
-  captureGroupMode: "none" | "flow" | "host-path" | "burst";
-  captureTimelineLaneMode: "domain" | "provider" | "flow";
-  captureTimelineLaneSort: "most-events" | "most-errors" | "severity" | "alphabetical";
-  captureTimelinePreviousLaneSort:
-    | "most-events"
-    | "most-errors"
-    | "severity"
-    | "alphabetical"
-    | null;
+  captureHeaderMode: CaptureSavedView["headerMode"];
+  captureViewMode: CaptureSavedView["viewMode"];
+  captureGroupMode: CaptureSavedView["groupMode"];
+  captureTimelineLaneMode: CaptureSavedView["timelineLaneMode"];
+  captureTimelineLaneSort: CaptureSavedView["timelineLaneSort"];
+  captureTimelinePreviousLaneSort: CaptureSavedView["timelineLaneSort"] | null;
   captureTimelineLaneSearch: string;
-  captureTimelineZoom: 75 | 100 | 150 | 200 | 300;
-  captureTimelineSparklineMode: "session-relative" | "lane-relative";
+  captureTimelineZoom: CaptureSavedView["timelineZoom"];
+  captureTimelineSparklineMode: CaptureSavedView["timelineSparklineMode"];
   captureTimelineWindowStartPct: number | null;
   captureTimelineWindowEndPct: number | null;
   captureTimelineBrushAnchorPct: number | null;
@@ -213,18 +207,17 @@ export type UiState = {
   captureTimelineFocusSelectedFlow: boolean;
   captureTimelineFocusedLaneMode: "all" | "only-matching" | "collapse-background";
   captureTimelineFocusedLaneThreshold: "any" | "events-2" | "percent-10" | "percent-25";
-  captureDetailPlacement: "right" | "bottom";
+  captureDetailPlacement: CaptureSavedView["detailPlacement"];
   captureDetailSplitPct: number;
   captureDetailSplitDragging: boolean;
   captureDetailView: "overview" | "flow" | "payload" | "headers";
-  capturePreferredDetailView: "overview" | "flow" | "payload" | "headers" | null;
   captureFlowDetailLayout: "nav-first" | "pair-first" | null;
-  capturePayloadDetailLayout: "formatted" | "raw" | null;
-  capturePayloadExtent: "preview" | "full";
+  capturePayloadDetailLayout: CaptureSavedView["payloadLayout"];
+  capturePayloadExtent: CaptureSavedView["payloadExtent"];
   capturePayloadEventSort: "stream" | "name" | "size";
   capturePayloadEventFilter: string;
   captureErrorsOnly: boolean;
-  captureCoverage: CaptureCoverageSummary | null;
+  captureCoverage: Omit<CaptureCoverageSummary, "localPeers"> | null;
   captureStartupStatus: CaptureStartupStatus | null;
   evidence: EvidenceGalleryModel | null;
   evidenceArtifactFilter: "all" | EvidenceArtifactView["mediaKind"];

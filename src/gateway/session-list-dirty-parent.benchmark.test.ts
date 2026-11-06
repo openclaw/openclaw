@@ -11,14 +11,9 @@ import { listProjectedSessions } from "./session-utils-list.js";
 
 it.runIf(process.env.OPENCLAW_SESSION_DIRTY_PARENT_BENCH === "1")(
   "measures a 245-row page after parent publications over 5,000 candidates",
-  async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg = {
-        agents: {
-          list: [{ id: "main", default: true }],
-          defaults: { model: "unit-test/model" },
-        },
-      };
+  () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = { agents: { entries: { main: {} }, defaults: { model: "unit-test/model" } } };
       const parentKey = "agent:main:parent";
       const candidates = 5_000;
       const children = 2_000;
@@ -28,14 +23,15 @@ it.runIf(process.env.OPENCLAW_SESSION_DIRTY_PARENT_BENCH === "1")(
         (database) => {
           for (let index = 0; index < candidates; index++) {
             const parent = index === 0;
+            const child = index > 0 && index <= children;
             writeSessionEntry(
               database,
               parent ? parentKey : `agent:main:row-${index}`,
               {
                 sessionId: parent ? "parent" : `row-${index}`,
                 label: `Session ${index}`,
-                updatedAt: index > 0 && index <= children ? 1_000 + index : 1,
-                ...(index > 0 && index <= children ? { parentSessionKey: parentKey } : {}),
+                updatedAt: child ? 1_000 + index : 1,
+                ...(child ? { parentSessionKey: parentKey } : {}),
                 ...(index > children ? { archivedAt: 1 } : {}),
               },
               { canonicalPreviousEntry: null, previousEntry: null },
@@ -52,8 +48,8 @@ it.runIf(process.env.OPENCLAW_SESSION_DIRTY_PARENT_BENCH === "1")(
       });
       try {
         await projection.ensureMaterialized();
-        const list = () =>
-          listProjectedSessions({ projection, opts: { limit: 245, archived: "all" } });
+        const list = (search?: string) =>
+          listProjectedSessions({ projection, opts: { limit: 245, archived: "all", search } });
         const golden = await list();
         expect(golden.sessions).toHaveLength(245);
         expect(golden.totalCount).toBe(candidates);
@@ -61,33 +57,26 @@ it.runIf(process.env.OPENCLAW_SESSION_DIRTY_PARENT_BENCH === "1")(
           createHash("sha256").update(JSON.stringify(value)).digest("hex");
         const checksum = digest(golden);
         const normalizedChecksum = digest({ ...golden, path: "<fixture>" });
-        const search = () =>
-          listProjectedSessions({
-            projection,
-            opts: { limit: 245, archived: "all", search: "Session" },
-          });
-        expect(await search()).toEqual(golden);
+        expect(await list("Session")).toEqual(golden);
+        const measure = async (search?: string) => {
+          const start = performance.now();
+          const result = await list(search);
+          const elapsed = performance.now() - start;
+          expect(digest(result)).toBe(checksum);
+          return elapsed;
+        };
         const cleanMs: number[] = [];
         const searchMs: number[] = [];
         const dirtyMs: number[] = [];
         const dirtyCounts: number[] = [];
         const materialized: number[] = [];
         for (let index = 0; index < samples + 5; index++) {
-          const cleanStart = performance.now();
-          const clean = await list();
-          const cleanElapsed = performance.now() - cleanStart;
-          expect(digest(clean)).toBe(checksum);
-          const searchStart = performance.now();
-          const searched = await search();
-          const searchElapsed = performance.now() - searchStart;
-          expect(digest(searched)).toBe(checksum);
+          const cleanElapsed = await measure();
+          const searchElapsed = await measure("Session");
           sessionChanges.emit({ agentId: "main", sessionKey: parentKey });
           const dirtyCount = projection.dirtyRowCount;
           const before = projection.materializedCount;
-          const dirtyStart = performance.now();
-          const dirty = await list();
-          const dirtyElapsed = performance.now() - dirtyStart;
-          expect(digest(dirty)).toBe(checksum);
+          const dirtyElapsed = await measure();
           if (index >= 5) {
             cleanMs.push(cleanElapsed);
             searchMs.push(searchElapsed);
@@ -123,7 +112,6 @@ it.runIf(process.env.OPENCLAW_SESSION_DIRTY_PARENT_BENCH === "1")(
         clock.mockRestore();
         release();
       }
-    });
-  },
+    }),
   180_000,
 );

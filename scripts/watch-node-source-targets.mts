@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { root, type Root } from "@openclaw/fs-safe/root";
 import type { WatchEntry, WatchScope } from "@openclaw/fs-safe/watch";
 import { admitObservationRoot, observationPrefixKind } from "../src/infra/fs-observation-root.ts";
+import { runTasksWithConcurrency } from "../src/utils/run-with-concurrency.ts";
 import { runNodeConfigFiles } from "./run-node-watch-paths.mts";
 import type { WatchOptions } from "./watch-node-observation.mts";
 
@@ -14,10 +16,34 @@ const SOURCE_OBSERVATION_LIMITS = {
   directories: 4096,
   depth: 128,
   linkHops: 32,
+  reads: 8,
 } as const;
 
 type Mapping = { physical: string; lexical: string; kind: "entry" | "tree" };
-export type SourceTargetGroup = { authority: Root; mappings: Mapping[]; scopes: WatchScope[] };
+export type SourceFile = { authority: Root; relative: string; hash: string };
+export type SourceTargetGroup = {
+  authority: Root;
+  mappings: Mapping[];
+  scopes: WatchScope[];
+  files: Map<string, SourceFile>;
+};
+
+export async function hashSourceFile(authority: Root, relative: string, signal: AbortSignal) {
+  signal.throwIfAborted();
+  await using opened = await authority.open("./" + relative, { hardlinks: "allow" });
+  const hash = createHash("sha256");
+  if (opened.stat.size > 0) {
+    for await (const chunk of opened.handle.createReadStream({
+      autoClose: false,
+      end: opened.stat.size - 1,
+    })) {
+      signal.throwIfAborted();
+      hash.update(chunk);
+    }
+  }
+  signal.throwIfAborted();
+  return hash.digest("hex");
+}
 
 function relativeInside(parent: string, child: string): string | undefined {
   const relative = path.relative(parent, child);
@@ -74,11 +100,17 @@ export function createSourceTargetDiscovery(
       .toSorted((a, b) => b.rootReal.length - a.rootReal.length)
       .find((authority) => relativeInside(authority.rootReal, target) !== undefined);
 
-  const targetAuthority = async (target: string, signal: AbortSignal) => {
+  const targetAuthority = async (requested: string, signal: AbortSignal) => {
+    // Resolve components before `..` through the filesystem before ascending.
+    const spelling = path.sep === "\\" ? requested.replaceAll("/", path.sep) : requested;
+    const parts = spelling.split(path.sep);
+    const parent = parts.indexOf("..");
+    const remaining = parent < 0 ? "" : parts.splice(parent).join(path.sep);
+    const target = path.resolve(parts.join(path.sep) || path.parse(spelling).root);
     // Never re-admit a replaced Root, even after its last alias disappeared.
     const previous = pinnedRoot(target);
     if (previous) {
-      return { authority: previous, target };
+      return { authority: previous, target, remaining };
     }
     const admitted = await admitObservationRoot(path.dirname(target));
     signal.throwIfAborted();
@@ -87,8 +119,11 @@ export function createSourceTargetDiscovery(
       path.relative(admitted.rootDir, target),
     );
     const authority = pinnedRoot(canonicalTarget) ?? admitted;
+    if (!pinned.has(authority.rootReal) && pinned.size >= SOURCE_OBSERVATION_LIMITS.mappings) {
+      throw new RangeError("Source observation lifetime Root budget exceeded");
+    }
     pinned.set(authority.rootReal, authority);
-    return { authority, target: canonicalTarget };
+    return { authority, target: canonicalTarget, remaining };
   };
 
   const discover = async (signal: AbortSignal): Promise<SourceTargetGroup[]> => {
@@ -99,6 +134,7 @@ export function createSourceTargetDiscovery(
     signal.throwIfAborted();
     const groups = new Map<Root, SourceTargetGroup>();
     const mappings = new Set<string>();
+    const reads: Array<() => Promise<void>> = [];
     let examined = 0;
     let directories = 0;
     const checkEntry = () => {
@@ -113,12 +149,13 @@ export function createSourceTargetDiscovery(
       lexical: string,
       kind: Mapping["kind"],
       hops: number,
+      remaining = "",
     ) => {
       signal.throwIfAborted();
       if (hops > SOURCE_OBSERVATION_LIMITS.linkHops) {
         throw new RangeError("Source link discovery cycle/hop budget exceeded");
       }
-      const key = JSON.stringify([physical, lexical, kind]);
+      const key = JSON.stringify([physical, lexical, kind, remaining]);
       if (mappings.has(key)) {
         return;
       }
@@ -128,19 +165,36 @@ export function createSourceTargetDiscovery(
       mappings.add(key);
       let group = groups.get(authority);
       if (!group) {
-        group = { authority, mappings: [], scopes: [] };
+        group = { authority, mappings: [], scopes: [], files: new Map() };
         groups.set(authority, group);
       }
-      group.mappings.push({ physical, lexical, kind });
+      const mapping: Mapping = { physical, lexical, kind: remaining ? "entry" : kind };
+      group.mappings.push(mapping);
+      const files = group.files;
+      const fingerprint = (name: string, alias: string) => {
+        reads.push(async () => {
+          files.set(alias, {
+            authority,
+            relative: name,
+            hash: await hashSourceFile(authority, name, signal),
+          });
+        });
+      };
       const relative = relativeInside(authority.rootReal, physical);
       if (relative === undefined) {
         throw new Error("Linked source outside admitted Root");
       }
-      // Watch from the first component: no physical scope crosses a symbolic
-      // parent, even when a formerly ordinary intermediate directory changes.
+      // Prefix trees cover intermediate aliases; literal files remain entry scopes.
       const first = relative.split(path.sep)[0] || ".";
-      if (!group.scopes.some((scope) => scope.path === first)) {
-        group.scopes.push({ path: first, kind: "tree", depth: SOURCE_OBSERVATION_LIMITS.depth });
+      const scope: WatchScope =
+        first === (relative || ".") && mapping.kind === "entry"
+          ? { path: first, kind: "entry" }
+          : { path: first, kind: "tree", depth: SOURCE_OBSERVATION_LIMITS.depth };
+      const scopeIndex = group.scopes.findIndex((entry) => entry.path === first);
+      if (scopeIndex < 0) {
+        group.scopes.push(scope);
+      } else if (scope.kind === "tree") {
+        group.scopes[scopeIndex] = scope;
       }
       const follow = async (
         link: string,
@@ -171,14 +225,21 @@ export function createSourceTargetDiscovery(
         if ((await observationPrefixKind(authority, path.dirname(link), signal)) !== "directory") {
           return;
         }
-        const declared = path.resolve(authority.rootReal, path.dirname(link), text);
+        const targetRoot = path.parse(text).root;
+        const base = path.resolve(authority.rootReal, path.dirname(link), targetRoot || ".");
+        const declared = base + path.sep + text.slice(targetRoot.length);
+        // Keep the target-parent authority independent of the selected suffix.
         const admitted = await targetAuthority(declared, signal);
+        const tail = [admitted.remaining, suffix].filter(Boolean).join(path.sep).split(path.sep);
+        const parent = tail.indexOf("..");
+        const rest = parent < 0 ? "" : tail.splice(parent).join(path.sep);
         await visit(
           admitted.authority,
-          path.resolve(admitted.target, suffix),
+          path.resolve(admitted.target, ...tail),
           alias,
           linkKind,
           hops + 1,
+          rest,
         );
       };
       const parts = relative.split(path.sep).filter(Boolean);
@@ -191,12 +252,31 @@ export function createSourceTargetDiscovery(
         prefix = path.join(prefix, part);
         const found = await observationPrefixKind(authority, prefix, signal);
         if (found === "symlink") {
-          await follow(prefix, lexical, parts.slice(index + 1).join(path.sep), kind);
+          await follow(
+            prefix,
+            lexical,
+            [...parts.slice(index + 1), remaining].filter(Boolean).join(path.sep),
+            kind,
+          );
           return;
         }
         if (found !== "directory") {
+          if (!remaining && found === "other" && index === parts.length - 1 && !ignored(lexical)) {
+            fingerprint(prefix, lexical);
+          }
           return;
         }
+      }
+      if (remaining) {
+        if ((await observationPrefixKind(authority, relative || ".", signal)) !== "directory") {
+          return;
+        }
+        const admitted = await targetAuthority(
+          path.dirname(physical) + path.sep + remaining.split(path.sep).slice(1).join(path.sep),
+          signal,
+        );
+        await visit(admitted.authority, admitted.target, lexical, kind, hops, admitted.remaining);
+        return;
       }
       if (kind !== "tree" || ignored(lexical, { isDirectory: () => true })) {
         return;
@@ -224,6 +304,8 @@ export function createSourceTargetDiscovery(
               throw new RangeError("Source discovery depth budget exceeded");
             }
             await scan(name, mapped, depth - 1);
+          } else if (entry.isFile) {
+            fingerprint(name, mapped);
           }
         }
       };
@@ -247,6 +329,22 @@ export function createSourceTargetDiscovery(
         0,
       );
     }
+    const errors = new Set<unknown>();
+    await runTasksWithConcurrency({
+      tasks: reads,
+      limit: SOURCE_OBSERVATION_LIMITS.reads,
+      errorMode: "stop",
+      throwOnError: false,
+      onTaskError: (error) => {
+        errors.add(error);
+      },
+    });
+    if (errors.size === 1) {
+      throw [...errors][0];
+    }
+    if (errors.size) {
+      throw new AggregateError(errors, "Source reads failed");
+    }
     for (const group of groups.values()) {
       group.scopes.sort((a, b) => a.path.localeCompare(b.path));
       group.mappings.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
@@ -260,11 +358,15 @@ export function createSourceTargetDiscovery(
         try {
           return await discover(signal);
         } catch (error) {
+          const errors: unknown[] = error instanceof AggregateError ? error.errors : [error];
           if (
             signal.aborted ||
             pass >= 3 ||
-            !(error instanceof FsSafeError) ||
-            !["not-found", "path-mismatch", "symlink"].includes(error.code)
+            !errors.every(
+              (failure) =>
+                failure instanceof FsSafeError &&
+                ["not-found", "not-file", "path-mismatch", "symlink"].includes(failure.code),
+            )
           ) {
             throw error;
           }

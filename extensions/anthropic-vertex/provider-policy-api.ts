@@ -4,7 +4,6 @@
  */
 import { resolveClaudeThinkingProfile } from "openclaw/plugin-sdk/claude-model-runtime";
 
-/** Resolve Anthropic Vertex thinking profile for a provider/model pair. */
 export function resolveThinkingProfile(params: {
   provider: string;
   modelId: string;

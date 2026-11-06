@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { auditSummaryQuality } from "./compaction-safeguard-quality.js";
+import {
+  auditSummaryQuality,
+  buildCompactionStructureInstructions,
+} from "./compaction-safeguard-quality.js";
 
 const structuredSummary = (pendingAsk: string, decision = "Keep current flow.") =>
   [
@@ -11,6 +14,20 @@ const structuredSummary = (pendingAsk: string, decision = "Keep current flow.") 
   ].join("\n");
 
 describe("compaction summary request matching", () => {
+  it("keeps failed-check guidance alongside a still-live user request", () => {
+    const instructions = buildCompactionStructureInstructions(
+      undefined,
+      undefined,
+      "Finish release preparation.",
+    );
+    expect(instructions).toContain(
+      "a check that ran and returned a failing result is completed, not an open TODO",
+    );
+    expect(instructions).toContain("keep only the remaining remediation in ## Open TODOs");
+    expect(instructions).toContain("Finish release preparation.");
+    expect(instructions).toContain("Its run owner will resume it after compaction");
+  });
+
   it("scopes retained ask checks to the split prefix without matching shared numbers", () => {
     const latestAsk = "Compare 10 and 20";
     const prefixSummary = (pendingAsk?: string) =>

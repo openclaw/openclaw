@@ -4,14 +4,17 @@ import {
   isSqliteReadOnlyError,
   readSourceJournalMode,
   readSourceSidecars,
+  requiresPrivateRollbackRecovery,
   SqliteSourceChangedError,
 } from "./sqlite-readonly-location.js";
+import { readSqliteSchemaCookie } from "./sqlite-schema-contract.js";
 import { withSqliteSourceReadDatabase } from "./sqlite-source-handle.js";
 
 /** Inspect in a dedicated child: closing a source in the caller can release its POSIX locks. */
 export function tryInspectSqliteReadOnlyInProcess<T>(
   pathname: string,
   inspect: (database: DatabaseSync) => T,
+  options: { allowClosedWal?: boolean } = {},
 ): { value: T } | undefined {
   const canonicalPath = fs.realpathSync.native(pathname);
   let mode: ReturnType<typeof readSourceJournalMode>;
@@ -24,9 +27,10 @@ export function tryInspectSqliteReadOnlyInProcess<T>(
     throw error;
   }
   const sidecars = readSourceSidecars(canonicalPath);
-  // Incomplete WAL families need private recovery. A live rollback journal
-  // still permits a committed read; only SQLite's recovery refusal falls back.
-  if (mode === "empty" || (mode === "wal" && !(sidecars.wal && sidecars.shm))) {
+  // Live runtime reads and certified clean closes permit empty WAL sidecars.
+  // Acquire real read locks; never use immutable mode on a live path.
+  const closedWal = options.allowClosedWal && !sidecars.wal && !sidecars.shm && !sidecars.journal;
+  if (mode === "empty" || (mode === "wal" && !(sidecars.wal && sidecars.shm) && !closedWal)) {
     return undefined;
   }
   return withSqliteSourceReadDatabase(canonicalPath, "source", (database) => {
@@ -60,5 +64,20 @@ export function tryInspectSqliteReadOnlyInProcess<T>(
     // sqlite-allow-raw -- End the read-only snapshot without committing any source changes.
     database.exec("ROLLBACK;");
     return { value };
+  });
+}
+
+/** The isolated reader lets SQLite distinguish a hot journal from harmless residue. */
+export function requiresSqliteRollbackRecoveryInProcess(pathname: string): boolean {
+  return withSqliteSourceReadDatabase(pathname, "source", (database) => {
+    try {
+      readSqliteSchemaCookie(database);
+      return false;
+    } catch (error) {
+      if (!requiresPrivateRollbackRecovery(pathname, error)) {
+        throw error;
+      }
+      return true;
+    }
   });
 }

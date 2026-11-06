@@ -13,6 +13,8 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.os.Bundle
+import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import android.provider.Settings
 import android.speech.RecognizerIntent
@@ -54,11 +56,30 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.shadows.ShadowLooper
 import org.robolectric.shadows.ShadowTextToSpeech
+import java.util.concurrent.atomic.AtomicInteger
 
 @RunWith(RobolectricTestRunner::class)
 @Config(application = WearApplication::class, sdk = [35])
 class WearChatEventFlowTest {
+  @Test
+  fun newFlowLeavesEarlierLoopersAlone() {
+    val earlierThread = HandlerThread("earlier-fixture")
+    earlierThread.start()
+    val earlierLooper = earlierThread.looper
+    val executed = AtomicInteger()
+    shadowOf(earlierLooper).pause()
+    Handler(earlierLooper).post { executed.incrementAndGet() }
+    try {
+      withFlow { flow -> flow.idle() }
+      assertEquals(0, executed.get())
+    } finally {
+      earlierThread.quitSafely()
+      earlierThread.join(5_000)
+    }
+  }
+
   @Test
   @Config(qualifiers = "en-rUS-w227dp-h227dp-round-xhdpi")
   @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -1966,7 +1987,8 @@ class WearChatEventFlowTest {
         flow.abortFails = mode == "failed"
         flow.abortGate = CompletableDeferred()
         flow.clickAppAction("Abort run")
-        assertTrue("The explicit action still stops current playback immediately", speech.isStopped)
+        flow.idle()
+        assertTrue("The explicit action stops current playback before the RPC outcome", speech.isStopped)
         assertEquals(ownRun, flow.state.pendingReply?.runId)
         if (mode == "confirmed-foreign") flow.emit("delta", eventRunId = "foreign-run", text = "Foreign live")
         flow.abortGate?.complete(Unit)
@@ -2641,13 +2663,15 @@ class WearChatEventFlowTest {
     }
     flow.settleApp()
     flow.captureApp(if (dictate) "dictate-error" else "type-reply")
-    assertTrue("Accepted ordinary input must open Chat, not leave its outcome hidden on Voice", flow.hasAppText("CHAT"))
     if (failure) {
       flow.scrollAppTo(0)
       assertTrue(flow.hasAppText("Error"))
     } else {
       assertTrue("The ordinary reply must be visible", flow.hasAppText("Hello from Chat"))
     }
+    // Following the reply can scroll the page heading out of the round viewport.
+    flow.scrollAppTo(0)
+    assertTrue("Accepted ordinary input must open Chat, not leave its outcome hidden on Voice", flow.hasAppText("CHAT"))
     assertTrue(
       flow.state.realtimeTalk.conversation
         .isEmpty(),
@@ -2704,6 +2728,7 @@ class WearChatEventFlowTest {
     }
 
   private class Flow {
+    private val existingLoopers = ShadowLooper.getAllLoopers().toSet()
     private val app = RuntimeEnvironment.getApplication() as WearApplication
     private var originalScale: Float? = null
     private val owner =
@@ -2744,7 +2769,7 @@ class WearChatEventFlowTest {
     val abortRuns = mutableListOf<String?>()
     private var replyObserver: ActivityController<out ComponentActivity>? = null
     private val client =
-      WearProxyClient.createForTests(
+      WearProxyClient(
         nodeResolver = WearNodeResolver { "phone-a" },
         transport = WearMessageTransport { _, _, bytes -> respond(bytes) },
       )
@@ -2765,10 +2790,20 @@ class WearChatEventFlowTest {
       idle()
     }
 
-    fun idle() = shadowOf(Looper.getMainLooper()).idle()
+    fun idle() {
+      // UI actions enqueue speech; speech callbacks publish state back to Compose.
+      // Drain only this fixture's workers; an earlier fixture may still be shutting down.
+      repeat(2) {
+        shadowOf(Looper.getMainLooper()).idle()
+        ShadowLooper
+          .getAllLoopers()
+          .filter { it != Looper.getMainLooper() && it !in existingLoopers && it.thread.isAlive }
+          .forEach { shadowOf(it).idle() }
+      }
+    }
 
     fun observeReplyCompletion() {
-      val sessionKey = state.selectedSession?.key
+      val sessionKey = checkNotNull(state.selectedSession).key
       val expectedRunId = state.pendingReply?.runId ?: state.replyTerminal?.runId
       val controller = Robolectric.buildActivity(ComponentActivity::class.java).setup()
       replyObserver = controller
@@ -2778,8 +2813,7 @@ class WearChatEventFlowTest {
         WearReplyCompletionEffect(
           state = current,
           snapshot = current.toConversationSnapshot(),
-          awaitingReply = awaiting,
-          awaitingReplySessionId = sessionKey,
+          awaitingReplySessionId = sessionKey.takeIf { awaiting },
           expectedAssistantKey = null,
           awaitingReplyRunId = expectedRunId,
         ) { reply ->
@@ -3109,9 +3143,12 @@ class WearChatEventFlowTest {
     }
 
     fun close() {
+      idle()
       replyObserver?.pause()?.stop()?.destroy()
       owner.viewModelStore.clear()
-      idle()
+      // Disposal shuts down the speech Looper before its thread necessarily exits.
+      // Drain remaining UI cleanup without sending control tasks to that Looper.
+      shadowOf(Looper.getMainLooper()).idle()
       clientField.set(app, previousClient)
       repositoryField.set(app, previousRepository)
       originalScale?.let { Settings.Global.putFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, it) }

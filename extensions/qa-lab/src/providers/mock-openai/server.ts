@@ -4,7 +4,6 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { format as formatUrl } from "node:url";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   closeQaHttpServer,
   dispatchQaHttpRequest,
@@ -22,17 +21,19 @@ import {
   normalizeAnthropicMessagesRequest,
 } from "./mock-anthropic-messages.js";
 import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
+import { resolveAfterToolHttpFailure } from "./mock-openai-after-tool-failures.js";
 import {
   buildAssistantText,
+  buildImageGenerationCompletionReply,
   buildImageInspectionReply,
   readForkedContextCompletion,
   isCanonicalCompactionRetryWriteResult,
   QA_COMPACTION_RETRY_FINAL_MARKER,
 } from "./mock-openai-assistant-text.js";
+import { planAutomationScenarioTurn } from "./mock-openai-automation-turns.js";
 import {
   type ResponsesInputItem,
   type StreamEvent,
-  type MockOpenAiRequestSnapshotBase,
   type MockOpenAiRequestKind,
   type MockCompactionSummaryFaultMode,
   type AnthropicMessagesRequest,
@@ -51,13 +52,14 @@ import {
   QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE,
   QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE,
   QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER,
+  QA_STALLED_TURN_RECOVERY_PROMPT_RE,
+  QA_STALLED_TURN_RECOVERY_NEEDLE,
+  QA_STALLED_TURN_RECOVERY_MARKER,
   QA_STREAMING_PROMPT_RE,
   QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE,
   QA_BLOCK_STREAMING_PROMPT_RE,
   QA_TOOL_PROGRESS_PROMPT_RE,
   QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE,
-  QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE,
-  QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE,
   QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE,
   QA_THREAD_REPLY_RECEIPT_PROMPT_RE,
   QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE,
@@ -102,14 +104,11 @@ import {
   QA_TOOL_SEARCH_FAILURE_PROMPT_RE,
   QA_MCP_CODE_MODE_PROMPT_RE,
   QA_RESTART_CODE_MODE_WAIT_PROMPT_RE,
-  QA_RESTART_RECOVERY_PROMPT_RE,
-  QA_KILL_RESTART_PROMPT_RE,
-  QA_KILL_RESTART_RECOVERED_MARKER,
+  QA_RESTART_RESUME_PROMPT_RE,
   QA_MCP_CODE_MODE_API_FILE_PROMPT_RE,
   type MockScenarioState,
   sourceDiscoveryReadPathForProvider,
   subagentHandoffTaskForProvider,
-  subagentFanoutTaskForProvider,
   readBody,
   parseJsonObjectBody,
   transcriptionTextForAudioRequest,
@@ -137,10 +136,9 @@ import {
   buildRemoteCompactionV2Events,
   buildReleaseAuditJson,
   buildReleaseHandoffMarkdown,
-  extractPlannedToolIdentity,
   splitMockStreamingText,
   buildChannelStreamingFixtureEvents,
-  QA_TELEGRAM_PREPARED_DELIVERY_RE,
+  resolveTelegramChannelStreamingPause,
   buildAssistantThenToolCallEvents,
   buildAssistantEvents,
   buildStreamingFinalAnswerEvents,
@@ -149,6 +147,7 @@ import {
   buildReasoningAndAssistantEvents,
   buildFailedResponseEvents,
 } from "./mock-openai-events.js";
+import { planGroupMessageToolTurn } from "./mock-openai-group-message-tool.js";
 import {
   extractLatestScenarioFamilyPrompt,
   extractLastUserText,
@@ -156,12 +155,14 @@ import {
   extractMockSubagentContext,
   resolveMockSubagentTurn,
   splitMockConversationContext,
+  isMockSubagentSettledWake,
   hasToolOutput,
   extractToolOutput,
   extractToolOutputStructuredError,
   extractToolOutputCallId,
   extractAllToolOutputText,
-  extractUserTextAfterLatestToolOutput,
+  extractFollowthroughEvidenceText,
+  normalizeResponsesInput,
   buildSlackMpimHistoryReply,
   extractUserTurnTexts,
   extractInstructionsText,
@@ -175,12 +176,14 @@ import {
   parseToolOutputJson,
 } from "./mock-openai-input.js";
 import { createMockOpenAiRequestLog } from "./mock-openai-request-log.js";
+import { writeMockOpenAiResponsesHttp } from "./mock-openai-responses-http.js";
 import { attachQaMockResponsesWebSocketServer } from "./mock-openai-responses-websocket.js";
 import {
   buildSlackOwnedRequesterEvents,
   readSlackProgressTurn,
 } from "./mock-openai-slack-requester.js";
-import { resolveMockSubagentHandoff } from "./mock-openai-subagent-completion.js";
+import * as mockSubagent from "./mock-openai-subagent-completion.js";
+import { planSubagentFanoutTurn } from "./mock-openai-subagent-fanout.js";
 import {
   QA_CODE_MODE_TARGET_MARKER,
   encodeCodeModeTarget,
@@ -207,7 +210,6 @@ import {
   isSnackRecallPrompt,
   extractSnackPreference,
 } from "./mock-openai-tooling.js";
-import { createQaMockScenarioStateStore } from "./scenario-state.js";
 import type { QaMockOpenAiServerOptions } from "./server-options.js";
 import {
   createQaSessionIdentityResolver,
@@ -318,27 +320,21 @@ function hasCompactionOutputRecoveryMarker(allInputText: string) {
 }
 
 const QA_RESTART_CHECKPOINT_COUNT = 3;
-const QA_RESTART_FINAL_TEXT = "unsafeVisible=false\nRESTART-CODE-MODE-WAIT-OK";
+const QA_RESTART_FINAL_TEXT = "RESTART-CODE-MODE-WAIT-OK";
 const QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE = /failed tool terminal recovery qa check/i;
 const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_PROMPT_RE = /telegram visible partial failure qa check/i;
 const QA_TELEGRAM_UNSENT_FAILURE_PROMPT_RE = /telegram unsent failure qa check/i;
 const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_MARKER = "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE";
-// Complete ordinary retries inside their diagnostic request allowance, then
-// leave the fifth request active so recovery can honor both the cumulative
-// no-progress bound and the current request's own allowance.
+// Fail three times, then start a quiet response inside the selected model's retry budget.
+// Its idle deadline settles it; keepalives must not extend that provider-owned wait.
 const QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS = 80_000;
 const QA_REPEATED_REQUEST_STALLED_RESPONSE_PAUSE_MS = 180_000;
-const QA_REPEATED_REQUEST_STALL_ATTEMPT = 5;
-
-function normalizeResponsesInput(value: unknown): ResponsesInputItem[] {
-  if (Array.isArray(value)) {
-    return value.map(asOptionalRecord).filter((item) => item !== undefined);
-  }
-  if (typeof value === "string") {
-    return [{ role: "user", content: [{ type: "input_text", text: value }] }];
-  }
-  return [];
-}
+const QA_REPEATED_REQUEST_STALL_ATTEMPT = 4;
+// Stalled-turn recovery mirrors the repeated-request e2e timings: short failing
+// retries, then one held request the QA-tuned stuck detector must abort.
+const QA_STALLED_TURN_RESPONSE_PAUSE_MS = 8_000;
+const QA_STALLED_TURN_STALLED_RESPONSE_PAUSE_MS = 90_000;
+const QA_STALLED_TURN_STALL_ATTEMPT = 5;
 
 function resolveCompactionSummaryFaultMode(params: {
   allInputText: string;
@@ -349,25 +345,14 @@ function resolveCompactionSummaryFaultMode(params: {
     return "none";
   }
   const emptyMarker = QA_COMPACTION_EMPTY_OUTPUT_ONCE_MARKER_RE.exec(params.allInputText)?.[0];
-  const reasoningMarker = QA_COMPACTION_REASONING_ONLY_OUTPUT_ONCE_MARKER_RE.exec(
-    params.allInputText,
-  )?.[0];
-  const selected = emptyMarker
-    ? {
-        key: emptyMarker,
-        mode: "empty-output-once" as const,
-      }
-    : reasoningMarker
-      ? {
-          key: reasoningMarker,
-          mode: "reasoning-only-output-once" as const,
-        }
-      : undefined;
-  if (!selected?.key || params.servedFaultMarkers.has(selected.key)) {
+  const marker =
+    emptyMarker ??
+    QA_COMPACTION_REASONING_ONLY_OUTPUT_ONCE_MARKER_RE.exec(params.allInputText)?.[0];
+  if (!marker || params.servedFaultMarkers.has(marker)) {
     return "none";
   }
-  params.servedFaultMarkers.add(selected.key);
-  return selected.mode;
+  params.servedFaultMarkers.add(marker);
+  return emptyMarker ? "empty-output-once" : "reasoning-only-output-once";
 }
 
 function buildMemoryGetArgs(result: Record<string, unknown>) {
@@ -380,10 +365,19 @@ function buildMemoryGetArgs(result: Record<string, unknown>) {
   return { path: result.path, from, lines: 4 };
 }
 
-function extractFollowthroughEvidenceText(input: ResponsesInputItem[]): string {
-  return [extractAllToolOutputText(input), extractUserTextAfterLatestToolOutput(input)]
-    .filter(Boolean)
-    .join("\n");
+function isSessionMemoryResult(result: Record<string, unknown>) {
+  return (
+    result.source === "sessions" ||
+    (typeof result.path === "string" && result.path.startsWith("sessions/"))
+  );
+}
+
+function memoryResultText(result: Record<string, unknown> | undefined) {
+  return typeof result?.snippet === "string"
+    ? result.snippet
+    : typeof result?.text === "string"
+      ? result.text
+      : "";
 }
 
 const PERSONAL_FOLLOWTHROUGH_FIXTURES = [
@@ -458,9 +452,9 @@ async function buildResponsesPayload(
   scenarioState: MockScenarioState,
   options: {
     subagentTurn: ReturnType<typeof resolveMockSubagentTurn>;
-    waitForTerminalRequesterSettled?: (caseName: string, childSessionKey: string) => Promise<void>;
-    requestKind?: MockOpenAiRequestKind;
-    compactionSummaryFaultMode?: MockCompactionSummaryFaultMode;
+    waitForTerminalRequesterSettled: (caseName: string, childSessionKey: string) => Promise<void>;
+    requestKind: MockOpenAiRequestKind;
+    compactionSummaryFaultMode: MockCompactionSummaryFaultMode;
   },
 ) {
   const model = typeof body.model === "string" ? body.model : "";
@@ -512,8 +506,7 @@ async function buildResponsesPayload(
     QA_COMPACTION_RETRY_PROMPT_RE.test(allInputText) ||
     hasCompactionRetryDurableContext ||
     allInputText.includes(QA_COMPACTION_RETRY_BULKY_MARKER);
-  const requestKind = options.requestKind ?? classifyMockOpenAiRequest(input, body);
-  if (requestKind === "compaction-summary") {
+  if (options.requestKind === "compaction-summary") {
     if (options.compactionSummaryFaultMode === "empty-output-once") {
       return buildAssistantEvents("");
     }
@@ -540,6 +533,15 @@ async function buildResponsesPayload(
   }
   const compactionRetryScenarioActive =
     scenarioState.compactionRetryActive || hasCompactionRetryMarker;
+  const automationScenarioTurn = planAutomationScenarioTurn({
+    prompt,
+    input,
+    body: toolDeclarationBody,
+    buildToolCall: buildToolCallEventsWithArgs,
+  });
+  if (automationScenarioTurn) {
+    return automationScenarioTurn;
+  }
   // The queued followup carries the stalled prompt in transcript history, so
   // current-turn dispatch must win before the persistent recovery fixture.
   if (QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE.test(prompt)) {
@@ -554,16 +556,15 @@ async function buildResponsesPayload(
   if (QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE.test(allInputText)) {
     return buildFailedResponseEvents();
   }
-  // The hard-kill fixture shares the first real checkpoint below, but recovery
-  // must settle without scheduling the repeated-restart fixture's later waits.
-  if (
-    QA_KILL_RESTART_PROMPT_RE.test(allInputText) &&
-    QA_RESTART_RECOVERY_PROMPT_RE.test(allInputText)
-  ) {
-    return buildAssistantEvents(QA_KILL_RESTART_RECOVERED_MARKER);
+  if (QA_STALLED_TURN_RECOVERY_PROMPT_RE.test(allInputText)) {
+    return allInputText.includes(QA_STALLED_TURN_RECOVERY_NEEDLE)
+      ? buildAssistantEvents(QA_STALLED_TURN_RECOVERY_MARKER)
+      : buildFailedResponseEvents();
   }
   if (QA_RESTART_CODE_MODE_WAIT_PROMPT_RE.test(allInputText)) {
     const progress = readRestartCheckpointProgress(input);
+    const resumeInputs = [...allInputText.matchAll(new RegExp(QA_RESTART_RESUME_PROMPT_RE, "gu"))]
+      .length;
     const currentControlCallId = extractToolOutputCallId(input);
     const latestControlCall = input.findLast(
       (item) => item.name === "exec" || item.name === "wait",
@@ -574,9 +575,6 @@ async function buildResponsesPayload(
       { length: QA_RESTART_CHECKPOINT_COUNT },
       (_, index) => index + 1,
     ).find((checkpoint) => !progress.checkpoints.includes(checkpoint));
-    if (toolOutput.includes("unsafe-probe-executed")) {
-      return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
-    }
     if (currentControlOutputIsLatest) {
       if (
         codeModeControlJson?.status === "waiting" &&
@@ -605,13 +603,12 @@ async function buildResponsesPayload(
       return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
     }
     if (nextCheckpoint !== undefined) {
-      if (nextCheckpoint > 1 && !QA_RESTART_RECOVERY_PROMPT_RE.test(allInputText)) {
+      if (nextCheckpoint > resumeInputs + 1) {
         return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
       }
       if (hasDeclaredTool(toolDeclarationBody, "exec")) {
         const encodedTarget = encodeCodeModeTarget("qa_restart_wait", {});
         return buildToolCallEventsWithArgs("exec", {
-          restartSafe: true,
           code: [
             `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
             'const target = (await catalog.search("qa_restart_wait")).find((tool) => tool.toolName === "qa_restart_wait");',
@@ -625,11 +622,8 @@ async function buildResponsesPayload(
       }
       return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
     }
-    if (!QA_RESTART_RECOVERY_PROMPT_RE.test(allInputText)) {
+    if (resumeInputs < QA_RESTART_CHECKPOINT_COUNT) {
       return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
-    }
-    if (hasToolDefinition(toolDeclarationBody, "qa_restart_unsafe_probe")) {
-      return buildToolCallEventsWithArgs("qa_restart_unsafe_probe", {});
     }
     return buildAssistantEvents(QA_RESTART_FINAL_TEXT);
   }
@@ -657,6 +651,9 @@ async function buildResponsesPayload(
     toolJson?.unavailable === true ||
     toolJson?.disabled === true ||
     (typeof toolJson?.error === "string" && toolJson.error.trim().length > 0);
+  const memoryResults = Array.isArray(toolJson?.results)
+    ? (toolJson.results as Array<Record<string, unknown>>)
+    : [];
   const promptExactReplyDirective = extractExactReplyDirective(prompt);
   const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
   const allUserTexts = extractUserTurnTexts(input);
@@ -732,9 +729,9 @@ async function buildResponsesPayload(
       completedToolName === "tool_search" &&
       !toolOutput.includes("FAKE_PLUGIN_OK") &&
       toolSearchOutputHasCandidate(parseToolOutputJson(toolOutput), targetTool) &&
-      hasDeclaredTool(body, "tool_call")
+      hasDeclaredTool(body, "dispatch_action")
     ) {
-      return buildToolCallEventsWithArgs("tool_call", { id: targetTool, args: plannedArgs });
+      return buildToolCallEventsWithArgs("dispatch_action", { id: targetTool, args: plannedArgs });
     }
     if (
       !hasCompletedToolOutput &&
@@ -851,7 +848,7 @@ async function buildResponsesPayload(
   if (privateWorker) {
     const childSessionKey = resolveQaChildSessionKey(input, body);
     if (privateWorker === "first" && childSessionKey) {
-      await options.waitForTerminalRequesterSettled?.("private", childSessionKey);
+      await options.waitForTerminalRequesterSettled("private", childSessionKey);
     }
     return buildAssistantEvents(
       privateWorker === "first"
@@ -862,7 +859,7 @@ async function buildResponsesPayload(
   const terminalCompletionCase = terminalTurn?.caseName;
   const current = terminalTurn?.text ?? "";
   if (terminalCompletionCase && terminalTurn?.kind === "settled") {
-    return buildAssistantEvents("NO_REPLY");
+    return buildAssistantEvents(mockSubagent.resolveMockSettledReply(terminalCompletionCase));
   }
   if (terminalCompletionCase === "private") {
     const nonce = QA_SUBAGENT_PRIVATE_RESULT_RE.exec(current)?.[0];
@@ -885,7 +882,11 @@ async function buildResponsesPayload(
           mode: "run",
         });
       }
-      return buildAssistantEvents("NO_REPLY");
+      return buildAssistantEvents(
+        current.includes(QA_SUBAGENT_PRIVATE_SECOND_RESULT)
+          ? "Private review complete."
+          : "Second worker started.",
+      );
     }
     if (hasCompletedToolOutput) {
       return buildAssistantEvents("Worker started.");
@@ -901,11 +902,7 @@ async function buildResponsesPayload(
   }
   if (terminalCompletionCase && terminalTurn?.kind === "completion") {
     const visibleRepresentation =
-      terminalCompletionCase === "silent"
-        ? QA_SUBAGENT_TERMINAL_MARKERS.silent
-        : terminalCompletionCase === "empty"
-          ? QA_SUBAGENT_TERMINAL_MARKERS.empty
-          : undefined;
+      terminalCompletionCase === "silent" ? QA_SUBAGENT_TERMINAL_MARKERS.silent : undefined;
     if (visibleRepresentation) {
       if (completedToolName === "message") {
         return buildAssistantEvents("");
@@ -927,15 +924,12 @@ async function buildResponsesPayload(
       }
       return buildAssistantEvents(visibleRepresentation);
     }
-    // The direct delivery fallback owns visible, restart, and sanitized fallback
-    // results. Use explicit silence so generic empty-response recovery cannot
-    // replay the historical spawn before that fallback runs.
-    return buildAssistantEvents("NO_REPLY");
+    return buildAssistantEvents("The child run ended. Report its outcome to the requester.");
   }
   const terminalWorkerCase = terminalTurn?.kind === "worker" ? terminalTurn.caseName : undefined;
   if (terminalWorkerCase) {
     const childSessionKey = resolveQaChildSessionKey(input, body);
-    if (options.waitForTerminalRequesterSettled && childSessionKey) {
+    if (childSessionKey) {
       await options.waitForTerminalRequesterSettled(terminalWorkerCase, childSessionKey);
     }
   }
@@ -969,7 +963,11 @@ async function buildResponsesPayload(
       ].join("\n"),
     );
   }
-  if (terminalWorkerCase === "visible" || terminalWorkerCase === "restart") {
+  if (
+    terminalWorkerCase === "visible" ||
+    terminalWorkerCase === "restart" ||
+    terminalWorkerCase === "race"
+  ) {
     return buildAssistantEvents(QA_SUBAGENT_TERMINAL_MARKERS[terminalWorkerCase]);
   }
   if (terminalCompletionCase && terminalTurn?.kind === "kickoff") {
@@ -1201,25 +1199,21 @@ async function buildResponsesPayload(
       return buildAssistantEvents(slackChartMatch[2]);
     }
   }
-  if (QA_MESSAGE_DECISION_SUPPRESSION_PROMPT_RE.test(allInputText)) {
+  const suppressMessageDecision = QA_MESSAGE_DECISION_SUPPRESSION_PROMPT_RE.test(allInputText);
+  if (suppressMessageDecision || QA_MESSAGE_DECISION_SEND_PROMPT_RE.test(allInputText)) {
     if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
       return buildToolCallEventsWithArgs("message", {
         action: "send",
-        message:
-          "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
-      });
-    }
-    if (hasCompletedToolOutput) {
-      return buildAssistantEvents("NO_REPLY");
-    }
-  }
-  if (QA_MESSAGE_DECISION_SEND_PROMPT_RE.test(allInputText)) {
-    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
-      return buildToolCallEventsWithArgs("message", {
-        action: "send",
-        message: "QA-MESSAGE-DELIVERY-OK",
-        final: true,
-        presentation: { blocks: [{ type: "text", text: "QA-MESSAGE-DELIVERY-OK" }] },
+        ...(suppressMessageDecision
+          ? {
+              message:
+                "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
+            }
+          : {
+              message: "QA-MESSAGE-DELIVERY-OK",
+              final: true,
+              presentation: { blocks: [{ type: "text", text: "QA-MESSAGE-DELIVERY-OK" }] },
+            }),
       });
     }
     if (hasCompletedToolOutput) {
@@ -1397,15 +1391,15 @@ async function buildResponsesPayload(
     }
     return buildAssistantEvents(divergentFinal || marker);
   }
-  if (QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE.test(allInputText)) {
-    const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-GROUP-TOOL-OK";
-    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
-      return buildToolCallEventsWithArgs("message", {
-        action: "send",
-        message: marker,
-      });
-    }
-    return buildAssistantEvents("");
+  const groupMessageToolTurn = planGroupMessageToolTurn({
+    allInputText,
+    body,
+    marker: exactMarkerDirective ?? exactReplyDirective,
+    hasCompletedToolOutput,
+    isSettledToolContinuation,
+  });
+  if (groupMessageToolTurn) {
+    return groupMessageToolTurn;
   }
   if (QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE.test(allInputText)) {
     const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-MSTEAMS-THREAD-DEDUPE-OK";
@@ -1431,6 +1425,38 @@ async function buildResponsesPayload(
   const slackMpimHistoryReply = buildSlackMpimHistoryReply(prompt);
   if (slackMpimHistoryReply !== undefined) {
     return buildAssistantEvents(slackMpimHistoryReply);
+  }
+  const subagentFanoutRequest = {
+    input,
+    body,
+    toolDeclarationBody,
+    currentPrompt,
+    allInputText,
+    hasCompletedToolOutput,
+    providerVariant,
+    scenarioState,
+  };
+  if (isMockSubagentSettledWake(currentPrompt)) {
+    const settledFanout = planSubagentFanoutTurn(subagentFanoutRequest);
+    if (settledFanout) {
+      return settledFanout;
+    }
+  }
+  // A handoff completion owns its reply before generic marker directives in
+  // the requester's quoted history can replace the child result.
+  const handoff = mockSubagent.resolveMockSubagentHandoff({
+    input,
+    body,
+    state: scenarioState,
+    toolOutput,
+    canSpawn: canCallSessionsSpawn,
+    canYield: canCallSessionsYield,
+    task: subagentHandoffTaskForProvider(providerVariant),
+  });
+  if (handoff) {
+    return "text" in handoff
+      ? buildAssistantEvents(handoff.text)
+      : buildToolCallEventsWithArgs(handoff.tool, handoff.args);
   }
   const promptMarkerReply = promptExactMarkerDirective ?? promptExactReplyDirective;
   if (/\bmarker\b/i.test(prompt) && promptMarkerReply) {
@@ -1562,10 +1588,7 @@ async function buildResponsesPayload(
         maxResults: 3,
       });
     }
-    const results = Array.isArray(toolJson?.results)
-      ? (toolJson.results as Array<Record<string, unknown>>)
-      : [];
-    const first = results[0];
+    const first = memoryResults[0];
     if (typeof first?.path === "string") {
       return buildToolCallEventsWithArgs("memory_get", buildMemoryGetArgs(first));
     }
@@ -1603,10 +1626,7 @@ async function buildResponsesPayload(
       }
       return buildAssistantEvents("NONE");
     }
-    const results = Array.isArray(toolJson?.results)
-      ? (toolJson.results as Array<Record<string, unknown>>)
-      : [];
-    const first = results[0];
+    const first = memoryResults[0];
     if (typeof first?.path === "string" && hasDeclaredTool(body, "memory_get")) {
       return buildToolCallEventsWithArgs("memory_get", buildMemoryGetArgs(first));
     }
@@ -1629,41 +1649,19 @@ async function buildResponsesPayload(
     if (memoryToolUnavailable) {
       return buildAssistantEvents("NONE");
     }
-    const results = Array.isArray(toolJson?.results)
-      ? (toolJson.results as Array<Record<string, unknown>>)
-      : [];
-    const preferredSessionResult = results.find((result) => {
-      const resultPath = typeof result.path === "string" ? result.path : undefined;
-      if (result.source !== "sessions" && !resultPath?.startsWith("sessions/")) {
-        return false;
-      }
-      const memoryText =
-        typeof result.snippet === "string"
-          ? result.snippet
-          : typeof result.text === "string"
-            ? result.text
-            : "";
-      return extractOrbitCode(memoryText) !== null;
-    });
-    const sessionMemoryText =
-      typeof preferredSessionResult?.snippet === "string"
-        ? preferredSessionResult.snippet
-        : typeof preferredSessionResult?.text === "string"
-          ? preferredSessionResult.text
-          : "";
+    const preferredSessionResult = memoryResults.find(
+      (result) =>
+        isSessionMemoryResult(result) && extractOrbitCode(memoryResultText(result)) !== null,
+    );
     const retrievedOrbitCode =
-      extractOrbitCode(sessionMemoryText) ??
+      extractOrbitCode(memoryResultText(preferredSessionResult)) ??
       (typeof toolJson?.text === "string" ? extractOrbitCode(toolJson.text) : null);
     if (retrievedOrbitCode) {
       return buildAssistantEvents(
         `Protocol note: I checked memory and the current Project Nebula codename is ${retrievedOrbitCode}.`,
       );
     }
-    const first =
-      results.find((result) => {
-        const resultPath = typeof result.path === "string" ? result.path : undefined;
-        return result.source === "sessions" || resultPath?.startsWith("sessions/");
-      }) ?? results[0];
+    const first = memoryResults.find(isSessionMemoryResult) ?? memoryResults[0];
     if (
       typeof first?.path === "string" &&
       (typeof first.startLine === "number" || typeof first.endLine === "number")
@@ -1728,6 +1726,10 @@ async function buildResponsesPayload(
     }
     return buildAssistantEvents("NONE");
   }
+  const imageCompletionReply = buildImageGenerationCompletionReply(input);
+  if (imageCompletionReply) {
+    return buildAssistantEvents(imageCompletionReply);
+  }
   if (
     QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) &&
     !hasCompletedToolOutput &&
@@ -1739,100 +1741,9 @@ async function buildResponsesPayload(
       size: "1024x1024",
     });
   }
-  const isSubagentFanoutPrompt = /subagent fanout synthesis check/i.test(allInputText);
-  const currentFanoutInstructions = extractAllRequestTexts(
-    input.filter((item) => item.role === "system" || item.role === "developer"),
-    body,
-  );
-  const fanoutRequiresFinalMessage =
-    /visible source replies are not automatically delivered for this run\.\s*use `?message\(action=send\)`?[\s\S]*set `?final=true`?/i.test(
-      currentFanoutInstructions,
-    );
-  // Delivery mode belongs to this turn's instructions, not earlier transcript
-  // turns whose private-reply policy may no longer apply.
-  const fanoutHasPrivateSourceReply =
-    isSubagentFanoutPrompt &&
-    (fanoutRequiresFinalMessage ||
-      /visible reply must use `?message\(action=send\)`?;\s*final text is private/i.test(
-        currentFanoutInstructions,
-      ));
-  const fanoutRequiresMessageTool = fanoutHasPrivateSourceReply && canCallMessage;
-  if (
-    scenarioState.subagentFanoutPhase === 3 &&
-    fanoutRequiresMessageTool &&
-    hasCompletedToolOutput
-  ) {
-    return buildAssistantEvents("");
-  }
-  const completeSubagentFanout = () => {
-    scenarioState.subagentFanoutPhase = 3;
-    const message = "subagent-1: ok\nsubagent-2: ok";
-    return fanoutRequiresMessageTool
-      ? buildToolCallEventsWithArgs("message", {
-          action: "send",
-          message,
-          ...(fanoutRequiresFinalMessage ? { final: true } : {}),
-        })
-      : buildAssistantEvents(message);
-  };
-  if (
-    !hasCompletedToolOutput &&
-    /subagent fanout synthesis check/i.test(prompt) &&
-    scenarioState.subagentFanoutPhase !== 0
-  ) {
-    scenarioState.subagentFanoutPhase = 0;
-    scenarioState.subagentFanoutCompletedWorkers.clear();
-  }
-  // A later requester-settle wake must replay the completed synthesis without spawning again.
-  if (isSubagentFanoutPrompt && scenarioState.subagentFanoutPhase === 3) {
-    return buildAssistantEvents("subagent-1: ok\nsubagent-2: ok");
-  }
-  if (canCallSessionsSpawn && isSubagentFanoutPrompt) {
-    if (!hasCompletedToolOutput && scenarioState.subagentFanoutPhase === 0) {
-      scenarioState.subagentFanoutPhase = 1;
-      return buildToolCallEventsWithArgs("sessions_spawn", {
-        task: subagentFanoutTaskForProvider(providerVariant, "alpha"),
-        label: "qa-fanout-alpha",
-        thread: false,
-      });
-    }
-    if (hasCompletedToolOutput && scenarioState.subagentFanoutPhase === 1) {
-      scenarioState.subagentFanoutPhase = 2;
-      return buildToolCallEventsWithArgs("sessions_spawn", {
-        task: subagentFanoutTaskForProvider(providerVariant, "beta"),
-        label: "qa-fanout-beta",
-        thread: false,
-      });
-    }
-  }
-  if (scenarioState.subagentFanoutPhase === 2) {
-    if (/\bALPHA-OK\b/i.test(allInputText)) {
-      scenarioState.subagentFanoutCompletedWorkers.add("alpha");
-    }
-    if (/\bBETA-OK\b/i.test(allInputText)) {
-      scenarioState.subagentFanoutCompletedWorkers.add("beta");
-    }
-    // A frozen child envelope may deny message. Its private final cannot be
-    // published; keep the batch for the requester-owned all-settled wake.
-    if (fanoutHasPrivateSourceReply && !fanoutRequiresMessageTool) {
-      return buildAssistantEvents("");
-    }
-    if (scenarioState.subagentFanoutCompletedWorkers.size === 2) {
-      return completeSubagentFanout();
-    }
-    if (canCallSessionsYield) {
-      return buildToolCallEventsWithArgs("sessions_yield", {
-        message: "Waiting for both QA fanout workers to finish.",
-      });
-    }
-    if (fanoutRequiresMessageTool) {
-      // Restricted completion turns cannot yield; stay silent until both
-      // workers settle instead of advancing past the sole visible reply.
-      return buildAssistantEvents("");
-    }
-    if (hasCompletedToolOutput) {
-      return completeSubagentFanout();
-    }
+  const subagentFanout = planSubagentFanoutTurn(subagentFanoutRequest);
+  if (subagentFanout) {
+    return subagentFanout;
   }
   const explicitSessionsSpawnArgs = buildExplicitSessionsSpawnArgs(prompt);
   if (explicitSessionsSpawnArgs && canCallSessionsSpawn && !hasCompletedToolOutput) {
@@ -1960,20 +1871,6 @@ async function buildResponsesPayload(
       return buildToolCallEventsWithArgs("read", { path: "FOLLOWTHROUGH_NOTE.md" });
     }
   }
-  const handoff = resolveMockSubagentHandoff({
-    input,
-    body,
-    state: scenarioState,
-    toolOutput,
-    canSpawn: canCallSessionsSpawn,
-    canYield: canCallSessionsYield,
-    task: subagentHandoffTaskForProvider(providerVariant),
-  });
-  if (handoff) {
-    return "text" in handoff
-      ? buildAssistantEvents(handoff.text)
-      : buildToolCallEventsWithArgs(handoff.tool, handoff.args);
-  }
   if (
     /(worked, failed, blocked|worked\/failed\/blocked|source and docs)/i.test(prompt) &&
     !hasCompletedToolOutput
@@ -2010,7 +1907,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
     params?.repeatedRequestStalledResponsePauseMs ?? QA_REPEATED_REQUEST_STALLED_RESPONSE_PAUSE_MS;
   const terminalRequesterSettleGate = createTerminalRequesterSettleGate();
   const servedCompactionSummaryFaultMarkers = new Set<string>();
-  const scenarioStateFor = createQaMockScenarioStateStore();
+  const scenarioStates = new Map<string, MockScenarioState>();
   const requestLog = createMockOpenAiRequestLog();
   const inflightRequests = new Map<number, { prompt: string; allInputText: string }>();
   let nextInflightRequestId = 1;
@@ -2040,7 +1937,20 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
     const prompt = extractLastUserText(input);
     const allInputText = extractAllRequestTexts(input, body);
     const sessionId = sessionIdentity.resolve(request, normalized);
-    const scenarioState = scenarioStateFor(sessionId);
+    // Transport identity survives prompt edits, provider switches, and cache boundaries.
+    const scenarioState = scenarioStates.get(sessionId ?? "") ?? {
+      anthropicThinkingErrorScenarioKeys: new Set<string>(),
+      compactionOverflowInjected: false,
+      compactionRetryActive: false,
+      subagentFanoutCompletedWorkers: new Set<"alpha" | "beta">(),
+      subagentFanoutPhase: 0,
+      subagentHandoffSpawned: false,
+      repeatedRequestRecoveryAttempts: 0,
+      stalledTurnRecoveryAttempts: 0,
+      toolLoopReadAttempts: 0,
+      rateLimitAfterToolInjected: false,
+    };
+    scenarioStates.set(sessionId ?? "", scenarioState);
     const compactionSummaryFaultMode = resolveCompactionSummaryFaultMode({
       allInputText,
       requestKind,
@@ -2069,7 +1979,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
       requestKind,
       compactionSummaryFaultMode,
       rawByteLength,
-    } satisfies MockOpenAiRequestSnapshotBase;
+    };
     if (
       requestKind === "agent-initial" &&
       (QA_COMPACTION_RETRY_PROMPT_RE.test(allInputText) ||
@@ -2139,7 +2049,6 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
     if (request.route === "anthropic-messages") {
       events = adaptAnthropicToolCallIds(events);
     }
-    const plannedToolIdentity = extractPlannedToolIdentity(events);
     const plannedTool = extractScenarioPlannedTool(events);
     const terminalRequesterCase =
       subagentTurn?.kind === "kickoff" ? subagentTurn.caseName : undefined;
@@ -2163,24 +2072,19 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
         : undefined;
     const failure =
       injectedFailure ??
-      (QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE.test(allInputText) && hasToolOutput(input)
-        ? {
-            status: 503,
-            type: "server_error",
-            message: "Service Unavailable",
-            retryAfterSeconds: 120,
-          }
-        : undefined);
+      resolveAfterToolHttpFailure(allInputText, hasToolOutput(input), scenarioState);
     const recorded = requestLog.record({
       ...requestSnapshotBase,
       outcome:
         failure || events.some((event) => event.type === "response.failed") ? "error" : "success",
       ...(events.some((event) => event.type === "response.failed")
         ? { errorCode: "response_failed_no_details" }
-        : {}),
-      plannedToolCallId: plannedToolIdentity.callId,
-      ...(request.route === "responses" && plannedToolIdentity.itemId
-        ? { plannedToolItemId: plannedToolIdentity.itemId }
+        : failure?.code
+          ? { errorCode: failure.code }
+          : {}),
+      plannedToolCallId: plannedTool.callId,
+      ...(request.route === "responses" && plannedTool.itemId
+        ? { plannedToolItemId: plannedTool.itemId }
         : {}),
       plannedToolName: plannedTool.name,
       ...(plannedTool.wireName && plannedTool.wireName !== plannedTool.name
@@ -2196,6 +2100,12 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
     if (repeatedRequestRecovery) {
       scenarioState.repeatedRequestRecoveryAttempts += 1;
     }
+    const stalledTurnAttempt =
+      QA_STALLED_TURN_RECOVERY_PROMPT_RE.test(allInputText) &&
+      !allInputText.includes(QA_STALLED_TURN_RECOVERY_NEEDLE);
+    if (stalledTurnAttempt) {
+      scenarioState.stalledTurnRecoveryAttempts += 1;
+    }
     const held = requestLog.waitForContinuation(recorded);
     if (held) {
       await held;
@@ -2209,20 +2119,40 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
           }
         : {}),
       ...(failure ? { failure } : {}),
-      ...(QA_TELEGRAM_PREPARED_DELIVERY_RE.test(splitMockConversationContext(prompt).current)
-        ? { previewPauseMs: 3_000 }
-        : QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText)
+      ...((() => {
+        const telegramPause = resolveTelegramChannelStreamingPause(
+          splitMockConversationContext(prompt).current,
+        );
+        return telegramPause && params?.telegramChannelStreamingPause
+          ? { previewPause: params.telegramChannelStreamingPause }
+          : telegramPause;
+      })() ??
+        (QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText)
           ? { previewPauseMs: finalOnlyMarkerPauseMs }
-          : {}),
+          : {})),
       // Stall one request; later failures let the normal retry budget settle the turn.
       ...(repeatedRequestRecovery &&
       scenarioState.repeatedRequestRecoveryAttempts <= QA_REPEATED_REQUEST_STALL_ATTEMPT
+        ? scenarioState.repeatedRequestRecoveryAttempts === QA_REPEATED_REQUEST_STALL_ATTEMPT
+          ? {
+              responsePauseMs: repeatedRequestStalledResponsePauseMs,
+              // Start the SSE response, but leave it silent until the provider times out.
+              responseKeepaliveMs: repeatedRequestStalledResponsePauseMs,
+            }
+          : { responsePauseMs: repeatedRequestResponsePauseMs }
+        : {}),
+      ...(stalledTurnAttempt
         ? {
             responsePauseMs:
-              scenarioState.repeatedRequestRecoveryAttempts === QA_REPEATED_REQUEST_STALL_ATTEMPT
-                ? repeatedRequestStalledResponsePauseMs
-                : repeatedRequestResponsePauseMs,
+              scenarioState.stalledTurnRecoveryAttempts === QA_STALLED_TURN_STALL_ATTEMPT
+                ? QA_STALLED_TURN_STALLED_RESPONSE_PAUSE_MS
+                : QA_STALLED_TURN_RESPONSE_PAUSE_MS,
           }
+        : {}),
+      // Hold the silent requester completion so a queued follow-up turn is
+      // admitted behind it before direct fallback mirrors the child result.
+      ...(subagentTurn?.kind === "completion" && subagentTurn.caseName === "race"
+        ? { responsePauseMs: 5_000 }
         : {}),
     };
   };
@@ -2341,35 +2271,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
       }
       if (url.pathname === "/v1/responses") {
         const dispatched = await dispatchResponses({ body, raw, headers: req.headers });
-        if (dispatched.failure) {
-          if (dispatched.failure.retryAfterSeconds !== undefined) {
-            res.setHeader("retry-after", String(dispatched.failure.retryAfterSeconds));
-          }
-          writeJson(res, dispatched.failure.status, {
-            error: {
-              type: dispatched.failure.type,
-              ...(dispatched.failure.code ? { code: dispatched.failure.code } : {}),
-              message: dispatched.failure.message,
-            },
-          });
-          return;
-        }
-        const { events } = dispatched;
-        if (dispatched.responsePauseMs !== undefined) {
-          await sleep(dispatched.responsePauseMs);
-        }
-        if (body.stream !== true) {
-          const completion = events.at(-1);
-          if (!completion || completion.type !== "response.completed") {
-            writeJson(res, 500, { error: "mock completion failed" });
-            return;
-          }
-          writeJson(res, 200, completion.response);
-          dispatched.onResponseSent?.();
-          return;
-        }
-        await writeSse(res, events, "responses", dispatched.previewPauseMs);
-        dispatched.onResponseSent?.();
+        await writeMockOpenAiResponsesHttp(res, body.stream === true, dispatched);
         return;
       }
       const dispatched = await dispatchProvider({

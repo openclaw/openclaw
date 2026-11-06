@@ -1,21 +1,35 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   prepareSystemAgentRunAdmission,
   readAdmittedRunOperatorAuthority,
   type AdmittedRunContext,
 } from "../agents/admitted-run-context.js";
-import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { ensureCanonicalUserProfileForOpenClawIdIdentity } from "../state/user-profile-openclaw-id.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { authorizeScopedGatewayHttpRequestOrReply as authorizeHttpRequest } from "./http-auth-utils.js";
 import type { authorizeScopedGatewayHttpRequestOrReply } from "./http-utils.js";
+import { markGatewayIngressTransport } from "./ingress-attribution.js";
+import {
+  setOpenClawIdTunnelPrincipalLookup,
+  setOpenClawIdTunnelPrincipalResolver,
+  type OpenClawIdTunnelPrincipal,
+} from "./openclaw-id/tunnel-principal.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
+import { gatewayProfile } from "./server/client-fixtures.test-support.js";
+import * as sessionSharing from "./session-sharing-read.js";
 
 const lifecycle = vi.hoisted(() => ({
   authorize:
@@ -117,6 +131,7 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot({});
   resolveGatewayContext = undefined;
   lifecycle.authorize.mockReset();
   lifecycle.authorize.mockResolvedValue({
@@ -129,6 +144,8 @@ beforeEach(() => {
   lifecycle.execute.mockReset();
   lifecycle.execute.mockResolvedValue({ ok: true });
 });
+
+afterEach(() => clearRuntimeConfigSnapshot());
 
 function invokeAbortProbe(signal?: AbortSignal): Promise<Response> {
   return fetch(`http://127.0.0.1:${serverPort}/tools/invoke`, {
@@ -248,7 +265,8 @@ describe("POST /tools/invoke request cancellation", () => {
   });
 
   it("retains each child's original grant after HTTP completion without adopting a replacement", async () => {
-    await withOpenClawTestState({ label: "http-tool-child-authority" }, async () => {
+    const stateOptions = { label: "http-tool-child-authority", prepareProfileCatalog: true };
+    await withOpenClawTestState(stateOptions, async () => {
       const cfg: OpenClawConfig = {
         gateway: {
           roles: {
@@ -265,6 +283,7 @@ describe("POST /tools/invoke request cancellation", () => {
       };
       setRuntimeConfigSnapshot(cfg);
       const person = ensureProfileForEmail("http-tool-operator@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const context = createGatewayRequestContext(makeContextParams());
       resolveGatewayContext = () => context;
       context.resolveGatewayContext = resolveGatewayContext;
@@ -307,12 +326,11 @@ describe("POST /tools/invoke request cancellation", () => {
             requestAuth: authorizedRequest({
               authMethod: "trusted-proxy",
               trustDeclaredOperatorScopes: true,
-              authenticatedUserProfile: {
-                profileId: person.id,
-                displayName: person.displayName,
-                hasAvatar: false,
-                updatedAt: person.updatedAt,
-              },
+              authenticatedUserProfile: gatewayProfile(
+                person.id,
+                person.displayName,
+                person.updatedAt,
+              ),
               operatorAccessAuthority: {
                 signal: grant.signal,
                 assertCurrent: () => grant.signal.throwIfAborted(),
@@ -360,6 +378,101 @@ describe("POST /tools/invoke request cancellation", () => {
         originalGrant.abort();
         replacementGrant.abort();
         resolveGatewayContext = undefined;
+      }
+    });
+  });
+
+  it("executes an HTTP member under its membership role and revokes retained work with that device", async () => {
+    await withOpenClawTestState({ label: "http-tool-membership" }, async () => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          roles: {
+            default: "reader",
+            definitions: {
+              reader: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
+            },
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(cfg);
+      const principal: OpenClawIdTunnelPrincipal = {
+        kind: "member",
+        peerKey: `iroh:${"31".repeat(32)}`,
+        accountId: "acct_http_tool_operator",
+        role: "operator",
+      };
+      const membership = new Map([[principal.peerKey, principal]]);
+      setOpenClawIdTunnelPrincipalResolver(async (key) => membership.get(key));
+      setOpenClawIdTunnelPrincipalLookup((key) => membership.get(key));
+      let admission: ReturnType<typeof prepareSystemAgentRunAdmission> | undefined;
+      let child: AdmittedRunContext | undefined;
+      try {
+        const person = await ensureCanonicalUserProfileForOpenClawIdIdentity({
+          accountId: principal.accountId,
+        });
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+        const context = createGatewayRequestContext(makeContextParams());
+        resolveGatewayContext = () => context;
+        context.resolveGatewayContext = resolveGatewayContext;
+        // Replace only the test transport attribution; authentication and scope decisions are real.
+        lifecycle.authorize.mockImplementationOnce(async ({ req, res }) => {
+          markGatewayIngressTransport(req, {
+            kind: "openclaw-id-tunnel",
+            peerKey: principal.peerKey,
+            clientIp: "fd69:726f:6800::1",
+          });
+          return await authorizeHttpRequest({
+            req,
+            res,
+            cfg,
+            getRuntimeConfig: () => cfg,
+            auth: { mode: "token", token: "test-token", allowTailscale: false },
+            operatorMethod: "agent",
+          });
+        });
+        using sharingProfiles = vi.spyOn(sessionSharing, "prepareSessionSharingProfiles");
+        lifecycle.execute.mockImplementationOnce(async () => {
+          const client = getPluginRuntimeGatewayRequestScope()?.client;
+          const authority = client?.internal?.operatorRunAuthority;
+          expect(client?.internal?.openclawIdPrincipal).toBe(principal);
+          if (!authority) {
+            throw new Error("HTTP tool did not capture its membership authority");
+          }
+          expect(authority.profileId).toBe(person.id);
+          expect(authority.readCurrentRoleFacts?.().policy).toMatchObject({
+            sessions: { others: "write" },
+            scopes: expect.arrayContaining(["operator.write"]),
+          });
+          admission = prepareSystemAgentRunAdmission(
+            cfg,
+            "http-membership-child",
+            "main",
+            "http-membership-test",
+            undefined,
+            authority,
+          );
+          child = await admission.admit("embedded");
+          return { ok: true };
+        });
+        const response = await invokeAbortProbe();
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ ok: true, result: { ok: true } });
+        expect(sharingProfiles.mock.calls[0]?.[0]?.internal?.openclawIdPrincipal).toBe(principal);
+        if (!child) {
+          throw new Error("HTTP tool did not retain its child authority");
+        }
+        const authority = readAdmittedRunOperatorAuthority(child);
+        expect(authority).toBeDefined();
+        expect(() => authority?.assertCurrent()).not.toThrow();
+        membership.delete(principal.peerKey);
+        expect(() => authority?.assertCurrent()).toThrow(
+          /OpenClaw ID membership authority changed/,
+        );
+      } finally {
+        admission?.close();
+        resolveGatewayContext = undefined;
+        setOpenClawIdTunnelPrincipalResolver(undefined);
+        setOpenClawIdTunnelPrincipalLookup(undefined);
       }
     });
   });

@@ -1,24 +1,16 @@
-import { vi } from "vitest";
 import type {
   WorkerInferenceStartParams,
   WorkerInferenceTerminalFrame,
   WorkerInferenceTerminalOutcome,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { createZeroUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
+import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
+import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import type { WorkerInferenceStore } from "./inference-store.js";
-import {
-  createWorkerInferenceManager,
-  type WorkerInferenceExecutor,
-  type WorkerInferenceSink,
-} from "./inference.js";
+import { createWorkerInferenceManager, type WorkerInferenceSink } from "./inference.js";
 
-export function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
+export { waitForFast } from "../../../test/helpers/vitest-wait.js";
 
 export const REQUEST: WorkerInferenceStartParams = {
   runEpoch: 3,
@@ -29,30 +21,14 @@ export const REQUEST: WorkerInferenceStartParams = {
   context: { messages: [] },
   options: {},
 };
+const { runEpoch, sessionId: session, runId: run, turnId, modelRef } = REQUEST;
 export const SESSION_TARGET = {
   agentId: "main",
-  sessionId: REQUEST.sessionId,
+  sessionId: session,
   sessionKey: "agent:main:inference",
   storePath: "inference-sessions.sqlite",
 };
-export const IDENTITY: WorkerConnectionIdentity = {
-  environmentId: "w",
-  credentialHash: "d",
-  bundleHash: "b",
-  sessionId: REQUEST.sessionId,
-  runId: REQUEST.runId,
-  turnClaim: {
-    sessionId: REQUEST.sessionId,
-    claimId: "claim-r",
-    runId: REQUEST.runId,
-    placementGeneration: 4,
-    owner: { kind: "worker", environmentId: "w", ownerEpoch: REQUEST.runEpoch },
-  },
-  ownerEpoch: REQUEST.runEpoch,
-  rpcSetVersion: 1,
-  protocolFeatures: ["worker-inference-v1"],
-  credentialExpiresAtMs: 10_000,
-};
+export const IDENTITY = identityFor(REQUEST);
 export const ERROR: WorkerInferenceTerminalOutcome = {
   type: "error",
   reason: "provider-error",
@@ -62,41 +38,32 @@ export const DONE: WorkerInferenceTerminalOutcome = {
   type: "done",
   message: {
     role: "assistant",
-    content: [{ type: "text", text: "done" }],
     api: "openai-responses",
-    provider: REQUEST.modelRef.provider,
-    model: REQUEST.modelRef.model,
-    usage: {
-      input: 1,
-      output: 1,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 2,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    content: [{ type: "text", text: "done" }],
+    ...modelRef,
+    usage: { ...createZeroUsageFixture(), input: 1, output: 1, totalTokens: 2 },
     stopReason: "stop",
     timestamp: 1,
   },
 };
-export const CANCEL = {
-  runEpoch: REQUEST.runEpoch,
-  sessionId: REQUEST.sessionId,
-  runId: REQUEST.runId,
-  turnId: REQUEST.turnId,
-};
+export const CANCEL = { runEpoch, sessionId: session, runId: run, turnId };
 
-export function identityFor(request: WorkerInferenceStartParams): WorkerConnectionIdentity {
-  return {
-    ...IDENTITY,
-    sessionId: request.sessionId,
-    runId: request.runId,
-    turnClaim: {
-      ...IDENTITY.turnClaim!,
-      sessionId: request.sessionId,
-      runId: request.runId,
-      claimId: `claim-${request.runId}`,
-    },
+export function identityFor({
+  sessionId,
+  runId,
+}: WorkerInferenceStartParams): WorkerConnectionIdentity {
+  const turnClaim: NonNullable<WorkerConnectionIdentity["turnClaim"]> = {
+    sessionId,
+    runId,
+    claimId: `claim-${runId}`,
+    placementGeneration: 4,
+    owner: { kind: "worker", environmentId: "w", ownerEpoch: runEpoch },
   };
+  return createWorkerConnectionIdentity(turnClaim, {
+    credentialHash: "d",
+    bundleHash: "b",
+    protocolFeatures: ["worker-inference-v1"],
+  });
 }
 
 export type Manager = ReturnType<typeof createWorkerInferenceManager>;
@@ -107,14 +74,12 @@ type StartOverrides = {
   revalidate?: () => "epoch-mismatch" | null;
 };
 
-export function createMemoryStore(): WorkerInferenceStore {
-  return {
-    begin: async () => ({ kind: "claimed" }),
-    complete: async (input) => input.outcome,
-    async cancelPending() {},
-    async recoverPending() {},
-  };
-}
+export const createMemoryStore = (): WorkerInferenceStore => ({
+  begin: async () => ({ kind: "claimed" }),
+  complete: async (input) => input.outcome,
+  async cancelPending() {},
+  async recoverPending() {},
+});
 
 export function createSink(connectionId = "c") {
   const frames: Parameters<WorkerInferenceSink["send"]>[0][] = [];
@@ -131,10 +96,22 @@ export function createSink(connectionId = "c") {
   return { frames, sink, terminal: terminal.promise };
 }
 
-export function terminalFrames(frames: Parameters<WorkerInferenceSink["send"]>[0][]) {
-  return frames.filter(
+export const terminalFrames = (frames: Parameters<WorkerInferenceSink["send"]>[0][]) =>
+  frames.filter(
     (frame): frame is WorkerInferenceTerminalFrame => frame.event === "worker.inference.terminal",
   );
+
+export function startInference(
+  instance: Manager,
+  overrides: Partial<Parameters<Manager["start"]>[0]> = {},
+) {
+  return instance.start({
+    identity: IDENTITY,
+    request: REQUEST,
+    sessionTarget: SESSION_TARGET,
+    sink: overrides.sink ?? createSink().sink,
+    ...overrides,
+  });
 }
 
 export async function accept(manager: Manager, overrides: StartOverrides = {}, launch = true) {
@@ -154,6 +131,5 @@ export async function accept(manager: Manager, overrides: StartOverrides = {}, l
   return result;
 }
 
-export function makeManager(execute: WorkerInferenceExecutor, store = createMemoryStore()) {
-  return createWorkerInferenceManager({ execute, store });
-}
+export const makeManager = (execute: WorkerInferenceExecutor, store = createMemoryStore()) =>
+  createWorkerInferenceManager({ execute, store });

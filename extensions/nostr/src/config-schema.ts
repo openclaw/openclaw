@@ -9,17 +9,9 @@ import { z } from "zod";
 const safeUrlSchema = z
   .string()
   .url()
-  .refine(
-    (url) => {
-      try {
-        const parsed = new URL(url);
-        return parsed.protocol === "https:";
-      } catch {
-        return false;
-      }
-    },
-    { message: "URL must use https:// protocol" },
-  );
+  .refine((url) => URL.parse(url)?.protocol === "https:", {
+    message: "URL must use https:// protocol",
+  });
 
 /**
  * NIP-01 profile metadata schema

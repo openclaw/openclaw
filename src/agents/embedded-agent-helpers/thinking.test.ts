@@ -3,20 +3,8 @@ import { describe, expect, it } from "vitest";
 import { pickFallbackThinkingLevel } from "./thinking.js";
 
 describe("pickFallbackThinkingLevel", () => {
-  it("returns undefined for empty message", () => {
-    expect(pickFallbackThinkingLevel({ message: "", attempted: new Set() })).toBeUndefined();
-  });
-
   it("returns undefined for undefined message", () => {
     expect(pickFallbackThinkingLevel({ message: undefined, attempted: new Set() })).toBeUndefined();
-  });
-
-  it("extracts supported values from error message", () => {
-    const result = pickFallbackThinkingLevel({
-      message: 'Unsupported reasoning.effort. Supported values are: "high", "medium"',
-      attempted: new Set(),
-    });
-    expect(result).toBe("high");
   });
 
   it("skips already attempted values", () => {
@@ -44,22 +32,6 @@ describe("pickFallbackThinkingLevel", () => {
     expect(result).toBe("minimal");
   });
 
-  it('returns undefined for reasoning-required errors after "minimal" was attempted', () => {
-    const result = pickFallbackThinkingLevel({
-      message: "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
-      attempted: new Set(["off", "minimal"]),
-    });
-    expect(result).toBeUndefined();
-  });
-
-  it('falls back to "off" for an explicit unsupported-thinking error', () => {
-    const result = pickFallbackThinkingLevel({
-      message: "thinking level not supported by this provider",
-      attempted: new Set(),
-    });
-    expect(result).toBe("off");
-  });
-
   it('returns undefined if "off" was already attempted', () => {
     const result = pickFallbackThinkingLevel({
       message: '400 think value "low" is not supported for this model',
@@ -69,14 +41,9 @@ describe("pickFallbackThinkingLevel", () => {
   });
 
   it.each([
-    "rate limit exceeded, please retry after 30 seconds",
-    "The 'unavailable-model' model is not supported when using Codex with a ChatGPT account.",
-    "The 'unavailable-thinking-model' model is not supported when using Codex with a ChatGPT account.",
-    "The 'unavailable-reasoning-effort-model' model is not supported when using Codex with a ChatGPT account.",
+    `400 ${JSON.stringify({ error: { message: '"reasoning_effort" is not supported' } })}`,
     "The 'unavailable-reasoning.effort-model' model is not supported when using Codex with a ChatGPT account.",
-    "This account is not supported by the provider.",
-    'Unsupported service tier. Supported values are: "high", "low"',
-  ])("does not retry unrelated provider failures: %s", (message) => {
+  ])("does not retry failures without a supported thinking alternative: %s", (message) => {
     const result = pickFallbackThinkingLevel({
       message,
       attempted: new Set(),

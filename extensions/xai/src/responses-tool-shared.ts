@@ -19,18 +19,15 @@ function normalizeXaiCitationUrl(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length > XAI_CITATION_URL_MAX_CHARS) {
     return undefined;
   }
-  try {
-    const url = new URL(value);
-    if (
-      (url.protocol !== "http:" && url.protocol !== "https:") ||
-      url.href.length > XAI_CITATION_URL_MAX_CHARS
-    ) {
-      return undefined;
-    }
-    return url.href === `${value}/` ? value : url.href;
-  } catch {
+  const url = URL.parse(value);
+  if (
+    !url ||
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    url.href.length > XAI_CITATION_URL_MAX_CHARS
+  ) {
     return undefined;
   }
+  return url.href === `${value}/` ? value : url.href;
 }
 
 function collectUrlCitations(annotations: unknown, citations: Set<string>): void {

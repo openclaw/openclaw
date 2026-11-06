@@ -1,39 +1,35 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
+import { escapeXml } from "../shared/xml.js";
 import { publishServiceFile } from "./service-stage.js";
 
-// Escape XML structure; launcher inputs already reject CR/LF in `assertNoCmdLineBreak`.
-function escapeXmlText(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-}
-
-// XML is required to disable both battery-stop defaults (#59299); the remaining
-// fields mirror the former ONLOGON, least-privilege, single-instance CLI task.
+// Node hosts need the user's desktop; Gateway services must also start before logon.
 export function buildScheduledTaskXml(params: {
   taskDescription: string;
   taskUser: string | null;
   launchPath: string;
+  interactive?: boolean;
 }): string {
-  const description = escapeXmlText(params.taskDescription);
-  const command = escapeXmlText(params.launchPath);
+  const description = escapeXml(params.taskDescription);
+  const unattended = Boolean(params.taskUser && !params.interactive);
+  const command = escapeXml(unattended ? getWindowsCmdExePath() : params.launchPath);
+  const action = unattended
+    ? `\n      <Arguments>${escapeXml(`/d /s /c ""${params.launchPath}""`)}</Arguments>\n      <WorkingDirectory>${escapeXml(path.dirname(params.launchPath))}</WorkingDirectory>`
+    : "";
   const principalLogon = params.taskUser
-    ? `\n      <UserId>${escapeXmlText(params.taskUser)}</UserId>\n      <LogonType>InteractiveToken</LogonType>`
+    ? `\n      <UserId>${escapeXml(params.taskUser)}</UserId>\n      <LogonType>${unattended ? "S4U" : "InteractiveToken"}</LogonType>`
     : "\n      <GroupId>S-1-5-32-545</GroupId>";
   const triggerUser = params.taskUser
-    ? `\n      <UserId>${escapeXmlText(params.taskUser)}</UserId>`
+    ? `\n      <UserId>${escapeXml(params.taskUser)}</UserId>`
     : "";
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
     <Description>${description}</Description>
   </RegistrationInfo>
-  <Triggers>
+  <Triggers>${unattended ? "\n    <BootTrigger><Enabled>true</Enabled></BootTrigger>" : ""}
     <LogonTrigger>
       <Enabled>true</Enabled>${triggerUser}
     </LogonTrigger>
@@ -68,7 +64,7 @@ export function buildScheduledTaskXml(params: {
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>${command}</Command>
+      <Command>${command}</Command>${action}
     </Exec>
   </Actions>
 </Task>`;

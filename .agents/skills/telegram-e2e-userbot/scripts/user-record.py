@@ -379,12 +379,36 @@ def fail_reply_barrier(recorder, action_index, barrier_dir, error, sent_id=None)
     raise error
 
 
+def await_forward_sources(recorder, text, cursor, deadline):
+    source_ids = []
+
+    def collect(events):
+        nonlocal cursor
+        for event in events[cursor:]:
+            cursor += 1
+            if event["kind"] != "message" or not event.get("isSut") or event.get("isOutgoing"):
+                continue
+            if not source_ids and event.get("text") == text:
+                source_ids.append(event["messageId"])
+            elif source_ids and event.get("contentType") == "messagePhoto":
+                source_ids.append(event["messageId"])
+                return True
+        return False
+
+    deadline = min(deadline, time.time() + 30)
+    if not collect(recorder.events):
+        recorder.pump(max(0, deadline - time.time()), stop_when=collect)
+    if len(source_ids) != 2:
+        raise driver.DriverError("Timed out waiting for the bot's forward source text and photo in the selected DM")
+    return source_ids
+
+
 def run_scenario(recorder, driver_obj, sut, actions, seconds, barrier_dir=""):
     telegram_actions = sorted(
         (
             (index, action)
             for index, action in enumerate(actions)
-            if action["type"] in {"send", "click"}
+            if action["type"] in {"send", "click", "forwardBurst"}
         ),
         key=lambda item: item[1]["atMs"],
     )
@@ -398,22 +422,54 @@ def run_scenario(recorder, driver_obj, sut, actions, seconds, barrier_dir=""):
             if now_ms >= action["atMs"] and scenario_barriers_ready(
                 actions, action_index, barrier_dir
             ):
+                if action["type"] == "forwardBurst":
+                    text, _run = driver.apply_template(action["text"], sut)
+                    send_outcome = "not-sent"
+                    try:
+                        source_cursor = len(recorder.events)
+                        driver_obj.post_forward_sources(text, action["photo"])
+                        source_ids = await_forward_sources(recorder, text, source_cursor, deadline)
+                        send_outcome = "unknown"
+                        forwarded = driver_obj.forward_messages(recorder.chat_id, recorder.chat_id, source_ids)
+                    except driver.DriverError as error:
+                        failure = recorder._append(
+                            "action", None, actionType="forwardBurst", actionIndex=action_index,
+                            status="failed", sendOutcome=send_outcome, error=str(error),
+                        )
+                        if barrier_dir:
+                            publish_recorder_state(Path(barrier_dir) / "action-failure.json", failure)
+                        recorder.pump(max(0, deadline - time.time()))
+                        raise
+                    message_ids = [message["id"] for message in forwarded]
+                    sent_ids.extend(message_ids)
+                    recorder._append(
+                        "action", message_ids[0], actionType="forwardBurst", actionIndex=action_index,
+                        status="completed", text=text, photo=action["photo"],
+                        messageIds=message_ids, sourceMessageIds=source_ids,
+                    )
+                    next_action += 1
+                    continue
+
                 if action["type"] == "send":
                     known_ids = set(recorder.messages).union(sent_ids) if action.get("awaitReply") else set()
                     text, _run = driver.apply_template(action["text"], sut)
                     # replyToPrevious targets the newest message this scenario sent.
                     reply_to = sent_ids[-1] if action.get("replyToPrevious") and sent_ids else None
                     photo = action.get("photo")
+                    photos = action.get("photos") or ([photo] if photo else [])
+                    album_ids = []
                     try:
-                        if photo:
+                        if photos:
                             results = driver_obj.send_photos(
                                 recorder.chat_id,
-                                [photo],
+                                photos,
                                 text,
                                 reply_to=reply_to,
                                 forum_topic_id=action.get("forumTopicId"),
                             )
                             result = results[0] if results else None
+                            if action.get("photos"):
+                                album_ids = [message.get("id") for message in results]
                         else:
                             result = driver_obj.send_text(
                                 recorder.chat_id,
@@ -438,7 +494,7 @@ def run_scenario(recorder, driver_obj, sut, actions, seconds, barrier_dir=""):
                         recorder.pump(max(0, deadline - time.time()))
                         raise
                     message_id = (result or {}).get("id")
-                    sent_ids.append(message_id)
+                    sent_ids.extend(album_ids or [message_id])
                     recorder._append(
                         "action",
                         message_id,
@@ -447,6 +503,7 @@ def run_scenario(recorder, driver_obj, sut, actions, seconds, barrier_dir=""):
                         status="completed",
                         text=text,
                         **({"photo": photo} if photo else {}),
+                        **({"photos": photos, "messageIds": album_ids} if album_ids else {}),
                         **(recorder._reply_fields(result or {}) if action.get("awaitReply")
                            else {"replyToMessageId": reply_to} if reply_to else {}),
                     )
@@ -629,11 +686,12 @@ def main():
             raise
         action_error = str(error)
         sent_ids = [
-            event["messageId"]
+            message_id
             for event in recorder.events
             if event["kind"] == "action"
-            and event.get("actionType") == "send"
+            and event.get("actionType") in {"send", "forwardBurst"}
             and event.get("status") == "completed"
+            for message_id in event.get("messageIds", [event["messageId"]])
         ]
     finally:
         recorder.close()

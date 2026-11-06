@@ -8,9 +8,6 @@ import type { EmbeddingInput } from "./embedding-inputs.js";
 // token_count <= utf8_byte_length.
 
 export function estimateUtf8Bytes(text: string): number {
-  if (!text) {
-    return 0;
-  }
   return Buffer.byteLength(text, "utf8");
 }
 
@@ -31,10 +28,7 @@ export function estimateStructuredEmbeddingInputBytes(input: EmbeddingInput): nu
 }
 
 export function splitTextToUtf8ByteLimit(text: string, maxUtf8Bytes: number): string[] {
-  if (maxUtf8Bytes <= 0) {
-    return [text];
-  }
-  if (estimateUtf8Bytes(text) <= maxUtf8Bytes) {
+  if (maxUtf8Bytes <= 0 || estimateUtf8Bytes(text) <= maxUtf8Bytes) {
     return [text];
   }
 

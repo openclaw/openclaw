@@ -26,7 +26,7 @@ export type UpdateStepResult = {
   outputLimitExceeded?: boolean;
   termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
   advisory?: UpdateStepAdvisory;
-  /** Complete owner-classified warnings when one step reports several outcomes. */
+  /** Complete current owner-classified warnings; an empty list records settlement. */
   warnings?: string[];
   /** Owner-selected informational messages, retained separately from warnings and raw output. */
   diagnostics?: string[];
@@ -34,6 +34,8 @@ export type UpdateStepResult = {
   recoverySteps?: readonly UpdateRecoveryStep[];
   failureFacts?: UpdateFailureFact[];
   doctorLintFindings?: UpdateDoctorLintFinding[];
+  /** Null records an observed Doctor without a usable selector report. */
+  deferredInspectionCheckIds?: string[] | null;
   configChanges?: UpdateDoctorConfigChange[];
   configWriteRefusal?: UpdateDoctorConfigWriteRefusal;
   snapshotCapacity?: UpdateSnapshotCapacity;

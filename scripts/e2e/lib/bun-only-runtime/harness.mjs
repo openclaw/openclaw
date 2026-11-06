@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createBuildSmokeEnv } from "../../../lib/build-smoke-env.mts";
 import {
   assertAgentReplyContainsMarker,
   assertOpenAiRequestLogUsed,
@@ -97,7 +98,8 @@ function start(label, args, childEnv = env) {
   const err = fs.openSync(stderrPath, "w");
   let child;
   try {
-    child = spawn(bun, args, {
+    const throughLauncher = entry !== undefined && args[0] === entry;
+    child = spawn(throughLauncher ? "openclaw" : bun, throughLauncher ? args.slice(1) : args, {
       env: childEnv,
       cwd: env.HOME,
       detached: true,
@@ -305,7 +307,11 @@ try {
       },
     );
     assert.equal(result.exitCode, 0, result.output.slice(-6000));
-    entry = fs.realpathSync(path.join(install, "bin/openclaw"));
+    entry = path.join(install, "install/global/node_modules/openclaw/openclaw.mjs");
+    const launcher = path.join(install, "bin/openclaw");
+    assert(!fs.lstatSync(launcher).isSymbolicLink(), "Bun-only install must publish a launcher");
+    assert(read(launcher).startsWith("#!/bin/sh\n# OpenClaw Bun launcher\n"));
+    env.PATH = `${path.dirname(launcher)}:${env.PATH}`;
     env.BUN_INSTALL = install;
     assert(
       !fs.existsSync(path.join(path.dirname(entry), ".openclaw-lifecycle-pending")),
@@ -373,12 +379,7 @@ try {
     const home = path.join(artifactDir, "node-home");
     const state = path.join(home, ".openclaw");
     fs.mkdirSync(state, { recursive: true });
-    const nodeEnv = {
-      ...env,
-      HOME: home,
-      OPENCLAW_STATE_DIR: state,
-      OPENCLAW_CONFIG_PATH: path.join(state, "openclaw.json"),
-    };
+    const nodeEnv = createBuildSmokeEnv(home, env);
     fs.writeFileSync(
       nodeEnv.OPENCLAW_CONFIG_PATH,
       JSON.stringify({

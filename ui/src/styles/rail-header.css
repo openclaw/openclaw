@@ -21,26 +21,6 @@
   border-bottom: 0;
 }
 
-.rail-header__copy {
-  display: flex;
-  min-width: 0;
-  flex: 1 1 auto;
-  flex-direction: column;
-  justify-content: center;
-  gap: var(--rail-header-copy-gap);
-}
-
-.rail-header__eyebrow {
-  overflow: hidden;
-  color: var(--muted);
-  font-size: var(--rail-header-eyebrow-size);
-  letter-spacing: var(--rail-header-eyebrow-letter-spacing);
-  line-height: 1;
-  text-overflow: ellipsis;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
 .rail-header__title {
   overflow: hidden;
   color: var(--text);
@@ -58,7 +38,15 @@
   gap: var(--rail-header-action-gap);
 }
 
-.rail-header__action {
+/* Rail actions are IconButtons; the rail supplies its glyph size and resting ink.
+   The unmigrated tab-close box keeps the legacy rules below. */
+.rail-header__action.oc-icon-button {
+  --icon-button-glyph: var(--rail-header-action-glyph-size);
+  --icon-button-stroke: 1.6px;
+  --icon-button-color: var(--rail-header-action-color);
+}
+
+.rail-header__action:not(.oc-icon-button) {
   display: inline-flex;
   width: var(--rail-header-action-size);
   min-width: var(--rail-header-action-size);
@@ -77,8 +65,8 @@
   transform: none;
 }
 
-.rail-header__action:hover,
-.rail-header__action:focus-visible {
+.rail-header__action:not(.oc-icon-button):hover,
+.rail-header__action:not(.oc-icon-button):focus-visible {
   border: 0;
   background: transparent;
   box-shadow: none;
@@ -86,25 +74,23 @@
   transform: none;
 }
 
-.rail-header__action:focus-visible {
+.rail-header__action:not(.oc-icon-button):focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: -3px;
 }
 
-.rail-header__action.is-active,
-.rail-header__action[aria-pressed="true"] {
+.rail-header__action:not(.oc-icon-button).is-active,
+.rail-header__action:not(.oc-icon-button)[aria-pressed="true"] {
   background: transparent;
   color: var(--rail-header-action-active-color);
 }
 
-.rail-header__action:disabled,
-.rail-header__action[aria-disabled="true"] {
+.rail-header__action:not(.oc-icon-button):disabled,
+.rail-header__action:not(.oc-icon-button)[aria-disabled="true"] {
   opacity: var(--rail-header-action-disabled-opacity);
 }
 
-.rail-header__action svg,
-.rail-header__action .nav-collapse-toggle__icon,
-.rail-header__action .nav-collapse-toggle__icon svg {
+.rail-header__action:not(.oc-icon-button) svg {
   display: block;
   width: var(--rail-header-action-glyph-size);
   height: var(--rail-header-action-glyph-size);

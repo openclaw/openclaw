@@ -57,12 +57,21 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
     ["OPENCLAW_LIVE_OPENAI_COMPACTION"],
   ],
   ["src/agents/subagents/announce/subagent-announce.live.test.ts", ["OPENCLAW_LIVE_SUBAGENT_E2E"]],
+  ["test/gateway-agentsapi.live.test.ts", ["OPENCLAW_LIVE_AGENTS_API"]],
   [
     "src/agents/subagents/announce/subagent-continuation.live.test.ts",
     ["OPENCLAW_LIVE_SUBAGENT_E2E"],
   ],
   [
+    "src/agents/subagents/announce/subagent-followup-yield.live.test.ts",
+    ["OPENCLAW_LIVE_SUBAGENT_E2E"],
+  ],
+  [
     "src/agents/subagents/announce/subagent-late-reply.live.test.ts",
+    ["OPENCLAW_LIVE_SUBAGENT_STRESS"],
+  ],
+  [
+    "src/agents/subagents/announce/subagent-yield-pause.live.test.ts",
     ["OPENCLAW_LIVE_SUBAGENT_STRESS"],
   ],
   [
@@ -79,7 +88,6 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
   ],
   ["extensions/openai/realtime-quicksilver.live.test.ts", ["OPENCLAW_LIVE_GPT_LIVE"]],
   ["extensions/openai/realtime-talk-defaults.live.test.ts", ["OPENCLAW_LIVE_GPT_LIVE"]],
-  ["src/skills/workshop/experience-review.live.test.ts", ["OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW"]],
   ["src/system-agent/rescue-channel.live.test.ts", ["OPENCLAW_LIVE_SYSTEM_AGENT_RESCUE_CHANNEL"]],
   ["src/gateway/android-node.capabilities.live.test.ts", ["OPENCLAW_LIVE_ANDROID_NODE"]],
   ["src/gateway/gateway-acp-bind.live.test.ts", ["OPENCLAW_LIVE_ACP_BIND"]],
@@ -326,6 +334,7 @@ export function selectLiveShardFiles(shard: string, files = collectAllLiveTestFi
       return files.filter(
         (file) =>
           file.startsWith("src/agents/") ||
+          file.startsWith("src/decisions/") ||
           file.startsWith("src/llm/") ||
           file.startsWith("src/skills/"),
       );
@@ -451,7 +460,7 @@ export function resolveLiveShardPreparation(files: string[]): LiveShardPreparati
   if (
     files.some(isSourceGatewayLiveTest) ||
     files.some((file) => file.startsWith("test/e2e/qa-lab/runtime/")) ||
-    files.includes("src/infra/heartbeat-runner.live.test.ts") ||
+    files.includes("src/infra/session-event-wake.live.test.ts") ||
     files.includes("src/agents/tools/image-tool.providers.live.test.ts") ||
     files.includes("extensions/openai/openai.live.test.ts")
   ) {

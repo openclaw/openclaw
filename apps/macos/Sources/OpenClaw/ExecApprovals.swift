@@ -21,33 +21,10 @@ extension ExecApprovalsSecurity {
     }
 }
 
-extension ExecApprovalsAsk {
-    static func stricter(_ lhs: ExecAsk, _ rhs: ExecAsk) -> ExecAsk {
-        lhs.strictnessRank >= rhs.strictnessRank ? lhs : rhs
-    }
-
-    private var strictnessRank: Int {
-        switch self {
-        case .off: 0
-        case .onMiss: 1
-        case .always: 2
-        }
-    }
-}
-
 enum ExecApprovalDecision: String, Codable, Equatable {
     case allowOnce = "allow-once"
     case allowAlways = "allow-always"
     case deny
-}
-
-enum ExecAllowlistPatternValidationReason: String, Codable, Equatable, Sendable {
-    case empty
-}
-
-enum ExecAllowlistPatternValidation: Equatable {
-    case valid(String)
-    case invalid(ExecAllowlistPatternValidationReason)
 }
 
 struct ExecAllowlistUse: Sendable {
@@ -65,24 +42,33 @@ struct ExecAllowlistEntryMatchKey: Hashable, Sendable {
     }
 }
 
-enum ExecApprovalsMutationError: Error, Equatable, Sendable {
-    case invalidPattern(ExecAllowlistPatternValidationReason)
-    case unavailable
+enum ExecApprovalsMutationError: Error, LocalizedError, Equatable, Sendable {
+    case unavailable(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .unavailable(diagnostic): diagnostic
+        }
+    }
 }
 
-enum ExecApprovalsReadError: Error, Equatable, Sendable {
-    case migrationRequired(ExecApprovalsLegacyMigrationRequiredError)
-    case unavailable
+enum ExecApprovalsReadError: Error, LocalizedError, Equatable, Sendable {
+    case unavailable(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .unavailable(diagnostic): diagnostic
+        }
+    }
 }
 
 struct ExecApprovalsResolved: Sendable {
-    let url: URL
     let socketPath: String
     let token: String
-    let defaults: ExecApprovalsResolvedDefaults
     let agent: ExecApprovalsResolvedDefaults
     let allowlist: [ExecAllowlistEntry]
     var file: ExecApprovalsFile
+    var unavailableReason: String?
 }
 
 struct ExecApprovalsResolvedDefaults: Codable, Sendable {
@@ -93,25 +79,13 @@ struct ExecApprovalsResolvedDefaults: Codable, Sendable {
 }
 
 enum ExecApprovalHelpers {
-    static func validateAllowlistPattern(_ pattern: String?) -> ExecAllowlistPatternValidation {
-        let trimmed = pattern?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !trimmed.isEmpty else { return .invalid(.empty) }
-        return .valid(trimmed)
-    }
-
     static func requiresAsk(
         ask: ExecAsk,
         security: ExecSecurity,
         allowlistMatch: ExecAllowlistEntry?,
         skillAllow: Bool) -> Bool
     {
-        if ask == .always {
-            return true
-        }
-        if ask == .onMiss, security == .allowlist, allowlistMatch == nil, !skillAllow {
-            return true
-        }
-        return false
+        ask == .always || (ask == .onMiss && security == .allowlist && allowlistMatch == nil && !skillAllow)
     }
 
     static func allowlistPattern(command: [String], resolution: ExecCommandResolution?) -> String? {
@@ -221,9 +195,7 @@ actor SkillBinsCache {
                     continue
                 }
 
-                var paths = pathsByName[name] ?? Set<String>()
-                paths.insert(normalizedPath)
-                pathsByName[name] = paths
+                pathsByName[name, default: []].insert(normalizedPath)
             }
         }
 

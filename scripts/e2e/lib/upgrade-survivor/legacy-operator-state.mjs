@@ -2,11 +2,16 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { assertAgentReplyContainsMarker } from "../agent-turn-output.mjs";
 import { readTcpPortEnv } from "../env-limits.mjs";
+import { readJson } from "../fixtures/common.mjs";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
+import {
+  prepareLegacyOperatorAuth,
+  seedLegacyOperatorAuth,
+} from "./legacy-operator-doctor-repairs.mjs";
+import { readDatabase } from "./observations.mjs";
 
 const MODEL = "survivor/gpt-5.6-luna";
 const JOBS = [
@@ -23,10 +28,6 @@ function requiredEnv(name) {
 
 function artifact(name) {
   return path.join(requiredEnv("OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT"), name);
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
 function writeJson(file, value) {
@@ -96,6 +97,28 @@ function approvalsCommand() {
 }
 
 export function seedLegacyOperatorState() {
+  // Published baselines expose either the retired boolean or the later mode.
+  // Read their schema before authoring settings; never retry a rejected write.
+  const schema = cli(["config", "schema"], "legacy-operator-config-schema", { json: true });
+  const autonomous =
+    schema.properties?.skills?.properties?.workshop?.properties?.autonomous?.properties ?? {};
+  const hasEnabled = Object.hasOwn(autonomous, "enabled");
+  assert.notEqual(
+    hasEnabled,
+    Object.hasOwn(autonomous, "mode"),
+    "legacy operator Workshop schema must expose exactly one autonomous field",
+  );
+  assert(
+    hasEnabled
+      ? autonomous.enabled?.type === "boolean"
+      : Array.isArray(autonomous.mode?.anyOf) &&
+          autonomous.mode.anyOf.some(
+            (option) => option.type === "string" && option.const === "off",
+          ),
+    "legacy operator Workshop schema does not support an explicit opt-out",
+  );
+  const workshopAutonomousField = hasEnabled ? "enabled" : "mode";
+  prepareLegacyOperatorAuth();
   const workspace = requiredEnv("OPENCLAW_TEST_WORKSPACE_DIR");
   const mockPort = readTcpPortEnv("OPENCLAW_UPGRADE_SURVIVOR_MOCK_PORT");
   const set = (key, value) =>
@@ -103,7 +126,7 @@ export function seedLegacyOperatorState() {
       ["config", "set", key, JSON.stringify(value), "--strict-json"],
       `legacy-operator-config-${key}`,
     );
-  // Only transport and model setup uses config set. Every state specimen below
+  // Configuration uses config set. Every state specimen below
   // is authored by the installed baseline, preserving its native storage era.
   set("gateway", {
     mode: "local",
@@ -142,13 +165,17 @@ export function seedLegacyOperatorState() {
     "legacy-operator-setup",
   );
   set("agents.defaults.model.primary", MODEL);
+  // Preserve an authored workspace skill without autonomous learning; the
+  // restrictive plugin allowlist intentionally excludes unrelated defaults.
+  set(`skills.workshop.autonomous.${workshopAutonomousField}`, hasEnabled ? false : "off");
+  seedLegacyOperatorAuth();
   // Every fixture client shares this container's loopback network namespace.
   set("plugins.entries.device-pair", {
     enabled: true,
     config: { publicUrl: "ws://127.0.0.1:18789" },
   });
   unsetSystemAgent();
-  writeJson(artifact("legacy-operator-baseline.json"), {});
+  writeJson(artifact("legacy-operator-baseline.json"), { workshopAutonomousField });
   seedLegacyOperatorWebhooks(set);
   const skillPath = path.join(workspace, "skills", "survivor-workspace", "SKILL.md");
   fs.mkdirSync(path.dirname(skillPath), { recursive: true });
@@ -191,10 +218,13 @@ function seedLegacyOperatorWebhooks(set) {
     token: "synthetic-survivor-hook-token",
   };
   const prior = readJson(requiredEnv("OPENCLAW_CONFIG_PATH")).plugins ?? {};
-  // An explicit allowlist retains the baseline's enabled plugins. The deny entry
-  // keeps this migration specimen idle while exercising both retired-id lists.
+  // Keep the fixture allowlist tied to authored config, not bundled defaults.
+  // The deny entry keeps this specimen idle while exercising both retired-id lists.
   const allow =
-    prior.allow ?? inventory.plugins.filter((plugin) => plugin.enabled).map((p) => p.id);
+    prior.allow ??
+    Object.entries(prior.entries ?? {})
+      .filter(([, plugin]) => plugin.enabled !== false)
+      .map(([id]) => id);
   set("plugins", {
     ...prior,
     allow: [...new Set([...allow, "webhooks"])],
@@ -230,6 +260,19 @@ export function seedLegacyOperatorExternalPlugin() {
   };
   if (bundled) {
     // This is the published bundled-era web-search configuration, authored by its CLI.
+    const allow = readJson(requiredEnv("OPENCLAW_CONFIG_PATH")).plugins?.allow;
+    if (Array.isArray(allow) && !allow.includes("duckduckgo")) {
+      cli(
+        [
+          "config",
+          "set",
+          "plugins.allow",
+          JSON.stringify([...allow, "duckduckgo"]),
+          "--strict-json",
+        ],
+        "legacy-operator-allow-duckduckgo",
+      );
+    }
     cli(["plugins", "enable", "duckduckgo"], "legacy-operator-enable-duckduckgo");
     for (const [key, value] of Object.entries({
       "plugins.entries.duckduckgo": entry,
@@ -314,6 +357,11 @@ export function assertLegacyOperatorExternalPlugin(expectedVersion) {
 }
 
 function seedLegacyOperatorApprovals() {
+  // Keep the requested policy aligned with the restrictive host migration specimen.
+  cli(
+    ["config", "set", "tools.exec.mode", JSON.stringify("allowlist"), "--strict-json"],
+    "legacy-operator-exec-policy",
+  );
   const approvals = approvalsCommand();
   const policyInput = artifact("legacy-operator-policy-input.json");
   const nativeEligibility = artifact("native-assignment-eligibility.json");
@@ -495,6 +543,34 @@ export function seedLegacyOperatorGatewayState() {
   );
 }
 
+export function seedLegacyOperatorPendingDelivery() {
+  // Keep the main agent's restored-index specimen and its archived bytes intact.
+  const storePath = path.join(
+    requiredEnv("OPENCLAW_STATE_DIR"),
+    "agents/ops/sessions/sessions.json",
+  );
+  const store = fs.existsSync(storePath) ? readJson(storePath) : {};
+  const sessionKey = "agent:ops:legacy-pending-delivery";
+  assert(!Object.hasOwn(store, sessionKey), "pending-delivery specimen already exists");
+  store[sessionKey] = {
+    sessionId: "legacy-pending-delivery",
+    updatedAt: 1710000001000,
+    pendingFinalDelivery: true,
+    pendingFinalDeliveryText: "Saved July reply",
+    pendingFinalDeliveryCreatedAt: 1710000000000,
+    pendingFinalDeliveryContext: { channel: "telegram", to: "synthetic-recipient" },
+    pendingFinalDeliveryIntentId: "legacy-pending-intent",
+    pendingFinalDeliveryLastAttemptAt: 1710000000500,
+    pendingFinalDeliveryAttemptCount: 2,
+    pendingFinalDeliveryLastError: "synthetic delivery failure",
+  };
+  writeJson(storePath, store);
+  writeJson(artifact("legacy-operator-pending-delivery.json"), {
+    storePath,
+    original: fs.readFileSync(storePath, "utf8"),
+  });
+}
+
 export function assertLegacyOperatorConfig(stage) {
   const config = readJson(requiredEnv("OPENCLAW_CONFIG_PATH"));
   const webhooks = readJson(artifact("legacy-operator-webhooks.json"));
@@ -533,6 +609,42 @@ export function assertLegacyOperatorConfig(stage) {
     );
   }
   assert.equal(config.agents?.defaults?.model?.primary, MODEL, "legacy operator model changed");
+  const coreWorkshop = Object.hasOwn(config.skills ?? {}, "workshop");
+  const pluginEntry = config.plugins?.entries?.["skill-workshop"];
+  const pluginWorkshop = Object.hasOwn(pluginEntry ?? {}, "config");
+  // Published baselines and older candidates keep core settings. Newer Doctor
+  // moves them into marked plugin config and deletes the retired core key.
+  assert.notEqual(coreWorkshop, pluginWorkshop, "legacy operator Workshop locations changed");
+  if (stage === "baseline") {
+    assert(coreWorkshop, "legacy operator baseline Workshop placement changed");
+  }
+  if (pluginWorkshop) {
+    assert.equal(
+      config.meta?.migrations?.skillWorkshopPlugin,
+      true,
+      "legacy operator Workshop migration marker missing",
+    );
+  }
+  const autonomous =
+    (pluginWorkshop ? pluginEntry.config : config.skills.workshop)?.autonomous ?? {};
+  const field =
+    stage === "baseline"
+      ? readJson(artifact("legacy-operator-baseline.json")).workshopAutonomousField
+      : "mode";
+  assert(
+    field === "enabled" || field === "mode",
+    "legacy operator Workshop baseline field missing",
+  );
+  assert(
+    Object.hasOwn(autonomous, field) &&
+      !Object.hasOwn(autonomous, field === "enabled" ? "mode" : "enabled"),
+    "legacy operator Workshop opt-out changed",
+  );
+  assert.equal(
+    autonomous[field],
+    field === "enabled" ? false : "off",
+    "legacy operator Workshop opt-out changed",
+  );
   assert.equal(
     fs.readFileSync(
       path.join(
@@ -558,16 +670,13 @@ export function assertLegacyOperatorApprovals(stage) {
   } else {
     const dbPath = path.join(stateDir, "state", "openclaw.sqlite");
     assert(fs.existsSync(dbPath), "legacy operator approvals database missing");
-    const db = new DatabaseSync(dbPath, { readOnly: true });
-    try {
+    readDatabase(dbPath, (db) => {
       const row = db
         .prepare("SELECT raw_json FROM exec_approvals_config WHERE config_key = ?")
         .get("current");
       assert(row, "legacy operator approvals canonical row missing");
       policy = JSON.parse(row.raw_json);
-    } finally {
-      db.close();
-    }
+    });
   }
   const observed = stage === "baseline" ? baselinePolicy(policy) : authoredPolicy(policy);
   writeJson(artifact(`legacy-operator-${stage}-approvals.json`), observed);
@@ -769,9 +878,11 @@ export function assertLegacyOperatorCronOwners(listing, baseline) {
       expected.agentId,
       `legacy operator cron owner unresolved or changed: ${expected.name}`,
     );
+    // Doctor may pin an ownerless legacy-roster job to its historical owner
+    // (docs/gateway/doctor/state-and-sessions.md); authored owners never move.
     assert.equal(
       after.agentId,
-      before.agentId,
+      before.agentId ?? after.agentId,
       `legacy operator cron explicit owner changed: ${expected.name}`,
     );
   }

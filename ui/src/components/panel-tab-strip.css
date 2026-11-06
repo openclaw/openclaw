@@ -1,0 +1,227 @@
+:where(.tp-header, .bp-header) {
+  --rail-header-height: 46px;
+  --rail-header-padding-start: 8px;
+}
+:where(.tp-actions, .bp-actions) {
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
+.tabstrip {
+  display: flex;
+  align-items: center;
+  /* Allow the strip to shrink inside a flex header so wide tab rows scroll
+   here instead of squeezing out sibling header controls. */
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tabstrip::-webkit-scrollbar {
+  display: none;
+}
+.tabstrip-tab {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 34px 0 10px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--muted);
+  white-space: nowrap;
+  font-size: 12.5px;
+  transition:
+    color 0.12s ease,
+    background 0.12s ease,
+    box-shadow 0.12s ease;
+}
+.tabstrip-tab:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+.tabstrip-tab[active] {
+  color: var(--text);
+  background: var(--bg-hover);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+.tabstrip-tab.is-exited:not([active]) {
+  opacity: 0.55;
+}
+.tabstrip-tab.is-connecting .tabstrip-tab__icon {
+  animation: tabstrip-pulse 1.2s ease-in-out infinite;
+}
+.tabstrip-tab__icon {
+  display: inline-flex;
+  color: var(--accent);
+}
+.tabstrip-tab__favicon {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  object-fit: contain;
+}
+.tabstrip-tab.is-exited .tabstrip-tab__icon {
+  color: var(--muted);
+}
+.tabstrip-tab__label {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+.tabstrip-tab__tooltip-trigger {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: inherit;
+  flex: 1 1 auto;
+}
+.tabstrip-tab__status {
+  font-size: 11px;
+  color: var(--muted);
+}
+.tabstrip-tab__badge {
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 999px;
+  color: var(--accent);
+  font-size: 9px;
+  line-height: 14px;
+  padding: 0 5px;
+  text-transform: uppercase;
+}
+/* Keep close actions visually inside each tab without nesting buttons. */
+.tabstrip-tab__close {
+  flex: 0 0 auto;
+  align-self: center;
+  z-index: 1;
+  margin-left: -32px;
+  margin-right: 4px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.tabstrip-tab__close-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+}
+:where(.tabstrip-tab:hover, .tabstrip-tab[active]) + .tabstrip-tab__close,
+.tabstrip-tab__close:hover,
+.tabstrip-tab__close:focus-visible {
+  opacity: 1;
+}
+.tabstrip-new {
+  flex: none;
+  align-self: center;
+  margin-left: 2px;
+}
+.tabstrip-new-control {
+  display: inline-flex;
+  flex: none;
+  align-self: center;
+}
+.tabstrip-separator {
+  flex: 0 0 auto;
+  align-self: center;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tabstrip-tab.is-connecting .tabstrip-tab__icon {
+    animation: none;
+  }
+}
+
+/* Desktop hosts share the main row proportions and the native dock surface.
+   The close button overlays reserved space, so the border encloses one pill. */
+.tabstrip.tabstrip--desktop {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  overflow-x: auto;
+  scrollbar-width: none;
+
+  .tabstrip-tab {
+    position: relative;
+    display: flex;
+    flex: 0 1 auto;
+    align-items: center;
+    gap: 7px;
+    height: 28px;
+    min-width: 91px;
+    max-width: 188px;
+    padding-block: 0;
+    padding-inline: 8px 28px;
+    border: 0;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--muted);
+    font-size: var(--control-ui-text-sm);
+    white-space: nowrap;
+  }
+
+  .tabstrip-tab.is-fixed {
+    padding-inline-end: 8px;
+  }
+
+  /* The close action is a sibling overlaid inside this same tab. */
+  .tabstrip-tab:is(:hover, [active]),
+  .tabstrip-tab:has(+ .tabstrip-tab__close:hover) {
+    border-radius: var(--radius-md);
+    color: var(--text);
+    background: var(--bg-hover);
+  }
+
+  .tabstrip-tab[active] {
+    box-shadow: inset 0 0 0 1px var(--border-strong);
+  }
+
+  .tabstrip-tab__icon {
+    display: inline-flex;
+    flex: none;
+    width: 16px;
+    height: 16px;
+    align-items: center;
+    justify-content: center;
+    color: inherit;
+  }
+
+  .tabstrip-tab__icon svg {
+    width: 15px;
+    height: 15px;
+    stroke-width: 1.6px;
+  }
+
+  .tabstrip-tab__close {
+    flex: 0 0 28px;
+    width: 28px;
+    min-width: 28px;
+    height: 28px;
+    margin: 0;
+    margin-inline-start: -28px;
+    z-index: 1;
+    opacity: 0;
+  }
+
+  .tabstrip-tab + .tabstrip-tab__close {
+    background: transparent;
+  }
+
+  .tabstrip-tab:is(:hover, [active]) + .tabstrip-tab__close,
+  .tabstrip-tab__close:is(:hover, :focus-visible) {
+    opacity: 1;
+    background: transparent;
+  }
+
+  .tabstrip-tab__close-box {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 12px;
+    height: 12px;
+  }
+
+  .tabstrip-tab__close svg {
+    width: 11px;
+    height: 11px;
+  }
+}

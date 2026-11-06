@@ -2,112 +2,43 @@ import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbou
 import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-outbound";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
-import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-runtime";
 import {
   createMattermostPost,
   deleteMattermostPost,
+  fetchMattermostChannelPosts,
   updateMattermostPost,
   type MattermostClient,
 } from "./client.js";
 
 const MATTERMOST_STREAM_MAX_CHARS = 4000;
-const DEFAULT_THROTTLE_MS = 1000;
+const THROTTLE_MS = 1200;
 
 type MattermostDraftPublishedPart = {
   messageId: string;
   content: string;
 };
 
-type MattermostFinalTextResolution =
-  | {
-      kind: "full" | "remaining";
-      text: string;
-      publishedParts: readonly MattermostDraftPublishedPart[];
-    }
-  | {
-      kind: "already-delivered";
-      publishedParts: readonly MattermostDraftPublishedPart[];
-    };
-
-type MattermostDraftStream = {
-  update: (text: string) => void;
-  updateAssistantText: (text: string) => void;
-  flush: () => Promise<void>;
-  postId: () => string | undefined;
-  clear: () => Promise<void>;
-  deleteCurrentMessage: () => Promise<void>;
-  discardPending: () => Promise<void>;
-  seal: () => Promise<void>;
-  stop: () => Promise<void>;
-  forceNewMessage: () => Promise<void>;
-  settleBoundaries: () => Promise<void>;
-  resolveFinalText: (text: string) => MattermostFinalTextResolution;
-};
-
-function normalizeMattermostDraftText(text: string, maxChars: number): string {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (trimmed.length <= maxChars) {
-    return trimmed;
-  }
-  return `${sliceUtf16Safe(trimmed, 0, Math.max(0, maxChars - 3)).trimEnd()}...`;
-}
-
-function consumeMattermostPublishedChunk(params: {
-  source: string;
-  offset: number;
-  chunk: string;
-}): number | undefined {
-  const chunk = params.chunk.trim();
-  if (!chunk) {
-    return params.offset;
-  }
-  let offset = params.offset;
-  while (offset < params.source.length && /\s/.test(params.source[offset] ?? "")) {
-    offset += 1;
-  }
-  return params.source.startsWith(chunk, offset) ? offset + chunk.length : undefined;
-}
-
-export function createMattermostDraftPreviewBoundaryController(params: {
-  enabled: boolean;
-  forceNewMessage: () => void | Promise<void>;
-}) {
-  let hasStreamedContent = false;
-  return {
-    noteUpdate() {
-      hasStreamedContent = true;
-    },
-    async noteBoundary() {
-      if (!params.enabled || !hasStreamedContent) {
-        return;
-      }
-      hasStreamedContent = false;
-      await params.forceNewMessage();
-    },
-  };
-}
-
 export function createMattermostDraftStream(params: {
   client: MattermostClient;
   channelId: string;
   rootId?: string;
-  maxChars?: number;
-  throttleMs?: number;
-  renderText?: (text: string) => string;
   chunkText?: (text: string) => string[];
   log?: (message: string) => void;
   warn?: (message: string) => void;
-}): MattermostDraftStream {
-  const maxChars = Math.min(
-    params.maxChars ?? MATTERMOST_STREAM_MAX_CHARS,
-    MATTERMOST_STREAM_MAX_CHARS,
-  );
-  const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
+}) {
   const streamState = { stopped: false, final: false };
   let terminalAcceptedDeliveryError: Error | undefined;
+  const retainAcceptedDeliveryFailure = (err: unknown) => {
+    if (isChannelPartialDeliveryError(err)) {
+      // Publish terminal state before warning hooks can re-enter delivery.
+      const acceptedDeliveryError = toErrorObject(err, "Mattermost accepted delivery failed");
+      streamState.stopped = true;
+      terminalAcceptedDeliveryError = acceptedDeliveryError;
+      return acceptedDeliveryError;
+    }
+    return undefined;
+  };
   const assertNoAcceptedDeliveryFailure = () => {
     if (terminalAcceptedDeliveryError !== undefined) {
       throw terminalAcceptedDeliveryError;
@@ -132,12 +63,15 @@ export function createMattermostDraftStream(params: {
   const publishedAssistantParts = new Map<string, MattermostDraftPublishedPart>();
 
   const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
-    if (streamState.stopped && !streamState.final) {
-      return false;
-    }
     const target = currentGeneration;
-    const rendered = params.renderText?.(text) ?? text;
-    const normalized = normalizeMattermostDraftText(rendered, maxChars);
+    const trimmed = text.trim();
+    const normalized = trimmed
+      ? truncateWithMarker(trimmed, MATTERMOST_STREAM_MAX_CHARS, {
+          marker: "...",
+          reserve: 3,
+          trimEnd: true,
+        })
+      : "";
     if (!normalized) {
       return false;
     }
@@ -168,13 +102,7 @@ export function createMattermostDraftStream(params: {
     } catch (err) {
       // Stop immediately so a discarded background failure cannot queue a second visible post.
       streamState.stopped = true;
-      const acceptedDeliveryError = isChannelPartialDeliveryError(err)
-        ? toErrorObject(err, "Mattermost accepted delivery failed")
-        : undefined;
-      if (acceptedDeliveryError) {
-        // Warning handlers can synchronously re-enter finalization; retain the failure first.
-        terminalAcceptedDeliveryError = acceptedDeliveryError;
-      }
+      const acceptedDeliveryError = retainAcceptedDeliveryFailure(err);
       params.warn?.(
         `mattermost stream preview failed: ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -193,7 +121,8 @@ export function createMattermostDraftStream(params: {
     clearWithStop,
     seal: sealLifecycle,
   } = createFinalizableDraftLifecycle({
-    throttleMs,
+    throttleMs: THROTTLE_MS,
+    coalesceInFlight: true,
     state: streamState,
     sendOrEditStreamMessage,
     readMessageId: () => currentGeneration.postId,
@@ -226,9 +155,15 @@ export function createMattermostDraftStream(params: {
         return;
       }
       publishedAssistantParts.set(messageId, { messageId, content });
+      const chunk = content.trim();
+      let nextOffset = offset;
+      if (chunk) {
+        while (nextOffset < assistantText.length && /\s/.test(assistantText[nextOffset] ?? "")) {
+          nextOffset += 1;
+        }
+      }
       publishedAssistantOffset =
-        consumeMattermostPublishedChunk({ source: assistantText, offset, chunk: content }) ??
-        offset;
+        !chunk || assistantText.startsWith(chunk, nextOffset) ? nextOffset + chunk.length : offset;
     };
     const boundary = (async () => {
       try {
@@ -237,15 +172,13 @@ export function createMattermostDraftStream(params: {
         await inFlightAtBoundary;
         assertNoAcceptedDeliveryFailure();
         if (streamState.stopped && !streamState.final) {
-          assertNoAcceptedDeliveryFailure();
           return;
         }
         const sourceText = pendingText.trim() ? pendingText : sealed.latestSourceText;
-        const rendered = params.renderText?.(sourceText) ?? sourceText;
-        const finalizedText = rendered.trim();
+        const finalizedText = sourceText.trim();
         const chunks =
           params.chunkText?.(finalizedText) ??
-          chunkMarkdownTextWithMode(finalizedText, maxChars, "length");
+          chunkMarkdownTextWithMode(finalizedText, MATTERMOST_STREAM_MAX_CHARS, "length");
         const firstChunk = chunks[0];
         if (!firstChunk) {
           return;
@@ -284,14 +217,7 @@ export function createMattermostDraftStream(params: {
           sealedAssistantTexts.push({ text: assistantText, requiresBlockBoundary: true });
         }
       } catch (err) {
-        const acceptedDeliveryError = isChannelPartialDeliveryError(err)
-          ? toErrorObject(err, "Mattermost accepted delivery failed")
-          : undefined;
-        if (acceptedDeliveryError) {
-          // Publish terminal state before warning hooks can re-enter update or forceNewMessage.
-          streamState.stopped = true;
-          terminalAcceptedDeliveryError = acceptedDeliveryError;
-        }
+        const acceptedDeliveryError = retainAcceptedDeliveryFailure(err);
         const publishedAssistantPrefix = assistantText?.slice(0, publishedAssistantOffset).trim();
         if (publishedAssistantPrefix) {
           // A later physical chunk failed after this exact source prefix became durable.
@@ -370,15 +296,17 @@ export function createMattermostDraftStream(params: {
     assertNoAcceptedDeliveryFailure();
   };
   const resolveFinalText = (text: string) => {
-    const publishedParts = [...publishedAssistantParts.values()];
+    const publishedParts: readonly MattermostDraftPublishedPart[] = [
+      ...publishedAssistantParts.values(),
+    ];
     if (sealedAssistantTexts.length === 0) {
       return { kind: "full" as const, text, publishedParts };
     }
 
     let remainingText = text.trim();
     for (const sealedText of sealedAssistantTexts) {
-      const completed = sealedText.text.trim();
-      if (!completed || !remainingText.startsWith(completed)) {
+      const completed = sealedText.text;
+      if (!remainingText.startsWith(completed)) {
         return { kind: "full" as const, text, publishedParts };
       }
       const suffix = remainingText.slice(completed.length);
@@ -399,7 +327,25 @@ export function createMattermostDraftStream(params: {
       : { kind: "already-delivered" as const, publishedParts };
   };
 
-  params.log?.(`mattermost stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
+  // Generations publish in order, so the current preview is this draft's newest post: anything
+  // after it came from someone else (message tool, a person, another bot). Without collapsed
+  // threads every reply renders in the channel stream, so root-level previews check the whole
+  // channel. Accepted gap: 200+ newer channel posts outside a threaded preview's thread.
+  const findPostAfter = async (postId: string): Promise<string | undefined> => {
+    const { messages } = await fetchMattermostChannelPosts(params.client, params.channelId, {
+      after: postId,
+      limit: 200,
+      skipFetchThreads: true,
+    });
+    return messages.find(
+      (post) =>
+        !post.type?.startsWith("system_") && (!params.rootId || post.root_id === params.rootId),
+    )?.id;
+  };
+
+  params.log?.(
+    `mattermost stream preview ready (maxChars=${MATTERMOST_STREAM_MAX_CHARS}, throttleMs=${THROTTLE_MS})`,
+  );
 
   return {
     update,
@@ -414,5 +360,6 @@ export function createMattermostDraftStream(params: {
     forceNewMessage,
     settleBoundaries,
     resolveFinalText,
+    findPostAfter,
   };
 }

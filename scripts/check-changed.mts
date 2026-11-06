@@ -15,11 +15,13 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import {
   LIVE_DOCKER_AUTH_SHELL_TARGETS,
+  detectChangedLanes,
   detectChangedLanesForPaths,
   getChangedCoreTestPaths,
   hasConfigDocInput,
   isConfigDocSchemaSourcePath,
   hasDeadcodeScannedSource,
+  hasLineCapRatchetInput,
   hasProtocolEventCoverageInput,
   listChangedPathsFromGit,
   listStagedChangedPaths,
@@ -32,10 +34,15 @@ import {
   parseFlagArgs,
   stringFlag,
 } from "./lib/arg-utils.mts";
-import { getChangedPathFacts, normalizeChangedPath } from "./lib/changed-path-facts.mjs";
+import {
+  getChangedPathFacts,
+  isTestLineAllocationPath,
+  normalizeChangedPath,
+} from "./lib/changed-path-facts.mjs";
 import { printTimingSummary } from "./lib/check-timing-summary.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
+import { chunkFormatFilesForCommand } from "./lib/format-command-batches.mts";
 import { resolveLocalCheckEnv } from "./lib/local-check-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { readNativeTypeScriptConfig } from "./lib/native-typescript-config.mts";
@@ -61,6 +68,11 @@ type CiLintSelection = {
   rootTestFiles?: string[];
   coreStripes: number[];
   extensionStripes: number[];
+  extensionRoots?: string[];
+  extensionStripeCount?: number;
+  fullCoreStripes?: number[];
+  fullExtensionStripes?: number[];
+  fullGroups?: ("core" | "scripts")[];
   groups: ("core" | "extensions" | "scripts")[];
   central: boolean;
 };
@@ -109,11 +121,11 @@ type NpmLockPackageDirsResolver = (changedPaths: string[]) => string[];
 type TargetedLintCommand = NonNullable<ReturnType<typeof createTargetedOxlintCommand>>;
 
 const NPM_LOCK_POLICY_PATH_RE =
-  /^(?:package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|scripts\/generate-npm-package-lock\.mts|(?:extensions|packages)\/[^/]+(?:\/.*)?\/package\.json)$/u;
+  /^(?:package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|scripts\/(?:generate-npm-package-lock\.mts|lib\/(?:npm-lock-package-selection|record-shared)\.(?:mjs|d\.mts))|(?:extensions|packages)\/[^/]+(?:\/.*)?\/package\.json)$/u;
 const PROMPT_SNAPSHOT_CHECK_PATH_RE =
-  /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts|sync-codex-model-prompt-fixture\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|prompt-snapshot-paths)\.ts|test\/fixtures\/agents\/prompt-snapshots\/.+)$/u;
+  /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|prompt-snapshot-paths)\.ts|test\/fixtures\/agents\/prompt-snapshots\/.+)$/u;
 const PROMPT_SNAPSHOT_OWNER_TEST_PATH_RE =
-  /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts|sync-codex-model-prompt-fixture\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|prompt-snapshot-paths)\.ts|test\/fixtures\/agents\/prompt-snapshots\/codex-model-catalog\/.+)$/u;
+  /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|prompt-snapshot-paths)\.ts)$/u;
 const RUNTIME_SIDECAR_BASELINE_PATH_RE =
   /^(?:scripts\/generate-runtime-sidecar-paths-baseline\.ts|scripts\/lib\/bundled-runtime-sidecar-paths\.json|src\/plugins\/runtime-sidecar-paths(?:-baseline)?\.ts)$/u;
 // Doctor-contract declaration truth depends on arbitrary plugin source (artifacts
@@ -134,6 +146,8 @@ const EXTENSION_TEST_CORE_IMPORT_PATH_RE =
   /^(?:extensions\/|test\/helpers\/|scripts\/(?:check-no-extension-test-core-imports|check-file-utils)\.ts$|scripts\/check-changed\.m[jt]s$)/u;
 const CONTROL_UI_I18N_VERIFY_PATH_RE =
   /^(?:package\.json$|ui\/(?:src\/|config\/control-ui-locales\.ts$)|scripts\/(?:control-ui-i18n(?:-(?:report|verify))?\.ts|lib\/(?:control-ui-i18n-[^/]+\.ts|control-ui-i18n-config\.json))$|test\/scripts\/control-ui-i18n[^/]*\.test\.ts$)/u;
+const CONTROL_UI_CONTROLLERS_PATH_RE =
+  /^(?:package\.json$|ui\/src\/|extensions\/(?:(?:workboard|memory-core|nostr|whatsapp)\/browser\/|(?:clawrouter|x)\/src\/control-ui\.tsx$)|config\/(?:control|plugin)-ui-\w+-baseline\.txt$|scripts\/(?:check-control-ui-controllers|control-ui-solid-inventory)\.mts$|scripts\/lib\/shrink-ratchet\.mts$|test\/scripts\/check-control-ui-controllers\.test\.ts$)/u;
 const SHRINK_RATCHET_OWNER_PATH = "scripts/lib/shrink-ratchet.mts";
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
 const EXTENSIONS_OXLINT_TS_CONFIG = "extensions/tsconfig.json";
@@ -144,10 +158,10 @@ const CORE_LINT_ARGV_BYTES = 24 * 1024;
 const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_EXTENSION_PATH_RE = /^extensions\/[^/]+\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_SCRIPT_PATH_RE = /^scripts\/.+\.[cm]?[jt]sx?$/u;
-const LINTABLE_UI_STYLE_PATH_RE = /^ui\/(?:src\/.+\.(?:css|ts)|public\/themes\/[^/]+\.css)$/u;
+const LINTABLE_UI_STYLE_PATH_RE = /^ui\/(?:src\/.+\.css|public\/themes\/[^/]+\.css)$/u;
 // These baselines are checked by their ratchets, not consumed by Oxlint.
 const LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
-  /^(?:docs\/|README\.md$|.*\.mdx?$|config\/(?:assertion-safety-baseline|env-var-count-budget)\.txt$)/u;
+  /^(?:docs\/|README\.md$|.*\.mdx?$|config\/(?:assertion-safety-baseline|env-var-count-budget|max-lines-baseline|test-timeout-race-baseline|test-mock-exports-baseline)\.txt$)/u;
 const CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$|^ui\/(?:src\/.+|public\/themes\/[^/]+)\.css$/u;
 const TOOLING_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
@@ -337,7 +351,10 @@ function shouldRunPromptSnapshotOwnerTest(paths: string[]) {
 }
 
 function shouldRunControlUiI18nVerify(paths: string[]) {
-  return paths.some((changedPath) => CONTROL_UI_I18N_VERIFY_PATH_RE.test(changedPath));
+  return (
+    detectChangedScope(paths).runControlUiI18n ||
+    paths.some((changedPath) => CONTROL_UI_I18N_VERIFY_PATH_RE.test(changedPath))
+  );
 }
 
 function shouldRunRuntimeSidecarBaselineCheck(paths: string[]) {
@@ -481,8 +498,22 @@ export function createChangedCheckPlan(
   const typechecks = new Set<ChangedCheckCommand>();
   const lintChecks = new Set<ChangedCheckCommand>();
   const baseEnv = { ...resolveLocalCheckEnv(options.env ?? process.env) };
+  const controllerGuardArgs = [
+    "check:control-ui-controllers",
+    ...(options.staged ? ["--staged"] : []),
+    ...(!options.staged && baseEnv.CHECKOUT_BASE_SHA
+      ? ["--base", baseEnv.CHECKOUT_BASE_SHA, "--no-merge-base"]
+      : options.base
+        ? ["--base", options.base]
+        : []),
+  ];
   delete baseEnv.OPENCLAW_OXLINT_CHANGED_PATHS;
+  delete baseEnv.OPENCLAW_OXLINT_CHANGED_BASE;
   const cwd = process.cwd();
+  const changedOxlintContext = {
+    base: !options.staged ? baseEnv.CHECKOUT_BASE_SHA || options.base : undefined,
+    cwd,
+  };
   if (
     result.paths.some((changedPath) => LINTABLE_EXTENSION_PATH_RE.test(changedPath)) &&
     cachedGeneratedExtensionAssetPaths?.cwd !== cwd
@@ -548,27 +579,75 @@ export function createChangedCheckPlan(
       );
     }
     for (const command of [...lintChecks].filter(isOxlintCommand)) {
-      command.env = createChangedOxlintEnv(result.paths, command.env ?? baseEnv);
+      command.env = createChangedOxlintEnv(
+        result.paths,
+        command.env ?? baseEnv,
+        changedOxlintContext,
+      );
     }
     if (options.lintOnly) {
-      const lintEnv = createChangedOxlintEnv(result.paths, baseEnv);
+      const lintEnv = createChangedOxlintEnv(result.paths, baseEnv, changedOxlintContext);
       const lintCommands = commands.filter((command) => lintChecks.has(command));
       const selection = options.lintSelection;
+      const selectedCentralCommands = selection?.central
+        ? lintCommands.flatMap((command) => {
+            if (targetedLintOwner(command)) {
+              return [];
+            }
+            if (
+              selection.extensionRoots === undefined &&
+              selection.fullCoreStripes === undefined &&
+              selection.fullExtensionStripes === undefined &&
+              selection.fullGroups === undefined
+            ) {
+              return [command];
+            }
+            // Explicit owners replace aggregate Oxlint work, retaining wrapper-owned guards.
+            if (["lint:core", "lint:extensions"].includes(command.args[0] ?? "")) {
+              return [];
+            }
+            if (command.args[0] === "lint:scripts") {
+              return ["lint:docker-e2e", "lint:tmp:no-raw-http2-imports"].map((task) => ({
+                name: task,
+                args: [task],
+                bin: command.bin,
+                env: command.env,
+              }));
+            }
+            if (command.args[0] === "lint") {
+              return [
+                { ...command, name: "Control UI controller guard", args: controllerGuardArgs },
+                { ...command, name: "Control UI i18n catalog", args: ["lint:ui:i18n"] },
+                {
+                  ...command,
+                  name: "Control UI styles",
+                  bin: "node",
+                  args: [
+                    "--import",
+                    "tsx",
+                    "scripts/run-stylelint.mts",
+                    "ui/src/**/*.css",
+                    "ui/public/themes/*.css",
+                  ],
+                },
+              ];
+            }
+            return [command];
+          })
+        : [];
       return {
         commands: selection
           ? [
               ...(selection.central
-                ? lintCommands
-                    .filter((command) => !targetedLintOwner(command))
-                    .map((command) =>
-                      options.lintThreads &&
-                      command.bin === "node" &&
-                      command.args[0] === "scripts/run-oxlint.mjs"
-                        ? Object.assign({}, command, {
-                            args: [...command.args, `--threads=${options.lintThreads}`],
-                          })
-                        : command,
-                    )
+                ? selectedCentralCommands.map((command) =>
+                    options.lintThreads &&
+                    command.bin === "node" &&
+                    command.args[0] === "scripts/run-oxlint.mjs"
+                      ? Object.assign({}, command, {
+                          args: [...command.args, `--threads=${options.lintThreads}`],
+                        })
+                      : command,
+                  )
                 : []),
               ...createCiLintCommands(selection, options.lintThreads ?? 1, lintEnv),
             ]
@@ -658,9 +737,7 @@ export function createChangedCheckPlan(
     );
   }
   add("conflict markers", ["check:no-conflict-markers"]);
-  if (
-    result.paths.some((file) => /\.(?:ts|tsx|mts|mjs)$/u.test(file) || file === ".oxlintrc.json")
-  ) {
+  if (hasLineCapRatchetInput(result.paths)) {
     add("line-cap growth ratchet", [
       "check:line-cap-ratchet",
       ...(options.staged ? ["--staged"] : []),
@@ -700,6 +777,53 @@ export function createChangedCheckPlan(
       options.base ?? (options.staged ? "HEAD" : "origin/main"),
     ]);
   }
+  if (result.paths.some((file) => /^(?:src|extensions|packages|scripts)\//u.test(file))) {
+    add("SQLite worker ratchet", [
+      "check:database-worker-ratchet",
+      ...(options.staged ? ["--staged"] : []),
+      "--base",
+      options.base ?? (options.staged ? "HEAD" : "origin/main"),
+    ]);
+    add("SQLite dialect ratchet", [
+      "check:database-dialect-ratchet",
+      ...(options.staged ? ["--staged"] : []),
+      "--base",
+      options.base ?? (options.staged ? "HEAD" : "origin/main"),
+    ]);
+  }
+  if (
+    result.paths.some(
+      (filePath) =>
+        filePath === SHRINK_RATCHET_OWNER_PATH ||
+        filePath === "config/test-timeout-race-baseline.txt" ||
+        (/\.(?:[cm]?[jt]s|[jt]sx)$/u.test(filePath) && !/\.d\.[cm]?ts$/u.test(filePath)),
+    )
+  ) {
+    add("test timeout race ratchet", [
+      "check:test-timeout-race-ratchet",
+      ...(options.staged ? ["--staged"] : []),
+      "--base",
+      options.base ?? (options.staged ? "HEAD" : "origin/main"),
+    ]);
+  }
+  if (
+    result.paths.some(
+      (file) =>
+        file === SHRINK_RATCHET_OWNER_PATH ||
+        file === "config/test-mock-exports-baseline.txt" ||
+        file === "package.json" ||
+        file === "tsconfig.json" ||
+        /^(?:packages|extensions)\/[^/]+\/package\.json$/u.test(file) ||
+        (/\.(?:[cm]?[jt]s|[jt]sx)$/u.test(file) && !/\.d\.[cm]?ts$/u.test(file)),
+    )
+  ) {
+    add("first-party mock export ratchet", [
+      "check:test-mock-exports",
+      ...(options.staged ? ["--staged"] : []),
+      "--base",
+      options.base ?? (options.staged ? "HEAD" : "origin/main"),
+    ]);
+  }
   add("changelog attributions", ["check:changelog-attributions"]);
   add("doctor deprecation registry", ["check:doctor-deprecation-registry"]);
   add("guarded extension wildcard re-exports", ["lint:extensions:no-guarded-wildcard-reexports"]);
@@ -713,15 +837,9 @@ export function createChangedCheckPlan(
   add("duplicate scan target coverage", ["dup:check:coverage"]);
   broadAudits.add(add("coercion helper declaration guard", ["check:coercion-helpers"]));
   add("dependency pin guard", ["deps:pins:check"]);
-  if (result.paths.length > 0) {
-    lintChecks.add(
-      add("format changed files", [
-        "format:check",
-        "--no-error-on-unmatched-pattern",
-        "--",
-        ...result.paths,
-      ]),
-    );
+  const formatPrefix = ["format:check", "--no-error-on-unmatched-pattern", "--"];
+  for (const files of chunkFormatFilesForCommand(result.paths, formatPrefix)) {
+    lintChecks.add(add("format changed files", [...formatPrefix, ...files]));
   }
   const npmLockGuardCommand = createNpmLockGuardCommand(result.paths);
   if (npmLockGuardCommand) {
@@ -910,6 +1028,9 @@ export function createChangedCheckPlan(
   } else if (shouldRunControlUiI18nVerify(result.paths)) {
     addLint("Control UI i18n catalog", ["lint:ui:i18n"]);
   }
+  if (!runAll && result.paths.some((file) => CONTROL_UI_CONTROLLERS_PATH_RE.test(file))) {
+    addLint("Control UI controller guard", controllerGuardArgs);
+  }
 
   if (typeLanes.all) {
     addTypecheck("typecheck all", ["tsgo:all"]);
@@ -941,7 +1062,11 @@ export function createChangedCheckPlan(
   }
 
   if (runAll) {
-    addLint("lint", ["lint"]);
+    addLint("lint", [
+      "lint",
+      ...(options.staged ? ["--staged"] : []),
+      ...(options.base ? ["--base", options.base] : []),
+    ]);
     add("runtime import cycles", ["check:import-cycles"]);
     return finishPlan("all");
   }
@@ -1114,10 +1239,46 @@ function createCiLintCommands(
   threads: 1 | 8,
   env: NodeJS.ProcessEnv,
 ): ChangedCheckCommand[] {
-  if (selection.files.length === 0) {
-    return [];
+  const extensionRoots = selection.extensionRoots;
+  const extensionStripeCount = selection.extensionStripeCount ?? 6;
+  const fullCoreStripes = selection.fullCoreStripes ?? [];
+  const fullExtensionStripes = selection.fullExtensionStripes ?? [];
+  const fullGroups = selection.fullGroups ?? [];
+  if (
+    (extensionRoots !== undefined &&
+      (!Array.isArray(extensionRoots) ||
+        extensionRoots.length === 0 ||
+        !extensionRoots.every((root) => typeof root === "string") ||
+        new Set(extensionRoots).size !== extensionRoots.length)) ||
+    ![1, 3, 6].includes(extensionStripeCount) ||
+    (selection.extensionStripeCount !== undefined &&
+      extensionRoots === undefined &&
+      selection.fullExtensionStripes === undefined) ||
+    (extensionRoots !== undefined && fullExtensionStripes.length > 0) ||
+    (extensionRoots !== undefined &&
+      (!selection.extensionStripes.length ||
+        selection.extensionStripes.some(
+          (stripe) => !Number.isInteger(stripe) || stripe < 1 || stripe > extensionStripeCount,
+        ))) ||
+    !Array.isArray(fullCoreStripes) ||
+    fullCoreStripes.some((stripe) => !Number.isInteger(stripe) || stripe < 1 || stripe > 5) ||
+    new Set(fullCoreStripes).size !== fullCoreStripes.length ||
+    !Array.isArray(fullExtensionStripes) ||
+    fullExtensionStripes.some(
+      (stripe) => !Number.isInteger(stripe) || stripe < 1 || stripe > extensionStripeCount,
+    ) ||
+    new Set(fullExtensionStripes).size !== fullExtensionStripes.length ||
+    !Array.isArray(fullGroups) ||
+    fullGroups.some((group) => group !== "core" && group !== "scripts") ||
+    new Set(fullGroups).size !== fullGroups.length
+  ) {
+    throw new Error("Invalid CI lint package or full-owner selection");
   }
-  const command = (name: string, args: string[]) => ({
+  const files = extensionRoots
+    ? selection.files.filter((file) => !file.startsWith("extensions/"))
+    : selection.files;
+  const groups = selection.groups.filter((group) => !extensionRoots || group !== "extensions");
+  const command = (name: string, args: string[], scopeArgs: string[] = []) => ({
     name,
     bin: "node",
     env,
@@ -1127,29 +1288,56 @@ function createCiLintCommands(
       "scripts/run-oxlint-shards.mts",
       ...args,
       `--threads=${threads}`,
-      "--files-json",
-      JSON.stringify(selection.files),
+      ...scopeArgs,
     ],
   });
+  const fileScope = ["--files-json", JSON.stringify(files)];
   return [
-    ...selection.coreStripes.map((stripe) =>
-      command(`lint core file stripe ${stripe}`, [
+    ...fullCoreStripes.map((stripe) =>
+      command(`lint full core stripe ${stripe}`, [
         "--only=core",
         "--split-core",
         `--core-stripe=${stripe}/5`,
       ]),
     ),
-    ...selection.extensionStripes.map((stripe) =>
-      command(`lint extension file stripe ${stripe}`, [
+    ...fullExtensionStripes.map((stripe) =>
+      command(`lint full extension stripe ${stripe}`, [
         "--only=extensions",
-        `--extension-stripe=${stripe}/6`,
+        `--extension-stripe=${stripe}/${extensionStripeCount}`,
       ]),
     ),
-    ...(selection.groups.length
+    ...(fullGroups.length
+      ? [
+          command(
+            "lint full remaining groups",
+            fullGroups.map((group) => `--only=${group}`),
+          ),
+        ]
+      : []),
+    ...(files.length
+      ? selection.coreStripes.map((stripe) =>
+          command(
+            `lint core file stripe ${stripe}`,
+            ["--only=core", "--split-core", `--core-stripe=${stripe}/5`],
+            fileScope,
+          ),
+        )
+      : []),
+    ...(extensionRoots || files.length
+      ? selection.extensionStripes.map((stripe) =>
+          command(
+            `lint extension ${extensionRoots ? "package" : "file"} stripe ${stripe}`,
+            ["--only=extensions", `--extension-stripe=${stripe}/${extensionStripeCount}`],
+            extensionRoots ? ["--extension-roots-json", JSON.stringify(extensionRoots)] : fileScope,
+          ),
+        )
+      : []),
+    ...(files.length && groups.length
       ? [
           command(
             "lint remaining file groups",
-            selection.groups.map((group) => `--only=${group}`),
+            groups.map((group) => `--only=${group}`),
+            fileScope,
           ),
         ]
       : []),
@@ -1199,7 +1387,11 @@ export async function createChangedCiLintPlan(
   result: ChangedLaneResult,
   { runnerProfile }: { runnerProfile: string },
 ) {
-  const commands = createChangedCheckPlan(result, { lintOnly: true }).commands;
+  // Budget records retain their guards and formatting, but cannot affect lint inputs.
+  const lintPaths = result.paths.filter((file) => !isTestLineAllocationPath(file));
+  const lintResult =
+    lintPaths.length === result.paths.length ? result : detectChangedLanes(lintPaths);
+  const commands = createChangedCheckPlan(lintResult, { lintOnly: true }).commands;
   if (
     result.paths.some((file) => path.basename(file) === "package.json") ||
     commands.some(({ args }) =>
@@ -1228,6 +1420,7 @@ export async function createChangedCiLintPlan(
     coreStripes: [],
     extensionStripes: [],
     groups: [],
+    fullGroups: [],
     central: true,
   };
   const core: { stripe: number; lint_selection_json: string }[] = [];
@@ -1474,16 +1667,19 @@ export async function runChangedCheck(
       )
     : undefined;
   const timings: ChangedCheckTiming[] = [];
+  let failure = 0;
   for (const command of plan.commands) {
     const status = await runPlanCommand(command, timings, coreTestCheck);
-    if (status !== 0) {
-      printSummary(timings, options);
-      return status;
+    failure ||= status;
+    // Timeouts and cancellation deliberately stop admitting new work.
+    if (status === 124 || status >= 128) {
+      failure = status;
+      break;
     }
   }
 
   printSummary(timings, options);
-  return 0;
+  return failure;
 }
 
 function sameArgs(left: string[], right: string[]) {
@@ -1713,8 +1909,7 @@ function isDirectRun() {
   return isDirectRunUrl(process.argv[1], import.meta.url);
 }
 
-async function main() {
-  const argv = process.argv.slice(2);
+export async function main(argv = process.argv.slice(2)) {
   let args: ReturnType<typeof parseArgs>;
   try {
     args = parseArgs(argv);
@@ -1757,24 +1952,6 @@ async function main() {
         head: args.head,
         staged: args.staged,
       });
-      let typecheckResult: ChangedLaneResult | undefined;
-      if (
-        !args.staged &&
-        !args.noChanges &&
-        args.paths.length === 0 &&
-        !argv.includes("--") &&
-        args.head === "HEAD"
-      ) {
-        const { findTypecheckInertPaths } = await import("./lib/typecheck-inert.mts");
-        const inert = new Set(findTypecheckInertPaths({ paths, base: args.base ?? "origin/main" }));
-        if (inert.size) {
-          typecheckResult = detectChangedLanesForPaths({
-            paths: paths.filter((file) => !inert.has(file)),
-            base: args.base ?? "origin/main",
-            head: args.head,
-          });
-        }
-      }
       if (
         shouldDelegateChangedCheckToCrabbox(argv, process.env, {
           result,
@@ -1789,20 +1966,34 @@ async function main() {
       ) {
         const delegated = await runChangedCheckViaCrabbox(argv, process.env);
         if (delegated.backendUnavailable) {
-          // Say this loudly: the proof below is local, so whoever reads the run
-          // knows which machine produced it and that Linux-only lanes are unproven.
           console.error(
-            "[check:changed] the remote backend never ran the checks (no run summary). Falling back to local execution; note this in the proof summary.",
+            "[check:changed] remote proof is unavailable. Use PR CI or explicitly select a qualified local scope; platform-specific requirements remain unproven. Local checks were not started.",
           );
         }
-        process.exitCode = delegated.backendUnavailable
-          ? await runChangedCheck(result, {
-              ...args,
-              typecheckResult,
-              explicitPaths: args.paths.length > 0,
-            })
-          : delegated.exitCode;
+        process.exitCode = delegated.exitCode;
       } else {
+        // Only the executing branch needs trivia classification; remote children
+        // classify their own source instead of discarding a native compiler run here.
+        let typecheckResult: ChangedLaneResult | undefined;
+        if (
+          !args.staged &&
+          !args.noChanges &&
+          args.paths.length === 0 &&
+          !argv.includes("--") &&
+          args.head === "HEAD"
+        ) {
+          const { findTypecheckInertPaths } = await import("./lib/typecheck-inert.mts");
+          const inert = new Set(
+            findTypecheckInertPaths({ paths, base: args.base ?? "origin/main" }),
+          );
+          if (inert.size) {
+            typecheckResult = detectChangedLanesForPaths({
+              paths: paths.filter((file) => !inert.has(file)),
+              base: args.base ?? "origin/main",
+              head: args.head,
+            });
+          }
+        }
         process.exitCode = await runChangedCheck(result, {
           ...args,
           typecheckResult,

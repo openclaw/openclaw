@@ -15,12 +15,12 @@ Adds DeepSeek model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/deepseek-provider`
-- Install route: npm or ClawHub: `clawhub:@openclaw/deepseek-provider`
+- Install route: npm or ClawHub: `@openclaw/deepseek-provider`
 
 ## Surface
 
 - Providers: `deepseek`
-- Contracts: `usageProviders`
+- Contracts: `usageProviders`, `webSearchProviders`
 
 ## Related docs
 

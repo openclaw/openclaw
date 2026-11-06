@@ -59,20 +59,16 @@ export function resolveActivityRouteData(
     };
   }
   const executionId = params.get("execution");
+  const runId = params.get("run");
   const selectorId = params.get("receipt")?.trim() || null;
   const decisionCursor = selectorId ? params.get("decision")?.trim() || null : null;
-  if (executionId?.trim()) {
-    return {
-      mode: "run",
-      selector: { kind: "execution", id: executionId },
-      selectorId,
-      decisionCursor,
-    };
-  }
-  const runId = params.get("run");
   return {
     mode: "run",
-    selector: runId?.trim() ? { kind: "run", id: runId } : null,
+    selector: executionId?.trim()
+      ? { kind: "execution", id: executionId }
+      : runId?.trim()
+        ? { kind: "run", id: runId }
+        : null,
     selectorId,
     decisionCursor,
   };
@@ -84,7 +80,7 @@ export type RunInspectorResult = AuditRunInspectResult;
 
 export type RunInspectorState =
   | { status: "empty" }
-  | { status: "loading"; waitingForGateway: boolean }
+  | { status: "loading" }
   | { status: "disconnected" }
   | { status: "unauthorized" }
   | { status: "unsupported" }
@@ -94,6 +90,7 @@ export type RunInspectorState =
       result: RunInspectorResult;
       executionPageStatus?: "loading" | "error";
       decisionPageStatus?: "loading" | "error";
+      refreshError?: "restart" | "retry";
       receiptPageCursors: ReceiptPageCursorMap;
     };
 
@@ -130,11 +127,8 @@ export function mergeDecisionPage(
 
 export function classifyRunInspection(result: RunInspectorResult) {
   const identity = result.identity;
-  if (identity.state === "present") {
-    return "present";
-  }
-  if (identity.state === "ambiguous") {
-    return "ambiguous";
+  if (identity.state === "present" || identity.state === "ambiguous") {
+    return identity.state;
   }
   if (identity.reasonCode === "run_not_found" || identity.reasonCode === "execution_not_found") {
     return "not-found";
