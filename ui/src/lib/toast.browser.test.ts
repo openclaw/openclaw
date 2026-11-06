@@ -199,7 +199,7 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
         message: "Release readiness check",
         actionLabel: "Open session",
         placement: "top-right",
-        avatar: { id: "gardener", name: "Garden keeper", avatar },
+        avatar: { kind: "agent", agent: { id: "gardener", name: "Garden keeper", avatar } },
       },
       center.host,
     );

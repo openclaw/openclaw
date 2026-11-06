@@ -1,7 +1,14 @@
 import type { AgentIdentity } from "./identity-avatar-view.ts";
+import type { PresenceViewer } from "./presence-users.ts";
 import { listen } from "./reactive/listener.ts";
 
-type ToastDismissReason = "action" | "dismiss" | "disconnected" | "replaced" | "timeout";
+type ToastDismissReason =
+  | "action"
+  | "cancelled"
+  | "dismiss"
+  | "disconnected"
+  | "replaced"
+  | "timeout";
 
 /** One signal per variant: the leading icon's color. Neutral toasts explicitly use undefined. */
 export type ToastSeverity = "success" | "info" | "warning" | "error" | "progress";
@@ -12,8 +19,8 @@ export type ToastOptions = {
   message: string | Node;
   /** Distinguishes actionable notices that share copy; repeats of the same key replace each other. */
   dedupeKey?: string;
-  /** Muted second line, for the sentence that follows the title. */
-  description?: string;
+  /** Muted second line, for the sentence that follows the title. Nodes carry trusted markup. */
+  description?: string | Node;
   /** Raw error shown only when expanded; redacted by the shared error renderer. */
   detail?: unknown;
   /** Positions a compact toast at the top center of the owning panel. */
@@ -23,14 +30,16 @@ export type ToastOptions = {
   placement?: ToastPlacement;
   /** Errors announce through role="alert"; every other variant uses role="status". */
   severity: ToastSeverity | undefined;
-  /** Agent identity shown for session notifications, using the shared avatar loader. */
-  avatar?: AgentIdentity;
+  /** Session notification identities use their existing shared avatar renderers. */
+  avatar?: { kind: "agent"; agent: AgentIdentity } | { kind: "human"; user: PresenceViewer };
   actionLabel?: string;
   actionHref?: string;
   /** Terracotta fill, reserved for the required next step (Review…, Try again). */
   actionPrimary?: boolean;
   onAction?: (event?: MouseEvent) => void;
   onDismiss?: (reason: ToastDismissReason) => void;
+  /** Retire a notice, including one queued before the host mounts, with its owner. */
+  signal?: AbortSignal;
   durationMs?: number;
 };
 
@@ -94,7 +103,8 @@ export function registerToastContainer(element: HTMLElement, role: "shell" | "dr
 // Outcomes reported during startup (a restored post-update result, for example)
 // race the shell that owns the host element. Hold them instead of dropping them,
 // so no caller's message disappears because it arrived too early.
-const queuedToasts: ToastOptions[] = [];
+type QueuedToast = { options: ToastOptions; stopAbort?: () => void };
+const queuedToasts: QueuedToast[] = [];
 
 type LiveToast = {
   id: number;
@@ -104,6 +114,7 @@ type LiveToast = {
   deadline: number;
   timer?: ReturnType<typeof globalThis.setTimeout>;
   exitTimer?: ReturnType<typeof globalThis.setTimeout>;
+  stopAbort?: () => void;
   leaving: boolean;
 };
 
@@ -232,7 +243,8 @@ class ToastOwner {
     }
     this.publish();
     for (const pending of queuedToasts.splice(0)) {
-      this.show(pending);
+      pending.stopAbort?.();
+      this.show(pending.options);
     }
   }
 
@@ -271,6 +283,9 @@ class ToastOwner {
   }
 
   show(options: ToastOptions) {
+    if (options.signal?.aborted) {
+      return;
+    }
     const lane = toastLane(options);
     // A panel holds one notice; other lanes deduplicate by explicit identity or unkeyed copy.
     for (const toast of this.live) {
@@ -287,14 +302,18 @@ class ToastOwner {
         this.finish(toast, "replaced");
       }
     }
-    this.live.unshift({
+    const toast: LiveToast = {
       id: nextToastId++,
       options,
       lane,
       remainingMs: options.durationMs ?? TOAST_DURATION_MS[options.severity ?? "neutral"],
       deadline: 0,
       leaving: false,
-    });
+    };
+    this.live.unshift(toast);
+    if (options.signal) {
+      toast.stopAbort = listen(options.signal, "abort", () => this.finish(toast, "cancelled"));
+    }
     this.publish();
   }
 
@@ -339,6 +358,7 @@ class ToastOwner {
       return;
     }
     this.pause(toast);
+    toast.stopAbort?.();
     globalThis.clearTimeout(toast.exitTimer);
     this.live = this.live.filter((candidate) => candidate !== toast);
     if (!this.live.some((candidate) => candidate.lane === toast.lane)) {
@@ -451,12 +471,20 @@ export function toastOwnerFor(host: OpenClawToastHost) {
 }
 
 export function showToast(options: ToastOptions): boolean {
-  if (typeof document === "undefined") {
+  if (typeof document === "undefined" || options.signal?.aborted) {
     return false;
   }
   const host = [...connectedHosts].find((candidate) => candidate.isConnected);
   if (!host) {
-    queuedToasts.push(options);
+    const pending: QueuedToast = { options };
+    queuedToasts.push(pending);
+    if (options.signal) {
+      pending.stopAbort = listen(options.signal, "abort", () => {
+        queuedToasts.splice(queuedToasts.indexOf(pending), 1);
+        pending.stopAbort?.();
+        options.onDismiss?.("cancelled");
+      });
+    }
     return false;
   }
   const modal = activeModalToastLayer();

@@ -4,7 +4,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import type { createHumanMentionPolicy } from "./human-mention-policy.js";
 import { hasValidMentionReferences, type MentionCommittedInput } from "./mention-inbox-input.js";
-import { formatMentionExcerpt } from "./mention-inbox-presentation.js";
+import { formatMentionExcerpt, formatMentionPreview } from "./mention-inbox-presentation.js";
 import {
   indexMentionItem,
   mentionTargetKey,
@@ -98,7 +98,13 @@ export function createMentionInputRecorder(params: {
       sessionKey: resolved.canonicalKey,
       entry: resolved.entry,
     };
-    const excerpt = formatMentionExcerpt(input.excerpt);
+    const spans = new Map<string, { start: number; end: number }>();
+    for (const span of input.mentionSpans ?? []) {
+      if (!spans.has(span.profileId)) {
+        spans.set(span.profileId, span);
+      }
+    }
+    let sharedExcerpt = false;
     // Recipients share immutable message data; consumed sources retain only replay tombstones.
     const message: StoredMention["message"] = {
       sessionId: input.sessionId,
@@ -108,7 +114,6 @@ export function createMentionInputRecorder(params: {
         agentId: target.agentId,
         messageId: input.messageId,
         createdAt: now,
-        ...(excerpt ? { excerpt } : {}),
       },
     };
     const created: StoredMention[] = [];
@@ -131,6 +136,17 @@ export function createMentionInputRecorder(params: {
         source,
         message,
       };
+      const span = spans.get(profileId);
+      const preview = span && input.excerpt ? formatMentionPreview(input.excerpt, span) : undefined;
+      if (preview) {
+        (message.content.previews ??= {})[item.id] = preview;
+      } else if (!sharedExcerpt) {
+        sharedExcerpt = true;
+        const excerpt = formatMentionExcerpt(input.excerpt);
+        if (excerpt) {
+          message.content.excerpt = excerpt;
+        }
+      }
       items.set(item.id, item);
       source.recipients.set(recipient.profileId, item);
       indexMentionItem(draft, item);

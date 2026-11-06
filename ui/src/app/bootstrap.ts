@@ -62,6 +62,7 @@ import { createApplicationGateway } from "./gateway-store.ts";
 import { createGuestWelcome } from "./guest-welcome-handle.ts";
 import { startLinkReaderRouting } from "./link-reader-routing.ts";
 import { startMcpAppRouting } from "./mcp-app-link-routing.ts";
+import { showMentionNotification } from "./mention-notification.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
 import type { NativeConversationBridge } from "./native-conversation-types.ts";
 import { prepareNativeUpdateFallback, startNativeLinkRouting } from "./native-link-routing.ts";
@@ -316,6 +317,7 @@ export function bootstrapApplication(
     overlays,
     scopeUpgrade,
     connectionBootstrap,
+    onMention: (mention, signal) => showMentionNotification(context, mention, signal),
   });
   const stopConfigWriteSuspension = bindUpdateConfigWriteInterlock(overlays, runtimeConfig);
   const navigation = createApplicationNavigationPreferences(theme);

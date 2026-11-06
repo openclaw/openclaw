@@ -2,6 +2,7 @@ import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import { ErrorDetails } from "../components/config-error.tsx";
 import { Icon, type IconName } from "../components/solid/icon.tsx";
 import { AgentIdentityAvatar } from "../components/solid/identity-avatar.tsx";
+import { ViewerAvatar } from "../components/solid/viewer-facepile.tsx";
 import { formatUiExternalText } from "./format-error.ts";
 import { shouldHandleNavigationClick } from "./navigation-click.ts";
 import { t } from "./reactive/i18n.ts";
@@ -144,6 +145,10 @@ function ToastCard(props: { entry: ToastEntry; open: boolean; owner: ToastContro
       ? { title: split[1]!, description: split[2]! }
       : { title: text, description: toast().description };
   });
+  const description = createMemo(() => {
+    const value = copy().description;
+    return typeof value === "string" ? formatUiExternalText(value) : value;
+  });
   const message = createMemo(() => {
     const value = content();
     if (typeof value === "string") {
@@ -226,7 +231,15 @@ function ToastCard(props: { entry: ToastEntry; open: boolean; owner: ToastContro
     >
       {toast().avatar ? (
         <span class="app-toast__avatar" aria-hidden="true">
-          <AgentIdentityAvatar agent={toast().avatar!} />
+          <Show when={toast().avatar} keyed>
+            {(avatar) =>
+              avatar.kind === "human" ? (
+                <ViewerAvatar user={avatar.user} markAsViewer={false} variant="footer" />
+              ) : (
+                <AgentIdentityAvatar agent={avatar.agent} />
+              )
+            }
+          </Show>
         </span>
       ) : toast().severity ? (
         <span class="app-toast__icon" aria-hidden="true">
@@ -240,7 +253,7 @@ function ToastCard(props: { entry: ToastEntry; open: boolean; owner: ToastContro
           </span>
           {copy().description ? " " : undefined}
           {copy().description ? (
-            <span class="app-toast__description">{formatUiExternalText(copy().description)}</span>
+            <span class="app-toast__description">{description()}</span>
           ) : undefined}
           <Show when={toast()} keyed>
             {(options) => <ErrorDetails error={options.detail} />}

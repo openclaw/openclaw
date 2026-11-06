@@ -90,6 +90,50 @@ afterEach(() => {
 });
 
 describe("application mention Inbox", () => {
+  it.each(["dispose", "access loss"] as const)(
+    "announces only post-baseline arrivals and retires their connection scope on %s",
+    async (ending) => {
+      let snapshot = result(1);
+      const request = vi.fn<RequestFn>(async () => snapshot);
+      const onArrival = vi.fn<(item: MentionInboxItem, signal: AbortSignal) => void>();
+      const { harness, capability } = inboxFixture(request, { onArrival });
+      await capability.refresh();
+      expect(onArrival).not.toHaveBeenCalled();
+
+      const arrived = { ...mention, id: "mention-2" };
+      snapshot = result(2, [arrived, mention]);
+      harness.changed(2);
+      await capability.refresh();
+      expect(onArrival).toHaveBeenCalledExactlyOnceWith(arrived, expect.any(AbortSignal));
+      const signal = onArrival.mock.calls[0]![1];
+      expect(signal.aborted).toBe(false);
+      await capability.refresh();
+      await capability.dismiss([mention.id]);
+      expect(onArrival).toHaveBeenCalledTimes(1);
+
+      harness.update({ phase: "reconnecting" });
+      expect(signal.aborted).toBe(true);
+      harness.update({ phase: "connected", hello: hello() });
+      await capability.refresh();
+      expect(onArrival).toHaveBeenCalledTimes(1);
+
+      const next = { ...mention, id: "mention-3" };
+      snapshot = result(3, [next, arrived]);
+      harness.changed(3);
+      await capability.refresh();
+      expect(onArrival).toHaveBeenCalledTimes(2);
+      const nextSignal = onArrival.mock.calls[1]![1];
+      expect(nextSignal).not.toBe(signal);
+      if (ending === "dispose") {
+        capability.dispose();
+      } else {
+        request.mockRejectedValueOnce(accessError());
+        await capability.refresh();
+      }
+      expect(nextSignal.aborted).toBe(true);
+    },
+  );
+
   it("backs off unavailable reads across gateway updates and invalidations, then recovers", async () => {
     vi.useFakeTimers();
     const request = vi.fn<RequestFn>().mockRejectedValue(

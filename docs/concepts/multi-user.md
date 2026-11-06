@@ -237,6 +237,8 @@ Mentions work for ordinary messages, queued or steered input, and the first mess
 
 ## Mentions Inbox
 
+New mentions also appear as compact in-app cards with the sender, session, and **View session** action. The preview is centered on the place you were mentioned and highlights that mention, even in long messages or when several people share a name. Cards close after five seconds, pausing while hovered or keyboard-focused. Closing a card does not dismiss its Inbox entry. Sessions already visible in a chat pane do not produce a card, including either desktop split pane; a hidden mobile pane can still notify.
+
 Open **Inbox → Mentions** to see messages addressed to your signed-in profile across accessible agents. Opening a mention opens its session without dismissing it. Select **Dismiss** to remove the entry from your Inbox. That change follows the same profile across connected browsers, without deleting the chat message.
 
 Mentions and dismissals survive Gateway restarts and upgrades. Entries keep their original identifiers and expiry times: **up to seven days**, with at most **100 entries per profile** and **10,000 across the Gateway**. Older entries can be evicted earlier by capacity limits. Refreshing or reconnecting reloads the retained Inbox without resending old browser alerts. Old transcript messages are not scanned to rebuild missing entries.

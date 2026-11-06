@@ -11,7 +11,7 @@ import type { AgentSelectionCapability } from "./agent-selection.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import type { ApplicationGateway } from "./gateway.ts";
-import type { MentionsCapability } from "./mentions.ts";
+import type { MentionArrival, MentionsCapability } from "./mentions.ts";
 import type { ApplicationOverlays } from "./overlays-types.ts";
 
 export type SidebarAttentionStoreSources = {
@@ -21,6 +21,7 @@ export type SidebarAttentionStoreSources = {
   overlays: ApplicationOverlays;
   scopeUpgrade: ScopeUpgradeCapability;
   connectionBootstrap?: ConnectionBootstrapCoordinator;
+  onMention?: MentionArrival;
 };
 
 export type SidebarAttentionStoreOwner = {

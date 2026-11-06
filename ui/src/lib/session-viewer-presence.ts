@@ -9,6 +9,7 @@ const SESSION_VIEWERS_SET_METHOD = "sessions.viewers.set";
 type SessionViewerPresenceStore = {
   watch: (owner: object, sessionKeys: readonly string[]) => void;
   unwatch: (owner: object) => void;
+  isViewing: (sessionKey: string) => boolean;
 };
 
 const stores = new WeakMap<ApplicationGateway, SessionViewerPresenceStore>();
@@ -118,7 +119,13 @@ export function sessionViewerPresenceForGateway(
     lifecycle.schedule();
   };
 
-  const store: SessionViewerPresenceStore = { watch, unwatch: (owner) => watch(owner, []) };
+  const store: SessionViewerPresenceStore = {
+    watch,
+    unwatch: (owner) => watch(owner, []),
+    isViewing: (sessionKey) =>
+      (typeof document === "undefined" || document.visibilityState !== "hidden") &&
+      visibleSessionKeys().includes(resolveSessionKey(sessionKey, gateway.snapshot.hello).trim()),
+  };
   stores.set(gateway, store);
   return store;
 }
