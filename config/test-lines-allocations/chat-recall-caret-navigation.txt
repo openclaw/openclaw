@@ -1,0 +1,4 @@
+# Chat recall: one production-browser regression proves native multiline caret
+# movement preserves a recalled prompt and history can still restore the draft.
+# Native textarea default key behavior is not exercised by the existing jsdom test.
+41

@@ -156,6 +156,9 @@ export function handleChatInputHistoryKey(
     input.isComposing ||
     input.keyCode === 229 ||
     input.selectionStart !== input.selectionEnd ||
+    // Repositioning inside a recalled prompt returns arrow keys to native editing.
+    (input.selectionStart !== 0 &&
+      (input.key === "ArrowUp" || input.selectionStart !== state.chatMessage.length)) ||
     (state.chatInputHistoryIndex === -1 &&
       (input.key === "ArrowDown" || input.selectionStart !== 0))
   ) {
