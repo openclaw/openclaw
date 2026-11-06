@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/memory-wiki",
-  "version": "2026.9.36",
+  "version": "2026.9.37",
   "description": "OpenClaw persistent wiki plugin",
   "type": "module",
   "dependencies": {
@@ -15,7 +15,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.9.36"
+    "openclaw": ">=2026.9.37"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -33,11 +33,11 @@
       "minHostVersion": ">=2026.9.4"
     },
     "compat": {
-      "pluginApi": ">=2026.9.36"
+      "pluginApi": ">=2026.9.37"
     },
     "build": {
       "bundledDist": true,
-      "openclawVersion": "2026.9.36"
+      "openclawVersion": "2026.9.37"
     },
     "release": {
       "publishToClawHub": true,

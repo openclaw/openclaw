@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/team-reports",
-  "version": "2026.9.36",
+  "version": "2026.9.37",
   "description": "OpenClaw team activity reports plugin (GitHub org + Discord activity with model summaries)",
   "repository": {
     "type": "git",
@@ -12,7 +12,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.9.36"
+    "openclaw": ">=2026.9.37"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -33,10 +33,10 @@
       "minHostVersion": ">=2026.9.2"
     },
     "compat": {
-      "pluginApi": ">=2026.9.36"
+      "pluginApi": ">=2026.9.37"
     },
     "build": {
-      "openclawVersion": "2026.9.36",
+      "openclawVersion": "2026.9.37",
       "bundledDist": false,
       "workerEntries": [
         "./src/store.worker.ts",
