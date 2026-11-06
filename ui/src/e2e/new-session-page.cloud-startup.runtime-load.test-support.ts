@@ -159,10 +159,10 @@ async function recoverStartup(
       await navigateToControlUiSession(page, selectedKey);
       await expect
         .poll(() => alert.locator(".app-toast__message").textContent())
-        .toBe("Recovery needs a reload.");
+        .toBe("Couldn’t start this session.");
       await expect
         .poll(() => alert.locator(".app-toast__description").textContent())
-        .toBe("Unsaved starts will be lost.");
+        .toContain("Recovery needs a reload. Unsaved starts will be lost.");
       expect(await button(alert, "Retry").count()).toBe(0);
       expect(await alert.locator("details").count()).toBe(0);
     }
@@ -174,7 +174,7 @@ async function recoverStartup(
     await expect
       .poll(() =>
         alert.evaluate((element) => {
-          const text = element.querySelector(".app-toast__body")!.getBoundingClientRect();
+          const text = element.querySelector(".app-toast__description")!.getBoundingClientRect();
           const action = element.querySelector(".chat-error__discard")!.getBoundingClientRect();
           return action.top >= text.bottom && action.right <= innerWidth && action.left >= 0;
         }),

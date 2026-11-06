@@ -2,8 +2,12 @@ import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { ChatTopbarNoticesContent } from "./chat-view-notices-content.tsx";
+import {
+  ChatComposerNoticesContent,
+  ChatTopbarNoticesContent,
+} from "./chat-view-notices-content.tsx";
 import "../../styles.css";
+import "../../styles/chat/layout.css";
 
 const warning =
   "Session worktree could not be restored. Free disk space if needed, check the source repository, then retry. The conversation and snapshot are preserved.";
@@ -77,4 +81,29 @@ it("keeps diagnostic details redacted, open across refreshes, and reset for a di
   expect(details.open).toBe(true);
   setDetail("A different restore failure");
   await waitForSolid(() => expect(view.container.querySelector("details")?.open).toBe(false));
+});
+
+it("keeps the recovery action beside the title when details open", async () => {
+  const view = mountSolid(() => (
+    <ChatComposerNoticesContent
+      sessionKey="agent:main:main"
+      connected
+      messages={[]}
+      runError={{
+        runId: "run-1",
+        summary: "Error: Restore failed.\nprovider reported lease destroyed",
+      }}
+      onRefresh={() => {}}
+    />
+  ));
+  await waitForSolid(() =>
+    expect(view.container.querySelector(".chat-error__refresh")).not.toBeNull(),
+  );
+  const offset = () =>
+    view.container.querySelector(".chat-error__refresh")!.getBoundingClientRect().top -
+    view.container.querySelector(".app-toast__message")!.getBoundingClientRect().top;
+  const closed = offset();
+  expect(Math.abs(closed)).toBeLessThan(8);
+  view.container.querySelector("details")!.open = true;
+  await waitForSolid(() => expect(offset()).toBe(closed));
 });

@@ -11,6 +11,53 @@ openclaw-pending-session-create {
   align-self: center;
 }
 
+/* Persistent errors keep their recovery action beside the title in every
+ * state: expanding details must not move it, and narrow panes must not strand
+ * it on its own row. Details span the full width below. */
+.chat-error .app-toast__content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 2px 12px;
+}
+
+.chat-error .app-toast__body {
+  display: contents;
+}
+
+.chat-error .app-toast__message,
+.chat-error .app-toast__description {
+  grid-column: 1;
+}
+
+.chat-error .app-toast__body > .lazy-view-error__details {
+  grid-column: 1 / -1;
+}
+
+.chat-error .app-toast__content > :not(.app-toast__body) {
+  grid-row: 1;
+  grid-column: 2;
+  margin-block-start: -4px;
+}
+
+/* The long discard label would squeeze the message into a sliver on phones. */
+@media (max-width: 560px) {
+  .chat-error .app-toast__content > .chat-error__discard {
+    grid-row: auto;
+    grid-column: 1 / -1;
+    justify-self: start;
+    margin-block-start: 6px;
+  }
+}
+
+/* Touch has no hover, and a persistent error needs a visible way to dismiss it. */
+@media (hover: none) {
+  .chat-error > .app-toast__dismiss {
+    opacity: 1;
+    scale: 1;
+  }
+}
+
 @media (max-width: 560px) {
   .chat-error__discard,
   .chat-error__refresh {
