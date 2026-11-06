@@ -1460,18 +1460,15 @@
     --chat-composer-context-stroke: 1.5px;
   }
 
-  .agent-chat__input--mobile-toolbar
-    :is(
-      .agent-chat__input-btn--attach,
-      .chat-controls__permission-trigger,
-      .context-ring,
-      .chat-controls__model-trigger,
-      .chat-controls__effort-trigger,
-      .chat-send-btn--voice,
-      .chat-send-btn--stop,
-      .chat-send-btn--send,
-      .chat-send-btn--talk-mode
-    ) {
+  .agent-chat__input--mobile-toolbar .agent-chat__input-btn--attach,
+  .agent-chat__input--mobile-toolbar .chat-controls__permission-trigger,
+  .agent-chat__input--mobile-toolbar .context-ring,
+  .agent-chat__input--mobile-toolbar .chat-controls__model-trigger,
+  .agent-chat__input--mobile-toolbar .chat-controls__effort-trigger,
+  .agent-chat__input--mobile-toolbar .chat-send-btn--voice,
+  .agent-chat__input--mobile-toolbar .chat-send-btn--stop,
+  .agent-chat__input--mobile-toolbar .chat-send-btn--send,
+  .agent-chat__input--mobile-toolbar .chat-send-btn--talk-mode {
     position: relative;
     display: inline-flex;
     align-items: center;
