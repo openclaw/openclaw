@@ -4,6 +4,20 @@ import { observeFontLoading } from "../lib/reactive/font-loading.ts";
 import { listen } from "../lib/reactive/listener.ts";
 
 export type ScrollState = { scrollable: boolean; atStart: boolean; atEnd: boolean };
+
+export function scrollStateForGeometry(
+  size: number,
+  viewport: number,
+  position: number,
+): ScrollState {
+  const scrollable = size > viewport + 1;
+  return {
+    scrollable,
+    atStart: !scrollable || position <= 1,
+    atEnd: !scrollable || position + viewport >= size - 1,
+  };
+}
+
 type Observation = {
   horizontal: boolean;
   trackScroll: boolean;
@@ -34,12 +48,7 @@ function schedule(element: HTMLElement): void {
             ? size - viewport + element.scrollLeft
             : element.scrollLeft
           : element.scrollTop;
-        const scrollable = size > viewport + 1;
-        state = {
-          scrollable,
-          atStart: !scrollable || position <= 1,
-          atEnd: !scrollable || position + viewport >= size - 1,
-        };
+        state = scrollStateForGeometry(size, viewport, position);
         states.set(entry.horizontal, state);
       }
       return { entry, state };
@@ -64,7 +73,7 @@ function onScroll(event: Event): void {
   }
 }
 
-/** One observer and one frame batch serve component and sidebar scroll state. */
+/** Share one observer and frame read across an element's consumers. */
 export function observeScrollState(
   element: HTMLElement,
   publish: (state: ScrollState) => void,

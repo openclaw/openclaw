@@ -60,7 +60,7 @@ async function seededStore() {
   return store;
 }
 
-async function putSidebar(value: unknown, savedAt: number, projectionVersion = 5) {
+async function putSidebar(value: unknown, savedAt: number, projectionVersion = 6) {
   const database = await openSessionSnapshotDatabase();
   assert(database, "expected snapshot database");
   const transaction = database.transaction(SIDEBAR, "readwrite");
@@ -152,7 +152,7 @@ it("writes each changed presentation once across independent tab stores", async 
   expect(await read(peer)).toEqual(changed);
 });
 
-it.each([1, 2, 3, 4])(
+it.each([1, 2, 3, 4, 5])(
   "retires an incompatible sidebar version %i without evicting valid caches",
   async (projectionVersion) => {
     vi.spyOn(Date, "now").mockReturnValue(1000);

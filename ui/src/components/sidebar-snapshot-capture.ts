@@ -187,6 +187,8 @@ export function captureSidebarSnapshotModel(
       (key) => !isIncognitoSessionKey(key),
     ),
     scrollTop: host.scroll?.element()?.scrollTop ?? 0,
+    rowFloor: host.scroll?.rowFloor() ?? 32,
+    hasMore: host.sessionData.sessionsResult?.hasMore === true,
     footer: displayUser(context.gateway.snapshot.selfUser),
     brand: readSidebarBrandPresentation(host),
   });

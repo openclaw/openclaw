@@ -17,7 +17,7 @@ export function createSidebarSessionWindow(
 ) {
   const scroll = useContext(SidebarScrollContext);
   let list: HTMLDivElement;
-  const [rowFloor, setRowFloor] = createSignal(32);
+  const [rowFloor, setRowFloor] = createSignal(scroll?.rowFloor() ?? 32);
   const [focusedKey, setFocusedKey] = createSignal<string>();
   const [view, setView] = createSignal<{ items: WindowItem[]; height: number }>();
   const retained = (row: SidebarRecentSession, focused: string | undefined): boolean =>
@@ -96,7 +96,7 @@ export function createSidebarSessionWindow(
     if (!scroller) {
       return;
     }
-    const top = scroller.scrollTop - margin;
+    const top = scroll.top() - margin;
     const first = positions.findIndex((item) => item.top + item.height > top);
     const beyond = positions.findIndex((item) => item.top >= top + viewportHeight);
     const start = first < 0 ? positions.length : Math.max(0, first - 2);
@@ -126,8 +126,8 @@ export function createSidebarSessionWindow(
   };
   const rebuild = () => {
     const scroller = scroll.element();
-    const anchor = scroller && anchorAt(scroller.scrollTop - margin);
-    const offset = anchor && scroller ? scroller.scrollTop - margin - anchor.top : 0;
+    const anchor = scroller && anchorAt(scroll.top() - margin);
+    const offset = anchor ? scroll.top() - margin - anchor.top : 0;
     let top = 0;
     positions = current.map((input, index) => {
       const known = measured.get(input.row.key);
@@ -167,6 +167,7 @@ export function createSidebarSessionWindow(
         scroller.scrollTop;
       // All layout reads precede the publication/scroll writes.
       return () => {
+        scroll.captureRowFloor(nextRowFloor);
         // This request still contains estimates for the previous CSS minimum.
         if (rowFloor() !== nextRowFloor) {
           setRowFloor(nextRowFloor);
@@ -239,7 +240,7 @@ export function createSidebarSessionWindow(
         return;
       }
       publish();
-      const top = scroller.scrollTop - margin;
+      const top = scroll.top() - margin;
       const anchor = anchorAt(top);
       if (anchor) {
         scroll.captureAnchor({ key: anchor.row.key, offset: top - anchor.top });

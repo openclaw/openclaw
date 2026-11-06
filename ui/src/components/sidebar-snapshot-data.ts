@@ -191,6 +191,8 @@ export const sidebarSnapshotSchema = json.object({
   involvingMe: json.boolean,
   windowKeys: json.array(sessionKey),
   scrollTop: json.number,
+  rowFloor: json.number,
+  hasMore: json.boolean,
   footer: json.nullable(user),
   brand: json.object({
     name: text,

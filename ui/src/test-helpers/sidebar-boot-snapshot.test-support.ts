@@ -27,6 +27,8 @@ export function sidebarBootSnapshot(roster: BootRoster | null): SidebarSnapshotM
     involvingMe: false,
     windowKeys: [],
     scrollTop: 0,
+    rowFloor: 32,
+    hasMore: false,
     footer: null,
     brand: { name: "Synthetic workspace", avatar: null, icon: "mark", environment: null },
   };

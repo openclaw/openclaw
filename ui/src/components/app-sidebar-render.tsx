@@ -39,7 +39,7 @@ import {
 import { ThemeBrandIcon } from "./theme-brand-icon.tsx";
 
 export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
-  readonly scroll?: { element(): HTMLElement | undefined };
+  readonly scroll?: { element(): HTMLElement | undefined; rowFloor(): number };
   readonly nativeGatewaySnapshot: NativeGatewaysSnapshot | null;
   readonly people: import("./sidebar-people.ts").SidebarPeoplePreferences;
   readonly peopleView?: ReturnType<typeof import("./sidebar-people.ts").createSidebarPeople>;

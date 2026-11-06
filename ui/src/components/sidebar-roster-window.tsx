@@ -37,7 +37,9 @@ export function createSidebarRosterWindow<T extends { id: string }>(
     getScrollElement: () => viewport() ?? null,
     estimateSize: () => 46,
     observeElementRect,
-    observeElementOffset,
+    observeElementOffset: (instance, notify) =>
+      observeElementOffset(instance, (_offset, scrolling) => notify(scroll.top(), scrolling)),
+    initialOffset: () => scroll.top(),
     scrollToFn: elementScroll,
     overscan: 2,
     onChange: publish,
