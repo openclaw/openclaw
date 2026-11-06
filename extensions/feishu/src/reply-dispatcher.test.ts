@@ -662,8 +662,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     };
     const fallbackText = ["Pick a run", ...lines, `- ${label}: \`/open-run\``].join("\n\n");
     const finalText = "The run is ready.";
-    // Queue both logical payloads before automatic idle. A final may replace
-    // ordinary stream text, but it must not erase an earlier controls fallback.
+    // Queue both before idle so the final can replace prose but must retain the controls fallback.
     expect(dispatcher.sendBlockReply(payload)).toBe(true);
     expect(dispatcher.sendFinalReply({ text: finalText })).toBe(true);
     dispatcher.markComplete();
@@ -1103,6 +1102,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["fence sp", ["  ~~~", null, "  ~~~ py\nx\n~~~"], ["  ~~~", "  ~~~ py\nx\n~~~"]],
     ["retry", [2, 2, "B.", ["B.", 1], 2, "C.", ["C.", 2]], ["B.\n\nC."]],
     ["trade", [2, 2, ["A.", 1], ["X.", 1], "X. Y.", ["X.", 1], null, ["Y.", 1]], ["X. Y.", ""]],
+    ["retry gap", [2, 2, 2, "B.", ["B.", 1]], ["B."]],
+    ["block guard", [2, ["A.", 1], 2, "X.", ["X.", 1]], ["A.\n\nX.X."]],
   ] as const)("streams %s", async (name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();
@@ -1391,7 +1392,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     }
     const { options } = createDispatcherHarness();
     const delivery = await options.final({ text });
-    const duplicate = rejected ? await options.final({ text }) : undefined;
+    const repeat = rejected ? await options.final({ text }) : undefined;
     stream(0).closeWithResult.mockRejectedValueOnce(
       streamingFailure(new Error(error), {
         visibleReplySent: visible,
@@ -1403,9 +1404,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await expect(options.onIdle?.()).rejects.toThrow(error);
     await expect(delivery?.finalization).rejects.toMatchObject(partialDelivery(text, [messageId]));
     if (rejected) {
-      await expect(duplicate?.finalization).rejects.toMatchObject(
-        partialDelivery(text, [messageId]),
-      );
+      await expect(repeat?.finalization).rejects.toMatchObject(partialDelivery(text, [messageId]));
     }
     if (recover) {
       expect(send).toHaveBeenCalledWith(expect.objectContaining({ text }));

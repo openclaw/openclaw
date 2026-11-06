@@ -29,6 +29,7 @@ export function createReplyAccount(
     }),
   };
 }
+
 export function installReplyRuntime(fullChunking = false) {
   const store = createPluginRuntimeStore<PluginRuntime>({
     pluginId: "feishu",
