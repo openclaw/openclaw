@@ -213,15 +213,12 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
         // Read while measured layout is clean; a native clamp needs its rows now.
         const { threadInnerElement: inner, headerHeight: top, offsetState } = this;
         const moved = redraw && inner && this.layout.commitRange(inner, view.getTotalSize() + top);
-        // A read-back inside the committed window can share the next frame.
-        // A fast scroll reaching new rows still needs them before this paint.
+        // Native resize delivery can read a fast scroll before its scroll event.
+        // Keep its position, but replace observed rows outside the delivery cycle.
         const defer = redraw && !(moved || this.canAutoFollow() || offsetState.hasPendingAnchor);
         this.presentation.commitChange(
           () => (redraw ? (this.renderPreviousRows ?? invalidate) : invalidate)(),
-          defer &&
-            (offsetState.measuringOffset
-              ? this.renderer.coversViewport(view.calculateRange())
-              : !sync),
+          offsetState.measuringOffset || (defer && !sync),
         );
         // A caller render can replace the queued redraw without replacing this geometry receipt.
         // Retiring a reader correction can grow the native extent without changing row totals.
@@ -253,7 +250,12 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
             onOffset: (delta) => void (delta && this.initialRange.recordReaderMovement(delta)),
             onComposerLayout: (changed) => this.commitComposerResize(changed),
             onReaderScroll: (towardEnd) => this.callbacks.onReaderScroll?.(towardEnd),
-            onNativeScroll: callbacks.onNativeScroll,
+            onNativeScroll: (event) => {
+              // Measurement may have consumed this offset before its native event.
+              // Commit its queued rows now, ahead of this frame's paint.
+              this.presentation.flushChange();
+              callbacks.onNativeScroll?.(event);
+            },
           },
           instance,
           callback,

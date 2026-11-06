@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, expect, it, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
+import { observeMenuSpacing } from "./menu-spacing.ts";
 import { hasMenuSurface, promoteToPopoverTopLayer } from "./menu-surface.ts";
 
 const bridge = vi.hoisted(() => ({ available: false }));
@@ -16,6 +17,35 @@ afterEach(async () => {
   bridge.available = false;
 });
 const frame = () => new Promise(requestAnimationFrame);
+
+it("ignores decorative changes while keeping menu row boundaries current", async () => {
+  const root = document.createElement("div");
+  root.innerHTML = '<button class="oc-menu-item"><span></span></button>';
+  const row = root.firstElementChild!;
+  const avatar = row.firstElementChild!;
+  const disconnect = observeMenuSpacing(root);
+  const scan = vi.spyOn(row.classList, "contains");
+  try {
+    avatar.className = "is-fallback";
+    avatar.append(document.createElement("img"));
+    await frame();
+    expect(scan).not.toHaveBeenCalled();
+    expect(root.hasAttribute("data-menu-row-end")).toBe(true);
+    row.className = "";
+    await frame();
+    expect(root.hasAttribute("data-menu-row-end")).toBe(false);
+    row.className = "oc-menu-item";
+    await frame();
+    expect(root.hasAttribute("data-menu-row-end")).toBe(true);
+    row.remove();
+    await frame();
+    expect(root.hasAttribute("data-menu-row-end")).toBe(false);
+  } finally {
+    disconnect();
+    scan.mockRestore();
+  }
+});
+
 function positioned<K extends keyof HTMLElementTagNameMap>(tag: K, x: number, size = 50, y = 20) {
   const element = document.createElement(tag);
   element.getBoundingClientRect = () => new DOMRect(x, y, size, size);

@@ -193,6 +193,7 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "agents.defaults",
       "models",
       "desktop.host",
+      "gateway.openclawId",
       "cloudWorkers",
     ],
     kind: "hot",

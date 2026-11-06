@@ -12,7 +12,7 @@ export type TranscriptContent = GuardedTranscriptItem | JSX.Element;
 export type TranscriptRow<T = unknown> = {
   estimatedSize?: number;
   retainDom?: boolean;
-  /** Native message content supports data-only Markdown preparation. */
+  /** Prepare Markdown data while idle; visited DOM can still be retained. */
   prewarm?: boolean;
   streaming?: boolean;
 } & (

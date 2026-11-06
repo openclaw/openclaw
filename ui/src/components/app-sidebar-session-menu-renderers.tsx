@@ -34,12 +34,13 @@ import { SidebarSessionFilterPopover } from "./sidebar-session-filter-popover.ts
 import { Icon } from "./solid/icon.tsx";
 import type { MenuEntry, MenuItem } from "./solid/menu.tsx";
 import { Picker } from "./solid/select-picker.tsx";
-import { SettingsSegmented, SettingsToggle } from "./solid/settings-ui.tsx";
+import { SettingsSegmented } from "./solid/settings-ui.tsx";
 import {
   SidebarMenuRadioItem,
   SidebarOwnerFilter,
   SidebarOwnerOptions,
 } from "./solid/sidebar-owner-filter.tsx";
+import { SwitchIndicator } from "./solid/switch.tsx";
 
 registerSessionMenuEnglish();
 
@@ -311,9 +312,7 @@ export function renderSidebarSessionSortMenuForMenus(
       onClick={() => onChange(!checked())}
     >
       <span>{label()}</span>
-      <span inert aria-hidden="true">
-        <SettingsToggle checked={checked()} ariaLabel={label()} onChange={() => undefined} />
-      </span>
+      <SwitchIndicator checked={checked()} size="sm" />
     </button>
   );
   return (

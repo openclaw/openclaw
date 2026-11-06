@@ -80,6 +80,7 @@ const dependencies = [
         "typebox",
         "typescript",
         "undici",
+        "ws",
       ]
     : []),
 ].map((dependency) => {

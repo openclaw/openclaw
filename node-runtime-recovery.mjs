@@ -16,6 +16,7 @@ import {
 } from "./gateway-shutdown-budget.mjs";
 import { nodeRuntimePathEntries, withNodeRuntimePath } from "./node-runtime-env.mjs";
 import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "./node-sqlite.mjs";
+import { formatNodeSecurityWarning } from "./node-version.mjs";
 import { createRuntimeProcessScriptFile } from "./runtime-process-scripts.generated.mjs";
 
 export { consumeLauncherRootOptionToken };
@@ -768,19 +769,32 @@ export async function recoverNodeRuntime({
     env.OPENCLAW_NODE_UPDATE_RESPAWNED === "1" ||
     !process.argv[1] ||
     isForegroundGmailRunInvocation(process.argv) ||
-    (process.platform !== "win32" && isNativeHookRelayInvocation(process.argv)) ||
-    !nodeRuntimeFailure(process.versions.node, await detectCurrentSqliteCapabilities())
+    (process.platform !== "win32" && isNativeHookRelayInvocation(process.argv))
   ) {
     return false;
   }
-  const selected = await findUsableNodeRuntime({ homeDir, allowInstall, env });
+  const failure = nodeRuntimeFailure(
+    process.versions.node,
+    await detectCurrentSqliteCapabilities(),
+  );
+  const securityWarning = formatNodeSecurityWarning(process.versions.node);
+  if (!failure && !securityWarning) {
+    return false;
+  }
+  // Certificate-only recovery may reuse a patched runtime, never download one.
+  const selected = await findUsableNodeRuntime({
+    homeDir,
+    allowInstall: Boolean(failure) && allowInstall,
+    env,
+    acceptVersion: failure ? undefined : (version) => !formatNodeSecurityWarning(version),
+  });
   const nodePath = selected?.nodePath;
   const reason = selected?.reason;
   if (!nodePath) {
     return false;
   }
   process.stderr.write(
-    `openclaw: Retrying with ${JSON.stringify(nodePath)} (${reason}; current Node failed runtime admission).\n`,
+    `openclaw: Retrying with ${JSON.stringify(nodePath)} (${reason}; ${failure ? "current Node failed runtime admission" : "recommended security patch"}).\n`,
   );
   return await runRespawnedChild(
     resolveOpenClawCliRespawn({

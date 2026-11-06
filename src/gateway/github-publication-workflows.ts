@@ -29,7 +29,7 @@ export function assertGitHubPublicationWorkflowChangesAllowed(
   }
 }
 
-export function isGitHubPublicationWorkflowPath(file: string): boolean {
+function isGitHubPublicationWorkflowPath(file: string): boolean {
   return (
     file.startsWith(workflowDirectory) &&
     /^[^/]+\.ya?ml$/iu.test(file.slice(workflowDirectory.length))
@@ -55,7 +55,7 @@ export async function prepareGitHubPublicationWorkflowGuard(
 type WorkflowTree = ReadonlyMap<string, string>;
 
 /** Only an unchanged published definition or an unambiguous target-only update is exempt. */
-export async function hasUnapprovedGitHubPublicationWorkflowChanges(params: {
+async function hasUnapprovedGitHubPublicationWorkflowChanges(params: {
   before: WorkflowTree;
   accepted: WorkflowTree;
   readUpstream: () => Promise<

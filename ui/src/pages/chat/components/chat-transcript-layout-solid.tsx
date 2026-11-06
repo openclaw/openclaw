@@ -155,11 +155,6 @@ function TranscriptRows(props: {
                       { "chat-virtual-row--first": virtualRow().index === 0 },
                     ]}
                     style={{
-                      // Live content stays measurable; reflecting every resize back into
-                      // its own style would invalidate it again after native layout.
-                      "contain-intrinsic-block-size": streaming()
-                        ? undefined
-                        : `${virtualRow().size}px`,
                       "min-height": `${props.snapshot.layout.rowMinimum(index())}px`,
                       display: active() ? undefined : preparing() ? "flow-root" : "none",
                       position: active() ? undefined : "absolute",
@@ -169,6 +164,7 @@ function TranscriptRows(props: {
                         preparing() || streaming() ? "visible" : active() ? undefined : "hidden",
                     }}
                     data-index={String(virtualRow().index)}
+                    data-row-size={streaming() ? undefined : String(virtualRow().size)}
                     data-virtual-row-key={row()?.key}
                     data-prepared-row={active() ? undefined : "true"}
                     data-preparing-row={preparing() ? "true" : undefined}
@@ -247,20 +243,6 @@ export class ChatTranscriptRenderer {
 
   get columnElement(): HTMLDivElement | undefined {
     return this.column;
-  }
-
-  coversViewport(range: { startIndex: number; endIndex: number } | null): boolean {
-    const snapshot = this.committed;
-    if (!range || !snapshot) {
-      return false;
-    }
-    for (let index = range.startIndex; index <= range.endIndex; index++) {
-      const row = snapshot.rows[index];
-      if (!row || !snapshot.activeRowKeys.has(row.key)) {
-        return false;
-      }
-    }
-    return true;
   }
 
   subscribe(listener: () => void): () => void {
