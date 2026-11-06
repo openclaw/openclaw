@@ -6,10 +6,14 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { ModelProviderIcon } from "../../lib/reactive/provider-presentation.tsx";
 import { ModelSetupWizard } from "../model-setup/wizard-view-solid.tsx";
+import type { CustomProviderEditorActions } from "./custom-endpoints.tsx";
 import type { ModelProviderLogin } from "./login-controller.ts";
 import { ProviderAccountSummary } from "./profiles-view.tsx";
 
-export function ModelProviderLoginView(props: { controller: ModelProviderLogin }) {
+export function ModelProviderLoginView(props: {
+  controller: ModelProviderLogin;
+  customProvider?: CustomProviderEditorActions;
+}) {
   const picker = createMemo(() => props.controller.pickerView());
   const wizard = createMemo(() => props.controller.wizardViewProps);
   return (
@@ -32,6 +36,7 @@ export function ModelProviderLoginView(props: { controller: ModelProviderLogin }
               fallback={(error) => (
                 <PickerDialog
                   controller={props.controller}
+                  customProvider={props.customProvider}
                   current={current()}
                   error={formatUiError(error(), t("modelProviders.requestFailed"))}
                 />
@@ -39,10 +44,19 @@ export function ModelProviderLoginView(props: { controller: ModelProviderLogin }
             >
               <Loading
                 fallback={
-                  <PickerDialog controller={props.controller} current={current()} loading />
+                  <PickerDialog
+                    controller={props.controller}
+                    customProvider={props.customProvider}
+                    current={current()}
+                    loading
+                  />
                 }
               >
-                <InventoryPicker controller={props.controller} inventory={inventory} />
+                <InventoryPicker
+                  controller={props.controller}
+                  customProvider={props.customProvider}
+                  inventory={inventory}
+                />
               </Loading>
             </Errored>
           )}
@@ -54,25 +68,52 @@ export function ModelProviderLoginView(props: { controller: ModelProviderLogin }
 
 function InventoryPicker(props: {
   controller: ModelProviderLogin;
+  customProvider?: CustomProviderEditorActions;
   inventory: { value: ModelAuthStatusResult | Promise<ModelAuthStatusResult | null> };
 }) {
   const inventory = createMemo(() => props.inventory.value);
   const picker = createMemo(() => props.controller.pickerView(inventory()));
   return (
     <Show when={picker()}>
-      {(current) => <PickerDialog controller={props.controller} current={current()} />}
+      {(current) => (
+        <PickerDialog
+          controller={props.controller}
+          customProvider={props.customProvider}
+          current={current()}
+        />
+      )}
     </Show>
   );
 }
 
 function PickerDialog(props: {
   controller: ModelProviderLogin;
+  customProvider?: CustomProviderEditorActions;
   current: NonNullable<ReturnType<ModelProviderLogin["pickerView"]>>;
   loading?: boolean;
   error?: string;
 }) {
   let searchInput: HTMLInputElement | undefined;
   const current = createMemo(() => props.current);
+  const matchesCustom = () =>
+    props.customProvider &&
+    ["custom", "endpoint", t("modelProviders.endpoints.customProvider")].some((label) =>
+      label.toLocaleLowerCase().includes(current().query.trim().toLocaleLowerCase()),
+    );
+  const options = createMemo(() =>
+    [
+      ...current().matches.map((group) => ({ id: group.id, label: group.label, group })),
+      ...(matchesCustom()
+        ? [
+            {
+              id: "custom-endpoint",
+              label: t("modelProviders.endpoints.customProvider"),
+              group: null,
+            },
+          ]
+        : []),
+    ].toSorted((a, b) => a.label.localeCompare(b.label)),
+  );
   return (
     <openclaw-modal-dialog
       prop:initialFocus={() => (searchInput?.isConnected ? searchInput : null)}
@@ -157,31 +198,51 @@ function PickerDialog(props: {
                     class="model-provider-login__providers"
                     aria-label={t("modelSetup.manual.provider")}
                   >
-                    <For each={current().matches} keyed={(group) => group.id}>
-                      {(group) => (
+                    <For each={options()} keyed={(option) => option.id}>
+                      {(option) => (
                         <li>
-                          <LoginOption
-                            provider={group().id}
-                            label={group().label}
-                            hint={
-                              // A provider with only a key has one way in, so its row stays quiet.
-                              group().choices.length
-                                ? [
-                                    ...group().choices.map((choice) => choice.label),
-                                    ...(group().apiKeyProvider
-                                      ? [t("modelProviders.status.apiKey")]
-                                      : []),
-                                  ].join(" · ")
-                                : undefined
+                          <Show
+                            when={option().group}
+                            fallback={
+                              <LoginOption
+                                provider="custom"
+                                label={option().label}
+                                hint={t("modelProviders.endpoints.localOnly")}
+                                disabled={
+                                  current().disabled || props.customProvider?.disabled === true
+                                }
+                                onClick={() => {
+                                  current().onClose();
+                                  props.customProvider?.create();
+                                }}
+                              />
                             }
-                            disabled={current().disabled}
-                            onClick={() => current().onProvider(group().id)}
-                          />
+                          >
+                            {(group) => (
+                              <LoginOption
+                                provider={group().id}
+                                label={group().label}
+                                hint={
+                                  // A provider with only a key has one way in, so its row stays quiet.
+                                  group().choices.length
+                                    ? [
+                                        ...group().choices.map((choice) => choice.label),
+                                        ...(group().apiKeyProvider
+                                          ? [t("modelProviders.status.apiKey")]
+                                          : []),
+                                      ].join(" · ")
+                                    : undefined
+                                }
+                                disabled={current().disabled}
+                                onClick={() => current().onProvider(group().id)}
+                              />
+                            )}
+                          </Show>
                         </li>
                       )}
                     </For>
                   </ul>
-                  <Show when={!current().matches.length}>
+                  <Show when={!options().length}>
                     <p class="muted" role="status">
                       {t(
                         current().query.trim()

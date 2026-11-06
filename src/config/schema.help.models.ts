@@ -28,6 +28,8 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "Public HTTPS PNG, JPEG, WebP, or GIF URL without embedded credentials or a fragment. The Gateway fetches and sanitizes the image with private-network and redirect protections; the browser never contacts this URL directly.",
   "models.providers.*.icon.name":
     "Bundled Control UI icon name, such as server. An unknown name falls back to the provider's built-in brand or display-name initial.",
+  "models.providers.*.logo":
+    "Optional image data URL, up to the shared 2 MB avatar limit, for Provider access. Rendered as an image with a fallback icon; no remote logo is fetched. Omit to use the default icon.",
   "models.providers.*.baseUrl":
     "Base URL for the provider endpoint used to serve model requests for that provider entry. Use HTTPS endpoints and keep URLs environment-specific through config templating where needed.",
   "models.providers.*.apiKey":

@@ -10,6 +10,7 @@ import type { ModelsConfigSchema } from "../../config/zod-schema.core.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withGuardedFetchRequestAuthority } from "../../infra/net/fetch-request-authority.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { isRenderableAvatarImageDataUrl } from "../../shared/avatar-limits.js";
 import { CUSTOM_ENDPOINT_APIS, customEndpointModelInputs } from "../../shared/custom-endpoint.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandler, GatewayRequestHandlerOptions } from "./types.js";
@@ -19,6 +20,14 @@ type AuthoredProvider = NonNullable<AuthoredModels["providers"]>[string];
 type AuthoredModel = NonNullable<AuthoredProvider["models"]>[number];
 type EndpointSourceConfig = Omit<OpenClawConfig, "models"> & { models?: AuthoredModels };
 
+const branding = {
+  name: z.string().trim().min(1).nullable().optional(),
+  logo: z
+    .string()
+    .refine(isRenderableAvatarImageDataUrl, "Use a bounded image data URL.")
+    .nullable()
+    .optional(),
+};
 const connection = {
   baseUrl: z
     .string()
@@ -59,6 +68,7 @@ export const customEndpointParams = z.discriminatedUnion("action", [
     .object({
       ...target,
       ...connection,
+      ...branding,
       action: z.literal("create"),
       models: z.array(model).min(1),
     })
@@ -67,6 +77,7 @@ export const customEndpointParams = z.discriminatedUnion("action", [
     .object({
       ...target,
       ...connection,
+      ...branding,
       action: z.literal("edit"),
       api: z.enum(CUSTOM_ENDPOINT_APIS).optional(),
       models: z.array(model).min(1),
@@ -216,6 +227,8 @@ export function prepareCustomEndpointPatch(
     }
     value = {
       ...existing,
+      ...(params.name !== undefined ? { name: params.name } : {}),
+      ...(params.logo !== undefined ? { logo: params.logo } : {}),
       baseUrl: params.baseUrl,
       ...(params.api === undefined ? {} : { api: params.api }),
       models,

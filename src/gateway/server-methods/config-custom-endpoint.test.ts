@@ -25,6 +25,48 @@ const source: Source = {
 };
 
 describe("independent custom endpoint config intent", () => {
+  it("preserves branding through endpoint edits and carries explicit clears without touching credential identity", () => {
+    const logo = "data:image/png;base64,iVBORw0KGgo=";
+    const branded: Source = {
+      models: {
+        providers: {
+          [draft.provider]: {
+            ...source.models?.providers?.[draft.provider],
+            name: "Lab inference",
+            logo,
+            apiKey: { source: "env", provider: "default", id: "LAB_KEY" },
+            request: { allowPrivateNetwork: true },
+          },
+        },
+      },
+    };
+    const params = {
+      ...draft,
+      action: "edit" as const,
+      models: [{ id: "chat", existingId: "chat", edits: {} }],
+    };
+    const provider = (value: ReturnType<typeof prepareCustomEndpointPatch>) =>
+      JSON.parse(value.raw).models.providers[draft.provider];
+    expect(provider(prepareCustomEndpointPatch(params, branded))).toMatchObject({
+      name: "Lab inference",
+      logo,
+      apiKey: { source: "env", provider: "default", id: "LAB_KEY" },
+      request: { allowPrivateNetwork: true },
+    });
+    expect(
+      provider(prepareCustomEndpointPatch({ ...params, name: "New name", logo: null }, branded)),
+    ).toMatchObject({ name: "New name", logo: null });
+    expect(customEndpointParams.safeParse({ ...params, name: null, logo: null }).success).toBe(
+      true,
+    );
+    for (const unsafe of [
+      "https://images.example/logo.png",
+      "javascript:alert(1)",
+      "<svg onload=alert(1)>",
+    ]) {
+      expect(customEndpointParams.safeParse({ ...params, logo: unsafe }).success).toBe(false);
+    }
+  });
   it("creates distinct models without inventing token, capability, or cost metadata", () => {
     const patch = JSON.parse(
       prepareCustomEndpointPatch(

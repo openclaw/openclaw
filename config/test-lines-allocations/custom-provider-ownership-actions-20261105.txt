@@ -1,0 +1,5 @@
+# Second-only net test LF growth against first cabbf9fbdcf2fbed0e0ec7f70c70ea969e485c87.
+# Required regression coverage: unified branding and omitted-adapter editing,
+# retained setup lifetime, anonymous shared probes, independent credentials,
+# and native Gateway config persistence. Excludes the first 1086-LF grant.
+657

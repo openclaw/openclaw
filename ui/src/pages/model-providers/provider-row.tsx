@@ -1,11 +1,16 @@
 // Provider access keeps account credentials and plan limits together in each row.
 import type { JSX } from "@solidjs/web";
-import { createSignal, For, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
+import { isRenderableAvatarImageDataUrl } from "../../../../src/shared/avatar-limits.js";
 import type { ModelsProbeResult } from "../../api/types.ts";
 import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
+import {
+  IdentityAvatarImage,
+  createIdentityAvatarPresentation,
+} from "../../components/solid/identity-avatar-image.tsx";
+import { ProviderBrandIcon, ProviderFallbackIcon } from "../../components/solid/provider-icon.tsx";
 import {
   hasProviderUsageDetails,
   ProviderUsagePanel,
@@ -227,16 +232,12 @@ export function ApiKeyInput(props: {
   );
 }
 
-function keyEditorOpen(props: ProviderRowProps): boolean {
-  return props.keyEditorProvider === props.card.id;
-}
-
 /** Opens the key form, which then stands in for this button until it closes. */
 function KeyButton(props: ProviderRowProps & { replace?: boolean }) {
   const authModeBlocked = () =>
     Boolean(props.card.configAuthMode && props.card.configAuthMode !== "api-key");
   return (
-    <Show when={props.card.apiKeySupported !== false && !keyEditorOpen(props)}>
+    <Show when={props.card.apiKeySupported !== false && props.keyEditorProvider !== props.card.id}>
       <button
         class="btn btn--sm"
         disabled={
@@ -316,15 +317,19 @@ function KeyForm(props: ProviderRowProps & { onCancel?: () => void }) {
 
 function KeyEditor(props: ProviderRowProps & { onCancel?: () => void }) {
   return (
-    <Show when={keyEditorOpen(props)}>
+    <Show when={props.keyEditorProvider === props.card.id}>
       <KeyForm {...props} />
     </Show>
   );
 }
 
 /** Defaults for all agents served by this provider; removal keeps them selected. */
-function defaultModelsUsing(props: ProviderRowProps): string | undefined {
-  const { primary, fallbacks, utilityModel } = props.defaultModels;
+function defaultModelsUsing(
+  defaultModels: ProviderRowProps["defaultModels"],
+  configuredModels: ProviderRowProps["configuredModels"],
+  providerId: string,
+): string | undefined {
+  const { primary, fallbacks, utilityModel } = defaultModels;
   const names = [
     primary,
     ...fallbacks,
@@ -333,9 +338,9 @@ function defaultModelsUsing(props: ProviderRowProps): string | undefined {
   ].flatMap((ref) => {
     const model = ref ? splitTrailingAuthProfile(ref).model : "";
     // Aliases resolve through their catalog entry; other refs name the provider first.
-    const entry = props.configuredModels.find((candidate) => modelCatalogRef(candidate) === model);
+    const entry = configuredModels.find((candidate) => modelCatalogRef(candidate) === model);
     const provider = entry?.provider ?? (model.includes("/") ? model.split("/", 1)[0] : "");
-    return provider && canonicalModelAuthProviderId(provider) === props.card.id
+    return provider && canonicalModelAuthProviderId(provider) === providerId
       ? [entry?.name ?? model]
       : [];
   });
@@ -380,9 +385,45 @@ function removalPlan(card: ModelProviderCard): {
   };
 }
 
+function ProviderCardIcon(props: { card: ModelProviderCard }) {
+  const view = createMemo(() => ({
+    imageUrl:
+      props.card.logo && isRenderableAvatarImageDataUrl(props.card.logo) ? props.card.logo : null,
+    pending: false,
+  }));
+  const image = createIdentityAvatarPresentation(view);
+  return (
+    <Show
+      when={view().imageUrl}
+      fallback={
+        <ProviderBrandIcon
+          provider={props.card.id}
+          presentation={props.card}
+          class="provider-row__icon model-providers__icon"
+        />
+      }
+    >
+      <span
+        class={[
+          "provider-row__icon",
+          "model-providers__icon",
+          "model-provider-logo",
+          image.classes(),
+        ]}
+      >
+        <Show when={image.state() !== "loaded"}>
+          <ProviderFallbackIcon label={props.card.displayName} />
+        </Show>
+        <IdentityAvatarImage view={view()} onStateChange={image.onStateChange} ariaHidden />
+      </span>
+    </Show>
+  );
+}
+
 function ProviderActions(props: ProviderRowProps) {
   const removal = () => removalPlan(props.card);
-  const defaultModels = () => defaultModelsUsing(props);
+  const defaultModels = () =>
+    defaultModelsUsing(props.defaultModels, props.configuredModels, props.card.id);
   const connected = () => isProviderUsable(props.card) || props.card.profiles.length > 0;
   const connectName = () =>
     t(connected() ? "modelProviders.profiles.addAccount" : "modelProviders.login.action");
@@ -396,6 +437,24 @@ function ProviderActions(props: ProviderRowProps) {
     );
   return (
     <div class="model-providers__card-actions provider-row__footer">
+      <Show when={props.card.customEndpoint}>
+        <button
+          class="btn btn--sm"
+          disabled={
+            !props.customProvider ||
+            props.customProvider.disabled ||
+            !props.card.customEndpoint?.editable
+          }
+          title={
+            !props.card.customEndpoint?.editable
+              ? t("modelProviders.endpoints.unsupportedAdapter")
+              : undefined
+          }
+          onClick={() => props.customProvider?.edit(props.card.configKey ?? props.card.id)}
+        >
+          {t("modelProviders.endpoints.editConnection")}
+        </button>
+      </Show>
       <Show when={removal().removeTargets.length > 0}>
         <button
           class="btn btn--sm btn--ghost danger provider-row__remove"
@@ -417,7 +476,7 @@ function ProviderActions(props: ProviderRowProps) {
           {t("modelProviders.remove.action")}
         </button>
       </Show>
-      <Show when={isProviderUsable(props.card)}>
+      <Show when={isProviderUsable(props.card) || Boolean(props.card.customEndpoint)}>
         <button
           class="btn btn--sm"
           disabled={
@@ -512,7 +571,7 @@ export function ProviderRow(props: ProviderRowProps) {
   const [expanded, setExpanded] = createSignal<boolean>();
   // Work in progress and broken credentials start open; a click always wins.
   const startsOpen = () =>
-    keyEditorOpen(props) ||
+    props.keyEditorProvider === props.card.id ||
     Boolean(message()) ||
     Boolean(props.probeResults[card().id]) ||
     Boolean(props.busy[`probe:${card().id}`]) ||
@@ -534,11 +593,7 @@ export function ProviderRow(props: ProviderRowProps) {
         aria-controls={detailId()}
         onClick={() => setExpanded(!open())}
       >
-        <ProviderBrandIcon
-          provider={card().id}
-          presentation={card()}
-          class="provider-row__icon model-providers__icon"
-        />
+        <ProviderCardIcon card={card()} />
         <span class="provider-row__identity">
           <span class="provider-row__name">{providerName(card())}</span>
           <span class="provider-row__meta settings-row__desc">
@@ -591,11 +646,7 @@ export function UnconnectedProviderRow(props: ProviderRowProps) {
   return (
     <li class="provider-row provider-row--quiet model-providers__row" data-provider-id={card().id}>
       <div class="provider-row__summary model-providers__head">
-        <ProviderBrandIcon
-          provider={card().id}
-          presentation={card()}
-          class="provider-row__icon model-providers__icon"
-        />
+        <ProviderCardIcon card={card()} />
         <span class="provider-row__identity">
           <span class="provider-row__name">{providerName(card())}</span>
           <span class="provider-row__meta settings-row__desc">
@@ -605,6 +656,7 @@ export function UnconnectedProviderRow(props: ProviderRowProps) {
         <ProviderActions {...props} />
       </div>
       <KeyEditor {...props} />
+      {renderProbeResult(props.probeResults[card().id])}
       {renderMutationMessage(message())}
     </li>
   );

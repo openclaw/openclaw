@@ -13,6 +13,7 @@ export const MODEL_FIELD_LABELS: Record<string, string> = {
   "models.providers.*.icon.path": "Model Provider Icon File",
   "models.providers.*.icon.url": "Model Provider Icon URL",
   "models.providers.*.icon.name": "Model Provider Bundled Icon",
+  "models.providers.*.logo": "Model Provider Logo",
   "models.providers.*.baseUrl": "Model Provider Base URL",
   "models.providers.*.apiKey": "Model Provider API Key", // pragma: allowlist secret
   "models.providers.*.auth": "Model Provider Auth Mode",

@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { flush } from "solid-js";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { card, mount, props, text } from "./view.test-support.tsx";
 
 function actions(container: HTMLElement, providerId: string) {
@@ -115,4 +115,45 @@ it("puts Replace on a key's row only when it is the provider's only key", () => 
     expect(rowReplace(container)).toEqual([]);
     expect(actions(container, "openai")).toContainEqual(setKey);
   }
+});
+
+it("probes an anonymous custom endpoint with no catalog through the shared row action", () => {
+  const onProbe = vi.fn();
+  const container = mount(
+    props({
+      cards: [
+        card({
+          id: "local-endpoint",
+          displayName: "Local endpoint",
+          modelCount: 0,
+          availableModelCount: 0,
+          apiKey: undefined,
+          credentialProviderIds: [],
+          customEndpoint: { editable: true },
+          catalogStatus: "unavailable",
+        }),
+      ],
+      onProbe,
+      probeResults: {
+        "local-endpoint": {
+          provider: "local-endpoint",
+          status: "ok",
+          latencyMs: 42,
+          results: [],
+        },
+      },
+    }),
+  );
+  const row = container.querySelector("[data-provider-id=local-endpoint]")!;
+  expect(row.classList.contains("provider-row--quiet")).toBe(true);
+  const probe = [...row.querySelectorAll<HTMLButtonElement>("button")].find(
+    (entry) => entry.textContent?.trim() === "Test access",
+  );
+  expect(probe).toBeDefined();
+  expect(probe!.disabled).toBe(false);
+  probe!.click();
+  expect(onProbe).toHaveBeenCalledExactlyOnceWith("local-endpoint", ["local-endpoint"]);
+  expect(row.querySelector(".model-providers__probe-summary")?.textContent).toContain(
+    "Access verified",
+  );
 });
