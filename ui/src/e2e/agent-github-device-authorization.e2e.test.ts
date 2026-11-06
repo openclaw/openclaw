@@ -275,7 +275,7 @@ suite.define(() => {
         const connection = (scope: string) =>
           section.locator(`[data-github-connection="${scope}"]`);
         await expect(connection("system")).toContainText("@system-octocat");
-        await expect(button("Change system GitHub")).toHaveCount(0);
+        await expect(button("Change System GitHub")).toHaveCount(0);
         await expect(connection("agent")).toHaveCount(0);
         const configReads = (await gateway.getRequests("config.get")).length;
         const configWrites = (await gateway.getRequests("config.set")).length;

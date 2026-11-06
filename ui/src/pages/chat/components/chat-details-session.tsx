@@ -17,9 +17,9 @@ import { ProcessesPanelData } from "../processes-panel-data.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "../session-cache.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { ChatDetailsBackground } from "./chat-details-background.tsx";
-import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
 import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
+import "../../../styles/chat/details-desktop.css";
 import { ChatDetailsPeopleSummary } from "./chat-details-people.tsx";
 import { ChatDetailsProcesses } from "./chat-details-processes.tsx";
 import { ChatDetailsProgress } from "./chat-details-progress.tsx";
@@ -33,6 +33,7 @@ import { getChatOutputsCount, hasChatDesktopOutputs } from "./chat-outputs-data.
 import { isProcessesPresentationReady } from "./chat-processes-presentation.ts";
 import { ChatPullRequests, type ChatPullRequestsProps } from "./chat-pull-requests.tsx";
 import { syncSessionPanelInputs, useSessionPanel } from "./chat-session-panel.tsx";
+import { preloadChatSubagentActivity } from "./chat-subagent-activity-lazy.tsx";
 import { ChatSummaryAutomations } from "./chat-summary-automations.tsx";
 
 export { preloadChatDetailsEnvironment } from "./chat-details-environment.tsx";
@@ -575,6 +576,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                     showProcesses={false}
                   />
                   <ChatDetailsProcesses
+                    details={props.props!}
                     processes={processes}
                     presented={active()}
                     expanded={sectionExpanded("processes")}
@@ -645,18 +647,30 @@ export type ChatDetailsDesktopCompositionProps = Omit<Props, "desktop"> & {
   /** The native host keeps ownership of top-layer menus and Undo/focus behavior. */
   progressMenuRef?: (menu: MenuHandle) => void;
   onHideProgress?: () => void;
+  onReady?: () => void;
 };
 
 /** Desktop entry point: one scroll body and the native Progress owner after Outputs. */
 export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositionProps) {
-  const [scrollport, setScrollport] = createSignal<HTMLDivElement>();
+  // Native section roots commit independently; admit cached activity before any sibling paints.
+  const prepared = createMemo<boolean>(() =>
+    props.presented &&
+    props.props?.cachedDetails?.subagents?.rows.some((row) => row.listed === false)
+      ? preloadChatSubagentActivity().then(
+          () => true,
+          // The activity boundary owns failures; sibling sections still render.
+          () => true,
+        )
+      : true,
+  );
+  onSettled(() => props.onReady?.());
   return (
-    <ChatDetailsDesktopBody presented={props.presented} onScrollPortRef={setScrollport}>
+    <Show when={prepared()}>
       <ChatDetailsSession
         props={props.props}
         presented={props.presented}
         dismissed={props.dismissed}
-        scrollport={scrollport()}
+        scrollport={props.scrollport}
         desktop
       />
       <Show when={props.props?.progressCard}>
@@ -675,6 +689,6 @@ export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositi
       </Show>
       {/* Keep the automation slot after Progress while its inventory revalidates. */}
       <DetailsAutomations props={props.props} presented={props.presented} desktop />
-    </ChatDetailsDesktopBody>
+    </Show>
   );
 }

@@ -34,6 +34,7 @@ import {
   QUESTIONS_SCOPE,
   READ_SCOPE,
   SESSION_WRITE_SCOPE,
+  TALK_SCOPE,
   TALK_SECRETS_SCOPE,
   WRITE_SCOPE,
   isOperatorScope,
@@ -351,6 +352,7 @@ export function authorizeOperatorScopesForRequiredScope(
   if (
     ((requiredScope === READ_SCOPE && sessionScope === "operator.sessions.read") ||
       ((requiredScope === WRITE_SCOPE ||
+        requiredScope === TALK_SCOPE ||
         (requiredScope === QUESTIONS_SCOPE && method?.startsWith("question."))) &&
         sessionScope === "operator.sessions.write")) &&
     operatorScopeSatisfied(sessionScope, scopes)

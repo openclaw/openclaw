@@ -4,13 +4,7 @@ import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/sc
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { verifyDeviceToken } from "../infra/device-pairing-tokens.js";
-import { listDevicePairing } from "../infra/device-pairing.js";
-import { verifyPairingToken } from "../infra/pairing-token.js";
-import {
-  intersectOperatorScopes,
-  operatorScopeSatisfied,
-} from "../shared/operator-scope-compat.js";
+import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
@@ -49,6 +43,7 @@ import {
   bindHttpOperatorAccessAuthority,
   sendGatewayHttpAuthFailure,
 } from "./http-operator-access.js";
+import { verifyHttpOperatorDeviceToken } from "./http-operator-device-token.js";
 import {
   bindHttpResponseAuthority,
   captureHttpRequestAuthority,
@@ -74,9 +69,6 @@ import { withSerializedCredentialFallbackAttempt } from "./rate-limit-attempt-se
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { prepareSessionCreatorProfile } from "./session-creator.js";
 import { createProfileSessionEntryFilter } from "./session-sharing-read.js";
-
-const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read.no-credential-enrollment";
-const CONTROL_UI_OPERATOR_ROLE = "operator";
 
 export { getBearerToken, getHeader } from "./http-header-value.js";
 
@@ -145,38 +137,6 @@ function resolveControlUiReadAuthToken(
   }
 }
 
-async function verifyHttpOperatorDeviceToken(
-  token: string,
-  requiredSharedGatewaySessionGeneration: string | undefined,
-  requiredScopes: readonly string[] = [],
-): Promise<string[] | null> {
-  const pairing = await listDevicePairing();
-  for (const device of pairing.paired) {
-    const operatorToken = device.tokens?.[CONTROL_UI_OPERATOR_ROLE];
-    if (
-      !operatorToken ||
-      operatorToken.revokedAtMs ||
-      !verifyPairingToken(token, operatorToken.token)
-    ) {
-      continue;
-    }
-    const readScope = operatorScopeSatisfied(CONTROL_UI_OPERATOR_READ_SCOPE, operatorToken.scopes)
-      ? CONTROL_UI_OPERATOR_READ_SCOPE
-      : "operator.sessions.read";
-    const verified = await verifyDeviceToken({
-      deviceId: device.deviceId,
-      token,
-      role: CONTROL_UI_OPERATOR_ROLE,
-      // Verify the whole observed grant so a concurrent scope reduction cannot
-      // leave the HTTP request with authority from the earlier pairing snapshot.
-      scopes: [readScope, ...operatorToken.scopes, ...requiredScopes],
-      requiredSharedGatewaySessionGeneration,
-    });
-    return verified.ok ? [...operatorToken.scopes] : null;
-  }
-  return null;
-}
-
 function resolveControlUiReadOperatorScopes(
   req: IncomingMessage,
   authMethod: NonNullable<GatewayAuthResult["method"]>,
@@ -225,6 +185,7 @@ async function checkHttpOperatorCredentials(
   const ingressAttribution = prepareGatewayIngressAttribution({
     req: params.req,
     trustedProxies: params.trustedProxies,
+    trustedProxy: auth.trustedProxy,
     allowRealIpFallback: params.allowRealIpFallback,
   });
   if (ingressAttribution.kind === "unattributable-proxy") {
@@ -232,7 +193,10 @@ async function checkHttpOperatorCredentials(
   }
   const clientIp = ingressAttribution.rateLimit.subject.key;
   const canUseDeviceTokenFallback =
-    Boolean(token) && auth.mode !== "trusted-proxy" && auth.mode !== "none";
+    Boolean(token) &&
+    auth.mode !== "trusted-proxy" &&
+    auth.mode !== "none" &&
+    ingressAttribution.kind !== "openclaw-id-tunnel";
   const run = async (): Promise<HttpOperatorCredentialResult> => {
     const authResult = await authorizeConnect({
       auth,

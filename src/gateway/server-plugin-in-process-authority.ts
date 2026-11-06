@@ -49,6 +49,7 @@ import {
   runWithOperatorToolGatewayAuthority,
   runOutsideOperatorToolGatewayAuthority,
 } from "./operator-tool-gateway-authority.js";
+import { resolvePluginSessionWorkDispatch } from "./plugin-session-work-authority.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import type {
   DispatchGatewayMethodInProcessOptions,
@@ -338,6 +339,13 @@ export function resolveInProcessGatewayDispatch(
       `In-process gateway dispatch requires a gateway request scope or instance binding (method: ${method}).`,
     );
   }
+  const service = resolvePluginSessionWorkDispatch({
+    method,
+    params,
+    context,
+    scopedPluginId: scope?.pluginId,
+    pluginRuntimeOwnerId: options?.pluginRuntimeOwnerId,
+  });
   const operatorRunAuthority =
     selection?.operatorAuthority ??
     caller?.operatorAuthority ??
@@ -375,6 +383,9 @@ export function resolveInProcessGatewayDispatch(
     options.agentToolCaller?.agentId === caller.agentId &&
     options.agentToolCaller.sessionKey === caller.sessionKey;
   const assertInvocationCurrent = composeSessionSourceAssertion([
+    // Host-owned agent paths may omit the ambient invocation guard below, but
+    // none may outlive or broaden a recovered service operation's tool ceiling.
+    service?.assertCurrent,
     selection?.assertCurrent,
     runtimeAuthority?.assertCurrent,
     assertSettleWakeCurrent,
@@ -699,6 +710,7 @@ export function resolveInProcessGatewayDispatch(
     assertSourceCurrent,
     assertInvocationCurrent,
     assertContextCurrent: composeSessionSourceAssertion([
+      service?.assertCurrent,
       selection?.assertCurrent,
       runtimeAuthority?.assertCurrent,
       assertSourceCurrent,

@@ -1,17 +1,21 @@
 import type { PluginsListResult } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import { setPluginEnabled } from "../../lib/plugins/index.ts";
 
-export const SKILL_WORKSHOP_PLUGIN_ID = "skill-workshop";
+const SKILL_WORKSHOP_PLUGIN_ID = "skill-workshop";
 
 /** Why the Gateway serves no Workshop methods, and whether the page can turn the plugin on. */
 export type WorkshopPluginAvailability =
   | { status: "checking" }
-  | { status: "off"; enabling: boolean; error: string | null }
+  | { status: "off"; enabling: boolean; error: unknown }
   | { status: "missing" }
   | { status: "failed" }
-  | { status: "error"; error: string };
+  // Turned on, but this connection never learned the Workshop methods.
+  | { status: "reload" }
+  | { status: "error"; error: unknown };
+
+/** How long a successful enable may wait for the Gateway to publish the Workshop. */
+const WORKSHOP_PUBLISH_TIMEOUT_MS = 15_000;
 
 /**
  * Reads the plugin's catalog entry for one connection and turns it on. Results for a retired
@@ -21,6 +25,7 @@ export type WorkshopPluginAvailability =
 export class WorkshopPluginAvailabilityOwner {
   state: WorkshopPluginAvailability | null = null;
   private client: GatewayBrowserClient | null = null;
+  private publishTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private readonly changed: () => void) {}
 
@@ -29,6 +34,7 @@ export class WorkshopPluginAvailabilityOwner {
     if (client === this.client) {
       return;
     }
+    clearTimeout(this.publishTimer);
     this.client = client;
     this.state = client ? { status: "checking" } : null;
     if (client) {
@@ -55,13 +61,27 @@ export class WorkshopPluginAvailabilityOwner {
       await setPluginEnabled(client, SKILL_WORKSHOP_PLUGIN_ID, true);
     } catch (error) {
       if (this.client === client) {
-        this.state = { status: "off", enabling: false, error: formatUiError(error) };
+        this.state = { status: "off", enabling: false, error };
         this.changed();
       }
+      return;
+    }
+    // `plugins.changed` normally loads the Workshop in place; that broadcast may be dropped
+    // for a slow client, so recheck instead of leaving the button busy.
+    if (this.client === client) {
+      this.publishTimer = setTimeout(
+        () => void this.check(client, true),
+        WORKSHOP_PUBLISH_TIMEOUT_MS,
+      );
     }
   };
 
-  private async check(client: GatewayBrowserClient): Promise<void> {
+  dispose(): void {
+    clearTimeout(this.publishTimer);
+    this.client = null;
+  }
+
+  private async check(client: GatewayBrowserClient, afterEnable = false): Promise<void> {
     let next: WorkshopPluginAvailability;
     try {
       const { plugins } = await client.request<PluginsListResult>("plugins.list", {});
@@ -69,10 +89,10 @@ export class WorkshopPluginAvailabilityOwner {
       next = !entry
         ? { status: "missing" }
         : entry.enabled
-          ? { status: "failed" }
+          ? { status: afterEnable ? "reload" : "failed" }
           : { status: "off", enabling: false, error: null };
     } catch (error) {
-      next = { status: "error", error: formatUiError(error) };
+      next = { status: "error", error };
     }
     if (this.client === client) {
       this.state = next;

@@ -217,6 +217,23 @@ scopes and widget approvals remain unchanged. Canvas imports require a saved wid
 receipt in the dashboard conversation, with source access retained through the write.
 Broad readers keep their existing document-ID-only access.
 
+For saved summaries, an authorized agent can publish selected results as a
+`session:report`; readers consume the saved session data. For live HTML
+dashboards, session readers can execute an explicitly approved named
+`github.actions.runs` query using only its view ticket and query name. The
+Gateway resolves its fixed repository, workflow, branch, filters, result limit,
+and returned fields. Runtime query overrides are rejected. The flexible
+`board.data.read` binding form requires broader access. A repository-only grant does not approve a
+named query, and changing a definition requires renewed approval under the
+existing policy.
+
+The Gateway authorizes the session from the view ticket and rechecks caller
+access, widget revision and view generation, and the current query grant before
+returning even cached data. Approval deliberately shares matching future and
+private Actions results obtained with the agent's credentials; readers need no
+GitHub repository access of their own. Session visibility alone is not approval.
+Other dashboard host data bindings and actions retain their broader scopes.
+
 Session readers can also use `artifacts.list`, `artifacts.get`, and
 `artifacts.download` for artifacts in a conversation they can currently read.
 Both session-key and run-ID queries retain the selected session's visibility,

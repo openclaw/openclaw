@@ -30,6 +30,12 @@ import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js
 import { resolveCronSkillsSnapshot } from "../skills/runtime/cron-snapshot.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
+import {
+  isOpenClawIdTunnelPrincipalCurrent,
+  onOpenClawIdTunnelPrincipalsChanged,
+  openclawIdTunnelRolePolicy,
+  prepareOpenClawIdTunnelPrincipal,
+} from "./openclaw-id/tunnel-principal.js";
 import { resumeGatewayOperatorAccessGrant } from "./operator-access-policy.js";
 import {
   onOperatorRolePolicyChanged,
@@ -77,21 +83,31 @@ export async function prepareCronStreamSandboxAuthority(params: {
   const sandboxConfig = captureSandboxConfig(resolveSandboxConfigForAgent(config, target.agentId));
   const configuredWorkspace = resolveAgentWorkspaceDir(config, target.agentId);
   const operator = target.operator;
+  const principal = operator?.openclawIdPrincipal;
+  const membershipPolicy = openclawIdTunnelRolePolicy(principal);
+  if (principal) {
+    await prepareOpenClawIdTunnelPrincipal(principal);
+  }
+  params.assertCurrent();
+  params.signal?.throwIfAborted();
   const originalRole = operator
     ? structuredClone(
         sourceRolePolicy(
-          resolveOperatorRolePolicyForAssignment(
-            operator.profileId,
-            operator.assignedRole,
-            config,
-            operator.githubLogin,
-          ),
+          membershipPolicy ??
+            resolveOperatorRolePolicyForAssignment(
+              operator.profileId,
+              operator.assignedRole,
+              config,
+              operator.githubLogin,
+            ),
         ),
       )
     : undefined;
   const client = operator
     ? createSyntheticPluginRuntimeClient({
         operatorRoleActor: { kind: "operator", profileId: operator.profileId },
+        // The original source is checked below; the client carries its role ceiling.
+        openclawIdPrincipal: principal,
         scopes: [...operator.scopes],
       })
     : undefined;
@@ -216,6 +232,9 @@ export async function prepareCronStreamSandboxAuthority(params: {
     revoked.signal.throwIfAborted();
     params.signal?.throwIfAborted();
     params.assertCurrent();
+    if (principal && !isOpenClawIdTunnelPrincipalCurrent(principal)) {
+      throw unavailable();
+    }
     const currentConfig = params.getRuntimeConfig();
     if (
       !listAgentIds(currentConfig).includes(target.agentId) ||
@@ -229,12 +248,13 @@ export async function prepareCronStreamSandboxAuthority(params: {
     }
     const identity = profile?.readCurrentFacts(emailBindingIds);
     const role = operator
-      ? resolveOperatorRolePolicyForAssignment(
+      ? (membershipPolicy ??
+        resolveOperatorRolePolicyForAssignment(
           operator.profileId,
           operator.assignedRole,
           currentConfig,
           identity ? (identity.profile.githubLogin ?? null) : operator.githubLogin,
-        )
+        ))
       : undefined;
     if (operator) {
       if (
@@ -388,6 +408,9 @@ export async function prepareCronStreamSandboxAuthority(params: {
       }
     }),
   );
+  if (principal) {
+    subscriptions.push(onOpenClawIdTunnelPrincipalsChanged(recheck));
+  }
   params.signal?.addEventListener("abort", sourceAborted, { once: true });
   subscriptions.push(() => params.signal?.removeEventListener("abort", sourceAborted));
   try {
@@ -452,6 +475,7 @@ export async function prepareCronStreamSandboxAuthority(params: {
     const authority = operator
       ? createAdmittedRunOperatorAuthority({
           profileId: operator.profileId,
+          openclawIdPrincipal: principal,
           scopes: operator.scopes,
           gatewayAccessGrant: operator.gatewayAccessGrant,
           assertCurrent: assertAuthorityCurrent,
@@ -459,6 +483,7 @@ export async function prepareCronStreamSandboxAuthority(params: {
           readCurrentRoleFacts: () => ({
             assignedRole: operator.assignedRole,
             githubLogin: operator.githubLogin,
+            ...(membershipPolicy ? { policy: membershipPolicy } : {}),
           }),
           ...(originalRole
             ? {

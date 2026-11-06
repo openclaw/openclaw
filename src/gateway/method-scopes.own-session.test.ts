@@ -437,3 +437,32 @@ it("admits bounded ordinary actions without admitting personal credential acquis
     ["operator.read.no-credential-enrollment"],
   );
 });
+
+describe("session-only dictation admission", () => {
+  const scopes = ["operator.sessions.write"];
+  const sessionKey = "agent:main:guest-dictation";
+
+  it.each([
+    ["talk.catalog", { sessionKey }],
+    [
+      "talk.session.create",
+      { sessionKey, mode: "transcription", transport: "gateway-relay", brain: "none" },
+    ],
+    ["talk.session.appendAudio", { sessionId: "recording", audioBase64: "AAA=" }],
+    ["talk.session.close", { sessionId: "recording" }],
+  ])("admits %s through the session scope", (method, params) => {
+    expect(authorizeOperatorScopesForMethod(method, scopes, params).allowed).toBe(true);
+  });
+
+  it.each([
+    ["talk.catalog", {}],
+    ["talk.catalog", { sessionKey, provider: "other" }],
+    ["talk.session.create", { mode: "transcription" }],
+    ["talk.session.create", { sessionKey, mode: "realtime" }],
+    ["talk.session.create", { sessionKey, mode: "transcription", provider: "other" }],
+    ["talk.session.create", { sessionKey, mode: "transcription", model: "other" }],
+    ["talk.config", {}],
+  ])("does not grant broad access via %s", (method, params) => {
+    expect(authorizeOperatorScopesForMethod(method, scopes, params).allowed).toBe(false);
+  });
+});

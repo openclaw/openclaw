@@ -22,6 +22,7 @@ import {
   isValidPortalIngressDomain,
   portalIngressConflictsWithOrigin,
 } from "./gateway-portal-ingress.js";
+import { GatewayOpenClawIdConfigSchema } from "./zod-schema.gateway-openclaw-id.js";
 import {
   GatewayRemoteConfigSchema,
   ResponsesEndpointUrlFetchShape,
@@ -195,6 +196,8 @@ export const GatewayConfigSchema = z
           .optional(),
       })
       .optional(),
+    /** Experimental OpenClaw ID remote access (Labs); inert unless enabled. */
+    openclawId: GatewayOpenClawIdConfigSchema.optional(),
     github: GatewayGitHubEndpointSchema.optional(),
     repositoryIntegration: z.string().trim().min(1).optional(),
     projects: z

@@ -1,10 +1,11 @@
 // Allowlist maintenance of the reference membership authority: removing an owner device
 // together with every device it approved, recording when keys were last admitted, and
 // dropping keys that have not been used for a long time. Nothing here keeps a history:
-// a removed key is simply no longer listed.
+// a removed key is simply no longer listed. Each listed key carries the seq at which it
+// was listed, so a revocation can tell whether it covers that listing.
 import type { IrohEndpointKey, KeyFingerprint } from "../keys.js";
 import type { UnixSeconds } from "../statements/types.js";
-import type { AuthorityState, MemberRecord } from "./state.js";
+import type { AuthorityState, MemberRecord, OwnerDeviceRecord } from "./state.js";
 
 /** Default: owner devices not admitted for 90 days are dropped. */
 export const OWNER_DEVICE_INACTIVITY_SECONDS = 90 * 86400;
@@ -21,6 +22,43 @@ export const DEFAULT_INACTIVITY_WINDOWS: InactivityWindows = {
   ownerDeviceSeconds: OWNER_DEVICE_INACTIVITY_SECONDS,
   memberPeerKeySeconds: MEMBER_PEER_KEY_INACTIVITY_SECONDS,
 };
+
+/** The seq at which an owner device was listed (0 when its record predates listing seqs). */
+export function ownerDeviceListedSeq(record: OwnerDeviceRecord): number {
+  return record.listed_seq ?? 0;
+}
+
+/** The seq at which this owner device was given `key`, or undefined when it does not hold it. */
+export function ownerPeerListedSeq(
+  record: OwnerDeviceRecord,
+  key: IrohEndpointKey,
+): number | undefined {
+  const index = record.cert.body.peer_keys.indexOf(key);
+  return index < 0 ? undefined : (record.peer_listed_seq?.[index] ?? 0);
+}
+
+/** The seq at which the member's browser `key` was listed, or undefined when it is not listed. */
+export function memberPeerListedSeq(
+  member: MemberRecord,
+  key: IrohEndpointKey,
+): number | undefined {
+  const index = member.peer_keys.indexOf(key);
+  return index < 0 ? undefined : (member.listed_seq?.[index] ?? 0);
+}
+
+/**
+ * The earliest seq at which `key` is listed anywhere at the claw (as an owner device's peer key
+ * or a member's browser), or undefined when it is not listed. Listing a key that is still listed
+ * somewhere keeps this seq, so copying it into another record cannot move it out of reach of a
+ * revocation already signed; only a key absent from every listing is listed afresh.
+ */
+export function peerKeyListedSeq(state: AuthorityState, key: IrohEndpointKey): number | undefined {
+  const seqs = [
+    ...Object.values(state.owner_devices).map((record) => ownerPeerListedSeq(record, key)),
+    ...Object.values(state.members).map((member) => memberPeerListedSeq(member, key)),
+  ].filter((seq): seq is number => seq !== undefined);
+  return seqs.length > 0 ? Math.min(...seqs) : undefined;
+}
 
 /**
  * `fp` and every owner device it approved, directly or through devices it approved,
@@ -47,7 +85,10 @@ export function approvalDescendants(state: AuthorityState, fp: KeyFingerprint): 
   return [...found];
 }
 
-/** Removes owner devices from the allowlist; returns the new state and their peer keys. */
+/**
+ * Removes owner devices from the allowlist, with the invites they registered that are still
+ * open; returns the new state and the devices' peer keys.
+ */
 export function withoutOwnerDevices(
   state: AuthorityState,
   fps: readonly KeyFingerprint[],
@@ -58,7 +99,16 @@ export function withoutOwnerDevices(
     // SAFETY: owner_devices is keyed by KeyFingerprint; Object.entries widens keys to string.
     Object.entries(state.owner_devices).filter(([fp]) => !remove.has(fp as KeyFingerprint)),
   );
-  return { state: { ...state, owner_devices }, peers: [...new Set(peers)] };
+  const invites = Object.fromEntries(
+    Object.entries(state.invites).filter(
+      ([, invite]) =>
+        invite.status !== "open" ||
+        invite.created_by === undefined ||
+        invite.created_by === "root" ||
+        !remove.has(invite.created_by),
+    ),
+  );
+  return { state: { ...state, owner_devices, invites }, peers: [...new Set(peers)] };
 }
 
 /** Removes peer keys from every member (members themselves stay listed). */
@@ -67,20 +117,34 @@ export function withoutMemberPeerKeys(
   peers: readonly IrohEndpointKey[],
 ): AuthorityState {
   const remove = new Set(peers);
+  return withoutMemberBrowsers(state, (_account, key) => remove.has(key));
+}
+
+/** Removes the member browsers `drop` selects, keeping each remaining browser's listing seq. */
+export function withoutMemberBrowsers(
+  state: AuthorityState,
+  drop: (account: string, key: IrohEndpointKey) => boolean,
+): AuthorityState {
   const members = Object.fromEntries(
-    Object.entries(state.members).map(([account, member]) => [
-      account,
-      {
-        ...member,
-        peer_keys: member.peer_keys.filter((key) => !remove.has(key)),
-        last_seen: Object.fromEntries(
-          Object.entries(member.last_seen).filter(
-            // SAFETY: last_seen is keyed by IrohEndpointKey; Object.entries widens keys to string.
-            ([key]) => !remove.has(key as IrohEndpointKey),
+    Object.entries(state.members).map(([account, member]) => {
+      const kept = member.peer_keys.flatMap((key, index) =>
+        drop(account, key) ? [] : [{ key, seq: member.listed_seq?.[index] ?? 0 }],
+      );
+      return [
+        account,
+        {
+          ...member,
+          peer_keys: kept.map((entry) => entry.key),
+          listed_seq: kept.map((entry) => entry.seq),
+          last_seen: Object.fromEntries(
+            Object.entries(member.last_seen).filter(
+              // SAFETY: last_seen is keyed by IrohEndpointKey; Object.entries widens keys to string.
+              ([key]) => !drop(account, key as IrohEndpointKey),
+            ),
           ),
-        ),
-      } satisfies MemberRecord,
-    ]),
+        } satisfies MemberRecord,
+      ];
+    }),
   );
   return { ...state, members };
 }

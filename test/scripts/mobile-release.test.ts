@@ -109,6 +109,9 @@ const stageOnly = process.argv.includes("--stage-only");
 const sourceRoot = process.env.OPENCLAW_IOS_RELEASE_SOURCE_ROOT || process.cwd();
 const plan = JSON.parse(fs.readFileSync(process.env.OPENCLAW_IOS_RELEASE_PLAN, "utf8"));
 const buildNumber = process.argv[process.argv.indexOf("--build-number") + 1];
+if (!stageOnly) {
+  execFileSync(process.execPath, ["--import", "./scripts/tsx.mjs", "scripts/mobile-release-notes.ts", "generate", "--platform", "ios", "--plan", process.env.OPENCLAW_IOS_RELEASE_PLAN, "--output", process.env.OPENCLAW_MOBILE_RELEASE_NOTES], { stdio: "inherit" });
+}
 const notes = renderMobileReleaseNotes({ rootDir: sourceRoot, platform: "ios", version: plan.appStoreVersion, build: buildNumber, audience: "ios" });
 fs.appendFileSync(process.env.FIXTURE_UPLOAD_AUDIT, JSON.stringify({ sha, stageOnly, notes, buildNumber, destination: process.argv.includes("--destination") ? process.argv[process.argv.indexOf("--destination") + 1] : "app-store", stampedSha: process.env.GIT_COMMIT, status: git("status", "--porcelain", "--untracked-files=all"), remoteMain: git("ls-remote", "origin", "refs/heads/main").split(/\\s+/)[0], metadata: fs.readFileSync("apps/ios/CHANGELOG.md", "utf8") }) + "\\n");
 if (!stageOnly) {
@@ -646,20 +649,13 @@ describe("mobile release CLI", () => {
     },
   );
 
-  it.each(["ios", "android"])(
-    "retains full %s release ancestry when notes are needed",
-    (platform) => {
-      const f = fixture(platform, undefined, true);
-      const latestMain = advanceMain(f);
-      expect(git(f.root, "rev-list", "--count", "HEAD")).toBe("1");
-      const result = f.invoke("run", [], workflowEnv(f.base));
-      expectResult(result, 0);
-      expect(git(f.root, "log", "--format=%s")).toBe("Update application source\nInitial source");
-      expect(f.audit()).toHaveLength(1);
-      expect(f.ref("main")).toBe(latestMain);
-      expect(git(f.root, "rev-parse", "HEAD")).toBe(f.base);
-    },
-  );
+  it.each(["ios", "android"])("avoids loading %s ancestry for first release notes", (platform) => {
+    const f = fixture(platform, undefined, true);
+    const result = f.invoke("run", [], workflowEnv(f.base));
+    expectResult(result, 0);
+    expect(git(f.root, "rev-list", "--count", "HEAD")).toBe("1");
+    expect(git(f.root, "rev-parse", "HEAD")).toBe(f.base);
+  });
 
   it("rejects dirty, non-main, and missing-key releases before creating a worktree or calling Fastlane", () => {
     const f = fixture();

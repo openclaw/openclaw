@@ -42,6 +42,7 @@ import {
   getRemoteControlUiIngressContext,
   hasCurrentRemoteControlUiIngress,
 } from "../../ingress-attribution.js";
+import { isOpenClawIdTunnelPrincipalCurrent } from "../../openclaw-id/tunnel-principal.js";
 import { resolveIdentityOperatorScopes } from "../../operator-identity-scopes.js";
 import type { OperatorScope } from "../../operator-scopes.js";
 import { checkGatewayWsBrowserOrigin, normalizeChromeExtensionOrigin } from "../../origin-check.js";
@@ -181,6 +182,10 @@ export function resolveGatewayConnectPolicyFailure(
   context: GatewayConnectPhaseContext,
   state: AuthenticatedGatewayConnect,
 ): { kind: "auth" } | { kind: "origin"; reason: string } | undefined {
+  const principal = state.authResult.openclawId;
+  if (principal && !isOpenClawIdTunnelPrincipalCurrent(principal)) {
+    return { kind: "auth" };
+  }
   if (context.browserOrigin) {
     const originCheck = checkGatewayWsBrowserOrigin(context.browserOrigin, getRuntimeConfig());
     if (!originCheck.ok) {

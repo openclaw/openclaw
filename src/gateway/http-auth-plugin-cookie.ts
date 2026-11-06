@@ -26,6 +26,7 @@ import {
 import {
   getRemoteControlUiIngressContext,
   assertRemoteControlUiIngressCurrent,
+  readGatewayIngressTransport,
 } from "./ingress-attribution.js";
 import { normalizeOperatorScopeList } from "./operator-scopes.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
@@ -47,6 +48,11 @@ function readControlUiPluginCookieRequest(
 ) {
   const ingress = getRemoteControlUiIngressContext(req);
   assertRemoteControlUiIngressCurrent(ingress);
+  // Tunnel requests already have a device principal. Cookie handoffs must not
+  // replace its current membership/role with a previously signed browser grant.
+  if (readGatewayIngressTransport(req)?.kind === "openclaw-id-tunnel") {
+    return null;
+  }
   // WebSocket upgrades bypass this HTTP-only handoff and use
   // checkGatewayHttpRequestAuth directly in attachGatewayUpgradeHandler.
   // Explicit owner/staff credentials retain their own authority even when an

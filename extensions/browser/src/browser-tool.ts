@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   type AnyAgentTool,
@@ -224,7 +225,15 @@ export function createBrowserTool(
   return {
     ...metadata,
     execute: async (_toolCallId, args, signal) => {
-      opts?.assertInvocationCurrent?.();
+      // Host guards resolve their caller from the async context they run in. Shared CDP
+      // connections deliver navigation events in whichever call's context created them, so
+      // every host check for this request runs in the context this call was admitted in.
+      const runInInvocation = AsyncLocalStorage.snapshot();
+      const bindToInvocation = (assert: (() => void) | undefined) =>
+        assert ? () => runInInvocation(assert) : undefined;
+      const assertInvocationCurrent = bindToInvocation(opts?.assertInvocationCurrent);
+      const assertLocalLoopbackCurrent = bindToInvocation(opts?.assertLocalLoopbackCurrent);
+      assertInvocationCurrent?.();
       let params = binding
         ? applyBrowserTabToolBinding(args as Record<string, unknown>, binding)
         : (args as Record<string, unknown>);
@@ -643,16 +652,17 @@ export function createBrowserTool(
       const result = await withBrowserRequestScope(
         {
           allowLocalLoopback: opts?.allowLocalLoopback === true && !baseUrl && !proxyRequest,
-          assertLocalLoopbackCurrent: opts?.assertLocalLoopbackCurrent,
-          ...(opts?.assertInvocationCurrent
+          assertLocalLoopbackCurrent,
+          ...(assertInvocationCurrent
             ? {
-                assertInvocationCurrent: opts.assertInvocationCurrent,
-                assertCurrent: opts.assertInvocationCurrent,
+                assertInvocationCurrent,
+                assertCurrent: assertInvocationCurrent,
               }
             : {}),
           ...(dashboardTarget
             ? {
                 managedOnly: true as const,
+                // Awaited on the request's own chain, never from shared listeners.
                 assertCurrent: async (
                   admittedProfile?: Parameters<
                     typeof import("./browser-dashboard.js").assertBrowserDashboardTargetCurrent
@@ -666,7 +676,7 @@ export function createBrowserTool(
                     { signal },
                     admittedProfile,
                   );
-                  opts?.assertInvocationCurrent?.();
+                  assertInvocationCurrent?.();
                 },
               }
             : {}),

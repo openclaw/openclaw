@@ -238,7 +238,7 @@ suite.define(() => {
       await page.locator("#settings-appearance-background").scrollIntoViewIfNeeded();
       expect(await page.locator("[data-background-upload]").isDisabled()).toBe(true);
       await page
-        .getByText("Image uploads require permission to edit your profile.", { exact: true })
+        .getByText("You need permission to edit your profile to upload images.", { exact: true })
         .waitFor();
       await captureUiProof(suite, page, "scoped-reader-background.png");
       if (captureUiProofEnabled) {
@@ -555,8 +555,8 @@ suite.define(() => {
         code: "FORBIDDEN",
         message: "missing scope: operator.admin",
       });
-      await pollLocatorText(page.locator(".new-session-page__error")).toContain(
-        "missing scope: operator.admin",
+      await pollLocatorText(page.locator(".new-session-page__error")).toBe(
+        "Couldn’t complete this request. Ask an admin to grant admin access.",
       );
     });
   });

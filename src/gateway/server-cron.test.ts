@@ -1373,7 +1373,7 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("forwards durable recurring wake changes to cron_changed hooks", async () => {
+  it("forwards durable recurring wake changes through the finished cron_changed hook", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-10T12:00:00.000Z"));
     const clock = createGatewaySchedulerClock(Date.now());
@@ -1398,22 +1398,22 @@ describe("buildGatewayCronService", () => {
       expect(await state.cron.run(job.id, "due")).toEqual({ ok: true, ran: true });
       expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
 
-      const scheduledCallIndex = mocks.changed.mock.calls.findIndex(([candidate]) => {
-        return requireRecord(candidate, "cron_changed event").action === "scheduled";
+      const finishedCallIndex = mocks.changed.mock.calls.findIndex(([candidate]) => {
+        return requireRecord(candidate, "cron_changed event").action === "finished";
       });
-      expect(scheduledCallIndex).toBeGreaterThanOrEqual(0);
-      const event = callRecord(mocks.changed, scheduledCallIndex);
+      expect(finishedCallIndex).toBeGreaterThanOrEqual(0);
+      const event = callRecord(mocks.changed, finishedCallIndex);
       const persistedNextRunAtMs = state.cron.getJob(job.id)?.state.nextRunAtMs;
       expect(persistedNextRunAtMs).toBeGreaterThan(dueAtMs);
       expect(event).toMatchObject({
-        action: "scheduled",
+        action: "finished",
         jobId: job.id,
         nextRunAtMs: persistedNextRunAtMs,
         sessionTarget: "main",
         agentId: "main",
         job: { agentId: "main", state: { nextRunAtMs: persistedNextRunAtMs } },
       });
-      const context = callRecord(mocks.changed, scheduledCallIndex, 1);
+      const context = callRecord(mocks.changed, finishedCallIndex, 1);
       expect(context.config).toBe(runtimeCfg);
       expect(context.getCron).toBeTypeOf("function");
     } finally {

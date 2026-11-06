@@ -4,6 +4,7 @@ import {
   pathForTemplateCatalogEntry,
   pathForRoute,
 } from "../../app-route-paths.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -71,9 +72,9 @@ export function TemplatesPage(props: { routeData: TemplatesRouteData | undefined
         when={available()}
         fallback={
           <SettingsPage wide carapace>
-            <div class="callout warn" role="status">
+            <InlineAlert tone="warning" role="status">
               {t("templatesCatalog.disabled")}
-            </div>
+            </InlineAlert>
           </SettingsPage>
         }
       >
