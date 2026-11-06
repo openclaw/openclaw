@@ -244,11 +244,18 @@ export function resolveFinalDoctorHealthContributions(params: {
         note(warnings.join("\n"), "Hooks");
       },
     }),
+    createDoctorHealthContribution("doctor:legacy-output-cap", "Saved model output caps", {
+      updateWork: { kind: "inspection", scope: "run" },
+      healthCheckIds: ["core/doctor/legacy-output-cap"],
+      run: (ctx) =>
+        runCoreHealthFindingNote(ctx, "core/doctor/legacy-output-cap", {
+          infoNoteTitle: "Model output caps",
+        }),
+    }),
     ...(
       [
         ["model-references", "Model references", "agent"],
         ["acp-agent-model", "ACP agent model", "agent"],
-        ["legacy-output-cap", "Saved model output caps", "run"],
         ["provider-catalog-projection", "Provider catalog projection", "run"],
         ["local-audio-acceleration", "Local audio acceleration", "run"],
         ["runtime-tool-schemas", "Runtime tool schemas", "agent"],
