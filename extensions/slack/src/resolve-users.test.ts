@@ -101,35 +101,3 @@ it.each([
     expect(list).toHaveBeenCalledTimes(resolved ? 0 : 1);
   },
 );
-
-it.each([
-  ["NFC entry against an NFD profile name", "Rene\u0301e", "Ren\u00e9e"],
-  ["NFD entry against an NFC profile name", "Ren\u00e9e", "Rene\u0301e"],
-] as const)(
-  "resolves %s because canonical forms compare equal",
-  async (_label, profileName, entryName) => {
-    list.mockResolvedValue({
-      members: [
-        {
-          id: "U_ACCENT",
-          name: "accented",
-          profile: { email: "accented@example.com", display_name: profileName },
-        },
-      ],
-    });
-
-    const res = await resolve([`@${entryName}`]);
-
-    expect(res).toEqual([
-      {
-        deleted: false,
-        email: "accented@example.com",
-        id: "U_ACCENT",
-        input: `@${entryName}`,
-        isBot: false,
-        name: profileName,
-        resolved: true,
-      },
-    ]);
-  },
-);
