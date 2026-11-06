@@ -29,25 +29,15 @@ function ownerHue(id: string): number {
 export function SessionOwnerAvatar(props: {
   owner: Pick<SessionOwnerOption, "id" | "label" | "avatarUrl" | "identity">;
 }) {
-  // Reconcile owner facts without replacing the bridge's user prop.
-  const user = {
-    get id() {
-      return props.owner.id;
-    },
-    get name() {
-      return props.owner.label;
-    },
-    get avatarUrl() {
-      return props.owner.avatarUrl;
-    },
-    get identity() {
-      return props.owner.identity;
-    },
-    watchedSessions: [],
-  };
   return (
     <ParticipantAvatar
-      user={user}
+      user={{
+        id: props.owner.id,
+        name: props.owner.label,
+        avatarUrl: props.owner.avatarUrl,
+        identity: props.owner.identity,
+        watchedSessions: [],
+      }}
       markAsViewer={false}
       label={props.owner.label || props.owner.id}
       aria-hidden="true"
@@ -95,9 +85,7 @@ export function SessionOwnerChip(props: SessionOwnerChipProps) {
           owner()!.identity?.type === "agent" ||
           owner()!.identity?.type === "profile" ||
           resolveAvatar({
-            id: owner()!.id,
             identity: owner()!.identity,
-            name: owner()!.label,
             profileAvatarUrl: owner()!.avatarUrl,
           }).kind === "profile"
         }

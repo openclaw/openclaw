@@ -277,8 +277,6 @@ export function ParticipantAvatar(props: {
             .agentsList?.agents.find((entry) => entry.id === identity().id);
           const resolved = resolveAvatar({
             identity: identity(),
-            id: props.user.id,
-            name: props.user.name,
             profileAvatarUrl: props.user.avatarUrl,
           });
           const hydrated = agentIdentity?.read().get(identity().id, resolved.kind !== "profile");
