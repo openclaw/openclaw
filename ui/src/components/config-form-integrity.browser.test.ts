@@ -645,7 +645,7 @@ describe("config form integrity", () => {
     expect(textarea.value).toBe('{"enabled":');
     expect(textarea.getAttribute("aria-invalid")).toBe("true");
     const error = expectElement(
-      container.querySelector<HTMLElement>("[role='alert']"),
+      container.querySelector<HTMLElement>(".cfg-json-editor [role='alert']"),
       "JSON error",
     );
     expect(error.hidden).toBe(false);
