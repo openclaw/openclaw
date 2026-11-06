@@ -2597,7 +2597,6 @@
 ["src/cli/daemon-cli/install.test-support.ts","../../commands/random-token.js","269ddbdf20ff35327750f87895b41bc05d0d6991ca3855541b64584690925249",1]
 ["src/cli/daemon-cli/install.test-support.ts","../../config/io.js","734ef33f5e8ffccf10ad0a352646c3089dff9a4b7246ebd0575fac389c454ef1",1]
 ["src/cli/daemon-cli/install.test-support.ts","../../config/mutate.js","ff3c8a95ecbcbf68eb87c25c3d2037a2b027722e63c2fbd6122495455badf7a0",1]
-["src/cli/daemon-cli/install.test-support.ts","../../daemon/program-args.js","47aefab1482d2e2638682f844ab49f1037049075d18e0b33589cd9ac5196bf94",1]
 ["src/cli/daemon-cli/install.test-support.ts","../../daemon/service.js","bb33683861682317424e42a154c7ae109fc159fe8e53848709ed49fac1e0b4e9",1]
 ["src/cli/daemon-cli/install.test-support.ts","../../gateway/auth.js","b38f3ef638430ada6ea8cd2c543692a1b2b9be3d02532930b697a22c00d4e456",1]
 ["src/cli/daemon-cli/install.test-support.ts","../../runtime.js","840b83055adec3c3a45d380e94025f151ee3336b30b1f2d053859f134a623292",1]
