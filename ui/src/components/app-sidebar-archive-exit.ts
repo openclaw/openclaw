@@ -1,30 +1,35 @@
 /** Keep in sync with the `[data-sidebar-archive-exiting]` transitions in layout.css. */
 const EXIT_DURATION_MS = 240;
 const EXIT_EASING = "cubic-bezier(0.2, 0, 0, 1)";
+const SNAPSHOT_ATTRIBUTES = [
+  "id",
+  "data-session-key",
+  "data-session-tree",
+  "data-session-window-key",
+];
 const exitsByList = new WeakMap<HTMLElement, number>();
 
 /**
- * Plays a short exit for a sidebar session the user just archived.
+ * Starts a short exit for a sidebar row the user is archiving; call it right
+ * before the optimistic removal and call the returned stop once that settles.
  *
  * The roster still owns membership and removes the live row immediately. When
- * that row's tree unmounts while `archive` is in flight, an inert copy takes its
- * place and fades out while the remaining rows glide into the gap. Removals
- * after the archive settles (refreshes, failures, cancelled confirmations) are
- * not animated. Archiving the last row of a section unmounts the whole list, so
- * that case stays instant.
+ * the row's tree leaves the list, an inert snapshot takes its place and fades out
+ * while the remaining rows glide into the gap. Archiving the last row of a
+ * section unmounts the whole list, so that case stays instant.
  */
-export function playSidebarArchiveExit<T>(sessionKey: string, archive: Promise<T>): Promise<T> {
-  const view = globalThis.window;
-  if (!view || view.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
-    return archive;
-  }
-  const tree = view.document.querySelector<HTMLElement>(
-    `.sidebar-session-tree[data-session-tree="${CSS.escape(sessionKey)}"]`,
-  );
-  const list = tree?.parentElement;
+export function startSidebarArchiveExit(row: HTMLElement): () => void {
+  const tree = row.closest<HTMLElement>(".sidebar-session-tree") ?? row;
+  const list = tree.parentElement;
+  const view = row.ownerDocument.defaultView;
   // DOM shims without Web Animations (jsdom) keep the instant removal.
-  if (!tree || !list || typeof tree.animate !== "function") {
-    return archive;
+  if (
+    !list ||
+    !view ||
+    typeof tree.animate !== "function" ||
+    view.matchMedia("(prefers-reduced-motion: reduce)").matches
+  ) {
+    return () => undefined;
   }
   const height = tree.getBoundingClientRect().height;
   // Flag the list before the roster moves its rows: the window measures layout
@@ -36,20 +41,18 @@ export function playSidebarArchiveExit<T>(sessionKey: string, archive: Promise<T
     if (removal) {
       removed = true;
       observer.disconnect();
-      insertExitCopy(tree, height, list, removal.nextSibling);
+      insertSnapshot(tree, height, list, removal.nextSibling);
     }
   });
   observer.observe(list, { childList: true });
   // Solid applies the optimistic removal before the next frame; stop afterward.
-  const stop = () =>
+  return () =>
     view.requestAnimationFrame(() => {
       observer.disconnect();
       if (!removed) {
         releaseExit(list);
       }
     });
-  archive.then(stop, stop);
-  return archive;
 }
 
 function holdExit(list: HTMLElement) {
@@ -65,24 +68,29 @@ function releaseExit(list: HTMLElement) {
   }
 }
 
-function insertExitCopy(tree: HTMLElement, height: number, list: HTMLElement, next: Node | null) {
-  const copy = tree.cloneNode(true) as HTMLElement;
-  for (const element of [copy, ...copy.querySelectorAll<HTMLElement>("*")]) {
-    for (const name of ["id", "data-session-key", "data-session-tree", "data-session-window-key"]) {
+function insertSnapshot(tree: HTMLElement, height: number, list: HTMLElement, next: Node | null) {
+  // SAFETY: a deep clone of an HTMLElement is an HTMLElement of the same type.
+  const snapshot = tree.cloneNode(true) as HTMLElement;
+  // The snapshot is detached, unowned markup: drop the identities that selectors,
+  // focus restoration and the virtual window key on, so nothing mistakes it for the row.
+  for (const element of [snapshot, ...snapshot.getElementsByTagName("*")]) {
+    for (const name of SNAPSHOT_ATTRIBUTES) {
       element.removeAttribute(name);
     }
   }
-  copy.dataset.sidebarArchiveExit = "";
-  copy.inert = true;
-  copy.setAttribute("aria-hidden", "true");
-  list.insertBefore(copy, next?.parentNode === list ? next : null);
+  snapshot.dataset.sidebarArchiveExit = "";
+  snapshot.inert = true;
+  snapshot.setAttribute("aria-hidden", "true");
+  snapshot.style.overflow = "hidden";
+  list.insertBefore(snapshot, next?.parentNode === list ? next : null);
   const fade = { opacity: 0, translate: "-10px 0", scale: "0.98", filter: "blur(1.5px)" };
+  const shown = { opacity: 1, translate: "0 0", scale: "1", filter: "blur(0)" };
   // Windowed lists position rows absolutely, so their neighbors glide by
-  // transition. In-flow lists need the copy itself to give its slot back.
+  // transition. In-flow lists need the snapshot itself to give its slot back.
   const keyframes = list.classList.contains("sidebar-session-window")
-    ? [{ opacity: 1, translate: "0 0", scale: "1", filter: "blur(0)" }, fade]
+    ? [shown, fade]
     : [
-        { opacity: 1, translate: "0 0", scale: "1", filter: "blur(0)", height: `${height}px` },
+        { ...shown, height: `${height}px` },
         { ...fade, height: `${height}px`, offset: 0.5 },
         {
           ...fade,
@@ -90,15 +98,11 @@ function insertExitCopy(tree: HTMLElement, height: number, list: HTMLElement, ne
           marginBottom: `${-Number.parseFloat(getComputedStyle(list).rowGap) || 0}px`,
         },
       ];
-  copy.style.overflow = "hidden";
-  const animation = copy.animate(keyframes, {
-    duration: EXIT_DURATION_MS,
-    easing: EXIT_EASING,
-    fill: "forwards",
-  });
   const finish = () => {
-    copy.remove();
+    snapshot.remove();
     releaseExit(list);
   };
-  animation.finished.then(finish, finish);
+  snapshot
+    .animate(keyframes, { duration: EXIT_DURATION_MS, easing: EXIT_EASING, fill: "forwards" })
+    .finished.then(finish, finish);
 }

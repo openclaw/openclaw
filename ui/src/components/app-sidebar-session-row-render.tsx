@@ -6,7 +6,6 @@ import { t } from "../lib/reactive/i18n.ts";
 import { writeSessionDragData } from "../lib/sessions/drag.ts";
 import { canArchiveSessionRow, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
-import { playSidebarArchiveExit } from "./app-sidebar-archive-exit.ts";
 import type {
   CatalogBackingSessionDisplay,
   CatalogRowControls,
@@ -353,10 +352,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
                   },
                 );
               } else {
-                void playSidebarArchiveExit(
-                  target.key,
-                  host().sessionOrganizer.archiveSessionWithUndo(target),
-                );
+                void host().sessionOrganizer.archiveSessionWithUndo(target, rowElement);
               }
             }}
           >
