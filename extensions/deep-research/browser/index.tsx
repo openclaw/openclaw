@@ -78,7 +78,7 @@ function ResearchAccessory(props: {
   client: ReturnType<typeof createResearchClient>;
   open: () => void;
 }) {
-  const [snapshot, setSnapshot] = createSignal<Snapshot>(props.client.read());
+  const [snapshot, setSnapshot] = createSignal<Snapshot>(() => props.client.read());
   onSettled(() => {
     const stop = props.client.subscribe(setSnapshot);
     void props.client.refresh();

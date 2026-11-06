@@ -3,12 +3,13 @@ import { resolve } from "node:path";
 import { expect as pw } from "playwright/test";
 import { expect, it } from "vitest";
 import type { ResearchView } from "../../../extensions/deep-research/api.js";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
-  installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { installNativePluginMockGateway } from "../test-helpers/control-ui-plugin-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Deep research native bundle" });
@@ -87,6 +88,118 @@ const read = (job: ResearchView) => ({
 });
 
 suite.define(() => {
+  it("restores uncertain starts only for the same account after a native remount", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const questionA = "Private question belonging to A";
+      const questionB = "Independent question belonging to B";
+      const gateway = await installNativePluginMockGateway(page, {
+        nativePlugins: [
+          {
+            pluginId: "deep-research",
+            rootDir: resolve("extensions/deep-research"),
+            source: "./browser/index.tsx",
+          },
+        ],
+        communityInvite: false,
+        assistantAgentId: "main",
+        defaultAgentId: "main",
+        featureMethods: [
+          ...defaultControlUiFeatureMethods,
+          ...["list", "read", "start", "cancel", "resume"].map(method),
+        ],
+        methodResponses: {
+          [method("list")]: list(),
+          [method("start")]: {
+            __mockError: { code: "UNAVAILABLE", message: "Synthetic lost start reply" },
+          },
+        },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await page.getByRole("button", { name: "Open deep research progress" }).click();
+      const pane = page.locator(".deep-research-pane");
+      const input = pane.getByLabel("Research question");
+      await input.fill(questionA);
+      await pane.getByRole("button", { name: "Start research", exact: true }).click();
+      const original = await gateway.waitForRequest(method("start"));
+      expect(original.params).toMatchObject({ request: { question: questionA } });
+      await pw(pane.getByRole("button", { name: "Retry pending start" })).toBeVisible();
+      await gateway.setOnline(false);
+      await pw(pane).toHaveCount(0);
+      await gateway.setOnline(true);
+      await pw(input).toHaveValue(questionA);
+      await pw(pane.getByRole("button", { name: "Retry pending start" })).toBeEnabled();
+      expect(await gateway.getRequests(method("start"))).toHaveLength(1);
+      const after = await gateway.deferNext(method("start"));
+      await pane.getByRole("button", { name: "Retry pending start" }).click();
+      const retry = await gateway.waitForRequest(method("start"), { after });
+      expect(retry.params).toEqual(original.params);
+      const hello = await evaluateControlUiContext(page, (app) => app.gateway.snapshot.hello);
+      expect(hello).toBeTruthy();
+      await gateway.setMethodResponse("connect", {
+        ...hello,
+        auth: { ...hello?.auth, recoveryScope: "research-account-b" },
+        server: { ...hello?.server, connId: "research-account-b-connection" },
+      });
+      const retired = await evaluateControlUiContext(
+        page,
+        (app, privateQuestion) => {
+          const storage = app.plugins
+            .registrations("panels")
+            .find((entry) => entry.key === "deep-research/research")?.host.recoveryStorage;
+          app.gateway.connect({ token: "synthetic-research-account-b" });
+          let handleRetired = false;
+          try {
+            storage?.assertCurrent();
+          } catch {
+            handleRetired = true;
+          }
+          const retained = Array.from({ length: sessionStorage.length }, (_, index) =>
+            sessionStorage.getItem(sessionStorage.key(index)!),
+          ).some((value) => value?.includes(privateQuestion));
+          return { handleRetired, retained };
+        },
+        questionA,
+      );
+      expect(retired).toEqual({ handleRetired: true, retained: false });
+      await pw(input).toHaveValue("");
+      expect(await gateway.getRequests(method("start"))).toHaveLength(2);
+      const afterB = await gateway.deferNext(method("start"));
+      await input.fill(questionB);
+      await pane.getByRole("button", { name: "Start research", exact: true }).click();
+      const startB = await gateway.waitForRequest(method("start"), { after: afterB });
+      expect(startB.params).toMatchObject({ request: { question: questionB } });
+      expect(startB.params).not.toEqual(original.params);
+      const beforeLateReply = await page.evaluate(() =>
+        Object.entries(sessionStorage).filter(([key]) =>
+          key.startsWith("openclaw.control.pluginRecovery.v1:"),
+        ),
+      );
+      await gateway.resolveDeferred(
+        method("start"),
+        read({ ...running, jobId: "late-a-result", question: questionA }),
+        { match: { request: { question: questionA } } },
+      );
+      await evaluateControlUiContext(
+        page,
+        (app, request) => app.gateway.snapshot.client!.request(request.method, request.params),
+        {
+          method: method("list"),
+          params: { sessionKey, agentId: "main" },
+        },
+      );
+      await pw(input).toHaveValue(questionB);
+      await pw(pane.getByText("late-a-result", { exact: true })).toHaveCount(0);
+      expect(
+        await page.evaluate(() =>
+          Object.entries(sessionStorage).filter(([key]) =>
+            key.startsWith("openclaw.control.pluginRecovery.v1:"),
+          ),
+        ),
+      ).toEqual(beforeLateReply);
+      expect(await gateway.getRequests(method("start"))).toHaveLength(3);
+    });
+  }, 90_000);
+
   it("opens native pane, safely navigates citations, handles cancellation/offline/reconnect and clears denied data", async () => {
     await suite.withPage(
       {
@@ -104,7 +217,7 @@ suite.define(() => {
             JSON.stringify(errors, null, 2),
           );
         });
-        const gateway = await installMockGateway(page, {
+        const gateway = await installNativePluginMockGateway(page, {
           nativePlugins: [
             {
               pluginId: "deep-research",
@@ -230,8 +343,13 @@ suite.define(() => {
         await pane.getByLabel("Research question").fill(question);
         await pane.getByRole("button", { name: "Start research", exact: true }).click();
         await pw(
-          pane.getByRole("button", { name: "Retry pending start", exact: true }),
+          pane.getByText(
+            "Start outcome uncertain. Retry the same question with the retained request key.",
+          ),
         ).toBeVisible();
+        await pw(
+          pane.getByRole("button", { name: "Retry pending start", exact: true }),
+        ).toBeEnabled();
         await gateway.setMethodResponse(method("list"), list(running));
         await gateway.setMethodResponse(method("start"), read(running));
         await pane.getByRole("button", { name: "Retry pending start", exact: true }).click();

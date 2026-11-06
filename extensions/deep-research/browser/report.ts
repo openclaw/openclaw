@@ -1,4 +1,4 @@
-import type { ResearchView } from "../src/view-contract.js";
+import type { ResearchView } from "../api.js";
 
 export function safeSourceUrl(raw?: string): string | undefined {
   if (!raw) {

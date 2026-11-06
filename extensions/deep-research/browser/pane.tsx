@@ -1,7 +1,7 @@
 /** @jsxImportSource @solidjs/web */
 import { Dynamic } from "@solidjs/web";
 import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
-import type { ResearchView, ResearchViewSource } from "../src/view-contract.js";
+import type { ResearchView, ResearchViewSource } from "../api.js";
 import type { createResearchClient, Snapshot } from "./client.js";
 import { reportBlocks, safeSourceUrl, sourceDomain } from "./report.js";
 
@@ -11,16 +11,17 @@ const labels = {
   "supplied-document": "Supplied document",
 };
 export function ResearchPane(props: { client: ReturnType<typeof createResearchClient> }) {
-  const [snapshot, setSnapshot] = createSignal<Snapshot>(props.client.read());
+  const [snapshot, setSnapshot] = createSignal<Snapshot>(() => props.client.read());
   const [tab, setTab] = createSignal("Progress");
-  const [question, setQuestion] = createSignal(props.client.pending()?.question ?? "");
+  const [question, setQuestion] = createSignal(() => props.client.pending()?.question ?? "");
   const [focusSource, setFocusSource] = createSignal<string>();
   const details = new Map<string, { details: HTMLDetailsElement; summary: HTMLElement }>();
   let citationFocus: HTMLButtonElement | undefined;
   let reportRegion: HTMLElement | undefined;
   onSettled(() => {
-    let incarnation = props.client.read().incarnation;
-    const stop = props.client.subscribe((value) => {
+    const client = props.client;
+    let incarnation = client.read().incarnation;
+    const stop = client.subscribe((value) => {
       if (
         (incarnation && incarnation !== value.incarnation) ||
         (!value.incarnation && value.error)
@@ -31,13 +32,13 @@ export function ResearchPane(props: { client: ReturnType<typeof createResearchCl
         reportRegion = undefined;
         setFocusSource(undefined);
       }
-      if (value.sessionId && props.client.pending()) {
-        setQuestion(props.client.pending()!.question);
+      if (value.sessionId && client.pending()) {
+        setQuestion(client.pending()!.question);
       }
       incarnation = value.incarnation;
       setSnapshot(value);
     });
-    void props.client.refresh();
+    void client.refresh();
     return stop;
   });
   const job = () => snapshot().job;
@@ -243,7 +244,9 @@ export function ResearchPane(props: { client: ReturnType<typeof createResearchCl
                     register={(id, entry) => {
                       details.set(id, entry);
                       return () => {
-                        if (details.get(id) === entry) details.delete(id);
+                        if (details.get(id) === entry) {
+                          details.delete(id);
+                        }
                       };
                     }}
                   />
