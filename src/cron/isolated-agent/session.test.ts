@@ -162,6 +162,10 @@ it.each([true, false])("resets routing and runtime handles (forced=$0)", (forceN
   const preferences = {
     pinnedAt: NOW_MS - 500,
     sidebarRoot: true,
+    label: "Scheduled check",
+    displayName: "My scheduled check",
+    category: "Automations",
+    icon: "🤖",
     modelOverride: "claude-sonnet-4-6",
     providerOverride: "anthropic",
     modelOverrideSource: "user" as const,

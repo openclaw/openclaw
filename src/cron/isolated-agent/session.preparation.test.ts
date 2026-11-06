@@ -99,6 +99,35 @@ it("prepares a missing start timestamp from the bounded transcript header withou
   });
 });
 
+it("preserves filed presentation through consecutive isolated session renewals", async () => {
+  const sessionKey = "agent:main:cron:filed-check";
+  const storePath = path.join(state.sessionsDir(), "sessions.json");
+  const scope = { agentId: "main", env: state.env, sessionKey, storePath };
+  const presentation = { label: "Scheduled check", category: "Automations", icon: "🤖" };
+  let previousSessionId = "filed-check-original";
+  await replaceSessionEntry(scope, {
+    sessionId: previousSessionId,
+    updatedAt: 1,
+    sessionStartedAt: 1,
+    ...presentation,
+  });
+
+  for (const nowMs of [2, 3]) {
+    const prepared = await prepareCronSession({
+      cfg: { session: { store: storePath } },
+      agentId: "main",
+      sessionKey,
+      forceNew: true,
+      nowMs,
+    });
+    expect(prepared.sessionEntry.sessionId).not.toBe(previousSessionId);
+    await replaceSessionEntry(scope, prepared.sessionEntry);
+    const stored = await loadCronSessionEntryLatest(storePath, sessionKey);
+    expect(stored).toMatchObject({ ...presentation, sessionId: prepared.sessionEntry.sessionId });
+    previousSessionId = prepared.sessionEntry.sessionId;
+  }
+});
+
 it("captures store ownership before dispatch without host SQLite", async () => {
   const storePath = state.path("shared.sqlite");
   const sessionKey = "agent:main:cron:custom";
