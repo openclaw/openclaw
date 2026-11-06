@@ -69,29 +69,21 @@ describe("resolveOcPath", () => {
     expect(resolve(ast, uri)).toMatchObject({ kind: "insertion-point", container });
   });
 
-  it("returns null when insertion target is not a container", () => {
-    const ast = parseJsonc('{ "k": 42 }');
-    expect(resolve(ast, "oc://config/k/+")).toBeNull();
+  it.each([
+    [parseJsonc('{ "k": 42 }'), "oc://config/k/+"],
+    [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/name/absent"],
+    [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/name/+added"],
+  ])("returns null for an invalid target at %s %s", (ast, uri) => {
+    expect(resolve(ast, uri)).toBeNull();
   });
   it("preserves source line lookup for numeric map keys", () => {
     const ast = parseYaml("name: x\n1: one\n");
     const m = resolve(ast, "oc://workflow.yaml/1");
-    expectLeaf(m, "one");
-    expect(m?.line).toBe(2);
+    expect(m).toMatchObject({ kind: "leaf", leafType: "string", valueText: "one", line: 2 });
   });
 });
 
 describe("setOcPath", () => {
-  it.each([
-    ["absent", "unresolved"],
-    ["+added", "not-writable"],
-  ])("rejects descent beyond a frontmatter leaf with %s", (suffix, reason) => {
-    const ast = parseMd("---\nname: drafter\nrole: writer\n---\n");
-    const uri = `oc://X.md/[frontmatter]/name/${suffix}`;
-    expect(resolve(ast, uri)).toBeNull();
-    expectEditError(ast, uri, "changed", reason);
-  });
-
   it.each([
     ['{"é":true,"e\\u0301":true}', "e\u0301", "false", '{"é":true,"e\\u0301":false}', false],
     [
@@ -141,6 +133,8 @@ describe("setOcPath", () => {
     [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/+9name", "y", "not-writable"],
     [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/+name.dot", "y", "not-writable"],
     [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/+café", "y", "not-writable"],
+    [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/name/absent", "y", "unresolved"],
+    [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/name/+added", "y", "not-writable"],
     [parseJsonc('{"plugins":{"github":"x"}}'), "oc://config/plugins/+github", '"y"', "unresolved"],
     [parseJsonc('{"items":[1,2]}'), "oc://config/items/+abc", "3", "type-mismatch"],
     [parseJsonl(""), "oc://log/+", "not json", "parse-error"],
