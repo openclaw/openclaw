@@ -103,9 +103,12 @@ actor PushRegistrationManager {
         let tokenHashHex = Self.sha256Hex(apnsTokenHex)
         let relayOrigin = relayClient.normalizedBaseURLString
         let scope = PushRelayRegistrationStore.RegistrationScope(
-            installationId: installationId, gatewayDeviceId: gatewayIdentity.deviceId, relayOrigin: relayOrigin,
+            installationId: installationId,
+            gatewayDeviceId: gatewayIdentity.deviceId,
+            relayOrigin: relayOrigin,
             apnsEnvironment: self.buildConfig.apnsEnvironment.rawValue,
-            relayProfile: self.buildConfig.relayProfile.rawValue, proofPolicy: self.buildConfig.proofPolicy.rawValue,
+            relayProfile: self.buildConfig.relayProfile.rawValue,
+            proofPolicy: self.buildConfig.proofPolicy.rawValue,
             topic: topic)
         let stored = PushRelayRegistrationStore.loadRegistrationState(scope: scope)
         let registrationState: PushRelayRegistrationStore.RegistrationState
@@ -195,9 +198,12 @@ actor PushRegistrationManager {
               let payload = try? JSONDecoder().decode(RelayGatewayPushRegistrationPayload.self, from: data)
         else { return nil }
         let scope = PushRelayRegistrationStore.RegistrationScope(
-            installationId: payload.installationId, gatewayDeviceId: payload.gatewayDeviceId,
-            relayOrigin: payload.relayOrigin, apnsEnvironment: payload.environment,
-            relayProfile: self.buildConfig.relayProfile.rawValue, proofPolicy: self.buildConfig.proofPolicy.rawValue,
+            installationId: payload.installationId,
+            gatewayDeviceId: payload.gatewayDeviceId,
+            relayOrigin: payload.relayOrigin,
+            apnsEnvironment: payload.environment,
+            relayProfile: self.buildConfig.relayProfile.rawValue,
+            proofPolicy: self.buildConfig.proofPolicy.rawValue,
             topic: payload.topic)
         guard let stored = PushRelayRegistrationStore.loadRegistrationState(scope: scope),
               stored.relayHandle == payload.relayHandle, stored.sendGrant == payload.sendGrant,
