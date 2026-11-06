@@ -1,2 +1,2 @@
-# Regressions: Doctor keeps every retained updater runtime while its idle plugin preparation worker stays alive.
-50
+# Regressions: Doctor keeps every retained updater runtime while an unrelated native worker stays alive.
+35

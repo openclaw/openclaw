@@ -28,6 +28,7 @@ const custody = vi.hoisted(() => ({
   census: vi.fn(),
   retireBroker: vi.fn<() => Promise<boolean>>(),
   activeNativeWork: false,
+  activeWorkerPath: "",
   actualNativeSource: false,
 }));
 
@@ -50,6 +51,12 @@ vi.mock("../infra/worker-native-lifecycle.js", async (importOriginal) => {
         ...source,
         retireIdleBroker: () =>
           custody.actualNativeSource ? source.retireIdleBroker() : custody.retireBroker(),
+        activeWorkerPaths: () =>
+          custody.actualNativeSource
+            ? source.activeWorkerPaths()
+            : custody.activeNativeWork
+              ? [custody.activeWorkerPath]
+              : [],
         get hasActiveWorkers() {
           return custody.actualNativeSource ? source.hasActiveWorkers : custody.activeNativeWork;
         },
@@ -91,6 +98,7 @@ it.each([
       fs.writeFileSync(path.join(packageRoot, "package.json"), '{"name":"openclaw"}');
       mocks.packageRoot.mockReturnValue(packageRoot);
       const artifact = createDoctorRuntimeProjection(root, packageRoot, "Old001");
+      custody.activeWorkerPath = path.join(artifact, "worker.js");
       vi.spyOn(os, "tmpdir").mockReturnValue(root);
       vi.spyOn(packageRoots, "resolveOpenClawPackageRootsSync").mockReturnValue([packageRoot]);
       mocks.service.mockReturnValue({
@@ -131,7 +139,8 @@ it.each([
         const maintenance = getOpenClawDatabaseMaintenanceScope();
         expect(maintenance?.ownsSchemaMaintenance).toBe(true);
         maintenance!.assertAdmission();
-        custody.activeNativeWork = broker === "late-independent-thread";
+        custody.activeNativeWork =
+          broker === "late-independent-thread" || broker === "independent-thread";
         return {
           pids: readSource
             ? readSource.hasActiveWorkers

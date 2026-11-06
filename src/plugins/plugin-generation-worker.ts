@@ -198,18 +198,6 @@ function preparationOwnerFor(source: RetainedNativeWorkerSource): PreparationOwn
   return owner;
 }
 
-/** Join an owner's idle captures so a settled command stops holding native workers. */
-export async function retireIdlePluginPreparationWorkers(
-  source: RetainedNativeWorkerSource,
-): Promise<void> {
-  const owner = preparationOwners.get(source);
-  if (!owner) {
-    return;
-  }
-  const outcomes = await Promise.allSettled([...owner.clients].map((close) => close()));
-  throwSettledAggregate(outcomes, "Plugin preparation workers failed to close");
-}
-
 /** Artifacts keep separate capture custody and share their owner's preparation isolate. */
 export async function preparePluginGenerationArtifact(
   params: PreparationParameters,

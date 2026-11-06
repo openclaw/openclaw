@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { getStateDatabaseSchemaLease } from "../infra/gateway-state-owner.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
 import { runWithDoctorMigrationBackup } from "../infra/update-doctor-migration-attribution.js";
@@ -410,8 +412,6 @@ export async function createDoctorMaintenanceState(options: {
     async cleanupRetainedRuntimes(inspectService: boolean) {
       const { captureRetainedNativeWorkerSource } =
         await import("../infra/worker-native-lifecycle.js");
-      const { retireIdlePluginPreparationWorkers } =
-        await import("../plugins/plugin-generation-worker.js");
       const { retireIdleOpenClawStateReadWorkers } =
         await import("../state/openclaw-state-read-worker.js");
       const { prepareRetainedUpdateRuntimeCleanup } = await import("./doctor-retained-runtime.js");
@@ -422,15 +422,10 @@ export async function createDoctorMaintenanceState(options: {
       const nativeSource = captureRetainedNativeWorkerSource();
       // This phase runs after the tracked Doctor callback has settled.
       let readersRetired: boolean;
-      let brokerRetired: boolean;
       try {
         await closeResources();
         readersRetired = await retireIdleOpenClawStateReadWorkers(nativeSource);
-        // A failed close leaves a live worker, which only retains the runtime below.
-        await retireIdlePluginPreparationWorkers(nativeSource).catch((error: unknown) => {
-          process.emitWarning(`Plugin preparation cleanup failed: ${formatErrorMessage(error)}`);
-        });
-        brokerRetired = await nativeSource.retireIdleBroker();
+        await nativeSource.retireIdleBroker();
       } catch (cause) {
         throw new DoctorMaintenanceRefusalError(
           `Doctor inspection resource cleanup failed: ${formatErrorMessage(cause)}. Resolve this cleanup failure before restarting the Gateway or rerunning openclaw doctor --fix.`,
@@ -445,9 +440,18 @@ export async function createDoctorMaintenanceState(options: {
               assertOwnerCurrent();
               owner!.assertDatabaseAccess(resolveOpenClawStateSqlitePath(selectedEnv));
             },
-            assertResourcesSettled() {
+            assertResourcesSettled(directory) {
               // Worker threads share this PID and are invisible to the process census.
-              if (!readersRetired || !brokerRetired || nativeSource.hasActiveWorkers) {
+              // Cached plugin preparation stays alive for this command, but only a
+              // worker loaded from this runtime can hold it.
+              const holdsRuntime = nativeSource
+                .activeWorkerPaths()
+                .some(
+                  (worker) =>
+                    worker === undefined ||
+                    isPathInside(directory, resolveIdentityPathViaExistingAncestorSync(worker)),
+                );
+              if (!readersRetired || holdsRuntime) {
                 throw new Error(
                   `independent native work in this process (PID: ${process.pid}); let these holders finish, then rerun openclaw doctor --fix`,
                 );

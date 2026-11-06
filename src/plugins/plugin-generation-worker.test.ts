@@ -27,10 +27,7 @@ import { createFixture } from "./plugin-generation-artifact.admission.test-suppo
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { withPluginGenerationSourceCustody } from "./plugin-generation-source-lookup.js";
 import type { GenerationWorkerInput } from "./plugin-generation-worker-contract.js";
-import {
-  preparePluginGenerationArtifact,
-  retireIdlePluginPreparationWorkers,
-} from "./plugin-generation-worker.js";
+import { preparePluginGenerationArtifact } from "./plugin-generation-worker.js";
 import { isPluginSourceAcquisitionError } from "./plugin-instance-error.js";
 import {
   nativeAdmissionStateFor,
@@ -399,28 +396,6 @@ it("joins retained capture workers before terminal native-source shutdown", asyn
       );
       expect(capturesBeforeRecovery).toEqual([path.basename(prepared.artifact.boundaryRoot)]);
       expect(capturesWithRecovery).toHaveLength(2);
-    }),
-  );
-});
-
-it("retires idle capture workers for a settled command and prepares again afterward", async () => {
-  const { root, source, entry } = sourceFixture();
-  await withArtifactPreservingStateReads(() =>
-    withStorage(root, async () => {
-      const prepared = await preparePluginGenerationArtifact({ rootDir: source, source: entry });
-      const nativeSource = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
-      expect(nativeSource.hasActiveWorkers).toBe(true);
-      await retireIdlePluginPreparationWorkers(nativeSource);
-      expect(nativeSource.hasActiveWorkers).toBe(false);
-      expect(() => prepared.artifact.prepareModule(entry)).toThrow(
-        "Plugin preparation worker has closed",
-      );
-      await prepared.artifact.disposeAsync();
-      await withPrepared(
-        preparePluginGenerationArtifact({ rootDir: source, source: entry }),
-        (artifact) => expectSource(artifact, entry, "42"),
-      );
-      await closeDefaultRetainedNativeWorkerSource();
     }),
   );
 });
