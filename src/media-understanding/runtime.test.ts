@@ -159,6 +159,23 @@ describe("media-understanding runtime", () => {
     expect(mocks.runCapability).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["audio", transcribeAudioFile],
+    ["video", describeVideoFile],
+  ] as const)("refuses canceled %s before preparing media", async (_kind, describeFile) => {
+    const controller = new AbortController();
+    const reason = new Error("Media request interrupted");
+    controller.abort(reason);
+    await expect(
+      describeFile(
+        { filePath: "/tmp/media", cfg: {} },
+        { signal: controller.signal, assertCurrent: () => controller.signal.throwIfAborted() },
+      ),
+    ).rejects.toBe(reason);
+    expect(mocks.createMediaAttachmentCache).not.toHaveBeenCalled();
+    expect(mocks.runCapability).not.toHaveBeenCalled();
+  });
+
   it("passes media scope context through file media understanding requests", async () => {
     const output: MediaUnderstandingOutput = {
       kind: "image.description",

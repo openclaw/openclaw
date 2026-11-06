@@ -231,6 +231,9 @@ openclaw infer audio transcribe --file ./memo.m4a --model openai/whisper-1 --jso
 An accepted interrupt cancels the pending transcription request and suppresses
 late transcript output.
 
+The same cancellation behavior applies to `infer video describe`: interruption
+stops the pending provider request and suppresses late description output.
+
 For audio transcription and video description on POSIX systems, `--file` follows
 directory symlinks before resolving `..`, matching filesystem path resolution.
 Final-file symlinks remain subject to the existing media-directory checks.
