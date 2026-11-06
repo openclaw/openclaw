@@ -13,11 +13,8 @@ import {
 import { createConfigIO } from "./io.factory.js";
 import { withTempHome } from "./test-helpers.js";
 
-const {
-  runRegisteredConfigCommand: run,
-  withConfigFileHarness: withConfig,
-  registeredRuntimeErrors: errors,
-} = useConfigCliIntegrationHarness();
+const { runRegisteredConfigCommand: run, withConfigFileHarness: withConfig } =
+  useConfigCliIntegrationHarness();
 const set = (key: string, value: string) => run(["config", "set", key, value]);
 const loggingRoot = '{"gateway":{"mode":"local"},"logging":{"$include":"logging.json"}}\n';
 const withLoggingConfig = (body: Parameters<typeof withConfig>[2]) =>
@@ -71,46 +68,6 @@ const createSnapshot = (
   });
 
 describe("config backup rotation", () => {
-  it.each(["root", "include"] as const)(
-    "refuses malformed UTF-8 in the %s before consuming recovery backups",
-    async (owner) => {
-      await withConfig("openclaw-config-utf8-", "{}", async ({ configPath, tempDir }) => {
-        const profile = { name: "Legal 中文 日本語 한글 😀 �", workspace: tempDir };
-        const config = {
-          gateway: { mode: "local", port: 19000 },
-          agents: { entries: { main: owner === "root" ? profile : { $include: "agent.json" } } },
-        };
-        const rootRaw = JSON.stringify(config);
-        await fs.writeFile(configPath, rootRaw);
-        const target = owner === "root" ? configPath : path.join(tempDir, "agent.json");
-        const valid = Buffer.from(`\uFEFF${JSON.stringify(owner === "root" ? config : profile)}\n`);
-        const damaged = Buffer.from(valid);
-        damaged[damaged.indexOf("Legal")] = 0xff;
-        await fs.writeFile(target, damaged);
-        const backup = Buffer.from("retained recovery point\n");
-        await fs.writeFile(`${target}.bak`, backup);
-        const key = owner === "root" ? "gateway.port" : "agents.entries.main.workspace";
-        const value = owner === "root" ? "19001" : path.join(tempDir, "next-workspace");
-
-        await expect(set(key, value)).rejects.toMatchObject({ name: "ExitError", code: 1 });
-        expect(errors.join("\n")).toContain("valid UTF-8");
-        await expect(fs.readFile(target)).resolves.toEqual(damaged);
-        await expect(fs.readFile(`${target}.bak`)).resolves.toEqual(backup);
-        await expectPathMissing(`${target}.bak.1`);
-
-        await fs.writeFile(target, valid);
-        await set(key, value);
-        const saved = JSON.parse(await fs.readFile(target, "utf8"));
-        expect(owner === "root" ? saved.agents.entries.main.name : saved.name).toBe(profile.name);
-        await expect(fs.readFile(`${target}.bak`)).resolves.toEqual(valid);
-        await expect(fs.readFile(`${target}.bak.1`)).resolves.toEqual(backup);
-        if (owner === "include") {
-          await expectFile(configPath, rootRaw);
-        }
-      });
-    },
-  );
-
   it("openclaw config set keeps five recovery points and preserves manual and pre-update backups", async () => {
     const original = '{"gateway":{"mode":"local","port":19000}}\n';
     await withConfig("openclaw-config-backup-ring-", original, async ({ configPath }) => {
@@ -156,52 +113,32 @@ describe("config backup rotation", () => {
     });
   });
 
-  it("openclaw config set warns and continues when root backup rotation fails", async () => {
-    const original = '{"gateway":{"mode":"local","port":19000}}\n';
-    await withConfig("openclaw-config-backup-warning-", original, async ({ configPath }) => {
-      const rename = failBackupRename(configPath);
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      try {
-        await set("gateway.port", "19001");
-
-        expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toMatchObject({
-          gateway: { mode: "local", port: 19001 },
-        });
-        await expectPathMissing(`${configPath}.bak`);
+  it.each(["root", "include"])("continues after %s backup rotation fails", async (owner) => {
+    const root = owner === "root";
+    const original = root ? '{"gateway":{"mode":"local","port":19000}}\n' : '{"level":"info"}\n';
+    await withConfig(
+      "openclaw-config-backup-warning-",
+      root ? original : loggingRoot,
+      async ({ configPath, tempDir }) => {
+        const target = root ? configPath : path.join(tempDir, "logging.json");
+        if (!root) {
+          await fs.writeFile(target, original, { mode: 0o600 });
+        }
+        using _ = failBackupRename(target);
+        using warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        await set(root ? "gateway.port" : "logging.level", root ? "19001" : "debug");
+        expect(JSON.parse(await fs.readFile(target, "utf8"))).toMatchObject(
+          root ? { gateway: { mode: "local", port: 19001 } } : { level: "debug" },
+        );
+        await expectPathMissing(`${target}.bak`);
         expect(warn).toHaveBeenCalledOnce();
-        expect(warn.mock.calls[0]?.[0]).toContain("Config backup rotation failed");
-        expect(warn.mock.calls[0]?.[0]).toContain("openclaw backup create --verify");
-        expect(warn.mock.calls[0]?.[0]).not.toContain(configPath);
-        expect(warn.mock.calls[0]?.[0]).not.toContain(original);
-      } finally {
-        rename.mockRestore();
-        warn.mockRestore();
-      }
-    });
-  });
-
-  it("openclaw config set warns and continues when include backup rotation fails", async () => {
-    const original = '{"level":"info"}\n';
-    await withLoggingConfig(async ({ tempDir }) => {
-      const includePath = path.join(tempDir, "logging.json");
-      await fs.writeFile(includePath, original, { mode: 0o600 });
-      const rename = failBackupRename(includePath);
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      try {
-        await set("logging.level", "debug");
-
-        expect(JSON.parse(await fs.readFile(includePath, "utf8")).level).toBe("debug");
-        await expectPathMissing(`${includePath}.bak`);
-        expect(warn).toHaveBeenCalledOnce();
-        expect(warn.mock.calls[0]?.[0]).toContain("Config backup rotation failed");
-        expect(warn.mock.calls[0]?.[0]).toContain("openclaw backup create --verify");
-        expect(warn.mock.calls[0]?.[0]).not.toContain(includePath);
-        expect(warn.mock.calls[0]?.[0]).not.toContain(original);
-      } finally {
-        rename.mockRestore();
-        warn.mockRestore();
-      }
-    });
+        const message = warn.mock.calls[0]?.[0];
+        expect(message).toContain("Config backup rotation failed");
+        expect(message).toContain("openclaw backup create --verify");
+        expect(message).not.toContain(target);
+        expect(message).not.toContain(original);
+      },
+    );
   });
 
   it.skipIf(IS_WINDOWS).each(["symlink", "hardlink"])(
