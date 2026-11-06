@@ -59,8 +59,8 @@ const controlUiPerformanceBudgets = {
   newBootCssRequests: 3,
   // Generated-name-normalized main measurement plus 64 B toolchain headroom.
   // Retired copy, browser fallbacks, and unused initializers: measured head plus 64 B.
-  chatBootJsGzipBytes: 1_287_644,
-  newBootJsGzipBytes: 796_760,
+  chatBootJsGzipBytes: 1_287_197,
+  newBootJsGzipBytes: 796_484,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
@@ -70,7 +70,7 @@ const controlUiPerformanceBudgets = {
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,
   // Normalized shared application chunk plus 64 B toolchain headroom.
-  largestJsGzipBytes: 559_941,
+  largestJsGzipBytes: 559_544,
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
