@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import type { AgentsListResult } from "../../api/types.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -17,7 +18,10 @@ vi.mock("../toast.ts", async (original) => ({
 afterEach(() => vi.resetAllMocks());
 
 async function fixture() {
-  const roster = { defaultId: "main", agents: [{ id: "main" }, { id: "research" }] };
+  const roster: Pick<AgentsListResult, "defaultId" | "agents"> = {
+    defaultId: "main",
+    agents: [{ id: "main" }, { id: "research" }],
+  };
   const request = vi.fn(async (method: string) => {
     if (method === "agents.list") {
       return structuredClone(roster);

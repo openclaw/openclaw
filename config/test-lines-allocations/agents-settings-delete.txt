@@ -1,2 +1,2 @@
-# Shared deletion cancellation/authority/error regressions and desktop/phone settings entry proof.
-234
+# Shared deletion cancellation/authority/error regressions, typed roster fixture, and desktop/phone settings entry proof.
+238
