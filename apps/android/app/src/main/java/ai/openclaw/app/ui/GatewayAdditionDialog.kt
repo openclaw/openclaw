@@ -62,6 +62,10 @@ private sealed interface GatewayAdditionStep {
 
   class ReadingImage : GatewayAdditionStep
 
+  class NodeEnrollment(
+    val link: String,
+  ) : GatewayAdditionStep
+
   class Review(
     val config: GatewayConnectConfig,
     val previous: GatewayAdditionStep,
@@ -129,6 +133,11 @@ internal fun GatewayAdditionDialog(
     previous: GatewayAdditionStep,
   ) {
     if (!isCurrent()) return
+    decoded.nodeJoinLink?.let { link ->
+      setupCode = ""
+      step = GatewayAdditionStep.NodeEnrollment(link)
+      return
+    }
     val config =
       decoded.setupCode?.let { code ->
         resolveGatewayConnectConfig(true, code, "", "", false, "", "", "")
@@ -187,6 +196,33 @@ internal fun GatewayAdditionDialog(
         GatewayAdditionStep.Manual(gatewayEndpointValidationMessage(error, GatewayEndpointInputSource.MANUAL))
       }
   }
+  val enrollment = step as? GatewayAdditionStep.NodeEnrollment
+  val enrollmentState by viewModel.openClawIdEnrollment.collectAsState()
+  // Runtime public state keeps a confirmed attempt visible across Activity recreation.
+  if (enrollment != null || enrollmentState.waiting || enrollmentState.admitted || enrollmentState.error != null) {
+    OpenClawIdEnrollmentDialog(
+      nodeJoinLink = enrollment?.link,
+      state = enrollmentState,
+      onConfirm = { link, origin ->
+        if (isCurrent()) {
+          viewModel.beginOpenClawIdEnrollment(link, origin)
+          step = GatewayAdditionStep.Scan
+        }
+      },
+      onDismiss = {
+        viewModel.cancelOpenClawIdEnrollment()
+        setupCode = ""
+        step = GatewayAdditionStep.Scan
+      },
+      onComplete = {
+        viewModel.cancelOpenClawIdEnrollment()
+        setupCode = ""
+        step = GatewayAdditionStep.Scan
+        cancel()
+      },
+    )
+    return
+  }
   FoldAwareDialog(onDismissRequest = ::back, title = nativeString("Add Gateway")) {
     Surface(
       modifier = Modifier.fillMaxWidth().testTag("gateway-addition"),
@@ -203,6 +239,10 @@ internal fun GatewayAdditionDialog(
           Text(nativeString("Add Gateway"), style = ClawTheme.type.title)
         }
         when (val current = step) {
+          is GatewayAdditionStep.NodeEnrollment -> {
+            Unit
+          }
+
           GatewayAdditionStep.Scan, is GatewayAdditionStep.ScanError -> {
             (current as? GatewayAdditionStep.ScanError)?.let { Text(it.message, color = ClawTheme.colors.warning) }
             SetupQrScanner(

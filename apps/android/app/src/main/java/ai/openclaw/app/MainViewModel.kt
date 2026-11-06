@@ -32,6 +32,7 @@ import ai.openclaw.app.gateway.GatewayMediaKind
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
+import ai.openclaw.app.gateway.OpenClawIdEnrollmentUiState
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.systemagent.SystemAgentChatState
@@ -501,6 +502,23 @@ class MainViewModel internal constructor(
     runtimeRef
       .map { runtime -> runtime != null }
       .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+  internal val openClawIdEnrollment: StateFlow<OpenClawIdEnrollmentUiState> = runtimeState(OpenClawIdEnrollmentUiState()) { it.openClawIdEnrollment }
+
+  internal fun beginOpenClawIdEnrollment(
+    link: String,
+    discoveryOrigin: String,
+  ) {
+    // Confirmation originates in the visible connection form. Reuse the process service-intent owner.
+    val processIntent = resumeNodeServiceForConnection()
+    val sequence = gatewayConfigOperationSeq.incrementAndGet()
+    val runtime = ensureRuntime()
+    runtime.beginOpenClawIdEnrollment(link, discoveryOrigin) { sequence == gatewayConfigOperationSeq.get() && processIntent() }
+  }
+
+  internal fun cancelOpenClawIdEnrollment() {
+    runtimeRef.value?.cancelOpenClawIdEnrollment()
+  }
 
   val gateways: StateFlow<List<GatewayEndpoint>> = runtimeState(initial = emptyList()) { it.gateways }
   val notificationForwardingEnabled: StateFlow<Boolean> = prefs.notificationForwardingEnabled
