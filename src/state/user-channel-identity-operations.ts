@@ -156,7 +156,8 @@ async function changeIdentity(
             committed &&
             isRecord(committed.facts) &&
             committed.facts.kind === "channel-identity" &&
-            committed.facts.subject === subject
+            committed.facts.subject === subject &&
+            (captured.action !== "policy" || committed.facts.policyChanged !== false)
           ) {
             publishUserProfileAliasChange();
             emitUserProfilesChanged();
