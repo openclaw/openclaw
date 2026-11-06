@@ -67,6 +67,7 @@ import { walkBackupTar } from "./backup-tar-walk.js";
 import { withDatabaseEngineSelection } from "./database-engine/context.js";
 import { listDatabaseEngineStores } from "./database-engine/registry.js";
 import { safeStat } from "./path-existence.js";
+import { formatUnreadableForeignEntryWarning } from "./unreadable-foreign-entry.js";
 import { isUpdateCapturePath } from "./update-capture-paths.js";
 
 const loadTarRuntime = createLazyRuntimeModule(() => import("tar"));
@@ -565,6 +566,7 @@ async function createBackupArchiveInScope(
                   );
                 },
                 filter: tarFilter,
+                onUnreadable: inventory.skipUnreadable,
                 onVanished: (sourcePath) => {
                   if (requiredSourcePaths.has(sourcePath)) {
                     throw new Error(`Required backup source disappeared: ${sourcePath}`);
@@ -607,6 +609,12 @@ async function createBackupArchiveInScope(
               () => {
                 result.skipped = [
                   ...plan.skipped,
+                  ...[...inventory.skippedUnreadablePaths].map((sourcePath) => ({
+                    kind: "entry",
+                    sourcePath,
+                    displayPath: sourcePath,
+                    reason: "unreadable-foreign",
+                  })),
                   ...[...skippedEntries].map(([sourcePath, reason]) => ({
                     kind: "entry",
                     sourcePath,
@@ -615,7 +623,15 @@ async function createBackupArchiveInScope(
                   })),
                 ];
                 // Per-entry reports must not overflow the bounded restore manifest.
-                const manifest = buildManifest({ ...result, skipped: plan.skipped }, plan);
+                const manifest = buildManifest(
+                  {
+                    ...result,
+                    skipped: result.skipped.filter(
+                      (entry) => entry.reason !== "volatile" && entry.reason !== "vanished",
+                    ),
+                  },
+                  plan,
+                );
                 if (stateSqliteBackup.sharedDatabaseSourcePath !== undefined) {
                   manifest.paths = {
                     ...manifest.paths,
@@ -661,6 +677,7 @@ async function createBackupArchiveInScope(
       (reason) => reason === "volatile",
     ).length;
     const archiveWarnings = [
+      ...[...inventory.skippedUnreadablePaths].map(formatUnreadableForeignEntryWarning),
       ...[...opaqueSqliteSourcePaths]
         .toSorted(([left], [right]) => left.localeCompare(right))
         .map(([sourcePath, action]) =>

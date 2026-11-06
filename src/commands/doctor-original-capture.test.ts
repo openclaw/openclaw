@@ -11,6 +11,7 @@ import { readUpdateRunDriver } from "../infra/update-run-driver.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import * as preparation from "../plugins/doctor-contract-preparation.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { parseUpdateRecoveryBackupManifest } from "./backup-verify-manifest.js";
 import { preserveDoctorOriginalState } from "./doctor-original-capture.js";
 
 afterEach(() => {
@@ -34,6 +35,60 @@ const captureDefaults = () => ({
   signal: new AbortController().signal,
   assertCurrent() {},
 });
+
+it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+  "captures around an unreadable foreign workspace directory but refuses owned originals",
+  async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      vi.spyOn(preparation, "preparePluginDoctorMigrationBackupResources").mockResolvedValue({
+        resources: [{ path: state.workspaceDir, kind: "directory" }],
+        deferredPluginIds: new Set(),
+        notices: [],
+        assertCurrent() {},
+      });
+      const foreign = path.join(state.workspaceDir, ".fseventsd");
+      const owned = path.join(state.workspaceDir, "keep.txt");
+      fs.mkdirSync(foreign, { mode: 0o000 });
+      fs.writeFileSync(owned, "owned original");
+      const lstat = fs.lstatSync;
+      vi.spyOn(fs, "lstatSync").mockImplementation((...args) => {
+        const stat = lstat(...args);
+        // Ownership is synthetic; chmod drives the real permission failure.
+        if (stat && args[0] === foreign) {
+          Object.defineProperty(stat, "uid", { value: typeof stat.uid === "bigint" ? 0n : 0 });
+        }
+        return stat;
+      });
+      const capture = (runId: string) =>
+        baselineCapture.captureUpdateRecoveryBaseline({
+          runId,
+          installRoot: process.cwd(),
+          env: state.env,
+          drivers: [],
+          assertCurrent() {},
+        });
+      try {
+        const result = await capture("foreign-directory");
+        const manifest = parseUpdateRecoveryBackupManifest(
+          fs.readFileSync(result.ref.manifestPath, "utf8"),
+        );
+        expect(manifest.excludedRoots).toContain(foreign);
+        expect(
+          manifest.entries.some((entry) => entry.sourcePath === owned && entry.kind === "file"),
+        ).toBe(true);
+        expect(
+          result.diagnostics.databaseWarnings.filter((warning) => warning.includes(foreign)),
+        ).toEqual([`Skipped unreadable foreign entry: ${foreign}`]);
+        fs.chmodSync(owned, 0);
+        expect(() => fs.readFileSync(owned)).toThrow(/EACCES/);
+        await expect(capture("owned-file")).rejects.toThrow("Original update capture failed");
+      } finally {
+        fs.chmodSync(foreign, 0o700);
+        fs.chmodSync(owned, 0o600);
+      }
+    });
+  },
+);
 
 it("removes its failed unsealed capture after the backup work settles", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

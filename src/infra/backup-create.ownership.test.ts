@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -367,3 +368,54 @@ describe.skipIf(process.platform === "win32")("backup SQLite symbolic link loops
     ),
   );
 });
+
+it.skipIf(process.platform === "win32" || process.getuid?.() === 0).each(["directory", "sqlite"])(
+  "records an unreadable foreign workspace %s without losing backup coverage",
+  backupCase({ layout: "state-only", prefix: "backup-foreign-ownership-" })(async (state, kind) => {
+    const foreign = state.statePath(
+      "workspace",
+      kind === "directory" ? ".fseventsd" : "foreign.sqlite",
+    );
+    await fs.mkdir(path.dirname(foreign), { recursive: true });
+    if (kind === "directory") {
+      await fs.mkdir(foreign);
+    } else {
+      await declarePluginSqliteResources(state, "workspace");
+      await fs.writeFile(foreign, "foreign bytes");
+    }
+    await fs.chmod(foreign, 0);
+    const lstat = fsSync.lstatSync;
+    vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
+      const stat = lstat(...args);
+      if (stat && args[0] === foreign) {
+        Object.defineProperty(stat, "uid", { value: typeof stat.uid === "bigint" ? 0n : 0 });
+      }
+      return stat;
+    });
+    try {
+      const archive = await createVerifiedBackup(state);
+      expect(archive.verified).toBe(true);
+      expect(archive.warnings?.filter((warning) => warning.includes(foreign))).toEqual([
+        `Skipped unreadable foreign entry: ${foreign}`,
+      ]);
+      const restored = await restoreBackup(state, archive);
+      const manifest = JSON.parse(
+        await fs.readFile(
+          path.join(restored.targetPath, archive.archiveRoot, "manifest.json"),
+          "utf8",
+        ),
+      );
+      expect(manifest.skipped).toContainEqual(
+        expect.objectContaining({ sourcePath: foreign, reason: "unreadable-foreign" }),
+      );
+      await fs.chmod(state.configPath, 0);
+      await expect(
+        createVerifiedBackup(state, { output: state.path("refused.tgz") }),
+      ).rejects.toThrow(/config|EACCES|permission/i);
+    } finally {
+      await fs.chmod(foreign, 0o700);
+      await fs.chmod(state.configPath, 0o600);
+      vi.restoreAllMocks();
+    }
+  }),
+);

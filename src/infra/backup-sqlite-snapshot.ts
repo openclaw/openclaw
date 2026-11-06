@@ -194,7 +194,10 @@ async function discoverBackupSqliteSources(params: {
         return true;
       },
     });
-    const failure = failedDirs.find(({ error }) => !hasErrnoCode(error, "ENOENT"));
+    const failure = failedDirs.find(
+      ({ error, path: sourcePath }) =>
+        !hasErrnoCode(error, "ENOENT") && !params.inventory.skipUnreadable(error, sourcePath),
+    );
     if (failure) {
       throw failure.error;
     }
@@ -215,6 +218,16 @@ async function discoverBackupSqliteSources(params: {
   for (const entry of candidates) {
     if (classifyBackupSqliteSource(entry.path, params.inventory) !== "sqlite") {
       continue;
+    }
+    // Name-trusted SQLite files bypass header reads. Check readability without
+    // closing a raw SQLite descriptor in this process and disturbing its locks.
+    try {
+      await fs.access(entry.path, fs.constants.R_OK);
+    } catch (error) {
+      if (params.inventory.skipUnreadable(error, entry.path)) {
+        continue;
+      }
+      throw error;
     }
     discoveredSourcePaths.add(entry.path);
     if (!SQLITE_SIDECAR_SUFFIXES.some((suffix) => entry.name.endsWith(suffix))) {

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { isUnreadableForeignEntry } from "./unreadable-foreign-entry.js";
 
 const magic = Buffer.from("SQLite format 3\0");
 const input: unknown = JSON.parse(fs.readFileSync(0, "utf8"));
@@ -24,6 +25,11 @@ const results = paths.map((pathname) => {
   } catch (error) {
     const code = error instanceof Error && "code" in error ? error.code : undefined;
     if (code === "ENOENT" || code === "ELOOP") {
+      return false;
+    }
+    // Discovery leaves unreadable foreign bytes to the archive walker, which
+    // records their omission. Owned sources still refuse the complete backup.
+    if (isUnreadableForeignEntry(error, pathname)) {
       return false;
     }
     throw error;

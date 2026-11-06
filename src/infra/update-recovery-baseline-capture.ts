@@ -40,6 +40,10 @@ import {
 import { root as safeRoot } from "./fs-safe.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
 import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
+import {
+  formatUnreadableForeignEntryWarning,
+  isUnreadableForeignEntry,
+} from "./unreadable-foreign-entry.js";
 import { isUpdateCapturePath, resolveUpdateCaptureRoot } from "./update-capture-paths.js";
 import {
   UPDATE_CAPTURE_PRIVACY_MARKER,
@@ -255,8 +259,25 @@ export function captureUpdateRecoveryBaseline(params: {
       }
     };
     const roots = new Set(resources.keys());
+    const skippedUnreadablePaths = new Set<string>();
+    const skipUnreadable = (error: unknown, pathname: string): boolean => {
+      if (resources.has(pathname) || !isUnreadableForeignEntry(error, pathname)) {
+        return false;
+      }
+      skippedUnreadablePaths.add(pathname);
+      return true;
+    };
     const forcedSqlite = new Set<string>();
     const visit = async (pathname: string, declaredKind?: ResourceKind): Promise<void> => {
+      try {
+        await visitEntry(pathname, declaredKind);
+      } catch (error) {
+        if (declaredKind || !skipUnreadable(error, pathname)) {
+          throw error;
+        }
+      }
+    };
+    const visitEntry = async (pathname: string, declaredKind?: ResourceKind): Promise<void> => {
       const kind = declaredKind ?? resources.get(pathname);
       if (observed.has(pathname)) {
         return;
@@ -325,6 +346,11 @@ export function captureUpdateRecoveryBaseline(params: {
           await visit(path.join(pathname, name));
         }
       } else if (stat.isFile() && kind !== "directory") {
+        // Probe foreign files before database acquisition without opening a raw
+        // descriptor that could release this process's existing SQLite locks.
+        if (process.geteuid && stat.uid !== BigInt(process.geteuid())) {
+          await fs.access(pathname, fs.constants.R_OK);
+        }
         files.set(pathname, stat);
       } else {
         throw new Error(`Original update resource has an unsupported file kind: ${pathname}`);
@@ -448,10 +474,20 @@ export function captureUpdateRecoveryBaseline(params: {
         assertCurrent();
         const sourceRoot = await safeRoot(path.dirname(pathname));
         assertCurrent();
-        const source = await sourceRoot.open(path.basename(pathname), {
-          symlinks: "reject",
-          hardlinks: "allow",
-        });
+        const source = await sourceRoot
+          .open(path.basename(pathname), {
+            symlinks: "reject",
+            hardlinks: "allow",
+          })
+          .catch((error: unknown) => {
+            if (skipUnreadable(error, pathname)) {
+              return undefined;
+            }
+            throw error;
+          });
+        if (!source) {
+          continue;
+        }
         const archivePath = `payload/${payloadIndex++}`;
         await using handle = source.handle;
         const opened = await handle.stat({ bigint: true });
@@ -507,6 +543,7 @@ export function captureUpdateRecoveryBaseline(params: {
         excludedRoots: [
           ...new Set([
             ...(rehearsal?.paths ?? []),
+            ...skippedUnreadablePaths,
             ...[...observed.keys()].filter((pathname) => rehearsal?.excludes(pathname)),
           ]),
         ].toSorted(),
@@ -563,7 +600,13 @@ export function captureUpdateRecoveryBaseline(params: {
           manifestSha256: sha256Hex(raw),
         } satisfies UpdateRecoveryBaselineRef,
         warnings: boundedWarnings,
-        diagnostics: { databaseWarnings: [...capacityWarnings, ...databases.warnings] },
+        diagnostics: {
+          databaseWarnings: [
+            ...capacityWarnings,
+            ...databases.warnings,
+            ...[...skippedUnreadablePaths].map(formatUnreadableForeignEntryWarning),
+          ],
+        },
       };
     } catch (cause) {
       let outcome = `evidence retained at ${directory}`;

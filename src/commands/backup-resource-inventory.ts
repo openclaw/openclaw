@@ -8,6 +8,7 @@ import { normalizeWindowsNamespaceAlias } from "../infra/backup-archive-path-pol
 import { isTransientBackupPath, isVolatileBackupPath } from "../infra/backup-volatile-filter.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { walkDirectory } from "../infra/fs-safe.js";
+import { isUnreadableForeignEntry } from "../infra/unreadable-foreign-entry.js";
 import { isUpdateCapturePath } from "../infra/update-capture-paths.js";
 import type { ResolvedPluginBackupResource } from "../plugins/manifest-backup-resources.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
@@ -57,6 +58,8 @@ type BackupResourcePolicy = Readonly<{
   isTraversable: (sourcePath: string) => boolean;
   isPackageContent: (sourcePath: string) => boolean;
   isVolatile: (sourcePath: string) => boolean;
+  skippedUnreadablePaths: Set<string>;
+  skipUnreadable: (error: unknown, sourcePath: string) => boolean;
 }>;
 
 export type BackupResourcePlan = BackupResourcePolicy &
@@ -81,6 +84,7 @@ const MANAGED_STATE_ROOTS = ["dev", "git", "npm", "npm-runtime", "tmp", "tools"]
 async function listDefaultAgentTemporaryRoots(
   stateDir: string,
   agentRoots: readonly BackupAgentRoot[],
+  failedDirectories: Map<string, unknown>,
 ): Promise<string[]> {
   // Name-based scratch ownership belongs only to the shipped default layout;
   // a configured custom root keeps its durable tmp trees even when nested there.
@@ -113,9 +117,10 @@ async function listDefaultAgentTemporaryRoots(
       descend: (entry) =>
         entry.name !== "tmp" && entry.name !== ".tmp" && !isCustomAgentPath(entry.path),
     });
-    const failure = scan.failedDirs.find(({ error }) => !isNotFoundPathError(error));
-    if (failure) {
-      throw failure.error;
+    for (const { error, path: sourcePath } of scan.failedDirs) {
+      if (!isNotFoundPathError(error)) {
+        failedDirectories.set(sourcePath, error);
+      }
     }
     temporaryRoots.push(...scan.entries.map((entry) => entry.path));
   }
@@ -137,6 +142,8 @@ export async function createBackupResourcePlan(params: {
   localCompanion?: boolean;
 }): Promise<BackupResourcePlan> {
   const stateDir = path.resolve(params.stateDir);
+  const skippedUnreadablePaths = new Set<string>();
+  const failedDirectories = new Map<string, unknown>();
   const pluginResourceRoots: string[] = [];
   const configPaths = new Set(params.configPaths.map((configPath) => path.resolve(configPath)));
   const agentRoots = params.agentRoots.map((root) => ({
@@ -167,7 +174,11 @@ export async function createBackupResourcePlan(params: {
     for (const templateDir of params.excludedWorktreeTemplateDirs ?? []) {
       exclude("worktree template", templateDir);
     }
-    for (const temporaryRoot of await listDefaultAgentTemporaryRoots(stateDir, agentRoots)) {
+    for (const temporaryRoot of await listDefaultAgentTemporaryRoots(
+      stateDir,
+      agentRoots,
+      failedDirectories,
+    )) {
       exclude("agent temporary files", temporaryRoot);
     }
     exclude("plugin skills", path.join(stateDir, "plugin-skills"));
@@ -219,8 +230,16 @@ export async function createBackupResourcePlan(params: {
     protectedPaths,
     excludedPaths,
     pluginResourceRoots,
+    skippedUnreadablePaths,
   };
-  return { ...resources, ...createBackupPathPolicy(resources) };
+  const policy = createBackupPathPolicy(resources);
+  // Plugin includes are now complete; preliminary scans cannot omit their owners.
+  for (const [sourcePath, error] of failedDirectories) {
+    if (!policy.skipUnreadable(error, sourcePath)) {
+      throw error;
+    }
+  }
+  return { ...resources, ...policy };
 }
 
 function createBackupPathPolicy({
@@ -229,10 +248,40 @@ function createBackupPathPolicy({
   regenerableRoots,
   protectedPaths,
   excludedPaths,
+  skippedUnreadablePaths,
 }: Pick<
   BackupResourcePlan,
-  "stateDir" | "agentRoots" | "regenerableRoots" | "protectedPaths" | "excludedPaths"
+  | "stateDir"
+  | "agentRoots"
+  | "regenerableRoots"
+  | "protectedPaths"
+  | "excludedPaths"
+  | "skippedUnreadablePaths"
 >): BackupResourcePolicy {
+  const skipUnreadable = (error: unknown, sourcePath: string): boolean => {
+    if (
+      sourcePath === stateDir ||
+      protectedPaths.some((protectedPath) => isPathInside(sourcePath, protectedPath)) ||
+      !isUnreadableForeignEntry(error, sourcePath)
+    ) {
+      return false;
+    }
+    skippedUnreadablePaths.add(sourcePath);
+    return true;
+  };
+  const isCaptureOrUnreadable = (candidate: string): boolean => {
+    if (skippedUnreadablePaths.has(candidate)) {
+      return true;
+    }
+    try {
+      return isUpdateCapturePath(candidate, stateDir);
+    } catch (error) {
+      if (skipUnreadable(error, candidate)) {
+        return true;
+      }
+      throw error;
+    }
+  };
   const isIncludedByOwner = (candidate: string): boolean => {
     const exclusion = excludedPaths.find((excludedPath) => isPathInside(excludedPath, candidate));
     if (!exclusion) {
@@ -247,11 +296,11 @@ function createBackupPathPolicy({
   };
   const isIncluded = (sourcePath: string): boolean => {
     const candidate = path.resolve(sourcePath);
-    return !isUpdateCapturePath(candidate, stateDir) && isIncludedByOwner(candidate);
+    return !isCaptureOrUnreadable(candidate) && isIncludedByOwner(candidate);
   };
   const isTraversable = (sourcePath: string): boolean => {
     const candidate = path.resolve(sourcePath);
-    if (isUpdateCapturePath(candidate, stateDir)) {
+    if (isCaptureOrUnreadable(candidate)) {
       return false;
     }
     return (
@@ -316,6 +365,8 @@ function createBackupPathPolicy({
     isTraversable,
     isPackageContent,
     isVolatile,
+    skippedUnreadablePaths,
+    skipUnreadable,
   };
 }
 

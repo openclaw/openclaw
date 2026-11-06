@@ -53,6 +53,14 @@ backup.
 
 ## Update implementation contract
 
+Original-state capture and backups omit unreadable foreign filesystem entries,
+including root-owned system directories on volumes mounted inside a workspace.
+Each omitted path is recorded in the capture or backup manifest and reported as
+a warning. Unreadable owned originals and present private-capture markers still
+refuse capture. The running updater must contain this fix to change original-state
+capture; the candidate's discovery and backup walkers must contain it for validation.
+Existing installed updaters retain their original walking behavior on the first hop.
+
 Interactive failed-update triage preserves the invoking operator's `PATH`, home,
 and authentication environment before candidate admission enters the managed
 Gateway environment. Repair agents still receive the latest target installation's
