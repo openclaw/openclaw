@@ -209,19 +209,17 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 - [193114](https://github.com/openclaw/openclaw/pull/193114): Seven unseeded Run Inspector privacy-list entries removed; all ten cases and seeded privacy assertions remain. Original/candidate/published browser suites pass10/10; scoped checks and fresh review completed, CI32 success/28 skipped and exact security tuple passed. Local tokenjuice dependency failure and export-scan timeout/timing gaps remain disclosed. Squash `4bd434d2a5d4` verified; native checkout removed, managed carrier retained for shared-store contention. No cases removed.
 
+- [193386](https://github.com/openclaw/openclaw/pull/193386): Typing-preview checks now target the animated caret, with active-animation controls before pause and reduced-motion checks. Both omitted CSS rules escape the original assertions and fail the repaired ones; all nine cases remain. Original/candidate/published suites and scoped checks pass; exact-head CI32 success/28 skipped and security pass. Squash `01a5e160dabf` verified; native checkout removed, managed carrier retained. No cases removed.
+
 ## Current qualification
 
-Batch109, pinned main `486a0bddbb95`: the typing-preview assertions now inspect
-the animated child caret and prove active animation before each paused or
-reduced-motion check. The unchanged baseline and restored candidate pass all
-nine browser cases. Independently omitting either CSS stop rule passes both
-original rows and fails both repaired rows with `chat-typing-pulse` instead of
-`none`; all production and temporary instrumentation bytes are restored.
-All seven declarations/nine cases remain. Three test lines and their exact
-per-change allocation are added; the shared ceiling is unchanged. Scoped types,
-typed lint, formatting, ledger MDX, whitespace and the line ratchet pass. The PR
-records fresh review and hosted admission. No case or support-removal credit is
-claimed.
+Batch110, pinned main `57953680cdf7`: source inspection confirms that the
+MCP gate waiter has no retained runtime consumer after the grant-revalidation
+suite was retired. The proposed removal covers two obsolete declarations/three
+expanded gate cases and their orphan helper. The two HTTP/process cleanup cases
+remain. This ledger-only draft qualifies the native dependency route; the test
+and support files are unchanged, and baseline/candidate proof is pending.
+Source dispositions were already recorded; this batch adds no census marks.
 
 Prior qualified batches remain unlanded: [192672](https://github.com/openclaw/openclaw/pull/192672)
 has two HTTP502 landing responses and retained checkouts; [192719](https://github.com/openclaw/openclaw/pull/192719)
