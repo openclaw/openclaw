@@ -221,6 +221,33 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     ).toEqual(["deepseek"]);
   });
 
+  it.each([false, true])(
+    "loads full registration only for uncovered runtime catalogs (sibling covered: %s)",
+    (siblingCovered) => {
+      const manifest = createManifestPlugin("fixture");
+      manifest.providers = ["fixture", "sibling"];
+      manifest.modelCatalog = { discovery: { fixture: "runtime", sibling: "refreshable" } };
+      mockManifestPlugins([manifest]);
+      const entries = [createProvider("fixture", "catalog")];
+      if (siblingCovered) {
+        entries.push(createProvider("sibling", "catalog"));
+      }
+      mocks.loadSource.mockReturnValue(entries);
+      mocks.resolvePluginProvidersCore.mockReturnValue([]);
+
+      const providers = discoverProviders({ onlyPluginIds: ["fixture"] });
+
+      expect(providers.map(({ catalog }) => catalog)).toEqual(
+        entries.map(({ catalog }) => catalog),
+      );
+      if (siblingCovered) {
+        expect(mocks.resolvePluginProvidersCore).not.toHaveBeenCalled();
+      } else {
+        expect(runtimePluginIds()).toEqual(["fixture"]);
+      }
+    },
+  );
+
   it("keeps unscoped discovery bounded for mixed live and static-only entries", () => {
     const codexEntryProvider = createProvider("codex", "catalog");
     const deepseekEntryProvider = createProvider("deepseek", "static");
