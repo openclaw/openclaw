@@ -20,6 +20,7 @@ import { setRuntimeConfigSnapshot } from "../../../src/config/runtime-snapshot.j
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import { startGatewayServer } from "../../../src/gateway/server.js";
 import { acquireGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.listener.js";
+import { resolveOpenClawAgentSqlitePath } from "../../../src/state/openclaw-agent-db.paths.js";
 import { createTestGatewayScheduler } from "../../../src/test-utils/gateway-scheduler-clock.js";
 import * as testStateFixture from "../../../src/test-utils/openclaw-test-state.ts";
 import type { TestPortClaim } from "../../../src/test-utils/port-claims.js";
@@ -298,7 +299,12 @@ const suite = createControlUiE2eSuite({
       showFixture = async (callId) => {
         const nextResult = await show.execute(callId, { city: "Paris" });
         const manager = await SessionManager.openAsync(
-          { agentId: "main", sessionId: runtime.sessionId, sessionKey, env: state!.env },
+          {
+            agentId: "main",
+            sessionId: runtime.sessionId,
+            sessionKey,
+            storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env: state!.env }),
+          },
           tempRoot,
         );
         await manager.appendMessageAsync({
