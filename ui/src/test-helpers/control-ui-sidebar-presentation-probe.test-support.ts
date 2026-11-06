@@ -13,7 +13,22 @@ export function sidebarPresentationProbe() {
       state: string | null;
     }>;
     avatarNodes: number[];
+    avatarPresentation: Array<{
+      classes: string;
+      image: string | null;
+      fallback: string;
+      hue: string | null;
+    }>;
+    avatarRootNodes: number[];
     avatarDescendants: number;
+    avatarComponents: {
+      owners: number;
+      humanBridges: number;
+      agents: number;
+      facepileBridges: number;
+    };
+    ownerStack: boolean;
+    ownerAway: boolean;
     participantCount: string | null;
     ownerAvatars: number;
     presenceAvatars: number;
@@ -43,9 +58,34 @@ export function sidebarPresentationProbe() {
   const frames: Frame[] = [];
   const nodeIds = new WeakMap<Element, number>();
   let nextNodeId = 0;
+  const nodeId = (element: Element) => {
+    let id = nodeIds.get(element);
+    if (id === undefined) {
+      id = ++nextNodeId;
+      nodeIds.set(element, id);
+    }
+    return id;
+  };
   const avatarFacts = (row: Element) => {
     const avatars = [...row.querySelectorAll<HTMLElement>('[class*="avatar"]')];
+    const roots = avatars.filter((avatar) => avatar.classList.contains("viewer-avatar"));
     return {
+      avatarPresentation: roots.map((avatar) => {
+        const image = avatar.querySelector("img");
+        const imageUrl =
+          image && !image.closest(".is-fallback,.is-pending") ? image.getAttribute("src") : null;
+        return {
+          classes: avatar.className,
+          image: imageUrl,
+          fallback: imageUrl
+            ? ""
+            : (avatar.querySelector(".identity-avatar__text")?.getAttribute("data-avatar") ??
+              avatar.textContent ??
+              ""),
+          hue: imageUrl ? null : avatar.getAttribute("style"),
+        };
+      }),
+      avatarRootNodes: roots.map(nodeId),
       avatarDisplay: avatars.map((avatar) => ({
         classes: avatar.className,
         initials: avatar.querySelector(".viewer-avatar__initials")?.textContent ?? "",
@@ -53,14 +93,7 @@ export function sidebarPresentationProbe() {
         color: avatar.getAttribute("style"),
         state: avatar.getAttribute("data-avatar-state"),
       })),
-      avatarNodes: avatars.map((avatar) => {
-        let id = nodeIds.get(avatar);
-        if (id === undefined) {
-          id = ++nextNodeId;
-          nodeIds.set(avatar, id);
-        }
-        return id;
-      }),
+      avatarNodes: avatars.map(nodeId),
       avatarDescendants: avatars.reduce(
         (count, avatar) =>
           count +
@@ -69,6 +102,14 @@ export function sidebarPresentationProbe() {
             : 1 + avatar.querySelectorAll("*").length),
         0,
       ),
+      avatarComponents: {
+        owners: row.querySelectorAll("openclaw-session-owner-chip").length,
+        humanBridges: row.querySelectorAll("openclaw-viewer-avatar").length,
+        agents: row.querySelectorAll(".identity-avatar--agent").length,
+        facepileBridges: row.querySelectorAll("openclaw-viewer-facepile").length,
+      },
+      ownerStack: Boolean(row.querySelector(".session-owner-stack")),
+      ownerAway: Boolean(row.querySelector(".session-owner-chip--away")),
       participantCount: row.querySelector(".session-owner-stack__count")?.textContent ?? null,
     };
   };

@@ -4,6 +4,7 @@ import type { GatewaySessionRow } from "../api/types.ts";
 import type { NavigationRouteId, SidebarZoneEntry } from "../app-navigation.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
+import type { PresencePayload } from "../app/user-profile.ts";
 import type { PresenceActivity } from "../lib/presence-users.ts";
 import type {
   SessionMethodAccess,
@@ -46,6 +47,7 @@ export interface SessionListHost {
     | Pick<ApplicationContext, "gateway" | "agentSelection" | "agents" | "sessions">
     | undefined;
   readonly sidebarLiveActivity: boolean;
+  readonly sidebarPresencePayload: PresencePayload | undefined;
   readonly sessionsShowCron: boolean;
   readonly sessionsShowPreview: boolean;
   readonly sessionsShowSystem: boolean;

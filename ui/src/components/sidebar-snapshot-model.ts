@@ -69,7 +69,16 @@ export function snapshotSessions(
   rows: readonly SidebarRecentSession[],
   presentation?: (
     row: SidebarRecentSession,
-  ) => Pick<SidebarSnapshotSession, "snapshotSubtitle" | "childrenDisplayMode" | "state">,
+  ) => Pick<
+    SidebarSnapshotSession,
+    | "snapshotSubtitle"
+    | "childrenDisplayMode"
+    | "state"
+    | "owner"
+    | "archivedBy"
+    | "participants"
+    | "participantCount"
+  >,
 ): SidebarSnapshotSession[] {
   return rows
     .filter((row) => !row.incognito && !isIncognitoSessionKey(row.key))
@@ -109,6 +118,10 @@ export function snapshotSessions(
         key: row.key,
         label: row.label,
         agentId: row.agentId,
+        owner: display?.owner,
+        archivedBy: display?.archivedBy,
+        participants: display?.participants,
+        participantCount: display?.participantCount,
         subtitle: row.subtitle,
         icon: row.icon,
         color: row.color,

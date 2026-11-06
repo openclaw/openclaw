@@ -295,6 +295,7 @@ it("keeps the sidebar and unrelated chats when a deleted session is pruned from 
   const saved: typeof sidebarSnapshot = {
     ...sidebarSnapshot,
     windowKeys: [removed.key, retained.key],
+    onlineUsers: [{ id: "viewer", watchedSessions: [removed.key, retained.key] }],
     pinnedSessions: [removed, parent],
     pages: [removed, retained],
     entries: [`session:${removed.key}`, `session:${retained.key}`, "route:usage"],
@@ -315,6 +316,7 @@ it("keeps the sidebar and unrelated chats when a deleted session is pruned from 
   expect(restored.pinnedSessions.map((row) => row.key)).toEqual([retained.key]);
   expect(restored.pinnedSessions[0]?.children).toEqual([]);
   expect(restored.windowKeys).toEqual([retained.key]);
+  expect(restored.onlineUsers[0]?.watchedSessions).toEqual([retained.key]);
   expect(restored.entries).toEqual([`session:${retained.key}`, "route:usage"]);
   expect(await store.readSidebar(key(otherAccount), parseSidebarSnapshot)).toEqual(saved);
   expect(await store.read(`${accountPrefix}${retained.key}`)).toEqual(transcript);
