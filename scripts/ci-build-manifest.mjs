@@ -517,11 +517,9 @@ const narrowAndroidUnitTests =
       ) && lstatSync(file, { throwIfNoEntry: false })?.isFile(),
   );
 const runAndroidPhoneTests =
-  !narrowAndroidUnitTests ||
-  changedPaths?.some((file) => file.startsWith("apps/android/app/")) === true;
+  !narrowAndroidUnitTests || changedPaths?.some((file) => file.startsWith("apps/android/app/"));
 const runAndroidWearTests =
-  !narrowAndroidUnitTests ||
-  changedPaths?.some((file) => file.startsWith("apps/android/wear/")) === true;
+  !narrowAndroidUnitTests || changedPaths?.some((file) => file.startsWith("apps/android/wear/"));
 // Unit tests do not compile the benchmark. Keep its build when inputs
 // change, or when the existing changed-path manifest cannot narrow scope.
 const androidBenchmarkChanged =
