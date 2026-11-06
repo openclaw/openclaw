@@ -20,6 +20,8 @@ export type EngineScenario = Omit<InteractionScenario, "run"> & {
   viewports?: readonly ("desktop" | "mobile")[];
   /** A fresh context stays unnavigated until the measured action starts. */
   navigation?: "measured" | "reload";
+  /** Standalone approval/question documents have no shell roster or route preload manifest. */
+  standaloneDocument?: boolean;
   /** Append to the mock Gateway's init script, preserving WebSocket wrapper order. */
   initScript?: string;
   settings?: Partial<UiSettings>;
