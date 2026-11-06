@@ -9,7 +9,6 @@ import {
   leaseReusableSqliteSnapshot,
   publishBoundReusableSqliteSnapshot,
   publishReusableSqliteSnapshot,
-  retireSqliteSnapshotReuse,
   withSqliteSnapshotReuse,
 } from "./sqlite-snapshot-reuse.js";
 
@@ -120,14 +119,6 @@ reusing("sees commits and restores through an alias and preserved timestamps", a
   fs.writeFileSync(restored.source, "MAIN");
   fs.utimesSync(restored.source, aged, aged);
   expect(leaseReusableSqliteSnapshot(restored.source)).toBeUndefined();
-});
-
-reusing("retires held images on request and copies again afterwards", async () => {
-  const { source, retire, lease } = seed();
-  lease.cleanup();
-  await retireSqliteSnapshotReuse();
-  expect(retire).toHaveBeenCalledOnce();
-  expect(leaseReusableSqliteSnapshot(source)).toBeUndefined();
 });
 
 reusing("holds a recent source back only as long as its clock could hide a write", () => {

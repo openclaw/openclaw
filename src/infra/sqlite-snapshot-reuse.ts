@@ -61,17 +61,12 @@ export async function withSqliteSnapshotReuse<T>(operation: () => Promise<T>): P
   } finally {
     scopes.depth -= 1;
     if (scopes.depth === 0) {
-      await retireSqliteSnapshotReuse();
+      for (const [key, image] of images) {
+        retire(key, image);
+      }
+      await Promise.allSettled(scopes.retiring);
     }
   }
-}
-
-/** An image keeps its staging worker alive, so work needing an idle process retires them first. */
-export async function retireSqliteSnapshotReuse(): Promise<void> {
-  for (const [key, image] of images) {
-    retire(key, image);
-  }
-  await Promise.allSettled(scopes.retiring);
 }
 
 export function isSqliteSnapshotReuseActive(): boolean {
