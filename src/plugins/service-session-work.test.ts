@@ -28,6 +28,8 @@ const state = vi.hoisted(() => ({
 vi.mock("../agents/tools/gateway-caller-context.js", () => ({
   captureGatewayToolCallerAssertion: () => state.assertCurrent,
   getGatewayToolCallerIdentity: () => ({
+    agentId: "main",
+    sessionKey: "agent:main:research",
     assertToolAllowed: () => {
       if (!state.allowTool) {
         throw new Error("tool denied");
@@ -164,6 +166,16 @@ beforeEach(() => {
   state.target.lifecycleRevision = "1";
   vi.clearAllMocks();
 });
+it.each([
+  { agentId: "other", sessionKey: "agent:main:research" },
+  { agentId: "main", sessionKey: "agent:main:other" },
+])("rejects admission outside the live caller's conversation: %j", async (target) => {
+  const { service } = fixture();
+  await expect(service.admit({ ...input, ...target })).rejects.toThrow("own conversation");
+  expect(state.prepare).not.toHaveBeenCalled();
+  expect(state.records.size).toBe(0);
+});
+
 it("admits and reauthorizes an exact operation with its original tool ceiling", async () => {
   const { service } = fixture();
   await expect(service.admit(input)).resolves.toEqual({ target: state.target, recoverable: true });

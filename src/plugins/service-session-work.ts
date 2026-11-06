@@ -98,6 +98,9 @@ export function createPluginServiceSessionWork(params: {
       }
       const caller = getGatewayToolCallerIdentity();
       const assertCaller = captureGatewayToolCallerAssertion();
+      if (caller && (caller.agentId !== input.agentId || caller.sessionKey !== input.sessionKey)) {
+        throw new Error("Session work must target the invoking agent's own conversation");
+      }
       const captured = await captureAmbientGatewayOperatorAuthority({
         missingBindingError: () => new Error("Session work requires its original operator source"),
         retainInherited: true,

@@ -19,6 +19,11 @@ export function runWithPluginSessionWorkAuthority<T>(
   return current.run(authority, run);
 }
 
+/** Scheduled service work must acquire a fresh borrow instead of inheriting a settled one. */
+export function runOutsidePluginSessionWorkAuthority<T>(run: () => T): T {
+  return current.exit(run);
+}
+
 /** Apply the accepted operation's ceiling before any in-process method dispatch. */
 export function resolvePluginSessionWorkDispatch({
   method,
