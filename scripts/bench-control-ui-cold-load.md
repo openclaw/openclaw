@@ -34,6 +34,13 @@ the same narrow viewport and touch settings, but omit Playwright's unsupported
 `isMobile` emulation. Hidden-tab scenarios are skipped where native visibility
 cannot be controlled.
 
+Desktop `transcript-scroll-top` uses repeated sub-page native wheel gestures and
+reports `wheelEvents` with its result. Firefox deliberately caps a single wheel
+event to one page, so an arbitrarily large delta is not a portable jump-to-top.
+The measured journey includes the driver gaps between gestures; it is not
+single-wheel latency. Mobile retains the programmatic scrollport jump because
+Playwright's mobile WebKit driver does not support wheel input.
+
 ## Native browser work and composited layers
 
 Use the same production route and interaction scenarios with `--native-audit`
