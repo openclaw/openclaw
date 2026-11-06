@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { parseJsonc } from "../jsonc/parse.js";
 import { parseJsonl } from "../jsonl/parse.js";
@@ -218,20 +217,17 @@ describe("setOcPath", () => {
     expect(md).toEqual(before);
   });
 
-  it("appends a JSON line with `+`", () => {
-    const ast = parseJsonl('{"event":"start"}\n');
-    const { raw } = edit(ast, "oc://log/+", '{"event":"step","n":1}');
-    const lines = raw.split("\n").filter((l) => l.length > 0);
-    expect(lines).toHaveLength(2);
-    const appended = expectDefined(lines[1], "appended JSONL line");
-    expect(JSON.parse(appended)).toEqual({ event: "step", n: 1 });
-  });
-
   it.each([
     [parseMd("---\nn: x\n---\n"), "oc://X.md/[frontmatter]/n", "new", "---\nn: new\n---\n"],
     [parseJsonc('{"k":1}'), "oc://config/k", "99", '{"k":99}'],
     [parseJsonl('{"a":1}\n'), "oc://log/L1/a", "99", '{"a":99}\n'],
     [parseJsonl('{"a":1}\n'), "oc://log/L1", '{"event":"replaced"}', '{"event":"replaced"}\n'],
+    [
+      parseJsonl('{"event":"start"}\n'),
+      "oc://log/+",
+      '{"event":"step","n":1}',
+      '{"event":"start"}\n{"event":"step","n":1}\n',
+    ],
   ])("writes expected bytes without mutating %s at %s", (ast, uri, value, expected) => {
     const before = JSON.stringify(ast);
     expect(edit(ast, uri, value).raw).toBe(expected);
