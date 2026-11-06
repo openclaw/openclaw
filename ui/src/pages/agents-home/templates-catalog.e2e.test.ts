@@ -85,7 +85,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
           content: [
             {
               type: "text",
-              text: "Try [Workflow Operator](/templates/packages/%40openclaw%2Fworkflow-operator).",
+              text: "Try [Workflow Operator](/templates/packages/%40openclaw%2Fworkflow-operator) or [another reference](/templates/packages/%40openclaw%2Fworkflow-operator).",
             },
           ],
         },
@@ -350,10 +350,18 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
   it("keeps the inline preview shell stable through category and file navigation", async () => {
     const { page, gateway } = await fixture();
     await gateway.setMethodResponse("templates.catalog.preview", {
-      preview: { content: "Long file content. ".repeat(2000) },
+      preview: {
+        content: "Long file content. ".repeat(2000) + "\n\n[Agent instructions](AGENTS.md)",
+      },
     });
     await page.goto(`${server.baseUrl}chat/main`);
-    await page.locator("a.markdown-template-link").click();
+    const references = page.locator("a.markdown-template-link");
+    await references.first().hover();
+    await page.locator(".template-reference-card").waitFor();
+    await references.nth(1).hover();
+    await page.waitForTimeout(250); // The first anchor’s 180 ms dismissal must not close the second.
+    expect(await page.locator(".template-reference-card").isVisible()).toBe(true);
+    await references.nth(1).click();
     const modal = page.getByRole("dialog", { name: "Template details", exact: true });
     const shell = modal.locator(".template-preview");
     await shell.getByRole("button", { name: /Workspace files/ }).waitFor();
@@ -373,6 +381,9 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     });
     expect(await shell.locator("header").boundingBox()).toEqual(header);
     expect(await shell.locator("footer").boundingBox()).toEqual(footer);
+    await shell.getByRole("link", { name: "Agent instructions", exact: true }).click();
+    await shell.getByRole("heading", { name: "AGENTS.md", exact: true }).waitFor();
+    expect(await page.getByRole("dialog").count()).toBe(1);
     const back = shell.getByRole("button", { name: "Back to Workspace files", exact: true });
     expect(await back.textContent()).toBe("");
     await back.click();
@@ -385,7 +396,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     await evaluateControlUiContext(page, (app) =>
       app.navigateAndWait("chat", { pathname: "/chat/main" }),
     );
-    await page.locator("a.markdown-template-link:visible").waitFor();
+    await page.locator("a.markdown-template-link:visible").first().waitFor();
     expect(await modal.count()).toBe(0);
   });
 

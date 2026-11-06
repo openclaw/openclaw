@@ -1,4 +1,4 @@
-import { Show, lazy, createMemo, createSignal, onSettled, useContext } from "solid-js";
+import { Loading, Show, lazy, createMemo, createSignal, onSettled, useContext } from "solid-js";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import {
   linkReaderPrefetchRef as createLinkReaderPrefetchRef,
@@ -34,7 +34,6 @@ import {
   subscribeExpansionState,
 } from "../chat-thread.ts";
 import { retainLinkFaviconCache } from "../link-favicon-cache.ts";
-import { ChatCommentPins } from "./chat-comment-pins.tsx";
 import { ChatConversationLoading } from "./chat-conversation-loading.tsx";
 import { ChatConversationMobile } from "./chat-conversation-presentation.ts";
 import { CHAT_HISTORY_BOUNDARY_HEIGHT_PX, ChatHistoryBoundary } from "./chat-history-boundary.tsx";
@@ -52,6 +51,7 @@ import type { ChatTranscript } from "./chat-transcript-controller.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import type { TranscriptHeader } from "./chat-transcript-session.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
+import "../../../styles/chat/selection-annotations.css";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -59,6 +59,11 @@ const TemplateReferenceView = lazy(
   () => import("../../../components/template-reference-view.tsx"),
   { export: "TemplateReferenceView" },
 );
+
+// Both transcript overlays are optional; ordinary chat boot needs neither renderer.
+const ChatCommentPins = lazy(() => import("./chat-comment-pins.tsx"), {
+  export: "ChatCommentPins",
+});
 
 const EMPTY_ENTRY_KEYS: ReadonlyMap<string, string> = new Map();
 
@@ -415,13 +420,15 @@ export function ChatThread(input: {
         {contents()}
         <Show when={commentPins() ? getTranscriptState(paneId()) : undefined} keyed>
           {(threadState) => (
-            <ChatCommentPins
-              threadState={threadState}
-              transcript={current().session}
-              attachments={input.props.commentAttachments}
-              sessionKey={input.props.sessionKey}
-              disabled={input.props.commentsDisabled ?? false}
-            />
+            <Loading>
+              <ChatCommentPins
+                threadState={threadState}
+                transcript={current().session}
+                attachments={input.props.commentAttachments}
+                sessionKey={input.props.sessionKey}
+                disabled={input.props.commentsDisabled ?? false}
+              />
+            </Loading>
           )}
         </Show>
       </div>

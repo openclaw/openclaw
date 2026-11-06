@@ -1,6 +1,5 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, isPending, latest, Loading, Show } from "solid-js";
-import { stripFrontmatterBlock } from "../../../packages/markdown-core/src/frontmatter.js";
 import { registerFilePreviewEnglish } from "../i18n/locales/en-file-preview.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { elementRef } from "../lib/reactive/element-ref.ts";
@@ -10,12 +9,11 @@ import { createPendingFocus } from "../lib/reactive/pending-focus.ts";
 import { createScrollPosition } from "../lib/reactive/scroll-state.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { type FileKind, fileKindForPath } from "./file-kind.ts";
-import { toSanitizedMarkdownHtml } from "./markdown.ts";
+import { FilePreviewDocument, filePreviewDocumentLink } from "./file-preview-document.tsx";
 import { CopyButton } from "./solid/copy-button.tsx";
 import { Icon, type IconName } from "./solid/icon.tsx";
 import { Kbd } from "./solid/kbd.tsx";
 import { PanelLoadingSkeleton } from "./solid/panel-loading-skeleton.tsx";
-import { SanitizedHtml } from "./solid/sanitized-html.tsx";
 import styles from "./file-preview-modal.styles.css?inline";
 import "./modal-dialog.tsx";
 import kbdStyles from "./kbd.css?inline";
@@ -147,21 +145,7 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
     }
   };
   const handleDocumentLink = (event: MouseEvent) => {
-    const anchor =
-      event.target instanceof Element ? event.target.closest<HTMLAnchorElement>("a[href]") : null;
-    const href = anchor?.getAttribute("href");
-    if (!href || /^[a-z][a-z0-9+.-]*:|^\/\//iu.test(href)) {
-      return;
-    }
-    event.preventDefault();
-    const base = new URL(activeFile()?.path ?? "SKILL.md", "https://skill.invalid/");
-    const target = new URL(href, base);
-    let filePath: string;
-    try {
-      filePath = decodeURIComponent(target.pathname.slice(1));
-    } catch {
-      return;
-    }
+    const filePath = filePreviewDocumentLink(event, activeFile()?.path ?? "SKILL.md");
     const file = props.files.find((candidate) => candidate.path === filePath);
     if (file) {
       select(file.path);
@@ -453,45 +437,6 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
   );
 }
 
-/** Shared read-only rendering; callers retain file-read and overlay ownership. */
-export function FilePreviewDocument(props: {
-  path: string;
-  content: string;
-  message?: string;
-  markdown?: boolean;
-  onClick?: JSX.EventHandler<HTMLElement, MouseEvent>;
-}) {
-  const chunks = createMemo(() => chunkFileContents(props.content));
-  const html = createMemo(() =>
-    toSanitizedMarkdownHtml(stripFrontmatterBlock(props.content), {
-      mode: "document",
-      remoteImages: false,
-      codeBlockChrome: "none",
-      fileLinks: false,
-    }),
-  );
-  return (
-    <Show when={!props.message} fallback={<p role="status">{props.message}</p>}>
-      <Show
-        when={props.markdown && /\.md$/iu.test(props.path)}
-        fallback={
-          <div class="code-content">
-            <For each={chunks()}>
-              {(chunk, index) => (
-                <pre class="code-chunk" data-chunk={index()}>
-                  {chunk}
-                </pre>
-              )}
-            </For>
-          </div>
-        }
-      >
-        <SanitizedHtml tag="article" class="markdown" onClick={props.onClick} html={html()} />
-      </Show>
-    </Show>
-  );
-}
-
 export const FilePreviewModal = defineSolidBridge<FilePreviewModalProps>(
   "openclaw-file-preview-modal",
   FilePreviewContent,
@@ -518,14 +463,6 @@ export const FilePreviewModal = defineSolidBridge<FilePreviewModalProps>(
   },
 );
 
-function chunkFileContents(contents: string): string[] {
-  const lines = contents.split("\n");
-  const chunks: string[] = [];
-  for (let index = 0; index < lines.length; index += 64) {
-    chunks.push(lines.slice(index, index + 64).join("\n"));
-  }
-  return chunks;
-}
 function fileKind(path: string): string {
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
   const map: Record<string, string> = {

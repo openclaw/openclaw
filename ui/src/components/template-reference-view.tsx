@@ -16,7 +16,6 @@ import { listen } from "../lib/reactive/listener.ts";
 import { createTimeout } from "../lib/reactive/timers.ts";
 import { TemplateArtwork } from "../pages/agents-home/template-artwork.tsx";
 import { searchTemplates } from "../pages/agents-home/templates-catalog-client.ts";
-import { markdownTemplatePackage } from "./markdown-template-links.ts";
 import { Popover } from "./solid/popover.tsx";
 import type { TemplateReference, TemplateReferenceSource } from "./template-reference-surface.tsx";
 import "../styles/template-reference.css";
@@ -39,11 +38,15 @@ export function TemplateReferenceView(props: {
   return (
     <Show when={current() && props.source().applicationContext}>
       {(application) => (
-        <ScopedTemplateReferenceView
-          application={application()}
-          intent={props.intent}
-          onDismiss={props.onDismiss}
-        />
+        <Show when={props.intent.anchor} keyed>
+          {(_anchor) => (
+            <ScopedTemplateReferenceView
+              application={application()}
+              intent={props.intent}
+              onDismiss={props.onDismiss}
+            />
+          )}
+        </Show>
       )}
     </Show>
   );
@@ -95,10 +98,7 @@ function ScopedTemplateReferenceView(props: {
       <Show when={!preview() && target()} keyed>
         {(value) => {
           const entry = createMemo(async () => {
-            const packageName = markdownTemplatePackage(
-              value.anchor.href,
-              props.application.basePath,
-            );
+            const packageName = value.anchor.dataset.templatePackage;
             return packageName
               ? ((await searchTemplates(value.client, packageName, 100)).find(
                   (item) => item.packageName === packageName,
@@ -169,10 +169,7 @@ function ScopedTemplateReferenceView(props: {
         {(application) => (
           <ApplicationProvider value={application}>
             <TemplateDialog
-              initialPackageName={markdownTemplatePackage(
-                preview()!.anchor.href,
-                props.application?.basePath,
-              )!}
+              initialPackageName={preview()!.anchor.dataset.templatePackage!}
               modal
               onClose={() => {
                 const anchor = preview()?.anchor;

@@ -1,5 +1,8 @@
 import { createMemo, createSignal, Errored, For, Loading, Show } from "solid-js";
-import { FilePreviewDocument } from "../../components/file-preview-modal.tsx";
+import {
+  FilePreviewDocument,
+  filePreviewDocumentLink,
+} from "../../components/file-preview-document.tsx";
 import { Icon, type IconName } from "../../components/solid/icon.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -274,6 +277,15 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                                     path={category() === "skills" ? "SKILL.md" : selectedName()!}
                                     content={props.view.preview?.content ?? ""}
                                     markdown
+                                    onClick={(event) => {
+                                      const path = filePreviewDocumentLink(event, selectedName()!);
+                                      if (
+                                        category() === "instructions" &&
+                                        items("instructions").some((file) => file.name === path)
+                                      ) {
+                                        open(path!);
+                                      }
+                                    }}
                                   />
                                 </Loading>
                               </Errored>
