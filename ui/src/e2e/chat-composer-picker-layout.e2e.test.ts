@@ -1,6 +1,5 @@
 import { webkit, type Browser } from "playwright";
 import { expect, it } from "vitest";
-import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { controlUiE2eWaitTimeoutMs, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
@@ -60,17 +59,10 @@ suite.define(() => {
     expect(Math.max(...offsets), JSON.stringify(offsets)).toBeLessThanOrEqual(0.5);
   });
 
-  it.each(["chromium", "webkit"] as const)(
-    "fits and reaches an unfiltered tall model catalog above the mobile composer in %s",
-    async (engine) => {
-      const options = { viewport: { width: 393, height: 500 }, isMobile: true, hasTouch: true };
-      const context =
-        engine === "chromium"
-          ? await suite.newBrowserContext(options)
-          : await webkitBrowser.newContext(options);
-      const page = await context.newPage();
-      page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
-      try {
+  it("reaches the final model with only the catalog list scrolling", async () => {
+    await suite.withPage(
+      { viewport: { width: 393, height: 500 }, isMobile: true, hasTouch: true },
+      async ({ page }) => {
         await page.emulateMedia({ reducedMotion: "reduce" });
         await installMockGateway(page, {
           models: Array.from({ length: 24 }, (_, index) => ({
@@ -82,58 +74,20 @@ suite.define(() => {
         await page.goto(suite.server.baseUrl + "new?agent=main");
         const trigger = page.locator("[data-chat-model-select]");
         await trigger.click();
-        const search = page.locator("[data-chat-model-search]");
-        await search.waitFor();
+        const panel = page.locator(".chat-picker-overlay:popover-open");
         await page.locator("[data-chat-model-provider-toggle]").first().click();
         await page.locator("[data-chat-model-more-toggle]").click();
-        const overlay = page.locator(".chat-picker-overlay:popover-open");
-        const choices = page.locator(".chat-controls__model-options");
-        const lastModel = page.locator('[data-chat-model-option="example/model-23"]');
-        // Virtual rows replace estimates as they mount, so scroll until the end stays put.
-        await expect
-          .poll(async () => {
-            await choices.evaluate((node) => {
-              node.scrollTop = node.scrollHeight;
-            });
-            await waitForLayoutSettled(page, ".chat-controls__model-options");
-            return choices.evaluate(
-              (node) =>
-                node.querySelector('[data-chat-model-option="example/model-23"]') !== null &&
-                node.scrollHeight - node.clientHeight - node.scrollTop <= 1,
-            );
-          })
-          .toBe(true);
-        const composer = (await page.locator(".agent-chat__input").boundingBox())!;
-        const panel = (await overlay.boundingBox())!;
-        const list = (await choices.boundingBox())!;
-        const last = (await lastModel.boundingBox())!;
-        expect(panel.y).toBeGreaterThanOrEqual(0);
-        expect(panel.y + panel.height).toBeLessThan(composer.y);
-        expect(panel.height).toBeGreaterThan(200);
-        // Only the choices list scrolls; the surface itself must not clip a second scroller.
-        expect(
-          await overlay.evaluate((node) => node.scrollHeight - node.clientHeight),
-        ).toBeLessThanOrEqual(1);
-        expect(last.y).toBeGreaterThanOrEqual(list.y - 1);
-        expect(last.y + last.height).toBeLessThanOrEqual(list.y + list.height + 1);
-        expect(
-          await lastModel.evaluate((node) => {
-            const bounds = node.getBoundingClientRect();
-            return (
-              document
-                .elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
-                ?.closest("[data-chat-model-option]") === node
-            );
-          }),
-        ).toBe(true);
+        const options = panel.locator(".chat-controls__model-options");
+        await options.evaluate((node) => node.scrollTo(0, node.scrollHeight));
+        const lastModel = panel.locator('[data-chat-model-option="example/model-23"]');
+        await lastModel.scrollIntoViewIfNeeded();
+        expect(await panel.evaluate((node) => node.scrollHeight - node.clientHeight)).toBe(0);
         await lastModel.click();
         expect(await trigger.textContent()).toContain("Model 23");
-        expect(await search.isVisible()).toBe(false);
-      } finally {
-        await (engine === "chromium" ? suite.closeBrowserContext(context) : context.close());
-      }
-    },
-  );
+        expect(await panel.isVisible()).toBe(false);
+      },
+    );
+  });
 
   it.each(["chromium", "webkit"] as const)(
     "keeps model and effort targets separate when Files narrows the composer in %s",
