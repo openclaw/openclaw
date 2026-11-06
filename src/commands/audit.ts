@@ -507,6 +507,19 @@ export async function auditListCommand(
   options: AuditListCommandOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
+  // A present blank filter must not become an omitted filter during normalization.
+  for (const [flag, value] of [
+    ["--agent", options.agentId],
+    ["--session", options.sessionKey],
+    ["--run", options.runId],
+    ["--execution", options.executionId],
+    ["--channel", options.channel],
+    ["--cursor", options.cursor],
+  ] as const) {
+    if (value !== undefined && !value.trim()) {
+      throw new Error(`${flag} must not be blank`);
+    }
+  }
   if (options.explain) {
     const runId = options.runId?.trim();
     const executionId = options.executionId?.trim();

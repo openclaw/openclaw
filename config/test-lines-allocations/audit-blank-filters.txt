@@ -1,0 +1,2 @@
+# A present blank audit list filter must fail loudly instead of silently widening the query to every agent/session/run.
+6
