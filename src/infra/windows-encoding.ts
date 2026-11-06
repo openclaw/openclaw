@@ -3,7 +3,11 @@ import { spawnSync } from "node:child_process";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
 import { assertAppContainerSpawnSupported } from "./windows-appcontainer-spawn.js";
-import { getWindowsCmdExePath, queryWindowsRegistryValue } from "./windows-install-roots.js";
+import {
+  getWindowsCmdExePath,
+  getWindowsPowerShellExePath,
+  queryWindowsRegistryValue,
+} from "./windows-install-roots.js";
 
 const WINDOWS_CODEPAGE_ENCODING_MAP: Record<number, string> = {
   65001: "utf-8",
@@ -100,10 +104,16 @@ function resolveWindowsSystemEncoding(): string | null {
   if (cachedWindowsSystemEncoding !== undefined) {
     return cachedWindowsSystemEncoding;
   }
-  cachedWindowsSystemEncoding = probeWindowsEncoding(
-    () => "powershell.exe",
-    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "[Text.Encoding]::Default.CodePage"],
-  );
+  // A bare name depends on PATH: services, AppContainer launches and sandboxes that
+  // trim PATH fail the probe and silently fall back to UTF-8 replacement decoding.
+  // Resolve through the same install-root helper the console probe already uses.
+  cachedWindowsSystemEncoding = probeWindowsEncoding(getWindowsPowerShellExePath, [
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    "[Text.Encoding]::Default.CodePage",
+  ]);
   return cachedWindowsSystemEncoding;
 }
 
