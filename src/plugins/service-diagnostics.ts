@@ -7,6 +7,10 @@ import { markTrustedOtelDiagnosticListener } from "../infra/diagnostic-otel-list
 import { registerDiagnosticTracePropagationBridge } from "../infra/diagnostic-trace-propagation.js";
 import { onGatewayWorkMetrics } from "../infra/gateway-work-metrics.js";
 import { onGatewayWsMetrics } from "../infra/gateway-ws-metrics.js";
+import type {
+  ProviderUsageMetricsListener,
+  ProviderUsageMetricsSnapshot,
+} from "../infra/provider-usage-metrics.types.js";
 import { onWorkerRequestMetrics } from "../infra/worker-request-diagnostics.js";
 import {
   recordDiagnosticExporterHealth,
@@ -21,11 +25,18 @@ type TrustedExporterInternalDiagnostics = NonNullable<
   OpenClawPluginServiceContext["internalDiagnostics"]
 > & {
   reportExporterHealth: (update: DiagnosticExporterHealthUpdate) => void;
+  observeProviderUsage?: (listener: ProviderUsageMetricsListener) => Promise<() => void>;
 };
+
+export type ObserveProviderUsage = (params: {
+  isActive: () => boolean;
+  listener: (snapshot: ProviderUsageMetricsSnapshot) => void;
+}) => Promise<() => void>;
 
 export function createPluginServiceDiagnostics(
   entry: PluginServiceRegistration,
   lease: PluginRuntimeCapabilityLease,
+  observeProviderUsage?: ObserveProviderUsage,
 ): TrustedExporterInternalDiagnostics | undefined {
   const isDiagnosticsExporter =
     entry.pluginId === entry.id &&
@@ -37,6 +48,7 @@ export function createPluginServiceDiagnostics(
     return undefined;
   }
   const isOtelExporter = entry.id === "diagnostics-otel";
+  const isPrometheusExporter = entry.id === "diagnostics-prometheus";
   return {
     getRuntimeIdentity: () => {
       lease.assertActive("runtime diagnostic identity");
@@ -78,5 +90,21 @@ export function createPluginServiceDiagnostics(
         recordDiagnosticExporterHealth(entry.id, update);
       }
     },
+    ...(isPrometheusExporter && observeProviderUsage
+      ? {
+          observeProviderUsage: async (listener: ProviderUsageMetricsListener) => {
+            lease.assertActive("provider usage observer");
+            const release = await observeProviderUsage({
+              isActive: lease.isActive,
+              listener: (snapshot) => {
+                if (lease.isActive()) {
+                  listener(snapshot);
+                }
+              },
+            });
+            return lease.retain(release);
+          },
+        }
+      : {}),
   };
 }

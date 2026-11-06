@@ -24,6 +24,12 @@ const codex: ProviderUsageSnapshot = {
 };
 const load = (options: Parameters<typeof loadProviderUsageSummary>[0]) =>
   loadProviderUsageSummary({ config: {}, env: {}, ...options });
+const loadWithAuth = async (
+  auth: NonNullable<NonNullable<Parameters<typeof loadProviderUsageSummary>[0]>["auth"]>,
+) => {
+  vi.spyOn(Date, "now").mockReturnValue(usageNow);
+  return await load({ auth });
+};
 const unusedFetch = () =>
   createProviderUsageFetch(async () => {
     throw new Error("legacy fetch should not run");
@@ -157,7 +163,70 @@ describe("provider-usage.load", () => {
     },
   );
 
-  it("returns completed non-ignored siblings at the deadline while retaining unfinished work", async () => {
+  it("does not dispatch usage after auth completes beyond the deadline", async () => {
+    vi.useFakeTimers();
+    const scope = new AsyncWorkScope();
+    const auth = createDeferredCore<{ token: string }>();
+    resolveProviderUsageAuthWithPluginMock.mockReturnValue(auth.promise);
+    const pending = scope.track(() =>
+      load({
+        providers: ["anthropic"],
+        env: { ANTHROPIC_API_KEY: "fixture-token" },
+        timeoutMs: 1,
+      }),
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(1);
+      expect((await pending).providers[0]?.error).toBe("Timeout");
+      expect(resolveProviderUsageAuthWithPluginMock).toHaveBeenCalledOnce();
+      auth.resolve({ token: "fixture-token" });
+      await scope.drain();
+      expect(resolveProviderUsageSnapshotWithPluginMock).not.toHaveBeenCalled();
+    } finally {
+      auth.resolve({ token: "fixture-token" });
+      await pending;
+      await scope.drain();
+    }
+  });
+
+  it("does not dispatch usage after caller authority is revoked during authentication", async () => {
+    const scope = new AsyncWorkScope();
+    const auth = createDeferredCore<{ token: string }>();
+    const authority = new AbortController();
+    resolveProviderUsageAuthWithPluginMock.mockReturnValue(auth.promise);
+    const pending = scope.track(() =>
+      load({
+        providers: ["anthropic"],
+        env: { ANTHROPIC_API_KEY: "fixture-token" },
+        signal: authority.signal,
+      }),
+    );
+    try {
+      await vi.waitFor(() => expect(resolveProviderUsageAuthWithPluginMock).toHaveBeenCalledOnce());
+      authority.abort(new DOMException("Observer released", "AbortError"));
+      auth.resolve({ token: "fixture-token" });
+      await scope.drain();
+      expect(resolveProviderUsageSnapshotWithPluginMock).not.toHaveBeenCalled();
+      expect((await pending).providers[0]?.error).toBe("Observer released");
+    } finally {
+      auth.resolve({ token: "fixture-token" });
+      await pending;
+      await scope.drain();
+    }
+  });
+
+  it("returns empty provider list when auth resolves to none", async () => {
+    const summary = await loadWithAuth([]);
+    expect(summary).toEqual({ updatedAt: usageNow, providers: [] });
+  });
+
+  it("returns unsupported provider snapshots for unknown provider ids", async () => {
+    const summary = await loadWithAuth([{ provider: "unsupported-provider", token: "token-u" }]);
+    expect(summary.providers).toHaveLength(1);
+    expect(summary.providers[0]?.error).toBe("Unsupported provider");
+  });
+
+  it("returns live siblings at the deadline while retaining the unfinished provider", async () => {
     vi.useFakeTimers();
     const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(unusedFetch());
     const scope = new AsyncWorkScope();

@@ -23,18 +23,21 @@ import type {
   UsageSummary,
 } from "./provider-usage.types.js";
 
+type UsageSummaryOptions = {
+  timeoutMs?: number;
+  providers?: UsageProviderId[];
+  auth?: ProviderAuth[];
+  authStore?: AuthProfileStore;
+  agentDir?: string;
+  workspaceDir?: string;
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
+};
+
 /** Loads usage snapshots from configured provider auth and plugin-backed usage hooks. */
 export async function loadProviderUsageSummary(
-  opts: {
-    timeoutMs?: number;
-    providers?: UsageProviderId[];
-    auth?: ProviderAuth[];
-    authStore?: AuthProfileStore;
-    agentDir?: string;
-    workspaceDir?: string;
-    config?: OpenClawConfig;
-    env?: NodeJS.ProcessEnv;
-  } = {},
+  opts: UsageSummaryOptions = {},
 ): Promise<UsageSummary> {
   const now = Date.now();
   const timeoutMs = opts.timeoutMs ?? PROVIDER_USAGE_TIMEOUT_MS;
@@ -75,8 +78,12 @@ export async function loadProviderUsageSummary(
     (authStore ??= ensureAuthProfileStoreAsync(opts.agentDir, { allowKeychainPrompt: false }));
   const tasks = descriptors.map(({ provider }) => {
     return raceUsageTimeout(
-      (signal) =>
+      (timeoutSignal) =>
         trackAsyncWork(async () => {
+          const signal = opts.signal
+            ? AbortSignal.any([timeoutSignal, opts.signal])
+            : timeoutSignal;
+          signal.throwIfAborted();
           let authError: unknown;
           const auth =
             opts.auth?.find((candidate) => candidate.provider === provider) ??

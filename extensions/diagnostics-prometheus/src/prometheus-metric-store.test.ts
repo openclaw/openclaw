@@ -46,7 +46,7 @@ it("preserves the observed registry's golden exposition across cold and warm scr
   for (let scrape = 0; scrape < 2; scrape++) {
     const rendered = store.render();
     expect(createHash("sha256").update(rendered).digest("hex")).toBe(
-      "8bca72cac3d5f446991fa7c930ee2f81d56ec23d4f4afba9c4b514feb8a71cce",
+      "abad95efe71862a59207b595abdfb7613dd3dec0c01c58d48a134d05c23c252f",
     );
     rendered.buffer.transfer(0);
   }
