@@ -210,6 +210,8 @@ private actor VoiceWakeCommandBarrier {
                 // Talk can already target another agent while phone focus still
                 // belongs to the old agent. Selecting it must retire that capture.
                 model.synchronizeTalkSessionKey("agent:beta:main")
+                try #require(model.chatSessionKey == "agent:main:original")
+                try #require(model.chatSessionKey != model.mainSessionKey)
             } else if change == "watch-target" {
                 // Watch-started Talk can leave its target after Talk stops;
                 // phone focus must invalidate wake even when Talk already targets the next chat.
@@ -259,7 +261,7 @@ private actor VoiceWakeCommandBarrier {
             } else if change == "agent" {
                 model.setSelectedAgentId("beta")
                 #expect(model.mainSessionKey == "agent:beta:main")
-                #expect(model.focusedChatSessionKey == nil)
+                #expect(model.chatSessionKey == model.mainSessionKey)
             } else {
                 model.focusChatSession("agent:main:replacement")
             }
