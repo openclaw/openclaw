@@ -267,10 +267,21 @@ in the settled History assertion; its final full browser flow passed again.
 Independent review and hosted admission remain pending.
 
 Prior qualified batches remain unlanded: [192672](https://github.com/openclaw/openclaw/pull/192672)
-has two HTTP502 landing responses and retained checkouts; [192719](https://github.com/openclaw/openclaw/pull/192719)
-has failed CI run41819244430/attempt1 with31 successful and28 skipped visible jobs,
-no aggregate job, and an unestablished cause. Its checkouts and proof are retained.
-Neither blocked route is retried by this batch.
+has two historical HTTP502 landing responses and retained checkouts. Its original
+five-case baseline, repaired suite and published-head proof passed; the identical
+early-failure probe observed the original client retained after hooks and the
+repaired client released, with all four sibling cases and shutdown assertions
+preserved. The repair uses the existing caller-owned release and adds four test
+lines with an equal separate allocation; production is unchanged. A later native
+recovery stopped before dispatch on a ledger conflict against main `4aea2c089cb7`.
+This correction preserves that baseline's ledger history and current qualification
+while retaining the original test and allocation bytes. Fresh integrated-head
+review, proof and hosted admission remain pending; no landing is claimed.
+
+[192719](https://github.com/openclaw/openclaw/pull/192719) has failed CI
+run41819244430/attempt1 with31 successful and28 skipped visible jobs, no aggregate
+job, and an unestablished cause. Its checkouts and proof are retained. This
+correction does not retry that route.
 
 ## Completed source review
 
