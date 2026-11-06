@@ -12,6 +12,7 @@ import {
   registerEmbeddingCapabilityCliTests,
 } from "./capability-cli.embedding.test-support.js";
 import { registerCapabilityCli } from "./capability-cli.js";
+import { registerMediaUnderstandingCapabilityCliTests } from "./capability-cli.media-understanding.test-support.js";
 import {
   invalidModelRunOptionCases,
   preparedModel,
@@ -1515,32 +1516,9 @@ describe("capability cli", () => {
       outputs: [{ path: selected, text: "selected input bytes" }],
     });
   });
-  it("reports actual audio attribution and forwards request hints", async () => {
-    mocks.transcribeAudioFile.mockResolvedValueOnce({
-      text: "meeting notes",
-      provider: "fixture-asr",
-      model: "fixture-actual-model",
-    });
-    await runCap(
-      "infer",
-      "audio",
-      "transcribe",
-      ...cliOptions({
-        file: "memo.m4a",
-        model: "openai/whisper-1",
-        language: "en",
-        prompt: "Focus on names",
-      }),
-    );
-    expect(mocks.transcribeAudioFile).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ language: "en", prompt: "Focus on names" }),
-    );
-    const output = mocks.runtime.log.mock.calls.at(-1)?.[0];
-    expect(output).toContain("provider: fixture-asr");
-    expect(output).toContain("model: fixture-actual-model");
-    expect(output).toContain(path.resolve("memo.m4a"));
-    expect(output).toContain("meeting notes");
+  registerMediaUnderstandingCapabilityCliTests({
+    transcribeAudioFile: mocks.transcribeAudioFile,
+    runtimeLog: mocks.runtime.log,
   });
 
   it.each([
