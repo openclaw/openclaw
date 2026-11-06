@@ -1,2 +1,0 @@
-# Prove shared warning callouts keep the amber gradient and tone on every route.
-41
