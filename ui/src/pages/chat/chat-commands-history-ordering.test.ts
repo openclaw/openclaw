@@ -74,6 +74,11 @@ describe("accepted empty history command ordering", () => {
     expect(host.chatMessages).toEqual([]);
   }
 
+  function outputStartPlacement(host: ReturnType<typeof makeChatHost>, output: unknown) {
+    return getChatSessionProjection(host).entries.find((entry) => entry.message === output)
+      ?.atHistoryStart;
+  }
+
   it("keeps a command before the first turn following authoritative empty history", async () => {
     let messages: unknown[] = [];
     const host = makeChatHost({
@@ -206,12 +211,7 @@ describe("accepted empty history command ordering", () => {
         f.host.assistantAgentId = "work";
       }
       const output = await command(f.host);
-      expect(
-        Boolean(
-          getChatSessionProjection(f.host).entries.find((entry) => entry.message === output)
-            ?.atHistoryStart,
-        ),
-      ).toBe(!changes);
+      expect(Boolean(outputStartPlacement(f.host, output))).toBe(!changes);
       if (!changes) {
         await f.later();
         expect(f.host.chatMessages).toEqual([output, user, assistant]);
@@ -280,10 +280,7 @@ describe("accepted empty history command ordering", () => {
       reading = f.read();
     }
     const output = await command(f.host);
-    expect(
-      getChatSessionProjection(f.host).entries.find((entry) => entry.message === output)
-        ?.atHistoryStart,
-    ).toBeUndefined();
+    expect(outputStartPlacement(f.host, output)).toBeUndefined();
     if (reading) {
       pending.resolve({ messages: [], totalMessages: 1, sessionId: "empty-session" });
       await reading;
@@ -323,10 +320,7 @@ describe("accepted empty history command ordering", () => {
         storage.setItem(storageTargetForComposer(f.host).key, "invalid json");
       }
       const output = await command(f.host);
-      expect(
-        getChatSessionProjection(f.host).entries.find((entry) => entry.message === output)
-          ?.atHistoryStart,
-      ).toBeUndefined();
+      expect(outputStartPlacement(f.host, output)).toBeUndefined();
       if (mode === "read failure") {
         expect(readFailure).toHaveBeenCalled();
       }
@@ -351,10 +345,7 @@ describe("accepted empty history command ordering", () => {
       ),
     );
     const output = await command(f.host);
-    expect(
-      getChatSessionProjection(f.host).entries.find((entry) => entry.message === output)
-        ?.atHistoryStart,
-    ).toBeUndefined();
+    expect(outputStartPlacement(f.host, output)).toBeUndefined();
     const send = f.host.request.mock.calls.find(([method]) => method === "chat.send");
     const sendRunId = (expectDefined(send, "chat.send request")[1] as { idempotencyKey: string })
       .idempotencyKey;
@@ -387,10 +378,7 @@ describe("accepted empty history command ordering", () => {
     expect(f.host.chatRunId).toBe("redirect-run");
     const output = f.host.chatMessages.at(-1);
     expect(output).toMatchObject({ role: "system" });
-    expect(
-      getChatSessionProjection(f.host).entries.find((entry) => entry.message === output)
-        ?.atHistoryStart,
-    ).toBeUndefined();
+    expect(outputStartPlacement(f.host, output)).toBeUndefined();
   });
 
   it.each(["request await", "settlement microtask"] as const)(
@@ -428,10 +416,7 @@ describe("accepted empty history command ordering", () => {
       }
       await loading;
       const output = await command(f.host);
-      expect(
-        getChatSessionProjection(f.host).entries.find((entry) => entry.message === output)
-          ?.atHistoryStart,
-      ).toBeUndefined();
+      expect(outputStartPlacement(f.host, output)).toBeUndefined();
     },
   );
 
@@ -482,10 +467,7 @@ describe("accepted empty history command ordering", () => {
     await f.read();
     expect(fired).toBe(true);
     const output = await command(f.host);
-    expect(
-      getChatSessionProjection(f.host).entries.find((entry) => entry.message === output)
-        ?.atHistoryStart,
-    ).toBeUndefined();
+    expect(outputStartPlacement(f.host, output)).toBeUndefined();
   });
 
   it("does not mint a usable zero-source receipt across reentrant retirement publication", async () => {
@@ -502,10 +484,7 @@ describe("accepted empty history command ordering", () => {
     await f.read();
     expect(fired).toBe(true);
     const output = await command(f.host);
-    expect(
-      getChatSessionProjection(f.host).entries.find((entry) => entry.message === output)
-        ?.atHistoryStart,
-    ).toBeUndefined();
+    expect(outputStartPlacement(f.host, output)).toBeUndefined();
   });
 
   it.each([true, false])(
@@ -535,10 +514,7 @@ describe("accepted empty history command ordering", () => {
       expect(f.host.chatPendingInputs?.queuedInputs).toHaveLength(queued ? 1 : 0);
       expect(readChatHistoryStartCapability(f.host)).toBeUndefined();
       const output = await command(f.host);
-      expect(
-        getChatSessionProjection(f.host).entries.find((entry) => entry.message === output)
-          ?.atHistoryStart,
-      ).toBeUndefined();
+      expect(outputStartPlacement(f.host, output)).toBeUndefined();
       await f.later();
       expect(f.host.chatMessages).toEqual([user, assistant, output]);
     },
@@ -572,10 +548,7 @@ describe("accepted empty history command ordering", () => {
       applyChatPendingInputs(f.host, { total: 0, queuedCount: 0, items: [] });
       expect(f.host.chatPendingInputs?.page.total).toBe(0);
       const output = await command(f.host);
-      expect(
-        getChatSessionProjection(f.host).entries.find((entry) => entry.message === output)
-          ?.atHistoryStart,
-      ).toBeUndefined();
+      expect(outputStartPlacement(f.host, output)).toBeUndefined();
       await f.later();
       expect(f.host.chatMessages).toEqual([user, assistant, output]);
     },
@@ -610,10 +583,7 @@ describe("accepted empty history command ordering", () => {
         }
       }
       const output = await command(f.host);
-      expect(
-        getChatSessionProjection(f.host).entries.find((entry) => entry.message === output)
-          ?.atHistoryStart,
-      ).toBeUndefined();
+      expect(outputStartPlacement(f.host, output)).toBeUndefined();
     },
   );
 });

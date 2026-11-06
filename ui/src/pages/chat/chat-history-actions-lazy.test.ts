@@ -8,6 +8,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+const actionOwners = (owners: readonly ("route" | "physical")[]) =>
+  owners.flatMap((owner) =>
+    (["clear", "rewind", "switch"] as const).map((action) => ({ action, owner })),
+  );
+
 async function heldActions(takeoverAtEntry?: "route" | "physical") {
   vi.stubGlobal("sessionStorage", createStorageMock());
   const load = createDeferred();
@@ -63,51 +68,30 @@ async function heldActions(takeoverAtEntry?: "route" | "physical") {
   const branch = vi.spyOn(state.sessions, "switchBranch").mockResolvedValue({});
   vi.spyOn(state.sessions, "listBranches").mockResolvedValue([]);
   const reads = new ChatAttachmentReadLifecycle(() => {});
-  return { actions, state, reset, rewind, branch, reads, load, started };
+  const start = (action: "clear" | "rewind" | "switch") =>
+    action === "clear"
+      ? actions.clearChatHistory(state)
+      : action === "rewind"
+        ? actions.rewindChatHistory(state, "original", reads)
+        : actions.switchChatHistoryBranch(state, "branch");
+  return { actions, state, reset, rewind, branch, reads, load, started, start };
 }
 
-it.each(["clear", "rewind", "switch"] as const)(
-  "does not issue a cold %s against a successor route",
-  async (action) => {
-    const fixture = await heldActions();
-    const { actions, state, load, reads, reset, rewind, branch, started } = fixture;
+it.each(actionOwners(["route", "physical"]))(
+  "does not issue a cold $action against a successor $owner owner",
+  async ({ action, owner }) => {
+    const { start, state, load, reset, rewind, branch, started } = await heldActions();
     try {
-      const pending =
-        action === "clear"
-          ? actions.clearChatHistory(state)
-          : action === "rewind"
-            ? actions.rewindChatHistory(state, "original", reads)
-            : actions.switchChatHistoryBranch(state, "branch");
+      if (owner === "physical") {
+        state.currentSessionId = "original-physical";
+      }
+      const pending = start(action);
       await started.promise;
-      state.sessionKey = "agent:main:successor";
-      load.resolve();
-      expect(await pending).toBe(
-        action === "clear" ? "failed" : action === "rewind" ? null : false,
-      );
-      expect(reset).not.toHaveBeenCalled();
-      expect(rewind).not.toHaveBeenCalled();
-      expect(branch).not.toHaveBeenCalled();
-      expect(state.chatError).toBeNull();
-    } finally {
-      state.sessions.dispose();
-    }
-  },
-);
-
-it.each(["clear", "rewind", "switch"] as const)(
-  "does not issue a cold %s against a successor physical session at the same key",
-  async (action) => {
-    const { actions, state, load, reads, reset, rewind, branch, started } = await heldActions();
-    try {
-      state.currentSessionId = "original-physical";
-      const pending =
-        action === "clear"
-          ? actions.clearChatHistory(state)
-          : action === "rewind"
-            ? actions.rewindChatHistory(state, "original", reads)
-            : actions.switchChatHistoryBranch(state, "branch");
-      await started.promise;
-      state.currentSessionId = "successor-physical";
+      if (owner === "physical") {
+        state.currentSessionId = "successor-physical";
+      } else {
+        state.sessionKey = "agent:main:successor";
+      }
       load.resolve();
       expect(await pending).toBe(
         action === "clear" ? "failed" : action === "rewind" ? null : false,
@@ -125,15 +109,10 @@ it.each(["clear", "rewind", "switch"] as const)(
 it.each(["clear", "rewind", "switch"] as const)(
   "allows a cold %s when the initially unknown physical identity resolves",
   async (action) => {
-    const { actions, state, load, reads, reset, rewind, branch, started } = await heldActions();
+    const { start, state, load, reset, rewind, branch, started } = await heldActions();
     try {
       state.currentSessionId = null;
-      const pending =
-        action === "clear"
-          ? actions.clearChatHistory(state)
-          : action === "rewind"
-            ? actions.rewindChatHistory(state, "original", reads)
-            : actions.switchChatHistoryBranch(state, "branch");
+      const pending = start(action);
       await started.promise;
       state.currentSessionId = "resolved-physical";
       load.resolve();
@@ -149,57 +128,32 @@ it.each(["clear", "rewind", "switch"] as const)(
   },
 );
 
-it.each(["clear", "rewind", "switch"] as const)(
-  "rechecks a newly resolved physical owner at the %s execution entry",
-  async (action) => {
-    const { actions, state, load, reads, reset, rewind, branch, started } =
-      await heldActions("physical");
+it.each(actionOwners(["physical", "route"]))(
+  "rechecks a cold $action execution entry after $owner ownership changes",
+  async ({ action, owner }) => {
+    const { start, state, load, reset, rewind, branch, started } = await heldActions(owner);
     try {
-      state.currentSessionId = null;
-      const pending =
-        action === "clear"
-          ? actions.clearChatHistory(state)
-          : action === "rewind"
-            ? actions.rewindChatHistory(state, "original", reads)
-            : actions.switchChatHistoryBranch(state, "branch");
+      if (owner === "physical") {
+        state.currentSessionId = null;
+      }
+      const pending = start(action);
       await started.promise;
-      state.currentSessionId = "resolved-physical";
+      if (owner === "physical") {
+        state.currentSessionId = "resolved-physical";
+      }
       load.resolve();
       expect(await pending).toBe(
         action === "clear" ? "failed" : action === "rewind" ? null : false,
       );
-      expect(state.currentSessionId).toBe("successor-physical");
-      expect(reset).not.toHaveBeenCalled();
-      expect(rewind).not.toHaveBeenCalled();
-      expect(branch).not.toHaveBeenCalled();
-      expect(state.chatError).toBeNull();
-    } finally {
-      state.sessions.dispose();
-    }
-  },
-);
-
-it.each(["clear", "rewind", "switch"] as const)(
-  "rechecks the %s execution owner after its module resolves",
-  async (action) => {
-    const { actions, state, load, reads, reset, rewind, branch, started } =
-      await heldActions("route");
-    try {
-      const pending =
-        action === "clear"
-          ? actions.clearChatHistory(state)
-          : action === "rewind"
-            ? actions.rewindChatHistory(state, "original", reads)
-            : actions.switchChatHistoryBranch(state, "branch");
-      await started.promise;
-      load.resolve();
-      expect(await pending).toBe(
-        action === "clear" ? "failed" : action === "rewind" ? null : false,
+      expect(owner === "physical" ? state.currentSessionId : state.sessionKey).toBe(
+        owner === "physical" ? "successor-physical" : "agent:main:successor",
       );
-      expect(state.sessionKey).toBe("agent:main:successor");
       expect(reset).not.toHaveBeenCalled();
       expect(rewind).not.toHaveBeenCalled();
       expect(branch).not.toHaveBeenCalled();
+      if (owner === "physical") {
+        expect(state.chatError).toBeNull();
+      }
     } finally {
       state.sessions.dispose();
     }
@@ -295,14 +249,9 @@ it("does not retire a newer initial submission while a cold clear loads", async 
 it.each(["clear", "rewind", "switch"] as const)(
   "reports a cold %s loader failure without issuing a mutation",
   async (action) => {
-    const { actions, state, load, reads, reset, rewind, branch, started } = await heldActions();
+    const { start, state, load, reset, rewind, branch, started } = await heldActions();
     try {
-      const pending =
-        action === "clear"
-          ? actions.clearChatHistory(state)
-          : action === "rewind"
-            ? actions.rewindChatHistory(state, "original", reads)
-            : actions.switchChatHistoryBranch(state, "branch");
+      const pending = start(action);
       await started.promise;
       load.reject(new Error("History action could not load"));
       expect(await pending).toBe(
