@@ -262,6 +262,9 @@ export async function startSignalIngressMonitor(params: {
       await flushing;
       await monitor.stop();
     },
-    waitForIdle: monitor.waitForIdle,
+    waitForIdle: async () => {
+      await flushing;
+      await monitor.waitForIdle();
+    },
   };
 }

@@ -61,6 +61,9 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
     // sort by id. A later admission never ties an earlier one, and the time steps when a
     // lane's next event would sort ahead of its previous one (group lanes mix senders'
     // ids), so each lane drains in arrival order.
+    // Accepted edge: stepping can put rows ahead of wall time, and this monitor does not
+    // seed from the queue (Matrix does). After a restart inside that window, a new event
+    // in the same lane can drain ahead of older backlog rows. Rare and nothing is lost.
     let arrivalAt = Math.max(admitOptions.receivedAt, lastReceivedAt + 1);
     const lastIdByLane = new Map<string, string>();
     for (const raw of rawEvents) {

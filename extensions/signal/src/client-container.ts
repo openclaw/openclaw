@@ -473,7 +473,7 @@ export async function streamContainerEvents(params: {
         // close, whose final eventChain owns every accepted durable admission.
         shutdownDrainTimer = setTimeout(() => {
           logError(
-            "[signal-ws] shutdown timed out draining accepted receive events; messages may be lost",
+            "[signal-ws] shutdown stopped waiting for received events; stopping ingress still stores every event already read",
           );
           ws.terminate();
           resolveOnce();
