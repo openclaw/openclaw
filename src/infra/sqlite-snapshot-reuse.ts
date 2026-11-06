@@ -16,9 +16,11 @@ import type {
 } from "./sqlite-readonly-location.types.js";
 import { assertDatabaseFileIdentity, type DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 
-// Timestamps must clear the coarsest filesystem clock (FAT's two seconds), so a
-// later write always changes the fingerprint this image was captured against.
-const SOURCE_QUIESCENT_MS = 2_000;
+// Timestamps must clear the filesystem's clock, so a later write always changes the
+// fingerprint this image was captured against. Only a whole-second timestamp can come
+// from a clock as coarse as FAT's two seconds; any other clock moves within a tick.
+const COARSE_CLOCK_QUIESCENT_MS = 2_000;
+const FINE_CLOCK_QUIESCENT_MS = 50;
 
 export type SqliteSnapshotSource = { fingerprint: string; main: BigIntStats };
 type SqliteSnapshotLease = PreparedSqliteReadOnlyLocation & RetainedPreparedSqliteReadOnlyLocation;
@@ -84,7 +86,7 @@ function completed<T>(value: T): RetainedOperation<T> {
  */
 function readSource(
   canonicalPath: string,
-): (SqliteSnapshotSource & { newestMs: number }) | undefined {
+): (SqliteSnapshotSource & { newestMs: number; quiescentMs: number }) | undefined {
   try {
     const main = fs.statSync(canonicalPath, { bigint: true, throwIfNoEntry: false });
     if (!main?.isFile() || fs.statSync(`${canonicalPath}-journal`, { throwIfNoEntry: false })) {
@@ -99,6 +101,11 @@ function readSource(
       ].join("|"),
       main,
       newestMs: Math.max(Number(main.mtimeMs), Number(frames?.mtimeMs ?? 0)),
+      quiescentMs: [main, frames].some(
+        (stat) => stat && stat.mtimeNs % 1_000_000_000n === 0n,
+      )
+        ? COARSE_CLOCK_QUIESCENT_MS
+        : FINE_CLOCK_QUIESCENT_MS,
     };
   } catch {
     // Reuse is only an optimization; the snapshot producer reports the real failure.
@@ -200,11 +207,11 @@ export function leaseReusableSqliteSnapshot(
   return lend(key, image);
 }
 
-/** Observe before copying; a source written within the timestamp quantum is never retained. */
+/** Observe before copying; a source written within its clock's quantum is never retained. */
 export function captureReusableSqliteSource(pathname: string): SqliteSnapshotSource | undefined {
   const key = scopes.depth > 0 ? canonicalKey(pathname) : undefined;
   const source = key ? readSource(key) : undefined;
-  return source && Date.now() - source.newestMs >= SOURCE_QUIESCENT_MS ? source : undefined;
+  return source && Date.now() - source.newestMs >= source.quiescentMs ? source : undefined;
 }
 
 /** Borrowers may fork this image, so its family is bound before any of them can read it. */

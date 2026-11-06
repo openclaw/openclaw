@@ -105,6 +105,7 @@ export async function prepareArtifactPreservingSqliteRead(
   const prepared = await prepareSqliteReadOnlyLocation(pathname, {
     preserveSourceArtifacts: true,
     signal,
+    reuse: true,
   });
   // Concurrent callers can join one producer; the report retains only one of its leases.
   if (scope.snapshots.has(key)) {
