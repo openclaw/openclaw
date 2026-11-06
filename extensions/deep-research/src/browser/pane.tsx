@@ -1,7 +1,7 @@
 /** @jsxImportSource @solidjs/web */
 import { Dynamic } from "@solidjs/web";
 import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
-import type { ResearchView, ResearchViewSource } from "../api.js";
+import type { ResearchView, ResearchViewSource } from "../../api.js";
 import type { createResearchClient, Snapshot } from "./client.js";
 import { reportBlocks, safeSourceUrl, sourceDomain } from "./report.js";
 

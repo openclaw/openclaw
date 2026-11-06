@@ -3,11 +3,5 @@
   "compilerOptions": {
     "jsx": "preserve",
     "jsxImportSource": "@solidjs/web"
-  },
-  "include": [
-    "*.ts",
-    "src/**/*.ts",
-    "browser/**/*.ts",
-    "browser/**/*.tsx"
-  ]
+  }
 }

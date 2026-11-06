@@ -3,7 +3,7 @@ import type {
   ControlUiPanel,
   ControlUiRecoveryStorageV1,
 } from "openclaw/plugin-sdk/control-ui";
-import type { ResearchList, ResearchView } from "../api.js";
+import type { ResearchList, ResearchView } from "../../api.js";
 
 export type Scope = Parameters<ControlUiPanel["mount"]>[1]["props"];
 export type Snapshot = {

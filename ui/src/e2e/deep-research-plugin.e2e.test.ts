@@ -97,7 +97,7 @@ suite.define(() => {
           {
             pluginId: "deep-research",
             rootDir: resolve("extensions/deep-research"),
-            source: "./browser/index.tsx",
+            source: "./src/browser/index.tsx",
           },
         ],
         communityInvite: false,
@@ -222,7 +222,7 @@ suite.define(() => {
             {
               pluginId: "deep-research",
               rootDir: resolve("extensions/deep-research"),
-              source: "./browser/index.tsx",
+              source: "./src/browser/index.tsx",
             },
           ],
           communityInvite: false,
