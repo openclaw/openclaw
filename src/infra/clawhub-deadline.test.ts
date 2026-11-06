@@ -2,7 +2,15 @@ import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { downloadClawHubPackageArchive } from "./clawhub-artifacts.js";
-import { reportClawHubPluginInstallTelemetry, searchClawHubPackages } from "./clawhub-packages.js";
+import {
+  fetchClawHubPackageArtifact,
+  fetchClawHubPackageDetail,
+  fetchClawHubPackageSecurity,
+  fetchClawHubPackageVersion,
+  listClawHubPackages,
+  reportClawHubPluginInstallTelemetry,
+  searchClawHubPackages,
+} from "./clawhub-packages.js";
 
 function createResponseSource(params: { status: number; headersAfterMs?: number }) {
   const connected = createDeferred<{
@@ -84,6 +92,41 @@ describe("ClawHub response deadlines", () => {
     vi.clearAllTimers();
     vi.useRealTimers();
     vi.unstubAllEnvs();
+  });
+
+  it.each([
+    ["detail", fetchClawHubPackageDetail],
+    ["list", listClawHubPackages],
+    ["version", fetchClawHubPackageVersion],
+    ["artifact", fetchClawHubPackageArtifact],
+    ["security", fetchClawHubPackageSecurity],
+    ["search", searchClawHubPackages],
+  ] as const)("cancels an outstanding package %s response", async (_name, read) => {
+    const source = createResponseSource({ status: 200 });
+    const controller = new AbortController();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(source.fetchImpl);
+    const pending = observe<unknown>(
+      read({
+        name: "cancel-fixture",
+        version: "1.0.0",
+        query: "calendar",
+        token: "fixture-token",
+        signal: controller.signal,
+      }),
+    );
+    const body = await source.connected;
+    try {
+      controller.abort(new Error("Package read canceled"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pending.settled).toHaveBeenCalledOnce();
+      await expect(pending.result).resolves.toEqual({ error: controller.signal.reason });
+      expect(source.aborted).toHaveBeenCalledExactlyOnceWith(controller.signal.reason);
+      expect(fetchSpy).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      body.close();
+      await pending.result;
+    }
   });
 
   it.each([

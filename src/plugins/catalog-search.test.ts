@@ -48,11 +48,13 @@ describe("plugin catalog search", () => {
       query: "calendar",
       family: "code-plugin",
       limit: 2,
+      signal: undefined,
     });
     expect(mocks.searchClawHubPackages).toHaveBeenNthCalledWith(2, {
       query: "calendar",
       family: "bundle-plugin",
       limit: 2,
+      signal: undefined,
     });
     expect(results.map((entry) => [entry.package.name, entry.score])).toEqual([
       ["shared", 9],
@@ -70,11 +72,13 @@ describe("plugin catalog search", () => {
       query: "calendar",
       family: "code-plugin",
       limit: 20,
+      signal: undefined,
     });
     expect(mocks.searchClawHubPackages).toHaveBeenCalledWith({
       query: "calendar",
       family: "bundle-plugin",
       limit: 20,
+      signal: undefined,
     });
   });
 });

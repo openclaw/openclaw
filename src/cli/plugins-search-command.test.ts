@@ -1,6 +1,8 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { ClawHubPackageSearchResult } from "../infra/clawhub-packages.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
 const mocks = await vi.hoisted(async () => {
@@ -42,6 +44,33 @@ describe("plugins search command", () => {
     vi.clearAllMocks();
     mocks.searchClawHubPackages.mockReset();
   });
+
+  it.each(["pre-aborted", "late-results", "late-error"])(
+    "does not publish a canceled search: %s",
+    async (mode) => {
+      const scope = new AsyncWorkScope();
+      const response = createDeferred<ClawHubPackageSearchResult[]>();
+      mocks.searchClawHubPackages.mockImplementation(() => response.promise);
+      if (mode === "pre-aborted") {
+        scope.beginClose();
+      }
+      const pending = scope.run(() =>
+        runPluginsSearchCommand("calendar", { json: true }, mocks.runtime),
+      );
+      scope.beginClose();
+      if (mode === "late-error") {
+        response.reject(new Error("Late registry failure"));
+      } else {
+        response.resolve([]);
+      }
+      await pending;
+      expect(mocks.searchClawHubPackages).toHaveBeenCalledTimes(mode === "pre-aborted" ? 0 : 2);
+      expect(mocks.logs).toEqual([]);
+      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+      expect(mocks.runtime.error).not.toHaveBeenCalled();
+      expect(mocks.runtime.exit).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     ["openclaw-calendar", "work", undefined, " --profile work", "openclaw-calendar@latest"],
