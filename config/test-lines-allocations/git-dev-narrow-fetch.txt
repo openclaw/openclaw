@@ -1,4 +1,5 @@
 # PR193109: real tag-only source selection, successive updates, owned upstream
 # metadata and unrelated config preservation, plus uncached partial-setup recovery.
-# Net tracked test growth is 137 on accepted base 4dc45181; no shared scalar change.
-137
+# Includes the required immutable-build preflight fixture field.
+# Net tracked test growth is 138 on accepted base 4dc45181; no shared scalar change.
+138
