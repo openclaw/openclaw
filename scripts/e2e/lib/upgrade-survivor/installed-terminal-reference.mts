@@ -49,7 +49,7 @@ const currentRoots = [
 const historicalRoots = ["@openclaw/fs-safe", "chalk", "json5", "koffi"];
 const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 
-export function prepareInstalledTerminalDependencyReference(role: "current" | "historical") {
+function prepareInstalledTerminalDependencyReference(role: "current" | "historical") {
   const source = fs.realpathSync(
     process.env.OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT ||
       fileURLToPath(new URL("../../../../", import.meta.url)),
