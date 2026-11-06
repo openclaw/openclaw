@@ -54,7 +54,8 @@ jobs:
           api-key: ${{ secrets.BOAT_API_KEY }}
           boat-org: ${{ vars.BOAT_ORG }}
           runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
-          app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          app-id: ${{ vars.BOAT_RUNNER_APP_ID }}
+          app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
 
   validate:
     needs: [boat_nightly_runner]
@@ -149,6 +150,7 @@ jobs:
           api-key: ${{ secrets.BOAT_API_KEY }}
           boat-org: ${{ vars.BOAT_ORG }}
           runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
-          app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          app-id: ${{ vars.BOAT_RUNNER_APP_ID }}
+          app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
           vm: ${{ needs.boat_nightly_runner.outputs.nightly_vm }}
           runner: ${{ needs.boat_nightly_runner.outputs.nightly_runner }}

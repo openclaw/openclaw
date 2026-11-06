@@ -17,8 +17,11 @@ inputs:
   runner-group:
     description: GitHub organization runner group
     required: false
+  app-id:
+    description: Dedicated Boat runner GitHub App ID
+    required: true
   app-private-key:
-    description: GitHub App private key with organization self-hosted runner permission
+    description: Dedicated Boat runner GitHub App private key
     required: true
   vm:
     description: VM receipt from this workflow's provisioning job
@@ -46,7 +49,7 @@ runs:
       continue-on-error: ${{ inputs.operation == 'cleanup' }}
       uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
       with:
-        app-id: "2729701"
+        app-id: ${{ inputs.app-id }}
         private-key: ${{ inputs.app-private-key }}
         owner: ${{ github.repository_owner }}
         permission-organization-self-hosted-runners: write

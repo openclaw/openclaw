@@ -393,10 +393,13 @@ and the nightly watcher keep their 720-minute budgets. When
 and register ephemeral organization runners for those three jobs. Native Boat
 CI has a six-hour limit, so these watchers use regular VMs instead.
 
-This route requires the repository secret `BOAT_API_KEY`, the variable
-`BOAT_ORG`, and `BOAT_RELEASE_RUNNER_GROUP`. Use a dedicated Boat runner group;
-`OPENCLAW_RELEASE_RUNNER_GROUP` continues to select the existing hosted runners.
-The existing GitHub App must have organization self-hosted runner write access.
+This route requires the repository secrets `BOAT_API_KEY` and
+`BOAT_RUNNER_APP_PRIVATE_KEY`, plus the variables `BOAT_ORG`,
+`BOAT_RELEASE_RUNNER_GROUP`, and `BOAT_RUNNER_APP_ID`. Use a dedicated Boat runner
+GitHub App with organization self-hosted runner write access and a dedicated
+runner group. `OPENCLAW_RELEASE_RUNNER_GROUP` continues to select the existing
+hosted runners. App token creation must succeed before a VM is provisioned;
+a missing app ID or private key stops provisioning.
 The runner group must admit the nightly workflow on `main` and Full Release
 Validation on each immutable `release-ci/` transport ref. Install a Crabbox release supporting
 `actions register --receipt` and `actions unregister --receipt` before enabling
