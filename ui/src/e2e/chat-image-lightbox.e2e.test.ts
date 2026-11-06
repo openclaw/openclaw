@@ -1,10 +1,11 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { openChatPanels } from "../test-helpers/chat-layout-menu.ts";
 import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   exactButton,
@@ -78,7 +79,7 @@ async function installImageGalleries(page: Page) {
     ),
   );
   const gateway = await installMockGateway(page, {
-    // Each gallery is its own turn; turn boundaries end image navigation.
+    // Separate response turns still share the loaded thread gallery.
     historyMessages: [1, 2, 5].flatMap((count) => [
       chatMessage("user", `Show ${count}`, { timestamp: 1_800_000_000_000 + count * 2 }),
       {
@@ -440,19 +441,120 @@ suite.define(() => {
     }
   });
 
-  it("navigates every image in the opened turn in transcript order", async () => {
+  it("navigates media across the loaded thread from a single-image turn", async () => {
     const page = await newPage();
-    const [before, after, detail, mobile, separate] = await imageDataUrls(page, [
+    await installImageGalleries(page);
+    const trigger = await revealImage(page, "Gallery 1 image 1");
+    await trigger.click();
+    const lightbox = page.locator("openclaw-image-lightbox");
+    const shown = lightbox.locator(".image");
+    await expectLoadedImage(shown);
+    await page.locator("body").evaluate(finishElementAnimations);
+    const frame = await takeControlUiScreenshotFrame(page, lightbox.getByRole("dialog"), [shown], {
+      animations: "disabled",
+    });
+    await writeFile(path.join(suite.artifactDir, "thread-media-navigation.png"), frame.png);
+    console.log(`Thread media screenshot: ${suite.artifactDir}/thread-media-navigation.png`);
+    await counterValue(lightbox.locator(".gallery-counter")).toBe("1 / 8");
+    await page.keyboard.press("ArrowRight");
+    await polledAttribute(shown, "alt").toBe("Gallery 2 image 1");
+    await page.keyboard.press("ArrowLeft");
+    await polledAttribute(shown, "alt").toBe("Gallery 1 image 1");
+    await page.keyboard.press("Escape");
+    await expectFocused(trigger);
+  });
+
+  it("includes inline Markdown and attachment images in the same thread gallery", async () => {
+    const page = await newPage();
+    const [first, second, inbound, attachment] = await imageDataUrls(page, [
+      [72, 40],
+      [36, 64],
+      [72, 40],
+      [36, 64],
+    ]);
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        chatMessage("user", "Show the images.", { timestamp: 1_800_000_000_000 }),
+        chatMessage(
+          "assistant",
+          `![Inline first](${first})\n\n![Inline second](${second})\n\n![Inline first](${first})\n\n[![Linked image](${first})](https://example.com/)\n\n\`![Code only](${second})\``,
+          { timestamp: 1_800_000_001_000 },
+        ),
+        {
+          role: "user",
+          content: [{ type: "image", url: inbound, alt: "Inbound image" }],
+          timestamp: 1_800_000_002_000,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "image", url: attachment, alt: "Attachment image" }],
+          timestamp: 1_800_000_003_000,
+        },
+      ],
+    });
+    await page.goto(`${suite.server.baseUrl}chat`);
+    await gateway.waitForRequest("sessions.messages.subscribe");
+    await scrollChatThreadToTop(page);
+    const trigger = page
+      .locator(".markdown-inline-image-button")
+      .filter({ has: page.getByAltText("Inline first", { exact: true }) })
+      .first();
+    await trigger.click();
+    const lightbox = page.locator("openclaw-image-lightbox");
+    const counter = lightbox.locator(".gallery-counter");
+    const shown = lightbox.locator(".image");
+    await polledAttribute(shown, "alt").toBe("Inline first");
+    await counterValue(counter).toBe("1 / 5");
+    for (const [index, title] of [
+      [2, "Inline second"],
+      [3, "Inline first"],
+      [4, "Inbound image"],
+      [5, "Attachment image"],
+    ] as const) {
+      await page.keyboard.press("ArrowRight");
+      await counterValue(counter).toBe(`${index} / 5`);
+      await polledAttribute(shown, "alt").toBe(title);
+    }
+    await page.keyboard.press("Escape");
+    await expectFocused(trigger);
+    const attachmentTrigger = await revealImage(page, "Attachment image");
+    await attachmentTrigger.click();
+    await counterValue(counter).toBe("5 / 5");
+    await page.keyboard.press("ArrowLeft");
+    await counterValue(counter).toBe("4 / 5");
+    await page.keyboard.press("ArrowLeft");
+    await counterValue(counter).toBe("3 / 5");
+    await page.keyboard.press("ArrowLeft");
+    await polledAttribute(shown, "alt").toBe("Inline second");
+    await page.keyboard.press("Escape");
+    await expect.poll(() => lightbox.count()).toBe(0);
+    await scrollChatThreadToTop(page);
+    await page
+      .locator(".markdown-inline-image-button")
+      .filter({ has: page.getByAltText("Inline first", { exact: true }) })
+      .last()
+      .click();
+    await counterValue(counter).toBe("3 / 5");
+  });
+
+  it("navigates user and assistant images across turns in transcript order", async () => {
+    const page = await newPage();
+    const [before, after, detail, mobile, separate, inbound] = await imageDataUrls(page, [
       [720, 400],
       [360, 640],
       [720, 400],
       [360, 640],
+      [720, 400],
       [720, 400],
     ]);
     const image = (url: string | undefined, alt: string) => ({ type: "image", url, alt });
     const gateway = await installMockGateway(page, {
       historyMessages: [
-        chatMessage("user", "Show the screenshots.", { timestamp: 1_800_000_000_000 }),
+        {
+          role: "user",
+          content: [{ type: "text", text: "Show the screenshots." }, image(inbound, "User image")],
+          timestamp: 1_800_000_000_000,
+        },
         {
           role: "assistant",
           content: [
@@ -493,44 +595,44 @@ suite.define(() => {
     };
     const trigger = await open("Turn after");
     await lightbox.getByRole("dialog").waitFor({ state: "visible" });
-    await counterValue(counter).toBe("2 / 4");
+    await counterValue(counter).toBe("3 / 6");
     for (const [index, alt] of [
-      [3, "Turn detail"],
-      [4, "Turn mobile"],
+      [4, "Turn detail"],
+      [5, "Turn mobile"],
+      [6, "Separate turn"],
     ] as const) {
       await page.keyboard.press("ArrowRight");
-      await counterValue(counter).toBe(`${index} / 4`);
+      await counterValue(counter).toBe(`${index} / 6`);
       await polledAttribute(shown, "alt").toBe(alt);
       await expectLoadedImage(shown);
     }
     await page.keyboard.press("ArrowRight");
-    expect((await counter.textContent())?.trim()).toBe("4 / 4");
+    expect((await counter.textContent())?.trim()).toBe("6 / 6");
     for (const [index, alt] of [
-      [3, "Turn detail"],
-      [2, "Turn after"],
-      [1, "Turn before"],
+      [5, "Turn mobile"],
+      [4, "Turn detail"],
+      [3, "Turn after"],
+      [2, "Turn before"],
+      [1, "User image"],
     ] as const) {
       await page.keyboard.press("ArrowLeft");
-      await counterValue(counter).toBe(`${index} / 4`);
+      await counterValue(counter).toBe(`${index} / 6`);
       await polledAttribute(shown, "alt").toBe(alt);
     }
     await page.keyboard.press("Escape");
     await expect.poll(() => lightbox.count()).toBe(0);
     await expectFocused(trigger);
-
     await open("Turn detail");
-    await counterValue(counter).toBe("3 / 4");
+    await counterValue(counter).toBe("4 / 6");
     await page.keyboard.press("Escape");
     await expect.poll(() => lightbox.count()).toBe(0);
-
     await open("Separate turn");
-    await polledAttribute(shown, "alt").toBe("Separate turn");
-    expect(await counter.count()).toBe(0);
+    await counterValue(counter).toBe("6 / 6");
     await page.keyboard.press("ArrowLeft");
-    expect(await shown.getAttribute("alt")).toBe("Separate turn");
+    await polledAttribute(shown, "alt").toBe("Turn mobile");
   });
 
-  it("navigates only the opened turn gallery and restores its original tile focus", async () => {
+  it("navigates the loaded thread and restores the original tile focus", async () => {
     const page = await newPage();
     await installImageGalleries(page);
     const lightbox = page.locator("openclaw-image-lightbox");
@@ -538,43 +640,33 @@ suite.define(() => {
     const previous = exactButton(lightbox, "Previous image");
     const next = exactButton(lightbox, "Next image");
     const image = lightbox.locator(".image");
-    for (const count of [1, 2, 5]) {
-      const openedIndex = count > 1 ? 2 : 1;
+    for (const [count, openedIndex, position] of [
+      [1, 1, 1],
+      [2, 2, 3],
+      [5, 2, 5],
+    ] as const) {
       const trigger = await revealImage(page, `Gallery ${count} image ${openedIndex}`);
       await trigger.click();
       await lightbox.getByRole("dialog").waitFor({ state: "visible" });
-      await polledAttribute(image, "alt").toBe(`Gallery ${count} image ${openedIndex}`);
-      if (count === 1) {
-        expect(await counter.count()).toBe(0);
-        expect(await previous.count()).toBe(0);
-        expect(await next.count()).toBe(0);
-        await page.keyboard.press("ArrowRight");
-        expect(await image.getAttribute("alt")).toBe("Gallery 1 image 1");
-      } else {
-        await counterValue(counter).toBe(`2 / ${count}`);
-        expect(await counter.getAttribute("aria-live")).toBe("polite");
-        await previous.click();
-        await polledAttribute(image, "alt").toBe(`Gallery ${count} image 1`);
-        expect(await previous.isDisabled()).toBe(true);
+      await counterValue(counter).toBe(`${position} / 8`);
+      for (let index = position; index > 1; index--) {
         await page.keyboard.press("ArrowLeft");
-        expect((await counter.textContent())?.trim()).toBe(`1 / ${count}`);
-        await lightbox.locator("openclaw-modal-dialog > dialog").evaluate(finishElementAnimations);
-        const stageBox = await lightbox.locator(".stage").boundingBox();
-        for (let index = 2; index <= count; index++) {
-          if (index === 2) {
-            await next.click();
-          } else {
-            await page.keyboard.press("ArrowRight");
-          }
-          await counterValue(counter).toBe(`${index} / ${count}`);
-          await polledAttribute(image, "alt").toBe(`Gallery ${count} image ${index}`);
-          await expectLoadedImage(image);
-          expect(await lightbox.locator(".stage").boundingBox()).toEqual(stageBox);
-        }
-        expect(await next.isDisabled()).toBe(true);
-        await page.keyboard.press("ArrowRight");
-        expect((await counter.textContent())?.trim()).toBe(`${count} / ${count}`);
+        await counterValue(counter).toBe(`${index - 1} / 8`);
       }
+      await polledAttribute(image, "alt").toBe("Gallery 1 image 1");
+      expect(await previous.isDisabled()).toBe(true);
+      await page.keyboard.press("ArrowLeft");
+      expect((await counter.textContent())?.trim()).toBe("1 / 8");
+      await lightbox.locator("openclaw-modal-dialog > dialog").evaluate(finishElementAnimations);
+      for (let index = 2; index <= 8; index++) {
+        await next.click();
+        await counterValue(counter).toBe(`${index} / 8`);
+        await expectLoadedImage(image);
+      }
+      await polledAttribute(image, "alt").toBe("Gallery 5 image 5");
+      expect(await next.isDisabled()).toBe(true);
+      await page.keyboard.press("ArrowRight");
+      expect((await counter.textContent())?.trim()).toBe("8 / 8");
       await page.keyboard.press("Escape");
       await expect.poll(() => lightbox.count()).toBe(0);
       await expectFocused(trigger);
@@ -592,7 +684,7 @@ suite.define(() => {
     const lightbox = page.locator("openclaw-image-lightbox");
     const counter = lightbox.locator(".gallery-counter");
     const image = lightbox.locator(".image");
-    await counterValue(counter).toBe("2 / 5");
+    await counterValue(counter).toBe("5 / 8");
     await expect.poll(() => exactButton(lightbox, "Zoom in").isEnabled()).toBe(true);
     await lightbox.locator("openclaw-modal-dialog > dialog").evaluate(finishElementAnimations);
     const touch = await page.context().newCDPSession(page);
@@ -635,18 +727,18 @@ suite.define(() => {
       ).toBe("1");
     }
     await swipe(-24);
-    expect((await counter.textContent())?.trim()).toBe("2 / 5");
+    expect((await counter.textContent())?.trim()).toBe("5 / 8");
     await swipe(-30, 120);
-    expect((await counter.textContent())?.trim()).toBe("2 / 5");
+    expect((await counter.textContent())?.trim()).toBe("5 / 8");
     await swipe(-130, 0, true, true);
-    expect((await counter.textContent())?.trim()).toBe("2 / 5");
+    expect((await counter.textContent())?.trim()).toBe("5 / 8");
     await swipe(-130, 0, true);
-    await counterValue(counter).toBe("3 / 5");
+    await counterValue(counter).toBe("6 / 8");
 
     await exactButton(lightbox, "Zoom in").click();
     await expect.poll(readScale).toBeGreaterThan(1);
     await swipe(-130);
-    expect((await counter.textContent())?.trim()).toBe("3 / 5");
+    expect((await counter.textContent())?.trim()).toBe("6 / 8");
     await exactButton(lightbox, "Reset zoom").click();
     await expect.poll(readScale).toBe(1);
     const point = await center();
@@ -666,7 +758,7 @@ suite.define(() => {
     });
     await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     await expect.poll(readScale).toBeGreaterThan(1);
-    expect((await counter.textContent())?.trim()).toBe("3 / 5");
+    expect((await counter.textContent())?.trim()).toBe("6 / 8");
     await exactButton(lightbox, "Reset zoom").click();
     await expect.poll(readScale).toBe(1);
 
@@ -686,15 +778,15 @@ suite.define(() => {
     await expect.poll(headerOverlaps).toBe(false);
     await page.emulateMedia({ reducedMotion: "reduce" });
     await swipe(130);
-    await counterValue(counter).toBe("4 / 5");
+    await counterValue(counter).toBe("7 / 8");
     await page.keyboard.press("ArrowLeft");
-    await counterValue(counter).toBe("5 / 5");
+    await counterValue(counter).toBe("8 / 8");
     await page.keyboard.press("ArrowLeft");
-    expect((await counter.textContent())?.trim()).toBe("5 / 5");
+    expect((await counter.textContent())?.trim()).toBe("8 / 8");
     await page.keyboard.press("ArrowRight");
-    await counterValue(counter).toBe("4 / 5");
+    await counterValue(counter).toBe("7 / 8");
     await swipe(-130);
-    await counterValue(counter).toBe("3 / 5");
+    await counterValue(counter).toBe("6 / 8");
     await exactButton(lightbox, "Close image preview").click();
     await expect.poll(() => lightbox.count()).toBe(0);
     await touch.detach();

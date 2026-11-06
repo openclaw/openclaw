@@ -13,6 +13,30 @@ export function isImageLightboxEvent(event: Event): boolean {
     );
 }
 
+export function isInlineChatImage(node: Node): node is HTMLImageElement {
+  return (
+    node instanceof HTMLImageElement &&
+    node.classList.contains("markdown-inline-image") &&
+    Boolean(node.getAttribute("src")) &&
+    !node.closest("a")
+  );
+}
+
+function inlineChatImageIndex(root: HTMLElement, image: HTMLImageElement): number {
+  // Only identify the clicked slot here; gallery membership comes from source Markdown.
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+  let index = 0;
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (isInlineChatImage(node)) {
+      if (node === image) {
+        return index;
+      }
+      index += 1;
+    }
+  }
+  return -1;
+}
+
 function inlineChatImageFromEvent(event: Event): HTMLImageElement | null {
   const target = event
     .composedPath()
@@ -26,12 +50,13 @@ function inlineChatImageFromEvent(event: Event): HTMLImageElement | null {
     target instanceof HTMLImageElement
       ? target
       : (target?.querySelector<HTMLImageElement>(".markdown-inline-image") ?? null);
-  return image?.closest("a") ? null : image;
+  return image && isInlineChatImage(image) ? image : null;
 }
 
 export function openInlineChatImage(
   event: Event,
-  onOpenImage: ((item: ImageLightboxItem) => void) | undefined,
+  onOpenImage: ((item: ImageLightboxItem, index?: number) => void) | undefined,
+  imageRoot?: HTMLElement,
 ): boolean {
   if (event.defaultPrevented) {
     return false;
@@ -40,9 +65,13 @@ export function openInlineChatImage(
   if (!image) {
     return false;
   }
+  const index = imageRoot ? inlineChatImageIndex(imageRoot, image) : undefined;
+  if (index === -1) {
+    return false;
+  }
   event.preventDefault();
   const src = image.currentSrc || image.src;
   const title = image.alt.trim() || t("chat.imageLightbox.untitled");
-  openResolvedImage(onOpenImage, src, title);
+  openResolvedImage(onOpenImage ? (item) => onOpenImage(item, index) : undefined, src, title);
   return true;
 }

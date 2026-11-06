@@ -33,6 +33,13 @@ without known dimensions keep a 3:2 frame while displayed, with the full image
 fitted inside it. Previously learned dimensions size the next preview without
 moving the surrounding messages when the image decodes.
 
+Opening a transcript image or video shows a shared viewer for supported media in
+the loaded thread, including inline Markdown images, your own attachments, and
+earlier response turns.
+When more than one item is available, use the visible previous/next buttons,
+Left/Right arrow keys, or touch swipes to browse; the counter shows your position.
+Older messages that have not been loaded are not fetched just to fill the viewer.
+
 Optional surfaces follow the permissions granted to the current connection.
 Session-only roles do not load the plugin UI catalog, Side Chat history, observer
 visibility, or remote session-link titles. Side Chat is hidden, and session links

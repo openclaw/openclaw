@@ -525,7 +525,7 @@ describe("message attachment image gallery projection", () => {
           showToolCalls: false,
           assistantName: "OpenClaw",
           assistantAvatar: null,
-          getTurnMediaMessages: (key) => (key === "first" ? turn : undefined),
+          getThreadMediaMessages: (key) => (key === "first" ? turn : undefined),
           onOpenImage,
         },
       },
