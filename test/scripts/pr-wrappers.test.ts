@@ -2323,11 +2323,31 @@ closeSync(fd);
     () => {
       const fixture = makeFrozenDependencyFixture();
       const { calls } = fixture;
+      const legacyCache = join(fixture.env.HOME!, ".cache/openclaw/pr-dependencies");
+      mkdirSync(legacyCache, { recursive: true, mode: 0o700 });
+      const retained = [
+        ...Array.from({ length: 6 }, (_, index) => (index + 1).toString(16).repeat(64)),
+        "7".repeat(64),
+        "unrelated-sentinel",
+      ].map((name, index) => {
+        const path = join(legacyCache, name);
+        mkdirSync(path, { mode: 0o700 });
+        writeFileSync(join(path, "sentinel"), name);
+        if (index < 6) {
+          mkdirSync(join(path, ".pr-complete"));
+        }
+        utimesSync(path, 0, 0);
+        return { name, path, ino: lstatSync(path).ino };
+      });
       const before = fixture.gitText(["rev-parse", "HEAD"], fixture.tooling);
       for (let run = 0; run < 2; run++) {
         const result = fixture.run(run === 0 ? { OPENCLAW_PR_TOOLING_ROOT: fixture.tooling } : {});
         expect(result.status, result.stdout + result.stderr).toBe(2);
         expect(result.stderr).toContain("running wrapper code materialized from");
+        for (const entry of retained) {
+          expect(lstatSync(entry.path).ino).toBe(entry.ino);
+          expect(readScript(join(entry.path, "sentinel"))).toBe(entry.name);
+        }
       }
       expect(jsonLines(calls)).toHaveLength(1);
       const cache = join(fixture.env.HOME!, ".cache/openclaw/pr-dependencies/v3");
@@ -2348,6 +2368,27 @@ closeSync(fd);
       expect(realpathSync(join(fixture.tooling, "node_modules/tsx"))).toBe(fixture.stale);
     },
   );
+
+  itPosix("refuses a mismatched current cache without deleting or reinstalling it", () => {
+    const fixture = makeFrozenDependencyFixture();
+    const installed = fixture.run();
+    expect(installed.status, installed.stdout + installed.stderr).toBe(2);
+    const cache = join(fixture.env.HOME!, ".cache/openclaw/pr-dependencies/v3");
+    const entries = prCacheEntries(cache);
+    expect(entries).toHaveLength(1);
+    const entry = join(cache, entries[0]!);
+    const before = lstatSync(entry);
+    rmSync(join(entry, "node_modules/tsx"));
+    symlinkSync(fixture.stale, join(entry, "node_modules/tsx"), "dir");
+    const refused = fixture.run();
+    expect(refused.status, refused.stdout + refused.stderr).toBe(1);
+    expect(refused.stderr).toContain("Cached dependencies do not match the trust anchor.");
+    expect(lstatSync(entry).ino).toBe(before.ino);
+    expect(readPrCacheState(entry).registered).toBe(true);
+    expect(realpathSync(join(entry, "node_modules/tsx"))).toBe(fixture.stale);
+    expect(prCacheEntries(cache)).toEqual(entries);
+    expect(jsonLines(fixture.calls)).toHaveLength(1);
+  });
 
   itPosix(
     "shares one frozen install across source revisions with independent anchor lifetimes",
@@ -2899,6 +2940,94 @@ echo "canonical wrapper executed";`,
     expect(result.stderr).not.toContain("Refusing to silently substitute");
     const anchors = matchingEntries(fixture.root, "openclaw-pr-anchor-v3.");
     expect(anchors).toHaveLength(0);
+  });
+
+  itPosix("supervisor startup preserves unrelated anchors while retiring its own", () => {
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
+    parkCanonicalOffAnchor(fixture);
+    const reaped = spawnSync(
+      process.execPath,
+      ["-e", "process.stdout.write(String(process.pid))"],
+      {
+        encoding: "utf8",
+        timeout: 30_000,
+      },
+    );
+    expect(reaped.status, reaped.stderr).toBe(0);
+    const dead = Number(reaped.stdout);
+    const future = Date.now() + 25 * 60 * 60 * 1000;
+    const retained = [
+      "openclaw-pr-anchor." + dead + ".stale",
+      "openclaw-pr-anchor.legacy",
+      "openclaw-pr-anchor." + process.pid + ".live",
+      "openclaw-pr-anchor." + dead + ".young",
+      "openclaw-pr-anchor." + dead + ".mode",
+      "unrelated-anchor",
+      ANCHOR_PREFIX + dead + ".stale",
+      ANCHOR_PREFIX + process.pid + ".live",
+    ].map((name, index) => {
+      const path = join(fixture.root, name);
+      mkdirSync(path, { mode: index === 4 ? 0o755 : 0o700 });
+      writeFileSync(join(path, "sentinel"), name);
+      utimesSync(path, index === 3 ? future / 1000 : 0, index === 3 ? future / 1000 : 0);
+      return { name, path, ino: lstatSync(path).ino };
+    });
+    const alias = join(fixture.root, "openclaw-pr-anchor." + dead + ".alias");
+    symlinkSync(retained[5]!.path, alias, "dir");
+    const aliasIdentity = lstatSync(alias);
+    const clockReceipt = join(fixture.root, "supervisor-clock");
+    const clockModule = join(fixture.root, "supervisor-clock.mjs");
+    // Only the supervisor receives this fixture clock. It ages ctime as well as
+    // mtime, so the old startup sweep would actually reach the unrelated anchors.
+    writeFileSync(
+      clockModule,
+      'import { writeFileSync } from "node:fs";\n' +
+        "const now = Date.now;\nDate.now = () => now() + 25 * 60 * 60 * 1000;\n" +
+        "writeFileSync(" +
+        JSON.stringify(clockReceipt) +
+        ", JSON.stringify({ now: Date.now(), script: process.argv[3] }));\n",
+    );
+    writeExecutable(
+      join(fixture.bin, "node"),
+      '#!/bin/sh\ncase "$1" in\n' +
+        '  */process-group-runner.mjs) exec "$PR_TEST_REAL_NODE" --import "$PR_TEST_CLOCK_MODULE" "$@" ;;\n' +
+        'esac\nexec "$PR_TEST_REAL_NODE" "$@"\n',
+    );
+    const result = runWrapper(fixture, ["ci-dispatch", "123"], "linked", {
+      env: {
+        ...fixture.env,
+        PR_TEST_REAL_NODE: requireNodeTool("node"),
+        PR_TEST_CLOCK_MODULE: clockModule,
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("canonical wrapper executed");
+    expect(result.stderr).toContain("running wrapper code materialized from");
+    const receipt = JSON.parse(readScript(clockReceipt));
+    const observedClock = receipt.now;
+    const ownAnchor = dirname(dirname(receipt.script));
+    expect(ownAnchor.startsWith(join(realpathSync(fixture.root), ANCHOR_PREFIX))).toBe(true);
+    expect(retained.some((entry) => entry.path === ownAnchor)).toBe(false);
+    expect(existsSync(ownAnchor)).toBe(false);
+    for (const entry of retained.slice(0, 2)) {
+      expect(observedClock - lstatSync(entry.path).ctimeMs).toBeGreaterThan(24 * 60 * 60 * 1000);
+    }
+    for (const entry of retained) {
+      expect(lstatSync(entry.path).ino).toBe(entry.ino);
+      expect(readScript(join(entry.path, "sentinel"))).toBe(entry.name);
+    }
+    expect(lstatSync(alias).ino).toBe(aliasIdentity.ino);
+    expect(readlinkSync(alias)).toBe(retained[5]!.path);
+    expect(
+      readdirSync(fixture.root)
+        .filter((name) => name.startsWith("openclaw-pr-anchor.") || name.startsWith(ANCHOR_PREFIX))
+        .toSorted(),
+    ).toEqual(
+      [
+        ...retained.filter((entry) => entry.name !== "unrelated-anchor").map((entry) => entry.name),
+        alias.slice(fixture.root.length + 1),
+      ].toSorted(),
+    );
   });
 
   itPosix.for([

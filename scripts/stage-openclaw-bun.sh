@@ -19,8 +19,6 @@ done
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-bun.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 TAG="$(node -p 'require(process.argv[1]).tag' "$PIN")"
-CACHE_DIR="$ROOT_DIR/.cache/openclaw-bun/$TAG"
-mkdir -p "$CACHE_DIR"
 download() {
   curl --fail --location --proto '=https' --proto-redir '=https' --no-progress-meter --show-error \
     --connect-timeout 15 --max-time 300 --retry 7 --retry-max-time 300 \
@@ -68,19 +66,13 @@ console.log(pin.commit, pin.revision, artifact.asset, artifact.sha256, artifact.
 JS
 )
   mkdir -p "$WORK/$arch"
-  actual=""
-  if [[ -f "$CACHE_DIR/$ASSET" && ! -L "$CACHE_DIR/$ASSET" ]]; then
-    actual="$(shasum -a 256 "$CACHE_DIR/$ASSET" | awk '{print $1}')"
-  fi
-  if [[ "$actual" != "$ARCHIVE_SHA" ]]; then
-    download "$ASSET"
-    [[ "$(shasum -a 256 "$WORK/$ASSET" | awk '{print $1}')" == "$ARCHIVE_SHA" ]] || {
-      echo "ERROR: Bun $ASSET sha256 mismatch" >&2; exit 1;
-    }
-    mv -f "$WORK/$ASSET" "$CACHE_DIR/$ASSET"
-  fi
+  # Archives are invocation-owned intermediates, retired with WORK by the EXIT trap.
+  download "$ASSET"
+  [[ "$(shasum -a 256 "$WORK/$ASSET" | awk '{print $1}')" == "$ARCHIVE_SHA" ]] || {
+    echo "ERROR: Bun $ASSET sha256 mismatch" >&2; exit 1;
+  }
   # Extract the pinned executable's bytes only, never paths supplied by the zip.
-  unzip -p "$CACHE_DIR/$ASSET" "$EXECUTABLE" > "$WORK/$arch/bun"
+  unzip -p "$WORK/$ASSET" "$EXECUTABLE" > "$WORK/$arch/bun"
   [[ "$(shasum -a 256 "$WORK/$arch/bun" | awk '{print $1}')" == "$EXECUTABLE_SHA" ]] || {
     echo "ERROR: Bun executable checksum mismatch" >&2; exit 1;
   }

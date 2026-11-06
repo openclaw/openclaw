@@ -79,7 +79,8 @@ The OpenClaw Bun fork has one shared pin in `scripts/lib/openclaw-bun.json`,
 consumed by macOS packaging, the Tauri app, and CI's `setup-test-bun` action.
 `scripts/stage-openclaw-bun.sh <runtime> <darwin|linux> <arm64|x64> [...]`
 downloads it; Darwin accepts both architectures for a universal binary.
-Archives are cached under `.cache/openclaw-bun/<tag>/`. Staging verifies the
+Each staging run downloads its archives into a temporary directory and removes
+that directory on exit. Staging verifies the
 release manifest against `SHA256SUMS`, its identity and artifact fields against
 the pin, each archive against both sources, then the executable checksum,
 native architecture, and runnable fork revision. The fork's package auto-install

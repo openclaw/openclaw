@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
@@ -64,8 +64,11 @@ int main(int argc, char **argv) {
 }
 
 it.runIf(["darwin", "linux"].includes(process.platform)).concurrent.for([
-  ["cached", ""],
+  ["retained-cache", ""],
+  ["damaged-cache", ""],
+  ["concurrent", ""],
   ["download", ""],
+  ["acquisition-failure", "fixture archive acquisition failed"],
   ["archive-checksum", "sha256 mismatch"],
   ["executable-checksum", "executable checksum mismatch"],
   ["architecture", "executable architecture mismatch"],
@@ -88,12 +91,14 @@ it.runIf(["darwin", "linux"].includes(process.platform)).concurrent.for([
       const run = toolRunner(root, command);
       const checksum = (kind: string, value: string) =>
         scenario === kind ? "0".repeat(64) : value;
-      const redownload = ["download", "archive-checksum"].includes(scenario);
+      const retainedCache: Record<string, Buffer> = {};
       const binaries = await revisionExecutables(root, command);
       const tag = "fixture-release";
       await mkdir(file("downloads"));
       const arches: Arch[] =
-        scenario === "cached" && process.platform === "darwin" ? ["arm64", "x64"] : [hostArch];
+        scenario === "retained-cache" && process.platform === "darwin"
+          ? ["arm64", "x64"]
+          : [hostArch];
       const artifacts: Record<
         string,
         { asset: string; sha256: string; executable: string; executableSha256: string }
@@ -106,16 +111,25 @@ it.runIf(["darwin", "linux"].includes(process.platform)).concurrent.for([
         // Staging assigns executable modes and verifies the real extracted bytes.
         const archiveBytes = makeStoredZip({ [executable]: binary });
         await write(`downloads/${asset}`, archiveBytes);
-        await write(
-          `.cache/openclaw-bun/${tag}/${asset}`,
-          redownload ? "damaged cache" : archiveBytes,
-        );
+        if (scenario !== "download") {
+          const cachePath = `.cache/openclaw-bun/${tag}/${asset}`;
+          retainedCache[cachePath] =
+            scenario === "damaged-cache" || scenario === "archive-checksum"
+              ? Buffer.from("damaged cache")
+              : archiveBytes;
+          await write(cachePath, retainedCache[cachePath]);
+        }
         artifacts[`${process.platform}-${arch}`] = {
           asset,
           sha256: checksum("archive-checksum", digest(archiveBytes)),
           executable,
           executableSha256: checksum("executable-checksum", digest(binary)),
         };
+      }
+      if (scenario !== "download") {
+        const sentinel = ".cache/openclaw-bun/retained-sentinel";
+        retainedCache[sentinel] = Buffer.from("unrelated retained entry");
+        await write(sentinel, retainedCache[sentinel]);
       }
       const pin = {
         tag,
@@ -153,46 +167,92 @@ it.runIf(["darwin", "linux"].includes(process.platform)).concurrent.for([
         "tools/curl",
         `#!/bin/bash
 set -euo pipefail
-printf 'download\\n' >> "$fixture_curl_log"
 while [[ "$1" != --output ]]; do shift; done
+printf '%s\\n' "$2" >> "$fixture_curl_log"
+if [[ "$fixture_fail_archive" == 1 && "$2" == *.zip ]]; then
+  printf 'partial archive' > "$2"
+  echo "fixture archive acquisition failed" >&2
+  exit 22
+fi
 cp "$fixture_downloads/$(basename "$2")" "$2"
 `,
         0o755,
       );
-      const bun = file("runtime/bin/bun");
-      await write("runtime/bin/bun", "previous runtime");
-      const result = await command.run(
-        "/bin/bash",
-        [file(stageScript), file("runtime"), process.platform, ...arches],
-        {
-          encoding: "utf8",
-          env: {
-            PATH: `${file("tools")}:${nodeDirectory}:/usr/bin:/bin`,
-            TMPDIR: root,
-            fixture_downloads: file("downloads"),
-            fixture_curl_log: curlLog,
-            HOME: root,
-          },
-        },
+      const destinations = scenario === "concurrent" ? ["runtime-a", "runtime-b"] : ["runtime"];
+      for (const destination of destinations) {
+        await write(`${destination}/bin/bun`, "previous runtime");
+      }
+      // Join both same-source invocations before inspecting shared fixture state.
+      const results = await Promise.allSettled(
+        destinations.map((destination) =>
+          command.run(
+            "/bin/bash",
+            [file(stageScript), file(destination), process.platform, ...arches],
+            {
+              encoding: "utf8",
+              env: {
+                PATH: `${file("tools")}:${nodeDirectory}:/usr/bin:/bin`,
+                TMPDIR: root,
+                fixture_downloads: file("downloads"),
+                fixture_curl_log: curlLog,
+                fixture_fail_archive: scenario === "acquisition-failure" ? "1" : "0",
+                HOME: root,
+              },
+            },
+          ),
+        ),
       );
-      const downloadsMade = await readFile(curlLog, "utf8");
-      expect(downloadsMade).toBe("download\ndownload\n" + (redownload ? "download\n" : ""));
-      if (expectedError) {
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(expectedError);
-        expect(await readFile(bun, "utf8")).toBe("previous runtime");
-        return;
+      const outputPaths = (await readFile(curlLog, "utf8")).trim().split("\n");
+      const workPaths = [...new Set(outputPaths.map((output) => path.dirname(output)))];
+      expect(workPaths).toHaveLength(destinations.length);
+      const expectedDownloads = [
+        "SHA256SUMS",
+        "manifest.json",
+        ...(scenario.startsWith("release-") ? [] : Object.values(artifacts).map((a) => a.asset)),
+      ].toSorted();
+      for (const work of workPaths) {
+        expect(path.dirname(work)).toBe(root);
+        expect(path.basename(work)).toMatch(/^openclaw-bun\.[A-Za-z0-9]+$/);
+        expect(
+          outputPaths
+            .filter((output) => path.dirname(output) === work)
+            .map((output) => path.basename(output))
+            .toSorted(),
+        ).toEqual(expectedDownloads);
       }
-      expect(result.status, result.stderr).toBe(0);
-      expect((await stat(bun)).mode & 0o777).toBe(0o755);
-      if (process.platform === "darwin") {
-        const stagedArches = await run("/usr/bin/lipo", ["-archs", bun]);
-        expect(stagedArches.split(/\s+/).toSorted()).toEqual(
-          arches.map((arch) => (arch === "x64" ? "x86_64" : arch)).toSorted(),
-        );
+      expect((await readdir(root)).filter((name) => name.startsWith("openclaw-bun."))).toEqual([]);
+      for (const [cachePath, bytes] of Object.entries(retainedCache)) {
+        expect(await readFile(file(cachePath))).toEqual(bytes);
       }
-      expect(await run(bun, ["--revision"])).toBe(revision);
-      expect(await run(bun, ["-p", "Bun.revision"])).toBe(commit);
-      expect(JSON.parse(await readFile(file("runtime/bun-manifest.json"), "utf8")).tag).toBe(tag);
+      if (scenario === "download") {
+        await expect(stat(file(".cache/openclaw-bun"))).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      for (const [index, settled] of results.entries()) {
+        if (settled.status === "rejected") {
+          throw settled.reason;
+        }
+        const result = settled.value;
+        const destination = destinations[index];
+        const bun = file(`${destination}/bin/bun`);
+        if (expectedError) {
+          expect(result.status).not.toBe(0);
+          expect(result.stderr).toContain(expectedError);
+          expect(await readFile(bun, "utf8")).toBe("previous runtime");
+          continue;
+        }
+        expect(result.status, result.stderr).toBe(0);
+        expect((await stat(bun)).mode & 0o777).toBe(0o755);
+        if (process.platform === "darwin") {
+          const stagedArches = await run("/usr/bin/lipo", ["-archs", bun]);
+          expect(stagedArches.split(/\s+/).toSorted()).toEqual(
+            arches.map((arch) => (arch === "x64" ? "x86_64" : arch)).toSorted(),
+          );
+        }
+        expect(await run(bun, ["--revision"])).toBe(revision);
+        expect(await run(bun, ["-p", "Bun.revision"])).toBe(commit);
+        expect(
+          JSON.parse(await readFile(file(`${destination}/bun-manifest.json`), "utf8")).tag,
+        ).toBe(tag);
+      }
     }),
 );
