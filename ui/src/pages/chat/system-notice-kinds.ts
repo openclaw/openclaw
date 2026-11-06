@@ -74,17 +74,13 @@ export function projectSystemNoticeSummary(params: {
   detailed: boolean;
   statusOnly?: boolean;
 }) {
-  if (!params.statusOnly) {
-    return { label: params.label, text: params.text, collapsedBody: params.detailed };
+  let { label, text, detailed: collapsedBody } = params;
+  if (params.statusOnly) {
+    const summary = label + ": " + text;
+    const short = summary.length <= 64 && !/[\r\n\u2028\u2029]/u.test(summary);
+    label = short ? summary : t("common.system");
+    text = short ? "" : text;
+    collapsedBody = !short;
   }
-  const label = params.label.replace(/\s+/gu, " ").trim();
-  const summary = label + ": " + params.text;
-  const short = !/[\r\n\u2028\u2029]/u.test(summary) && summary.length <= 64;
-  return short
-    ? { label: summary, text: "", collapsedBody: false }
-    : {
-        label: label.length <= 64 ? label : t("common.system"),
-        text: params.text,
-        collapsedBody: true,
-      };
+  return { label, text, collapsedBody };
 }
