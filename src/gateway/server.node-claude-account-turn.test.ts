@@ -164,7 +164,7 @@ it(
           frame,
           client: hostClient,
           response: createNodeInvokeResponder(hostClient, frame),
-          skillBins: { current: () => [] },
+          skillBins: { current: async () => [] },
           runtime: { claudePath: executable },
         }).catch((error: unknown) => {
           nodeFault = error;
