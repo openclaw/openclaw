@@ -478,6 +478,7 @@ def checkout_harness(sha):
         "scripts/lib/actions-artifact-archive.mjs",
         "scripts/lib/ci-test-observations.mjs",
         "scripts/lib/ci-ios-smoke-plan.mjs",
+        "scripts/lib/ci-skills-python-plan.mjs",
         "scripts/lib/release-context.mjs",
         "scripts/lib/release-version.mjs",
     )

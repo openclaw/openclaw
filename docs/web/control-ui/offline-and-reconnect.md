@@ -199,9 +199,11 @@ Unique display-name links use the same cached route resolution, including the
 
 Exact conversation links can restore their scoped transcript without waiting for
 the sidebar roster or the socket to open. A prepared snapshot supplies the header,
-transcript, and composer in the first pane frame. Cached content stays visible
-while live history and route confirmation finish; those checks do not show the
-header connection indicator. Dashboard layouts restore before the pane renders, and embedded
+transcript, and composer in the first pane frame, including the selected context-window
+badge and last run action. Stop stays disabled until the live connection confirms
+permission to stop the run. Cached content stays visible while live history and route
+confirmation finish; those checks do not show the header connection indicator.
+Dashboard layouts restore before the pane renders, and embedded
 HTML widgets restore their last board metadata from the same scoped conversation
 cache and start loading the isolated sandbox while connecting. Document requests
 still require the current Gateway connection and overlap the live board refresh.
