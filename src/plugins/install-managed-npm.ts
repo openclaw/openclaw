@@ -10,7 +10,6 @@ import {
 } from "../infra/install-package-dir.js";
 import { withInstallActivity } from "../infra/install-progress.js";
 import {
-  buildNpmResolutionFields,
   formatNpmCommandFailureOutput,
   type NpmSpecResolution,
 } from "../infra/install-source-utils.js";
@@ -24,6 +23,7 @@ import {
   upsertManagedNpmRootDependency,
   type ManagedNpmRootInstalledDependency,
 } from "../infra/npm-managed-root.js";
+import { buildNpmResolutionFields } from "../infra/npm-registry-spec.js";
 import {
   createSafeNpmInstallArgs,
   createSafeNpmInstallEnv,
