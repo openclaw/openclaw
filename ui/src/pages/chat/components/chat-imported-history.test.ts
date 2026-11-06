@@ -47,25 +47,7 @@ function expectDisplay(message: unknown, text: string) {
   expect(displayed(message)).toBe(text);
 }
 
-it("updates retained message copy labels when the locale changes", async () => {
-  await i18n.setLocale("en");
-  const details = resolveMessageActionDetails(prepareChatMessageRender(imported("Answer")), {
-    messageId: "localized-copy",
-    senderLabel: "Assistant",
-  });
-  root = mountSolid(() => createComponent(MessageActions, { details, options: {} }), { container });
-  const button = container.querySelector<HTMLButtonElement>(".chat-copy-btn")!;
-  expect(button.getAttribute("aria-label")).toBe("Copy as markdown");
-  try {
-    await i18n.setLocale("de");
-    await vi.waitFor(() => expect(button.getAttribute("aria-label")).toBe("Als Markdown kopieren"));
-    expect(container.querySelector(".chat-copy-btn")).toBe(button);
-  } finally {
-    await i18n.setLocale("en");
-  }
-});
-
-it("localizes catalog truncation in retained browse/import views and the open output panel", async () => {
+it("localizes retained message copy labels, catalog truncation, and the open output panel", async () => {
   const messages = [
     {
       id: "tool",
@@ -115,6 +97,7 @@ it("localizes catalog truncation in retained browse/import views and the open ou
   }
   root = mountSolid(
     () => [
+      createComponent(MessageActions, { details: { markdown: "Answer" }, options: {} }),
       ...messages.map((message, index) =>
         createComponent(GroupedMessage, {
           preparation: prepareChatMessageRender(message),
@@ -131,11 +114,12 @@ it("localizes catalog truncation in retained browse/import views and the open ou
     ],
     { container },
   );
+  const button = container.querySelector<HTMLButtonElement>(".chat-copy-btn")!;
   try {
-    for (const [locale, notice] of [
-      ["fr", "[Sortie tronquée]"],
-      ["de", "[Ausgabe gekürzt]"],
-      ["en", "[Output truncated]"],
+    for (const [locale, notice, copyLabel] of [
+      ["fr", "[Sortie tronquée]", "Copier au format markdown"],
+      ["de", "[Ausgabe gekürzt]", "Als Markdown kopieren"],
+      ["en", "[Output truncated]", "Copy as markdown"],
     ] as const) {
       await i18n.setLocale(locale);
       await vi.waitFor(() =>
@@ -143,6 +127,8 @@ it("localizes catalog truncation in retained browse/import views and the open ou
           Array.from(container.querySelectorAll('p[role="status"]'), (node) => node.textContent),
         ).toEqual(Array(7).fill(notice)),
       );
+      await vi.waitFor(() => expect(button.getAttribute("aria-label")).toBe(copyLabel));
+      expect(container.querySelector(".chat-copy-btn")).toBe(button);
       expect(container.querySelectorAll(".chat-thinking")).toHaveLength(2);
       expect(container.querySelector(".chat-tool-output__text")?.textContent).toContain(
         "literal [Output truncated]",
