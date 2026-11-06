@@ -51,7 +51,7 @@ it.each([
           expect(response.headers.get("cache-control")).toContain("no-store");
           expect(response.headers.get("retry-after")).toBe("1");
           const document = await response.text();
-          expect(document).toContain("OpenClaw is waking up");
+          expect(document).toContain("OpenClaw is starting");
           // The wordmark is inlined: no app asset is reachable yet.
           expect(document).toContain('<svg class="wordmark" role="img" aria-label="OpenClaw"');
           expect(document).not.toMatch(/<img|src=/);

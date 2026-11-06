@@ -105,8 +105,8 @@ export function renderControlUiUnavailableDocument(title: string): string {
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="light dark"><title>OpenClaw — Temporarily unavailable</title>
 <style>
-:root{color-scheme:light;--bg:#f8f8f8;--text:#353535;--text-strong:#202020;--muted:#5e5e5e;--tertiary:rgb(53 53 53/.484);--rail:#f0f0f0;--rail-edge:#ebebeb;--side:#f4f4f4;--side-edge:#ededed;--icon:rgb(53 53 53/.6);--current:#e5e5e5;--current-icon:#202020;--accent:#bd4531;--divider:rgb(0 0 0/.13);--placeholder:rgb(94 94 94/.16);--placeholder-strong:rgb(94 94 94/.2);--skeleton:rgb(94 94 94/.1);--skeleton-disc:rgb(94 94 94/.12);--presence:#92400e;--tile:#fbfbfb;--tile-edge:#eaeaea;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;line-height:1.55;letter-spacing:-.01em;color:var(--text);background:var(--bg);-webkit-font-smoothing:antialiased}
-@media(prefers-color-scheme:dark){:root{color-scheme:dark;--bg:#0e1015;--text:#bcbcc0;--text-strong:#f4f4f5;--muted:#8e8e97;--tertiary:rgb(188 188 192/.484);--rail:#15171c;--rail-edge:#1f2126;--side:#121419;--side-edge:#1d1f24;--icon:rgb(188 188 192/.48);--current:#222429;--current-icon:#f4f4f5;--accent:#ff5c5c;--divider:rgb(255 255 255/.14);--placeholder:rgb(142 142 151/.16);--placeholder-strong:rgb(142 142 151/.2);--skeleton:rgb(142 142 151/.1);--skeleton-disc:rgb(142 142 151/.12);--presence:#f59e0b;--tile:#1c1e23;--tile-edge:#23252a}}
+:root{color-scheme:light;--bg:#f8f8f8;--text:#353535;--text-strong:#202020;--muted:#5e5e5e;--rail:#f0f0f0;--rail-edge:#ebebeb;--side:#f4f4f4;--side-edge:#ededed;--icon:rgb(53 53 53/.6);--current:#e5e5e5;--current-icon:#202020;--accent:#bd4531;--divider:rgb(0 0 0/.13);--placeholder:rgb(94 94 94/.16);--placeholder-strong:rgb(94 94 94/.2);--skeleton:rgb(94 94 94/.1);--skeleton-disc:rgb(94 94 94/.12);--presence:#92400e;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;line-height:1.55;letter-spacing:-.01em;color:var(--text);background:var(--bg);-webkit-font-smoothing:antialiased}
+@media(prefers-color-scheme:dark){:root{color-scheme:dark;--bg:#0e1015;--text:#bcbcc0;--text-strong:#f4f4f5;--muted:#8e8e97;--rail:#15171c;--rail-edge:#1f2126;--side:#121419;--side-edge:#1d1f24;--icon:rgb(188 188 192/.48);--current:#222429;--current-icon:#f4f4f5;--accent:#ff5c5c;--divider:rgb(255 255 255/.14);--placeholder:rgb(142 142 151/.16);--placeholder-strong:rgb(142 142 151/.2);--skeleton:rgb(142 142 151/.1);--skeleton-disc:rgb(142 142 151/.12);--presence:#f59e0b}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg)}
 .shell{display:flex;min-height:100svh}
 .sidebar{display:flex;flex:none;position:sticky;top:0;height:100svh}
@@ -127,27 +127,23 @@ export function renderControlUiUnavailableDocument(title: string): string {
 .skeleton-rows>span>span{height:10px;border-radius:9999px;background:var(--skeleton)}
 .skeleton-rows>span>:first-child{flex:none;width:18px;height:18px;border-radius:50%;background:var(--skeleton-disc)}
 .skeleton-rows>span>:last-child{width:68%}.skeleton-rows>:nth-child(2)>:last-child{width:50%}.skeleton-rows>:nth-child(3)>:last-child{width:78%}.skeleton-rows>:nth-child(4)>:last-child{width:58%}
-.content{position:relative;display:flex;flex-direction:column;flex:1;min-width:0;padding:0 20px}
+.content{position:relative;display:flex;flex-direction:column;flex:1;min-width:0}
 .topbar{display:none}
 .wordmark{display:block;width:140px;height:32px;color:var(--text-strong)}
-main{display:grid;place-items:center;flex:1;min-height:100svh;padding:48px 32px}
-.body{width:min(100%,480px);padding-bottom:9vh}
-.busy{display:grid;place-items:center;width:48px;height:48px;margin-bottom:28px;border:1px solid var(--tile-edge);border-radius:14px;background:var(--tile);color:var(--accent)}
-.busy svg{display:block;width:22px;height:22px;animation:spin 1.6s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
-h1{margin:0;font-size:clamp(24px,2.5vw,32px);font-weight:600;line-height:1.2;letter-spacing:-.035em;text-wrap:balance}
-p{margin:16px 0 0;max-width:42ch;color:var(--muted);font-size:12px;line-height:1.7}
-/* Holds the empty action row height of the app view, so the block sits where the app draws it. */
-.status{margin:20px 0 calc(48px - 1.7em);color:var(--tertiary);font-size:11px}
-@media(max-width:768px),(max-width:932px) and (max-height:500px) and (orientation:landscape){.sidebar{display:none}.content{padding:0 4px}.topbar{display:flex;align-items:flex-start;justify-content:center;padding:14.5px 12px 0}main{min-height:calc(100svh - 64px);margin-top:11px}}
-@media(max-width:640px){main{padding:32px 24px}.body{padding-bottom:6vh}}
-@media(prefers-reduced-motion:reduce){.busy svg{animation:none}}
+main{position:relative;flex:1;min-height:100svh}
+/* Every status page shares one anatomy: a left-aligned column whose title holds a fixed height a little above centre. */
+.body{position:absolute;top:34%;left:50%;width:min(440px,calc(100% - 48px));transform:translateX(-50%)}
+h1{position:relative;margin:0;color:var(--text-strong);font-size:22px;font-weight:600;line-height:28px;letter-spacing:-.01em;text-wrap:balance}
+.spin{position:absolute;top:7px;left:-26px;color:var(--accent)}.spin svg{display:block;width:14px;height:14px;animation:spin .9s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+p{margin:6px 0 0;color:var(--muted);font-size:14px;line-height:21px;text-wrap:pretty}
+@media(max-width:768px),(max-width:932px) and (max-height:500px) and (orientation:landscape){.sidebar{display:none}.content{padding:0 4px}.topbar{display:flex;align-items:flex-start;justify-content:center;padding:14.5px 12px 0}main{min-height:calc(100svh - 64px)}.body{top:30%;left:24px;right:24px;width:auto;transform:none}h1{font-size:20px;line-height:26px}.spin{display:none}}
+@media(prefers-reduced-motion:reduce){.spin svg{animation-duration:3s}}
 </style></head><body>
 <div class="shell" data-window-drag>${SHELL_SIDEBAR}
 <div class="content" data-window-drag><header class="topbar" data-window-drag>${OPENCLAW_WORDMARK_SVG}</header>
 <main id="openclaw-maintenance" data-window-drag><div class="body" data-window-drag>
-<div class="busy" aria-hidden="true"><svg viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="10" opacity=".2"/><circle cx="11" cy="11" r="10" pathLength="100" stroke-dasharray="26 74" stroke-linecap="round"/></svg></div>
-<h1>${escapeHtml(title)}</h1><p>Your workspace opens when it’s ready.</p>
-<p class="status" role="status" aria-live="polite">Checking now — no need to reload.</p>
+<h1><span class="spin" aria-hidden="true"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="6.25" opacity=".2"/><circle cx="7" cy="7" r="6.25" pathLength="100" stroke-dasharray="26 74" stroke-linecap="round"/></svg></span>${escapeHtml(title)}</h1>
+<p role="status" aria-live="polite">Hang on while the Gateway gets ready.</p>
 </div></main></div></div><script>${recoveryScript}</script></body></html>`;
 }
 
@@ -183,7 +179,7 @@ function serveControlUiUnavailableDocument(
     return false;
   }
   const html = renderControlUiUnavailableDocument(
-    startup.status === "starting" ? "OpenClaw is waking up" : "OpenClaw is temporarily unavailable",
+    startup.status === "starting" ? "OpenClaw is starting" : "OpenClaw is temporarily unavailable",
   );
   const ingress = getRemoteControlUiIngressContext(req);
   applyControlUiSecurityHeaders(res, ingress);
