@@ -125,6 +125,47 @@ test("New session command discovery previews admitted project skills under runti
   });
 });
 
+test("command catalogs distinguish manual-only skills from slash-only bundle templates", async () => {
+  await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, () =>
+    withSkillState(async (root) => {
+      const workspace = path.join(root, "workspace");
+      const bundle = path.join(root, "bundle");
+      await writeSkill({
+        dir: path.join(workspace, "skills", "manual-review"),
+        name: "manual-review",
+        description: "Manual review",
+        frontmatterExtra: "disable-model-invocation: true",
+      });
+      await fs.mkdir(path.join(bundle, ".claude-plugin"), { recursive: true });
+      await fs.mkdir(path.join(bundle, "commands"));
+      await fs.writeFile(
+        path.join(bundle, ".claude-plugin", "plugin.json"),
+        '{"name":"review-bundle"}',
+      );
+      await fs.writeFile(path.join(bundle, "commands", "bundle-review.md"), "Review $ARGUMENTS");
+      const cfg = agentConfig(workspace);
+      cfg.plugins = {
+        allow: ["review-bundle"],
+        load: { paths: [bundle] },
+        entries: { "review-bundle": { enabled: true } },
+      };
+      const result = await listCommands(cfg, {});
+      expect(result.ok).toBe(true);
+      const commands = (result.payload as CommandsListResult).commands;
+      expect(commands.find((command) => command.name === "manual_review")).toMatchObject({
+        source: "skill",
+        skillModelVisible: false,
+        skillReferenceable: true,
+      });
+      expect(commands.find((command) => command.name === "bundle_review")).toMatchObject({
+        source: "skill",
+        skillModelVisible: false,
+        skillReferenceable: false,
+      });
+    }),
+  );
+});
+
 // The created session's catalog takes the same host routing from its session entry; the
 // discovery owner proves that half in chat-commands.discovery.test.ts.
 test("project previews keep the registry's file host", async () => {
