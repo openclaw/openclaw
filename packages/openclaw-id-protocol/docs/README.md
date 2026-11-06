@@ -37,9 +37,11 @@ endpoint key held by the tunnel child, sidecar -> tunnel child process, DERP -> 
 4. **Approvals travel directly.** Membership changes and invite approvals reach the Gateway
    over the tunnel or direct loopback, never through the mailbox. The mailbox carries only
    requests and root-signed statements (kit enrollment, revocation).
-5. **A claw's root never changes.** R is pinned at linking, only by the local operator on
-   direct loopback, and nothing replaces it: owner reset is out of scope for this version
-   (OCF-319). Certificates have no expiry unless one is entered explicitly (enrollment.md).
+5. **Only the machine replaces a claw's root.** R is pinned at linking, only by the local
+   operator on direct loopback. Owner reset on the machine replaces it, vouched for by the
+   Gateway key K_gw; a client never moves its pin to the new root, it is set up again
+   (enrollment.md, "Owner reset"). Certificates have no expiry unless one is entered
+   explicitly (enrollment.md).
 
 ## Layout
 

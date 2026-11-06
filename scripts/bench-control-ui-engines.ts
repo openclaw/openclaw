@@ -31,6 +31,11 @@ import {
 } from "./lib/control-ui-chat-composer-scenarios.ts";
 import { createChatMessageScenarios } from "./lib/control-ui-chat-message-scenarios.ts";
 import { createChatPanelScenarios } from "./lib/control-ui-chat-panel-scenarios.ts";
+import {
+  mapColdLoadCpuProfile,
+  type ColdLoadCpuProfile,
+} from "./lib/control-ui-cold-load-trace.ts";
+import { createControlUiCpuCensus } from "./lib/control-ui-cpu-census.ts";
 import { createEngineActionScenarios } from "./lib/control-ui-engine-action-scenarios.ts";
 import {
   createEngineActionTiming,
@@ -40,6 +45,7 @@ import {
   createEngineBootScenarios,
   type EngineScenario,
 } from "./lib/control-ui-engine-boot-scenarios.ts";
+import { createEngineCompletedRunScenarios } from "./lib/control-ui-engine-completed-run-scenarios.ts";
 import { createEngineMemoryScenarios } from "./lib/control-ui-engine-memory-scenarios.ts";
 import { createEngineMemoryCollector } from "./lib/control-ui-engine-memory.ts";
 import {
@@ -97,6 +103,7 @@ const { values } = parseArgs({
     trace: { type: "boolean", default: false },
     "observer-origins": { type: "boolean", default: false },
     "cpu-only": { type: "boolean", default: false },
+    "cpu-profile": { type: "boolean", default: false },
     "cpu-throttle": { type: "string", default: "1" },
     "memory-soak-rounds": { type: "string", default: "10" },
   },
@@ -153,6 +160,9 @@ if (values["control-bundle-dir"]?.length && !values["compare-bundle-dir"]) {
 }
 if (values.trace && values["cpu-only"]) {
   throw new Error("Choose --trace or --cpu-only; use separate untraced timing runs");
+}
+if (values["cpu-profile"] && (values.trace || values["cpu-only"] || engines.includes("webkit"))) {
+  throw new Error("--cpu-profile requires Chromium and a separate run from --trace/--cpu-only");
 }
 const artifactDir = createControlUiE2eArtifactDir("engines", values.output);
 const viewports = [
@@ -273,6 +283,7 @@ type Observation = {
   artifactPrefix: string;
 };
 const observations: Observation[] = [];
+const cpuCensus = createControlUiCpuCensus();
 const writeJson = (name: string, value: unknown) =>
   writeFile(path.join(artifactDir, name), JSON.stringify(value, null, 2));
 try {
@@ -307,6 +318,7 @@ try {
   const catalog: EngineScenario[] = [
     ...createEngineBootScenarios(servers[0]!.server.baseUrl),
     ...createEngineActionScenarios(),
+    ...createEngineCompletedRunScenarios(servers[0]!.server.baseUrl),
     ...createChatComposerScenarios(),
     ...createChatMessageScenarios(),
     ...createChatPanelScenarios().map((scenario) =>
@@ -366,7 +378,12 @@ try {
         [
           "./bench-control-ui-engines.ts",
           "./lib/control-ui-engine-metrics.ts",
+          "./lib/control-ui-cold-load-trace.ts",
+          "./lib/control-ui-cpu-census.ts",
           "./lib/control-ui-engine-boot-scenarios.ts",
+          "./lib/control-ui-engine-completed-run-scenarios.ts",
+          "./lib/control-ui-long-session-probe.ts",
+          "../ui/src/test-helpers/control-ui-team-scale-history-fixture.ts",
           "./lib/control-ui-chat-composer-scenarios.ts",
           "./lib/control-ui-chat-message-scenarios.ts",
           "./lib/control-ui-chat-panel-scenarios.ts",
@@ -382,6 +399,9 @@ try {
           "./lib/control-ui-engine-memory-scenarios.ts",
           "./lib/control-ui-engine-plugin-memory-scenarios.ts",
           "./lib/control-ui-engine-page-scenarios.ts",
+          "./lib/control-ui-data-board-scenarios.ts",
+          "./lib/control-ui-data-log-scenarios.ts",
+          "./lib/control-ui-data-usage-scenarios.ts",
           "./lib/control-ui-page-observer.ts",
           "./lib/control-ui-bench-gateway-server.ts",
           "./lib/control-ui-bench-order.ts",
@@ -409,13 +429,16 @@ try {
     trace: values.trace,
     observerOrigins: values["observer-origins"],
     cpuOnly: values["cpu-only"],
+    cpuProfile: values["cpu-profile"],
     cpuThrottle,
     memorySoakRounds,
-    collection: values.trace
-      ? "Playwright tracing and engine Inspector/Profiler; overhead included"
-      : values["cpu-only"]
-        ? "WebKit smoothed utilization diagnostic (not action CPU) and Chromium CDP thread CPU; no timeline or script profiler"
-        : "Untraced wall time; Chromium CDP counters only, unavailable WebKit counters are null",
+    collection: values["cpu-profile"]
+      ? "V8 sampled self-time census; diagnostic attribution, not timing proof"
+      : values.trace
+        ? "Playwright tracing and engine Inspector/Profiler; overhead included"
+        : values["cpu-only"]
+          ? "WebKit smoothed utilization diagnostic (not action CPU) and Chromium CDP thread CPU; no timeline or script profiler"
+          : "Untraced wall time; Chromium CDP counters only, unavailable WebKit counters are null",
     order:
       "Serial network profile and engine order alternates each pair; bundle positions rotate and reverse across pairs; fresh browser context per observation",
     acceptance:
@@ -458,7 +481,11 @@ try {
             const scenario =
               createEngineBootScenarios(slot.server.baseUrl, networkProfile.gatewayLatencyMs).find(
                 ({ id }) => id === item.id,
-              ) ?? item;
+              ) ??
+              createEngineCompletedRunScenarios(slot.server.baseUrl).find(
+                ({ id }) => id === item.id,
+              ) ??
+              item;
             const artifactPrefix = `${viewport.name}-${scenario.id}-${networkProfile.name}-${pair + 1}-${engine}-${bundle}`;
             const observation: Observation = {
               engine,
@@ -500,6 +527,7 @@ try {
             page.on("pageerror", (error: Error) => errors.push({ message: error.message, phase }));
             let tracingStarted = false;
             let measurement: Awaited<ReturnType<typeof startEngineMeasurement>> | undefined;
+            let cpuProfile: ColdLoadCpuProfile | undefined;
             let memory: Awaited<ReturnType<typeof createEngineMemoryCollector>> | undefined;
             let throttle: Awaited<ReturnType<typeof context.newCDPSession>> | undefined;
             try {
@@ -644,6 +672,7 @@ try {
               measurement = await startEngineMeasurement(page, engine, {
                 trace: values.trace,
                 cpuOnly: values["cpu-only"],
+                cpuProfile: values["cpu-profile"],
               });
               phase = "measurement";
               const start = performance.now();
@@ -728,6 +757,16 @@ try {
               measurement = undefined;
               const captured = await activeMeasurement.stop();
               observation.metrics = captured.metrics;
+              if (values["cpu-profile"]) {
+                // SAFETY: This mode is Chromium-only; Profiler.stop returns V8's
+                // Profile shape, whose sample intervals the census validates.
+                const mapped = await mapColdLoadCpuProfile(captured.profile as ColdLoadCpuProfile, {
+                  assetBaseUrl: `${slot.server.baseUrl}/assets/`,
+                  assetDirectory: path.join(slot.directory, "assets"),
+                });
+                await writeJson(`${artifactPrefix}.cpuprofile`, mapped.profile);
+                cpuProfile = mapped.profile;
+              }
               if (traceAction) {
                 await writeJson(
                   `${artifactPrefix}.user-timing.json`,
@@ -820,6 +859,11 @@ try {
                 if (scenario.memory) {
                   await observationBrowser.close();
                 }
+              }
+              // Capture/cleanup can also fail after the scenario assertions pass.
+              if (observation.status === "passed" && cpuProfile) {
+                cpuCensus.add(`${viewport.name}/${scenario.id}/bundle-${bundle}`, cpuProfile);
+                await writeJson("cpu-census.json", cpuCensus.report());
               }
               observations.push(observation);
               await writeJson(`${artifactPrefix}.json`, observation);
