@@ -268,7 +268,10 @@ it.each([
       try {
         await service.stop();
         for (const owner of services) {
-          assert(owner.apiVersion === 2, "Expected service API version 2");
+          assert(
+            owner.apiVersion !== 2 && owner.apiVersion !== 3,
+            "Expected service API version 1",
+          );
           await owner.stop?.({
             config: support.testState.config,
             stateDir: support.testState.root,

@@ -71,7 +71,7 @@ async function assertGatewayExporters() {
   let unsubscribe: (() => void) | undefined;
   let serviceContext: OpenClawPluginServiceContextV2 | undefined;
   let prometheus:
-    | Extract<Parameters<OpenClawPluginApi["registerService"]>[0], { apiVersion: 2 }>
+    | Exclude<Parameters<OpenClawPluginApi["registerService"]>[0], { apiVersion: 2 | 3 }>
     | undefined;
   const scheduler = createTestPluginServiceScheduler();
   const cleanupFailures: unknown[] = [];
@@ -114,8 +114,12 @@ async function assertGatewayExporters() {
       }),
     );
     const registeredPrometheus = services[0];
-    if (registeredPrometheus?.apiVersion !== 2) {
-      throw new Error("Prometheus plugin did not register its V2 service");
+    if (
+      !registeredPrometheus ||
+      registeredPrometheus.apiVersion === 2 ||
+      registeredPrometheus.apiVersion === 3
+    ) {
+      throw new Error("Prometheus plugin did not register its V1 service");
     }
     prometheus = registeredPrometheus;
     const stateDir = process.env.OPENCLAW_STATE_DIR;

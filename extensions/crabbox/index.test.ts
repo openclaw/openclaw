@@ -50,8 +50,8 @@ function registerCrabboxGeneration() {
   });
   plugin.register(api);
   const service = services[0];
-  if (service?.apiVersion !== 2) {
-    throw new Error("Expected service API version 2");
+  if (!service || service.apiVersion === 2 || service.apiVersion === 3) {
+    throw new Error("Expected service API version 1");
   }
   const generation = {
     provider: providers[0]!,

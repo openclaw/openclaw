@@ -1,3 +1,3 @@
-793
+808
 # Accepted service-work admission, current-source revocation, scheduler isolation, and V3 lifecycle regressions.
 # Includes explicit version guards in legacy V1/V2 service fixtures after widening the registration union.

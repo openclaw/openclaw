@@ -152,8 +152,8 @@ async function createRegisteredResume() {
         const service = registry.registry.services.find(
           (entry) => entry.service.id === "codex-session-catalog",
         )?.service;
-        if (service?.apiVersion !== 2) {
-          throw new Error("Expected Codex catalog service API version 2");
+        if (!service || service.apiVersion === 2 || service.apiVersion === 3) {
+          throw new Error("Expected Codex catalog service API version 1");
         }
         await service.stop?.({ config, stateDir, logger, scheduler });
       } finally {

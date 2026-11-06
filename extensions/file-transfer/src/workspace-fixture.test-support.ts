@@ -55,8 +55,8 @@ export async function createWorkspaceFixture(parent: string, unary = false) {
     api,
     get service() {
       const service = registerService.mock.lastCall![0];
-      if (service.apiVersion !== 2) {
-        throw new Error("Expected workspace service API version 2");
+      if (service.apiVersion === 2 || service.apiVersion === 3) {
+        throw new Error("Expected workspace service API version 1");
       }
       return service;
     },

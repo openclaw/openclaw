@@ -86,8 +86,8 @@ describe("Crabbox runtime preflight cleanup", () => {
     scheduler.beginClose();
     try {
       for (const service of pluginServices.splice(0)) {
-        if (service?.apiVersion !== 2) {
-          throw new Error("Expected service API version 2");
+        if (!service || service.apiVersion === 2 || service.apiVersion === 3) {
+          throw new Error("Expected service API version 1");
         }
         await service.stop?.({
           scheduler,
