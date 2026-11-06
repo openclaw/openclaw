@@ -13910,3 +13910,34 @@ describe("extension lint PR admission", () => {
     },
   );
 });
+
+it.each([
+  { paths: ["skills/model-usage/scripts/model_usage.py"], expected: ["skills/model-usage"] },
+  { paths: ["skills/skill-creator/scripts/quick_validate.py"], expected: ["skills/skill-creator"] },
+  {
+    paths: [
+      "skills/model-usage/scripts/model_usage.py",
+      "skills/skill-creator/scripts/quick_validate.py",
+    ],
+    expected: ["skills/model-usage", "skills/skill-creator"],
+  },
+  { paths: ["skills/pyproject.toml"], expected: ["skills"] },
+  { paths: ["skills/unknown/scripts/module.py"], expected: ["skills"] },
+  { paths: ["skills/model-usage/scripts/missing.py"], expected: ["skills"], missing: true },
+  {
+    paths: ["skills/model-usage/scripts/model_usage.py", "scripts/example.mjs"],
+    expected: ["skills"],
+  },
+  { paths: ["skills/model-usage/scripts/model_usage.py"], expected: ["skills"], full: true },
+  { paths: null, expected: ["skills"], full: true },
+])("routes Python checks to $expected", ({ paths, expected, full = false, missing = false }) => {
+  const result = runCiManifestFixture({
+    bundledPlanner: true,
+    eventName: full ? "schedule" : "pull_request",
+    changedPaths: paths,
+    targetFiles: missing ? [] : (paths ?? []),
+    scopeEnv: { OPENCLAW_CI_RUN_SKILLS_PYTHON: "true" },
+  });
+  expect(result.status, result.output).toBe(0);
+  expect(readJsonOutput(result.outputs, "skills_python_targets_json")).toEqual(expected);
+});

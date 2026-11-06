@@ -134,6 +134,7 @@ export function installWarmReloadBrowserProbe(
     contextRingFrames: [] as Array<{
       atMs: number;
       composer: { x: number; y: number; width: number; height: number };
+      controls: Array<{ selector: string; x: number; width: number; text: string }>;
       ring: {
         label: string | null;
         opacity: string;
@@ -559,6 +560,33 @@ export function installWarmReloadBrowserProbe(
         const ringBox = ring?.getBoundingClientRect();
         const state = {
           composer: { x: box.x, y: box.y, width: box.width, height: box.height },
+          controls: [
+            ".agent-chat__composer-lead",
+            ".agent-chat__composer-trail",
+            ".agent-chat__composer-controls",
+            ".context-usage",
+            "[data-chat-model-select]",
+            "[data-chat-thinking-select]",
+            "[data-chat-permission-select]",
+            ".agent-chat__composer-actions",
+            ".agent-chat__input-btn--attach",
+            ".chat-send-btn--voice",
+            ".chat-send-btn--stop",
+            ".chat-send-btn--send",
+          ].flatMap((selector) => {
+            const element = composer.querySelector(selector);
+            const rect = element?.getBoundingClientRect();
+            return element && rect?.width
+              ? [
+                  {
+                    selector,
+                    x: rect.x,
+                    width: rect.width,
+                    text: element.textContent?.trim() ?? "",
+                  },
+                ]
+              : [];
+          }),
           ring:
             ring && ringBox
               ? {
