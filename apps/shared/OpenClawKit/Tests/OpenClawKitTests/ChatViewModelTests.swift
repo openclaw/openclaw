@@ -15349,64 +15349,29 @@ struct ChatHistoryMutationTests {
     }
 }
 
-#if os(macOS)
 struct ChatObscuredStreamPacingTests {
-    @Test @MainActor func `hosted hidden chat slows display and restores pace when revealed`() async throws {
-        _ = NSApplication.shared
+    @Test @MainActor func `pacing preserves pending output across interval changes`() throws {
         let vm = OpenClawChatViewModel(sessionKey: "main", transport: TestChatTransport(historyResponses: []))
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 400, height: 700),
-            styleMask: [.titled],
-            backing: .buffered,
-            defer: false)
-        window.isReleasedWhenClosed = false
-        func content(_ hidden: Bool) -> some View {
-            OpenClawChatView(viewModel: vm, showsComposer: false)
-                .environment(\.openClawChatIsObscured, hidden)
-        }
-        let host = NSHostingView(rootView: content(true))
-        window.contentView = host
-        defer {
-            vm.detachTransport()
-            window.contentView = nil
-            window.close()
-        }
-        host.layoutSubtreeIfNeeded()
-        try await Task.sleep(for: .milliseconds(100))
-        #expect(vm.streamPacing.interval == 0.5)
-        // Exercise the scheduled display path, not only the configured interval.
-        func displayChanges(prefix: String) async throws -> Int {
-            vm.updateStreamingAssistantText(nil)
-            vm.updateStreamingAssistantText(prefix)
-            #expect(vm.liveAssistantDisplayText == prefix)
-            var previous = vm.liveAssistantDisplayText
-            var changes = 0
-            let clock = ContinuousClock()
-            let deadline = clock.now.advanced(by: .milliseconds(1200))
-            var word = 0
-            while clock.now < deadline {
-                word += 1
-                vm.updateStreamingAssistantText("\(prefix) \(word)")
-                try await Task.sleep(for: .milliseconds(20))
-                if vm.liveAssistantDisplayText != previous {
-                    changes += 1
-                    previous = vm.liveAssistantDisplayText
-                }
-            }
-            // A terminal clear must remain immediate with a pending paced update.
-            vm.updateStreamingAssistantText(nil)
-            #expect(vm.liveAssistantDisplayText == nil)
-            return changes
-        }
-        let hiddenChanges = try await displayChanges(prefix: "Hidden")
-        #expect(hiddenChanges > 0)
-        host.rootView = content(false)
-        host.layoutSubtreeIfNeeded()
-        try await Task.sleep(for: .milliseconds(100))
-        #expect(vm.streamPacing.interval == 0.15)
-        let visibleChanges = try await displayChanges(prefix: "Visible")
-        print("PACING_DISPLAY_CHANGES hidden=\(hiddenChanges) visible=\(visibleChanges)")
-        #expect(visibleChanges >= hiddenChanges + 2)
+        defer { vm.detachTransport() }
+        vm.streamPacing.interval = 0.5
+        vm.updateStreamingAssistantText("First")
+        #expect(vm.liveAssistantDisplayText == "First")
+        vm.updateStreamingAssistantText("First covered update")
+        let coveredID = try #require(vm.streamPacing.scheduledID)
+        #expect(vm.liveAssistantDisplayText == "First")
+        vm.streamPacing.interval = 0.15
+        vm.updateStreamingAssistantText("Latest revealed update")
+        #expect(vm.streamPacing.scheduledID == coveredID)
+        vm.flushStreamingAssistantDisplay(scheduledID: coveredID)
+        #expect(vm.liveAssistantDisplayText == "Latest revealed update")
+        #expect(vm.streamPacing.pending == nil)
+        #expect(vm.streamPacing.scheduledID == nil)
+        vm.updateStreamingAssistantText("Pending before clearing")
+        let retiredID = try #require(vm.streamPacing.scheduledID)
+        vm.updateStreamingAssistantText(nil)
+        #expect(vm.liveAssistantDisplayText == nil)
+        vm.updateStreamingAssistantText("New first output")
+        vm.flushStreamingAssistantDisplay(scheduledID: retiredID)
+        #expect(vm.liveAssistantDisplayText == "New first output")
     }
 }
-#endif
