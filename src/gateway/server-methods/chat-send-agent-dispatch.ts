@@ -215,8 +215,10 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
   } = createOperatorChatSendServerTiming(params);
   emitServerTiming("dispatch-started");
   const dispatchAdmission = {
-    run: <T>(operation: () => Promise<T>) =>
-      gatewayWorkAdmission.run(async () => {
+    run: async <T>(operation: () => Promise<T>) => {
+      using admissionWait = diagnostics.scope("detail.dispatch.admission_wait");
+      return await gatewayWorkAdmission.run(async () => {
+        admissionWait?.finish();
         // Durable input custody owns the ACK. Steering may wait behind an older
         // queued turn, so only detached dispatch joins that ordered admission.
         phase?.mark("replyContext");
@@ -229,6 +231,15 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
           userTurnRecorder,
           beginCapturedMessageInjection,
         );
+        void messageInjectionAttempt?.acceptance.then(
+          (accepted) => {
+            if (accepted) {
+              const change = { sessionKey, agentId, reason: "agent.input.steering" };
+              emitSessionsChanged(context, change, { accessChanged: false });
+            }
+          },
+          () => undefined,
+        );
         injectionPhase?.mark("detail.run_admission.steer_settlement");
         acceptedMessageInjection = await settleChatSendMessageInjection(messageInjectionAttempt);
         messageInjectionAttempt = await injectionDisposition.observe(messageInjectionAttempt);
@@ -236,7 +247,8 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
         return await (acceptedMessageInjection
           ? operation()
           : withCurrentUserTurnInput(userTurnRecorder, operation));
-      }),
+      });
+    },
   };
   const dashboardReadAdmission = assertDashboardReadCurrent
     ? {
@@ -279,7 +291,9 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
               context,
               session,
             });
+            using promptReadyWait = diagnostics.scope("detail.dispatch.workspace_prompt_ready");
             await workspacePreparation.promptReady;
+            promptReadyWait?.finish();
             workspacePreparation.assertCurrent();
           }
           const assertWorkspaceRunOwnership = workspacePreparation?.assertCurrent;
@@ -474,7 +488,13 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
                   ),
                 ),
             );
-          const runDispatch = () => runChatSendExternalDispatch(params, dispatchWithRetry);
+          const runDispatch = async () => {
+            using handoff = diagnostics.scope("detail.dispatch.external_handoff");
+            return await runChatSendExternalDispatch(params, () => {
+              handoff?.finish();
+              return dispatchWithRetry();
+            });
+          };
           // A ready workspace still needs a fresh scope: internal continuations may retain
           // the previous chat run's preparation even after its ownership has ended.
           const dispatchResult = await runWithAgentWorkspaceReadiness(
@@ -483,7 +503,12 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
               try {
                 return await runDispatch();
               } finally {
-                await workspacePreparation?.waitUntilReady();
+                if (workspacePreparation) {
+                  // Preparation overlaps execution; charge only the remaining readiness wait.
+                  using readinessWait = diagnostics.scope("detail.dispatch.workspace_readiness");
+                  await workspacePreparation.waitUntilReady();
+                  readinessWait?.finish();
+                }
               }
             },
           );

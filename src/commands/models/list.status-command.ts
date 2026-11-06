@@ -961,12 +961,11 @@ export async function modelsStatusCommand(
         2,
         "integer",
       );
-      const probeMaxTokens = parseProbeOption(
-        opts.probeMaxTokens,
-        "--probe-max-tokens",
-        8,
-        "integer",
-      );
+      // No default cap: a small cap leaves reasoning models with no visible reply.
+      const probeMaxTokens =
+        opts.probeMaxTokens === undefined || opts.probeMaxTokens === null
+          ? undefined
+          : parseProbeOption(opts.probeMaxTokens, "--probe-max-tokens", 1, "integer");
 
       let probeSummary: Awaited<ReturnType<typeof runAuthProbes>> | undefined;
       if (opts.probe) {

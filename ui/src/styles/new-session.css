@@ -40,6 +40,11 @@ openclaw-new-session-page,
   }
 }
 
+/* A new draft has no session title; keep its header's accessible group name. */
+.new-session-page .mobile-header__title-row {
+  display: none;
+}
+
 /* Chat's phone header holds these controls, so the page has nothing to clear. */
 .new-session-page--chat-header .new-session-page__scroll {
   padding-top: 0;
@@ -49,14 +54,7 @@ openclaw-new-session-page,
 .shell
   .new-session-page
   .mobile-header__capsule
-  :is(.new-session-page__draft-toggle--active, .new-session-page__incognito-toggle--active),
-.shell
-  .new-session-page
-  .mobile-header__capsule
-  :is(
-    .new-session-page__draft-toggle--active,
-    .new-session-page__incognito-toggle--active
-  ):hover:not(:disabled) {
+  :is(.new-session-page__draft-toggle--active, .new-session-page__incognito-toggle--active) {
   background: transparent;
   color: var(--accent);
 }
@@ -103,7 +101,8 @@ openclaw-new-session-page,
   color: var(--session-header-control-active-color);
 }
 
-:is(.new-session-page__draft-toggle-label, .new-session-page__incognito-toggle-label) {
+.new-session-page__draft-toggle-label,
+.new-session-page__incognito-toggle-label {
   font-size: 12px;
 }
 
@@ -347,7 +346,8 @@ span.new-session-page__select {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
 }
 
-.new-session-page__trigger:disabled {
+.new-session-page__trigger:disabled,
+.session-group-defaults__mode-trigger:disabled {
   cursor: default;
   opacity: 0.6;
 }
@@ -558,11 +558,6 @@ span.new-session-page__select {
   grid-template-columns: 18px minmax(0, 1fr) 14px;
   align-items: center;
   gap: 10px;
-}
-
-.session-group-defaults__mode-trigger:disabled {
-  cursor: default;
-  opacity: 0.6;
 }
 
 .session-group-defaults__mode-menu .session-group-defaults__mode-option {
@@ -957,7 +952,8 @@ span.new-session-page__select {
 }
 
 .new-session-page__browser-entry:hover,
-.new-session-page__browser-entry--active {
+.new-session-page__browser-entry--active,
+.new-session-page__connect-device:hover {
   background: var(--bg-hover);
 }
 
@@ -1203,18 +1199,11 @@ span.new-session-page__select {
   }
 
   .new-session-page__triggers {
-    display: flex;
     /* Content-sized controls keep labels beside their chevrons. Cap each
        picker at half a row so long names truncate before dense setups wrap. */
-    flex-wrap: wrap;
-    align-items: center;
     gap: 0 4px;
     width: calc(100% - 2 * var(--chat-mobile-edge-inset));
-    margin-inline: auto;
-    margin-block-end: 0;
     padding: 0 calc(var(--chat-composer-editor-inset-inline, 12px) - 6px);
-    border: 0;
-    background: transparent;
   }
 
   .new-session-page__trigger,
@@ -1292,7 +1281,8 @@ span.new-session-page__select {
     display: none;
   }
 
-  .new-session-page__trigger > .new-session-page__target-icon {
+  .new-session-page__trigger > .new-session-page__target-icon,
+  .new-session-page__trigger .cloud-profile-icon {
     flex-basis: 14px;
     width: 14px;
     height: 14px;
@@ -1300,12 +1290,6 @@ span.new-session-page__select {
 
   .new-session-page__trigger > .new-session-page__target-icon svg {
     flex: 0 0 14px;
-    width: 14px;
-    height: 14px;
-  }
-
-  .new-session-page__trigger .cloud-profile-icon {
-    flex-basis: 14px;
     width: 14px;
     height: 14px;
   }
@@ -1485,10 +1469,6 @@ span.new-session-page__select {
   opacity: 0.6;
 }
 
-.new-session-page__connect-device:hover {
-  background: var(--bg-hover);
-}
-
 .new-session-page__cloud-choice-list + .new-session-page__environment-heading {
   margin-top: 20px;
 }
@@ -1642,5 +1622,32 @@ span.new-session-page__select {
 @container new-session (max-width: 932px) and (max-height: 500px) {
   .oc-popover.new-session-page__incognito-note {
     width: min(280px, calc(100vw - 48px));
+  }
+}
+
+/* Keep catalog arrival inside the space between the fixed footer controls. */
+@container chat-composer (max-width: 560px) {
+  .new-session-page .agent-chat__composer-controls,
+  .new-session-page .chat-composer-model-control,
+  .new-session-page .chat-controls__model-picker {
+    flex: 1;
+  }
+
+  .new-session-page .agent-chat__composer-controls .chat-controls__model-trigger {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .new-session-page .chat-controls__trigger-provider-icon {
+    display: none;
+  }
+
+  .new-session-page .chat-controls__model-trigger .chat-controls__inline-select-label {
+    width: 0;
+    flex: 1;
+  }
+
+  .new-session-page .chat-controls__model-trigger--loading .chat-controls__inline-select-chevron {
+    visibility: hidden;
   }
 }

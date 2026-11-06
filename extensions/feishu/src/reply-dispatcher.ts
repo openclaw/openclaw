@@ -258,6 +258,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streaming: FeishuStreamingSession | null = null;
   let streamText = "";
   let lastPartial = "";
+  let previewText = "";
+  let previewBlockOffset = 0;
   let reasoningText = "";
   let statusLine = "";
   let modelWaitLine = "";
@@ -327,15 +329,28 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     if (!nextText) {
       return;
     }
-    if (nextText === lastPartial) {
+    if (mode === "snapshot" && nextText === lastPartial) {
       return;
     }
-    lastPartial = nextText;
     if (mode === "delta") {
+      // Consume completed blocks in preview order, never by suffix overlap.
+      let offset = previewBlockOffset;
+      // Sentence chunks can omit the gap retained in the cumulative preview.
+      if (!previewText.startsWith(nextText, offset)) {
+        while (/\s/u.test(previewText.charAt(offset))) {
+          offset++;
+        }
+      }
+      if (previewText.startsWith(nextText, offset)) {
+        previewBlockOffset = offset + nextText.length;
+        return;
+      }
       streamText = `${streamText}${nextText}`;
     } else {
+      previewText = nextText;
       streamText = `${snapshotBaseText}${nextText}`;
     }
+    lastPartial = nextText;
     flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
   };
 
@@ -1380,6 +1395,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             // source boundary so tool continuations cannot replace it.
             snapshotBaseText = streamText ? `${streamText}\n\n` : "";
             lastPartial = "";
+            previewText = "";
+            previewBlockOffset = 0;
             modelWaitLine = "";
             return updateStreamingStatusLine("", false);
           }

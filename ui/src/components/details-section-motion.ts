@@ -1,7 +1,4 @@
-export const DETAILS_SECTION_MOTION = {
-  duration: 300,
-  easing: "cubic-bezier(0.2, 1, 0.22, 1)",
-};
+import { DETAILS_SECTION_MOTION } from "./details-section-motion-options.ts";
 
 type DetailsSectionMotion = {
   from: { height: number; opacity: string; marginTop: string };

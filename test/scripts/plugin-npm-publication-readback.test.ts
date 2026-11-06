@@ -158,8 +158,12 @@ it("revalidates artifact identity after a transient metadata retry", async () =>
 
 it("verifies already-published registry bytes alongside qualified publishers in a mixed roster", async () => {
   const parent = await fixture("direct", "existing-package");
-  await expect(parent.verify("@openclaw/existing", version, "beta")).resolves.toBeUndefined();
-  await expect(parent.verify(packageName, version, "beta")).resolves.toBeUndefined();
+  await expect(parent.verify("@openclaw/existing", version, "beta")).resolves.toEqual({
+    disposition: "published",
+  });
+  await expect(parent.verify(packageName, version, "beta")).resolves.toEqual({
+    disposition: "published",
+  });
 });
 
 it.each([
@@ -170,7 +174,9 @@ it.each([
   "replanned-failed",
 ])("verifies exact qualified bytes through the %s producer binding", async (mode) => {
   const parent = await fixture(mode);
-  await expect(parent.verify(packageName, version, "beta")).resolves.toBeUndefined();
+  await expect(parent.verify(packageName, version, "beta")).resolves.toEqual({
+    disposition: "published",
+  });
   expect(parent.requests.filter((url) => url.endsWith(".tgz"))).toHaveLength(1);
   expect(parent.evidence).toMatchObject([
     {
@@ -210,9 +216,10 @@ it.each([
 it("verifies superseded registry bytes without inventing qualification receipts", async () => {
   const supersededBy = "2026.9.2-beta.2";
   const parent = await fixture("direct", "no-publish", supersededBy);
-  await expect(parent.verify(packageName, version, "beta")).resolves.toBe(
-    `${packageName}@${version} superseded by ${supersededBy}; dist-tag beta stays.`,
-  );
+  await expect(parent.verify(packageName, version, "beta")).resolves.toEqual({
+    disposition: "published",
+    note: `${packageName}@${version} superseded by ${supersededBy}; dist-tag beta stays.`,
+  });
   expect(parent.evidence).toMatchObject([
     {
       packageName,

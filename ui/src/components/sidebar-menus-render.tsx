@@ -46,7 +46,12 @@ import { canRetryGatewayStatus } from "./gateway-status.ts";
 import "../styles/sidebar-menus.css";
 import { sessionMenuReasons } from "./session-menu-access.ts";
 import { SessionMenu, type SessionMenuAction } from "./session-menu-solid.tsx";
-import { runSessionAction, runBatchSessionAction } from "./session-organizer-menu.runtime.ts";
+import {
+  createNestedSession,
+  isCreatingNestedSession,
+  runSessionAction,
+  runBatchSessionAction,
+} from "./session-organizer-menu.runtime.ts";
 import { moveSessionFromMenu, sessionPlacementAction } from "./session-placement-action.ts";
 import { isUpdateAttentionForced } from "./sidebar-attention-dismissals.ts";
 import { isReleaseUpdateAvailable } from "./sidebar-attention-update.ts";
@@ -441,12 +446,29 @@ function renderSidebarMenus(
             navigationAllowed={Boolean(context())}
             copyMarkdownAllowed={canCopySessionMarkdown(context()?.gateway.snapshot)}
             splitAllowed={canSplitSessionView()}
+            nestedSession={{
+              creating: isCreatingNestedSession(
+                view.sessionOrganizer,
+                context()?.gateway.snapshot.client,
+                session().key,
+              ),
+              // Forks and empty children share parent-scoped sessions.create admission.
+              disabledReason: actionDisabledReasons().fork,
+              onCreate: () => {
+                void createNestedSession(view.sessionOrganizer, session()).finally(() => {
+                  if (projected.sessionMenu === menu) {
+                    menus.closeSessionMenu();
+                  }
+                });
+              },
+            }}
             forkDisabled={view.sessionData.sessionsLoading || session().modelSelectionLocked}
             forkFromLastCompleted={session().gatewayHasActiveRun ?? session().hasActiveRun}
             snoozeAllowed={true}
             archiveAllowed={archiveAllowed()}
             deleteAllowed={deleteAllowed()}
             cloudWorkerStopAllowed={cloudWorkerStopAllowed()}
+            cloudWorkerStopLabel={t(cloudWorkerStopAction()?.copyKey ?? "sessionsView.stopWorker")}
             groups={view.knownSessionGroups()}
             currentOwner={session().owner?.actor ?? null}
             work={batchRows() ? null : projected.sessionMenuWork}
@@ -526,7 +548,7 @@ function renderSidebarMenus(
                       if (!actionSignal.aborted) {
                         showToast({
                           severity: "error",
-                          message: error instanceof Error ? error.message : String(error),
+                          message: formatUiError(error),
                         });
                       }
                     });

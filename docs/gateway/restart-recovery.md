@@ -14,13 +14,25 @@ ordinary system input asking the agent to inspect current state and continue.
 The transcript remains the agent's context; the Gateway does not reconstruct or
 replay the old execution.
 
+The recovery input stays intact in the agent transcript but is hidden from the
+Control UI chat feed, including queued, live, and reloaded history. The continued
+answer remains visible as its own turn. This is not the separate update outcome
+(`restart-sentinel`), which remains visible with any actionable failure guidance.
+
+Control UI status summaries use source-owned copy, not recovery/workflow
+instructions. Their complete summary (including its label) is one line of at most
+64 characters; oversized summaries retain their details behind a disclosure.
+This budget does not truncate agent prompts, ordinary messages, actionable update
+outcomes, or the existing expandable context notices.
+
 A crash or `SIGKILL` cannot write shutdown markers. Startup also recognizes the
 existing persisted nonterminal run identity when it has no live execution owner
 and its run started in the immediately preceding Gateway lifetime. The existing
 boot ledger supplies that lifetime's exact start and the next boot's start; session
-update times and arbitrary freshness timeouts do not authorize recovery. Any recorded
-shutdown completion uses its markers only. Markers in any agent store also prevent
-unmarked adoption if shutdown was interrupted before recording completion. Older orphaned runs are recorded as stopped for restart and are
+update times and arbitrary freshness timeouts do not authorize recovery. A successfully
+completed shutdown uses its markers only. A forced stop or incomplete shutdown also
+recovers unfinished runs from that predecessor, even when other stores have markers.
+Older orphaned runs are recorded as stopped for restart and are
 not resumed. Missing boot history also prevents unmarked recovery. Files, external
 actions, and tool effects may already have changed, so the agent checks them
 before repeating work.
@@ -74,13 +86,18 @@ IDs of accepted user inputs still queued behind that session at shutdown. The
 Gateway writes one marker per running root session, batched by session store,
 before aborting work. It uses the existing session-entry JSON in SQLite and needs
 no schema migration.
-Crash recovery uses the run identity already persisted by ordinary turn admission
-and cleared by terminal settlement, bounded by the recorded predecessor lifetime.
+Crash recovery uses the nonterminal run marker committed with accepted plain
+chat input, before dispatch hooks or runtime start. The same commit records its
+writer identity; terminal settlement clears the run marker. Recovery is bounded
+by the recorded predecessor lifetime. Command persistence
+records activity only; commands gain recovery markers when their runs start.
+Commands that become runs, such as `/goal` or skill rewrites, remain unprotected
+between input persistence and runtime start. A plain message that a hook ends
+without starting a run can retain its marker and be retried after a crash.
 The same startup metadata read discovers both sources; there are no extra restart checkpoints or execution reconstruction.
 
 Startup recovers marked sessions in ready stores immediately. Before adopting
-unmarked crash work, it joins existing agent preparation to establish that no
-store has shutdown markers. Failed preparation disables unmarked adoption.
+unmarked crash work, it joins existing agent preparation. Failed preparation disables unmarked adoption.
 If a store is still undergoing
 inspection and preparation, its existing startup owner discovers retained work
 before admitting fresh inputs. Recovery runs after database preparation ends,
@@ -94,13 +111,21 @@ own input readiness pending until its retained inputs are admitted. This also
 applies when several logical agents share the same physical store. Database
 reads and writes retain their normal admission rules; recovery does not borrow
 startup's temporary database access or wait for model executions to finish.
+Crash recovery waits for preparation to settle without an interactive request
+deadline. Slow preparation does not disqualify interrupted work; failed preparation
+still prevents unmarked adoption and reports the normal admission diagnostics.
+This requires the updated Gateway, with no marker or schema migration.
 
 <a id="graceful-restarts-drain-first" />
 
 ## Graceful shutdown
 
 Once a stop or restart is committed, the Gateway fences new admission, snapshots
-running sessions, writes their markers, and aborts active runs. It joins accepted
+running sessions, writes their markers across independent stores in parallel, and aborts active runs. Marker persistence and subagent settlement each receive at most ten seconds within
+the existing shutdown deadline. Root cancellation does not wait for subagent settlement.
+If marker persistence times out, each eligible root's restart cancellation records
+resume intent in its existing terminal write. Runs that never finish that write remain
+eligible through the predecessor's persisted nonterminal identity. It joins accepted
 persistence before retiring state and gives other resource cleanup a bounded
 grace. A long model stream, tool call, or background process does not get
 a full run-completion drain before shutdown.

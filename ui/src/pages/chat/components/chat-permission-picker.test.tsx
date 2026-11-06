@@ -198,7 +198,7 @@ it("preserves option content on unrelated refreshes while admitting permission c
   flush();
   expect(container.querySelector('[data-chat-permission-option="default"]')).toBe(row);
   expect(row.textContent).toContain("Agent default");
-  expect(row.textContent).toContain("Uses this agent's settings.");
+  expect(row.textContent).toContain("Uses this agent’s settings.");
   expect(row.getAttribute("aria-checked")).toBe("false");
   expect(row.getAttribute("aria-label")).toBe("Agent default (Ask me)");
   expect(container.querySelector('[data-chat-permission-option="guarded"]')?.textContent).toContain(

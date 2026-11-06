@@ -341,7 +341,7 @@ async function providerFixture(signal: AbortSignal) {
 }
 
 it.skipIf(process.platform === "win32")(
-  "resumes only the interrupted predecessor after SIGKILL and marked sessions after partial shutdown",
+  "resumes the interrupted predecessor after SIGKILL and incomplete shutdown marking",
   { timeout: 180_000 },
   async ({ signal, onTestFailed }) => {
     const proofStartedAt = performance.now();
@@ -539,9 +539,9 @@ it.skipIf(process.platform === "win32")(
           unmarkedKey,
         )?.startedAt;
         assert(typeof unmarkedStartedAt === "number");
-        // A persisted marker owns recovery across stores even when shutdown never records completion.
+        // Partial marking must not hide unfinished work from this predecessor in another store.
         const olderPartialRun = await seedUnfinished(staleKey, staleStartedAt);
-        const unmarkedRun = await seedUnfinished(unmarkedKey, unmarkedStartedAt);
+        await seedUnfinished(unmarkedKey, unmarkedStartedAt);
         provider.restart();
         phase = "partial-shutdown startup";
         await instance.startGateway();
@@ -552,24 +552,24 @@ it.skipIf(process.platform === "win32")(
         provider.release(1);
         phase = "partial-shutdown final reply";
         await waitFinal(partialKey, "RESUMED_1_stream");
+        await waitFinal(unmarkedKey, "RESUMED_10_idle");
         elapsedMs.thirdResumeCompleted = Math.round(performance.now() - proofStartedAt);
         phase = "partial-shutdown history and settlement";
-        for (const targetKey of [staleKey, unmarkedKey]) {
-          expect(JSON.stringify((await history(targetKey)).messages)).not.toContain(RESUME);
-        }
+        expect(JSON.stringify((await history(staleKey)).messages)).not.toContain(RESUME);
         expect(
           provider.calls
             .filter((call) => call.resumeInput)
-            .map(({ cycle, name }) => ({ cycle, name })),
+            .map(({ cycle, name }) => ({ cycle, name }))
+            .toSorted((left, right) => left.cycle - right.cycle),
         ).toEqual([
           { cycle: 0, name: "stream" },
           { cycle: 1, name: "stream" },
+          { cycle: 10, name: "idle" },
         ]);
         await client.stopAndWait();
         client = undefined;
         await instance.stopGateway();
         expectSettled(staleKey, olderPartialRun);
-        expectSettled(unmarkedKey, unmarkedRun);
         process.stdout.write(`[restart-resume-proof] elapsedMs=${JSON.stringify(elapsedMs)}\n`);
       },
       () => client?.stopAndWait(),

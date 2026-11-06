@@ -50,6 +50,7 @@ export type PluginCatalogDetailProps = {
   onBack: () => void;
   onRetry: () => void;
   canInstall: boolean;
+  installTitle?: string;
   installBlockedReason: string | null;
   onInstall: () => void;
   iconUrls: Readonly<Record<string, string>>;
@@ -125,6 +126,7 @@ function CatalogDetailContent(props: {
                 onButtonRef={(element) => (installButton = element)}
                 buttonClass="btn oc-action plugin-catalog-detail__install"
                 primary
+                title={props.state.installTitle}
                 disabled={!props.state.canInstall}
                 busy={Boolean(props.state.busy)}
                 progress={props.state.installProgress}

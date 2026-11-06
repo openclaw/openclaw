@@ -594,7 +594,8 @@ public final class OpenClawChatViewModel {
                     return
                 }
                 await MainActor.run { [weak self] in
-                    self?.handleTransportEvent(evt)
+                    guard let self else { return }
+                    self.handleTransportEvent(evt)
                 }
             }
         }
