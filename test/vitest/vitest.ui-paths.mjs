@@ -91,6 +91,7 @@ export const uiNodeDrivenBrowserTestFiles = [
   "ui/src/styles/cursor-policy.browser.test.ts",
   "ui/src/styles/chat-file-link-presentation.browser.test.ts",
   "ui/src/styles/shimmer.browser.test.ts",
+  "ui/src/styles/reduced-motion.browser.test.ts",
   "ui/src/styles/incognito-shade.browser.test.ts",
   "ui/src/styles/forced-colors-indicators.browser.test.ts",
   "ui/src/styles/sr-only.browser.test.ts",
