@@ -111,31 +111,26 @@ export async function verifyEngineIdleClocks(page: Page, gateway: MockGatewayCon
       throw new Error("Clock fixture has no start time");
     }
     await clock.scrollIntoViewIfNeeded();
-    // The shared clock may be up to one tick old; a 30-second frozen label cannot pass.
-    await clock.evaluate(
-      (element, startedAt) =>
-        new Promise<void>((resolve, reject) => {
-          const deadline = performance.now() + 3_000;
-          const check = () => {
-            const elapsed = Math.max(1, Math.round((Date.now() - startedAt) / 1_000));
-            const read = element.textContent?.trim() ?? "";
-            const seconds = [...read.matchAll(/(\d+)\s*([hms])/gu)].reduce(
-              (total, match) =>
-                total + Number(match[1]) * (match[2] === "h" ? 3600 : match[2] === "m" ? 60 : 1),
-              0,
-            );
-            if (Math.abs(seconds - elapsed) <= 2) {
-              resolve();
-            } else if (performance.now() >= deadline) {
-              reject(new Error(`Clock did not catch up: ${read}; expected ${elapsed}s`));
-            } else {
-              setTimeout(check, 100);
-            }
-          };
-          check();
-        }),
-      start,
-    );
+    // Compare at the formatter's precision: hour-long runs omit seconds.
+    const deadline = Date.now() + 3_000;
+    for (;;) {
+      const { label, now } = await clock.evaluate((element) => ({
+        label: element.textContent?.trim() ?? "",
+        now: Date.now(),
+      }));
+      const expected = [-2_000, -1_000, 0, 1_000, 2_000].map((offset) =>
+        formatDurationParts(resolveCompactDurationParts(Math.max(1_000, now - start + offset))!),
+      );
+      if (expected.includes(label)) {
+        break;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`Clock did not catch up: ${label}; expected ${expected[2]}`);
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 100);
+      });
+    }
     checked.push({
       key,
       label: await clock.textContent(),
