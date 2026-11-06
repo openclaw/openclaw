@@ -420,32 +420,6 @@ async function newProofContext() {
 }
 
 suite.define(() => {
-  it("restores expired inline content on return without replaying the tool", async (context) => {
-    await suite.runScenario(context, {
-      run: async () => {
-        const browser = await newProofContext();
-        const page = await browser.newPage();
-        await mountHost(page);
-        const app = await findAppFrame(page);
-        await waitForTextContaining(app.locator("#result"), "initial-result");
-        await capture(page, "expiry-before-live");
-        // Controlled lease deadline; production keeps its ten-minute TTL.
-        viewLease().expiresAtMs = Date.now() - 1;
-        expect(getMcpAppViewLease(viewId, runtime)).toBeUndefined();
-        await mountHost(page);
-        await expect
-          .poll(() => page.locator("mcp-app-view").textContent())
-          .toContain("Send a message to interact again");
-        await capture(page, "expiry-before-return");
-        const calls = (await fixture.readEvents()).filter(
-          (event) => event.method === "tools/call" && event.tool === "show",
-        );
-        expect(calls).toHaveLength(1);
-        await browser.close();
-        console.log("MCP expiry proof:", proofDir);
-      },
-    });
-  });
   it("drives the authenticated Control UI and ticketed standalone bridges", async (context) => {
     await suite.runScenario(context, {
       run: async (signal) => {
@@ -825,4 +799,41 @@ suite.define(() => {
       },
     });
   }, 240_000);
+
+  it("restores expired inline content on return without replaying the tool", async (context) => {
+    await suite.runScenario(context, {
+      run: async () => {
+        await configureImmediate("expiry-restoration");
+        viewId = await showFixture("expiry-restoration-call");
+        const browser = await newProofContext();
+        const page = await browser.newPage();
+        await mountHost(page);
+        const app = await findAppFrame(page);
+        await waitForTextContaining(app.locator("#result"), "initial-result");
+        await waitForText(app.locator("#checkpoint"), "synthetic-checkpoint");
+        await capture(page, "expiry-live");
+        // Controlled lease deadline; production keeps its ten-minute TTL.
+        viewLease().expiresAtMs = Date.now() - 1;
+        expect(getMcpAppViewLease(viewId, runtime)).toBeUndefined();
+        await mountHost(page);
+        await expect
+          .poll(() => page.locator("mcp-app-view").textContent())
+          .toContain("Send a message to interact again");
+        const returnedApp = await findAppFrame(page);
+        await waitForTextContaining(returnedApp.locator("#result"), "initial-result");
+        await waitForText(returnedApp.locator("#checkpoint"), "synthetic-checkpoint");
+        await capture(page, "expiry-restored");
+        const calls = (await fixture.readEvents()).filter(
+          (event) =>
+            event.event === "incoming" &&
+            event.method === "tools/call" &&
+            event.tool === "show" &&
+            event.scenario === "expiry-restoration",
+        );
+        expect(calls).toHaveLength(1);
+        await browser.close();
+        console.log("MCP expiry proof:", proofDir);
+      },
+    });
+  });
 });

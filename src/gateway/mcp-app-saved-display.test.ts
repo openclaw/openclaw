@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { staticRuntime } from "../agents/agent-bundle-mcp-fixture.test-support.js";
 import {
   buildMcpAppCanvasPayload,
@@ -9,17 +10,26 @@ import {
 import { testing } from "../agents/mcp-ui-resource.test-support.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
-import { createSessionEntryWithTranscript } from "../config/sessions/session-accessor.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  createSessionEntryWithTranscript,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { acquireSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import {
   runWithSessionActorStorage,
   type SelectedSessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.paths.js";
+import { useUserProfileCatalogForTest } from "../test-utils/user-profile-catalog.js";
+import { mcpAppHandlers } from "./server-methods/mcp-app.js";
+import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
+import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 import { useTranscriptFixture } from "./session-transcript-fixtures.test-support.js";
 import {
   readSessionMessagesAsync,
@@ -28,6 +38,7 @@ import {
 
 describe("saved MCP App display", () => {
   const fixture = useTranscriptFixture("mcp-app-saved-display-");
+  const prepareProfiles = useUserProfileCatalogForTest();
   const bindings: SelectedSessionActorStorageBinding[] = [];
   afterEach(async () => {
     testing.clearViewStore();
@@ -53,6 +64,19 @@ describe("saved MCP App display", () => {
           : resolveOpenClawAgentSqlitePath)({ agentId: "main", env }),
         env,
       };
+      if (storage === "durable") {
+        await prepareProfiles();
+      }
+      const alice = storage === "durable" ? roleClient("view", "saved-display-alice") : undefined;
+      const bob = storage === "durable" ? roleClient("view", "saved-display-bob") : undefined;
+      const requesterId = alice?.authenticatedUserProfile!.profileId ?? "alice";
+      const cfg: OpenClawConfig = {
+        ...rolePolicyConfig(),
+        session: { store: scope.storePath },
+        agents: { entries: { main: {} } },
+        mcp: { apps: { enabled: true } },
+      };
+      setRuntimeConfigSnapshot(cfg);
       const authority = { assertCurrent() {}, authorize() {} };
       const consume = async (run: () => Promise<void>) => {
         if (storage === "durable") {
@@ -61,7 +85,12 @@ describe("saved MCP App display", () => {
               scope,
               () => ({
                 ok: true,
-                entry: { sessionId: scope.sessionId, updatedAt: 1 },
+                entry: {
+                  sessionId: scope.sessionId,
+                  updatedAt: 1,
+                  visibility: "shared",
+                  createdActor: { type: "human", source: "profile", id: requesterId },
+                },
               }),
               { cwd: "/tmp" },
             ),
@@ -100,6 +129,7 @@ describe("saved MCP App display", () => {
           ...scope,
           workspaceDir: "/tmp",
           configFingerprint: "saved",
+          mcpAppsEnabled: true,
           readResource,
           callTool,
           getCatalog: async () => ({ version: 1, generatedAt: 0, servers: {}, tools: [] }),
@@ -118,7 +148,7 @@ describe("saved MCP App display", () => {
           toolCallId: "call-1",
           toolInput: { city: "Paris" },
           toolResult,
-          requesterId: "alice",
+          requesterId,
         });
         assert(descriptor);
         const manager = await SessionManager.openAsync(scope, "/tmp");
@@ -167,7 +197,7 @@ describe("saved MCP App display", () => {
         assert(data?.savedDisplay, "live-admitted display must survive durable selection");
         expect(data.savedDisplay).toMatchObject({
           html,
-          requesterId: "alice",
+          requesterId,
           toolResult,
         });
         const restored = await fetchMcpAppView({
@@ -186,7 +216,7 @@ describe("saved MCP App display", () => {
           html,
           toolResult,
           readOnly: true,
-          requesterId: "alice",
+          requesterId,
         });
         expect(readResource).toHaveBeenCalledTimes(1);
         expect(callTool).not.toHaveBeenCalled();
@@ -203,6 +233,63 @@ describe("saved MCP App display", () => {
           expect(JSON.stringify(projection)).not.toContain("private-synthetic-checkpoint");
           expect(JSON.stringify(projection)).not.toContain("Saved diagram");
           expect(JSON.stringify(projection)).toContain("created once");
+        }
+        if (alice && bob) {
+          // Exercise the final Gateway payload boundary with real session/profile
+          // authority. The MCP transport alone is synthetic, as above.
+          const invoke = async (
+            client = alice,
+            sandbox: () => Promise<number> = async () => 18790,
+          ) => {
+            const respond = vi.fn<RespondFn>();
+            await mcpAppHandlers["mcp.app.view"]!({
+              params: { sessionKey: scope.sessionKey, viewId: restored.viewId },
+              req: { type: "req", id: "saved-display", method: "mcp.app.view" },
+              isWebchatConnect: () => true,
+              client,
+              respond,
+              context: {
+                getRuntimeConfig: () => cfg,
+                ensureSandboxHostPort: sandbox,
+              } as GatewayRequestContext,
+            });
+            return respond;
+          };
+          const allowed = await invoke();
+          expect(allowed.mock.calls[0]).toMatchObject([
+            true,
+            { html, toolResult, messageSupported: false },
+          ]);
+          const denied = await invoke(bob);
+          expect(denied.mock.calls[0]?.[0]).toBe(false);
+          expect(denied.mock.calls[0]?.[1]).toBeUndefined();
+          for (const change of ["requester revoked", "session reassigned"]) {
+            const entered = createDeferred();
+            const release = createDeferred<number>();
+            const pending = invoke(alice, () => {
+              entered.resolve();
+              return release.promise;
+            });
+            try {
+              await Promise.race([
+                entered.promise,
+                pending.then(() => {
+                  throw new Error("View settled before final-disclosure gate");
+                }),
+              ]);
+              if (change === "requester revoked") {
+                alice.invalidated = true;
+              } else {
+                await upsertSessionEntryCore(scope, { sessionId: "replacement-session" });
+              }
+            } finally {
+              release.resolve(18790);
+            }
+            const rejected = await pending;
+            expect(rejected.mock.calls[0]?.[0], change).toBe(false);
+            expect(rejected.mock.calls[0]?.[1], change).toBeUndefined();
+            alice.invalidated = false;
+          }
         }
       });
     },

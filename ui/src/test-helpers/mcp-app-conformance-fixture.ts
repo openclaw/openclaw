@@ -332,6 +332,7 @@ export function appHtml(appModuleUrl: string): string {
 <output id="tools"></output>
 <output id="input"></output>
 <output id="result"></output>
+<output id="checkpoint"></output>
 <output id="app-tool"></output>
 <output id="model-tool"></output>
 <output id="resource"></output>
@@ -366,7 +367,10 @@ const applyHostContext = () => {
 };
 app.onhostcontextchanged = applyHostContext;
 app.ontoolinput = ({ arguments: args }) => write("input", JSON.stringify(args ?? {}));
-app.ontoolresult = (value) => write("result", JSON.stringify(value.structuredContent ?? value));
+app.ontoolresult = (value) => {
+  write("result", JSON.stringify(value.structuredContent ?? value));
+  write("checkpoint", value._meta?.checkpoint ?? "missing");
+};
 app.onteardown = async () => {
   write("teardown", "received");
   console.info("mcp-conformance-teardown-received");
