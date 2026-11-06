@@ -11,7 +11,7 @@ import type { EngineScenario } from "./control-ui-engine-boot-scenarios.ts";
 import { frames } from "./control-ui-interaction-navigation.ts";
 
 /** A working day's churn in one document, sampled at the same parked route. */
-function workingDayScenario(rounds: number): EngineScenario {
+export function workingDayScenario(rounds: number): EngineScenario {
   const keys = Array.from({ length: 200 }, (_, index) =>
     index === 0 ? parityBaseScenario.sessionKey! : `agent:main:soak-${index}`,
   );
@@ -163,8 +163,8 @@ function workingDayScenario(rounds: number): EngineScenario {
           }
         }
         await page.locator(".chat-pane-cache__pane--active [data-chat-model-select]").click();
-        const search = page.locator("[data-chat-model-search]");
-        await search.fill("Model 3");
+        const search = page.locator(".chat-pane-cache__pane--active [data-chat-model-search]");
+        await search.fill("3");
         await search.press("Escape");
         await expect(search).toHaveValue("");
         await search.press("Escape");
