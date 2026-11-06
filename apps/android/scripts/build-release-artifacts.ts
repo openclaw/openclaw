@@ -225,12 +225,6 @@ function pinnedApkCertificateSha256(): string {
 function releaseArtifacts(versionName: string): ReleaseArtifact[] {
   return [
     {
-      flavorName: "wear",
-      kind: "aab",
-      gradleTask: ":wear:bundleRelease",
-      sourcePath: join(androidDir, "wear", "build", "outputs", "bundle", "release", "wear-release.aab"),
-    },
-    {
       flavorName: "play",
       kind: "aab",
       gradleTask: ":app:bundlePlayRelease",
@@ -243,6 +237,12 @@ function releaseArtifacts(versionName: string): ReleaseArtifact[] {
         "playRelease",
         "app-play-release.aab",
       ),
+    },
+    {
+      flavorName: "wear",
+      kind: "aab",
+      gradleTask: ":wear:bundleRelease",
+      sourcePath: join(androidDir, "wear", "build", "outputs", "bundle", "release", "wear-release.aab"),
     },
     {
       flavorName: "third-party",

@@ -1,6 +1,6 @@
 name: Android Emulator Diagnostic
 
-run-name: Android ${{ inputs.operation == 'screenshots' && 'screenshots' || 'emulator' }} diagnostic (${{ inputs.target_sha }})
+run-name: Android ${{ inputs.operation == 'bundle-order-benchmark' && 'bundle ordering' || inputs.operation == 'screenshots' && 'screenshots' || 'emulator' }} diagnostic (${{ inputs.target_sha }})
 
 on:
   workflow_dispatch:
@@ -13,6 +13,7 @@ on:
         options:
           - boot
           - screenshots
+          - bundle-order-benchmark
       target_sha:
         description: Exact lowercase 40-character commit SHA to diagnose
         required: true
@@ -23,6 +24,7 @@ permissions:
 
 jobs:
   validate-target:
+    if: inputs.operation != 'bundle-order-benchmark'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -705,4 +707,89 @@ jobs:
         with:
           name: android-emulator-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/android-emulator-diagnostic
+          retention-days: 7
+
+  bundle-order-benchmark:
+    if: inputs.operation == 'bundle-order-benchmark'
+    permissions:
+      contents: read
+    name: Bundle ordering pair ${{ matrix.pair }} (${{ matrix.first }} first)
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 25
+    concurrency:
+      group: android-bundle-order-benchmark
+      cancel-in-progress: false
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        include:
+          - pair: "01"
+            first: wear
+          - pair: "02"
+            first: phone
+          - pair: "03"
+            first: wear
+          - pair: "04"
+            first: phone
+          - pair: "05"
+            first: wear
+    steps:
+      - name: Verify frozen source selection
+        shell: bash
+        env:
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: test "$TARGET_SHA" = f99d785d2ac6269b37a1c88eb8d5ef2283b76b99
+
+      - name: Checkout benchmark tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+          install-bun: "true"
+          install-deps: "false"
+          node-version: "24.22.1"
+
+      - name: Setup identical release Android toolchain
+        id: android-toolchain
+        uses: ./.github/actions/setup-android-toolchain
+        with:
+          cache-mode: off
+          gradle-cache-mode: restore
+          install-screenshot-emulators: "false"
+
+      - name: Checkout identical release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: f99d785d2ac6269b37a1c88eb8d5ef2283b76b99
+          path: candidate
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install identical mobile release dependencies
+        working-directory: candidate
+        run: node scripts/install-mobile-release-dependencies.mjs
+
+      - name: Compare bundle ordering without publishing
+        env:
+          JAVA_HOME: ${{ steps.android-toolchain.outputs.gradle-java-home }}
+        run: >-
+          node scripts/bench-android-bundle-order.mjs
+          --source candidate
+          --first "${{ matrix.first }}"
+          --output ".build/android-bundle-order/${{ matrix.pair }}"
+
+      - name: Retain sanitized timing and resource proof
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-bundle-order-${{ matrix.pair }}-${{ github.run_id }}
+          path: .build/android-bundle-order/${{ matrix.pair }}/**
+          if-no-files-found: error
           retention-days: 7
