@@ -8,6 +8,7 @@ import { Client, SdkError, SdkErrorCode } from "@modelcontextprotocol/client";
 import { EmptyResultSchema, JSONRPCRequestSchema } from "@modelcontextprotocol/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import * as ownedStdio from "../process/owned-stdio.js";
 import { OwnedStdioCleanupError, type OwnedStdioProcess } from "../process/owned-stdio.js";
 import {
   connectMcpClient,
@@ -86,6 +87,14 @@ afterEach(async () => {
 });
 
 describe("OpenClawStdioClientTransport", () => {
+  it("passes terminateOnHostLoss to owned stdio custody", async () => {
+    const fixture = createFixture();
+    await fixture.transport.start();
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(spawnMock.mock.calls[0][0]).toMatchObject({ terminateOnHostLoss: true });
+    await fixture.transport.forceClose();
+  });
+
   it.each(["exit", "error", "send", "close", "detached"] as const)(
     "keeps legacy probe eligibility and SDK callbacks through %s",
     async (mode) => {
