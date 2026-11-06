@@ -266,6 +266,13 @@ const V1_BODIES: Record<StatementType, Check> = {
     proof: sha256Hex,
     requested_at: seconds,
   }),
+  // Added to v1-draft in place (pre-release); see docs/versioning.md, "Owner reset".
+  RootReset: object({
+    claw_id: clawId,
+    new_root_pub: ed25519Key,
+    binding_seq: positive,
+    issued_at: seconds,
+  }),
 };
 
 // Body schemas per envelope version. Every supported version has its own complete table.

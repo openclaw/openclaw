@@ -1,5 +1,6 @@
 /** Offline destination ownership and conservative adoption of historical import evidence. */
 import fs from "node:fs";
+import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveLegacyTranscriptPaths } from "../config/sessions/legacy-store-inspection.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
@@ -42,6 +43,34 @@ import type { LegacySessionRecord } from "./doctor-session-sqlite-discovery.js";
 import type { RecoveryArtifactReference } from "./doctor-session-sqlite-recovery-inventory.js";
 import type { DoctorSessionSqliteTargetReport } from "./doctor-session-sqlite-types.js";
 import { assertDoctorSqliteMaintenancePathsNotAliased } from "./doctor-sqlite-maintenance-lock.js";
+
+/**
+ * A reboot can renumber a volume's st_dev. The original sits beside its destination, so when its
+ * recorded inode and metadata are still on the destination's current device, both files moved
+ * together: the volume was renumbered, not swapped for another one with a colliding inode.
+ * Callers verify the original's bytes separately; a replaced destination still fails its inode check.
+ */
+function isOriginalBesideDestination(
+  move: SessionSqliteMigrationMove,
+  sqlitePath: string,
+  destination: fs.BigIntStats,
+): boolean {
+  const artifact = move.kind === "database-backup" ? move.artifact : undefined;
+  const witness =
+    artifact?.disposal.state === "pending-disposal" && !statMigrationPath(move.archivePath)
+      ? artifact.disposal.claimPath
+      : move.archivePath;
+  const stat = statMigrationPath(witness, { bigint: true });
+  return Boolean(
+    artifact &&
+    path.dirname(witness) === path.dirname(sqlitePath) &&
+    stat?.isFile() &&
+    stat.dev === destination.dev &&
+    String(stat.ino) === artifact.identity.ino &&
+    String(stat.mtimeNs) === artifact.identity.mtimeNs &&
+    stat.size === BigInt(artifact.identity.size),
+  );
+}
 
 /** Keep one owner proof per database; fence in-place writes and sidecar changes after awaits. */
 export function createRecoveryDestinationVerifier(
@@ -99,12 +128,14 @@ export function createRecoveryDestinationVerifier(
       }
       const identity = target.databaseIdentity;
       const deviceChanged = identity !== undefined && identity.dev !== String(files[0]!.dev);
+      const remounted =
+        deviceChanged && isOriginalBesideDestination(move, target.sqlitePath, files[0]!);
       // Owned cleanup tolerates its live Gateway writing between this stat and a fingerprint,
       // so it needs contents only to re-certify a moved destination. Otherwise ignore SHM
       // reader bookkeeping, but freshly fingerprint WAL/journal contents even on coarse
       // filesystem clocks. Raw descriptor closes stay outside the serving process.
       const generation =
-        options.allowOwnedMutation && !deviceChanged
+        options.allowOwnedMutation && (!deviceChanged || remounted)
           ? undefined
           : readSqliteFileGenerationSync(target.sqlitePath);
       if (
@@ -127,9 +158,10 @@ export function createRecoveryDestinationVerifier(
       ) {
         throw new Error("Recovery destination database changed; preview cleanup again.");
       }
-      if (identity && deviceChanged && generation) {
-        // An inode can collide across volumes. Older manifests can only be re-certified
-        // when a full producer-verified original proves the entire closed destination image.
+      if (identity && deviceChanged) {
+        // An inode can collide across volumes. Without a remount witness, older manifests can
+        // only be re-certified when a producer-verified original proves the entire closed
+        // destination image.
         const original =
           move.kind === "database-backup" &&
           move.sourcePath === target.sqlitePath &&
@@ -138,9 +170,11 @@ export function createRecoveryDestinationVerifier(
             ? move.artifact.identity
             : undefined;
         if (
-          (generation.wal?.size ?? 0n) > 32n ||
-          (generation.journal?.size ?? 0n) > 0n ||
-          generation.database.sha256 !== (identity.sha256 ?? original?.sha256)
+          !remounted &&
+          (!generation ||
+            (generation.wal?.size ?? 0n) > 32n ||
+            (generation.journal?.size ?? 0n) > 0n ||
+            generation.database.sha256 !== (identity.sha256 ?? original?.sha256))
         ) {
           throw new Error(
             `Recovery destination device changed from ${identity.dev} to ${files[0]!.dev}; destination contents could not be verified against recorded recovery evidence. Originals retained. Run openclaw doctor --fix to check current state; retain the originals for manual verification.`,
@@ -150,7 +184,7 @@ export function createRecoveryDestinationVerifier(
         target.databaseIdentity = {
           ...identity,
           dev: String(files[0]!.dev),
-          sha256: generation.database.sha256,
+          ...(generation && !remounted && { sha256: generation.database.sha256 }),
         };
         writeSessionSqliteMigrationManifest(run);
       }
