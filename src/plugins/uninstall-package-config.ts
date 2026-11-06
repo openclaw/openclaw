@@ -3,6 +3,7 @@ import { CHANNEL_CONFIG_METADATA_KEYS } from "../channels/config-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { resolveUserPath } from "../utils.js";
 import { normalizePluginId, normalizePluginTargetConfig } from "./config-state.js";
 import { resetPluginSlotsToDefaults, resolveRetainedContextEngineIds } from "./slots.js";
 
@@ -60,9 +61,14 @@ export function resolveUninstallChannelConfigKeys(
 }
 
 function loadPathMatchesInstallPath(loadPath: string, installPath: string): boolean {
+  if (loadPath === installPath) {
+    return true;
+  }
+  // Discovery and update-config expand `~/...` before comparing, so uninstall has to
+  // do the same or a documented home-relative load path never matches the install.
   return (
-    loadPath === installPath ||
-    resolveRealpathOrAbsolute(loadPath) === resolveRealpathOrAbsolute(installPath)
+    resolveRealpathOrAbsolute(resolveUserPath(loadPath)) ===
+    resolveRealpathOrAbsolute(resolveUserPath(installPath))
   );
 }
 

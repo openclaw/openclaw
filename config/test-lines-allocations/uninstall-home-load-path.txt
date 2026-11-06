@@ -1,0 +1,2 @@
+# Net new test lines: new uninstall-package-config.test.ts covers home-relative load paths.
+52
