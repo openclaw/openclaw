@@ -1,0 +1,6 @@
+# iMessage direct-chat media routing regressions (#194182): canonical send RPC for explicit
+# chat_id/chat_guid direct targets, group media pinned to the native attachment route (#86770),
+# explicit bridge transport preserved, and typed not-dispatched custody for stale direct chats.
+# The sender-boundary suite is the only coverage of this routing; redundant guid-classification
+# table coverage was removed per review.
+178

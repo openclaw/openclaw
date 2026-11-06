@@ -125,6 +125,16 @@ export function inferIMessageTargetChatType(raw: string): "direct" | "group" | u
   }
 }
 
+/**
+ * Direct-chat GUIDs pair one service with one handle (`iMessage;-;+1555…`), while group
+ * GUIDs join their participants with `;+;`. Chat labels that are not GUIDs (bridge chat
+ * ids, the remote `chat_id:` selector) match neither separator and stay undecided.
+ */
+export function isDirectIMessageChatGuid(guid: string): boolean {
+  const trimmed = guid.trim();
+  return trimmed.includes(";-;") && !trimmed.includes(";+;");
+}
+
 export function parseIMessageAllowTarget(raw: string): IMessageAllowTarget {
   const trimmed = raw.trim();
   if (!trimmed) {

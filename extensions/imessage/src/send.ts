@@ -37,6 +37,7 @@ import {
   type IMessageApprovalConversationKey,
   registerIMessageApprovalReactionTarget,
 } from "./approval-reactions.js";
+import { resolveIMessageAttachmentChatTarget } from "./attachment-target.js";
 import { chatContextFromIMessageTarget, resolveIMessageDirectChatService } from "./chat-context.js";
 import { withIMessageReceiptGuidReader } from "./chat-db.js";
 import { resolveIMessageChatDbLookupPath } from "./cli-path.js";
@@ -554,39 +555,43 @@ async function sendMessageIMessageForAccount(
     if (remoteHost && sendTransport === "applescript") {
       return null;
     }
-    let attachmentChatTarget: string | null = null;
-    if (target.kind === "chat_guid") {
-      attachmentChatTarget = target.chatGuid;
-    } else if (target.kind === "handle") {
-      const rawHandle = target.to.trim();
-      // Local imsg only accepts canonical handles; remote resolution accepts aliases.
-      if (remoteHost || rawHandle.includes("@") || rawHandle.startsWith("+")) {
-        const normalizedHandle = normalizeIMessageHandle(target.to);
-        if (normalizedHandle) {
-          const attachmentService = target.service !== "auto" ? target.service : service;
-          attachmentChatTarget = `${attachmentService === "sms" ? "SMS" : attachmentService === "imessage" ? "iMessage" : "any"};-;${normalizedHandle}`;
-        }
+    let attachmentChatTarget: string | null;
+    let directChatTarget: boolean;
+    try {
+      const resolved = await resolveIMessageAttachmentChatTarget({
+        target,
+        service,
+        remoteHost,
+        lookupChat: (chatId) => runCliJson(["group", "--chat-id", String(chatId)]),
+      });
+      attachmentChatTarget = resolved.chatTarget;
+      directChatTarget = resolved.directChat;
+    } catch (error) {
+      if (!audioAsVoice && isAttachmentCommandFallbackError(error)) {
+        return null;
       }
-    } else if (remoteHost) {
-      attachmentChatTarget =
-        target.kind === "chat_identifier"
-          ? target.chatIdentifier
-          : formatIMessageChatTarget(target.chatId);
-    } else if (target.kind === "chat_id") {
-      try {
-        const result = await runCliJson(["group", "--chat-id", String(target.chatId)]);
-        attachmentChatTarget = stringValue(result.guid) ?? stringValue(result.chat_guid) ?? null;
-      } catch (error) {
-        if (!audioAsVoice && isAttachmentCommandFallbackError(error)) {
-          return null;
-        }
-        throw error;
-      }
+      throw error;
     }
     if (!attachmentChatTarget) {
       if (audioAsVoice) {
         throw new Error("iMessage voice messages require an existing chat and bridge transport.");
       }
+      return null;
+    }
+    // One-shot `imsg send-attachment` resolves the chat with AppleScript
+    // `get chat id "<guid>"`, which answers -1728 once Messages.app stops listing that
+    // direct chat, and it lacks the same-account participant recovery imsg gives its
+    // canonical send (openclaw/imsg#246, openclaw/imsg#388). Ordinary direct-chat media
+    // therefore uses the send RPC, which recovers the stale chat and reports typed
+    // not-dispatched custody; native voice, threaded replies, an explicit bridge and
+    // remote hosts keep their existing attachment semantics.
+    if (
+      directChatTarget &&
+      !remoteHost &&
+      !audioAsVoice &&
+      !resolvedReplyToId &&
+      sendTransport !== "bridge"
+    ) {
       return null;
     }
     assertDirectAdapterHandoff?.();
