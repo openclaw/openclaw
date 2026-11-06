@@ -384,8 +384,13 @@ extension OpenClawChatComposer {
         return nil
     }
 
-    @ViewBuilder
+    /// Send/Talk observes the draft independently of the expensive model menu.
     var cleanCaptureAndPrimaryControls: some View {
+        ChatComposerSection { self.cleanCaptureAndPrimaryContent }
+    }
+
+    @ViewBuilder
+    private var cleanCaptureAndPrimaryContent: some View {
         if self.dictationControl != nil || self.voiceNoteControl != nil {
             OpenClawChatMicButton(
                 dictationControl: self.dictationControl,

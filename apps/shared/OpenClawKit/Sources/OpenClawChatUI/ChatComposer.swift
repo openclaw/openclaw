@@ -846,7 +846,12 @@ struct OpenClawChatComposer: View {
         return trimmed.isEmpty ? self.viewModel.sessionKey : trimmed
     }
 
+    /// Track draft observation in the editor, not the model-menu/composer body.
     var editorOverlay: some View {
+        ChatComposerSection { self.editorOverlayContent }
+    }
+
+    private var editorOverlayContent: some View {
         ZStack(alignment: editorOverlayAlignment) {
             #if !os(macOS)
             if self.viewModel.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
