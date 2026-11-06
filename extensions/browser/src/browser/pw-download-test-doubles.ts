@@ -35,11 +35,3 @@ export function trackDownloadStagingOpens(): string[] {
   });
   return opened;
 }
-
-export function requireStagedPath(opened: readonly string[]): string {
-  const savedPath = opened.find((candidate) => candidate.endsWith(".part"));
-  if (!savedPath) {
-    throw new Error("expected download staging file");
-  }
-  return savedPath;
-}

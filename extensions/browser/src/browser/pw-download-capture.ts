@@ -23,20 +23,11 @@ export type BrowserDownloadCaptureOptions = {
   beforeSave?: (download: BrowserDownloadCandidate) => Promise<void> | void;
   cancelOnBeforeSaveError?: (error: unknown) => boolean;
   mode?: "passive" | "explicit";
-  maxBytes?: number;
   outputPath?: string;
   outputRoot?: string;
   signal?: AbortSignal;
   timeoutMessage?: string;
 };
-
-function browserDownloadByteBudget(opts: BrowserDownloadCaptureOptions): number {
-  const maxBytes = opts.maxBytes ?? BROWSER_PROXY_MAX_FILE_BYTES;
-  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
-    throw new Error("Browser download byte budget must be a positive integer");
-  }
-  return maxBytes;
-}
 
 function browserDownloadTooLargeError(maxBytes: number): Error {
   return new Error(`Browser download exceeds ${maxBytes} bytes`);
@@ -44,9 +35,7 @@ function browserDownloadTooLargeError(maxBytes: number): Error {
 
 async function cancelOverBudgetDownload(download: Download): Promise<void> {
   await download.cancel().catch(() => {});
-  if (typeof download.delete === "function") {
-    await download.delete().catch(() => {});
-  }
+  await download.delete().catch(() => {});
 }
 
 async function writeEntireChunk(handle: fs.FileHandle, bytes: Buffer): Promise<void> {
@@ -144,7 +133,7 @@ export async function saveBrowserDownload(
       await writeDownloadWithinBudget(
         download,
         tempPath,
-        browserDownloadByteBudget(opts),
+        BROWSER_PROXY_MAX_FILE_BYTES,
         opts.signal,
       );
       opts.signal?.throwIfAborted();
