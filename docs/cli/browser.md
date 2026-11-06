@@ -36,6 +36,8 @@ also use this JSON failure envelope, including navigation, resize, and cookie re
 Ctrl-C or SIGTERM cancels pending reads such as status, tabs, and plain snapshots
 without printing late results. Already-accepted actions, `errors --clear`,
 `requests --clear`, and `snapshot --labels` still wait for their receipt.
+This includes the status readback for `start` and `stop`. Interrupted `doctor`
+reads do not report the browser as unhealthy.
 
 The CLI reserves 10 additional seconds beyond the request timeout for node and
 Gateway transport, allowing browser timeout diagnostics to reach the caller.
