@@ -167,11 +167,7 @@ function buildFailureAlert(
       preserveLast: Boolean(sourceConfig?.channel),
     }),
     to: to || (existingConfig?.to ? null : undefined),
-    ...(cooldownMs !== undefined
-      ? { cooldownMs }
-      : existingConfig?.cooldownMs !== undefined
-        ? { cooldownMs: null }
-        : {}),
+    cooldownMs: cooldownMs ?? (existingConfig?.cooldownMs !== undefined ? null : undefined),
     mode: form.failureAlertDeliveryMode || (existingConfig?.mode !== undefined ? null : undefined),
     accountId: accountId || (existingConfig?.accountId ? null : undefined),
   };
