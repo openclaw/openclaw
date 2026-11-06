@@ -544,9 +544,7 @@ footer.sidebar-issues-panel__mentions-note {
   cursor: var(--cursor-action);
   opacity: 0;
   pointer-events: none;
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
+  transition: color var(--duration-fast) ease;
 }
 
 .sidebar-issues-panel__dismiss svg {
@@ -577,7 +575,6 @@ footer.sidebar-issues-panel__mentions-note {
 
 @media (hover: hover) {
   .sidebar-issues-panel__dismiss:hover {
-    background: color-mix(in srgb, var(--text) 8%, transparent);
     color: var(--text-strong);
   }
 }

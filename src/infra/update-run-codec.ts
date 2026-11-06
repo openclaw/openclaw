@@ -6,6 +6,7 @@ import { redactSensitiveText } from "../logging/redact.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import type { UpdateRuns } from "../state/openclaw-state-db.generated.js";
+import { parseDoctorRetirementWideningLine } from "./doctor-progress.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
 import { normalizeUpdateFailureFacts } from "./update-failure-facts.js";
 import { UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
@@ -14,6 +15,8 @@ import type { UpdateRunRecord } from "./update-run-record.js";
 import { UpdateRunRecordSchema } from "./update-run-schema.js";
 
 const JSON_BYTES = 16 * 1024;
+/** Plugin rollback kept a later writer's value; users review it through Doctor. */
+export const PLUGIN_COHORT_KEPT_WARNING_STEP = "warning:plugin-cohort:later-changes-kept";
 const RETAINED_STEP_NAMES = [
   ...UPDATE_RUN_PHASES,
   "candidate-admission",
@@ -33,6 +36,7 @@ const RETAINED_STEP_NAMES = [
   "candidate-gateway-startup",
   "candidate-state-cleanup",
   "post-stop-checks",
+  "warning:post-stop-checks",
   "git-checkout",
   "git-runtime-activation",
   "openclaw doctor",
@@ -74,9 +78,12 @@ const RETAINED_STEP_NAMES = [
   "recovery-artifact-cleanup",
   "warning:recovery-artifact-cleanup",
   "diagnostic:recovery-artifact-cleanup",
+  PLUGIN_COHORT_KEPT_WARNING_STEP,
 ];
 export type UpdateRunLedgerOptions = OpenClawStateDatabaseOptions & {
   busyTimeoutMs?: number;
+  /** One-shot bookkeeping under the candidate Doctor capture, before native migration. */
+  attributeUpdateWrite?: true;
   redactPaths?: readonly string[];
 };
 
@@ -145,7 +152,10 @@ export function isRetainedStep(item: unknown): boolean {
     typeof item.step === "string" &&
     (item.termination === "signal" ||
       item.step.startsWith("finalize:") ||
-      RETAINED_STEP_NAMES.some((name) => name === item.step))
+      RETAINED_STEP_NAMES.some((name) => name === item.step) ||
+      (item.step.startsWith("diagnostic:") &&
+        typeof item.detail === "string" &&
+        parseDoctorRetirementWideningLine(item.detail) !== undefined))
   );
 }
 
@@ -172,9 +182,11 @@ function boundedJson(
           item.step !== "diagnostic:database migration writes" &&
           item.step !== "warning:database migration writes" &&
           item.step !== "warning:post-plugin doctor" &&
+          item.step !== "warning:post-stop-checks" &&
           item.step !== "warning:reconcile:driver-lost-after-verification" &&
           item.step !== "diagnostic:database rollback" &&
           item.step !== "finalize:data-at-risk" &&
+          !(typeof item.detail === "string" && parseDoctorRetirementWideningLine(item.detail)) &&
           !(typeof item.step === "string" && item.step.startsWith("finalize:doctor-lint:"))
             ? {
                 ...item,

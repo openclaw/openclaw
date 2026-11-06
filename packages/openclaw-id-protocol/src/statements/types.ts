@@ -1,5 +1,6 @@
 // Signed statement bodies (owner-key spec section 3). Field names are the wire names.
 import type { Ed25519PublicKey, IrohEndpointKey, KeyFingerprint } from "../keys.js";
+import type { StatementVersion } from "../version.js";
 
 /** Statement types. The type string is part of the signed domain-separation prefix. */
 export const STATEMENT_TYPES = [
@@ -10,6 +11,7 @@ export const STATEMENT_TYPES = [
   "Revocation",
   "MembershipSnapshot",
   "InviteRedemption",
+  "RootReset",
 ] as const;
 
 /** One of {@link STATEMENT_TYPES}. */
@@ -19,9 +21,9 @@ export type StatementType = (typeof STATEMENT_TYPES)[number];
 export type UnixSeconds = number;
 
 /**
- * The only root epoch in v1-draft. A claw's root never changes (owner reset is out of scope;
- * see OCF-319), so `root_epoch` is a constant: statements carry it, and anything else is
- * malformed.
+ * The only root epoch in v1-draft. There are no root epochs: an owner reset replaces the root
+ * without one (RootReset), so `root_epoch` is a constant: statements carry it, and anything
+ * else is malformed.
  */
 export const ROOT_EPOCH = 1;
 
@@ -46,6 +48,8 @@ export const MAX_OWNER_DEVICE_PEER_KEYS = 10;
 export const MAX_MEMBERS = 256;
 /** Most iroh peer keys (browsers) one member may have at a claw. */
 export const MAX_MEMBER_PEER_KEYS = 10;
+/** Most invites one claw keeps, in any state. Registering past it is refused with `limit_reached`. */
+export const MAX_INVITES = 100;
 
 /**
  * Certifies an owner device key D (and optionally its iroh peer keys W). It is signed by R or by
@@ -139,10 +143,14 @@ export const REVOCATION_KINDS = ["owner_device", "peer_key"] as const;
 export type RevocationKind = (typeof REVOCATION_KINDS)[number];
 
 /**
- * Removes a key by fingerprint from the claws that receive it. Nothing remembers it afterwards:
- * the removed key is simply no longer listed.
+ * Removes a key by fingerprint from one claw. It covers only what its signer saw: a key listed
+ * at or before `seq`. A key listed again after that seq is a new approval it does not cover, so
+ * the same bytes submitted later change nothing. Nothing remembers the revocation afterwards.
  */
 export type RevocationBody = {
+  claw_id: string;
+  /** The claw's membership seq the signer last saw (the snapshot's seq). */
+  seq: number;
   target_fp: KeyFingerprint;
   target_kind: RevocationKind;
   reason: string;
@@ -156,6 +164,18 @@ export type SnapshotOwnerDevice = { device_pub: Ed25519PublicKey; caps: OwnerCap
 
 /** One member entry in a snapshot. */
 export type SnapshotMember = { account_id: string; role: MemberRole; peer_keys: IrohEndpointKey[] };
+
+/**
+ * Protocol versions a Gateway accepts for new input, per versioned surface, ascending. Clients
+ * pick the highest version they share with it (`selectVersion`). The tunnel is not listed: its
+ * version is negotiated by QUIC ALPN inside the handshake K_srv authenticates.
+ */
+export type ProtocolVersions = {
+  /** Signed statement envelope versions. */
+  statement: number[];
+  /** ClawDescriptor versions. */
+  descriptor: number[];
+};
 
 /**
  * Gateway-signed (K_gw) mirror of the claw's current allowlist for Discovery listing and relay
@@ -173,6 +193,12 @@ export type MembershipSnapshotBody = {
   /** Owner device peer keys the relay should admit. */
   owner_peer_keys: IrohEndpointKey[];
   members: SnapshotMember[];
+  /**
+   * The versions this Gateway accepts. Signed by K_gw and only used from a snapshot that passed
+   * `assessFreshness`, so Discovery cannot edit it. It can still replay an older list a client
+   * has not seen; the Gateway refusing unlisted versions is what keeps that harmless.
+   */
+  protocols: ProtocolVersions;
   issued_at: UnixSeconds;
 };
 
@@ -188,6 +214,20 @@ export type InviteRedemptionBody = {
   requested_at: UnixSeconds;
 };
 
+/**
+ * Owner reset (OCF-319): the Gateway, with the K_gw of the claw's current binding, vouches that
+ * the claw's root is now `new_root_pub` from `binding_seq` on. Reset only happens on the claw's
+ * machine. It keeps K_srv and K_gw, so the new binding (signed by the new root at this
+ * binding_seq) names the same keys as the binding it replaces.
+ */
+export type RootResetBody = {
+  claw_id: string;
+  new_root_pub: Ed25519PublicKey;
+  /** The new binding's binding_seq: higher than the binding the reset replaces. */
+  binding_seq: number;
+  issued_at: UnixSeconds;
+};
+
 /** Maps each statement type to its body. */
 export type StatementBodies = {
   OwnerDeviceCert: OwnerDeviceCertBody;
@@ -197,6 +237,7 @@ export type StatementBodies = {
   Revocation: RevocationBody;
   MembershipSnapshot: MembershipSnapshotBody;
   InviteRedemption: InviteRedemptionBody;
+  RootReset: RootResetBody;
 };
 
 /**
@@ -207,7 +248,8 @@ export type StatementBodies = {
  * checked against the claw's current owner devices, which only the Gateway knows.
  */
 export type SignedStatement<T extends StatementType = StatementType> = {
-  v: 1;
+  /** Envelope version; selects the schema and the signing domain. */
+  v: StatementVersion;
   type: T;
   body: StatementBodies[T];
   signer: Ed25519PublicKey;

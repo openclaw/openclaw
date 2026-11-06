@@ -276,6 +276,7 @@ export function classifyFailoverClassificationFromHttpStatus(
     if (
       messageReason === "overloaded" ||
       messageReason === "server_error" ||
+      messageReason === "route_unavailable" ||
       (status >= 500 && messageReason === "format")
     ) {
       return messageClassification;

@@ -7,7 +7,7 @@ import type {
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
-import { resolveModelRuntimeEntry, type ModelRuntimeEntry } from "../model-runtime-choice.ts";
+import { resolveModelRuntimeEntry } from "../model-runtime-choice.ts";
 import {
   buildCatalogDisplayLookup,
   buildChatModelOptionFromLookup,
@@ -231,7 +231,7 @@ export function hasChatModelCatalogSelection(
 }
 
 export function chatModelUnavailableMessage(
-  reason: ModelRuntimeEntry["unavailableReason"],
+  reason: ModelCatalogEntry["unavailableReason"],
   inference?: "worker",
 ): string | undefined {
   if (inference === "worker" && (reason === "missing-auth" || reason === "auth-failed")) {
@@ -391,7 +391,7 @@ function resolveFastModeProvider(
 }
 
 function isChatStandardOnlySpeed(
-  entry: Pick<ModelRuntimeEntry, "supportsFastMode" | "serviceTiers"> | undefined,
+  entry: Pick<ModelCatalogEntry, "supportsFastMode" | "serviceTiers"> | undefined,
   canRecoverRejectedTier: boolean,
 ): boolean {
   return (

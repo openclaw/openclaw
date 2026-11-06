@@ -60,7 +60,8 @@ If you prefer editing config directly:
 - Stays opt-in: disable the plugin if you want verbatim output everywhere.
 
 The plugin releases Tokenjuice's compiled rule cache after results have used 128
-distinct working-directory contexts. This bounds retained rule sets from old
+distinct selected working directories. Ignored fallback directories do not count
+toward this limit. This bounds retained rule sets from old
 worktrees while preserving reuse for repeated results within the current set.
 After a release, active projects reload their rules on the next eligible result.
 Rule selection still uses the command's working directory.

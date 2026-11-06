@@ -173,7 +173,11 @@ function PluginUnavailable(props: { view: WorkshopView }) {
         ? t("skillWorkshop.plugin.failed")
         : status === "reload"
           ? t("skillWorkshop.plugin.reload")
-          : t("skillWorkshop.plugin.offBody");
+          : props.view().pluginsDisabled
+            ? t("skillWorkshop.plugin.pluginsDisabled")
+            : props.view().access.canEnablePlugin
+              ? t("skillWorkshop.plugin.offBody")
+              : t("skillWorkshop.plugin.needsAdmin");
   };
   return (
     <Show when={state()?.status !== "checking"} fallback={<SettingsLoadingSkeleton carapace />}>
@@ -190,10 +194,7 @@ function PluginUnavailable(props: { view: WorkshopView }) {
             <p>{message()}</p>
             <Show when={off()}>
               {(current) => (
-                <Show
-                  when={props.view().access.canEnablePlugin}
-                  fallback={<p>{t("skillWorkshop.plugin.needsAdmin")}</p>}
-                >
+                <Show when={props.view().access.canEnablePlugin && !props.view().pluginsDisabled}>
                   {/* aria-disabled keeps focus on the button while the Gateway works. */}
                   <button
                     type="button"

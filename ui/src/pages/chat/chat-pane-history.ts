@@ -329,6 +329,9 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
     if (newHistoryIntent && (this.historyAutoLoadBlocked || !this.historyObserverArmed)) {
       this.historyAutoLoadBlocked = false;
       this.historyObserverArmed = true;
+    }
+    // A row correction can retire the observer without consuming this gesture's intent.
+    if (hasUpwardIntent && this.historyObserverArmed && !this.historyObserver) {
       this.syncHistoryObserver();
     }
     // Preserve the normal at-bottom/new-message bookkeeping while layering

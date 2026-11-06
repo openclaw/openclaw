@@ -106,6 +106,13 @@ restore and update-recovery behavior.
 
 ## Local companion checkpoints
 
+Activated Codex plugins omit the managed agent-home `codex-home/logs_2.sqlite`
+diagnostic store and its `-wal`, `-shm`, and `-journal` companions from these
+checkpoints. Codex recreates this log store; old diagnostic history is not
+restored. Codex state databases, credentials, and session rollouts remain
+included. Full archives and same-name files outside that declared managed home
+keep their existing behavior.
+
 Use `openclaw backup create --local-companion --verify` for a local restart
 checkpoint when all portable database families use PostgreSQL. It archives local
 files, fixed-local SQLite databases (including client credentials), and PostgreSQL

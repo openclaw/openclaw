@@ -3055,12 +3055,10 @@ describe("ci workflow guards", () => {
         ...overrides,
         preflightOutputs: outputs,
       };
+      const sandbox = {};
       const evaluate = (value: unknown, matrix: Record<string, unknown> = {}) =>
         typeof value === "string" && value.startsWith("${{")
-          ? evaluateWorkflowExpression(value.replaceAll("fromJson(", "fromJSON("), {
-              ...context,
-              matrix,
-            })
+          ? evaluateWorkflowExpression(value, Object.assign(context, { matrix }), sandbox)
           : value;
       const rows: string[] = [];
       const hostedLabels = new Set(["ubuntu-24.04", "windows-2025", "xcode-27", "xcode-27-xlarge"]);
@@ -4605,6 +4603,68 @@ describe("ci workflow guards", () => {
           expect(
             runCiGateFixture(renderCiGateEnvironment(context, { android: result })).status,
           ).toBe(1);
+        }
+      },
+    );
+
+    it.each([
+      { paths: ["apps/android/app/src/main/Example.kt"], phone: true, wear: false },
+      { paths: ["apps/android/wear/src/test/ExampleTest.kt"], phone: false, wear: true },
+      {
+        paths: [
+          "apps/android/app/src/main/Example.kt",
+          "apps/android/wear/src/test/ExampleTest.kt",
+        ],
+        phone: true,
+        wear: true,
+      },
+      { paths: ["apps/android/wear/src/main/res/values/strings.xml"], phone: true, wear: true },
+      { paths: ["apps/android/wear-shared/src/main/Example.kt"], phone: true, wear: true },
+      { paths: ["apps/android/build.gradle.kts"], phone: true, wear: true },
+      { paths: ["apps/android/app/src/main/Missing.kt"], phone: true, wear: true, missing: true },
+      { paths: ["apps/android/app/src/main/Example.kt"], phone: true, wear: true, scheduled: true },
+    ])(
+      "preserves Android owners for $paths",
+      ({ paths, phone, wear, missing = false, scheduled = false }) => {
+        const eventName = scheduled ? "schedule" : "pull_request";
+        const manifest = runCiManifestFixture({
+          bundledPlanner: true,
+          androidCiCapabilities: true,
+          eventName,
+          changedPaths: paths,
+          targetFiles: missing ? [] : paths,
+          scopeEnv: { OPENCLAW_CI_RUN_ANDROID: "true" },
+        });
+        expect(manifest.status, manifest.output).toBe(0);
+        const rows = readJsonOutput(manifest.outputs, "android_matrix").include;
+        const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+          eventName,
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          preflightOutputs: manifest.outputs,
+        };
+        const tasks = rows.flatMap((row: Record<string, unknown>) => {
+          const result = runAndroidTask(row, context);
+          expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+          return result.tasks;
+        });
+        expect(tasks.includes(":app:testPlayDebugUnitTest")).toBe(phone);
+        expect(tasks.includes(":app:testThirdPartyDebugUnitTest")).toBe(phone);
+        expect(tasks.includes(":wear:testDebugUnitTest")).toBe(wear);
+        expect(tasks.filter((task: string) => task === ":app:lintThirdPartyDebug")).toHaveLength(1);
+        expect(tasks.filter((task: string) => task === ":app:lintPlayDebug")).toHaveLength(1);
+        expect(
+          runAndroidTask(
+            rows[0],
+            context,
+            phone ? ":app:testPlayDebugUnitTest" : ":wear:testDebugUnitTest",
+          ).status,
+        ).not.toBe(0);
+        if (phone && !wear) {
+          const lintOwner = rows.find(
+            (row: Record<string, unknown>) => row.app_lint === "third-party",
+          );
+          expect(runAndroidTask(lintOwner, context, ":app:lintThirdPartyDebug").status).not.toBe(0);
         }
       },
     );
@@ -13911,4 +13971,35 @@ describe("extension lint PR admission", () => {
       );
     },
   );
+});
+
+it.each([
+  { paths: ["skills/model-usage/scripts/model_usage.py"], expected: ["skills/model-usage"] },
+  { paths: ["skills/skill-creator/scripts/quick_validate.py"], expected: ["skills/skill-creator"] },
+  {
+    paths: [
+      "skills/model-usage/scripts/model_usage.py",
+      "skills/skill-creator/scripts/quick_validate.py",
+    ],
+    expected: ["skills/model-usage", "skills/skill-creator"],
+  },
+  { paths: ["skills/pyproject.toml"], expected: ["skills"] },
+  { paths: ["skills/unknown/scripts/module.py"], expected: ["skills"] },
+  { paths: ["skills/model-usage/scripts/missing.py"], expected: ["skills"], missing: true },
+  {
+    paths: ["skills/model-usage/scripts/model_usage.py", "scripts/example.mjs"],
+    expected: ["skills"],
+  },
+  { paths: ["skills/model-usage/scripts/model_usage.py"], expected: ["skills"], full: true },
+  { paths: null, expected: ["skills"], full: true },
+])("routes Python checks to $expected", ({ paths, expected, full = false, missing = false }) => {
+  const result = runCiManifestFixture({
+    bundledPlanner: true,
+    eventName: full ? "schedule" : "pull_request",
+    changedPaths: paths,
+    targetFiles: missing ? [] : (paths ?? []),
+    scopeEnv: { OPENCLAW_CI_RUN_SKILLS_PYTHON: "true" },
+  });
+  expect(result.status, result.output).toBe(0);
+  expect(readJsonOutput(result.outputs, "skills_python_targets_json")).toEqual(expected);
 });

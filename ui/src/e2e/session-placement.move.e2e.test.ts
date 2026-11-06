@@ -170,12 +170,11 @@ suite.define(() => {
       expect(await page.locator('[data-value="device:saturated"]').isDisabled()).toBe(true);
       expect(await page.locator('[data-value="device:offline"]').isDisabled()).toBe(true);
       expect(await page.locator('[data-value="device:nonhost"]').isDisabled()).toBe(true);
-      await page.getByText("No worker slots are available", { exact: false }).waitFor();
+      await page.getByText("No session slots are available", { exact: false }).waitFor();
       await page.getByText("Device unavailable", { exact: false }).waitFor();
       await page.getByText("Session hosting is disabled", { exact: false }).waitFor();
       expect(await gateway.getRequests("node.list")).toHaveLength(0);
       await page.locator('[data-value="device:writer-runner"]').click();
-
       await page.getByRole("button", { name: "Move session", exact: true }).click();
       await expectMove(gateway, { kind: "device", deviceId: "writer-runner" });
       await (
@@ -652,18 +651,19 @@ suite.define(() => {
       await profile.click();
       await expect.poll(() => profile.getAttribute("aria-pressed")).toBe("true");
       if (machineId) {
-        await page.getByRole("button", { name: "Machine", exact: true }).click();
+        await page.getByRole("button", { name: "Device size", exact: true }).click();
         await page
-          .getByRole("menu", { name: "Machine", exact: true })
+          .getByRole("menu", { name: "Device size", exact: true })
           .locator(`[role="menuitemradio"][data-value="${machineId}"]`)
           .click();
       } else {
         const dialog = page.locator("openclaw-modal-dialog");
-        expect(await dialog.getByText("Machine", { exact: true }).count()).toBe(0);
-        expect(await dialog.getByRole("button", { name: "Machine", exact: true }).count()).toBe(0);
+        expect(await dialog.getByText("Device size", { exact: true }).count()).toBe(0);
+        expect(await dialog.getByRole("button", { name: "Device size", exact: true }).count()).toBe(
+          0,
+        );
       }
       await page.getByRole("button", { name: "Move session", exact: true }).click();
-
       await expectMove(gateway, {
         kind: "profile",
         profileId: "aws",

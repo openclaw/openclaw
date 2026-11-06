@@ -2121,6 +2121,21 @@ openclaw-approvals-page .data-table-pagination__info {
   }
 }
 
+.standing-grants-empty {
+  display: grid;
+
+  &::before,
+  & > span {
+    grid-area: 1 / 1;
+  }
+
+  /* Reserve the translated empty copy while the read still says Unknown. */
+  &::before {
+    content: attr(data-empty-message);
+    visibility: hidden;
+  }
+}
+
 /* Each grant is one exact command with one action, so the whole command stays
    visible and nothing hides behind a disclosure. */
 .standing-grants {

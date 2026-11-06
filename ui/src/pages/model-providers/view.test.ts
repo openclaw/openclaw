@@ -950,6 +950,15 @@ describe("renderModelProviders", () => {
             logoutTargets: [{ provider: "openai-codex", profileIds: ["openai-codex:work"] }],
           }),
         ],
+        // Removal keeps defaults, so the confirmation names the ones this provider serves.
+        configuredModels: [
+          { id: "gpt-main", provider: "openai", name: "GPT Main", selectionRef: "main" },
+        ],
+        defaultModels: {
+          primary: "main",
+          fallbacks: ["anthropic/claude", "openai/gpt-backup"],
+          utilityModel: null,
+        },
         onRequestLogout,
       }),
     );
@@ -957,6 +966,7 @@ describe("renderModelProviders", () => {
     expect(onRequestLogout).toHaveBeenCalledWith(
       expect.objectContaining({
         cardId: "openai",
+        defaultModels: "GPT Main, openai/gpt-backup",
         // A provider-wide sign-out keeps config keys, so the key needs its own API-key target.
         removeTargets: [
           { provider: "openai-codex" },

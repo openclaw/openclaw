@@ -7,6 +7,7 @@ export const FAILOVER_REASONS = [
   "overloaded",
   "billing",
   "server_error",
+  "route_unavailable",
   "timeout",
   "tls_certificate",
   "context_overflow",

@@ -59,9 +59,11 @@ export function isSidebarSnapshotSettled(host: AppSidebarRenderHost): boolean {
   ) {
     return false;
   }
-  const people = resolveSidebarOnline(host).users;
   if (
-    people.some((person) => person.identity?.type === "profile") &&
+    host.navigationView === "online" &&
+    host.navigationVisible &&
+    !host.navigationCollapsed &&
+    resolveSidebarOnline(host).users.some((person) => person.identity?.type === "profile") &&
     host.sessionData.ownerCounts.counts === null &&
     host.sessionData.ownerCounts.error === null
   ) {
@@ -102,7 +104,7 @@ export function captureSidebarSnapshotModel(
       host.navigationCatalog.dashboards?.readSucceeded !== true) ||
     host.sessionData.sessionListError !== null ||
     context.sessions.state.error !== null ||
-    host.sessionData.ownerCounts.error !== null ||
+    (host.navigationView === "online" && host.sessionData.ownerCounts.error !== null) ||
     (host.sidebarAgentsMode === "roster" && roster.error !== null) ||
     (context.plugins.registryStatus !== "complete" && !host.sidebarPluginSnapshot)
   ) {

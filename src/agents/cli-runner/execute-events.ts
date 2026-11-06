@@ -28,10 +28,11 @@ import { extractToolErrorMessage, prepareToolResult } from "../embedded-agent-to
 import { runAgentHarnessAfterToolCallHook } from "../harness/hook-helpers.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
+import { stripOpenClawMcpToolPrefix } from "../tool-display-call.js";
 import { isToolResultError } from "../tool-result-error.js";
 import { cliAssistantItemId } from "./assistant-identity.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
-import { normalizeCliToolName, stripOpenClawMcpToolPrefix } from "./tool-policy.js";
+import { normalizeCliToolName } from "./tool-policy.js";
 import { recordCliTrajectoryEvent } from "./trajectory.js";
 import type { PreparedCliRunContext } from "./types.js";
 
