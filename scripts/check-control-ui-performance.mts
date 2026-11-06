@@ -54,8 +54,9 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Bounded resident history and native reader ownership: normalized 1,297,440 B + 64 B.
-  chatBootJsGzipBytes: 1_297_504,
+  // Preserve both merge legs: common 1,288,198 B + bounded-history allocation 9,306 B,
+  // plus the incoming sidebar adjustment (-85 B) and approved provider causes (+1,024 B).
+  chatBootJsGzipBytes: 1_298_443,
   newBootJsGzipBytes: 797_620,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
