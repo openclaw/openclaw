@@ -16,7 +16,9 @@ import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { BrowserTabPreviews } from "./chat-browser-tab-previews.tsx";
 import { ForwardedAttribution } from "./chat-forwarded-attribution.tsx";
 import { ChatHandoffResume } from "./chat-handoff-sessions.tsx";
+import { ChatInputDeliveryStatus } from "./chat-input-delivery-status-view.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { MessageActionsRow } from "./chat-message-actions-row-view.tsx";
 import { ActivityGroupContent } from "./chat-message-activity-view.tsx";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
@@ -34,16 +36,11 @@ import {
   FULL_MESSAGE_RETRY_REVISION_LIMIT,
   hasMessageActionButtons,
   MessageActions,
-  MessageActionsRow,
   ReplyButton,
 } from "./chat-message-markdown-view.tsx";
 import { GroupMessageReactions } from "./chat-message-reaction-chips-view.tsx";
 import { messageReactionOptions } from "./chat-message-reaction-model.ts";
-import {
-  ChatInputDeliveryStatus,
-  ChatSendStatus,
-  ChatSteerNow,
-} from "./chat-message-send-status-view.tsx";
+import { ChatSendStatus, ChatSteerNow } from "./chat-message-send-status-view.tsx";
 import { StreamGroupParts } from "./chat-message-stream-view.tsx";
 import type { AssistantMessageDisclosure } from "./chat-message-text-view.tsx";
 import { MessageMeta } from "./chat-message-timestamp-view.tsx";

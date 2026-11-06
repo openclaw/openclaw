@@ -70,10 +70,11 @@ function expectStableFooter(
   current: Awaited<ReturnType<typeof readFooterGeometry>>,
   resting: Awaited<ReturnType<typeof readFooterGeometry>>,
   rtl = false,
+  gap = 8,
 ) {
   expectStableNamePosition(current.name, resting.name);
   const { identity, actions } = current;
-  expect(rtl ? identity.left - actions.right : actions.left - identity.right).toBeCloseTo(8, 0);
+  expect(rtl ? identity.left - actions.right : actions.left - identity.right).toBeCloseTo(gap, 0);
 }
 
 function readRunId(params: unknown, nonempty = false) {
@@ -514,8 +515,8 @@ suite.define(() => {
         await tapBubble(longNamePeerGroup);
         await expect(longNamePeerGroup).toHaveClass(/\bchat-group--meta-revealed\b/u);
         const revealed = await readFooterGeometry(longNamePeerGroup);
-        expectStableFooter(revealed, restingTouchGeometry);
-        // Wrapped metadata and 44px touch controls still share one row.
+        expectStableFooter(revealed, restingTouchGeometry, false, 4);
+        // Compact metadata and 44px touch controls still share one row.
         const { actions, identity, footer } = revealed;
         expect(actions.top).toBeLessThan(identity.bottom);
         expect(actions.bottom).toBeGreaterThan(identity.top);

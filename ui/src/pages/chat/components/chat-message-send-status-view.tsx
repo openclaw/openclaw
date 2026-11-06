@@ -1,48 +1,13 @@
 import { Show } from "solid-js";
 import type { ChatPendingInputsPage } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
-import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { describePendingSteerWait, isChatSendReconnecting } from "../chat-send-presentation.ts";
-import type { readChatInputDelivery, readPendingSendStatus } from "../chat-thread-items.ts";
+import type { readPendingSendStatus } from "../chat-thread-items.ts";
 
 registerEnglishCatalog(registerChatComposerEnglish);
-registerEnglishCatalog(registerChatMessageMetadataEnglish);
 registerEnglishCatalog(registerChatSessionEnglish);
-
-const inputDeliveryLabels = {
-  read: "chat.messages.inputDeliveryRead",
-  unconfirmed: "chat.messages.inputDeliveryUnconfirmed",
-  "not-steered": "chat.messages.inputDeliveryNotSteered",
-} as const;
-const inputDeliveryDescriptions = {
-  read: "chat.messages.inputDeliveryReadDescription",
-  unconfirmed: "chat.messages.inputDeliveryUnconfirmedDescription",
-  "not-steered": "chat.messages.inputDeliveryNotSteeredDescription",
-} as const;
-
-export function ChatInputDeliveryStatus(props: {
-  delivery: ReturnType<typeof readChatInputDelivery>;
-}) {
-  return (
-    <Show when={props.delivery}>
-      {(delivery) => (
-        <span
-          class="chat-input-delivery"
-          data-delivery={delivery()}
-          role="status"
-          title={t(inputDeliveryDescriptions[delivery()])}
-          aria-label={
-            t(inputDeliveryLabels[delivery()]) + ": " + t(inputDeliveryDescriptions[delivery()])
-          }
-        >
-          {t(inputDeliveryLabels[delivery()])}
-        </span>
-      )}
-    </Show>
-  );
-}
 
 export type ChatSendStatusActions = {
   onSteerNow?: (runId: string) => void;

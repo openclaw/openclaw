@@ -99,6 +99,7 @@ import {
   createExpectedAcpUserTurn,
   createGlobalChatDirectiveConfig,
   createChatDirectiveSender,
+  createChatDirectiveTerminalObserver,
   createChatDirectiveSuiteResources,
   createChatDirectiveUserMessageReader,
   expectManagedAudioBlock,
@@ -1563,7 +1564,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           status: "ok",
         });
       });
-      expect(context.broadcast).toHaveBeenCalledOnce();
+      expect(context.broadcast).toHaveBeenCalledTimes(2);
     } finally {
       delivery.resolve();
       operation.complete();
@@ -1643,7 +1644,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       }),
     );
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore);
-    expect(context.broadcast).toHaveBeenCalledOnce();
+    expect(context.broadcast).toHaveBeenCalledTimes(2);
   });
 
   it.each([false, true])("steers document context with render failure=%s", async (renderFails) => {
@@ -1740,13 +1741,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     fs.mkdirSync(sandboxDir);
     const entered = createDeferred();
     const release = createDeferred();
-    const terminal = createDeferred<Record<string, unknown>>();
-    context.broadcast.mockImplementation((event, payload) => {
-      const message = asOptionalRecord(payload);
-      if (event === "chat" && message?.state !== "delta" && message) {
-        terminal.resolve(message);
-      }
-    });
+    const terminal = createChatDirectiveTerminalObserver(context);
     const sandbox = await import("../../agents/sandbox/context.js");
     const prepare = vi
       .spyOn(sandbox, "prepareSandboxWorkspaceForSession")
@@ -1880,7 +1875,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(mockState.lastDispatchCtx).toBeUndefined();
       reportAcceptance?.(true);
       delivery.resolve();
-      await waitForAssertion(() => expect(context.broadcast).toHaveBeenCalledOnce());
+      await waitForAssertion(() => expect(context.broadcast).toHaveBeenCalledTimes(2));
     } finally {
       hydration.resolve();
       delivery.resolve();
@@ -1902,7 +1897,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     expect(mockState.replyContextCalls).toBe(1);
     expect(mockState.lastDispatchCtx).toBeUndefined();
-    expect(context.broadcast).toHaveBeenCalledOnce();
+    expect(context.broadcast).toHaveBeenCalledTimes(2);
   });
 
   it("hydrates an ordinary reply before acknowledging its durable input", async () => {

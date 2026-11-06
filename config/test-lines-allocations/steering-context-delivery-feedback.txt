@@ -1,0 +1,7 @@
+# Net regression growth for source-specific steering context-delivery feedback.
+# Covers finalized native outcomes, live authority/reconnect behavior, bounded UI
+# projection lifecycle/work counts, exact-source grouping, and responsive metadata.
+# The real Gateway/model boundary cannot be replaced by ACK or helper-only tests;
+# layout/hover coverage guards names, actions, and receipt-arrival geometry.
+# Runtime proof and measured durations are recorded in PR #193910.
+891

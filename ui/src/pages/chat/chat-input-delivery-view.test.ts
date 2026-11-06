@@ -2,17 +2,17 @@
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, expect, it } from "vitest";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createState } from "./chat-gateway.test-support.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import type { readChatInputDelivery } from "./chat-thread-items.ts";
+import { ChatInputDeliveryStatus } from "./components/chat-input-delivery-status-view.tsx";
 import { MessageGroup } from "./components/chat-message-group-view.tsx";
-import { ChatInputDeliveryStatus } from "./components/chat-message-send-status-view.tsx";
 
 afterEach(cleanupSolid);
 
-it("updates an accessible receipt in place and offers no unsafe retry action", () => {
+it("updates an accessible receipt in place and offers no unsafe retry action", async () => {
   const [delivery, setDelivery] = createSignal<ReturnType<typeof readChatInputDelivery>>(null);
   const container = document.createElement("div");
   document.body.append(container);
@@ -27,8 +27,12 @@ it("updates an accessible receipt in place and offers no unsafe retry action", (
   );
   expect(container.textContent).toBe("");
   setDelivery("unconfirmed");
-  flush();
-  expect(container.querySelector("[role=status]")?.textContent).toBe("Delivery unconfirmed");
+  await waitForSolid(() =>
+    expect(container.querySelector("[role=status]")?.textContent).toBe("Delivery unconfirmed"),
+  );
+  expect(container.querySelector("[role=status]")?.getAttribute("data-delivery")).toBe(
+    "unconfirmed",
+  );
   expect(container.querySelector("button")).toBeNull();
   setDelivery("not-steered");
   flush();
@@ -36,6 +40,7 @@ it("updates an accessible receipt in place and offers no unsafe retry action", (
   setDelivery("read");
   flush();
   expect(container.textContent).toBe("Read");
+  expect(container.querySelector("[role=status]")?.getAttribute("data-delivery")).toBe("read");
   expect(container.querySelector("[role=status]")?.getAttribute("aria-label")).toContain(
     "does not confirm that it followed the instruction",
   );
@@ -45,7 +50,7 @@ it("updates an accessible receipt in place and offers no unsafe retry action", (
   container.remove();
 });
 
-it("keeps consecutive same-target steering receipts independently attributable", () => {
+it("keeps consecutive same-target steering receipts independently attributable", async () => {
   const state = createState({
     chatRunId: "active",
     chatMessages: ["a", "b"].map((id, index) => ({
@@ -105,7 +110,9 @@ it("keeps consecutive same-target steering receipts independently attributable",
   deliver("b", "unconfirmed", 1);
   flush();
   expect(container.querySelectorAll(".chat-group")).toHaveLength(1);
-  expect(container.querySelectorAll(".chat-input-delivery")).toHaveLength(2);
+  await waitForSolid(() =>
+    expect(container.querySelectorAll(".chat-input-delivery")).toHaveLength(2),
+  );
   deliver("a", "read", 2);
   flush();
   const receipts = container.querySelectorAll(".chat-input-delivery");

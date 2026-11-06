@@ -299,7 +299,6 @@
 }
 
 .chat-input-delivery {
-  flex: 0 1 auto;
   min-width: 4ch;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1377,7 +1376,6 @@ button.chat-reply-attribution__target:disabled {
 
   .chat-group.user.chat-group--peer .chat-group-footer__meta {
     flex: 0 1 auto;
-    flex-wrap: nowrap;
     gap: 0 4px;
   }
 
