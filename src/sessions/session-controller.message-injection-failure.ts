@@ -17,8 +17,7 @@ import {
   MessageInjectionWithdrawnError,
 } from "../auto-reply/reply/message-injection-authority.js";
 import { SessionPendingInputCustodyError } from "../config/sessions/session-pending-input-custody-error.js";
-import { readAutomationDisplayState } from "../infra/agent-run-registry.automation.js";
-import { getAgentRunContext } from "../infra/agent-run-registry.js";
+import { readQuietRunOwner } from "../infra/agent-run-registry.automation.js";
 import { hasPromptImageInput } from "../media/prompt-image-input.js";
 import type {
   ReplyBackendHandle,
@@ -42,15 +41,11 @@ export function resolveReplyBackendQueueMessageMismatch(
   authority?: { toolAuthorityFingerprint?: string },
 ): ReplyBackendQueueMessageMismatch | undefined {
   if (options?.isInboundUserMessage === true) {
-    const runContext = backend.runId ? getAgentRunContext(backend.runId) : undefined;
     // A new human turn must keep its own visible answer. Steering shares the
     // active turn's output owner, so leave this input with FIFO followup admission.
-    // Scheduled automation prose is audit-only and a no_change result publishes
-    // nothing, so an automation run cannot own a human answer either.
-    if (
-      (runContext?.isControlUiVisible === false && runContext.projectSessionMessages === false) ||
-      readAutomationDisplayState(backend.runId) !== "ordinary"
-    ) {
+    // Quiet runs (hidden coordination, scheduled automations whose prose is
+    // audit-only) cannot own a human answer.
+    if (readQuietRunOwner(backend.runId)) {
       return "input_visibility_mismatch";
     }
     const activeFingerprint = normalizeOptionalString(

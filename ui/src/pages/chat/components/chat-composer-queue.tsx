@@ -320,6 +320,9 @@ function ChatQueueItem(rowProps: {
     if (item().waitingFor === "automation") {
       return t("chat.queue.states.waitingForAutomation");
     }
+    if (item().waitingFor === "background") {
+      return t("chat.queue.states.waitingForBackground");
+    }
     switch (queueItem.sendState) {
       case "waiting-model":
       case "waiting-idle":

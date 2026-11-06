@@ -178,6 +178,12 @@ suite.define(() => {
         const timer = pane.locator(".chat-working-indicator__elapsed");
         await expect.poll(() => timer.count()).toBe(0);
         expect(await stop.count()).toBe(0);
+        // The sidebar shows the session working, not a paused queued ring.
+        const sidebarRing = page.locator(".session-glyph__ring").first();
+        await expect.poll(() => sidebarRing.count()).toBe(1);
+        await expect
+          .poll(() => sidebarRing.evaluate((ring) => getComputedStyle(ring).animationPlayState))
+          .toBe("running");
         // History hydration restores the same queued presentation, not a running turn.
         await page.reload();
         await waitForControlUiGatewayReady(page);

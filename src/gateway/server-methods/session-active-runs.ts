@@ -21,6 +21,7 @@ import {
 import {
   getRpcSourceIdentity,
   getRpcSourceProjectSessionActive,
+  isRpcSourceParkedFollowup,
   isRpcSourceWaitingForTurn,
   listRpcSourceEntries,
   resolveRpcSourceSessionProgressState,
@@ -54,6 +55,8 @@ type TrackedActiveSessionRun = {
   agentId?: string;
   terminalPersistence?: boolean;
   progress?: "queued" | "running";
+  /** Accepted input parked in follow-up custody behind another owner. */
+  parked?: true;
 };
 
 function collectTrackedActiveSessionRuns(
@@ -105,6 +108,7 @@ function collectTrackedActiveSessionRuns(
         ...(sessionId ? { sessionId } : {}),
         agentId: identity.agentId ? normalizeAgentId(identity.agentId) : undefined,
         ...(progress ? { progress } : {}),
+        ...(isRpcSourceParkedFollowup(ref) ? { parked: true as const } : {}),
         ...(terminalPersistence ? { terminalPersistence: true } : {}),
       });
     }
@@ -209,6 +213,7 @@ export function resolveVisibleActiveSessionRunState(
   let hasTerminalPersistence = false;
   let trackedRunning = false;
   let trackedQueued = false;
+  let trackedParked = false;
   for (const active of trackedRuns) {
     if (
       !matchesStore(active.storePaths) ||
@@ -228,6 +233,7 @@ export function resolveVisibleActiveSessionRunState(
     }
     trackedRunning ||= active.progress === "running" && !isAgentRunWaitingForCapacity(active.runId);
     trackedQueued ||= active.progress === "queued";
+    trackedParked ||= active.parked === true;
   }
   const directSubagent = getLatestLiveSubagentRunByChildSessionKey(
     canonicalKey,
@@ -268,7 +274,7 @@ export function resolveVisibleActiveSessionRunState(
     index: params.projectedAgentRunIndex,
   });
   const localResolution = sessionId ? resolveReplyRunForCurrentSessionId(sessionId) : undefined;
-  const localOperations = (
+  const ownedOperations = (
     localResolution?.kind === "one"
       ? [localResolution.operation]
       : localResolution?.kind === "ambiguous"
@@ -292,10 +298,21 @@ export function resolveVisibleActiveSessionRunState(
         },
         resolvedAgentId ?? defaultAgentId ?? "",
       ) &&
-      entry.attachment?.projectSessionActive !== false &&
       !operation.result
     );
   });
+  const localOperations = ownedOperations.filter(
+    (operation) =>
+      getSessionControllerEntryForOperation(operation).attachment?.projectSessionActive !== false,
+  );
+  // A quiet owner stays off the row until a human parks input behind it; then
+  // the session is visibly working on their behalf, not merely queued.
+  const quietOwnerRunning =
+    trackedParked &&
+    ownedOperations.some(
+      (operation) =>
+        !localOperations.includes(operation) && hasReplyOperationExecutionStarted(operation),
+    );
   // RPC metadata is correlation for this very same logical owner, not another
   // liveness vote. Include hidden/queued refs in representation, not visibility.
   const representedLocally =
@@ -319,6 +336,7 @@ export function resolveVisibleActiveSessionRunState(
   const running =
     ((hasLiveSubagent || hasQueuedSubagent) && !subagentCapacityWait) ||
     trackedRunning ||
+    quietOwnerRunning ||
     projectedRunState === "running" ||
     embeddedRunState === "running";
   const active =

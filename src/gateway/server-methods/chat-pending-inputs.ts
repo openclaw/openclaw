@@ -5,7 +5,7 @@ import {
   listSessionPendingInputs,
   type SessionPendingInput,
 } from "../../config/sessions/session-accessor.js";
-import { isSessionRunScheduledAutomation } from "../../sessions/session-controller.queries.js";
+import { resolveQuietSessionRunOwner } from "../../sessions/session-controller.queries.js";
 import {
   getRpcSourceForGateway,
   getRpcSourceIdentity,
@@ -124,10 +124,10 @@ export async function readChatPendingInputs(
     );
     return message ? [{ input, message }] : [];
   });
-  // Queued input behind a quiet scheduled run names its owner; the run itself stays quiet.
-  const waitingForAutomation = Boolean(
-    options.queuedRunIds?.size && isSessionRunScheduledAutomation(scope.sessionKey),
-  );
+  // Queued input behind a quiet run names its owner; the run itself stays quiet.
+  const waitingFor = options.queuedRunIds?.size
+    ? resolveQuietSessionRunOwner(scope.sessionKey)
+    : undefined;
   const messages = replaceOversizedChatHistoryMessages({
     messages: visible.map(({ message }) => message),
     maxSingleMessageBytes: Math.floor(
@@ -154,8 +154,8 @@ export async function readChatPendingInputs(
         display.runId = item.runId;
         if (item.state === "queued" && options.queuedRunIds?.has(item.runId)) {
           display.queued = true;
-          if (waitingForAutomation) {
-            display.waitingFor = "automation";
+          if (waitingFor) {
+            display.waitingFor = waitingFor;
           }
         }
         if (item.state === "queued") {

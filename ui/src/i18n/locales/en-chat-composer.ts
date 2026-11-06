@@ -225,6 +225,7 @@ const catalog = {
         runningCommand: "Running command",
         waitingForReconnect: "Waiting for reconnect",
         waitingForAutomation: "Waiting for automation to finish",
+        waitingForBackground: "Waiting for background work to finish",
         editing: "Editing",
         needsReview: "Needs review",
       },

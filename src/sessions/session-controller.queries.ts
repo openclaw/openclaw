@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { readAutomationDisplayState } from "../infra/agent-run-registry.automation.js";
+import { readQuietRunOwner } from "../infra/agent-run-registry.automation.js";
 import { ReplyRunAlreadyActiveError, type ReplyOperation } from "./session-controller.contracts.js";
 import {
   activeSessionOperations,
@@ -48,19 +48,23 @@ export function isSessionRunActiveForKey(sessionKey: string): boolean {
   );
 }
 
-/** Presentation only: a scheduled automation invocation currently owns this logical key. */
-export function isSessionRunScheduledAutomation(sessionKey: string): boolean {
+/** Presentation only: the quiet run (no chat output) that currently owns this logical key. */
+export function resolveQuietSessionRunOwner(
+  sessionKey: string,
+): "automation" | "background" | undefined {
   const normalizedSessionKey = normalizeOptionalString(sessionKey);
-  return Boolean(
-    normalizedSessionKey &&
-    findSessionControllerEntries(normalizedSessionKey).some(
-      (entry) =>
-        entry.active &&
-        [...(backendRunIdsByOperation.get(entry.active) ?? [])].some(
-          (runId) => readAutomationDisplayState(runId) !== "ordinary",
-        ),
-    ),
-  );
+  if (!normalizedSessionKey) {
+    return undefined;
+  }
+  for (const entry of findSessionControllerEntries(normalizedSessionKey)) {
+    for (const runId of (entry.active && backendRunIdsByOperation.get(entry.active)) || []) {
+      const owner = readQuietRunOwner(runId);
+      if (owner) {
+        return owner;
+      }
+    }
+  }
+  return undefined;
 }
 
 export function listActiveReplyRunSessionKeys(): string[] {

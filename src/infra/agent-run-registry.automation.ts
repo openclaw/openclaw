@@ -24,6 +24,23 @@ export function readAutomationDisplayState(
   return "checking";
 }
 
+/**
+ * Presentation only: which quiet owner a run is while it produces no chat output.
+ * Scheduled automations keep execution prose audit-only; private coordination
+ * (child completions, sessions_send from subagents) projects no session messages.
+ */
+export function readQuietRunOwner(
+  runId: string | undefined,
+): "automation" | "background" | undefined {
+  if (readAutomationDisplayState(runId) !== "ordinary") {
+    return "automation";
+  }
+  const context = runId ? getAgentRunContext(runId) : undefined;
+  return context?.isControlUiVisible === false && context.projectSessionMessages === false
+    ? "background"
+    : undefined;
+}
+
 /** A meaningful recorded result is the scheduled run's authored outcome, like a visible reply. */
 export function hasMeaningfulAutomationResult(runId: string | undefined): boolean {
   const invocations = runId ? getAgentRunContext(runId)?.cronRunsByJobId : undefined;
