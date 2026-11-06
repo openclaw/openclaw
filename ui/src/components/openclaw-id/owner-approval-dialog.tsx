@@ -3,6 +3,7 @@ import { createSignal, For, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { registerOpenClawIdDialogsEnglish } from "../../i18n/locales/en-openclaw-id-dialogs.ts";
 import { registerOpenClawIdEnglish } from "../../i18n/locales/en-openclaw-id.ts";
+import { openClawIdFeatureSignal } from "../../lib/openclaw-id/feature-lifetime.ts";
 import { ownerApprovalFor } from "../../lib/openclaw-id/owner-approval-lifetime.ts";
 import type { OwnerApproval, OwnerApprovalRequest } from "../../lib/openclaw-id/owner-approval.ts";
 import { openClawIdUiError } from "../../lib/openclaw-id/ui-error.ts";
@@ -84,7 +85,9 @@ function ApprovalRow(props: { request: OwnerApprovalRequest; owner: OwnerApprova
 /** Shows pending requests with their six-digit matching numbers; never offers an unsigned approval. */
 export function showOwnerApprovalDialog(params: { client: GatewayBrowserClient }): Promise<void> {
   const owner = ownerApprovalFor(params.client);
-  return withPromiseModalHost<void>(undefined, (modal) => {
+  // Closes when the feature turns off.
+  const lifetime = { signal: openClawIdFeatureSignal(), value: undefined };
+  return withPromiseModalHost<void>(lifetime, (modal) => {
     modal.render(() => {
       const projection = owner ? projectOwner(owner, (value) => value.read()) : null;
       return (
