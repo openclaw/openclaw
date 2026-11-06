@@ -12,7 +12,7 @@ import { createOwnerExpiryTimer } from "./owner-expiry.js";
 const DAY_SECONDS = 86400;
 
 /** The configured inactivity windows in seconds; unset ones keep the protocol defaults. */
-export function inactivityWindows(
+function inactivityWindows(
   config: GatewayOpenClawIdConfig | undefined,
 ): Partial<InactivityWindows> {
   const owner = config?.ownerDeviceInactivityDays;
