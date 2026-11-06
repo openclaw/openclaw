@@ -159,7 +159,7 @@ export type ChatThreadProps = Omit<
     retryAt?: number;
     onRetryRun?: (runId: string) => void;
     /** Opens Models at the provider a failed run's credentials belong to. */
-    onOpenModelProvider?: (provider?: string) => void;
+    onOpenModelProvider?: (provider: string) => void;
     failedMessageEditSource?: FailedMessageEditSource;
     failureActionsRunId?: string;
     onDismissPendingInput?: (inputId: string) => void;

@@ -1,0 +1,2 @@
+# Real-Gateway contract test: a reply whose provider rejects the saved key names the provider on the failure line, keeps that cause after reload, and Open Models lands on the provider; plus a component test for billing vs. retryable failures.
+172

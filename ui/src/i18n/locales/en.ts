@@ -1559,7 +1559,6 @@ const startupEnglish = {
       failedTitle: "Couldn’t finish this reply",
       credentialsRejected: "{provider} didn’t accept the saved credentials",
       billingProblem: "{provider} reports a billing problem",
-      unknownProvider: "The AI service",
       openModels: "Open Models",
       failedRepeatCount: "{count} times",
       failedHelp: "Automatic recovery has stopped. Check any completed work before trying again.",

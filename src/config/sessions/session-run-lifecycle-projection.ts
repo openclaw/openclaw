@@ -12,7 +12,6 @@ import {
   isSubagentSessionKey,
 } from "../../routing/session-key.js";
 import type { ProviderReviewTerminalFact } from "../../sessions/provider-review-terminal.js";
-import { readRunFailureCause, type RunFailureCause } from "../../shared/run-failure-notice.js";
 import { buildUpdatedSessionGoalStatus } from "./goals-transitions.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -46,7 +45,8 @@ export type SessionLifecyclePatchEffects = {
     errorKind?: "state_contention";
     suppressErrorNotice?: boolean;
     notice?: string;
-    cause?: RunFailureCause;
+    /** The run's provider error observation; the failure recorder bounds what it keeps. */
+    errorObservation?: unknown;
   };
 };
 
@@ -471,10 +471,9 @@ export function projectSessionLifecyclePatch(
     eventRunId &&
     (patch.status === "failed" || patch.status === "timeout")
   ) {
-    const cause = readRunFailureCause(params.event.data?.errorObservation);
     effects.failedRun = {
       runId: eventRunId,
-      ...(cause ? { cause } : {}),
+      errorObservation: params.event.data?.errorObservation,
       suppressErrorNotice: params.event.data?.suppressErrorNotice === true,
       errorKind:
         params.event.data?.errorKind === "state_contention" ? "state_contention" : undefined,

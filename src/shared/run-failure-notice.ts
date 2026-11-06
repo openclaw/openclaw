@@ -1,29 +1,25 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { FAILOVER_REASONS } from "../../packages/gateway-protocol/src/failover-reasons.js";
-
-type FailoverReason = (typeof FAILOVER_REASONS)[number];
 
 /** The provider fact that ended a run, as the run's error observation classified it. */
-export type RunFailureCause = { provider?: string; failoverReason?: FailoverReason };
+export type RunFailureCause = { provider: string; failoverReason?: string };
 
 /** A diagnostic-only display row owned by the settled run, not a model attempt. */
 export type RunFailureNotice = { runId: string; summary: string; cause?: RunFailureCause };
 
-const PROVIDER_ID_MAX_CHARS = 120;
+// Provider ids and failover reason codes are short identifiers; anything longer is not one.
+const CAUSE_FIELD_MAX_CHARS = 120;
 
-/** Keeps only the bounded provider id and known failover reason from an observation. */
+function readCauseField(value: unknown): string | undefined {
+  const text = typeof value === "string" ? value.trim() : "";
+  return text && text.length <= CAUSE_FIELD_MAX_CHARS ? text : undefined;
+}
+
+/** Keeps only a bounded provider id and failover reason from an error observation. */
 export function readRunFailureCause(value: unknown): RunFailureCause | undefined {
   const source = asOptionalRecord(value);
-  const provider =
-    typeof source?.provider === "string" &&
-    source.provider.trim() &&
-    source.provider.length <= PROVIDER_ID_MAX_CHARS
-      ? source.provider.trim()
-      : undefined;
-  const failoverReason = FAILOVER_REASONS.find((reason) => reason === source?.failoverReason);
-  return provider || failoverReason
-    ? { ...(provider ? { provider } : {}), ...(failoverReason ? { failoverReason } : {}) }
-    : undefined;
+  const provider = readCauseField(source?.provider);
+  const failoverReason = readCauseField(source?.failoverReason);
+  return provider ? { provider, ...(failoverReason ? { failoverReason } : {}) } : undefined;
 }
 
 export function readRunFailureNotice(message: unknown): RunFailureNotice | undefined {

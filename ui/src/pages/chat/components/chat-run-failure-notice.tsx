@@ -16,21 +16,6 @@ const ChatFailedMessageEditButton = lazy(() => import("./chat-failed-message-edi
 
 let nextPanelId = 0;
 
-/** Failures that a change under Models fixes, rather than another attempt. */
-function credentialFailureTitle(cause: RunFailureCause | undefined): string | undefined {
-  const reason = cause?.failoverReason;
-  if (reason !== "auth" && reason !== "auth_permanent" && reason !== "billing") {
-    return undefined;
-  }
-  const provider = cause?.provider
-    ? providerDisplayLabel(cause.provider)
-    : t("chat.recovery.unknownProvider");
-  return t(
-    reason === "billing" ? "chat.recovery.billingProblem" : "chat.recovery.credentialsRejected",
-    { provider },
-  );
-}
-
 /** Details open away from the conversation's edges, so they never cover the composer. */
 function panelPlacement(line: HTMLElement, panel: HTMLElement): "bottom" | "top" {
   const thread = line.closest(".chat-thread")?.getBoundingClientRect();
@@ -47,7 +32,7 @@ export function ChatRunFailureNotice(props: {
   cause?: RunFailureCause;
   repeatCount?: number;
   onRetry?: () => void;
-  onOpenModels?: (provider?: string) => void;
+  onOpenModels?: (provider: string) => void;
   editSource?: FailedMessageEditSource;
   onFocusComposer?: () => void;
 }) {
@@ -56,12 +41,22 @@ export function ChatRunFailureNotice(props: {
   const [open, setOpen] = createSignal(false);
   const [placement, setPlacement] = createSignal<"bottom" | "top">("bottom");
   let panel: PopoverHandle | undefined;
-  const credentialTitle = createMemo(() => credentialFailureTitle(props.cause));
-  const title = () => credentialTitle() ?? t("chat.recovery.failedTitle");
-  const openModels = () =>
-    credentialTitle() && props.onOpenModels
-      ? () => props.onOpenModels?.(props.cause?.provider)
+  // A rejected key or billing problem is fixed under Models, not by another attempt.
+  const fix = () => {
+    const cause = props.cause;
+    return cause?.provider && ["auth", "auth_permanent", "billing"].includes(cause.failoverReason!)
+      ? { provider: cause.provider, billing: cause.failoverReason === "billing" }
       : undefined;
+  };
+  const title = () => {
+    const cause = fix();
+    return cause
+      ? t(cause.billing ? "chat.recovery.billingProblem" : "chat.recovery.credentialsRejected", {
+          provider: providerDisplayLabel(cause.provider),
+        })
+      : t("chat.recovery.failedTitle");
+  };
+  const openModels = () => (props.onOpenModels ? fix()?.provider : undefined);
   const detail = createMemo(() => formatWebUiIconErrorText(props.summary).trim());
   const concise = createMemo(() => {
     const firstLine = detail().split(/\r?\n/u)[0] ?? "";
@@ -88,13 +83,7 @@ export function ChatRunFailureNotice(props: {
   onSettled(() => () => stopFollowing?.());
   return (
     <openclaw-chat-run-failure-notice style={{ display: "contents" }}>
-      <div
-        class="chat-run-failure"
-        role="status"
-        data-placement={placement()}
-        data-fix={openModels() ? "models" : undefined}
-        ref={setLine}
-      >
+      <div class="chat-run-failure" role="status" data-placement={placement()} ref={setLine}>
         <Popover
           id={panelId}
           class="chat-run-failure__panel"
@@ -181,11 +170,11 @@ export function ChatRunFailureNotice(props: {
           </Loading>
         </Show>
         <Show when={openModels()}>
-          {(openAction) => (
+          {(provider) => (
             <button
               type="button"
               class="btn primary btn--sm chat-run-failure__retry"
-              onClick={() => openAction()()}
+              onClick={() => props.onOpenModels?.(provider())}
             >
               {t("chat.recovery.openModels")}
             </button>
