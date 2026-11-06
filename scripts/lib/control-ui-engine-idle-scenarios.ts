@@ -9,6 +9,7 @@ import { parityBaseScenario } from "../control-ui-parity/fixtures.ts";
 import { dataUsageScenarios } from "./control-ui-data-usage-scenarios.ts";
 import type { EngineScenario } from "./control-ui-engine-boot-scenarios.ts";
 import { createEnginePageScenarios } from "./control-ui-engine-page-scenarios.ts";
+import { frames } from "./control-ui-interaction-navigation.ts";
 import { interactionScenarios } from "./control-ui-interaction-scenarios.ts";
 import { readControlUiResourceCounts } from "./control-ui-resource-counts.ts";
 
@@ -122,7 +123,7 @@ export async function verifyEngineIdleClocks(page: Page, gateway: MockGatewayCon
   return checked;
 }
 
-export function createEngineIdleScenarios(): readonly EngineIdleScenario[] {
+export function createEngineIdleScenarios(): readonly EngineScenario[] {
   const pages = createEnginePageScenarios();
   const pageSource = (id: string) => {
     const source = pages.find((scenario) => scenario.id === `page-${id}-leave`);
@@ -193,6 +194,26 @@ export function createEngineIdleScenarios(): readonly EngineIdleScenario[] {
     },
   });
   return [
+    {
+      ...clocks,
+      id: "sidebar-running-clock-scroll-resize",
+      explicitOnly: true,
+      expected: "Running child rows resume their clocks while scrolling and resizing the sidebar.",
+      run: async (page, gateway) => {
+        const scroller = page.locator(".sidebar-shell__body").first();
+        const viewport = page.viewportSize()!;
+        for (const fraction of [0.25, 0.5, 0.75, 1]) {
+          await scroller.evaluate((element, position) => {
+            element.scrollTop = (element.scrollHeight - element.clientHeight) * position;
+          }, fraction);
+          await frames(page);
+        }
+        await page.setViewportSize({ width: viewport.width + 48, height: viewport.height });
+        await frames(page);
+        await page.setViewportSize(viewport);
+        await verifyEngineIdleClocks(page, gateway);
+      },
+    },
     ...sources.flatMap(({ name, source }) =>
       (["realistic", "large"] as const).flatMap((size) => {
         const fixtureSource: EngineScenario = {
