@@ -1,0 +1,2 @@
+# Net new test lines: chunk-text.test.ts now covers a NaN chunk limit.
+19

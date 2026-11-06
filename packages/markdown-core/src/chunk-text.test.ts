@@ -33,3 +33,22 @@ it("keeps grapheme boundaries and surrogate-safe progress in each chunking mode"
     }
   }
 });
+
+it("treats a NaN limit as non-positive instead of emitting an empty chunk", () => {
+  // NaN bounds nothing: every comparison against it is false, so the range ended at
+  // NaN and slicing by it sent "" — the whole outbound message vanished.
+  const text = "Hello from OpenClaw — this outbound message must never vanish.";
+  expect(chunkText(text, Number.NaN)).toEqual([text]);
+  expect(chunkTextRanges(text, { limit: Number.NaN })).toEqual([{ start: 0, end: text.length }]);
+  expect(chunkTextRanges(text, { limit: Number.NaN, mode: "preferred" })).toEqual([
+    { start: 0, end: text.length },
+  ]);
+});
+
+it("keeps every unbounded limit path unchanged", () => {
+  const text = "Hello from OpenClaw — this outbound message must never vanish.";
+  for (const limit of [0, -5, Number.POSITIVE_INFINITY]) {
+    expect(chunkText(text, limit)).toEqual([text]);
+    expect(chunkTextRanges(text, { limit })).toEqual([{ start: 0, end: text.length }]);
+  }
+});

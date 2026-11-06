@@ -8,6 +8,12 @@ import { scanParenAwareBreakpoints } from "./text-breakpoints.js";
 export { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 
 function normalizeChunkLimit(limit: number): number {
+  // NaN bounds nothing: every guard and loop comparison against it is false, so a
+  // range ended at NaN and slicing by it produced "". Route it through the
+  // non-positive branch, which returns the text as one chunk.
+  if (Number.isNaN(limit)) {
+    return 0;
+  }
   // String slicing truncates fractional indexes, so positive limits need an integer progress step.
   return Number.isFinite(limit) && limit > 0 ? resolveIntegerOption(limit, 1, { min: 1 }) : limit;
 }
