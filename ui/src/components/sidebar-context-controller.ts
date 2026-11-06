@@ -1,9 +1,10 @@
 import { createContext, createSignal } from "solid-js";
 import { elementRef } from "../lib/reactive/element-ref.ts";
 import { createLayoutMeasurement } from "../lib/reactive/layout-measurement.ts";
+import { observeResize } from "../lib/reactive/observers.ts";
 import type { AppSidebarOwner } from "./app-sidebar-owner.tsx";
 import type { SidebarSessionsScrollState } from "./app-sidebar-session-types.ts";
-import { readScrollState } from "./scroll-state-observer.ts";
+import { readScrollState, type ScrollState } from "./scroll-state-observer.ts";
 
 export const SidebarScrollContext = createContext<{
   element(): HTMLElement | undefined;
@@ -40,6 +41,8 @@ export function createSidebarScroll(
       : host.navigationView;
   // Window selection uses the saved offset until the shared layout pass applies it.
   const top = () => pendingTop ?? scroller?.scrollTop ?? 0;
+  const publish = (next: ScrollState) =>
+    setState(!next.scrollable ? "none" : next.atStart ? "top" : next.atEnd ? "bottom" : "middle");
   const measure = createLayoutMeasurement(
     () => {
       viewportRevision();
@@ -47,31 +50,20 @@ export function createSidebarScroll(
     },
     () => {
       const element = scroller;
-      if (!element) {
+      if (!element || pendingTop !== undefined) {
         return undefined;
       }
-      const restoreTop = pendingTop;
-      const next = readScrollState(element, false, restoreTop);
+      const next = readScrollState(element);
       return () => {
         if (scroller !== element) {
           return;
         }
-        if (restoreTop !== undefined) {
-          element.scrollTop = restoreTop;
-          pendingTop = undefined;
-        }
-        setState(
-          !next.scrollable ? "none" : next.atStart ? "top" : next.atEnd ? "bottom" : "middle",
-        );
+        publish(next);
       };
     },
     {
       targets: () => (scroller ? [scroller, ...(content ? [content] : [])] : []),
       fonts: true,
-      // Only a pending restore must commit before the cached frame can expose offset zero.
-      get changeTiming(): "sync" | undefined {
-        return pendingTop === undefined ? undefined : "sync";
-      },
     },
   );
   return {
@@ -110,8 +102,23 @@ export function createSidebarScroll(
         pendingTop =
           Math.max(0, host.sidebarSnapshot?.scrollTop ?? positions.get(presentedKey) ?? 0) ||
           undefined;
+        // Native resize delivery follows layout and restores before this frame paints.
+        const stopRestore =
+          pendingTop === undefined
+            ? undefined
+            : observeResize([element], () => {
+                if (!element.isConnected || pendingTop === undefined) {
+                  return;
+                }
+                const next = readScrollState(element, false, pendingTop);
+                element.scrollTop = pendingTop;
+                pendingTop = undefined;
+                publish(next);
+                stopRestore?.();
+              });
         setViewportRevision((revision) => revision + 1);
         return () => {
+          stopRestore?.();
           if (scroller === element) {
             scroller = undefined;
             pendingTop = undefined;

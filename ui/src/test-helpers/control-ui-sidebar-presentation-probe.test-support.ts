@@ -32,6 +32,8 @@ export function sidebarPresentationProbe() {
   };
   const frames: Frame[] = [];
   let stopped = false;
+  const pendingFrames: Array<() => void> = [];
+  const channel = new MessageChannel();
   let dirty = true;
   let signature: string | undefined;
   const observer = new MutationObserver((records) => {
@@ -150,12 +152,27 @@ export function sidebarPresentationProbe() {
         frames.push({ at: performance.now(), cached, ...presentation });
       }
     }
-    requestAnimationFrame(sample);
   };
-  requestAnimationFrame(sample);
+  channel.port1.onmessage = () => {
+    sample();
+    for (const resolve of pendingFrames.splice(0)) {
+      resolve();
+    }
+  };
+  const requestSample = () => {
+    if (!stopped) {
+      // rAF precedes ResizeObserver; this task samples after the rendering update.
+      channel.port2.postMessage(null);
+      requestAnimationFrame(requestSample);
+    }
+  };
+  requestAnimationFrame(requestSample);
   const probe = {
+    nextFrame: () => new Promise<void>((resolve) => pendingFrames.push(resolve)),
     read() {
       stopped = true;
+      channel.port1.close();
+      channel.port2.close();
       observer.disconnect();
       document.removeEventListener("scroll", scrolled, true);
       const first = frames.findIndex((frame) => frame.cached && frame.rows.length > 0);
@@ -183,6 +200,7 @@ export function sidebarPresentationProbe() {
         }
       }
       return {
+        sampling: "after-render-task",
         timeOrigin: performance.timeOrigin,
         frames,
         waves: Math.max(0, visible.length - 2),

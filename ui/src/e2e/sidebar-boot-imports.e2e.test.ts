@@ -31,8 +31,8 @@ type RestoreTraceEvent = {
 };
 
 function expectRestoreWithoutSynchronousLayout(events: RestoreTraceEvent[]) {
-  const starts = events.filter((event) => event.name === "sidebar-restore-native-start");
-  const ends = events.filter((event) => event.name === "sidebar-restore-native-end");
+  const starts = events.filter((event) => event.name === "sidebar-restore-geometry-start");
+  const ends = events.filter((event) => event.name === "sidebar-restore-geometry-end");
   expect(starts.length).toBeGreaterThan(0);
   expect(ends).toHaveLength(starts.length);
   const layout = events.filter(
@@ -110,6 +110,23 @@ suite.define(() => {
             fixture.scenario.sessionGroups ?? [],
           );
           await context.addInitScript(() => {
+            const geometry = Object.getOwnPropertyDescriptor(Element.prototype, "scrollHeight")!;
+            let measured = false;
+            Object.defineProperty(Element.prototype, "scrollHeight", {
+              ...geometry,
+              get(this: Element) {
+                const restoring =
+                  !measured &&
+                  this.isConnected &&
+                  this.classList.contains("sidebar-shell__body") &&
+                  this.closest("aside.sidebar")?.getAttribute("data-snapshot-state") === "cached";
+                if (restoring) {
+                  measured = true;
+                  performance.mark("sidebar-restore-geometry-start");
+                }
+                return geometry.get!.call(this);
+              },
+            });
             const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
             Object.defineProperty(Element.prototype, "scrollTop", {
               ...descriptor,
@@ -125,6 +142,7 @@ suite.define(() => {
                 descriptor.set!.call(this, value);
                 if (restoring) {
                   performance.mark("sidebar-restore-native-end");
+                  performance.mark("sidebar-restore-geometry-end");
                 }
               },
             });
@@ -280,7 +298,7 @@ suite.define(() => {
                 await page.reload();
                 await gateway.waitForRequest("connect");
                 await page.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
-                await page.evaluate(() => new Promise(requestAnimationFrame));
+                await page.evaluate(() => Reflect.get(window, "__sidebarPresentation").nextFrame());
                 expect(
                   await page
                     .locator(".sidebar-shell__body")
