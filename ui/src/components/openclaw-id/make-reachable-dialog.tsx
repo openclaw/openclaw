@@ -4,7 +4,10 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { registerOpenClawIdDialogsEnglish } from "../../i18n/locales/en-openclaw-id-dialogs.ts";
 import { registerOpenClawIdEnglish } from "../../i18n/locales/en-openclaw-id.ts";
 import { requestOpenClawIdLinkCode } from "../../lib/openclaw-id/account.ts";
-import { generateOwnerDeviceKey, saveOwnerDeviceKey } from "../../lib/openclaw-id/device-key.ts";
+import {
+  announceOwnerDeviceKey,
+  ensureOwnerDeviceSigner,
+} from "../../lib/openclaw-id/device-key.ts";
 import type { RecoveryKitDetails } from "../../lib/openclaw-id/kit-export.ts";
 import {
   LINK_STEPS,
@@ -229,17 +232,14 @@ export function showMakeReachableDialog(params: {
       // The four honest linking steps (lib/openclaw-id/link-steps.ts).
       const link = async (preparation: OpenClawIdLinkPreparation) => {
         setStep({ kind: "linking", hostname: preparation.hostname });
-        const device = await generateOwnerDeviceKey();
         let signed: Awaited<ReturnType<typeof ceremony.sign>> | undefined;
         try {
           const publication = await runLinkSteps(
             {
               sign: async () => {
-                signed = await ceremony.sign(
-                  preparation,
-                  device.signer,
-                  t("openclawId.thisBrowser"),
-                );
+                // Stored before commit, so a lost answer cannot lose the admitted key.
+                const device = await ensureOwnerDeviceSigner(preparation.claw_id);
+                signed = await ceremony.sign(preparation, device, t("openclawId.thisBrowser"));
                 // The owner key is no longer needed once the statements are signed.
                 ceremony.discard();
               },
@@ -251,7 +251,7 @@ export function showMakeReachableDialog(params: {
                   ...signed,
                   enrollmentCode: nameRequest().enrollmentCode,
                 });
-                await saveOwnerDeviceKey(preparation.claw_id, device.pair);
+                announceOwnerDeviceKey();
                 return result.publication;
               },
               relayOnline: () => readRelayOnline(params.client),
