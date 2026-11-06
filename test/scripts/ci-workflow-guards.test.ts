@@ -3015,6 +3015,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
         }
         const releaseCacheId = new Map([
           ["${{ runner.temp }}/openclaw-watch-rtc-release-libraries", "watch-rtc-cache"],
+          ["${{ runner.temp }}/openclaw-ios-release-cas", "ios-compilation-cache"],
           ["~/Library/Developer/Xcode/DerivedData/OpenClaw-*/SourcePackages", "ios-packages-cache"],
         ]).get(String(step.with?.path));
         if (file === ".github/workflows/ios-store-release.yml" && releaseCacheId) {
