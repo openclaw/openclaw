@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -267,6 +268,7 @@ it.each([
       try {
         await service.stop();
         for (const owner of services) {
+          assert(owner.apiVersion === 2, "Expected service API version 2");
           await owner.stop?.({
             config: support.testState.config,
             stateDir: support.testState.root,

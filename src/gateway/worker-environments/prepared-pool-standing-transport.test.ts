@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -242,6 +243,7 @@ it.each([
       const scheduler = createTestPluginServiceScheduler();
       scheduler.beginClose();
       for (const entry of builder.registry.services) {
+        assert(entry.service.apiVersion === 2, "Expected worker service API version 2");
         if (entry.service.stop) {
           await entry.service.stop({
             config: f.config,

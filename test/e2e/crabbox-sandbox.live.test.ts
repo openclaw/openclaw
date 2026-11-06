@@ -103,6 +103,9 @@ describe.skipIf(!LIVE)("Crabbox registered sandbox backend (live)", () => {
               await registration.cleanup?.({ reason: "restart" });
             }
             for (const service of services) {
+              if (service?.apiVersion !== 2) {
+                throw new Error("Expected service API version 2");
+              }
               await service.stop?.({
                 config,
                 stateDir,

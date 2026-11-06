@@ -589,7 +589,7 @@ describe("Browser dashboard lifetime", () => {
       },
     };
     const service = services[0];
-    if (!service) {
+    if (service?.apiVersion !== 2) {
       throw new Error("Browser service was not registered");
     }
     await serviceScope.run("browser-service-instance", async () => await service.start(context));

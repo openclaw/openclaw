@@ -49,6 +49,10 @@ function registerCrabboxGeneration() {
     registerWorkerProvider: (provider) => providers.push(provider),
   });
   plugin.register(api);
+  const service = services[0];
+  if (service?.apiVersion !== 2) {
+    throw new Error("Expected service API version 2");
+  }
   const generation = {
     provider: providers[0]!,
     registrars,
@@ -58,7 +62,7 @@ function registerCrabboxGeneration() {
       const scheduler = createTestPluginServiceScheduler();
       scheduler.beginClose();
       try {
-        await services[0]?.stop?.({ config: {}, stateDir: ".", logger: console, scheduler });
+        await service.stop?.({ config: {}, stateDir: ".", logger: console, scheduler });
       } finally {
         await scheduler.stop();
       }

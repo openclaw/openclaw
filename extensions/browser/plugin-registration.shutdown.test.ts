@@ -113,7 +113,7 @@ function registerLifecycle(eager = false, path = "/browser/screencast") {
   registerBrowserPlugin(api);
   const route = vi.mocked(api.registerHttpRoute).mock.calls.findLast(([r]) => r.path === path)?.[0];
   const service = vi.mocked(api.registerService).mock.calls.at(-1)?.[0];
-  if (!route?.handleUpgrade || !service?.stop) {
+  if (!route?.handleUpgrade || !service?.stop || service.apiVersion !== 2) {
     throw new Error("expected browser relay route and service lifecycle");
   }
   const scheduler = createTestPluginServiceScheduler();

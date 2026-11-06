@@ -130,6 +130,9 @@ async function registerDiscovery(stateDir: string) {
     profile: "openclaw",
   });
   const service = services[0];
+  if (service?.apiVersion !== 2) {
+    throw new Error("Expected service API version 2");
+  }
   const sessionEnd = hooks.mock.calls.find(([name]) => name === "session_end")?.[1];
   assert(service?.stop && sessionEnd, "Browser discovery lifecycle was not registered");
   const subscribe = vi.fn<OpenClawPluginGatewayEvents["onSessionsChanged"]>(() => vi.fn());

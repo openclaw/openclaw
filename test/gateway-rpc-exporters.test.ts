@@ -70,7 +70,9 @@ async function assertGatewayExporters() {
   let ws: WebSocket | undefined;
   let unsubscribe: (() => void) | undefined;
   let serviceContext: OpenClawPluginServiceContextV2 | undefined;
-  let prometheus: Parameters<OpenClawPluginApi["registerService"]>[0] | undefined;
+  let prometheus:
+    | Extract<Parameters<OpenClawPluginApi["registerService"]>[0], { apiVersion: 2 }>
+    | undefined;
   const scheduler = createTestPluginServiceScheduler();
   const cleanupFailures: unknown[] = [];
   try {
@@ -111,10 +113,11 @@ async function assertGatewayExporters() {
           }),
       }),
     );
-    prometheus = services[0];
-    if (!prometheus) {
-      throw new Error("Prometheus plugin did not register its service");
+    const registeredPrometheus = services[0];
+    if (registeredPrometheus?.apiVersion !== 2) {
+      throw new Error("Prometheus plugin did not register its V2 service");
     }
+    prometheus = registeredPrometheus;
     const stateDir = process.env.OPENCLAW_STATE_DIR;
     if (!stateDir) {
       throw new Error("Gateway test hooks did not create an isolated state directory");

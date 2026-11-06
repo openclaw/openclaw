@@ -42,6 +42,9 @@ async function startAdvisor(everyToolCalls = 1, reply = "NO_CHANGE", runTrigger 
   };
   plugin.register(api);
   const service = registerService.mock.calls.find(([s]) => s.apiVersion === 2)?.[0];
+  if (service?.apiVersion !== 2) {
+    throw new Error("Expected service API version 2");
+  }
   const clock = createGatewaySchedulerClock();
   const scheduler = createTestPluginServiceScheduler(createTestGatewayScheduler(clock.clock));
   let calls = 0;

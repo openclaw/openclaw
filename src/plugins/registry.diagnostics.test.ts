@@ -375,7 +375,7 @@ describe("plugin service registration identity", () => {
     );
     const services = await startPluginServices({ registry: builder.registry, config: {} });
     try {
-      const context = expectDefined(received);
+      const context = expectDefined(received, "registered V3 service context");
       expect(context.sessionWork.version).toBe(1);
       expect(context.scheduler.signal.aborted).toBe(false);
       await expect(context.sessionWork.run("", async () => "unused")).rejects.toThrow(
