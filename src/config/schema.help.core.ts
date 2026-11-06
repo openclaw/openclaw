@@ -117,6 +117,24 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Client file and image upload policy for the Gateway and Control UI. Downloads and agent-generated media remain available.",
   "gateway.uploads.enabled":
     "Allows client file and image uploads (default: true). Set false to reject attachments, workspace/terminal uploads, avatar uploads, and archive imports at the Gateway, including direct API requests. Changes apply without restarting. This is not a sandbox or a restriction on channel media, agent tools, or operator shell access.",
+  "gateway.openclawId":
+    "Experimental OpenClaw ID remote access (Labs). When enabled, the Gateway supervises a tunnel child that accepts iroh connections from admitted devices and proxies them to this Gateway. Off by default; while off the Gateway starts no child process, opens no tunnel sockets, and contacts no OpenClaw ID, Discovery or relay service.",
+  "gateway.openclawId.enabled":
+    "Turns on experimental OpenClaw ID remote access (default: false). Changes apply without restarting the Gateway. Remote access also needs relayUrl; linking a claw additionally needs issuerUrl, discoveryUrl and loaderDomain.",
+  "gateway.openclawId.issuerUrl":
+    "OpenClaw ID issuer used to sign in for identity only while linking a claw. It is never trusted for membership, device approval or which server a client dials.",
+  "gateway.openclawId.clientId":
+    "Public OAuth client (authorization code with PKCE) the Control UI uses for Sign in with OpenClaw ID in its account menu. Its redirect URI is <Control UI origin>/openclaw-id/callback; sign-in works only from the Control UI on this machine.",
+  "gateway.openclawId.discoveryUrl":
+    "Discovery service that mirrors the claw descriptor and membership snapshot and relays mailbox messages. It is untrusted: every statement it returns is verified against the claw's pinned owner root.",
+  "gateway.openclawId.relayUrl":
+    "The only iroh relay in the tunnel endpoint's relay map (no public n0 relays, DNS or pkarr). Browsers reach the claw only through this relay.",
+  "gateway.openclawId.loaderDomain":
+    "Bare DNS domain of the OpenClaw ID loader; a linked claw is reachable at https://<name>-<account tag>.<loaderDomain> and its server binding is signed for that hostname.",
+  "gateway.openclawId.ownerDeviceInactivityDays":
+    "Days an owner device may go without reaching this claw before the claw removes it from its allowlist (default: 90). Devices it approved stay.",
+  "gateway.openclawId.memberDeviceInactivityDays":
+    "Days a member's browser may go without reaching this claw before the claw removes it (default: 30). The member stays listed.",
   "gateway.cliAgents":
     "Control UI discovery for external CLI session engines exposed by the Gateway session catalog. Enabled by default; disable to prevent starting those engines from the new-session model picker.",
   "gateway.cliAgents.enabled":

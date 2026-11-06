@@ -341,6 +341,22 @@ Use `--compare-bundle-dir` and `--control-bundle-dir` for candidate and A/A trip
 keep `--trace` attribution separate from untraced timing. These synthetic sweeps
 do not measure native reader scroll latency.
 
+Configuration censuses use the same scenarios and rotate configurations within
+each pair. `--configurations all` selects every built-in theme in light and dark,
+`zh-CN`, `ar`, `de`, device scale 2 and 3, reduced motion, and forced colors.
+Select individual axes with `default,theme:crt:dark,locale:ar,scale:2,reduced-motion,forced-colors`;
+add `control` for a separately named default A/A sample. Theme and locale are
+installed before boot in both saved settings and the synthetic Gateway preferences.
+Browser locale/media and device scale are recorded alongside the resolved app
+configuration; unsupported forced-color emulation is skipped, never counted as proof.
+Each observation records resource request timing/bytes, loaded font faces, computed
+colors/font/direction, and CLS (null where the engine lacks Layout Instability).
+Boot reports both transcript readiness and configuration readiness so a late
+translation wave cannot disappear behind an early English render. Use
+`--steps cold-boot,warm-boot --network-profiles rtt-100ms` to inspect request waves.
+One-pair screens only identify candidates: confirm deviations over 20% with ten
+rotated pairs plus `control`, and fixes with twenty pairs within the same configuration.
+
 Native clipboard measurements use `--steps chat-actions-native-paste-text,chat-actions-native-paste-image`.
 They paste a 256 KiB draft or a synthetic 2048×2048 PNG through the browser's
 clipboard and keyboard shortcut, and require trusted paste events. Evidence
