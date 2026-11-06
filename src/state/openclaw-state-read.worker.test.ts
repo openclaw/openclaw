@@ -407,6 +407,7 @@ it.each([
 });
 
 describe.each([
+  { type: "backup.runs" },
   { type: "subagents.restore" },
   {
     type: "meetingTranscripts.export",
@@ -414,7 +415,7 @@ describe.each([
     selector: "fixture-session",
     includeNotes: true,
   },
-] as const)("$type stream loading", (command) => {
+] as const)("$type owner loading", (command) => {
   const loaded = new Set<string>();
   const freshAdmission = vi.fn<() => void>();
   const nativeSection = vi.fn();
@@ -461,6 +462,17 @@ describe.each([
         onAdmitted();
         return { ok: true };
       });
+    vi.doMock("./backup-run-records.kernel.js", async (importOriginal) => {
+      loaded.add("backup.runs");
+      if (holdImport && command.type === "backup.runs") {
+        importStarted.resolve();
+        await releaseImport.promise;
+      }
+      return {
+        ...(await importOriginal<typeof import("./backup-run-records.kernel.js")>()),
+        readBackupRunsInDatabase: mock.query,
+      };
+    });
     vi.doMock("./openclaw-state-read-handlers.js", async (importOriginal) => {
       loaded.add("catchall");
       return importOriginal<typeof import("./openclaw-state-read-handlers.js")>();
@@ -511,6 +523,7 @@ describe.each([
 
   afterEach(() => {
     releaseImport.resolve();
+    vi.doUnmock("./backup-run-records.kernel.js");
     vi.doUnmock("./openclaw-state-read-handlers.js");
     vi.doUnmock("../agents/subagents/registry/subagent-registry.store.worker.js");
     vi.doUnmock("../agents/subagents/registry/subagent-registry.store.restore.worker.js");
@@ -518,44 +531,46 @@ describe.each([
     vi.restoreAllMocks();
   });
 
-  it("loads only its stream owner and preserves the reply", async () => {
-    const input = { ...request, checkFreshAdmission: true, command };
-    const reply = await mock.handler(input, channel, control);
-    expect(reply).toEqual(
-      command.type === "subagents.restore"
-        ? { ok: true, type: command.type, sourceAdmitted: true, count: 2 }
-        : { ok: true, type: command.type, sourceAdmitted: true, result: { ok: true } },
-    );
-    if (command.type === "subagents.restore") {
-      expect(restore).toHaveBeenCalledExactlyOnceWith(input, channel, expect.any(Function));
-      expect(exportTranscript).not.toHaveBeenCalled();
-    } else {
-      expect(exportTranscript).toHaveBeenCalledExactlyOnceWith(
-        input,
-        command,
-        channel,
-        expect.any(Function),
+  if (command.type !== "backup.runs") {
+    it("loads only its stream owner and preserves the reply", async () => {
+      const input = { ...request, checkFreshAdmission: true, command };
+      const reply = await mock.handler(input, channel, control);
+      expect(reply).toEqual(
+        command.type === "subagents.restore"
+          ? { ok: true, type: command.type, sourceAdmitted: true, count: 2 }
+          : { ok: true, type: command.type, sourceAdmitted: true, result: { ok: true } },
       );
-      expect(restore).not.toHaveBeenCalled();
-    }
-    expect(freshAdmission).toHaveBeenCalledOnce();
-    expect(nativeSection).toHaveBeenCalledOnce();
-    expect(loaded).toEqual(new Set([command.type]));
-  });
-
-  it("requires a receiver before entering either stream owner", async () => {
-    const reply = await mock.handler({ ...request, command }, undefined, control);
-    const operation =
-      command.type === "subagents.restore" ? "Subagent restore" : "Transcript export";
-    expect(reply).toMatchObject({
-      ok: false,
-      message: `${operation} requires a bounded receiver`,
-      sourceAdmitted: undefined,
+      if (command.type === "subagents.restore") {
+        expect(restore).toHaveBeenCalledExactlyOnceWith(input, channel, expect.any(Function));
+        expect(exportTranscript).not.toHaveBeenCalled();
+      } else {
+        expect(exportTranscript).toHaveBeenCalledExactlyOnceWith(
+          input,
+          command,
+          channel,
+          expect.any(Function),
+        );
+        expect(restore).not.toHaveBeenCalled();
+      }
+      expect(freshAdmission).toHaveBeenCalledOnce();
+      expect(nativeSection).toHaveBeenCalledOnce();
+      expect(loaded).toEqual(new Set([command.type]));
     });
-    expect(restore).not.toHaveBeenCalled();
-    expect(exportTranscript).not.toHaveBeenCalled();
-    expect(mock.open).not.toHaveBeenCalled();
-  });
+
+    it("requires a receiver before entering either stream owner", async () => {
+      const reply = await mock.handler({ ...request, command }, undefined, control);
+      const operation =
+        command.type === "subagents.restore" ? "Subagent restore" : "Transcript export";
+      expect(reply).toMatchObject({
+        ok: false,
+        message: `${operation} requires a bounded receiver`,
+        sourceAdmitted: undefined,
+      });
+      expect(restore).not.toHaveBeenCalled();
+      expect(exportTranscript).not.toHaveBeenCalled();
+      expect(mock.open).not.toHaveBeenCalled();
+    });
+  }
 
   it("checks fresh admission after the pending owner import settles", async () => {
     holdImport = true;
@@ -569,7 +584,7 @@ describe.each([
       await Promise.race([
         importStarted.promise,
         pending.then(() => {
-          throw new Error("Worker returned before loading the selected stream owner");
+          throw new Error("Worker returned before loading the selected owner");
         }),
       ]);
       expect(freshAdmission).not.toHaveBeenCalled();
@@ -590,54 +605,7 @@ describe.each([
     expect(restore).not.toHaveBeenCalled();
     expect(exportTranscript).not.toHaveBeenCalled();
     expect(mock.open).not.toHaveBeenCalled();
-  });
-});
-
-it("rechecks fresh admission after loading a deferred query owner", async () => {
-  vi.resetModules();
-  const entered = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<void>();
-  const query = vi.fn(() => []);
-  // mock-isolation: Hold the actual dispatch owner's import across source revocation.
-  vi.doMock("./backup-run-records.kernel.js", async (importOriginal) => {
-    entered.resolve();
-    await release.promise;
-    return {
-      ...(await importOriginal<typeof import("./backup-run-records.kernel.js")>()),
-      readBackupRunsInDatabase: query,
-    };
-  });
-  const { openClawStateDatabaseCache } = await import("./openclaw-state-db-cache.js");
-  const admission = vi.spyOn(
-    openClawStateDatabaseCache,
-    "assertOpenClawStateDatabaseFreshOpenAllowedAtPath",
-  );
-  await import("./openclaw-state-read.worker.js");
-  const pending = mock.handler({ ...request, checkFreshAdmission: true });
-  try {
-    await Promise.race([
-      entered.promise,
-      pending.then(() => {
-        throw new Error("Read returned before loading its query owner");
-      }),
-    ]);
-    expect(admission).not.toHaveBeenCalled();
-    admission.mockImplementation(() => {
-      throw new Error("Fresh source admission refused");
-    });
-    release.resolve();
-    expect(await pending).toMatchObject({
-      ok: false,
-      message: "Fresh source admission refused",
-      sourceAdmitted: undefined,
-    });
-    expect(admission).toHaveBeenCalledOnce();
-    expect(query).not.toHaveBeenCalled();
+    expect(mock.query).not.toHaveBeenCalled();
     expect(mock.admit).not.toHaveBeenCalled();
-  } finally {
-    release.resolve();
-    await pending;
-    admission.mockRestore();
-    vi.doUnmock("./backup-run-records.kernel.js");
-  }
+  });
 });

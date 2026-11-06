@@ -15,6 +15,7 @@ import * as coreCodingTools from "./core-coding-tools.js";
 import * as pluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { prepareCoreToolPolicy, projectAgentToolDefinition } from "./prepared-tool-surface.js";
+import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -42,13 +43,7 @@ it.each([buildTools, createOpenClawCodingToolsInternalAsync])(
       .spyOn(pluginTools, "resolveOpenClawPluginToolsForOptionsAsync")
       .mockResolvedValue([]);
     vi.mocked(createOpenClawTools).mockClear();
-    const host: AnyAgentTool = {
-      name: "host_ping",
-      label: "Host ping",
-      description: "Host-owned test tool",
-      parameters: { type: "object", properties: {} },
-      execute: vi.fn(async () => ({ content: [], details: {} })),
-    };
+    const host = createStubTool("host_ping");
     const options = {
       workspaceDir: tempDirs.make("denied-tools-"),
       config: { tools: { deny: ["*"] } },
