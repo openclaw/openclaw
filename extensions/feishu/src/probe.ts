@@ -50,7 +50,7 @@ function setCachedProbeResult(
   result: FeishuProbeResult,
   ttlMs: number,
 ): FeishuProbeResult {
-  probeCache.set(cacheKey, { result, expiresAt: Date.now() + ttlMs });
+  probeCache.set(cacheKey, { result, expiresAt: performance.now() + ttlMs });
   pruneMapToMaxSize(probeCache, MAX_PROBE_CACHE_SIZE);
   return result;
 }
@@ -81,7 +81,7 @@ export async function probeFeishu(
     setCachedProbeResult(cacheKey, { ok: false, appId: creds.appId, error }, PROBE_ERROR_TTL_MS);
   const cached = probeCache.get(cacheKey);
   if (cached) {
-    if (cached.expiresAt > Date.now()) {
+    if (cached.expiresAt > performance.now()) {
       return cached.result;
     }
     probeCache.delete(cacheKey);

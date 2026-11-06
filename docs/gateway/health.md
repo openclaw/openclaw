@@ -62,7 +62,9 @@ preparation clears the degraded status when all runtimes are ready.
 If a newer model-runtime refresh replaces preparation in progress, startup
 follows the admitted replacement through preparation and publication. Cancelling
 the retired acquisition does not stop the Gateway; genuine replacement failures
-still propagate.
+still propagate. A config reload that retires the plugins behind that preparation
+follows the same bounded retry. If replacements outlast those retries, the agent's
+refusal asks for a Gateway restart; it does not require database repair.
 
 Transcript projection repair runs after readiness in yielding worker-backed work.
 Pending GitHub publication recovery runs in the background and does not delay

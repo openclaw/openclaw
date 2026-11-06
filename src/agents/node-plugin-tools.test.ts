@@ -10,8 +10,9 @@ import { NodeMcpElicitationRegistry } from "../gateway/node-mcp-elicitation.js";
 import {
   listConnectedNodePluginTools,
   removeConnectedNodePluginTools,
-  replaceConnectedNodePluginTools,
+  publishNodeSessionPluginTools,
 } from "../gateway/node-plugin-tool-snapshot.js";
+import { makeNodeSession } from "../gateway/node-registry.test-helpers.js";
 import type { NodeSession } from "../gateway/node-session.types.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
@@ -82,16 +83,29 @@ function connectTool(
   descriptor: NodePluginToolDescriptor = remoteEcho,
   {
     registered = false,
-    ...node
-  }: Partial<Omit<Parameters<typeof replaceConnectedNodePluginTools>[0], "tools">> & {
+    nodeId = "node-1",
+    displayName,
+  }: Partial<Pick<NodeSession, "nodeId" | "displayName">> & {
     registered?: boolean;
   } = {},
 ) {
-  replaceConnectedNodePluginTools({
-    nodeId: "node-1",
-    ...node,
-    tools: [{ descriptor, registered }],
+  const node = makeNodeSession(nodeId, {
+    displayName,
+    commands: ["remote.echo", "mcp.tools.call.v1"],
+    declaredNodePluginTools: [descriptor],
   });
+  publishNodeSessionPluginTools(
+    node,
+    undefined,
+    registered
+      ? [
+          {
+            pluginId: descriptor.pluginId,
+            command: { command: descriptor.command, agentTool: descriptor },
+          },
+        ]
+      : [],
+  );
 }
 
 function docsTool(
@@ -633,7 +647,12 @@ describe("materializeNodeTools", () => {
     connectTool(githubDescriptor, { nodeId: "node-1", registered: true });
     expect(toolNames({ toolAllowlist: ["github"] })).toEqual(["remote_repo_search"]);
 
-    connectTool({ ...githubDescriptor, pluginId: "node-mcp" });
+    connectTool({
+      ...githubDescriptor,
+      pluginId: "node-mcp",
+      command: "mcp.tools.call.v1",
+      mcp: { server: "github", tool: "search" },
+    });
     expect(toolNames({ toolAllowlist: ["node-mcp"] })).toEqual(["remote_repo_search"]);
 
     connectTool(githubDescriptor);

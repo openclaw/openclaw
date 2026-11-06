@@ -1,5 +1,4 @@
 import { shouldForwardModelCommandToServer } from "../../../../src/auto-reply/commands-registry.shared.js";
-import { isAbortTrigger } from "../../../../src/auto-reply/reply/abort-trigger-text.js";
 import {
   captureChatWorkContext,
   formatChatWorkContext,
@@ -15,6 +14,7 @@ import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity
 import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { outboxStorageScope } from "../../lib/chat/outbox-payload-store.runtime.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
+import { captureMcpAppContext } from "../../lib/mcp-app-context.ts";
 import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
@@ -52,11 +52,12 @@ import {
 } from "./chat-send-eligibility.ts";
 import { resolveDisplayedLeafEntryId } from "./chat-send-request.ts";
 import {
+  acceptsChatAmbientContext,
   chatSendAdmissionHoldReason,
   chatSendHoldReason,
   formatChatQueueAdmissionError,
   isChatResetCommand,
-  OFFLINE_QUEUE_STORAGE_ERROR,
+  chatOfflineQueueStorageError,
   prependReplyQuote,
   annotationMessageContext,
 } from "./chat-send-support.ts";
@@ -252,7 +253,7 @@ export async function handleSendChat(
     if (error === undefined) {
       return false;
     }
-    showToast({ message: error });
+    showToast({ severity: "error", message: error });
     return true;
   };
 
@@ -408,7 +409,7 @@ export async function handleSendChat(
               host.chatAttachments = attachmentsToSend;
               host.composerDraftChanged?.();
             }
-            setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+            setChatError(host, chatOfflineQueueStorageError());
             return;
           }
           // Submission resumes follow; delayed command results respect later reader input.
@@ -494,19 +495,18 @@ export async function handleSendChat(
     : replyTarget?.sourceMessageId?.trim() || undefined;
   const quotedMessage =
     replyTarget && !replyToId && !intent ? prependReplyQuote(message, replyTarget) : message;
-  // Edits retain the original snapshot only while the edited text remains
-  // ordinary model input; commands and Goals never acquire ambient context.
-  const acceptsWorkContext =
-    !intent &&
-    !userMessage.startsWith("/") &&
-    !userMessage.startsWith("!") &&
-    !isAbortTrigger(quotedMessage);
-  const context = acceptsWorkContext
+  const acceptsAmbientContext = acceptsChatAmbientContext(userMessage, quotedMessage, intent);
+  const context = acceptsAmbientContext
     ? isInlineEditSubmission
       ? inlineEdit.source.workContext
       : host.getWorkContext?.()
     : undefined;
   const workContext = context ? captureChatWorkContext(context) : undefined;
+  const appContext = acceptsAmbientContext
+    ? isInlineEditSubmission
+      ? inlineEdit.source.appContext
+      : captureMcpAppContext(host.client, submittedSessionKey, submitGuardOptions.scope.agentId)
+    : undefined;
   // Annotation and fallback-reply prefixes shift mentions; structured work context never does.
   const mentionOffset = quotedMessage.length - userMessage.length;
   const effectiveMentions = submitted.mentions?.map((mention) => ({
@@ -597,6 +597,7 @@ export async function handleSendChat(
       text: intent ? quotedMessage : queuedText.text,
       ...(queuedText.mentions ? { mentions: queuedText.mentions } : {}),
       ...(workContext ? { workContext } : {}),
+      ...(appContext ? { appContext } : {}),
       createdAt: Date.now(),
       ...(resumedEdit?.orderKey !== undefined ? { orderKey: resumedEdit.orderKey } : {}),
       attachments: deliveredAttachments.length ? deliveredAttachments : undefined,

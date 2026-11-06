@@ -2,7 +2,7 @@
 
 import { flush } from "solid-js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { i18n } from "../../i18n/index.ts";
+import { i18n, t } from "../../i18n/index.ts";
 import { choosePickerValue, openPicker, updatePickers } from "../../test-helpers/select-picker.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { resolveDefaultModelPresentation } from "./data.ts";
@@ -31,6 +31,13 @@ function selectSegment(group: Element, value: string) {
 }
 
 describe("renderModelProviders", () => {
+  it("keeps the request summary separate from supplied error detail", () => {
+    const container = mount(props({ error: "Synthetic provider refusal" }));
+    const alert = container.querySelector('[role="alert"]')!;
+    expect(text(alert)).toContain("Couldn’t load model settings. Refresh and try again.");
+    expect(text(alert)).toContain("Synthetic provider refusal");
+    expect(alert.querySelectorAll(".settings-row__desc")).toHaveLength(2);
+  });
   it("keeps access details in open model options and out of selected settings triggers", async () => {
     const onPrimaryChange = vi.fn();
     const onUtilityChange = vi.fn();
@@ -213,9 +220,7 @@ describe("renderModelProviders", () => {
     const container = document.createElement("div");
     mount(props({ providerUsageFailed: true }), container);
 
-    expect(container.textContent).toContain(
-      "Provider usage is unavailable; the last request failed. Refresh to retry.",
-    );
+    expect(container.textContent).toContain("Couldn’t load provider usage. Refresh to try again.");
   });
 
   it.each([
@@ -253,6 +258,31 @@ describe("renderModelProviders", () => {
     );
     expect(retry).not.toBeNull();
     expect(retry?.disabled).toBe(false);
+  });
+
+  it("keeps listing failures quiet until something is set up", async () => {
+    const failure = "Couldn’t load models from acp-opencode, openai. Try again.";
+    const alert = (container: HTMLElement) =>
+      container.querySelector('.model-providers__catalog-progress[role="alert"]');
+    // Providers that failed discovery still get a row; none is connected on a fresh install.
+    const unconnected = card({ apiKey: undefined, modelCount: 0, availableModelCount: 0 });
+    const fresh = mount(
+      props({
+        cards: [unconnected],
+        defaultModels: { primary: "", fallbacks: [], utilityModel: null },
+        catalogDiscoveryError: failure,
+      }),
+    );
+    const configured = mount(
+      props({
+        cards: [unconnected],
+        defaultModels: { primary: "openai/gpt-5.5", fallbacks: [], utilityModel: null },
+        catalogDiscoveryError: failure,
+      }),
+    );
+    await waitForFast(() => expect(alert(configured)?.textContent).toContain(failure));
+    // Both views settled the same way; only the set-up one reports the failure.
+    expect(alert(fresh)).toBeNull();
   });
 
   it("shows inherited model policy, restores overrides, and preserves advanced thinking", () => {
@@ -332,7 +362,7 @@ describe("renderModelProviders", () => {
     expect(help).not.toBeNull();
     expect(row.querySelector(".settings-row__desc")).toBeNull();
     expect(text(row.querySelector('openclaw-tooltip [slot="content"]'))).toBe(
-      "Makes typed choices, scores, and yes/no judgments. Disabled until you select a decision model; chat models are not used as a fallback.",
+      "Makes typed choices, scores, and yes/no judgments. Disabled until you select a decision model; conversational models aren’t used as a fallback.",
     );
   });
 
@@ -544,7 +574,7 @@ describe("renderModelProviders", () => {
       "Config refresh failed after the model defaults were committed.",
     ]);
     expect(messages[0]?.classList.contains("success")).toBe(true);
-    expect(messages[1]?.classList.contains("warning")).toBe(true);
+    expect(messages[1]?.classList.contains("warn")).toBe(true);
   });
 
   it("keeps model behavior available while provider data loads", () => {
@@ -586,18 +616,18 @@ describe("renderModelProviders", () => {
       }),
     );
     const provider = container.querySelector('[data-provider-id="openai"]');
-    expect(text(container)).toContain("Connections for Writer");
+    expect(text(container)).toContain("Accounts for Writer");
     expect(text(provider)).toContain("From environment (OPENAI_API_KEY)");
     expect(text(provider?.querySelector(".model-providers__probe-summary") ?? null)).toBe(
-      "Connected",
+      "Access verified",
     );
     expect(
       [...(provider?.querySelectorAll(".model-providers__probe-target") ?? [])].map((target) =>
         [...target.querySelectorAll("span")].map(text),
       ),
     ).toEqual([
-      ["Default profile", "Connected · Request round-trip: 145 ms"],
-      ["Secondary profile", "Connected · Request round-trip: 320 ms"],
+      ["Default profile", "Access verified · Request round-trip: 145 ms"],
+      ["Secondary profile", "Access verified · Request round-trip: 320 ms"],
     ]);
     expect(text(provider)).not.toContain("9145");
   });
@@ -621,13 +651,13 @@ describe("renderModelProviders", () => {
     );
 
     const readiness = container.querySelector('[data-model-readiness="model-required"]');
-    expect(text(readiness)).toContain("Connect a verified AI model");
+    expect(text(readiness)).toContain(t("modelProviders.login.action"));
     expect(text(readiness)).toContain("Model required");
     expect(container.querySelector(".model-providers__defaults")).not.toBeNull();
     // Setup has one way to connect; the access section offers its own again once it ends.
     expect(container.querySelectorAll("[data-models-connect]")).toHaveLength(1);
 
-    button(readiness!, "Connect provider")?.click();
+    button(readiness!, "Add account")?.click();
     expect(onConnectProvider).toHaveBeenCalledOnce();
 
     mount(props(), container);
@@ -698,7 +728,7 @@ describe("renderModelProviders", () => {
     const provider = expand(container).querySelector('[data-provider-id="openai"]');
     expect(text(provider)).not.toContain("API key set in config");
     // Models are available, so the provider works with credentials OpenClaw does not hold.
-    expect(text(provider)).toContain("Credentials managed outside OpenClaw");
+    expect(text(provider)).toContain("Account access managed outside OpenClaw");
   });
 
   it("renders mixed credential probes as connected with warnings", () => {
@@ -730,7 +760,7 @@ describe("renderModelProviders", () => {
 
     const probe = container.querySelector(".model-providers__probe");
     expect(probe?.querySelector(".settings-status--warn")).not.toBeNull();
-    expect(text(probe)).toContain("Connected with warnings");
+    expect(text(probe)).toContain("Access verified with warnings");
     expect(text(probe)).toContain("Configured credential · openai/gpt-5.6-sol");
     expect(text(probe)).toContain("Profile Default · openai/gpt-5.6-sol");
     expect(text(probe)).toContain("Update or remove it, then retry");
@@ -770,7 +800,7 @@ describe("renderModelProviders", () => {
 
     const provider = container.querySelector('[data-provider-id="openai"]');
     expect(text(provider)).toContain("No models available");
-    expect(text(provider)).not.toContain("Connection failed");
+    expect(text(provider)).not.toContain("Access failed");
   });
 
   it.each([null])(
@@ -876,9 +906,9 @@ describe("renderModelProviders", () => {
   it("disables probing when the gateway does not advertise the method", () => {
     const onProbe = vi.fn();
     const container = expand(mount(props({ probeAvailable: false, onProbe })));
-    const testButton = button(container, "Test connection");
+    const testButton = button(container, "Test access");
     expect(testButton?.disabled).toBe(true);
-    expect(testButton?.title).toContain("newer gateway");
+    expect(testButton?.title).toContain("Update OpenClaw to test provider access.");
     testButton?.click();
     expect(onProbe).not.toHaveBeenCalled();
   });
@@ -891,7 +921,7 @@ describe("renderModelProviders", () => {
         onProbe,
       }),
     );
-    button(expand(container), "Test connection")!.click();
+    button(expand(container), "Test access")!.click();
     expect(onProbe).toHaveBeenCalledWith("openai", ["anthropic", "claude-cli"]);
   });
 
@@ -945,6 +975,15 @@ describe("renderModelProviders", () => {
             logoutTargets: [{ provider: "openai-codex", profileIds: ["openai-codex:work"] }],
           }),
         ],
+        // Removal keeps defaults, so the confirmation names the ones this provider serves.
+        configuredModels: [
+          { id: "gpt-main", provider: "openai", name: "GPT Main", selectionRef: "main" },
+        ],
+        defaultModels: {
+          primary: "main",
+          fallbacks: ["anthropic/claude", "openai/gpt-backup"],
+          utilityModel: null,
+        },
         onRequestLogout,
       }),
     );
@@ -952,6 +991,7 @@ describe("renderModelProviders", () => {
     expect(onRequestLogout).toHaveBeenCalledWith(
       expect.objectContaining({
         cardId: "openai",
+        defaultModels: "GPT Main, openai/gpt-backup",
         // A provider-wide sign-out keeps config keys, so the key needs its own API-key target.
         removeTargets: [
           { provider: "openai-codex" },
@@ -983,7 +1023,7 @@ describe("renderModelProviders", () => {
     );
     const setKey = button(expand(container), "Replace");
     expect(setKey?.disabled).toBe(true);
-    expect(setKey?.title).toContain('auth mode is "oauth"');
+    expect(setKey?.title).toContain("current sign-in method");
   });
 });
 

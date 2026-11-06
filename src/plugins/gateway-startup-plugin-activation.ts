@@ -139,7 +139,7 @@ function hasExplicitHookPolicyConfig(
 ): boolean {
   return (
     entry?.hooks?.allowConversationAccess === true ||
-    entry?.hooks?.allowPromptInjection === true ||
+    entry?.hooks?.allowPromptModification === true ||
     entry?.hooks?.timeoutMs !== undefined ||
     (entry?.hooks?.timeouts !== undefined && Object.keys(entry.hooks.timeouts).length > 0)
   );

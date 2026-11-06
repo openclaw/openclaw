@@ -269,12 +269,17 @@ it("shows a Gateway synthesis failure instead of starting another speech provide
   expect(request).toHaveBeenCalledTimes(2);
 });
 
-it("stops same-tick playback and ignores its late synthesis during a new playback", async () => {
+it("stops same-tick and pending playback without accepting late synthesis", async () => {
   const view = mount();
   const button = readButton(view);
   button.click();
   button.click();
-  expect(request).toHaveBeenCalledOnce();
+  await waitForSolid(() => expect(readButton(view)).toBe(button));
+  expect(request).not.toHaveBeenCalled();
+
+  button.click();
+  await waitForSolid(() => expect(request).toHaveBeenCalledOnce());
+  button.click();
   await waitForSolid(() => expect(readButton(view)).toBe(button));
 
   const next = createDeferred<TtsSpeakResult>();

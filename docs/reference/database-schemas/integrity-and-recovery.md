@@ -565,6 +565,12 @@ lease, and cancellation detaches only that caller while the shared operation and
 remaining leases keep their original owner and cleanup authority.
 
 Shared-state reads capture their source and lifecycle authority before queuing.
+Read-only state inspections in one Doctor process share a retained private image
+while the source's main file and WAL are unchanged, instead of copying the database
+for each schema, lease, or single-row read. A commit, a replaced file, or a rollback
+journal retires it, and Doctor retires it before finishing. A failed removal of a
+retired image logs a warning and stays with the exit retry and the Gateway sweep.
+
 An explicitly inherited snapshot keeps its original bytes. A fresh
 artifact-preserving copy checks the admitted physical file key at each main-file
 open and refuses changed identity rather than following a replacement. Requests
@@ -675,13 +681,32 @@ token; retirement is committed before handles close so a late worker cannot
 restart it. Updaters retain legacy-compatible token handling for released workers.
 Primary databases and backups are never removed by this owner.
 
-The serving Gateway does not scan or reclaim abandoned snapshot directories.
-Legacy copies left by older releases or a machine-wide crash require explicit
-offline operator maintenance. Large reflink cleanup can stall other databases
-on the same filesystem even when each truncate returns quickly; schedule that
-work separately from serving traffic. The cache can contain snapshots from
-multiple state directories, so Doctor's authority over one state directory does
-not authorize a cache-wide sweep. Snapshot allocation never waits for such a sweep.
+New snapshots use an installation-specific namespace under the cache root,
+derived from the resolved state-directory path. Delayed Gateway maintenance
+reclaims abandoned snapshots there, starting after the startup reconnect window
+and then hourly. The streaming scan yields between entries, so retained copies
+do not starve later entries. Retirement requires 15 minutes without payload
+activity plus exclusive ownership of every nested SQLite token.
+Live readers and creators prevent deletion even when the files are old. A crash
+or `SIGKILL` releases native locks, allowing a later pass to recover a leftover
+journal and retire the incomplete copy. Maintenance reports removed bytes and
+retained directories; missing tokens, unknown layouts and legacy workers are
+retained for operator inspection.
+
+The same pass also visits sibling `sqlite-<hash>` namespaces and
+`openclaw-sqlite-readonly-v2-*` directories directly under the shared cache
+parent. Earlier Doctor and triage runs, and older releases, staged copies there.
+Those copies are retired only after 24 hours without activity anywhere in their
+tree, because another installation may own them, and they still need exclusive
+ownership of every nested token. Unreadable roots are counted as retained, and
+namespace directories are never removed.
+
+Copies without a lifetime token, pre-token legacy layouts, unknown layouts and
+updater-owned temporary roots still require explicit offline operator
+maintenance. Primary databases and published backups remain outside this sweep.
+Deletion runs in the native worker, in steps of at most 64 MiB; delayed filesystem
+metadata work can still affect other traffic on the same filesystem. Snapshot
+allocation, fresh maintenance and rollback never invoke or await the sweep.
 
 Schema-only agent inspections during Doctor and restart checks read metadata in
 a child process, within one SQLite read transaction, without copying the whole

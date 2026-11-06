@@ -124,6 +124,13 @@ requester's saved Access; pass
 [`cyberAccessProgram`](/tools/subagents/tool-reference#tool-parameters) to choose
 a program for the child explicitly.
 
+Daybreak applies only to OpenAI models. When a chat with a saved Blue or Red
+choice runs a different provider, for example after a model change, a fallback,
+or a Claude CLI turn, that turn uses Standard and the chat shows a one-time
+notice. The saved choice is kept and applies again when the chat returns to an
+OpenAI model. OpenAI models still fail visibly when their runtime or account
+cannot use the selected program.
+
 Named operator roles grant Blue and Red independently through
 `gateway.roles.definitions.<role>.accessPrograms.cyber`. An omitted or empty grant
 list permits Standard only, including for admin-scoped roles or roles without

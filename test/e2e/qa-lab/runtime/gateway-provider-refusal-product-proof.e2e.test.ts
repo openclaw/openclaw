@@ -158,7 +158,11 @@ it("keeps a structured Anthropic refusal terminal across retry and fallback", as
           content: REFUSAL_NOTICE,
           display: true,
           excludeFromContext: true,
-          details: { runId: started.runId, error: REFUSAL_TEXT },
+          details: {
+            runId: started.runId,
+            error: REFUSAL_TEXT,
+            cause: { provider: "anthropic" },
+          },
         }),
       ]);
       expect(JSON.stringify(receipts)).not.toContain(REFUSAL_EXPLANATION);

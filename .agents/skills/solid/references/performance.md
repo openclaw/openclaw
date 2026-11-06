@@ -4,7 +4,7 @@ Delete unnecessary work before batching or caching; follow the [performance work
 
 ## Startup bundle
 
-`scripts/check-control-ui-performance.mts` and `config/control-ui-startup-budget-baseline.json` own startup measurement and enforcement: the committed gzip baseline plus growth and build-variance allowances, and one startup CSS request. The baseline itself may not exceed the script's `startupJsGzipBytes` cap. Preserve the lazy graph and compare every changed boot surface against its merge base. A surface already above its cap may not grow beyond the 64-byte build-variance allowance. Lower the startup baseline with the official `--update-baseline --reason` command after a verified reduction, using the measured head value rather than a lower target; raising budgets needs owner approval.
+`scripts/check-control-ui-performance.mts` and `config/control-ui-startup-budget-baseline.json` own startup measurement and enforcement: the committed gzip baseline plus growth and build-variance allowances, and one startup CSS request. Gzip and Brotli budgets normalize generated asset hashes; separate served sizes in the report retain the actual transfer bytes. The baseline itself may not exceed the script's `startupJsGzipBytes` cap. Preserve the lazy graph and compare every changed boot surface against its merge base. A surface already above its cap may not grow beyond the 64-byte build-variance allowance. Lower the startup baseline with the official `--update-baseline --reason` command after a verified reduction, using the measured head value rather than a lower target; raising budgets needs owner approval.
 
 - Keep code out of the startup graph until a startup surface actually needs it. Defer behind the route or interaction that uses it: automation readiness loads on the first read of its hook, and System busyness renders only when opened.
 - The Solid shell now owns startup rendering. Its imports must not eagerly register lazy page custom elements or load route-only libraries, even if every importer uses Solid. An eager Zod import previously added about 36 KB gzip.
@@ -72,6 +72,33 @@ These are results for the cited workloads, not universal speedups.
 
 ### WebKit
 
+- For aged-tab comparisons, put each fresh control in its own browser process
+  and match retained session keys, not just pane counts. Use the aged-tab
+  harness's separate `--in-page` run to distinguish application settlement from
+  compound native-input gaps. Zero-delay typing includes key acknowledgments
+  between edits; cancelling `keydown` does not isolate the driver because the
+  engine can invalidate focus styling before dispatch. Corroborate with paced
+  trusted input and browser-local frame measurements. Synthetic input does not
+  cover native editing defaults or IME, and two animation frames are not CPU or
+  presentation timestamps. Do not attribute a gap from resource counts alone.
+- Keep fixture validation outside CPU and input windows. Returning all recorded
+  requests grows with a soak even when the assertion only needs a count; use a
+  scalar count outside measurement. Chromium `Performance.enable` defaults to
+  elapsed task time: request `timeDomain: "threadTicks"` for thread CPU claims.
+- Match once-loaded route styles when isolating progressive aging. In the aged-tab
+  census, Chromium's remaining typing/sidebar gap disappeared after matching
+  external stylesheet residency (77 sheets versus 20 before matching). Report
+  that bounded first-visit cost separately; do not call it an ever-growing
+  subscription or automation backlog. Keep an unmatched run to show the actual
+  cost a used document pays.
+- Zero `document.getAnimations()` does not rule out native animation growth.
+  WebKit filters disconnected targets out of that API and subtree enumeration.
+  Session churn retained nine running `::after` shimmers per removed loading
+  skeleton in WebKit 27.2. Inspect native animation instances after timing;
+  diagnostic enumeration itself can create retaining wrappers. Capturing handles
+  while connected can flush style and mask a short-lived loading-frame failure.
+  Script cancellation stops ticking but may leave native CSS ownership records;
+  test style retirement at the connected owner boundary as well as running counts.
 - Split disclosure expansion and collapse before diagnosing a slow toggle cycle.
   The chat `*-toggle` benchmarks await ARIA/content assertions between two native
   activations, so their input-to-last-commit span includes the intervening driver
@@ -86,11 +113,17 @@ These are results for the cited workloads, not universal speedups.
 - Nested grid intrinsic sizing (`auto`, `min-content`, or `max-content` tracks inside grid items) can hang WebKit on large content; use explicit track sizes such as `minmax(0, 1fr)` ([#185997](https://github.com/openclaw/openclaw/pull/185997)).
 - Keep container queries and size containment on the smallest element that needs them. Moving containment from repeated Board reports to their toolbars cut WebKit opening time by 60% ([#185587](https://github.com/openclaw/openclaw/pull/185587)).
 - Avoid relational `:has()` selectors over frequently mutated elements. Derive the state in the existing owner: replacing position-rail sibling queries halved the median scroll frame gap ([#185727](https://github.com/openclaw/openclaw/pull/185727)).
+- Let the menu owner mark spacing boundaries explicitly. A universal `:has(> .oc-menu-item...)` made unrelated composer typing pay for wrapper matching on every style pass, even inside `@scope (.oc-menu)`; removing only `@scope` did not recover the cost. The menu owner's `data-menu-row-start/end` attributes replace relational inference. Keep first/last-child and submenu boundaries intact, retain standalone row gaps, and compare typing, Usage filters, picker geometry, and boot in both engines before accepting a replacement.
+- Trace the loaded stylesheet graph when unrelated pages gain style cost. Shared locale-aware formatters and permission labels were captured recursively by Chat's boot chunk; importing them from Usage also loaded Chat's styles. Keep shared leaf helpers in their existing neutral chunk, and check the built import closure as well as selector timings.
+- Mixed ancestor and leaf families inside a single `:where(...)` can defeat cheap selector matching even without `:has()`. Compare separately indexed zero-specificity branches and flat state rules; flattening nesting alone did not recover the Usage field cost. Preserve specificity, descendant relationships, hover exclusions, and forced-colors focus while measuring both engines.
+- Keep date-only chart labels separate from changing totals. A retained row can still repeat `Intl` formatting when its tooltip reads both the date and new values; a leaf memo keyed by the date and reactive locale removes that work without a shared cache. Three-way benchmark comparisons must rotate positions as well as direction: reversing base/head/control leaves head in the middle every time.
 - Check for redundant `content-visibility` alongside containment. Removing it from virtualized transcript rows improved WebKit fast scrolling ([#185665](https://github.com/openclaw/openclaw/pull/185665)); preserve offscreen geometry and verify both engines.
 - WebKit CPUProfiler `cpuMs` is aged utilization, not CPU consumed by the action ([#185466](https://github.com/openclaw/openclaw/pull/185466)). Attribute with Timeline elapsed time and measure untraced wall time separately.
 
 ## Measuring
 
+- Hash-normalized gzip removes generated asset-name noise, but identifier mangling can still swing it by hundreds of bytes without comparable code growth.
+  Read raw and served bytes alongside normalized sizes, and inspect the emitted chunks before attributing the delta to new code.
 - State the workload and acceptance rule before measurement. Use the existing [warm-interaction harness](../../control-ui-e2e/references/interaction-performance.md), [cold-load/streaming/session-switch benchmarks](../../../../scripts/bench-control-ui-cold-load.ts), and [retention proof](testing.md). Synthetic fixtures measure renderer cost, not live Gateway or provider latency.
 - Timing claims need at least ten serial interleaved base/head pairs on the same host, with median, p95, min–max, and host load. Separate cold/warm and traced/untraced runs. A timing cell is clean when median regression is at most 5% and p95 is no worse, or ten more pairs confirm that band; sub-1% p95 movement is noise unless repeated pairs confirm it. A regression beyond the performance workflow's 20% rule blocks. A missed numeric target does not block a clean measured win; report the gap.
 - Use an immediately available quiet Testbox when appropriate; cancel queued allocations and measure locally with host load recorded. A single trace identifies costs, not a latency improvement.

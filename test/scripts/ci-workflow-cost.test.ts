@@ -1,7 +1,12 @@
 import { matchesGlob } from "node:path";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
-import { acceptsWorkflowPaths, readCiWorkflow, readWorkflow } from "./ci-workflow.test-support.js";
+import {
+  acceptsWorkflowPaths,
+  evaluateWorkflow,
+  readCiWorkflow,
+  readWorkflow,
+} from "./ci-workflow.test-support.js";
 
 const before = "a".repeat(40);
 const head = "b".repeat(40);
@@ -15,6 +20,7 @@ const action = readWorkflow(".github/actions/detect-scheduled-changes/action.yml
 const script = action.runs.steps[0].with.script;
 
 describe("Darwin tooling event scope", () => {
+  const workflow = readWorkflow(".github/workflows/pr-tooling-darwin.yml");
   it.each([
     [["scripts/lib/ci-node-test-plan.mts"], false],
     [["scripts/lib/ci-extension-test-shards.mts"], false],
@@ -39,6 +45,12 @@ describe("Darwin tooling event scope", () => {
     [["test/scripts/pr-materialized-anchor.test.ts"], true],
     [["test/scripts/pr-operation-lock.test.ts"], true],
     [["test/scripts/pr-git-invocation.test.ts"], true],
+    [["test/scripts/package-mac-dist.test.ts"], true],
+    [["scripts/package-mac-dist.sh"], true],
+    [["scripts/notarize-mac-artifact.sh"], true],
+    [["src/infra/directory-walk.ts"], true],
+    [["test/scripts/package-mac-app.test.ts"], false],
+    [["src/infra/directory-walk.test.ts"], false],
     [["test/scripts/pr-wrapper.test-support.ts"], true],
     [["test/scripts/pr-main-refresh.test-support.ts"], true],
     [["test/scripts/pr-darwin-process-identity.test.py"], true],
@@ -55,8 +67,16 @@ describe("Darwin tooling event scope", () => {
     [["scripts/lib/ci-node-test-plan.mts", "scripts/pr"], true],
     [[".github/workflows/pr-tooling-darwin.yml"], true],
   ] as const)("routes %j", (files, expected) => {
-    const workflow = readWorkflow(".github/workflows/pr-tooling-darwin.yml");
     expect(acceptsWorkflowPaths(workflow.on.pull_request.paths, files)).toBe(expected);
+  });
+
+  it("executes native tooling once with unconditional macOS distribution coverage", () => {
+    const steps = workflow.jobs.darwin.steps.filter((step: { run?: string }) =>
+      step.run?.startsWith("node scripts/run-vitest.mjs "),
+    );
+    expect(steps).toHaveLength(1);
+    expect(steps[0].run.split(/\s+/u)).toContain("test/scripts/package-mac-dist.test.ts");
+    expect(steps[0].if).toBeUndefined();
   });
 });
 
@@ -87,6 +107,7 @@ describe("plugin scaffold event scope", () => {
     [[".github/workflows/plugin-init-scaffold-validation.yml"], true],
   ] as const)("routes %j", (files, expected) => {
     const workflow = readWorkflow(".github/workflows/plugin-init-scaffold-validation.yml");
+    expect(workflow.jobs["validate-provider-scaffold"]["runs-on"]).toBe("ubuntu-24.04");
     expect(workflow.on.push.paths).toEqual(workflow.on.pull_request.paths);
     for (const event of ["push", "pull_request"]) {
       expect(acceptsWorkflowPaths(workflow.on[event].paths, files)).toBe(expected);
@@ -260,7 +281,9 @@ describe("bounded scheduled proof reuse", () => {
     async (name) => {
       const workflow = readWorkflow(`.github/workflows/${name}.yml`);
       const scope = workflow.jobs.scope.steps.find((step: { id?: string }) => step.id === "scope");
-      const patterns = scope.with.paths.trim().split("\n");
+      const patterns = workflow.jobs.scope.steps
+        .filter((step: { with?: { paths?: string } }) => step.with?.paths)
+        .flatMap((step: { with: { paths: string } }) => step.with.paths.trim().split("\n"));
       expect(workflow.on.push.paths).toEqual(workflow.on.pull_request.paths);
       for (const path of workflow.on.push.paths.filter(
         (pattern: string) => !pattern.startsWith("!"),
@@ -547,7 +570,9 @@ describe("independent scheduled node runtime proofs", () => {
     const outputs = Object.fromEntries(
       Object.entries(workflow.jobs.scope.outputs).map(([key, value]) => [
         key,
-        runInNewContext((value as string).slice(3, -2), { steps }),
+        runInNewContext((value as string).slice(3, -2), {
+          steps: { ...steps, pr_scope: { outputs: {} } },
+        }),
       ]),
     );
     return Object.fromEntries(
@@ -598,6 +623,163 @@ describe("independent scheduled node runtime proofs", () => {
   );
 });
 
+describe("pull request node contract owners", () => {
+  const workflow = readWorkflow(".github/workflows/node-runtime-conformance.yml");
+  const step = workflow.jobs.scope.steps.find((entry: { id?: string }) => entry.id === "pr_scope");
+
+  it.each([
+    {
+      files: [{ filename: "scripts/lib/ci-node-test-plan.mts", status: "modified" }],
+      expected: [true, false],
+    },
+    {
+      files: [
+        { filename: "test/vitest/vitest.ui-paths.mjs", status: "modified" },
+        { filename: "ui/src/pages/model-providers/view.tsx", status: "modified" },
+        { filename: "config/test-lines-allocations/ui-coverage.txt", status: "added" },
+      ],
+      expected: [true, false],
+    },
+    {
+      files: [
+        { filename: "ui/src/retired.ts", status: "removed" },
+        { filename: "scripts/new.mjs", status: "modified" },
+      ],
+      expected: [true, true],
+    },
+    {
+      files: [
+        { filename: ".cargo/config.toml", status: "modified" },
+        { filename: "ui/config/control-ui-solid.ts", status: "modified" },
+      ],
+      expected: [true, true],
+    },
+    { files: [{ filename: ".cargo/config.toml", status: "modified" }], expected: [false, true] },
+    {
+      files: [{ filename: "crates/openclaw-node-host/src/main.rs", status: "modified" }],
+      expected: [true, true],
+    },
+    {
+      files: [{ filename: "packages/gateway-protocol/src/version.ts", status: "modified" }],
+      expected: [true, true],
+    },
+    {
+      files: [{ filename: "test/fixtures/node-sidecar-handshake-v1.json", status: "modified" }],
+      expected: [true, true],
+    },
+    {
+      files: [
+        { filename: "package.json", status: "modified" },
+        { filename: ".cargo/config.toml", status: "modified" },
+      ],
+      expected: [true, true],
+    },
+    {
+      files: [
+        { filename: "scripts/new.mjs", previous_filename: ".cargo/config.toml", status: "renamed" },
+      ],
+      expected: [true, true],
+    },
+    { files: [{ filename: "scripts/old.mjs", status: "removed" }], expected: [true, true] },
+    { files: [{ filename: "docs/intro.md", status: "modified" }], expected: [true, true] },
+    { files: [{ status: "modified" }], expected: [true, true] },
+    { files: [{ filename: "scripts/new.mjs", status: "renamed" }], expected: [true, true] },
+    { files: [], expected: [true, true] },
+    { files: undefined, expected: [true, true] },
+    {
+      files: Array.from({ length: 300 }, () => ({ filename: "package.json", status: "modified" })),
+      expected: [true, true],
+    },
+    { unavailable: true, expected: [true, true] },
+    { missingHead: true, expected: [true, true] },
+  ])(
+    "selects from exact complete inputs: %#",
+    async ({ files, unavailable, missingHead, expected }) => {
+      const output = vi.fn();
+      const compare = unavailable
+        ? vi.fn().mockRejectedValue(new Error("unavailable"))
+        : vi.fn().mockResolvedValue({ data: { files } });
+      await runInNewContext(`(async () => { ${step.with.script} })()`, {
+        require: () => ({ matchesGlob }),
+        process: { env: step.env },
+        context: {
+          ...context,
+          payload: {
+            pull_request: { base: { sha: before }, head: { sha: missingHead ? "" : head } },
+          },
+        },
+        core: { setOutput: output, warning: vi.fn() },
+        github: { rest: { repos: { compareCommitsWithBasehead: compare } } },
+      });
+      expect(output.mock.calls).toEqual([
+        ["changed", expected[0]],
+        ["rust_changed", expected[1]],
+      ]);
+      if (!missingHead) {
+        expect(compare).toHaveBeenCalledExactlyOnceWith({
+          ...context.repo,
+          basehead: `${before}...${head}`,
+        });
+      }
+      const steps = {
+        pr_scope: {
+          outputs: Object.fromEntries(
+            output.mock.calls.map(([key, value]) => [key, String(value)]),
+          ),
+        },
+        scope: { outputs: {} },
+        rust_scope: { outputs: {} },
+      };
+      const outputs = Object.fromEntries(
+        Object.entries(workflow.jobs.scope.outputs).map(([key, expression]) => [
+          key,
+          runInNewContext((expression as string).slice(3, -2), { steps }),
+        ]),
+      );
+      for (const [index, id] of ["typescript", "rust"].entries()) {
+        expect(
+          evaluateWorkflow(workflow.jobs[id].if, {
+            eventName: "pull_request",
+            additionalNeeds: { scope: { outputs } },
+          }),
+        ).toBe(expected[index]);
+      }
+    },
+  );
+
+  it("keeps manual, missing evidence and draft admission policies", () => {
+    for (const id of ["typescript", "rust"]) {
+      for (const eventName of ["pull_request", "workflow_dispatch"] as const) {
+        expect(
+          evaluateWorkflow(workflow.jobs[id].if, {
+            eventName,
+            additionalNeeds: { scope: { outputs: {} } },
+          }),
+        ).toBe(true);
+      }
+      expect(
+        evaluateWorkflow(workflow.jobs[id].if, {
+          eventName: "pull_request",
+          draft: true,
+          additionalNeeds: { scope: { outputs: {} } },
+        }),
+      ).toBe(false);
+    }
+    expect(
+      evaluateWorkflow(`\${{ ${workflow.jobs.scope.if} }}`, { eventName: "pull_request" }),
+    ).toBe(true);
+    expect(
+      evaluateWorkflow(`\${{ ${workflow.jobs.scope.if} }}`, {
+        eventName: "pull_request",
+        draft: true,
+      }),
+    ).toBe(false);
+    expect(
+      evaluateWorkflow(`\${{ ${workflow.jobs.scope.if} }}`, { eventName: "workflow_dispatch" }),
+    ).toBe(false);
+  });
+});
+
 describe("node runtime event scope", () => {
   it.each([
     [["patches/README.md"], false],
@@ -610,6 +792,10 @@ describe("node runtime event scope", () => {
       true,
     ],
     [["crates/openclaw-node-host/Cargo.toml"], true],
+    [[".cargo/config.toml"], true],
+    [["ui/config/control-ui-solid.ts"], true],
+    [["rust-toolchain.toml"], true],
+    [["test/fixtures/node-sidecar-handshake-v1.json"], true],
     [["crates/openclaw-node-host/tests/fixtures/README.md"], true],
     [[".github/workflows/node-runtime-conformance.yml"], true],
   ] as const)("routes %j", (files, expected) => {

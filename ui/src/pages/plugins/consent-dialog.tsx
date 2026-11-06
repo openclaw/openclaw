@@ -7,6 +7,7 @@ import {
 } from "../../../../packages/gateway-protocol/src/schema/plugin-declared-surface-groups.js";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/modal-dialog.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
   RetryAction,
   SettingsRow,
@@ -292,14 +293,21 @@ function renderPluginGrants(grants: PluginOperatorGrants, origin?: string): JSX.
       description={t("pluginConsent.grantsDescription")}
       carapace
     >
-      {renderPluginMetaRow(
-        t("pluginConsent.promptInjection"),
-        grantValue(
-          grants.hooks.allowPromptInjection,
-          "pluginConsent.allowed",
-          "pluginConsent.blocked",
-        ),
-      )}
+      <SettingsRow
+        title={t("pluginConsent.promptInjection")}
+        description={t("pluginConsent.promptInjectionDescription")}
+        control={
+          <span>
+            {grantValue(
+              grants.hooks.allowPromptInjection,
+              "pluginConsent.allowed",
+              "pluginConsent.blocked",
+            )}
+          </span>
+        }
+        stackedOnNarrow
+        carapace
+      />
       {renderPluginMetaRow(
         t("pluginConsent.conversationAccess"),
         <>
@@ -529,7 +537,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
           >
             <Errored
               fallback={(error, reset) => (
-                <div class="callout danger plugins-consent__error" role="alert">
+                <InlineAlert tone="danger" class="plugins-consent__error" role="alert">
                   <span>{formatUiError(error())}</span>
                   <RetryAction
                     type="button"
@@ -540,7 +548,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
                       reset();
                     }}
                   />
-                </div>
+                </InlineAlert>
               )}
             >
               <InspectionBody />

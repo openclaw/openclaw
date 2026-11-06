@@ -215,7 +215,6 @@
   padding: 6px 6px 14px;
   overscroll-behavior: contain;
   scroll-padding-block: 6px 18px;
-  scrollbar-width: thin;
   touch-action: pan-y;
 }
 
@@ -407,6 +406,12 @@ footer.sidebar-issues-panel__mentions-note {
   color: var(--primary-foreground);
 }
 
+.sidebar-issues-panel .sidebar-issues-panel__action--primary:active,
+.sidebar-issues-panel .sidebar-update-card__review--primary:active {
+  background: var(--primary-active);
+  color: var(--primary-foreground);
+}
+
 .shell--mobile-nav .sidebar-issues-panel .sidebar-issues-panel__action,
 .shell--mobile-nav .sidebar-issues-panel .sidebar-approval-row__action {
   min-height: 36px;
@@ -538,9 +543,7 @@ footer.sidebar-issues-panel__mentions-note {
   cursor: var(--cursor-action);
   opacity: 0;
   pointer-events: none;
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
+  transition: color var(--duration-fast) ease;
 }
 
 .sidebar-issues-panel__dismiss svg {
@@ -571,7 +574,6 @@ footer.sidebar-issues-panel__mentions-note {
 
 @media (hover: hover) {
   .sidebar-issues-panel__dismiss:hover {
-    background: color-mix(in srgb, var(--text) 8%, transparent);
     color: var(--text-strong);
   }
 }

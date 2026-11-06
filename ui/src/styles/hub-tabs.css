@@ -4,6 +4,8 @@
   --indicator-color: var(--accent);
 
   display: flex;
+  /* Preserve the horizontal scrollbar when a column shares height with a panel. */
+  flex-shrink: 0;
   min-block-size: min-content;
   align-items: stretch;
   overflow-x: auto;
