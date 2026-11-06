@@ -68,6 +68,7 @@ import { readModelsListCatalog } from "./models-list-catalog.js";
 import type { BuildModelsListResultParams } from "./models-list-context.js";
 import {
   buildPublicModelProjection,
+  projectModelCatalogRefreshStatus,
   projectModelServiceTiers,
   projectProviderCatalogOutcomes,
 } from "./models-list-public-projection.js";
@@ -337,18 +338,18 @@ export async function prepareModelsListResult({
     await withCurrentReadAuthority(authority, () => {});
     const readOutcomeProjection = () => {
       const accountSelection = readAccountSelection?.();
-      const pendingProviders = projector.snapshot.pendingProviders?.filter(
-        (provider) =>
-          (!providerFilter || normalizeProvider(provider) === providerFilter) &&
-          (view === "all" ||
-            view === "provider-config" ||
-            visibilityPolicy.allowAny ||
-            [...visibilityPolicy.allowedKeys].some((key) => key.startsWith(`${provider}/`))),
-      );
+      const isVisibleProvider = (provider: string) =>
+        (!providerFilter || normalizeProvider(provider) === providerFilter) &&
+        (["all", "provider-config"].includes(view) ||
+          visibilityPolicy.allowAny ||
+          [...visibilityPolicy.allowedKeys].some((key) => key.startsWith(`${provider}/`)));
       return {
-        ...(pendingProviders?.length ? { pendingProviders } : {}),
         ...outcomeProjection,
-        ...(snapshot.refreshFailed ? { refreshFailed: true } : {}),
+        ...projectModelCatalogRefreshStatus({
+          snapshot,
+          pendingProviders: projector.snapshot.pendingProviders,
+          isVisibleProvider,
+        }),
         ...(accountSelection ? { accountSelection } : {}),
         ...(decisionModels.length ? { decisionModels } : {}),
       };

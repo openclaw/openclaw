@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.GatewayModelCatalogResult
 import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.asBooleanOrNull
 import ai.openclaw.app.asJsonStringOrNull
@@ -441,6 +442,7 @@ class ChatController internal constructor(
   private val sessionSettingsRefreshError = nativeText("Could not refresh session settings. Refresh before sending.")
   private val chatMetadataLoadError = nativeText("Could not refresh chat metadata. Tap Refresh to try again.")
   private val chatMetadataRefreshError = nativeText("Could not refresh models. Tap Refresh to try again.")
+  private var chatMetadataCatalogWarning: NativeText? = null
 
   // Guarded by gatewayScopeApplyLock; stable gateway keys retain choices across reconnects.
   private val lastSelectedChatSessionByOwner = mutableMapOf<ChatAgentSessionSelectionOwner, RememberedChatSession>()
@@ -4902,7 +4904,26 @@ class ChatController internal constructor(
     chatMetadataNeedsStatusRefresh = false
   }
 
-  private fun isChatMetadataNotice(text: NativeText?): Boolean = text == chatMetadataLoadError || text == chatMetadataRefreshError
+  private fun isChatMetadataNotice(text: NativeText?): Boolean =
+    text == chatMetadataLoadError || text == chatMetadataRefreshError ||
+      (text != null && text == chatMetadataCatalogWarning)
+
+  private fun catalogRefreshWarning(catalog: GatewayModelCatalogResult): NativeText {
+    val providers = catalog.failedProviders.take(3).joinToString(", ") + if (catalog.failedProviders.size > 3) ", …" else ""
+    return when {
+      providers.isNotEmpty() && catalog.models.isNotEmpty() ->
+        nativeText("Some models could not be refreshed (\$providers). Available models can still be selected. Tap Refresh to retry.", providers)
+      providers.isNotEmpty() ->
+        nativeText("Could not refresh models from \$providers. Tap Refresh to retry.", providers)
+      catalog.nativeRefreshFailed && catalog.models.isNotEmpty() ->
+        nativeText("Native model discovery failed. Available models can still be selected. Tap Refresh to retry.")
+      catalog.nativeRefreshFailed ->
+        nativeText("Native model discovery failed. Tap Refresh to retry.")
+      catalog.models.isNotEmpty() ->
+        nativeText("Some models could not be refreshed. Available models can still be selected. Tap Refresh to retry.")
+      else -> chatMetadataRefreshError
+    }
+  }
 
   private suspend fun fetchChatMetadata(refresh: ChatMetadataRefresh) {
     val requestSequence = refresh.sequence
@@ -4967,9 +4988,12 @@ class ChatController internal constructor(
               if (!catalogSupported && _errorText.value == null) {
                 updateLocalizedErrorText(nativeText("Update your Gateway to use session model choices."))
               } else if (refreshFailed && (_errorText.value == null || isChatMetadataNotice(_errorText.value))) {
-                updateLocalizedErrorText(chatMetadataRefreshError)
+                val warning = catalogRefreshWarning(catalog)
+                chatMetadataCatalogWarning = warning
+                updateLocalizedErrorText(warning)
               } else if (!refreshFailed && isChatMetadataNotice(_errorText.value)) {
                 updateErrorText(null)
+                chatMetadataCatalogWarning = null
               }
             }
           }

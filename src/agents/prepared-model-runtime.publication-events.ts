@@ -106,8 +106,8 @@ export function createCatalogAttemptReporter(
       });
     }
   };
-  const hasFailedProviders = () =>
-    attempt.failedProviders.provider.size > 0 || attempt.failedProviders.native.size > 0;
+  const failedProviderCount = () =>
+    attempt.failedProviders.provider.size + attempt.failedProviders.native.size;
   return {
     setPending: (
       providers: readonly string[] | undefined,
@@ -124,6 +124,21 @@ export function createCatalogAttemptReporter(
     },
     withRefreshStatus: (catalog: ModelCatalogSnapshot) => {
       const nativeOutcomes = Object.values(catalog.nativeProviderOutcomes ?? {}).flat();
+      const readRefreshFailures = (): ModelCatalogSnapshot["refreshFailures"] => {
+        const failures = (["provider", "native"] as const).flatMap((acquisition) => {
+          const providers = new Set(attempt.failedProviders[acquisition]);
+          const outcomes = acquisition === "native" ? nativeOutcomes : catalog.providerOutcomes;
+          for (const outcome of outcomes ?? []) {
+            if (outcome.status === "unavailable") {
+              providers.add(outcome.provider);
+            }
+          }
+          return [...providers].map((provider) =>
+            provider === undefined ? { acquisition } : { acquisition, provider },
+          );
+        });
+        return failures.length ? failures : undefined;
+      };
       // Auth rejection leaves inventory incomplete without making its refresh fail.
       // Provider renewal does not retry a failed native inventory.
       if (
@@ -137,15 +152,18 @@ export function createCatalogAttemptReporter(
         configurable: true,
         get: readPendingProviders,
       });
+      // Acquisition failure is independent of retained inventory and auth outcomes.
+      // Keep unknown scopes explicit and follow the owning acquisition through recovery.
+      Object.defineProperty(catalog, "refreshFailures", {
+        enumerable: true,
+        configurable: true,
+        get: readRefreshFailures,
+      });
       // Keep the status live on retained inventory without copying an error into its successor.
       Object.defineProperty(catalog, "refreshFailed", {
         enumerable: true,
         configurable: true,
-        get: () =>
-          hasFailedProviders() ||
-          nativeOutcomes.some((outcome) => outcome.status === "unavailable") ||
-          catalog.providerOutcomes?.some((outcome) => outcome.status === "unavailable") ||
-          undefined,
+        get: () => (readRefreshFailures()?.length ? true : undefined),
       });
       return catalog;
     },
@@ -154,7 +172,7 @@ export function createCatalogAttemptReporter(
       kind?: PreparedModelCatalogAcquisitionKind,
       publication?: () => CatalogPublicationChange,
     ) => {
-      const previouslyFailed = hasFailedProviders();
+      const previousFailureCount = failedProviderCount();
       const previouslyPendingCount = pendingCount();
       const acquisitionKind = kind ?? "provider";
       const remaining = providers
@@ -172,7 +190,7 @@ export function createCatalogAttemptReporter(
       const change = publication?.();
       notifyPreparedModelCatalogPublication(
         change,
-        previouslyPendingCount !== pendingCount() || previouslyFailed !== hasFailedProviders(),
+        previouslyPendingCount !== pendingCount() || previousFailureCount !== failedProviderCount(),
       );
     },
     failed,

@@ -9,6 +9,7 @@ import { buildModelsListResult, prepareModelsListResult } from "./models-list-re
 import {
   createModelsListTestContext,
   modelAuthStore,
+  requestModelsList,
 } from "./models-list-result.openai-routes.test-support.js";
 
 const metadataSnapshot = createPluginMetadataSnapshotFixture();
@@ -83,6 +84,94 @@ function preloaded(
   };
 }
 
+it("discloses failed acquisition scopes on retained configured models", async () => {
+  const reporter = createCatalogAttemptReporter(
+    {},
+    { key: "synthetic", pluginFingerprint: "synthetic", credentials: {} },
+    () => true,
+    () => {},
+  );
+  const snapshot = reporter.withRefreshStatus({
+    entries: [openaiModel],
+    routeVariants: [openaiModel],
+    providerOutcomes: [{ provider: "openai", status: "ready" }],
+  });
+  const projector = decisions(snapshot);
+  const prepared = await prepareModelsListResult(preloaded(modelConfig, snapshot, projector));
+  const models = prepared.read().models;
+  expect(models.length).toBeGreaterThan(0);
+  // Neither a retained ready outcome nor an unknown native scope explains this failure.
+  reporter.failed(new Error("private endpoint and credential must not escape"), [
+    "openai",
+    "private-provider",
+  ]);
+  reporter.failed(new Error("private native failure"), [], "native");
+  expect(prepared.read()).toMatchObject({
+    models,
+    refreshFailed: true,
+    refreshFailures: [
+      { acquisition: "provider", provider: "openai" },
+      { acquisition: "provider" },
+      { acquisition: "native" },
+    ],
+    providerOutcomes: [{ provider: "openai", status: "ready" }],
+  });
+  expect(projector.snapshot.refreshFailures).toEqual(snapshot.refreshFailures);
+  expect(JSON.stringify(prepared.read())).not.toContain("private");
+  const respond = await requestModelsList(
+    createModelsListTestContext({
+      cfg: modelConfig,
+      catalog: [openaiModel],
+      catalogComplete: true,
+      preparedAuthStore: emptyAuthStore,
+      metadataSnapshot,
+      catalogDiagnostics: snapshot,
+    }),
+    { agentId: "main", view: "configured", includeDetails: true },
+  );
+  expect(respond.mock.calls[0]?.[0]).toBe(true);
+  expect(respond.mock.calls[0]?.[1]).toMatchObject({
+    refreshFailed: true,
+    refreshFailures: prepared.read().refreshFailures,
+  });
+  expect(JSON.stringify(respond.mock.calls[0]?.[1])).not.toContain("private");
+  reporter.published(["openai", "private-provider"], "provider");
+  expect(prepared.read()).toMatchObject({
+    models,
+    refreshFailed: true,
+    refreshFailures: [{ acquisition: "native" }],
+  });
+  reporter.published(undefined, "native");
+  expect(prepared.read()).not.toHaveProperty("refreshFailed");
+  expect(prepared.read()).not.toHaveProperty("refreshFailures");
+  expect(projector.snapshot.refreshFailures).toBeUndefined();
+});
+
+it("omits endpoint-shaped acquisition identifiers even from the all view", async () => {
+  const reporter = createCatalogAttemptReporter(
+    {},
+    { key: "synthetic", pluginFingerprint: "synthetic", credentials: {} },
+    () => true,
+    () => {},
+  );
+  reporter.failed(new Error("private error"), ["https://private.invalid/account"], "native");
+  const context = createModelsListTestContext({
+    cfg: {},
+    catalog: [],
+    catalogComplete: true,
+    preparedAuthStore: emptyAuthStore,
+    metadataSnapshot,
+    catalogDiagnostics: reporter.withRefreshStatus({ entries: [], routeVariants: [] }),
+  });
+  const respond = await requestModelsList(context, { view: "all", includeDetails: true });
+  expect(respond.mock.calls[0]?.[0]).toBe(true);
+  expect(respond.mock.calls[0]?.[1]).toMatchObject({
+    refreshFailed: true,
+    refreshFailures: [{ acquisition: "native" }],
+  });
+  expect(JSON.stringify(respond.mock.calls[0]?.[1])).not.toContain("private");
+});
+
 it.each([false, true])("preserves rejection on refresh failure=%s", async (unavailable) => {
   const reporter = createCatalogAttemptReporter(
     {},
@@ -112,7 +201,12 @@ it.each([false, true])("preserves rejection on refresh failure=%s", async (unava
   ).resolves.toEqual({
     models: [],
     providerOutcomes,
-    ...(unavailable ? { refreshFailed: true } : {}),
+    ...(unavailable
+      ? {
+          refreshFailed: true,
+          refreshFailures: [{ acquisition: "provider", provider: "unreachable" }],
+        }
+      : {}),
   });
 });
 
