@@ -140,8 +140,8 @@ it.each(["auto", "off"] as const)(
     });
     expect(backup.sourceGenerations[payload]).toEqual(expect.any(String));
     expect(backup.warnings).toEqual([]);
-    expect(fs.readFileSync(entry!.snapshotPath)).toEqual(before);
-    expect(fs.readFileSync(payload)).toEqual(before);
+    expect(fs.readFileSync(entry!.snapshotPath).equals(before), "snapshot bytes").toBe(true);
+    expect(fs.readFileSync(payload).equals(before), "source bytes").toBe(true);
     expect(fs.readdirSync(f.stagingRoot)).toEqual([]);
   },
 );

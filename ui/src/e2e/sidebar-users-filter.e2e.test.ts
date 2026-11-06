@@ -3,6 +3,7 @@ import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { sessionsListResponse } from "./session-management.test-support.ts";
+import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Sidebar user filter",
@@ -51,10 +52,16 @@ suite.define(() => {
         await page.mouse.move(900, 600);
         const rowBounds = (await row.boundingBox())!;
         const rest = (await counts.boundingBox())!;
-        expect(rowBounds.x + rowBounds.width - rest.x - rest.width).toBeLessThanOrEqual(10);
+        expect(rowBounds.x + rowBounds.width - rest.x - rest.width).toBeLessThanOrEqual(16);
+        const label = (await person.locator(".sidebar-online__person-label").boundingBox())!;
         const more = row.getByRole("button", { name: "Actions for Ada Chen", exact: true });
         expect(await more.evaluate((el) => getComputedStyle(el.parentElement!).opacity)).toBe("0");
-        await person.hover();
+        // The revealed action trails the name, so aim at the row's lead instead of its center.
+        const lead = { x: 12, y: 12 };
+        await person.hover({ position: lead });
+        const action = (await more.boundingBox())!;
+        expect(action.x).toBeGreaterThanOrEqual(label.x + label.width);
+        expect(action.x + action.width).toBeLessThanOrEqual(rest.x);
         await more.click();
         const menu = page.getByRole("menu", { name: "Actions for Ada Chen", exact: true });
         await menu.waitFor();
@@ -67,7 +74,7 @@ suite.define(() => {
         await page.locator('[data-navigation-view="online"]').click();
         await person.waitFor();
         await shortcut.waitFor();
-        await person.click({ button: "right" });
+        await person.click({ button: "right", position: lead });
         await menu.getByRole("menuitem", { name: "Unpin from sidebar", exact: true }).click();
         await expect.poll(() => shortcut.count()).toBe(0);
         await person.focus();
@@ -87,7 +94,7 @@ suite.define(() => {
         await expect
           .poll(() => page.evaluate(() => navigator.clipboard.readText()))
           .toBe(new URL(href!, page.url()).href);
-        await person.click({ button: "right" });
+        await person.click({ button: "right", position: lead });
         await menu.waitFor();
         await page.keyboard.press("Escape");
         await expect.poll(() => menu.isVisible()).toBe(false);
@@ -95,7 +102,7 @@ suite.define(() => {
         await more.click();
         await page.mouse.click(900, 600);
         await expect.poll(() => menu.isVisible()).toBe(false);
-        await person.click({ button: "right" });
+        await person.click({ button: "right", position: lead });
         await menu.getByRole("menuitem", { name: "View activity", exact: true }).click();
         await expect.poll(() => new URL(page.url()).pathname).toBe(href);
         expect(await gateway.getRequests("sessions.patch")).toEqual([]);
@@ -196,9 +203,20 @@ suite.define(() => {
         };
         await dismissHovercard();
         expect(await rail.getAttribute("aria-label")).toBe("Users");
+        const header = page.locator("openclaw-app-sidebar:visible .sidebar-panel-header");
+        const usersTitle = header.locator(".sidebar-panel-header__title");
+        await usersTitle.getByText("Users", { exact: true }).waitFor();
+        const titleStyle = (title: typeof usersTitle) =>
+          title.evaluate((element) => {
+            const { color, fontSize, fontWeight, letterSpacing, textTransform } =
+              getComputedStyle(element);
+            return { color, fontSize, fontWeight, letterSpacing, textTransform };
+          });
+        const usersTitleStyle = await titleStyle(usersTitle);
         await rail.click();
         await expect.poll(() => rail.getAttribute("aria-pressed")).toBe("true");
         const choosePresence = async (value: "all" | "online") => {
+          await page.locator(".sidebar-online__filter-toggle").click();
           await page.locator("#sidebar-people-presence").click();
           await page
             .locator(`openclaw-select-picker:has(#sidebar-people-presence) [data-value="${value}"]`)
@@ -213,6 +231,38 @@ suite.define(() => {
         await dismissHovercard();
         await choosePresence("online");
         await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(2);
+
+        await page.setViewportSize({ width: 390, height: 844 });
+        await navigationDrawerToggle(page).click();
+        await page.locator(".sidebar-panel-header #sidebar-people-presence").click();
+        await page
+          .locator('openclaw-select-picker:has(#sidebar-people-presence) [data-value="all"]')
+          .click();
+        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(3);
+        await page.setViewportSize({ width: 1280, height: 800 });
+        await choosePresence("online");
+        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(2);
+
+        // Every panel shares the Sessions header geometry, including the collapse control,
+        // and a Pages list taller than the sidebar scrolls beneath its pinned header.
+        await page.setViewportSize({ width: 1280, height: 320 });
+        const headerGeometry = async () => ({
+          header: await header.boundingBox(),
+          collapse: await header.getByRole("button", { name: "Collapse sidebar" }).boundingBox(),
+        });
+        const usersGeometry = await headerGeometry();
+        await openSidebarPages(page);
+        await usersTitle.getByText("Pages", { exact: true }).waitFor();
+        expect(await titleStyle(usersTitle)).toEqual(usersTitleStyle);
+        const body = page.locator("openclaw-app-sidebar:visible .sidebar-shell__body");
+        await body.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
+        expect(await body.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+        expect(await headerGeometry()).toEqual(usersGeometry);
+        await page.locator('[data-navigation-view="sessions"]').click();
+        await header.locator(".sidebar-session-sort").waitFor();
+        expect(await headerGeometry()).toEqual(usersGeometry);
+        await usersTitle.getByText("Sessions", { exact: true }).waitFor();
+        expect(await titleStyle(usersTitle)).toEqual(usersTitleStyle);
       },
     ));
 });

@@ -56,6 +56,8 @@ export type { CronAddOptions } from "./job-options.types.js";
 
 /** Transient internal context delivered beside, but never projected into, a CronEvent. */
 type CronEventContext = {
+  runNotStarted?: boolean;
+  quietTrigger?: boolean;
   failureNotificationDetail?: CronFailureNotificationDetail;
 };
 
@@ -363,7 +365,11 @@ type CronServiceDepsInternal = Omit<CronServiceDeps, "env" | "nowMs"> & {
 
 /** Dependencies consumed by job policy before its mutation is committed. */
 export type CronJobPolicyContext = {
-  deps: Pick<CronServiceDepsInternal, "cronConfig" | "nowMs" | "log" | "failureRepairTimeoutMs">;
+  deps: Pick<
+    CronServiceDepsInternal,
+    "cronConfig" | "nowMs" | "log" | "failureRepairTimeoutMs" | "defaultAgentId"
+  > &
+    Partial<Pick<CronServiceDepsInternal, "resolveDefaultAgentId">>;
   /** Resolved by the host for this exact job while its recovery transaction holds the row. */
   preparedFailureAlert?: { jobId: string; value: ResolvedFailureAlert | null };
 };
@@ -401,6 +407,11 @@ export type CronServiceState = {
   lifecycleGeneration: number;
   schedulingPaused: boolean;
   schedulerStarted: boolean;
+  /**
+   * Creation time of this cron service until its first stop; earlier missed slots are
+   * downtime catch-up. Cleared on stop so an in-process restart keeps startup deferral.
+   */
+  liveSinceMs: number | undefined;
   activeManualRunJobIds: Set<string>;
   /** Accepted manual runs until their terminal history row is written, keyed by runId. */
   queuedManualRuns: Map<string, Promise<unknown>>;
@@ -451,13 +462,14 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
   // Preserve its implicit owner unless a static or dynamic configured default exists.
   const defaultAgentId =
     deps.defaultAgentId ?? (deps.resolveDefaultAgentId ? undefined : LEGACY_IMPLICIT_AGENT_ID);
+  const nowMs = deps.nowMs ?? (() => deps.scheduler.now());
   return {
     deps: {
       ...deps,
       env: deps.env ?? process.env,
       storeKey: cronStoreKey(deps.storePath),
       defaultAgentId,
-      nowMs: deps.nowMs ?? (() => deps.scheduler.now()),
+      nowMs,
     },
     store: null,
     jobConfigRevisions: new Map(),
@@ -468,6 +480,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     lifecycleGeneration: 0,
     schedulingPaused: false,
     schedulerStarted: false,
+    liveSinceMs: nowMs(),
     activeManualRunJobIds: new Set<string>(),
     queuedManualRuns: new Map<string, Promise<unknown>>(),
     manualSetupTimeoutNotified: false,

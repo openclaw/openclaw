@@ -3,13 +3,11 @@ import {
   arrayItemSchema,
   arrayItemSchemaIndexes,
   collectAllOfSchemas,
-} from "./config-form.array-items.ts";
-import {
   objectAdditionalPropertiesSchema,
   objectPropertyKeys,
   objectPropertySchema,
   requiredPropertyKeys,
-} from "./config-form.constraints.ts";
+} from "./config-form.array-items.ts";
 import {
   pathKey,
   schemaMayAcceptString,

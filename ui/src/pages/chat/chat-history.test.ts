@@ -330,20 +330,34 @@ describe("full tail after a long live turn", () => {
   async function loadAfterLiveTurn(
     tail: ChatHistoryResult,
     older: () => Promise<ChatHistoryResult>,
-    { cursorReset = true } = {},
+    {
+      cursorReset = true,
+      initialEnd = 1,
+      previousLeaf,
+      supersedeFallback = false,
+    }: {
+      cursorReset?: boolean;
+      initialEnd?: number;
+      previousLeaf?: string;
+      supersedeFallback?: boolean;
+    } = {},
   ) {
     const state = createState(tail);
     state.currentSessionId = "session";
     state.chatDisplayedLeafEntryId = undefined;
     const pages: ChatHistoryResult[] = [
       {
-        messages: [prompt],
-        totalMessages: 1,
+        messages: transcript.slice(0, initialEnd),
+        totalMessages: initialEnd,
         deltaCursor: "before-stop",
-        sessionInfo: { ...sessionInfo, hasActiveRun: true },
+        sessionInfo: { ...sessionInfo, hasActiveRun: true, activeLeafEntryId: previousLeaf },
       },
       tail,
+      ...(supersedeFallback ? [tail] : []),
     ];
+    const fallbackStarted = createDeferred();
+    const fallbackResponse = createDeferred<ChatHistoryResult>();
+    let deferFallback = supersedeFallback;
     const request = vi
       .spyOn(state.client!, "request")
       .mockImplementation(async (_method, params) => {
@@ -352,15 +366,35 @@ describe("full tail after a long live turn", () => {
           return older();
         }
         // Stop persists an aborted reply, so the delta cursor resets to a bounded tail.
-        return cursor === "before-stop" && cursorReset ? { kind: "reset" } : pages.shift();
+        if (cursor === "before-stop" && cursorReset) {
+          return { kind: "reset" };
+        }
+        const page = pages.shift();
+        if (deferFallback && page === tail) {
+          deferFallback = false;
+          fallbackStarted.resolve();
+          return fallbackResponse.promise;
+        }
+        return page;
       });
     await loadChatHistory(state);
     // Live rows carry assistant turns only; tool results arrive as activity.
-    const scope = { sessionKey: state.sessionKey, sessionId: "session", activeLeafEntryId: null };
+    const scope = {
+      sessionKey: state.sessionKey,
+      sessionId: "session",
+      activeLeafEntryId: previousLeaf ?? null,
+    };
     for (const row of [call(2), call(4), call(6)]) {
       publishLive(state, row, scope);
     }
-    await loadChatHistory(state);
+    const loading = loadChatHistory(state);
+    if (supersedeFallback) {
+      await fallbackStarted.promise;
+      const refreshed = loadChatHistory(state, { supersedeInFlight: true });
+      fallbackResponse.resolve(tail);
+      await refreshed;
+    }
+    await loading;
     return { state, request };
   }
 
@@ -384,6 +418,32 @@ describe("full tail after a long live turn", () => {
       expect.anything(),
     );
     expect(state.chatMessages).toEqual(transcript);
+    expect(state.chatHistoryPagination).toEqual({ hasMore: false, totalMessages: 7 });
+  });
+
+  it("restores the held prefix when Stop advances the leaf within the prior read", async () => {
+    const tail = tailFrom(2);
+    const older = vi.fn(async () => ({ messages: transcript.slice(0, 2), sessionInfo }));
+    const { state } = await loadAfterLiveTurn(
+      { ...tail, sessionInfo: { ...tail.sessionInfo, activeLeafEntryId: "stopped-leaf" } },
+      older,
+      { initialEnd: 4, previousLeaf: "running-leaf" },
+    );
+    expect(state.chatMessages).toEqual(transcript);
+    expect(older).toHaveBeenCalledOnce();
+    expect(state.chatHistoryPagination).toEqual({ hasMore: false, totalMessages: 7 });
+  });
+
+  it("restores the held prefix when a refresh supersedes the Stop fallback", async () => {
+    const tail = tailFrom(2);
+    const older = vi.fn(async () => ({ messages: transcript.slice(0, 2), sessionInfo }));
+    const { state } = await loadAfterLiveTurn(
+      { ...tail, sessionInfo: { ...tail.sessionInfo, activeLeafEntryId: "stopped-leaf" } },
+      older,
+      { initialEnd: 4, previousLeaf: "running-leaf", supersedeFallback: true },
+    );
+    expect(state.chatMessages).toEqual(transcript);
+    expect(older).toHaveBeenCalledOnce();
     expect(state.chatHistoryPagination).toEqual({ hasMore: false, totalMessages: 7 });
   });
 

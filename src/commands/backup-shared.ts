@@ -41,7 +41,10 @@ import {
 } from "../skills/loading/skill-root-discovery.js";
 import { tryRealpath } from "../skills/loading/symlink-targets.js";
 import { recordBackupRunOutcome } from "../state/backup-run-records.js";
-import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
+import {
+  executeExistingOpenClawStateRead,
+  withOpenClawStateDatabaseReadSnapshot,
+} from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { pathExists, resolveUserPath, shortenHomePath } from "../utils.js";
 import {
@@ -185,9 +188,11 @@ async function resolveBackupPlanFromPaths(params: {
   configPath: string;
   oauthDir: string;
   workspaceDirs?: string[];
+  excludedWorktreeTemplateDirs?: string[];
   agentRoots?: readonly BackupAgentRoot[];
   pluginInventory?: ActivatedPluginBackupInventory;
   configCapture?: BackupConfigCapture;
+  localCompanion?: boolean;
   includeWorkspace?: boolean;
   onlyConfig?: boolean;
   skillDiscoveryLimits?: ResolvedSkillDiscoveryLimits;
@@ -237,9 +242,18 @@ async function resolveBackupPlanFromPaths(params: {
         ),
       )
     ).flat(),
+    excludedWorktreeTemplateDirs: (
+      await Promise.all(
+        (params.excludedWorktreeTemplateDirs ?? []).map(async (directory) => [
+          path.resolve(directory),
+          await canonicalizePathForContainment(directory),
+        ]),
+      )
+    ).flat(),
     agentRoots,
     pluginResources: params.pluginInventory?.resources ?? [],
     pluginRoots: params.pluginInventory?.pluginRoots ?? [],
+    localCompanion: params.localCompanion,
     onlyConfig,
   });
 
@@ -553,6 +567,8 @@ export async function resolveBackupAgentRoots(config: OpenClawConfig): Promise<B
 export async function resolveBackupPlanFromDisk(
   params: {
     includeWorkspace?: boolean;
+    excludeWorktreeTemplates?: boolean;
+    localCompanion?: boolean;
     onlyConfig?: boolean;
     nowMs?: number;
   } = {},
@@ -581,6 +597,8 @@ export async function resolveBackupPlanFromDisk(
 
 async function resolveBackupPlanFromState(params: {
   includeWorkspace?: boolean;
+  excludeWorktreeTemplates?: boolean;
+  localCompanion?: boolean;
   onlyConfig?: boolean;
   nowMs?: number;
 }) {
@@ -646,14 +664,24 @@ async function resolveBackupPlanFromState(params: {
       discoveredWorkspaceDirs.push(resolveUserPath(sharedWorkspaceBase));
     }
   }
+  // The registry owns exact template generations, including previous/custom roots.
+  // Never infer exclusions from .templates names or the whole checkout directory.
+  const templates = params.excludeWorktreeTemplates
+    ? await executeExistingOpenClawStateRead(
+        { env: process.env },
+        { type: "worktrees.templates.list", input: undefined },
+      )
+    : undefined;
   return await resolveBackupPlanFromPaths({
     stateDir,
     configPath,
     oauthDir,
     workspaceDirs: discoveredWorkspaceDirs,
+    excludedWorktreeTemplateDirs: templates?.records.map((template) => template.path),
     agentRoots,
     pluginInventory,
     configCapture,
+    localCompanion: params.localCompanion,
     includeWorkspace,
     onlyConfig,
     skillDiscoveryLimits: resolveSkillDiscoveryLimits(discoverySnapshot.config),

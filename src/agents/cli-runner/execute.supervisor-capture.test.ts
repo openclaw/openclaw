@@ -3,6 +3,7 @@
 import { assert, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { buildExternalRunFailureReply } from "../../auto-reply/reply/agent-runner-failure-reply.js";
+import { buildReplyPayloads } from "../../auto-reply/reply/agent-runner-payloads.js";
 import {
   markMcpLoopbackRequestFinished,
   markMcpLoopbackRequestStarted,
@@ -42,7 +43,6 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { hashCliImageTurnEntryId } from "../cli-image-turn-correlation.js";
-import { buildEmbeddedRunPayloads } from "../embedded-agent-runner/run/payloads.js";
 import { findCliTerminalStopError } from "../failover-error.js";
 import { resolveAgentRunErrorLifecycleFields } from "../run-termination.js";
 import { buildCliDeliveredFailure, buildCliRunResult } from "./cli-run-settlement.js";
@@ -1454,8 +1454,18 @@ it.each([
 );
 
 it.each([
-  ["explicit final", true, "source", "required", "Delivery complete", true],
-  ["default final", undefined, "source", "required", "Delivery complete", true],
+  ["explicit final", true, "source", "required", "Tool-authored answer", true],
+  ["default final", undefined, "source", "required", "Tool-authored answer", true],
+  ["explicit short final", true, "source", "required", "Done", true, "Done"],
+  ["default short final", undefined, "source", "required", "Done", true, "Done"],
+  ["short progress repeat", false, "source", "required", "Done", true, "Done"],
+  ["trimmed short final", true, "source", "required", "Done", true, " Done "],
+  ["distinct short final", true, "source", "required", "No", false, "Done"],
+  ["short prefix correction", true, "source", "required", "Done, but failed", false, "Done"],
+  ["short other conversation", true, "other", "required", "Done", false, "Done"],
+  ["identical emoji final", true, "source", "required", "✅", true, "✅"],
+  ["distinct emoji final", true, "source", "required", "❌", false, "✅"],
+  ["continued work", undefined, "source", "required", "The operation failed", false],
   ["progress", false, "source", "required", "Final answer", false],
   ["other conversation", true, "other", "required", "Final answer", false],
   ["partial delivery", true, "partial", "required", "Final answer", false],
@@ -1466,7 +1476,7 @@ it.each([
   ["authored silence", true, "source", "required", "NO_REPLY", true],
 ] as const)(
   "settles automatic external source delivery with %s evidence",
-  async (_label, final, delivery, terminalReplyExpectation, text, suppress) => {
+  async (_label, final, delivery, terminalReplyExpectation, text, suppress, sentText?: string) => {
     const context = captureContext("local-cli", "text");
     context.params.sourceReplyDeliveryMode = "automatic";
     context.params.messageChannel = TEST_MESSAGE_CHANNEL;
@@ -1480,7 +1490,7 @@ it.each([
           action: "send",
           channel: TEST_MESSAGE_CHANNEL,
           target: delivery === "other" ? "other-chat" : "source-chat",
-          message: "Tool-authored answer",
+          message: sentText ?? "Tool-authored answer",
           ...(final !== undefined ? { final } : {}),
           ...(delivery === "dry-run" ? { dryRun: true } : {}),
         },
@@ -1506,28 +1516,27 @@ it.each([
           },
         },
       );
+      if (_label === "continued work") {
+        recordToolOutcome(captureKey, "exec", { command: "check-result" }, "completed");
+      }
       input.onStdout?.(text);
     });
     const output = await executePreparedCliRun(context);
-    expect(output.messagingToolSourceReplyPayloads).toBeUndefined();
     const preparedReply = prepareCliRunTerminalReply(context, output);
     const result = settledResult(context, output, preparedReply);
-    expect(result.payloads).toEqual(suppress ? undefined : [{ text }]);
+    const { replyPayloads } = await buildReplyPayloads({
+      payloads: result.payloads ?? [],
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      replyToMode: "off",
+      messageProvider: TEST_MESSAGE_CHANNEL,
+      originatingTo: "source-chat",
+      messagingToolSentTexts: result.messagingToolSentTexts,
+      messagingToolSentTargets: result.messagingToolSentTargets,
+    });
+    expect(replyPayloads.map((payload) => payload.text)).toEqual(suppress ? [] : [text]);
     if (text === "NO_REPLY") {
       expect(result.meta.terminalReply).toEqual({ disposition: "silent" });
-    }
-    if (terminalReplyExpectation === "result-required") {
-      expect(preparedReply.completedFinalSource).toBe(false);
-    } else {
-      expect(
-        buildEmbeddedRunPayloads({
-          ...output,
-          assistantTexts: [text],
-          lastAssistant: undefined,
-          sessionKey: context.params.sessionKey ?? "",
-          sourceReplyDeliveryMode: "automatic",
-        }),
-      ).toEqual(suppress ? [] : [{ text, replyToTag: false }]);
     }
   },
 );

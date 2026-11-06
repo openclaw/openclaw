@@ -13,7 +13,10 @@ import {
   type ClientCredentialReceipt,
 } from "./client-credential-receipt.js";
 import type { ClientCredentialDatabase } from "./client-credential-schema.js";
-import { openClientCredentialCustody } from "./client-credential-store.js";
+import {
+  openClientCredentialCustodyAsync,
+  runClientCredentialTransactionAsync,
+} from "./client-credential-store.js";
 import { normalizeLegacyDeviceIdentity } from "./device-identity-legacy.js";
 import { storedDeviceIdentityFromRow } from "./device-identity-material.js";
 import { validateStoredDeviceIdentity, type DeviceIdentity } from "./device-identity-store.js";
@@ -175,14 +178,19 @@ async function migrateLegacyDeviceIdentitySource(params: {
           ? repairInvalidCanonicalIdentity(env, identityKey)
           : { changes: [], warnings: [] };
       }
-      const owner = openClientCredentialCustody(env, { createIfMissing: true, migration: true });
+      const owner = await openClientCredentialCustodyAsync(env, {
+        createIfMissing: true,
+        migration: true,
+      });
       if (!owner) {
         throw new Error("Local client credentials are unavailable.");
       }
       try {
         const stored = readClientCredentialReceipt(owner.database);
         if (stored) {
-          owner.transaction(() => assertClientCredentialStoreReady(owner.database, env, false));
+          await runClientCredentialTransactionAsync(owner, () =>
+            assertClientCredentialStoreReady(owner.database, env, false),
+          );
           if (stored.receipt.legacyImports[claimKey]) {
             if (params.detected.hasInvalidCanonical) {
               owner.close();
@@ -206,7 +214,7 @@ async function migrateLegacyDeviceIdentitySource(params: {
           return { changes: [], warnings: [] };
         }
         let imported = false;
-        owner.transaction(() => {
+        await runClientCredentialTransactionAsync(owner, () => {
           if (!stored) {
             writeClientCredentialReceipt(
               owner.database,

@@ -382,7 +382,7 @@ export function createTalkClientGatewayControlOwner(
     if (!acceptingProviderTranscripts || (signal.aborted && !final)) {
       return;
     }
-    if (!text.trim()) {
+    if (final ? !text.trim() : !text) {
       return;
     }
     if (!signal.aborted) {

@@ -1,7 +1,7 @@
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions/types.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { normalizeCommandBody } from "../commands-registry-normalize.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
@@ -19,7 +19,7 @@ async function seedGoalStore(status?: "active" | "paused", budgetLimited = false
     Object.assign(entry, {
       totalTokens: budgetLimited ? 25 : 0,
       totalTokensFresh: true,
-      totalTokensVersion: 1,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     });
   }
   if (status) {

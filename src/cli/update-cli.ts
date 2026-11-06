@@ -329,6 +329,21 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
       await updateAdmitCommand(opts.context);
     });
 
+  setCommandJsonMode(update.command("preflight", { hidden: true }), "output", () => true)
+    .description("Internal isolated candidate readiness protocol")
+    .option("--json", "Output the readiness receipt as JSON", true)
+    .option("--source-root <path>", "Absolute serving package root")
+    .option("--timeout <seconds>", "Override candidate check deadlines in seconds")
+    .action(
+      createUpdateLeafAction(async (opts, command) => {
+        const { updatePreflightCommand } = await import("./update-cli/update-command-preflight.js");
+        await updatePreflightCommand({
+          sourceRoot: typeof opts.sourceRoot === "string" ? opts.sourceRoot : undefined,
+          timeout: inheritedUpdateTimeout(opts, command),
+        });
+      }),
+    );
+
   for (const action of ["migrate", "restore", "finish"] as const) {
     setCommandJsonMode(update.command(action, { hidden: true }), "output", () => true)
       .description(`Internal externally supervised update ${action}`)

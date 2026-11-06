@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { MessageClientSource } from "../../../../src/chat/message-client-source.js";
 import type { ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
+import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 import { assistantGroupCanOwnActiveRunStatus } from "./chat-assistant-reply.ts";
 import {
   groupsOf,
@@ -503,3 +504,101 @@ it.each(["error", "aborted"])(
     );
   },
 );
+
+it("keeps each run's reply visible when completions answer without new user input", () => {
+  const run = (runId: string) => ({ __openclaw: { runId } });
+  const items = collapse([
+    message("user", "Start two subagents", 1_000),
+    message("assistant", "Spawning both.", 1_500, run("run-user")),
+    { ...toolResult("spawn", "bash", "ok", 2_000), ...run("run-user") },
+    message("assistant", "Both started.", 3_000, run("run-user")),
+    message("assistant", "Child A finished.", 4_000, run("announce:v1:child-a")),
+    { ...toolResult("lookup", "bash", "ok", 4_500), ...run("announce:v1:child-b") },
+    message("assistant", "Child B finished.", 5_000, run("announce:v1:child-b")),
+    message("assistant", "All children settled.", 6_000, run("announce:requester-settle:a,b")),
+  ]);
+  const text = (entries: unknown[]) =>
+    entries.map((entry) => (entry as { content?: unknown }).content);
+  expect(text(messagesOf(groupsOf(items)))).toEqual([
+    "Start two subagents",
+    "Both started.",
+    "Child A finished.",
+    "Child B finished.",
+    "All children settled.",
+  ]);
+  const rollup = items.find((item) => item.kind === "work-group");
+  expect(rollup?.kind === "work-group" ? text(messagesOf(rollup.groups)) : []).toEqual([
+    "Spawning both.",
+    "ok",
+    "ok",
+  ]);
+});
+
+it.each([
+  ["untagged CLI work of the first run", false, false, ["run-user", "announce:v1:child-a"]],
+  ["untagged CLI work across runs", false, true, undefined],
+  ["tagged work across runs", true, true, undefined],
+] as const)(
+  "frames completed work by its run when earlier runs keep replies: %s",
+  (_name, tagged, laterWork, frameRunIds) => {
+    // CLI runtimes import tool rows without a run id; only the persisted reply carries one.
+    const meta = (runId: string) =>
+      tagged ? { __openclaw: { runId } } : { __openclaw: { importedFrom: "claude-cli" } };
+    const items = coalesceAgentRunFrames(
+      coalesceActivityRuns(
+        collapse([
+          message("user", "Start two subagents", 1_000),
+          toolResult("spawn", "sessions_spawn", "accepted", 2_000, meta("run-user")),
+          message("assistant", "Both started.", 3_000, { __openclaw: { runId: "run-user" } }),
+          ...(laterWork
+            ? [toolResult("check", "sessions_list", "ok", 3_500, meta("announce:v1:child-a"))]
+            : []),
+          message("assistant", "Child A finished.", 4_000, {
+            __openclaw: { runId: "announce:v1:child-a" },
+          }),
+        ]),
+      ),
+    );
+    const frames = items.filter((item) => item.kind === "agent-run-frame");
+    if (frameRunIds) {
+      // The rollup stays in the frame of the run that did the work.
+      expect(items.map((item) => item.kind)).toEqual([
+        "group",
+        "agent-run-frame",
+        "agent-run-frame",
+      ]);
+      expect(frames.map((frame) => frame.runId)).toEqual(frameRunIds);
+      expect(frames[0]?.parts.map((part) => part.kind)).toEqual(["work-group", "group"]);
+    } else {
+      // Work across runs has no single owner, with or without run ids.
+      expect(items.map((item) => item.kind)).toEqual([
+        "group",
+        "work-group",
+        "agent-run-frame",
+        "agent-run-frame",
+      ]);
+    }
+  },
+);
+
+it("times completed work only against the run that owns it", () => {
+  const messages = [
+    message("user", "Start two subagents", 1_000),
+    toolResult("spawn", "sessions_spawn", "accepted", 2_000, {
+      __openclaw: { importedFrom: "claude-cli" },
+    }),
+    message("assistant", "Both started.", 3_000, { __openclaw: { runId: "run-user" } }),
+    message("assistant", "Child A finished.", 4_000, {
+      __openclaw: { runId: "announce:v1:child-a" },
+    }),
+  ];
+  const durationFor = (lastRunId: string) =>
+    collapseCompletedTurnWork(cachedGroups(messages), {
+      sessionKey,
+      runWorking: false,
+      session: { key: sessionKey, lastRunId, status: "done", runtimeMs: 7_000 },
+    }).find((item) => item.kind === "work-group")?.durationMs;
+  // The rollup belongs to the user's run; a later completion run's runtime is not its time.
+  expect(durationFor("run-user")).toBe(7_000);
+  expect(durationFor("announce:v1:child-a")).toBeNull();
+});

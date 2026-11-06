@@ -3,13 +3,14 @@ import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   buildFallbackSlashCommands,
   getSkillCommandCompletions,
   replaceSlashCommands,
 } from "../../lib/chat/commands.ts";
 import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { adjustTextareaHeight } from "../chat/components/chat-composer-dom.ts";
@@ -62,7 +63,17 @@ const skill = (name: string) => ({
   name,
   description: name,
   source: "skill" as const,
-  skillModelVisible: true,
+  skillReferenceable: true,
+});
+
+const skillEntry = (name: string) => ({
+  acceptsArgs: true,
+  description: name,
+  name,
+  scope: "both" as const,
+  source: "skill" as const,
+  skillReferenceable: true,
+  textAliases: [`/${name}`],
 });
 
 afterEach(() => {
@@ -218,45 +229,37 @@ describe("new-session composer keyboard submission", () => {
     },
   );
 
-  it.each(["agent", "client"] as const)(
+  it.each(["agent", "client", "project"] as const)(
     "drops pending skill completion after %s replacement",
     async (owner) => {
       const response = createDeferred<CommandsListResult>();
       const request = vi.fn(() => response.promise);
-      const snapshot = { client: { request } as unknown as GatewayBrowserClient };
+      const client = new GatewayBrowserClient({ url: "ws://gateway.test" });
+      vi.spyOn(client, "request").mockImplementation(request);
+      vi.spyOn(client, "hello", "get").mockReturnValue(gatewayHelloForMethods(["commands.list"]));
+      const snapshot = { client };
       const context = composerContext(snapshot);
-      const { composer, rerender, rerenderForAgent, composerTextarea } = renderComposer({
-        agentId: "writer",
-        context,
-        message: "$",
-      });
+      const commandProjectId = owner === "project" ? "project-alpha" : undefined;
+      const view = renderComposer({ agentId: "writer", commandProjectId, context, message: "$" });
+      const { composer, composerTextarea } = view;
       const textarea = getComposerTextarea(composer);
       textarea.setSelectionRange(1, 1);
       textarea.dispatchEvent(new Event("select", { bubbles: true }));
       expect(request).toHaveBeenCalledWith("commands.list", {
         agentId: "writer",
+        ...(commandProjectId ? { projectId: commandProjectId } : {}),
         includeArgs: true,
         scope: "text",
       });
       if (owner === "agent") {
-        rerenderForAgent("reviewer");
+        view.rerenderForAgent("reviewer");
+      } else if (owner === "project") {
+        view.rerenderForProject("project-beta");
       } else {
         snapshot.client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-        rerender();
+        view.rerender();
       }
-      response.resolve({
-        commands: [
-          {
-            acceptsArgs: true,
-            description: "Previous owner only",
-            name: "previous_owner_only",
-            scope: "both",
-            source: "skill",
-            skillModelVisible: true,
-            textAliases: ["/previous_owner_only"],
-          },
-        ],
-      });
+      response.resolve({ commands: [skillEntry("previous_owner_only")] });
       await waitForFast(() =>
         expect(composerTextarea.skillMenu.state.skillCommandRefreshPending).toBe(false),
       );
@@ -266,6 +269,43 @@ describe("new-session composer keyboard submission", () => {
       expect(getSkillCommandCompletions("previous_owner_only")).toEqual([]);
     },
   );
+
+  it("requests the new project's slash catalog while the previous project's is pending", async () => {
+    const first = createDeferred<CommandsListResult>();
+    const second = createDeferred<CommandsListResult>();
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    const client = new GatewayBrowserClient({ url: "ws://gateway.test" });
+    vi.spyOn(client, "request").mockImplementation(request);
+    vi.spyOn(client, "hello", "get").mockReturnValue(gatewayHelloForMethods(["commands.list"]));
+    const context = composerContext({ client });
+    const { composer, rerenderForProject } = renderComposer({
+      agentId: "writer",
+      commandProjectId: "project-alpha",
+      context,
+    });
+    const textarea = getComposerTextarea(composer);
+    typeDraft(textarea, "/");
+    expect(request).toHaveBeenLastCalledWith(
+      "commands.list",
+      expect.objectContaining({ projectId: "project-alpha" }),
+    );
+    rerenderForProject("project-beta");
+    typeDraft(textarea, "/");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenLastCalledWith(
+      "commands.list",
+      expect.objectContaining({ projectId: "project-beta" }),
+    );
+    first.resolve({ commands: [skillEntry("alpha_only")] });
+    second.resolve({ commands: [skillEntry("beta_only")] });
+    await waitForFast(() =>
+      expect(composer.querySelector(".slash-menu")?.textContent ?? "").toContain("/beta_only"),
+    );
+    expect(composer.querySelector(".slash-menu")?.textContent ?? "").not.toContain("/alpha_only");
+  });
 
   it("opens skill mentions and inserts the selected skill with Enter", () => {
     replaceSlashCommands([skill("release_notes")]);
@@ -654,26 +694,6 @@ describe("new-session composer attachment drops", () => {
     const switches = composer.querySelectorAll<HTMLButtonElement>('[role="switch"]');
 
     expect(switches).toHaveLength(0);
-  });
-
-  it("lets one draft pill replace page-level incognito", () => {
-    const onVisibilityChange = vi.fn();
-    const { composer } = renderComposer({
-      draftAvailable: true,
-      visibility: "draft",
-      onVisibilityChange,
-    });
-    const draftPill = composer.querySelector<HTMLButtonElement>('[role="switch"]');
-    const visibleDraftButtons = Array.from(
-      composer.querySelectorAll<HTMLButtonElement>(".agent-chat__composer-footer button"),
-    ).filter((button) => button.textContent?.trim() === "Draft");
-
-    expect(draftPill?.textContent).toContain("Draft");
-    expect(draftPill?.getAttribute("aria-checked")).toBe("true");
-    expect(visibleDraftButtons).toEqual([draftPill]);
-
-    draftPill?.click();
-    expect(onVisibilityChange).toHaveBeenCalledWith("normal");
   });
 
   it("adds a dropped file through the shared attachment handling", async () => {

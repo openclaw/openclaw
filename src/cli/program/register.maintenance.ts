@@ -52,7 +52,7 @@ export function registerMaintenanceCommands(
     .option("--non-interactive", "Run without prompts (safe migrations only)", false)
     .option(
       "--client-credentials",
-      "Prepare only local client credentials (requires --repair --non-interactive)",
+      "Prepare local client credentials and runtime intent (requires --repair --non-interactive)",
       false,
     )
     .option("--generate-gateway-token", "Generate and configure a gateway token", false)
@@ -232,6 +232,7 @@ export function registerMaintenanceCommands(
           await prepareStartupClientCredentials({
             env: process.env,
             runtime: defaultRuntime,
+            prepareRuntimePins: true,
           });
           if (opts.json === true) {
             defaultRuntime.writeJson({ ok: true });
@@ -316,6 +317,10 @@ export function registerMaintenanceCommands(
     )
     .option("--update-result <path>", "Include update-failure diagnostics from this JSON artifact")
     .action(async (opts) => {
+      // Triage runs Doctor's inspections; a closed terminal must still remove their copies.
+      if (hasCliProcessScope()) {
+        installCliDoctorSignalExitHandlers();
+      }
       if (opts.json === true && opts.run === true) {
         return exitDoctorError("triage --json cannot be combined with --run.", true);
       }

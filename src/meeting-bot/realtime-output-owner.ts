@@ -51,7 +51,7 @@ export function createMeetingRealtimeOutputQueue(params: {
 
   const isStalled = (incomingBytes = 0) =>
     writePhase === "writing" &&
-    Date.now() - writeStartedAt >= OUTPUT_STALL_MS &&
+    performance.now() - writeStartedAt >= OUTPUT_STALL_MS &&
     pendingBytes + incomingBytes > stallPendingBytes;
   const reset = () => {
     clearTimeout(stallTimer);
@@ -123,7 +123,7 @@ export function createMeetingRealtimeOutputQueue(params: {
           params.transport.beginOutput?.();
         }
         writePhase = "writing";
-        writeStartedAt = Date.now();
+        writeStartedAt = performance.now();
         // A finished provider cannot trigger another enqueue to detect stuck playback.
         stallTimer = setTimeout(() => {
           if (isStalled()) {
@@ -133,7 +133,7 @@ export function createMeetingRealtimeOutputQueue(params: {
         await params.transport.writeOutput(audio);
         if (!stopped && next.generation === generation) {
           // Native write completion admits audio to playback; it does not mean it was heard.
-          playableUntilMs = Math.max(Date.now(), playableUntilMs);
+          playableUntilMs = Math.max(performance.now(), playableUntilMs);
           for (const entry of batch) {
             playableUntilMs += entry.audio.byteLength / params.bytesPerMs;
             if (entry.audible) {
@@ -194,7 +194,7 @@ export function createMeetingRealtimeOutputQueue(params: {
       reset();
     },
     pending: () => ({ pendingBytes, pendingFrames }),
-    hasUnplayedAudibleAudio: () => pendingAudibleFrames > 0 || Date.now() < audibleUntilMs,
+    hasUnplayedAudibleAudio: () => pendingAudibleFrames > 0 || performance.now() < audibleUntilMs,
     getHealth: () => ({ clearCount, lastClearAt }),
   };
 }

@@ -18,7 +18,7 @@ import { readStandaloneInstaller } from "../../scripts/lib/standalone-installers
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writeNpmLifecycleFixture } from "./install-npm-fixtures.js";
-import { findDarwinReexecBash } from "./install-reexec-fixtures.js";
+import { findDarwinReexecBash, runStreamedInstallerHelp } from "./install-reexec-fixtures.js";
 import {
   defineInstallerNpmConfigContract,
   defineInstallerNpmFreshnessContract,
@@ -119,6 +119,37 @@ function runNpmPolicy(spec: string) {
 
 describe("install-cli.sh", () => {
   const script = readStandaloneInstaller(process.cwd(), SCRIPT_PATH.slice("scripts/".length));
+
+  it.each(["24.21.0", "24.22.1", "26.12.0", "26.12.1"])(
+    "reuses compatible private Node %s with one stderr security warning when needed",
+    (version) => {
+      const f = makeFixture("node-security-warning");
+      f.node(`prefix/tools/node-v${version}/bin/node`, `v${version}`);
+      f.shell(`prefix/tools/node-v${version}/bin/npm`, "exit 0");
+      const result = f.run(`
+        PREFIX="$ROOT/prefix" NODE_VERSION=${version} NODE_VERSION_REQUESTED=1 JSON=1
+        download_file() { echo 'unexpected runtime download' >&2; exit 91; }
+        install_node darwin arm64
+        install_node darwin arm64
+      `);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(
+        result.stdout
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line)),
+      ).toMatchObject([
+        { event: "step", name: "node", status: "skip" },
+        { event: "step", name: "node", status: "skip" },
+      ]);
+      const expectedWarnings = ["24.21.0", "26.12.0"].includes(version) ? 1 : 0;
+      expect(result.stderr.match(/SECURITY WARNING:/g) ?? []).toHaveLength(expectedWarnings);
+      if (expectedWarnings) {
+        expect(result.stderr).toContain("may trust TLS certificates signed with keys compromised");
+        expect(result.stderr).toContain("Node 24.22.1+ on the 24.x line or Node 26.12.1+");
+      }
+    },
+  );
 
   it.each([undefined, ".config/zsh"])("persists npm prefix PATH with ZDOTDIR=%s", (suffix) => {
     const home = tempDirs.make("openclaw-cli-zdotdir-");
@@ -333,20 +364,7 @@ fi
       return;
     }
     const tmp = tempDirs.make("openclaw-install-reexec-");
-    const result = spawnSync(bash, ["-s", "--", "--help"], {
-      input: script,
-      encoding: "utf8",
-      timeout: 10_000,
-      env: {
-        ...process.env,
-        HOME: tmp,
-        TMPDIR: tmp,
-        BASH_ENV: "",
-        ENV: "",
-        OPENCLAW_INSTALL_SH_NO_RUN: "0",
-        OPENCLAW_INSTALL_CLI_SH_NO_RUN: "0",
-      },
-    });
+    const result = runStreamedInstallerHelp(bash, script, tmp);
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("Usage: install-cli.sh [options]");
     expect(result.stderr).not.toContain("Run this installer with /bin/bash");

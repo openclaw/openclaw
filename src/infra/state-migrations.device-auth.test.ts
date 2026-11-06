@@ -1,11 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import { writeClientCredentialReceipt } from "./client-credential-readiness.js";
 import { emptyClientCredentialReceipt } from "./client-credential-receipt.js";
 import type { ClientCredentialDatabase } from "./client-credential-schema.js";
-import { runClientCredentialOperation } from "./client-credential-store.js";
+import {
+  openClientCredentialCustody,
+  runClientCredentialOperation,
+} from "./client-credential-store.js";
 import { withClientCredentialStore } from "./client-credential-store.test-support.js";
 import { loadDeviceAuthToken as readDeviceAuthTokenForTest } from "./device-auth-store.js";
 import {
@@ -13,11 +18,14 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import * as sqliteReadOnlyWorker from "./sqlite-readonly-worker.js";
 import {
   detectLegacyDeviceAuth,
   migrateLegacyDeviceAuth,
   prepareLegacyDeviceAuth,
 } from "./state-migrations.device-auth.js";
+import { readUpdateDatabaseGenerations } from "./update-database-generations.js";
+import { createUpdateDoctorDatabaseWriteCapture } from "./update-doctor-result.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let stateDir: string;
@@ -89,6 +97,49 @@ function selectSource(filename: string) {
 }
 
 describe("legacy device-auth Doctor migration", () => {
+  it("imports captured legacy tokens without synchronous migration observations", async () => {
+    {
+      using owner = openClientCredentialCustody(env, { createIfMissing: true, migration: true });
+      expect(owner).toBeDefined();
+    }
+    const original = readSource();
+    const pathname = resolveClientCredentialStorePath(env);
+    const capture = createUpdateDoctorDatabaseWriteCapture(
+      readUpdateDatabaseGenerations([pathname]),
+      {
+        env,
+        signal: new AbortController().signal,
+        warn: (message) => {
+          throw new Error(message);
+        },
+      },
+    )!;
+    const scope = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent() {},
+      assertDatabaseAccess() {},
+    });
+    try {
+      await capture.admit();
+      const synchronous = vi.spyOn(sqliteReadOnlyWorker, "runSqliteReadOnlyWorkerSync");
+      try {
+        const result = await scope.run(() => capture.run(migrate));
+        expect(result.changes).toEqual(["Migrated 1 device-auth token to SQLite."]);
+        expect(result.warnings).toEqual([]);
+        expect(synchronous).not.toHaveBeenCalled();
+      } finally {
+        synchronous.mockRestore();
+      }
+      await scope.close();
+      await capture.settle();
+      expect(capture.receipt?.unchanged).toBe(true);
+      expect((await readToken())?.token).toBe("legacy-token");
+      expect(readSource()).toEqual(original);
+    } finally {
+      await scope.close();
+    }
+  });
+
   it.each([
     ...sourceVariants.map(([profile, filename]) => ({ profile, filename, canonical: false })),
     ...profiles.map(([profile, filename]) => ({ profile, filename, canonical: true })),

@@ -501,6 +501,18 @@ export async function runReplyAgent(
       return hasVisiblePartialReply() || blockReplyPipeline?.didStream() === true;
     };
     bindReplyOperationTyping(replyOperation, typing);
+    // In message-tool-only delivery, a final message-tool send is the answer while the run
+    // continues. Report it now, so channel progress UI stops before it renders below it.
+    const stopSourceReplyObservation = replyOperation.onSourceReplyDelivered(() => {
+      if (followupRun.run.sourceReplyDeliveryMode !== "message_tool_only") {
+        return;
+      }
+      try {
+        void Promise.resolve(runOpts?.onObservedReplyDelivery?.()).catch(logObservedDeliveryError);
+      } catch (error) {
+        logObservedDeliveryError(error);
+      }
+    });
     let runFollowupTurn = queuedRunFollowupTurn;
     let shouldDrainQueuedFollowupsAfterClear = false;
     const returnWithQueuedFollowupDrain = <T>(value: T): T => {
@@ -599,6 +611,7 @@ export async function runReplyAgent(
       });
       return prependCompactionNotices(result, pendingCompactionNotices, replyOperation);
     } finally {
+      stopSourceReplyObservation();
       try {
         await cleanupReplyAgentRun({
           blockReplyPipeline,
@@ -626,4 +639,8 @@ export async function runReplyAgent(
     }
     retireUnadoptedReplySource(controllerInput);
   }
+}
+
+function logObservedDeliveryError(error: unknown): void {
+  logVerbose(`observed reply delivery callback failed: ${String(error)}`);
 }

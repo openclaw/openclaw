@@ -19,12 +19,9 @@ import {
   requiresAgentHarnessPluginSelection,
   resolveAgentHarnessOwnerPluginIds,
 } from "../agents/harness/runtime-plugin-load-plan.js";
+import { findModelCatalogEntry } from "../agents/model-catalog-lookup.js";
 import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
-import {
-  findModelCatalogEntry,
-  type ModelCatalogEntry,
-  type ModelCatalogSnapshot,
-} from "../agents/model-catalog.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
   type ModelRef,

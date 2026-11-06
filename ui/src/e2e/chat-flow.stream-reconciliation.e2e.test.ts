@@ -24,7 +24,7 @@ const assistantTexts = async (page: Page) =>
   );
 const terminalMessage = (text: string, displayContent: ReturnType<typeof textContent> = []) =>
   chatMessage("assistant", text, { openclawDisplayContent: displayContent });
-const stopButton = (page: Page) => page.getByRole("button", { name: "Stop generating" });
+const stopButton = (page: Page) => page.getByRole("button", { name: "Stop", exact: true });
 type Gateway = Awaited<ReturnType<typeof installMockGateway>>;
 const savedAnswer = (runId: string, text: string, id = "answer", seq = 2) => ({
   ...chatMessage("assistant", text),

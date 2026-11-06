@@ -189,7 +189,10 @@ describe.skipIf(!hasPopoverApi)("agent picker surface", () => {
   it("stays opaque while the menu animates open", async () => {
     await useDesktopViewport();
     const picker = document.createElement("openclaw-agent-select");
-    picker.options = [{ value: "all", label: "All agents" }];
+    picker.options = [
+      { value: "all", label: "All agents" },
+      { value: "main", label: "Main agent" },
+    ];
     document.body.append(picker);
     await picker.updateComplete;
     const menu = picker.querySelector<HTMLElement>(".agent-select__menu")!;
@@ -202,6 +205,11 @@ describe.skipIf(!hasPopoverApi)("agent picker surface", () => {
     }
     expect(getComputedStyle(menu).opacity).toBe("1");
     expect(getComputedStyle(menu).scale).not.toBe("1");
+    await expect.poll(() => menu.querySelectorAll(".agent-select__option").length).toBe(2);
+    const options = menu.querySelectorAll<HTMLElement>(".agent-select__option");
+    expect(getComputedStyle(options[1]!).marginBlockStart).toBe(
+      getComputedStyle(menu).getPropertyValue("--menu-item-gap").trim(),
+    );
   });
 });
 
@@ -224,7 +232,10 @@ describe.skipIf(!hasPopoverApi)("submenu parent highlight", () => {
           id: "parent",
           label: "Parent",
           class: className,
-          children: [{ id: "child", label: "Child", class: className }],
+          children: [
+            { id: "child", label: "Child", class: className },
+            { id: "child-next", label: "Next child", class: className },
+          ],
         },
         { id: "sibling", label: "Other action", class: className },
       ],
@@ -236,9 +247,7 @@ describe.skipIf(!hasPopoverApi)("submenu parent highlight", () => {
     const submenuShown = new Promise<void>((resolve) => {
       submenu.addEventListener("overlay-after-show", () => resolve(), { once: true });
     });
-    const highlight = colorSwatch(
-      input === "pointer" ? "var(--surface-selected-hover)" : "var(--surface-selected)",
-    );
+    const highlight = colorSwatch("var(--surface-hover)");
 
     await openMenu(container);
     await expect.poll(() => document.activeElement).toBe(parent);
@@ -255,6 +264,11 @@ describe.skipIf(!hasPopoverApi)("submenu parent highlight", () => {
     // Keyboard focus can precede submenu presentation and its final highlight transition.
     await submenuShown;
     expect(submenu.dataset.phase).toBe("open");
+    const gap = getComputedStyle(submenu).getPropertyValue("--menu-item-gap").trim();
+    expect(getComputedStyle(query(container, '[data-value="child-next"]')).marginBlockStart).toBe(
+      gap,
+    );
+    expect(getComputedStyle(sibling).marginBlockStart).toBe(gap);
     await Promise.all(parent.getAnimations().map((animation) => animation.finished));
     expect(getComputedStyle(parent).backgroundColor).toBe(highlight);
 
@@ -273,6 +287,82 @@ describe.skipIf(!hasPopoverApi)("submenu parent highlight", () => {
     await expect.poll(() => parent.matches(":hover")).toBe(false);
     await expect.poll(() => getComputedStyle(parent).backgroundColor).toBe("rgba(0, 0, 0, 0)");
   });
+});
+
+it("keeps inferred group spacing inside menus and direct row gaps outside", async () => {
+  const style = document.head.appendChild(document.createElement("style"));
+  style.textContent = overlayStyles;
+  onTestFinished(() => style.remove());
+  const host = document.body.appendChild(document.createElement("openclaw-menu-surface"));
+  onTestFinished(() => host.remove());
+  host.style.setProperty("--menu-item-gap", "6px");
+  const item = '<button class="oc-menu-item">Action</button>';
+  const group = `<section>${item}</section>`;
+  const submenu = `<div><button class="oc-menu-item oc-menu-item--submenu">More</button><div class="oc-overlay oc-menu">${item}</div></div>`;
+  const overridden =
+    '<button class="oc-menu-item" style="margin-block-start: 11px">Override</button>';
+  for (const [name, first, second, menuClass, expected] of [
+    ["rows", item, item, "oc-menu", "6px"],
+    ["row then group", item, group, "oc-menu", "6px"],
+    ["group then row", group, item, "oc-menu", "6px"],
+    ["groups", group, group, "oc-menu", "6px"],
+    ["submenu then row", submenu, item, "oc-menu", "6px"],
+    [
+      "custom submenu marker then row",
+      '<div><button class="oc-menu-item--submenu">More</button></div>',
+      item,
+      "oc-menu",
+      "6px",
+    ],
+    ["popup exclusion", item, `<div class="oc-overlay">${item}</div>`, "oc-menu", "4px"],
+    ["row override", item, overridden, "oc-menu", "11px"],
+    ["standalone rows", item, item, "", "6px"],
+    ["unrelated groups", group, group, "", "0px"],
+  ] as const) {
+    host.innerHTML = `<div class="${menuClass}"><div><div class="spacing-pair">${first}${second}</div></div></div>`;
+    const target = query(host, ".spacing-pair").lastElementChild!;
+    await expect
+      .poll(() => getComputedStyle(target).marginBlockStart, { message: name })
+      .toBe(expected);
+  }
+  host.innerHTML = `<div class="oc-menu"><div class="outer">${group}${group}</div><div class="oc-menu" style="--menu-item-gap: 9px"><div class="inner">${group}${group}</div></div></div><div class="outside">${group}${group}</div>`;
+  for (const [selector, expected] of [
+    [".outer", "6px"],
+    [".inner", "9px"],
+    [".outside", "0px"],
+  ] as const) {
+    await expect
+      .poll(() => getComputedStyle(query(host, selector).lastElementChild!).marginBlockStart)
+      .toBe(expected);
+  }
+});
+
+it("spaces actual Menu groups around custom content", async () => {
+  const container = mountMenu({
+    id: "group-spacing",
+    label: "Actions",
+    items: [
+      { id: "before", label: "Before" },
+      { kind: "group", id: "group", items: [{ id: "grouped", label: "Grouped" }] },
+      {
+        kind: "content",
+        id: "custom",
+        content: (
+          <section>
+            <button class="oc-menu-item">Custom</button>
+          </section>
+        ),
+      },
+      { id: "after", label: "After" },
+    ],
+  });
+  const menu = await openMenu(container);
+  const gap = getComputedStyle(menu).getPropertyValue("--menu-item-gap").trim();
+  const grouped = query(menu, '[data-value="grouped"]').parentElement!;
+  const after = query(menu, '[data-value="after"]');
+  for (const target of [grouped, grouped.nextElementSibling!, after]) {
+    expect(getComputedStyle(target).marginBlockStart).toBe(gap);
+  }
 });
 
 describe.skipIf(!hasPopoverApi)("action menu typography", () => {
@@ -333,13 +423,15 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       await useDesktopViewport();
       document.documentElement.dataset.theme = theme;
       document.documentElement.dataset.themeMode = theme;
-      highlight = colorSwatch("var(--bg-hover)");
+      highlight = colorSwatch("var(--surface-hover)");
       host = document.body.appendChild(document.createElement("div"));
     });
 
     it.each(["session-first", "overlay-first"])(
       "keeps canonical and plain row states independent with %s styles",
       async (order) => {
+        // This matrix checks final colors; animation behavior has its own cases.
+        host.style.setProperty("--control-ui-transition-fast", "0s");
         const { page, userEvent } = await import("vitest/browser");
         const style = document.head.appendChild(document.createElement("style"));
         onTestFinished(() => style.remove());
@@ -364,8 +456,13 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
           },
           {
             name: "expanded",
-            menu: ["--surface-selected", "--surface-selected-hover", "1"],
+            menu: ["--surface-hover", "--surface-hover", "1"],
             plain: ["--bg-hover", "--bg-hover", "1"],
+          },
+          {
+            name: "unchecked",
+            menu: ["transparent", "--menu-hover", "1"],
+            plain: ["transparent", "--bg-hover", "1"],
           },
           {
             name: "checked",
@@ -385,22 +482,22 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
           {
             name: "disabled",
             menu: ["transparent", "transparent", "0.5"],
-            plain: ["transparent", "transparent", "0.42"],
+            plain: ["transparent", "transparent", "0.5"],
           },
           {
             name: "aria-disabled",
             menu: ["transparent", "transparent", "0.5"],
-            plain: ["transparent", "transparent", "0.42"],
+            plain: ["transparent", "transparent", "0.5"],
           },
           {
             name: "disabled-expanded",
             menu: ["transparent", "transparent", "0.5"],
-            plain: ["--bg-hover", "--bg-hover", "0.42"],
+            plain: ["--bg-hover", "--bg-hover", "0.5"],
           },
           {
             name: "aria-disabled-expanded",
             menu: ["transparent", "transparent", "0.5"],
-            plain: ["--bg-hover", "--bg-hover", "0.42"],
+            plain: ["--bg-hover", "--bg-hover", "0.5"],
           },
         ] as const;
         for (const className of [
@@ -427,6 +524,9 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
               if (enabled) {
                 item.setAttribute(attribute, "true");
               }
+            }
+            if (state === "unchecked") {
+              item.setAttribute("aria-checked", "false");
             }
             if (danger) {
               item.dataset.variant = "danger";

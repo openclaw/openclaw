@@ -16,7 +16,10 @@ import {
 } from "../../packages/normalization-core/src/error-coercion.ts";
 import { expectDefined } from "../../packages/normalization-core/src/expect.ts";
 import { MAX_TIMER_TIMEOUT_MS } from "../../packages/normalization-core/src/number-coercion.ts";
-import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.ts";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../packages/normalization-core/src/string-coerce.ts";
 import {
   sliceUtf16Safe,
   truncateUtf16Safe,
@@ -145,6 +148,7 @@ async function fixture({
   const values = {
     theme: new Proxy({}, { get: () => (value) => value }),
     normalizeOptionalString,
+    normalizeLowercaseStringOrEmpty,
     expectDefined,
     resolveServiceRefreshEnv: (env) => env,
     resolveGatewayServiceManagementBlockMessageForUpdate: () => undefined,
@@ -227,6 +231,10 @@ async function fixture({
     // real owner/filesystem coverage in update-automatic-cleanup.test.ts; these
     // cases prove the separate package transaction's retirement authorization.
     automaticallyCleanUpdateRecovery: async () => undefined,
+    // Cohort settlement has native ledger coverage; this VM owns only package retirement.
+    commitVerifiedUpdatePluginCohort: async () => {},
+    assertUpdatePluginCohortReportingContinuation: () => {},
+    assertUpdatePluginCohortReportingAdmission: async () => {},
     // Every case here fails after the swap, so none retires its own capture.
     failedBeforeActivation: () => false,
     prepareResult: async (value) => () => printed.push(value),
@@ -247,6 +255,7 @@ async function fixture({
     sliceUtf16Safe,
     truncateUtf16Safe,
     withCommandProcessScope: async (action) => action(),
+    getCliPluginInvocationResources: () => undefined,
     readPackageVersion: async (packageRoot) => {
       assert.equal(packageRoot, installRoot);
       return "2026.9.4";
@@ -328,6 +337,11 @@ async function fixture({
     "../../logging/redact-performance",
     "../../logging/redact-prefilter",
     "../../logging/redact-bounded",
+    "../../../packages/net-policy/src/redact-sensitive-url",
+    "../../logging/redact-mask",
+    "../../logging/redact-edit-composition",
+    "../../logging/redact-json",
+    "../../logging/redact-json-tokens",
     "../../logging/secret-redaction-registry",
     "../../shared/global-singleton",
     "../../shared/regexp",
@@ -360,6 +374,7 @@ async function fixture({
     }).code;
     const mod = new vm.SourceTextModule(code, { context, identifier: filename });
     modules.set(path.basename(name) + ".js", mod);
+    modules.set(path.basename(name), mod);
     const imports = new Map();
     for (const match of code.matchAll(
       /(?:import|export)\s*\{([^}]+)\}\s*from\s*["']([^"']+)["']/gs,

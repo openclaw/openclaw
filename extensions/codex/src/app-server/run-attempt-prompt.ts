@@ -32,11 +32,7 @@ import { estimateCodexAppServerProjectedTurnTokens } from "./run-attempt-lifecyc
 import { prependCurrentInboundContext } from "./run-attempt-state.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
 import { resolveCodexProjectionStartupBinding } from "./thread-restricted-resume.js";
-import {
-  buildCodexHistoryProvenancePrefix,
-  buildCodexParentLocalInstructions,
-  buildTurnCollaborationMode,
-} from "./turn-params.js";
+import { buildCodexHistoryProvenancePrefix, buildTurnCollaborationMode } from "./turn-params.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 
 export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
@@ -77,6 +73,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     sandbox,
   } = connection;
   const { toolBridge } = attemptTools;
+  const isTelegram = (params.messageChannel ?? params.messageProvider) === "telegram";
   const usesSelectedHistory = Boolean(
     activeContextEngine ||
     (!usesSupervisionConnection && params.hostCapabilities.prepareBoundedSeed),
@@ -142,6 +139,19 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   const currentUserTurnIdempotencyKey = params.pluginRuntimeRefreshMessages
     ? undefined
     : admittedMessage?.idempotencyKey;
+  const currentMedia =
+    isTelegram && currentUserTurnIdempotencyKey && admittedMessage && !params.images?.length
+      ? await params.hostCapabilities.prepareContextMedia?.({
+          message: (await params.userTurnTranscriptRecorder?.resolveMessage()) ?? admittedMessage,
+          maxChars: 0,
+        })
+      : undefined;
+  assertProjectionCurrent();
+  const imageHistory = isTelegram
+    ? params.images?.length || currentMedia?.hasImageAttachments
+      ? "none"
+      : "latest-turn"
+    : undefined;
   const prepareFileContext: NonNullable<
     Parameters<typeof projectContextEngineAssemblyForCodex>[0]["prepareFileContext"]
   > = async (message, maxChars) => {
@@ -175,6 +185,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       prepareFileContext,
       currentUserTurnIdempotencyKey,
       currentUserMessage: admittedMessage,
+      imageHistory,
     });
     assertProjectionCurrent();
     contextImageGroups = projection.imageGroups ?? [];
@@ -256,6 +267,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
           prepareFileContext,
           currentUserTurnIdempotencyKey,
           currentUserMessage: admittedMessage,
+          imageHistory,
         },
         historyTokenBudget: historyBudget?.tokenBudget,
         baseDeveloperInstructions,
@@ -452,21 +464,24 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     codexTurnPromptText: decorateCodexTurnPromptText(firstPromptBuild),
   };
   let parentLocalEgress = false;
-  const parentLocalContext = {
-    personaInstructions: workspaceBootstrapContext.personaInstructions,
-    memoryInstructions: workspaceBootstrapContext.memoryInstructions,
-  };
-  // Observability view of the whole developer surface the model sees (reports,
-  // trajectory, size estimates). The lifecycle receives the generic policy and the
-  // refreshable instructions separately; joining them here must never feed thread requests.
+  let inferenceInstructions: string | undefined;
+  // Observability view of OpenClaw-managed developer instructions for reports,
+  // trajectory, and size estimates; not the complete native/provider prompt.
+  // Reuse registered relay text so diagnostics include every relay component.
+  // Hook context is already in that text, so only native policy precedes it.
+  // This combined projection must never feed native thread requests.
   const buildRenderedCodexDeveloperInstructions = () =>
-    joinPresentSections(
-      turnState.promptBuild.developerInstructions,
-      parentLocalEgress ? undefined : refreshableInstructions,
-      (parentLocalEgress
-        ? buildCodexParentLocalInstructions(params, { ...parentLocalContext, skillsInstructions })
-        : buildTurnCollaborationMode(params).settings.developer_instructions) ?? undefined,
-    );
+    inferenceInstructions !== undefined
+      ? joinPresentSections(
+          turnState.promptBuild.threadDeveloperInstructions ??
+            turnState.promptBuild.developerInstructions,
+          inferenceInstructions,
+        )
+      : joinPresentSections(
+          turnState.promptBuild.developerInstructions,
+          refreshableInstructions,
+          buildTurnCollaborationMode(params).settings.developer_instructions ?? undefined,
+        );
   const rebuildCodexPromptBuildFromCurrentProjection = async (preserveInstructions = false) => {
     const nextPromptBuild = await buildPromptFromCurrentInputs();
     turnState.promptBuild = preserveInstructions
@@ -682,8 +697,9 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         workspaceReferencesIncluded = include;
       }
     },
-    setParentLocalEgress: () => {
-      parentLocalEgress = true;
+    setInferenceInstructions: (instructions: string) => {
+      inferenceInstructions = instructions;
+      parentLocalEgress = !usesSupervisionConnection;
       Object.assign(systemPromptReport, buildSystemPromptReport(!workspaceReferencesIncluded));
     },
     buildRenderedCodexDeveloperInstructions,

@@ -295,7 +295,7 @@ describe("ordinary HTML preview transport", () => {
       path: "/sender/report/index.html",
       refs: ["a.png", "missing.png"],
     });
-    expect(assetStatus(view)?.textContent).toContain("Some assets couldn't be loaded (1)");
+    expect(assetStatus(view)?.textContent).toContain("Couldn’t load 1 assets. Try again.");
     expect(view.html).toBe(html);
   });
 
@@ -528,9 +528,9 @@ describe("ordinary HTML preview transport", () => {
     expect(view.querySelector("iframe")).toBeNull();
   });
 
-  it("shows unsupported CSP as unchanged HTML with Source/Download recovery", async () => {
+  it("prepares in-page links for unsupported CSP while retaining original source bytes", async () => {
     const html =
-      '<meta http-equiv="Content-Security-Policy" content="script-src https://example.test"><script src="app.js"></script><a href="#details">Details</a>';
+      '<meta http-equiv="Content-Security-Policy" content="script-src https://example.test"><script src="app.js"></script><a href="#details">Details</a><a target="_blank" href="#details">Other</a><a download href="#details">Download</a>';
     const request = vi.fn(async (method: string) =>
       method === "canvas.document.preview"
         ? { ...metadata, html }
@@ -539,7 +539,10 @@ describe("ordinary HTML preview transport", () => {
     const { view } = mount(request, html);
     view.sessionFileSource = { sessionKey: "agent:main:main", path: "/report/index.html" };
     const [transfer] = await transferFrom(await frameFor(view));
-    expect(transfer.params.html).toBe(html);
+    expect(transfer.params.html).toBe(
+      html.replace('<a href="#details">', '<a href="about:srcdoc#details">'),
+    );
+    expect(view.html).toBe(html);
     await waitForSolid(() =>
       expect(assetStatus(view)?.textContent).toContain("Use Source or Download"),
     );

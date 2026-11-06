@@ -147,13 +147,10 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
   }
 
   async handleNotification(notification: CodexPreparedServerNotification): Promise<void> {
-    if (this.projectionClosed) {
+    if (this.projectionClosed || !isJsonObject(notification.params)) {
       return;
     }
-    const params = isJsonObject(notification.params) ? notification.params : undefined;
-    if (!params) {
-      return;
-    }
+    const params = notification.params;
     if (notification.method === "hook/started" || notification.method === "hook/completed") {
       if (!this.isHookNotificationForCurrentThread(params)) {
         return;
@@ -181,6 +178,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     ) {
       this.eventProjection.flushPendingGuardianWarning();
     }
+    this.diagnostics.recordNotification(notification, params);
     this.nativeToolLifecycleProjector.handleNotification(notification);
     this.assistantProjection.handleNotification(notification.method, params);
 
@@ -416,6 +414,12 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
 
   private async handleItemStarted(params: JsonObject): Promise<void> {
     const item = readItem(params.item);
+    await this.settlement.project("media_projection", () =>
+      this.generatedMediaProjection.recordItemIdentity(item),
+    );
+    if (this.projectionClosed) {
+      return;
+    }
     if (item?.type === "agentMessage" && item.text) {
       this.eventProjection.markSafetyBufferingAssistantStarted();
     }

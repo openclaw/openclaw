@@ -1,3 +1,4 @@
+import { expressionBuilder } from "kysely";
 import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
 import { getPostgresPhysicalFacts } from "../../infra/database-engine/physical-facts.js";
 import {
@@ -6,6 +7,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   hasPendingInputConsumptionColumn,
@@ -17,6 +19,22 @@ import type {
   PendingInputHistorySnapshot,
 } from "./session-pending-input-history.types.js";
 import { resolvePendingInputHistoryLimit } from "./session-pending-input-value.js";
+
+function pendingInputHistoryEligibility(query: PendingInputHistoryQuery) {
+  const eb = expressionBuilder<Pick<DB, "session_pending_inputs">, "session_pending_inputs">();
+  return query.queuedInputIds
+    ? eb.and([
+        eb("state", "=", "queued"),
+        eb("input_id", "in", [...query.queuedInputIds]),
+        ...(query.liveInputIds?.length ? [eb("input_id", "not in", [...query.liveInputIds])] : []),
+      ])
+    : eb.or([
+        eb("state", "=", "cancelled"),
+        ...(query.liveInputIds?.length
+          ? [eb.and([eb("state", "=", "queued"), eb("input_id", "in", [...query.liveInputIds])])]
+          : []),
+      ]);
+}
 
 /** The admitted reader owns the snapshot; process-held incognito uses the same kernel. */
 export function readPendingInputHistoryInDatabase(
@@ -43,27 +61,7 @@ export function readPendingInputHistoryInDatabase(
       .selectFrom("session_pending_inputs")
       .where("session_key", "=", query.sessionKey)
       .where("session_id", "=", query.sessionId)
-      .where((eb) =>
-        query.queuedInputIds
-          ? eb.and([
-              eb("state", "=", "queued"),
-              eb("input_id", "in", [...query.queuedInputIds]),
-              ...(query.liveInputIds?.length
-                ? [eb("input_id", "not in", [...query.liveInputIds])]
-                : []),
-            ])
-          : eb.or([
-              eb("state", "=", "cancelled"),
-              ...(query.liveInputIds?.length
-                ? [
-                    eb.and([
-                      eb("state", "=", "queued"),
-                      eb("input_id", "in", [...query.liveInputIds]),
-                    ]),
-                  ]
-                : []),
-            ]),
-      );
+      .where(pendingInputHistoryEligibility(query));
     if (hasConsumption) {
       base = base.where("consumed_event_id", "is", null);
     }
@@ -98,27 +96,7 @@ function readPendingInputPageInDatabase(
           .where("session_key", "=", query.sessionKey)
           .where("session_id", "=", query.sessionId)
           .$if(hasConsumption, (selection) => selection.where("consumed_event_id", "is", null))
-          .where((eb) =>
-            query.queuedInputIds
-              ? eb.and([
-                  eb("state", "=", "queued"),
-                  eb("input_id", "in", [...query.queuedInputIds]),
-                  ...(query.liveInputIds?.length
-                    ? [eb("input_id", "not in", [...query.liveInputIds])]
-                    : []),
-                ])
-              : eb.or([
-                  eb("state", "=", "cancelled"),
-                  ...(query.liveInputIds?.length
-                    ? [
-                        eb.and([
-                          eb("state", "=", "queued"),
-                          eb("input_id", "in", [...query.liveInputIds]),
-                        ]),
-                      ]
-                    : []),
-                ]),
-          )
+          .where(pendingInputHistoryEligibility(query))
           .$if(query.before !== undefined, (selection) =>
             selection.where("seq", "<", query.before!),
           )

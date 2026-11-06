@@ -8,6 +8,7 @@ export function createSessionWorkspaceHost(
 ): SessionWorkspaceHost {
   return {
     sessionKey: "agent:main:files",
+    sessionWorkspaceReadDisabledReason: null,
     connectionEpoch: 1,
     connected: true,
     client: overrides.client ?? createGatewayBrowserClientFixture(),

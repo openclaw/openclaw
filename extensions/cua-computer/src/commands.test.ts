@@ -60,12 +60,14 @@ function actionResult(name: "confirmedBackgroundAction" | "suspectedNoopAction")
 
 function windowDriver(handle: (name: string) => CuaToolResult = () => cuaToolResult({})) {
   const native = driver();
-  native.callTool.mockImplementation(async (name) => {
+  native.callTool.mockImplementation(async (name, args) => {
     if (name === "list_windows") {
       return cuaToolResult(fixtures.listWindows);
     }
     if (name === "get_window_state") {
-      return cuaToolResult(fixtures.windowState, { image: true });
+      const elements = args.tree_format === "elements" ? fixtures.windowState.elements : undefined;
+      const image = args.include_screenshot !== false;
+      return cuaToolResult({ ...fixtures.windowState, elements }, { image });
     }
     return handle(name);
   });
@@ -228,14 +230,10 @@ describe("cua-computer provider", () => {
     },
   );
 
-  it("mints opaque refs without a screenshot and maps background evidence", async () => {
+  it("mints actionable refs without a screenshot when the driver defaults to Markdown", async () => {
     const { session, callTool } = windowDriver((name) =>
       name === "click" ? actionResult("confirmedBackgroundAction") : cuaToolResult({}),
     );
-    callTool.mockImplementationOnce(async () => cuaToolResult(fixtures.listWindows));
-    callTool.mockImplementationOnce(async (_name, args) => {
-      return cuaToolResult(fixtures.windowState, { image: args.include_screenshot !== false });
-    });
     const computer = await execution(session);
     const listed = await computer.read<{
       details: { windows: Array<{ windowRef: string; appName: string; title: string }> };
@@ -253,6 +251,7 @@ describe("cua-computer provider", () => {
     });
     expect(Boolean(observed.observation.base64)).toBe(false);
     const { observationId, elements } = observed.observation;
+    expect(elements).toHaveLength(1);
     const { elementRef } = elements[0]!;
     expect(observed).toMatchObject({ details: { coordinateSpace: "image-pixels" } });
     expect(observationId).toMatch(/^cua:v2:observation:/);

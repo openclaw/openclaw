@@ -183,6 +183,8 @@ export type UiSettings = {
   // so this stays out of the synced ui.prefs set in server-prefs-state.ts.
   sessionDeleteConfirm?: boolean;
   chatModelChangeConfirm?: boolean;
+  // Browser-local, Gateway-scoped acknowledgement; changed notices become visible again.
+  dismissedReadOnlyConfigNotice?: string;
   // Device-local opt-in: route eligible external links into the Gateway browser panel.
   openLinksInControlUiBrowser?: boolean;
   // Browser-local opt-in; absence preserves native panels and plugin readers.

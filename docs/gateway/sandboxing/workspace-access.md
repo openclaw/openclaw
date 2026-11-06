@@ -63,6 +63,12 @@ source preparation, not direct access to that host directory. Arbitrary external
 Visible child sessions keep their managed worktree as the sandbox workspace on
 later turns, including sessions created before an update.
 
+Rewind and branch switching keep that managed workspace and its accepted edits.
+OpenClaw settles pending sandbox edits and retires the old runtime before changing
+the conversation history. The next turn reuses the same private checkout under
+the new conversation incarnation. Conflicting edits remain saved and block the
+history change until the conflict is resolved.
+
 The private checkout contains the selected source commit, not the host's shared
 Git configuration, credential helpers, other branches, or ignored files selected
 by `.worktreeinclude`. Guest preparation does not run the repository's host setup
@@ -82,6 +88,19 @@ not admit host files, including newly provisioned files. Existing admitted sourc
 edits and guest-created files continue to reconcile, including guest-created
 ignored files. Source filenames must be valid UTF-8; rename invalid Git paths
 before retrying preparation. Publication uses the same admission boundary.
+
+A newly created filename containing a literal backslash cannot pass workspace
+checkpoint validation. Its bytes and the pending checkpoint remain preserved.
+The same authorized session can continue using its retained sandbox workspace
+to inspect and explicitly correct that filename with its ordinary permitted
+tools. This workspace can still contain an older view of canonical files; newer
+canonical edits are not imported over the pending changes. File delivery and
+command finalization continue to report the checkpoint failure until correction
+allows normal reconciliation. Existing conflict checks protect concurrent
+canonical edits, and subsequent preparation imports those accepted changes.
+This continuation does not bypass staged conflicts, journal recovery, or the
+session's current permissions, and OpenClaw does not rename or omit the file.
+
 Host recovery snapshots retain host data under their existing rules, but
 restoration does not admit that data to the guest. Use the
 session's managed GitHub publication action to publish accepted changes; host credentials are not
@@ -99,7 +118,8 @@ recovery, including previously retained inputs. Similarly named source files
 such as `.gitignore`, `.gitmodules`, and `.git-notes` still reconcile normally.
 
 At the checkout root, `.cache/vitest/`, `.cache/bun-transpiler/`, `.cache/openclaw/bun/`,
-`.cache/ms-playwright/`, `.local/share/pnpm/store/`, and `.openclaw/.pnpm-store/` caches stay with the runtime
+`.cache/ms-playwright/`, `.local/share/pnpm/store/`,
+`artifacts/task-environment/local/share/pnpm/store/`, `.openclaw/.pnpm-store/`, and `.openclaw/tools/` caches stay with the runtime
 that produced them, along with `.artifacts/vitest-workers/` compiler outputs,
 `.artifacts/vitest-worker-cache/` retained compiler outputs,
 `.artifacts/vitest-shard-timings.json` scheduling samples, and
@@ -117,6 +137,7 @@ runtime-owned lock subtree by replacing its parent directory.
 
 pnpm can select `.openclaw/.pnpm-store/` when installing beneath a protected
 `.openclaw` mount and its home store cannot hard-link into that project.
+Managed binary installers use `.openclaw/tools/` for re-downloadable tools such as Crabbox.
 
 Changed user files remain limited to 64 MiB each. If one exceeds the limit, reduce
 it or move it outside synchronization before retrying; repeated messages cannot
@@ -168,8 +189,9 @@ If you are a guest, you can ask the agent:
 > update the same PR. Do not merge it.
 
 Use `github_publish` with `action: "refresh_base"` to explicitly integrate the
-current selected repository base into this session's existing local managed
-workspace. This action is offered only in sessions with a writable managed sandbox;
+current target branch of a prepared or published PR, or the selected repository
+base when no PR is associated, into this session's existing local managed workspace.
+This action is offered only in sessions with a writable managed sandbox;
 sessions running directly on the host merge the base with git in their workspace,
 then publish. The Gateway fetches with its host identity and prepares any missing
 file contents from the selected repository before offline merge and snapshot
@@ -180,6 +202,10 @@ saved guest files, ignored guest data, and empty directories. The operation retu
 `baseCommit`, changed paths, and conflicting paths; it does not publish or change
 the GitHub pull request. It accepts no repository, URL, arbitrary ref, other
 session, or pull-request selector.
+
+For prepared PRs, commit distinct staged changes before refreshing a file that
+also has unstaged edits. The action preserves both versions and refuses until
+that staged work is saved. Finish any pending `prepare_pr` operation first.
 
 Resolve any reported conflicts in the same workspace, then repeat `refresh_base`
 with `conflictsResolved: true` and the returned `baseCommit`. This acknowledges
@@ -196,10 +222,11 @@ Reviewing against the old guest HEAD would
 also include upstream-only changes. The operation requires the prepared sandbox
 of the current agent; a direct RPC cannot supply another runtime. Publication
 refuses a pending integration and never silently merges new base changes into
-reviewed files. A retry or restart settles the existing retained source result
-through the workspace journal; host merge ancestry remains outside guest Git
-metadata. Worktree removal is deferred while the host integration is pending;
-finish refresh before retrying archive cleanup. Existing privileged PR actions
+reviewed files. A retry, restart, or later turn resumes the existing retained
+source result from the files it already applied instead of rolling them back, so
+a large refresh interrupted by a turn deadline still finishes; host merge
+ancestry remains outside guest Git metadata. Worktree removal is deferred while
+the host integration is pending; finish refresh before retrying archive cleanup. Existing privileged PR actions
 still require full operator write access.
 
 Finish refresh and conflict resolution before downgrading. An interrupted transfer
@@ -215,7 +242,15 @@ fail with an explanation rather than falling back to host execution.
 
 The managed worktree remains the source of truth for files, snapshots, and
 publication. OpenClaw pauses the exact execution and browser runtimes that mount
-this checkout while capturing or applying changes, records pending results and
+this checkout while capturing or applying changes. An existing session first
+checks both workspaces against their accepted baseline without pausing. If both
+are unchanged and no recovery is pending, its runtimes keep running. Changed or
+interrupted checks return to paused reconciliation; file edits are never applied
+from the live check. Concurrent preparations of the same workspace and session
+generation share queued reconciliation. Once filesystem observation begins,
+later preparations require a fresh check so intervening edits remain visible.
+Completed preparation results are not cached. Each caller retains its own
+cancellation and authority checks. OpenClaw records pending results and
 rollback journals in SQLite, and resumes
 only after settlement. New shell calls and command preparation wait for an active
 checkpoint to release the workspace before proceeding; background commands do not

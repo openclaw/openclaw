@@ -5,6 +5,7 @@ import {
   completionConfig,
 } from "../../agents/bash-tools.lifecycle.test-support.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
+import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { createCronTool } from "../../agents/tools/cron-tool.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/outbound.types.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
@@ -343,6 +344,84 @@ it.for([
           await drainGlobalSingletonLifecycleState("restart");
           resetSystemEventsForTest();
           restoreActivePluginRegistrySnapshot(registry);
+        }
+      },
+    );
+  },
+);
+
+it.for(["user", "restart", "superseded", "frozen-superseded", "timeout", "stalled"] as const)(
+  "preserves controller-owned %s through the scheduled event receipt",
+  async (reason, { signal }) => {
+    await withOpenClawTestState(
+      { label: "automation-owned-stop", env: { OPENCLAW_TEST_FAST: "0" } },
+      async (state) => {
+        const cfg = completionConfig(state.workspaceDir);
+        setRuntimeConfigSnapshot(cfg);
+        await state.writeConfig(cfg);
+        openOpenClawStateDatabase();
+        const scope = { agentId: "main", sessionKey: "agent:main:automation-owned-stop" };
+        await replaceSessionEntry(scope, {
+          sessionId: "automation-owned-stop-session",
+          updatedAt: Date.now(),
+          permissionMode: "full",
+        });
+        model.mockReset().mockImplementation(async (params) => {
+          await admitModelTurn(params);
+          const owner = expectDefined(params.replyOperation, "scheduled reply owner");
+          if (reason === "stalled") {
+            owner.abortForStall();
+            expect(owner.result).toMatchObject({ kind: "failed", code: "run_stalled" });
+          } else if (reason === "superseded" || reason === "frozen-superseded") {
+            if (reason === "frozen-superseded") {
+              owner.freezeAbort();
+            }
+            owner.supersede();
+            expect(owner.abortSignal.aborted).toBe(reason !== "frozen-superseded");
+          } else {
+            owner.abort(
+              reason === "timeout"
+                ? new DOMException("deadline", "TimeoutError")
+                : reason === "restart"
+                  ? createAgentRunRestartAbortError()
+                  : undefined,
+            );
+            expect(owner.result).toMatchObject({ kind: "aborted" });
+          }
+          return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
+        });
+        try {
+          const outcome = await runGatewayCronSessionEvent(
+            {
+              occurrence: TEST_SCHEDULED_OCCURRENCE,
+              job: makeCronJob({
+                id: "owned-stop-job",
+                agentId: "main",
+                sessionTarget: `session:${scope.sessionKey}`,
+                delivery: { mode: "none" },
+                payload: { kind: "agentTurn", message: "Wait for cancellation." },
+              }),
+              text: "Wait for cancellation.",
+              admissionSource: "operator-schedule",
+              deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent() {} },
+              abortSignal: signal,
+              assertCurrent() {},
+            },
+            createGatewayCronTargetResolver(state.env, { warn() {} }).resolveCronTarget,
+          );
+          expect(outcome).toMatchObject({ status: "error", executionStarted: true });
+          if (reason === "timeout") {
+            expect(outcome.errorClassification).toEqual({ kind: "reason", reason: "timeout" });
+          } else if (reason === "stalled") {
+            expect(outcome.errorClassification?.kind).not.toBe("aborted");
+          } else {
+            expect(outcome.errorClassification).toEqual({ kind: "aborted" });
+            expect(outcome.interruptedByRestart).toBe(reason === "restart");
+          }
+          expect(model).toHaveBeenCalledOnce();
+        } finally {
+          await drainGlobalSingletonLifecycleState("restart");
+          resetSystemEventsForTest();
         }
       },
     );

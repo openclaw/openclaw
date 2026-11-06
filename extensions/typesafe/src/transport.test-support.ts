@@ -1,5 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { vi } from "vitest";
 import plugin from "../index.js";
 import type { EvaluationInput } from "./schema.js";
@@ -96,13 +98,15 @@ export const mixedFixture = {
   },
 };
 export function registeredPreparedDecisionProvider(
-  current: () => ReturnType<OpenClawPluginApi["runtime"]["config"]["current"]>,
+  current: OpenClawPluginApi["runtime"]["config"]["current"],
 ) {
   const registerDecisionProvider = vi.fn<OpenClawPluginApi["registerDecisionProvider"]>();
-  plugin.register({
-    runtime: { config: { current } },
+  const api = createTestPluginApi({
+    id: "typesafe",
+    runtime: createPluginRuntimeMock({ config: { current } }),
     registerDecisionProvider,
-  } as unknown as OpenClawPluginApi);
+  });
+  plugin.register(api);
   const provider = registerDecisionProvider.mock.calls[0]![0];
   if (provider.contractVersion !== 2) {
     throw new Error("Expected the prepared TypeSafe provider");

@@ -15,6 +15,7 @@ import {
   CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
 } from "./native-tool-policy.js";
 import { readCodexPluginConfig as readWorkerPluginConfig } from "./src/app-server/config-parsing.js";
+import { hasManagedCodexAppServerBinary } from "./src/app-server/managed-binary.js";
 import { readCodexRuntimeModelId } from "./src/app-server/model-runtime.js";
 import { sessionBindingIdentity } from "./src/app-server/session-binding-record.js";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
@@ -391,6 +392,22 @@ export function createCodexAppServerAgentHarness(
         if (!reproducibleApiKey) {
           return unsupported("Codex Platform auth requires a prepared API key");
         }
+      }
+      const appServer = readWorkerPluginConfig(
+        options.resolvePluginConfig?.() ?? options.pluginConfig,
+      ).appServer;
+      if (
+        (appServer?.transport ?? "stdio") === "stdio" &&
+        // Worker placement owns its binary; selection has no admitted placement yet.
+        appServer?.workerHostedCloud !== true &&
+        !appServer?.command?.trim() &&
+        !process.env.OPENCLAW_CODEX_APP_SERVER_BIN?.trim() &&
+        !hasManagedCodexAppServerBinary()
+      ) {
+        // Missing binaries cannot preserve an explicit native session's ownership.
+        return unsupported(
+          "no native Codex app-server binary is available; install Codex or configure appServer.command for a native build",
+        );
       }
       return { supported: true, priority: 100 };
     },

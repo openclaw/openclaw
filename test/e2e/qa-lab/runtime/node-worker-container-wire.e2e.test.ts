@@ -404,7 +404,7 @@ it.runIf(CONTAINER_WIRE_ENABLED)(
           controlUiProof.fullAccessPatch.prematureChatSend,
           controlUiProof.page
             .locator(".chat-queue")
-            .getByText("Applying chat settings")
+            .getByText("Applying session settings")
             .waitFor({ state: "visible", timeout: 30_000 })
             .then(() => "queued-behind-settings" as const),
         ]);
@@ -492,7 +492,7 @@ it.runIf(CONTAINER_WIRE_ENABLED)(
           ).toBe("started"),
         );
 
-        await controlUiProof.page.getByRole("button", { name: "Stop generating" }).click();
+        await controlUiProof.page.getByRole("button", { name: "Stop", exact: true }).click();
         await cancellationEntered.promise;
         expect(controlUiProof.requests.at(-1)).toMatchObject({
           method: "chat.abort",
@@ -510,7 +510,7 @@ it.runIf(CONTAINER_WIRE_ENABLED)(
         });
         const recoveryRunId = recoveryRequest?.params?.idempotencyKey;
         expect(recoveryRunId).toBeTruthy();
-        await controlUiProof.page.getByRole("button", { name: "Stop generating" }).waitFor();
+        await controlUiProof.page.getByRole("button", { name: "Stop", exact: true }).waitFor();
         releasePendingCancellation();
         releasePendingCancellation = undefined;
         await expect(waitForRun(recoveryRunId)).resolves.toMatchObject({ status: "ok" });

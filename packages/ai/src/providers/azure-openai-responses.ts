@@ -106,7 +106,10 @@ export const streamAzureOpenAIResponses: StreamFunction<
         model: deploymentName,
         input: messages,
         stream: true,
-        prompt_cache_key: resolvePromptCacheKey(options, options?.cacheRetention ?? "short"),
+        prompt_cache_key: resolvePromptCacheKey(
+          requestModel.compat?.supportsPromptCacheKey === false ? undefined : options,
+          options?.cacheRetention ?? "short",
+        ),
         store: false,
       };
 

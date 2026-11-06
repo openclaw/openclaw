@@ -1,11 +1,13 @@
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableObjectRecord as readCostRecord } from "@openclaw/normalization-core/record-coerce";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../../../src/shared/transcript-only-openclaw-assistant.js";
-import type { GatewaySessionRow } from "../../../api/types.ts";
+import type { GatewaySessionRow, ModelCatalogResult } from "../../../api/types.ts";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import type { ProviderUsageDisplayProps } from "../../../lib/provider-quota-summary.ts";
 import { resolveSessionContextLimit } from "../../../lib/sessions/context-budget.ts";
+import type { ChatSessionStateSnapshot } from "../chat-session-state-snapshot.ts";
+import type { ContextCompactProps } from "./chat-context-compact.tsx";
 
 const CONTEXT_NOTICE_RATIO = 0.85;
 
@@ -20,13 +22,18 @@ export function latestAssistantProvider(messages: unknown[] | undefined): string
   return null;
 }
 
-export function getContextNoticeViewModel(session: GatewaySessionRow | undefined) {
-  const used = asNonNegativeFiniteNumber(session?.totalTokens);
-  const { tokens: limit, fromLastPrompt } = resolveSessionContextLimit(session);
+export function getContextNoticeViewModel(
+  session: GatewaySessionRow | undefined,
+  cached?: ChatSessionStateSnapshot["contextUsage"],
+) {
+  const used = cached?.used ?? asNonNegativeFiniteNumber(session?.totalTokens);
+  const { tokens: limit, fromLastPrompt } = cached
+    ? { tokens: cached.limit, fromLastPrompt: cached.fromLastPrompt }
+    : resolveSessionContextLimit(session);
   if (used === undefined || !limit) {
     return null;
   }
-  const approximate = session?.totalTokensFresh === false;
+  const approximate = cached?.approximate ?? session?.totalTokensFresh === false;
   const ratio = used / limit;
   const pct = Math.min(Math.round(ratio * 100), 100);
   // A stale total is still useful orientation, but must not drive warning or
@@ -60,11 +67,15 @@ export function getContextNoticeViewModel(session: GatewaySessionRow | undefined
 }
 
 export type ContextNoticeProps = {
+  contextUsage?: ChatSessionStateSnapshot["contextUsage"];
   messages?: unknown[];
   providerUsage?: ProviderUsageDisplayProps;
+  /** Configured account preference, not attribution for an earlier run. */
+  accountSelection?: ModelCatalogResult["accountSelection"] | null;
 } & {
   session?: GatewaySessionRow;
   gateway?: ApplicationGateway;
   agentId?: string;
   onOpenContext?: () => void;
-};
+  connected?: boolean;
+} & Pick<ContextCompactProps, "onCompact" | "compactionStatus" | "runActive">;

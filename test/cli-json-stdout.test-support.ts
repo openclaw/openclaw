@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import { resolveVitestNodeArgs } from "../scripts/lib/vitest-process-env.mts";
+import { resolveVitestNodeArgs } from "../scripts/lib/vitest-node-args.mts";
 
 export function runBuiltCli(
   tempHome: string,

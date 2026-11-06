@@ -17,7 +17,7 @@ import {
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -49,14 +49,9 @@ fs.mkdirSync(stateDir);
 const root = path.join(stateDir, "agents", "main", "agent");
 fs.mkdirSync(root, { recursive: true });
 const profilePath = path.join(stateDir, "allocation.heapprofile");
-const marker = (phase: string) =>
-  fs.writeSync(
-    1,
-    `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-  );
-marker("identify-start");
+writeGatewayGcTraceMarker("identify-start", profilePath);
 global.gc();
-marker("identify-stop");
+writeGatewayGcTraceMarker("identify-stop", profilePath);
 const { observeOwnedDirectory }: typeof import("../../src/infra/owned-directory-observation.js") =
   await import(
     values.owner
@@ -196,7 +191,7 @@ try {
   const latency: number[] = [];
   const cpu = process.cpuUsage();
   loop.reset();
-  marker("heap-start");
+  writeGatewayGcTraceMarker("heap-start", profilePath);
   measuredStart = performance.now();
   for (let operation = 0; operation < operations; operation++) {
     const started = performance.now();
@@ -206,7 +201,7 @@ try {
   }
   measuredEnd = performance.now();
   const usedCpu = process.cpuUsage(cpu);
-  marker("heap-stop");
+  writeGatewayGcTraceMarker("heap-stop", profilePath);
   loop.disable();
   await nextTurn();
   recordGc(observer.takeRecords());

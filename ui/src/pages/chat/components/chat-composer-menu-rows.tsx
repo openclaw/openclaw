@@ -95,7 +95,7 @@ export function renderCapabilityToggleRow(options: {
     checked: options.checked,
     disabled: options.disabled,
     class:
-      "agent-chat__capability-menu-item agent-chat__capability-menu-toggle agent-chat__capability-menu-toggle--switch",
+      "oc-menu-item--switch agent-chat__capability-menu-item agent-chat__capability-menu-toggle agent-chat__capability-menu-toggle--switch",
     attributes: { title: options.title ?? "" },
     icon: options.skill ? (
       skillIcon(options.emoji)

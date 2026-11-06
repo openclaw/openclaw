@@ -59,6 +59,8 @@ const createSnapshot = (
     configPath,
     fs: {
       writeFile: fs.writeFile,
+      rename: fs.rename,
+      rm: fs.rm,
       readFile: fs.readFile,
       existsSync: fsNode.existsSync,
       ...overrides,
@@ -282,6 +284,46 @@ describe("config backup rotation", () => {
       await expectPathMissing(`${configPath}.pre-update`);
     });
   });
+
+  it.each(["write", "rename"] as const)(
+    "preserves the published rollback point after an interrupted snapshot %s",
+    async (failure) => {
+      await withTempHome(async () => {
+        const configPath = resolveConfigPathFromTempState();
+        const snapshotPath = `${configPath}.pre-update`;
+        const previous = '{"gateway":{"mode":"local","port":19000}}\n';
+        const next = '{"gateway":{"mode":"local","port":19001}}\n';
+        await fs.writeFile(configPath, next, { mode: 0o600 });
+        await fs.writeFile(snapshotPath, previous, { mode: 0o600 });
+        let visibleDuringWrite: string | undefined;
+
+        const interrupt = async () => {
+          throw new Error("injected snapshot publication failure");
+        };
+        await createSnapshot(configPath, {
+          rename: failure === "rename" ? interrupt : fs.rename,
+          writeFile: async (file, content, options) => {
+            if (failure === "rename") {
+              await fs.writeFile(file, content, options);
+              visibleDuringWrite = await fs.readFile(snapshotPath, "utf8");
+              return;
+            }
+            await fs.writeFile(file, content.slice(0, 20), options);
+            visibleDuringWrite = await fs.readFile(snapshotPath, "utf8");
+            await interrupt();
+          },
+        });
+
+        expect(visibleDuringWrite).toBe(previous);
+        await expectFile(snapshotPath, previous, 0o600);
+        expect(await fs.readdir(path.dirname(configPath))).toEqual(
+          expect.not.arrayContaining([expect.stringMatching(/\.tmp$/)]),
+        );
+        await createSnapshot(configPath);
+        await expectFile(snapshotPath, next, 0o600);
+      });
+    },
+  );
 
   it("retries snapshot after transient read and write errors (#105431)", async () => {
     await withTempHome(async () => {

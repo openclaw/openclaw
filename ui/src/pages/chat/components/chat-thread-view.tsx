@@ -1,4 +1,4 @@
-import { Show, createMemo, onSettled, useContext } from "solid-js";
+import { Loading, Show, lazy, createMemo, createSignal, onSettled, useContext } from "solid-js";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import {
   linkReaderPrefetchRef as createLinkReaderPrefetchRef,
@@ -15,6 +15,7 @@ import {
 import { handleMarkdownTableInteraction } from "../../../components/markdown-tables.ts";
 import { LoadingState } from "../../../components/solid/loading-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import type { TemplateReference } from "../../../components/template-reference-surface.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import {
   anchorFromNavigationEvent,
@@ -25,6 +26,7 @@ import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import { projectOwner, projectSource } from "../../../lib/reactive/projection.ts";
+import { usePanePresentation } from "../chat-pane-presentation.ts";
 import {
   getExpandedToolCards,
   getExpandedUserMessages,
@@ -32,11 +34,11 @@ import {
   subscribeExpansionState,
 } from "../chat-thread.ts";
 import { retainLinkFaviconCache } from "../link-favicon-cache.ts";
-import { ChatCommentPins } from "./chat-comment-pins.tsx";
 import { ChatConversationLoading } from "./chat-conversation-loading.tsx";
 import { ChatConversationMobile } from "./chat-conversation-presentation.ts";
 import { CHAT_HISTORY_BOUNDARY_HEIGHT_PX, ChatHistoryBoundary } from "./chat-history-boundary.tsx";
 import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
+import { watchChatSearchHighlight } from "./chat-search-highlight.ts";
 import {
   getTranscriptState,
   handleTranscriptContextMenu,
@@ -49,9 +51,19 @@ import type { ChatTranscript } from "./chat-transcript-controller.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import type { TranscriptHeader } from "./chat-transcript-session.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
-import { ChatWelcome } from "./chat-welcome.tsx";
+import "../../../styles/chat/selection-annotations.css";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+
+const TemplateReferenceView = lazy(
+  () => import("../../../components/template-reference-view.tsx"),
+  { export: "TemplateReferenceView" },
+);
+
+// Both transcript overlays are optional; ordinary chat boot needs neither renderer.
+const ChatCommentPins = lazy(() => import("./chat-comment-pins.tsx"), {
+  export: "ChatCommentPins",
+});
 
 const EMPTY_ENTRY_KEYS: ReadonlyMap<string, string> = new Map();
 
@@ -82,11 +94,47 @@ export function ChatThread(input: {
   historySupplement?: TranscriptHeader;
 }) {
   const mobile = useContext(ChatConversationMobile);
-  let root: HTMLDivElement | undefined;
+  // Admission stays with the transcript; all overlay lifetime work loads on intent.
+  const [templateIntent, setTemplateIntent] = createSignal<TemplateReference | null>(null);
+  function handleTemplateReference(event: Event) {
+    const anchor = anchorFromNavigationEvent(event);
+    const client = input.props.gatewayClient;
+    if (
+      !anchor?.matches("a.markdown-template-link") ||
+      !client ||
+      !input.props.applicationContext
+    ) {
+      return false;
+    }
+    if (event.type === "click") {
+      event.preventDefault();
+    }
+    setTemplateIntent({ anchor, client, sessionKey: input.props.sessionKey, type: event.type });
+    return true;
+  }
+  const [root, setRoot] = createSignal<HTMLDivElement>();
   let stopSelectionGesture: (() => void) | undefined;
   const historyIntent = (event: Event) => input.props.onHistoryIntent?.(event);
   const paneId = createMemo(() => input.props.paneId);
-  onSettled(() => root && registerTranscriptElement(paneId(), root));
+  onSettled(() => {
+    const element = root();
+    const unregister = element && registerTranscriptElement(paneId(), element);
+    const searchState = getTranscriptState(paneId()).search;
+    let query = searchState.snapshot.query.trim();
+    const stopSearch = searchState.subscribe(() => {
+      const nextQuery = searchState.snapshot.query.trim();
+      if (nextQuery && nextQuery !== query) {
+        // A live reply remains below the matches; end-follow must not hide them.
+        input.transcript.scrollToOffset(0);
+      }
+      query = nextQuery;
+    });
+    return () => {
+      stopSearch();
+      unregister?.();
+    };
+  });
+  const isPresented = usePanePresentation(() => input.props.transcriptVisible ?? true);
   const search = createMemo(() =>
     projectOwner(getTranscriptState(paneId()).search, (owner) => owner.snapshot, Object.is),
   );
@@ -189,7 +237,7 @@ export function ChatThread(input: {
             )
           ) : undefined}
           {isEmpty() && !showLoadingSkeleton() && !searchOpen() ? (
-            <ChatWelcome {...input.props} onModelSetup={undefined} />
+            <div class="agent-chat__empty">{t("chat.thread.noMessages")}</div>
           ) : undefined}
           {isEmpty() && searchOpen() ? (
             <div class="agent-chat__empty">{t("chat.thread.noMatches")}</div>
@@ -206,6 +254,21 @@ export function ChatThread(input: {
   });
   return (
     <div class="chat-thread-viewport" ref={[elementRef(input.props.onScrollPortRef)]}>
+      <Show when={isPresented() && root()}>
+        {(element) => {
+          onSettled(() => {
+            const initialStopSearch = watchChatSearchHighlight(
+              element(),
+              getTranscriptState(paneId()).search,
+            );
+            return () => {
+              initialStopSearch();
+              setTemplateIntent(null);
+            };
+          });
+          return null;
+        }}
+      </Show>
       <Show when={input.props.fetchLinkFavicon} keyed>
         {(fetcher) => {
           onSettled(() => retainLinkFaviconCache(fetcher));
@@ -215,7 +278,7 @@ export function ChatThread(input: {
       <div
         ref={[
           elementRef((element: HTMLDivElement) => {
-            root = element;
+            setRoot(element);
             // Retained roots can settle before refs; bind viewport and input together here.
             const releaseViewport = input.bindViewport?.(element);
             const stopHistory = ["wheel", "touchstart", "touchmove"].map((type) =>
@@ -241,13 +304,19 @@ export function ChatThread(input: {
           },
         ]}
         role="log"
+        data-restoring={input.props.restoring ? "" : undefined}
         aria-label={t("chat.sidePanel.conversation")}
         aria-live="off"
         aria-relevant="additions"
         tabindex={0}
-        onFocusIn={(event) => current().session.handleFocusIn(event)}
-        onFocusOut={(event) => current().session.handleFocusOut(event)}
-        onScroll={(event) => input.props.onChatScroll?.(event)}
+        onPointerOver={handleTemplateReference}
+        onFocusIn={(event) => {
+          handleTemplateReference(event);
+          current().session.handleFocusIn(event);
+        }}
+        onFocusOut={(event) => {
+          current().session.handleFocusOut(event);
+        }}
         onKeyDown={(event) => {
           if (
             !event.defaultPrevented &&
@@ -286,10 +355,13 @@ export function ChatThread(input: {
         onClick={(event) => {
           handleMarkdownCodeBlockClick(event);
           handleMarkdownTableInteraction(event);
-          if (shouldHandleNavigationClick(event) && openManagedArtifactLink(event, input.props)) {
-            return;
-          }
-          if (shouldHandleNavigationClick(event) && navigateCronRunLink(event, input.props)) {
+          const navigation = shouldHandleNavigationClick(event);
+          if (
+            navigation &&
+            (handleTemplateReference(event) ||
+              openManagedArtifactLink(event, input.props) ||
+              navigateCronRunLink(event, input.props))
+          ) {
             return;
           }
           const target = markdownFileLinkFromEvent(event);
@@ -298,7 +370,7 @@ export function ChatThread(input: {
             return;
           }
           const sessionTarget = markdownSessionLinkFromEvent(event, input.props.basePath);
-          if (sessionTarget && shouldHandleNavigationClick(event)) {
+          if (sessionTarget && navigation) {
             event.preventDefault();
             input.props.onOpenSessionLink?.(sessionTarget);
           }
@@ -306,6 +378,12 @@ export function ChatThread(input: {
         onMouseDown={(event) => {
           stopSelectionGesture?.();
           stopSelectionGesture = handleTranscriptSelectionMouseDown(event);
+        }}
+        onPointerDown={(event) => {
+          // Keep late floating controls from stealing the pressed content's context menu.
+          if (event.button === 2 && event.target instanceof Element) {
+            event.target.setPointerCapture(event.pointerId);
+          }
         }}
         onContextMenu={(event) =>
           handleTranscriptContextMenu(
@@ -342,16 +420,26 @@ export function ChatThread(input: {
         {contents()}
         <Show when={commentPins() ? getTranscriptState(paneId()) : undefined} keyed>
           {(threadState) => (
-            <ChatCommentPins
-              threadState={threadState}
-              transcript={current().session}
-              attachments={input.props.commentAttachments}
-              sessionKey={input.props.sessionKey}
-              disabled={input.props.commentsDisabled ?? false}
-            />
+            <Loading>
+              <ChatCommentPins
+                threadState={threadState}
+                transcript={current().session}
+                attachments={input.props.commentAttachments}
+                sessionKey={input.props.sessionKey}
+                disabled={input.props.commentsDisabled ?? false}
+              />
+            </Loading>
           )}
         </Show>
       </div>
+      <Show when={templateIntent()}>
+        <TemplateReferenceView
+          presented={isPresented()}
+          source={() => input.props}
+          intent={templateIntent()!}
+          onDismiss={() => setTemplateIntent(null)}
+        />
+      </Show>
     </div>
   );
 }

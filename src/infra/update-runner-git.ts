@@ -15,7 +15,7 @@ import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { reportUpdateStepCompletion, runStep } from "./update-runner-command.js";
 import { settleGitUpdateCleanup } from "./update-runner-git-cleanup.js";
-import { gitCleanCheckArgs } from "./update-runner-git-commands.js";
+import { gitCleanCheckArgs, resolveGitUpdateCommandEnv } from "./update-runner-git-commands.js";
 import {
   readCurrentGitUpdateRecovery,
   recordGitRollbackOutcome,
@@ -26,6 +26,7 @@ import {
 } from "./update-runner-git-runtime.js";
 import {
   runGitActivationBranchCheckStep,
+  prepareGitUpdateCheckout,
   runGitCleanCheckStep,
   readGitRollbackPreservation,
   runGitRollbackSteps,
@@ -55,7 +56,8 @@ export async function updateGitCheckout(params: {
   timeoutMs: number;
   startedAt: number;
 }): Promise<UpdateRunResult> {
-  const { opts, defaultCommandEnv, timeoutMs, startedAt } = params;
+  const { opts, timeoutMs, startedAt } = params;
+  const defaultCommandEnv = resolveGitUpdateCommandEnv(params.defaultCommandEnv);
   let gitRoot = params.gitRoot;
   const runCommand: CommandRunner = (argv, options) =>
     params.runCommand(argv, {
@@ -511,20 +513,18 @@ export async function updateGitCheckout(params: {
       return buildError(sourceChanged.reason, sourceChanged.status);
     }
     await prepareMutation(preflight.candidateSha);
-    sourceMutationStarted = true;
-    const checkout = await runStep(
-      workStep(
-        "git-checkout",
-        activateBranch
-          ? ["git", "-C", gitRoot, "checkout", "-B", DEV_BRANCH, preflight.candidateSha]
-          : ["git", "-C", gitRoot, "checkout", "--detach", preflight.candidateSha],
-        gitRoot,
-      ),
+    const checkoutArgs = await prepareGitUpdateCheckout(
+      step("git-preserve-local-main", [], gitRoot),
+      preflight.candidateSha,
+      activateBranch,
     );
+    sourceMutationStarted = true;
+    const checkout = await runStep(workStep("git-checkout", checkoutArgs, gitRoot));
     if (isFailedUpdateStep(checkout)) {
       return await rollbackError("checkout-failed");
     }
-    createdDevBranchDuringUpdate = activateBranch && preflight.localDevBranchExists === false;
+    createdDevBranchDuringUpdate =
+      checkoutArgs.includes("-B") && preflight.localDevBranchExists === false;
     if (createdDevBranchDuringUpdate && preflight.selectedDevUpstream) {
       const upstreamArgs = [
         "git",

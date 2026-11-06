@@ -587,7 +587,31 @@ export async function authenticateFullReleaseValidationEvidence(options, client)
     getWorkflowSource,
     validateEvidenceReuseStrictly: () => evidence,
   });
-  return { ...result, evidence, publicationAdmission: manifest.publicationAdmission ?? null };
+  const revalidateAuthority = candidateArtifactAuthority(manifest, evidence, evidenceClient);
+  return {
+    ...result,
+    evidence,
+    publicationAdmission: manifest.publicationAdmission ?? null,
+    revalidateAuthority,
+  };
+}
+
+function candidateArtifactAuthority(manifest, evidence, evidenceClient) {
+  if (!manifest?.sourceAdmission?.qualificationAdmission) {
+    return undefined;
+  }
+  if (!evidence.qualificationAdmission) {
+    throw new Error("Authenticated candidate admission authority is missing");
+  }
+  // Keep live authority process-local and independent of caller-owned data.
+  const authority = structuredClone({
+    descriptor: manifest.sourceAdmission.qualificationAdmission,
+    admission: evidence.qualificationAdmission,
+  });
+  const revalidateAuthority = () =>
+    evidenceClient.revalidateQualificationAdmissionAuthority(authority);
+  revalidateAuthority();
+  return revalidateAuthority;
 }
 
 // Publication consumers replace ancestry only after the full FRV owner has
@@ -640,18 +664,7 @@ export async function authenticateCandidateOwnedArtifact({
   ) {
     throw new Error("Publication artifact is not bound to authenticated candidate qualification");
   }
-  if (!evidence.qualificationAdmission) {
-    throw new Error("Authenticated candidate admission authority is missing");
-  }
-  // Hold the already authenticated bytes independently of caller-owned manifests.
-  // This callback is process-local authority, never a serialized proof field.
-  const authority = structuredClone({
-    descriptor: manifest.sourceAdmission.qualificationAdmission,
-    admission: evidence.qualificationAdmission,
-  });
-  const revalidateAuthority = () =>
-    evidenceClient.revalidateQualificationAdmissionAuthority(authority);
-  revalidateAuthority();
+  const revalidateAuthority = candidateArtifactAuthority(manifest, evidence, evidenceClient);
   return { ...evidence, revalidateAuthority };
 }
 

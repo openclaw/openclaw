@@ -6,6 +6,7 @@ import { z } from "zod";
 import { decodeNodeTestGroups } from "./lib/ci-node-test-groups-codec.mts";
 import {
   ciTestTimingsSchema,
+  ciTimingRunnerProfile,
   isRuntimePlacementIncludePatterns,
 } from "./lib/ci-test-timings-schema.mts";
 import { execGhRead } from "./lib/plain-gh.mjs";
@@ -172,13 +173,8 @@ function main() {
           !job.steps.some((step) => step.name === "Run Node test shard") ||
           job.name.startsWith("checks-node-compact-") ||
           job.name.startsWith("checks-node-release-packed-") ||
-          !job.labels.includes("ubuntu-24.04") ||
-          job.labels.some(
-            (label) =>
-              label === "self-hosted" ||
-              label.startsWith("blacksmith-") ||
-              label.startsWith("runson"),
-          )
+          job.name.startsWith("checks-node-worker-e2e") ||
+          ciTimingRunnerProfile(job.labels) !== "github"
         ) {
           continue;
         }

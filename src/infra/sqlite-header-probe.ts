@@ -1,10 +1,12 @@
 import childProcess from "node:child_process";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describeLockedBackupSource } from "./backup-locked-source.js";
+import { hasErrnoCode } from "./errno.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
 const SQLITE_HEADER_PROBE_BATCH_SIZE = 4096;
+const SQLITE_HEADER_PROBE_TIMEOUT_MS = 10_000;
 
 /** Probe discovery batches without disturbing live SQLite file locks. */
 export function probeSqliteDatabaseHeaders(pathnames: Iterable<string>): Map<string, boolean> {
@@ -25,7 +27,7 @@ export function probeSqliteDatabaseHeaders(pathnames: Iterable<string>): Map<str
         input: JSON.stringify(batch),
         encoding: "utf8",
         maxBuffer: 64 * 1024 * 1024,
-        timeout: 10_000,
+        timeout: SQLITE_HEADER_PROBE_TIMEOUT_MS,
       });
       if (result.error) {
         throw result.error;
@@ -56,9 +58,13 @@ export function probeSqliteDatabaseHeaders(pathnames: Iterable<string>): Map<str
   } catch (cause) {
     const hint = describeLockedBackupSource(cause);
     throw new Error(
-      hint
-        ? `Could not determine whether backup files are SQLite databases.${hint}`
-        : "Could not determine whether backup files are SQLite databases. " +
+      hasErrnoCode(cause, "ETIMEDOUT")
+        ? `SQLite header probe timed out after ${SQLITE_HEADER_PROBE_TIMEOUT_MS} ms while checking ${paths.length} backup paths. ` +
+            "For a blocked update, preserve a verified backup and follow the manual package-manager hop: " +
+            "https://docs.openclaw.ai/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun"
+        : hint
+          ? `Could not determine whether backup files are SQLite databases.${hint}`
+          : "Could not determine whether backup files are SQLite databases. " +
             "Check that the backup worker can run and the source files are readable, then retry the backup.",
       { cause },
     );

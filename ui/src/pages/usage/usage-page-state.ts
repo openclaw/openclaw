@@ -6,12 +6,10 @@ import type { ApplicationContext } from "../../app/context-types.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import {
-  formatMissingOperatorReadScopeMessage,
-  isMissingOperatorReadScopeError,
-} from "../../lib/gateway-errors.ts";
+import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { GatewayPageBinding, type GatewayPageChange } from "../../lib/gateway-page-binding.ts";
 import { createPageRequest, type PageReadResult } from "../../lib/page-request.ts";
+import { formatMissingOperatorReadScopeMessage } from "../../lib/permission-error.ts";
 import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import type { SessionUsageQuery } from "../../lib/sessions/usage.ts";
 import { isUsageCacheIncomplete, resolveUsagePublication } from "./cache-status.ts";
@@ -312,7 +310,7 @@ export function createUsagePage(context: ApplicationContext) {
   }
 
   function usageCacheIncomplete(): boolean {
-    return isUsageCacheIncomplete(usageResult()?.cacheStatus, usageCalendarSummary()?.cacheStatus);
+    return isUsageCacheIncomplete(usageResult()?.cacheStatus, usageResult("calendar")?.cacheStatus);
   }
 
   function currentQuery(): SessionUsageQuery {
@@ -353,8 +351,11 @@ export function createUsagePage(context: ApplicationContext) {
       (projection === "roster" ||
         JSON.stringify(query.selectedSessions) === JSON.stringify(current.selectedSessions)) &&
       (projection === "calendar" ||
-        (JSON.stringify(query.recentKeys) === JSON.stringify(current.recentKeys) &&
-          query.offset === current.offset &&
+        JSON.stringify(query.recentKeys) === JSON.stringify(current.recentKeys)) &&
+      // Chart/filter projections describe the whole selection, not its roster page or order.
+      (projection === "calendar" ||
+        projection === "filterOptions" ||
+        (query.offset === current.offset &&
           query.sort === current.sort &&
           query.sortDirection === current.sortDirection))
     );
@@ -366,13 +367,10 @@ export function createUsagePage(context: ApplicationContext) {
       : null;
   }
 
-  function usageResult(): SessionsUsageResult | null {
-    return usageSnapshot && isCurrentQuery(usageSnapshot.query) ? usageSnapshot.result : null;
-  }
-
-  function usageCalendarSummary(): SessionsUsageResult | null {
-    // Day selection changes totals, but the same calendar remains available for Shift-click.
-    return usageSnapshot && isCurrentQuery(usageSnapshot.query, "calendar")
+  function usageResult(
+    projection: "all" | "calendar" | "filterOptions" = "all",
+  ): SessionsUsageResult | null {
+    return usageSnapshot && isCurrentQuery(usageSnapshot.query, projection)
       ? usageSnapshot.result
       : null;
   }
@@ -546,7 +544,9 @@ export function createUsagePage(context: ApplicationContext) {
         selectedSession: details.session.data ?? selectedSession,
         totals: usageResult()?.totals ?? null,
         aggregates: usageResult()?.aggregates ?? null,
-        costDaily: usageCalendarSummary()?.aggregates.costDaily ?? [],
+        costDaily: usageResult("calendar")?.aggregates.costDaily ?? [],
+        // Keep raw chart data outside the view projection that clears current-query rows.
+        readChartSnapshot: (projection: "calendar" | "filterOptions") => usageResult(projection),
         cacheRefresh: usageCacheIncomplete()
           ? usageRefreshFailed()
             ? ("failed" as const)

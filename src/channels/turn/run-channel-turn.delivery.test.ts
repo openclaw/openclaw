@@ -37,10 +37,10 @@ import { dispatchAssembledChannelTurn, dispatchRoutedChannelTurn } from "./lifec
 import {
   createCtx,
   createDispatch,
+  createDirectDeliveryDispatch,
   createDispatcherBackedDispatch,
   createDurableSendResult,
   createRecordInboundSession,
-  createReplyDispatchReceipt,
   createDeliveryResultCapture,
   type DurableSendRequest,
   type DurableSupportRequest,
@@ -507,15 +507,16 @@ describe("channel turn delivery", () => {
         { OriginatingTo: "channel:123" },
         { channel: "discord" },
       );
-      expect(settlePendingFinalDelivery).toHaveBeenLastCalledWith(
-        { kind: "pending-final", ...completion },
-        "unknown",
-        undefined,
-        undefined,
-      );
-      expect(settlePendingFinalDelivery.mock.calls.map(([, state]) => state)).toEqual([
-        "unknown",
-        "unknown",
+      const custody = { kind: "pending-final", ...completion };
+      // Unknown is not terminal. Deferred channel settlement follows the dispatcher drain;
+      // immediate channel settlement finishes inside deliver, before that drain.
+      const channelSettlement = [custody, "unknown", undefined, undefined];
+      const dispatcherSettlement = [custody, "unknown", ["queued"], undefined];
+      expect(settlePendingFinalDelivery.mock.calls).toEqual([
+        [custody, "unknown", ["prepared", "queued"]],
+        ...(deferred
+          ? [dispatcherSettlement, channelSettlement]
+          : [channelSettlement, dispatcherSettlement]),
       ]);
       expect(onDelivered).not.toHaveBeenCalled();
       expect(emitMessageSent).not.toHaveBeenCalled();
@@ -548,21 +549,17 @@ describe("channel turn delivery", () => {
       content ? undefined : { cancel: true, cancelReason: "policy", metadata: { source: "test" } },
     );
     const payload = { mediaUrls: ["media://only"] };
-    dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(async (params) => {
-      await params.dispatcherOptions.deliver({ text: "deliver me" }, { kind: "block" });
-      await params.dispatcherOptions.deliver(payload, finalInfo);
-      return recordAgentRunTerminalOutcome(
-        {
-          queuedFinal: true,
-          counts: { tool: 0, block: 1, final: 1 },
-          settledReceipt: createReplyDispatchReceipt({
-            block: { delivered: 1 },
-            final: { deliveredNotVisible: 1 },
-          }),
-        },
-        "failed",
-      );
-    });
+    const dispatch = createDispatcherBackedDispatch(
+      () => {},
+      () => payload,
+      (dispatcher, finalPayload) => {
+        dispatcher.sendBlockReply({ text: "deliver me" });
+        return dispatcher.sendFinalReply(finalPayload);
+      },
+    );
+    dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(async (params) =>
+      recordAgentRunTerminalOutcome(await dispatch(params), "failed"),
+    );
     const deliver = vi.fn(async () => ({ visibleReplySent: true })),
       onDelivered = vi.fn();
     const result = await runRouted(
@@ -733,7 +730,10 @@ describe("channel turn delivery", () => {
     resolveOutboundDurableFinalDeliverySupport.mockRejectedValueOnce(new Error("preflight failed"));
     const deliver = vi.fn();
     await expect(
-      runAssembled({ delivery: { deliver, durable: { replyToMode: "first" } } }),
+      runAssembled({
+        delivery: { deliver, durable: { replyToMode: "first" } },
+        dispatchReplyWithBufferedBlockDispatcher: createDirectDeliveryDispatch(),
+      }),
     ).rejects.toThrow("preflight failed");
     expect(sendDurableMessageBatch).not.toHaveBeenCalled();
     expect(deliver).not.toHaveBeenCalled();
@@ -748,7 +748,10 @@ describe("channel turn delivery", () => {
     });
     const deliver = vi.fn();
     await expect(
-      runAssembled({ delivery: { deliver, durable: { replyToMode: "first" } } }),
+      runAssembled({
+        delivery: { deliver, durable: { replyToMode: "first" } },
+        dispatchReplyWithBufferedBlockDispatcher: createDirectDeliveryDispatch(),
+      }),
     ).rejects.toMatchObject({ sentBeforeError: true, visibleReplySent: true });
     expect(deliver).not.toHaveBeenCalled();
   });

@@ -75,6 +75,65 @@ the typed public Plugin SDK. Bundled backend authors should follow the
 - [Building provider plugins](/plugins/sdk-provider-plugins) - provider registration and hooks
 - [Decision models](/plugins/sdk-overview/capabilities#decision-models-contract-version-1) - `openclaw/plugin-sdk/decisions` and the typed decision provider contract
 
+## Offline worker runtime artifacts
+
+Image-preparation tools can import `openclaw/runtime-artifacts` to export the
+canonical node runtime and worker archives from a built OpenClaw installation:
+
+```ts
+import {
+  prepareWorkerRuntimeArtifacts,
+  qualifyWorkerRuntimePlugins,
+  resolveNodeBootstrapPlugins,
+  workerBundleArchiveRelativePath,
+} from "openclaw/runtime-artifacts";
+
+const selection = await qualifyWorkerRuntimePlugins({ packageRoot, config });
+const artifacts = await prepareWorkerRuntimeArtifacts({
+  packageRoot,
+  runningBuildId,
+  plugins: resolveNodeBootstrapPlugins(selection),
+  outputDirectory,
+});
+const workerPath = workerBundleArchiveRelativePath(artifacts.workerBundle.tarballSha256);
+```
+
+Qualification inspects only this installation's bundled plugins, prefers their
+built entrypoints, and releases its inspection registry without publishing it
+to a Gateway. Configured external plugin paths are not loaded, and inspection
+cannot mutate the configuration.
+
+The output directory must not exist, its parent must exist, and it must be
+outside the installed package. The result records the build, selected plugins,
+platform, architecture, archive paths, sizes, and SHA-256 digests. Both archive
+producers settle before failure cleanup removes the owned output. A successful
+export belongs to the caller; keep it until transfer finishes. This API always
+exports a preassembled dependency bundle, not an npm-install archive.
+
+The Crabbox plugin's lazy `cli-runtime-api` artifact exposes
+`createCrabboxOfflineRuntimeSetup`. Pass the transferred archives' absolute local
+paths with their expected sizes, digests, build and manifest identity, plus
+`workerPath` as the worker archive's `packageRelativePath`. Execute the returned
+command as the intended runtime user on a matching prepared platform. It checks
+the local archives before installing them and returns no forwarded credentials.
+It does not allocate a machine, enroll a node, create a logical lease, or grant
+execution authority. Node and archive extraction tools must already be present.
+
+For a retained cache, `createCrabboxRuntimeCacheVerification` takes the same
+artifact identity without local archive paths and returns a credential-free
+command. It rejects missing or corrupt caches without installing, pruning
+archives, binding runtime Node, or creating enrollment state. It checks the
+package/build/manifest identity, CLI version, and retained worker archive digest;
+it does not hash every installed runtime file or grant live execution authority.
+
+After a successful bundle install or verification command, pass its stdout and expected
+identity to `readCrabboxRuntimeInstallation`. It accepts exactly one
+`openclaw.runtime-installed:` result line of at most 16 KiB and rejects mismatched
+artifacts. This stdout protocol marker is not an environment variable.
+`parseCrabboxRuntimeInstallation` validates an already decoded result against
+that identity. The receipt records `installed` or `existing-verified`; it is
+evidence of the completed check, not permission to skip future verification.
+
 ## Code Mode executor runtime
 
 Use `openclaw/plugin-sdk/code-mode-executor-runtime` to implement the `quickjs`
@@ -280,9 +339,9 @@ path projection, context order, instruction carriers, and session/turn lifetimes
 Optional `projectPath` projects file paths after budgeting without changing their
 contents or personal-user provenance. It describes existing execution placement;
 it does not transfer or mount files.
-Full-context preparation preserves Codex's existing selection timing: projecting
-the root instruction path away from `workspaceDir` produces an empty root snapshot.
-Callers preparing source-workspace instructions should omit `projectPath`.
+Root instruction selection uses source paths before projection, preserving the
+bounded snapshot when a sandbox remaps the workspace. The selected document is
+excluded from project context without granting the agent source-file access.
 
 `buildAgentWorkspaceInstructionSnapshot(contextFiles, workspaceDir)` selects and
 renders that root instruction document from already-bounded context, including
@@ -340,6 +399,15 @@ synchronous and opaque transaction callback forms remain deprecated through
 2026-12-31, with removal in the first January 2027 stable release. See [session entry migration](/plugins/sdk-migration/how-to-migrate#prepare-session-entry-changes)
 and [transcript migration](/plugins/sdk-migration/how-to-migrate#await-locked-transcript-preparation).
 
+To post a notice into a session's chat without sending it to the model, call
+`appendAssistantMirrorMessageByIdentity` with `text` and
+`deliveryMirror: { kind: "plugin-notice", pluginId, type, data }`. Every client
+shows the text. `data` is JSON that a client can use to render a richer row for a
+notice type it knows. The row is never replayed to the model. For a notice from
+background work that must skip a reset session or also reach the session's
+channel, use `api.runtime.system.postSessionNotice`; see
+[background session notices](/plugins/sdk-runtime#background-session-notices).
+
 For ordinary session preparation, await `getSessionEntryAsync`,
 `readSessionUpdatedAtAsync`, `getConversationSessionAsync`, or
 `readAmbientTranscriptWatermarkAsync` from `session-store-runtime`. Native command
@@ -369,6 +437,50 @@ When awaiting further preparation after `readSessionTranscriptCatalogPage`, its
 optional second argument captures an actor-currentness assertion. Call it at final
 serialization along with the caller's session/source checks. It does not grant
 access to the transcript or extend the session reader's lifetime.
+
+## Skill authoring
+
+`skill-authoring-runtime` is a private official-plugin runtime for plugins that
+keep learned skills in the per-agent folder their manifest names in
+`agentSkillsDir`. Skill loading already reads that folder; this subpath writes it.
+
+The host resolves the skills root from the calling plugin's own manifest. Calls take
+the target agent (`{ config, agentId }`) and a skill name, never a folder or path, so
+a plugin cannot name another plugin's skills. A plugin without `agentSkillsDir` gets
+`SkillAuthoringError` with code `no_skills_root`.
+
+- `resolveSkillsRoot({ config, agentId })` returns the calling plugin's folder for
+  one agent, for listing its skills.
+- `readSkillFile({ config, agentId, skillName, filePath })` and `listSkillFiles`
+  read with byte limits and refuse links.
+- `normalizeSkillFilePath(path)` accepts `SKILL.md` or a relative path below
+  `assets/`, `examples/`, `references/`, `scripts/`, or `templates/`.
+- `parseSkillFrontmatter` parses strictly; `splitSkillFrontmatter` returns the
+  frontmatter record and body and never throws.
+- `validateSkillFile({ skillName, filePath, content, maxSkillBytes })` checks
+  the support path, the `SKILL.md` frontmatter (`name` must match the folder,
+  `description` must be 1 to 1,024 bytes), the size limits, and the skill security
+  scan. It returns the description.
+- `writeSkillFile` and `removeSkillFile` validate, then change one file of one
+  skill. A skill name that is not one plain folder name, or a skill folder that a
+  link moves outside the root, is refused.
+- `commitSkillChange({ config, agentId, skillName, apply })` runs `apply`,
+  refreshes skill discovery, and dispatches one `skill_changed` hook with
+  `source: "plugin"`, the calling plugin's `pluginId`, and the before and after
+  artifacts. A failed `apply` dispatches nothing. Serialize overlapping changes to
+  one skill in the plugin.
+
+These calls must run inside a plugin call (a tool, hook, command, service, or
+`api.lifecycle.runInBackgroundContext` work). They carry the calling plugin's live
+authority from the host and check it after each awaited step and immediately before
+each file change and the `skill_changed` dispatch. When the plugin is disabled,
+replaced, or unloaded, they throw `PluginInstanceUnavailableError` and commit
+nothing.
+
+Refusals throw `SkillAuthoringError`. Its message says what to change, and its
+`code` (`invalid_path`, `path_escape`, `too_large`, `invalid_frontmatter`,
+`unsafe_content`, or `no_skills_root`) lets the plugin add its own guidance.
+Versioning, drafts, and naming rules stay with the plugin.
 
 ## Stateful CLI commands
 
@@ -417,6 +529,13 @@ The helper uses the prepared credential, headers, proxy/TLS policy, abort signal
 deadline, and live admission assertion. It never discovers credentials or
 constructs conversation history. Consumers own endpoint eligibility and any
 account-specific route grant before calling it.
+
+`executeOpenAIDecision(batch, execution)` accepts those same prepared facts as
+explicit fields: provider, model ID, base URL, headers, auth, request overrides,
+signal, deadline, admission assertion, and optional reasoning. Use it when a
+provider has already projected its execution inputs. Pass the full prepared
+request overrides, including auth metadata used to reject credential reflection.
+The context-based helper remains supported and delegates to this executor.
 
 `supportsOpenAIDecisionBatch(batch, reasoning)` gates protocol kinds, image and
 question bounds, and automatic reasoning before transport/discovery. Malformed

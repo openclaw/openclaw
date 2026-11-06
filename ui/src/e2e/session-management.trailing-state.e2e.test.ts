@@ -129,9 +129,9 @@ suite.define(() => {
         ui.bounds(state),
       ]);
 
-      // A glyph-less row draws the compact 14px ring centered in its 20px lead
+      // A glyph-less row draws the compact 12px ring centered in its 20px lead
       // slot; the title keeps its 8px distance from the slot, not from the ring.
-      expect(restingStateBounds.width).toBeCloseTo(14, 1);
+      expect(restingStateBounds.width).toBeCloseTo(12, 1);
       expect(restingStateBounds.x + restingStateBounds.width / 2).toBeCloseTo(
         restingGlyphBounds.x + restingGlyphBounds.width / 2,
         1,

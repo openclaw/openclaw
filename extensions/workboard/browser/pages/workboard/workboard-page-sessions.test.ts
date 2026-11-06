@@ -7,6 +7,7 @@ import type {
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { ControlUiAgentPickerProps, ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { loadMessages } from "../../i18n/locales.ts";
 import { mountPage } from "./workboard-page.test-support.ts";
 
 beforeEach(() => {
@@ -116,6 +117,49 @@ function peoplePicker(page: ReturnType<typeof mountPage>) {
     "people filter",
   );
 }
+
+it("retains session clocks on host refreshes and updates timestamps, titles and locale", async () => {
+  const page = sessionsPage();
+  await page.connect();
+  const tile = expectDefined(
+    page.container.querySelector('[data-session-key="agent:main:working"]'),
+    "session tile",
+  );
+  const time = expectDefined(
+    tile.querySelector<HTMLElement>(".workboard-session-tile__time"),
+    "session time",
+  );
+  expect(time.textContent).toBe("2m ago");
+  const scheduled = vi.spyOn(globalThis, "setTimeout");
+  for (let index = 0; index < 5; index++) {
+    page.fixture.notify();
+    await vi.advanceTimersByTimeAsync(0);
+  }
+  expect(scheduled).not.toHaveBeenCalled();
+  scheduled.mockRestore();
+
+  const session = expectDefined(page.result.sessions[0], "working session");
+  session.label = "Updated retries";
+  session.lastActivityAt = Date.now() - 10_000;
+  const previousTitle = time.title;
+  page.fixture.emit("plugin.workboard.changed", { epoch: "facts", revision: 2 });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(page.container.querySelector('[data-session-key="agent:main:working"]')).toBe(tile);
+  expect(tile.querySelector(".workboard-session-tile__time")).toBe(time);
+  expect(tile.querySelector("button")?.textContent).toBe("Updated retries");
+  expect(tile.getAttribute("title")).toContain("Updated retries");
+  expect(time.title).not.toBe(previousTitle);
+  expect(time.textContent).toBe("just now");
+  await vi.advanceTimersByTimeAsync(50_000);
+  expect(time.textContent).toBe("1m ago");
+
+  await loadMessages("de");
+  Object.assign(page.fixture.host, { locale: "de" });
+  page.fixture.notify();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(time.textContent).toBe("vor 1 Min.");
+  page.dispose();
+});
 
 it("renders the people facet, rereads the selected view and restores it only for its viewer, Gateway and board", async () => {
   const page = sessionsPage();
