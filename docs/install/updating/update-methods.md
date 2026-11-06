@@ -435,8 +435,9 @@ installed updater's backup implementation: its original-state capture and update
 backup discovery still use the installed code, including its retained runtime.
 Selecting a candidate with the batched probe does not repair that running updater.
 
-The timeout is usually a cold file cache. Read each file once, then run the update
-again straight away, adding any workspace directories outside the state directory:
+A cold file cache makes this timeout much more likely. Read each file once, then run
+the update again straight away, adding any workspace directories outside the state
+directory:
 
 ```bash
 find "${OPENCLAW_STATE_DIR:-$HOME/.openclaw}" -type f -exec head -c 16 {} + > /dev/null
@@ -444,8 +445,9 @@ openclaw update
 ```
 
 This needs no file changes, but it only helps when the cached probe fits inside
-10 seconds, which depends on the path count and the host. If the update still
-times out, use the manual procedure above for the first hop. Its backup step can
+10 seconds, which depends on the path count and the host. Regenerable directories
+such as `node_modules` in a workspace count too, so removing them can also help.
+If the update still times out, use the manual procedure above for the first hop. Its backup step can
 use `openclaw backup create --no-include-workspace --verify`, which keeps database
 coverage and skips workspace files; preserve your workspaces separately. If that
 also times out, stop the Gateway and other state writers and take a verified
