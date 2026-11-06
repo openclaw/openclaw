@@ -1,7 +1,8 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { Cron } from "croner";
 import { describe, expect, it, vi } from "vitest";
-import { computeNextRunAtMs, computePreviousRunAtMs, isValidCronExpression } from "./schedule.js";
+import { isValidCronExpression } from "./expression.js";
+import { computeNextRunAtMs, computePreviousRunAtMs } from "./schedule.js";
 import type { CronSchedule } from "./types.js";
 
 function expectOccurrences(schedule: CronSchedule, now: string, next?: string, previous?: string) {

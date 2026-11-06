@@ -38,6 +38,7 @@ on:
       - "scripts/lib/**"
       - "test/vitest/**"
       - "vitest*.ts"
+      - "ui/config/control-ui-solid.ts"
       - "tsconfig*.json"
       - "node-version.mjs"
       - ".npmrc"
@@ -108,6 +109,7 @@ jobs:
             scripts/**
             test/**
             vitest*.ts
+            ui/config/control-ui-solid.ts
             tsconfig*.json
             src/**
             packages/**
@@ -169,7 +171,9 @@ jobs:
               const typescript = process.env.TYPESCRIPT_INPUTS.trim().split('\n');
               const rust = process.env.RUST_INPUTS.trim().split('\n');
               const matches = (path, patterns) => patterns.some(pattern => matchesGlob(path, pattern));
-              if (paths.some(path => !matches(path, typescript) && !matches(path, rust))) {
+              // UI source and test-line budgets have their own CI owners.
+              const independent = ['ui/src/**', 'config/test-lines-allocations/*.txt'];
+              if (paths.some(path => !matches(path, typescript) && !matches(path, rust) && !matches(path, independent))) {
                 throw new Error('unknown contract input');
               }
               changed = paths.some(path => matches(path, typescript));

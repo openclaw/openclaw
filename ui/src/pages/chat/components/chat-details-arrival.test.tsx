@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { createComponent, createSignal } from "solid-js";
+import { Loading, createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { CronCompactJob, CronJobsListResult } from "../../../api/types.ts";
@@ -52,14 +52,11 @@ function mountDetails(overrides: Partial<ChatDetailsProps> = {}) {
     ...overrides,
   };
   const [details, setDetails] = createSignal(initial);
-  const view = mountSolid(() =>
-    createComponent(ChatDetailsDesktopComposition, {
-      get props() {
-        return details();
-      },
-      presented: true,
-    }),
-  );
+  const view = mountSolid(() => (
+    <Loading>
+      <ChatDetailsDesktopComposition props={details()} presented />
+    </Loading>
+  ));
   flush();
   onTestFinished(() => {
     view.unmount();
@@ -221,11 +218,12 @@ function automationGateway(request: ReturnType<typeof createGatewayRequestMock>)
 
 it("retains cached Subagents until the roster observes its parent, then adopts no children", async () => {
   const remember = vi.fn<NonNullable<ChatDetailsProps["onDetailsSnapshot"]>>();
+  const open = vi.fn();
   const view = mountDetails({
     selectedSession: undefined,
     subagentSessionsHydrated: true,
-    onOpenSubagent() {},
-    onOpenSubagents() {},
+    onOpenSubagent: open,
+    onOpenSubagents: open,
     onDetailsSnapshot: remember,
     cachedDetails: {
       locale: "en",
@@ -255,13 +253,101 @@ it("retains cached Subagents until the roster observes its parent, then adopts n
     view.update(facts);
     await advance();
     expect(view.group("subagents")?.textContent).toContain("Review");
+    view
+      .group("subagents")!
+      .querySelector<HTMLButtonElement>("button[data-subagent-session-key]")!
+      .click();
+    expect(open).not.toHaveBeenCalled();
     expect(remember).not.toHaveBeenCalled();
   }
   view.update({ subagentSessions: [{ key: view.initial.sessionKey, kind: "direct" }] });
   await advance();
   expect(view.group("subagents")).toBeNull();
-  expect(remember).toHaveBeenCalledWith({ subagents: { total: 0, rows: [], counts: [] } });
+  expect(remember).toHaveBeenCalledWith(
+    expect.objectContaining({ subagents: { total: 0, rows: [], counts: [] } }),
+  );
 });
+
+it.each(["empty", "unavailable", "unavailable-with-parent-facts"] as const)(
+  "retains ordinary child display until its live roster is %s, without cached navigation",
+  async (outcome) => {
+    const remember = vi.fn<NonNullable<ChatDetailsProps["onDetailsSnapshot"]>>();
+    const open = vi.fn();
+    const view = mountDetails({
+      selectedSession: undefined,
+      onSessionSelect: open,
+      onDetailsSnapshot: remember,
+      cachedDetails: {
+        locale: "en",
+        subagents: {
+          total: 1,
+          counts: [{ status: "done", count: 1, listed: false }],
+          rows: [
+            {
+              key: "agent:main:review",
+              label: "Cached review",
+              status: "done",
+              listed: false,
+            },
+          ],
+        },
+      },
+    });
+    await advance();
+    await waitForSolid(() =>
+      expect(view.group("subagents")?.textContent).toContain("Cached review"),
+    );
+    expect(view.group("subagents")!.querySelector("button.chat-subagent-activity__row")).toBeNull();
+    expect(remember).not.toHaveBeenCalled();
+    view.update({
+      selectedSession: { key: view.initial.sessionKey, kind: "direct" },
+      subagentSessionsHydrated: true,
+      subagentSessions: [],
+    });
+    await advance();
+    expect(view.group("subagents")?.textContent).toContain("Cached review");
+    expect(remember).not.toHaveBeenCalled();
+    const parent = { key: view.initial.sessionKey, kind: "direct" as const };
+    view.update(
+      outcome === "empty"
+        ? { subagentSessions: [parent] }
+        : {
+            subagentSessionsUnavailable: true,
+            ...(outcome === "unavailable-with-parent-facts"
+              ? {
+                  subagentSessions: [
+                    parent,
+                    {
+                      key: "agent:main:live-review",
+                      kind: "direct",
+                      label: "Known live review",
+                      parentSessionKey: parent.key,
+                      status: "done",
+                    },
+                  ],
+                }
+              : {}),
+          },
+    );
+    await advance();
+    if (outcome === "unavailable-with-parent-facts") {
+      expect(view.group("subagents")?.textContent).toContain("Known live review");
+      expect(view.group("subagents")?.textContent).not.toContain("Cached review");
+    } else {
+      expect(view.group("subagents")).toBeNull();
+    }
+    expect(remember).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subagents: {
+          total: 0,
+          rows: [],
+          counts: [],
+        },
+      }),
+    );
+    expect(open).not.toHaveBeenCalled();
+  },
+);
 
 it.each([false, true])(
   "keeps disclosure reset and restored preference: controlled=%s",

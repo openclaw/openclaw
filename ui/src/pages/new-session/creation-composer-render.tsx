@@ -1,6 +1,7 @@
 import { createMemo, Show } from "solid-js";
 import { createFooterControlRef } from "../../app/shell-layout-traits-solid.tsx";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
@@ -103,9 +104,9 @@ export function CreationComposer(props: {
             aria-label={t("newSession.followUps")}
           >
             <Show when={error()}>
-              <div class="callout danger" role="alert">
+              <InlineAlert tone="danger" role="alert">
                 {error()}
-              </div>
+              </InlineAlert>
             </Show>
             <ChatComposer
               {...prepared()}

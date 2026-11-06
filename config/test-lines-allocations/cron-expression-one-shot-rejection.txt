@@ -1,2 +1,2 @@
-# Reject ISO timestamps mislabeled as recurring cron expressions in validation and scheduling.
-45
+# Reject ISO timestamps as cron inputs; preserve stored jobs and validate update schedules.
+47

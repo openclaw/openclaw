@@ -475,6 +475,8 @@ export type CronStoredJob = Omit<CronJob, "streamExecutionHost" | "payloadSource
     sessionId: string;
     lifecycleRevision?: string;
   };
+  /** Original native process grant, independent of mutable payload authority; store-private. */
+  streamOperatorSource?: import("../gateway/operator-run-recovery-source.codec.js").OperatorRunRecoverySnapshot;
   /** Trusted logical sandbox and original access basis, never public create/patch input. */
   streamSandbox?: CronStreamSandboxTarget;
   /** Immutable revisions inherited from the authorized creator session, never human mutation authority. */

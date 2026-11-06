@@ -4,8 +4,8 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { CronConfig } from "../../config/types.cron.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { resolveCronDeliveryMode } from "../delivery-defaults.js";
+import { isValidCronExpression } from "../expression.js";
 import { assertCronJobStateTimestamps } from "../persisted-shape.js";
-import { isValidCronExpression } from "../schedule.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { normalizeCronScriptPayload } from "../script-payload.js";
 import { createCronSourceIdentity } from "../source-schedule.js";
