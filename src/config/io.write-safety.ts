@@ -393,7 +393,7 @@ export function assertBaseSnapshotStillCurrent(
 ): void {
   const readSource = (pathname: string) =>
     validateUtf8
-      ? decodeUtf8Input(ioFs.readFileSync(pathname), `Config source ${pathname}`)
+      ? decodeUtf8Input(ioFs.readFileSync(pathname), pathname)
       : ioFs.readFileSync(pathname, "utf-8");
   if (snapshot.path !== configPath) {
     throw new ConfigMutationConflictError("config path changed since last load", {
