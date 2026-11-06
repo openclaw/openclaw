@@ -48,6 +48,7 @@ const { values } = parseArgs({
     "dashboard-pane-chrome": { type: "boolean", default: false },
     "plugin-activation": { type: "boolean", default: false },
     "details-session-facts": { type: "boolean", default: false },
+    "details-subagent-activity": { type: "boolean", default: false },
     "active-targets": { type: "boolean", default: false },
     "composer-controls": { type: "boolean", default: false },
     "reload-after-navigation": { type: "boolean", default: false },
@@ -65,6 +66,7 @@ if (values.help) {
   --admission signed-in|token --base <dist|ref> --candidate <dist|ref>
   --reloads 11 --sessions 3000 --rtt-ms 80 --capture-ms 8000 --route both|chat|dashboard
   --transcript-late-paint --plugin-activation --active-targets --reload-after-navigation --cpu-profile
+  --details-subagent-activity (two settled ordinary children on the active chat target)
   --init-script <browser-script.js> (repeatable)
 Creates fresh isolated state and Chromium, records cold + warm reloads, then stops both.
 Offline paint audit: --audit-report <report.json> --paint-audit <paint-audit.json>
@@ -810,6 +812,7 @@ try {
     dashboardPaneChrome: values["dashboard-pane-chrome"],
     pluginActivation: values["plugin-activation"],
     detailsSessionFacts: values["details-session-facts"],
+    detailsSubagentActivity: values["details-subagent-activity"],
     activeTargets: values["active-targets"],
     composerControls: values["composer-controls"],
     ...(admission
@@ -1135,6 +1138,14 @@ try {
             !(await page.locator(".chat-details:visible").count())
           ) {
             await details.first().click();
+          }
+          if (route === "chat") {
+            for (const child of fixture.fixtureSummary.ordinaryChildren) {
+              await page
+                .locator(".chat-details .chat-subagent-activity__row")
+                .getByText(child.label, { exact: true })
+                .waitFor({ state: "visible" });
+            }
           }
           if (values["composer-controls"]) {
             const model = page.locator("[data-chat-model-select]:visible").first();

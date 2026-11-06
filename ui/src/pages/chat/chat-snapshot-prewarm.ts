@@ -60,7 +60,10 @@ export function prewarmChatSnapshot(cacheKey: string): Promise<void> {
         const docking = asOptionalRecord(details?.docking);
         // Placement supplies this prefetch hint; validation still owns display admission.
         if (docking?.wide === true) {
-          void loadChatDetailsDesktopComposition().catch(() => undefined);
+          const rows = asOptionalRecord(details?.subagents)?.rows;
+          void loadChatDetailsDesktopComposition(
+            Array.isArray(rows) && rows.some((row) => asOptionalRecord(row)?.listed === false),
+          ).catch(() => undefined);
         }
         return record;
       })

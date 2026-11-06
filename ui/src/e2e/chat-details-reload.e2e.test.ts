@@ -38,6 +38,7 @@ suite.define(() => {
             transcriptMessages: 15,
             paneChromeFacts: true,
             detailsSessionFacts: true,
+            detailsSubagentActivity: face === "chat" && !archived ? 1 : 0,
           });
           const sessionKey = fixture.selectedSessionKey;
           const selectedSession = fixture.scenario.sessions!.find((row) => row.key === sessionKey)!;

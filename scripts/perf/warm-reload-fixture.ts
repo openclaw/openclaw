@@ -23,6 +23,7 @@ export type WarmReloadFixtureOptions = {
   dashboardPaneChrome?: boolean;
   pluginActivation?: boolean;
   detailsSessionFacts?: boolean;
+  detailsSubagentActivity?: boolean;
   activeTargets?: boolean;
   composerControls?: boolean;
   admission?: Pick<
@@ -244,6 +245,9 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
   if (!Number.isSafeInteger(sessions) || sessions < 2000) {
     throw new Error("Warm-reload fixture requires at least 2000 sessions");
   }
+  if (options.detailsSubagentActivity && !options.activeTargets) {
+    throw new Error("Ordinary child activity requires active warm-reload targets");
+  }
   const stateDir = path.resolve(options.stateDir);
   const agentId = "reviewer";
   const workspaceDir = path.join(stateDir, "workspace", agentId);
@@ -411,6 +415,13 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       id: `team-shape-session-${index}`,
       label: index === 0 ? "Warm reload verification" : "Reload proof dashboard",
     }));
+    const ordinaryChildren = options.detailsSubagentActivity
+      ? Array.from({ length: 2 }, (_, index) => ({
+          key: `agent:${agentId}:chat:cd000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+          id: `warm-proof-child-${index}`,
+          label: `Synthetic child review ${index + 1}`,
+        }))
+      : [];
     let assignedToOperator = 0;
     let activeAssignedToOperator = 0;
     try {
@@ -574,6 +585,23 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
           });
         }, database);
       }
+      agentDb.runOpenClawAgentWriteTransaction((owner) => {
+        for (const [index, child] of ordinaryChildren.entries()) {
+          entries.writeSessionEntry(owner, child.key, {
+            sessionId: child.id,
+            label: child.label,
+            displayName: child.label,
+            parentSessionKey: targets[0]!.key,
+            parentSessionId: targets[0]!.id,
+            spawnedBy: targets[0]!.key,
+            createdAt: now - 60_000 + index,
+            startedAt: now - 60_000 + index,
+            endedAt: now - 30_000 + index,
+            updatedAt: now - 30_000 + index,
+            status: "done",
+          });
+        }
+      }, database);
       const targetKeys = new Set(targets.map((target) => target.key));
       const inventory = Object.entries(
         entries.readSessionEntryStore(agentDb.openOpenClawAgentDatabase(database)),
@@ -677,6 +705,7 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       admission: options.admission ? "signed-in" : "token",
       otherViewers: options.admission?.peerSessions.length ?? 0,
       targets,
+      ordinaryChildren,
       dashboardEndAnchor: options.dashboardEndAnchor ?? false,
       dashboardPaneChrome: options.dashboardPaneChrome ?? false,
       dashboardOutsideOperatorRoster: options.dashboardPaneChrome ?? false,
