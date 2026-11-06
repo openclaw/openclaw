@@ -1,4 +1,5 @@
 // iOS Fastlane release gate tests keep TestFlight upload on one canonical path.
+import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -1960,10 +1961,9 @@ end
     const result = spawnSync("ruby", ["-e", script], { encoding: "utf8" });
     expect(result.status, result.stderr).toBe(0);
     const rows = JSON.parse(result.stdout) as { cache: string | null; commands: string[][] }[];
-    for (const {
-      cache,
-      commands: [archive, exported],
-    } of rows) {
+    for (const { cache, commands } of rows) {
+      const [archive, exported] = commands;
+      assert(commands.length === 2 && archive && exported, "Expected one archive and one export");
       expect(archive.slice(-2)).toEqual(["clean", "archive"]);
       expect(archive).toContain("Release");
       const cacheArguments = archive.filter((part) => part.startsWith("COMPILATION_CACHE_"));
