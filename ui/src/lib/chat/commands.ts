@@ -41,6 +41,7 @@ export type SlashCommandDef = {
   source?: "native" | "plugin" | "skill";
   skillDisplayName?: string;
   skillModelVisible?: boolean;
+  skillReferenceable?: boolean;
   clientPresentation?: NonNullable<CommandEntry["clientPresentation"]>;
 };
 
@@ -63,6 +64,7 @@ type CommandLike = {
   source?: "native" | "plugin" | "skill";
   skillDisplayName?: string;
   skillModelVisible?: boolean;
+  skillReferenceable?: boolean;
   clientPresentation?: NonNullable<CommandEntry["clientPresentation"]>;
 };
 
@@ -228,6 +230,9 @@ function toSlashCommand(command: CommandLike, source: "local" | "remote"): Slash
     ...(command.skillModelVisible !== undefined
       ? { skillModelVisible: command.skillModelVisible }
       : {}),
+    ...(command.skillReferenceable !== undefined
+      ? { skillReferenceable: command.skillReferenceable }
+      : {}),
     ...(command.clientPresentation ? { clientPresentation: command.clientPresentation } : {}),
   };
 }
@@ -298,6 +303,7 @@ export function buildSlashCommandsFromEntries(entries: CommandEntry[]): SlashCom
         source: entry.source,
         skillDisplayName: entry.skillDisplayName?.trim() || undefined,
         skillModelVisible: entry.skillModelVisible,
+        skillReferenceable: entry.skillReferenceable,
         clientPresentation: entry.source === "plugin" ? entry.clientPresentation : undefined,
       };
     })
@@ -362,7 +368,7 @@ export function getSlashCommandCompletions(
   let commands = options?.inlineOnly
     ? SLASH_COMMANDS.filter(
         (command) =>
-          command.source === "skill" ||
+          isReferenceableSkill(command) ||
           (executesInlineImmediately(command) && options.allowImmediateInlineCommands !== false),
       )
     : SLASH_COMMANDS;
@@ -427,10 +433,14 @@ export function getSkillDisplayName(command: SlashCommandDef): string {
   return command.skillDisplayName?.trim() || command.name;
 }
 
+function isReferenceableSkill(command: SlashCommandDef): boolean {
+  return command.source === "skill" && command.skillReferenceable === true;
+}
+
 export function getSkillCommandCompletions(filter: string): SlashCommandDef[] {
   const lower = normalizeLowercaseStringOrEmpty(filter).normalize("NFC");
   const normalized = lower.replace(/[\s_]+/gu, "-");
-  return SLASH_COMMANDS.filter((command) => command.source === "skill")
+  return SLASH_COMMANDS.filter(isReferenceableSkill)
     .filter((command) => {
       const displayName = normalizeLowercaseStringOrEmpty(getSkillDisplayName(command)).normalize(
         "NFC",

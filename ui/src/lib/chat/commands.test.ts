@@ -101,6 +101,7 @@ function remoteCommand(name: string, overrides: Partial<CommandEntry> = {}): Com
     source: "plugin",
     scope: "both",
     acceptsArgs: true,
+    ...(overrides.source === "skill" ? { skillReferenceable: true } : {}),
     ...overrides,
   };
 }

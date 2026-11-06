@@ -1,2 +1,2 @@
-# Manual-only skill completion regression and the existing composer send flow.
-6
+# Manual-only and slash-only catalog distinction, affected fixtures, and composer send regressions.
+69
