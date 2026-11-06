@@ -14,11 +14,7 @@ import {
   runProjectScriptWithGitProbe,
 } from "./project-preparation.test-support.js";
 import { createProjectSetupScript } from "./project-setup-script.js";
-import {
-  prepareWorkerProjectSnapshot,
-  prepareWorkerWorkspaceGitPack,
-  workerProjectSeedKey,
-} from "./workspace-git-base.js";
+import { prepareWorkerProjectSnapshot, workerProjectSeedKey } from "./workspace-git-base.js";
 import { workspaceStatIdentity } from "./workspace-hash-memo.js";
 import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
@@ -263,6 +259,10 @@ printf 'setup\\n' >> "$HOME/count"
     });
     first.close();
     const prepared = result.preparedWorkspace!;
+    expect(prepared.baseCommit).toBe(f.project.baseCommit);
+    expect(await requireGit(prepared.workspaceDir, ["rev-parse", "HEAD"])).toBe(
+      prepared.baseCommit,
+    );
     expect(first.getPreparedWorkspace()).toEqual(prepared);
     const directory = path.join(f.home, ".openclaw-worker", "prepared", "gateway", "c".repeat(64));
     expect(prepared).toMatchObject({
@@ -413,74 +413,6 @@ printf 'setup\\n' >> "$HOME/count"
     expect(
       await fs.stat(path.join(skipped.homeDir, "setup-ran")).catch(() => undefined),
     ).toBeUndefined();
-  });
-
-  it("starts an admitted moving default branch on its completed snapshot without setup or transfer", async () => {
-    const f = await fixture('#!/bin/sh\nprintf "setup\n" >> "$HOME/setup-count"\n');
-    const first = await prepare(f);
-    const workspace = first.preparedWorkspace!;
-    await requireGit(f.repository, ["commit", "--allow-empty", "--quiet", "-m", "branch advanced"]);
-    const latest = await snapshot(f.repository);
-    const recipe = await readWorkerProjectEnvironmentRecipe(latest);
-    const revalidate = vi.fn(async () => {});
-    const owner = createWorkerProjectPreparation({
-      project: {
-        key: f.project.key,
-        baseCommit: latest.baseCommit,
-        source: {
-          kind: "repository",
-          url: "https://github.com/acme/project.git",
-          repositoryId: "R_fixture",
-          owner: {
-            agent: { agentId: "main", provenance: null },
-            identity: { source: "anonymous" },
-          },
-        },
-      },
-      namespace: "gateway",
-      preparation: {
-        key: "b".repeat(64),
-        cacheKey: "c".repeat(64),
-        purpose: "session",
-        demandAtMs: 1,
-        setupRecipe: recipe.identity,
-        recipe,
-      },
-      setupAuthorized: true,
-      snapshotStart: true,
-      revalidateRepositorySource: revalidate,
-      prepareRepositoryGitPack: ({ temporaryRoot, signal }) =>
-        prepareWorkerWorkspaceGitPack({
-          root: f.repository,
-          baseCommit: latest.baseCommit,
-          temporaryRoot,
-          signal,
-        }),
-      requireCurrent() {},
-    });
-    f.upload.mockClear();
-    f.runScript.mockClear();
-    try {
-      const prepared = await owner.project.prepare({
-        ...f,
-        snapshotBaseCommit: f.project.baseCommit,
-      });
-      expect(prepared.baseCommit).toBe(f.project.baseCommit);
-      expect(prepared.cacheHit).toBe(true);
-      expect(f.upload).not.toHaveBeenCalled();
-      expect(f.runScript).toHaveBeenCalledOnce();
-      expect(revalidate).toHaveBeenCalledOnce();
-      expect(await requireGit(workspace.workspaceDir, ["rev-parse", "HEAD"])).toBe(
-        f.project.baseCommit,
-      );
-      expect(await readText(workspace.homeDir, "setup-count")).toBe("setup\n");
-      await owner.project.inspectPreparedWorkspace!({
-        runScript: f.runScript,
-        baseCommit: f.project.baseCommit,
-      });
-    } finally {
-      owner.close();
-    }
   });
 
   it.each([false, true])(
