@@ -3,8 +3,10 @@ import type { SessionsListParams } from "../../packages/gateway-protocol/src/ind
 import * as pinPolicy from "../config/sessions/session-pin-policy.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { createSessionIdentityProjection } from "./session-identity-projection.js";
+import { getSessionListBaseMiss } from "./session-list-diagnostics.js";
 import type { SessionListFilteredEntries } from "./session-list-filters.js";
 import { SessionListViewCache } from "./session-list-view-cache.js";
+import { shareSidebarSessionRows } from "./session-row-presentation.js";
 import {
   create as createRow,
   identity,
@@ -15,6 +17,7 @@ import { createSessionRowSelection } from "./session-row-selection.js";
 import * as sessionCore from "./session-utils-core.js";
 import { selectSessionEntries } from "./session-utils-list.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
+import type { GatewaySessionRow } from "./session-utils.types.js";
 
 const now = 1_800_000_000_000;
 const storePath = "/synthetic/retained.sqlite";
@@ -237,6 +240,74 @@ it("keeps sidebar baselines when fixed query partitions advance through many rev
     }
   } finally {
     cache.clear();
+  }
+});
+
+it("keeps concurrent audience baselines under a daytime roster's selection pressure", () => {
+  const state = fixture();
+  for (let index = 0; index < 25_000; index++) {
+    state.put(`agent:main:day-${index}`, {
+      sessionId: String(index),
+      updatedAt: now + index,
+      lastInteractionAt: now + index,
+    });
+  }
+  const queries = new Map<string, SessionsListParams>();
+  // Seventy connections share 22 audiences; equal audience/query keys share a view.
+  for (let connection = 0; connection < 70; connection++) {
+    for (const sortBy of ["updatedAt", "lastInteractionAt", "activity"] as const) {
+      queries.set(`${connection % 22}:${sortBy}`, { sortBy, archived: "all", limit: 200 });
+    }
+  }
+  const cache = new SessionListViewCache();
+  const controls = new Map<string, SessionListViewCache>();
+  const baselines = new Map<string, string>();
+  const presented = new WeakMap<SessionEntry, GatewaySessionRow>();
+  let unknownBases = 0;
+  const differentReplies: string[] = [];
+  try {
+    for (let round = 0; round < 2; round++) {
+      if (round) {
+        const key = "agent:main:day-24999";
+        state.put(key, { ...state.rows.get(key)!.entry, updatedAt: now + 25_000 });
+      }
+      for (const [key, opts] of queries) {
+        const selection = cache.get(`selection:${key}`);
+        selection.selection = state.select(state.selection, opts, cache.partitions(selection));
+        cache.update(selection);
+        const rows = selection.selection.entries.map(([rowKey, entry]) => {
+          let row = presented.get(entry);
+          if (!row) {
+            row = Object.freeze({ key: rowKey, kind: "direct", updatedAt: entry.updatedAt });
+            presented.set(entry, row);
+          }
+          return row;
+        });
+        const view = cache.get(`rows:${key}`);
+        cache.setRows(view, rows, true);
+        const control = controls.get(key) ?? new SessionListViewCache();
+        controls.set(key, control);
+        const witness = control.get(key);
+        control.setRows(witness, rows, true);
+        const baseline = baselines.get(key);
+        const actual = shareSidebarSessionRows(rows, baseline, view.rowHistory);
+        const expected = shareSidebarSessionRows(rows, baseline, witness.rowHistory);
+        if (round) {
+          unknownBases += Number(getSessionListBaseMiss(actual) === "unknown-base");
+          if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+            differentReplies.push(key);
+          }
+          expect(expected.rowsDelta?.order).toHaveLength(200);
+          expect(expected.sessions).toHaveLength(1);
+        }
+        baselines.set(key, `delta:${actual.rowsRevision}`);
+      }
+    }
+    expect(unknownBases).toBe(0);
+    expect(differentReplies).toEqual([]);
+  } finally {
+    cache.clear();
+    controls.forEach((control) => control.clear());
   }
 });
 

@@ -107,6 +107,16 @@ on:
         required: false
         default: ""
         type: string
+      full_release_validation_run_id:
+        description: Original FRV parent owning the prepared npm artifact
+        required: false
+        default: ""
+        type: string
+      full_release_validation_run_attempt:
+        description: Exact original FRV attempt owning the prepared npm artifact
+        required: false
+        default: ""
+        type: string
       trusted_publisher_preflight:
         description: During preflight_only, verify npm trusted-publisher OIDC exchange instead of packing artifacts
         required: true
@@ -128,6 +138,13 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.22.1"
+  PREPARED_NPM_ARTIFACT: ${{ inputs.prepared_artifact }}
+  PREPARED_NPM_SOURCE_SHA: ${{ inputs.ref }}
+  PREPARED_NPM_FRV_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+  PREPARED_NPM_FRV_RUN_ATTEMPT: ${{ inputs.full_release_validation_run_attempt }}
+  PREPARED_NPM_SELECTION_MODE: ${{ inputs.publish_scope }}
+  PREPARED_NPM_PLUGINS: ${{ inputs.plugins }}
+  PREPARED_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
 
 jobs:
   preview_plugins_npm:
@@ -1792,6 +1809,9 @@ jobs:
               --allow-prevalidated-ref
             node scripts/openclaw-npm-extended-stable-release.mjs validate-active-line
           fi
+          if [[ -n "$PREPARED_NPM_ARTIFACT" ]]; then
+            node scripts/plugin-npm-prepared-release.mjs authorize --source-sha "$RELEASE_TARGET_SHA"
+          fi
           NPM_CONFIG_USERCONFIG="$npmrc" \
             NPM_CONFIG_GLOBALCONFIG=/dev/null \
             NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ \
@@ -1901,6 +1921,9 @@ jobs:
             --release-publish-ref "$RELEASE_PUBLISH_REF" \
             --release-publish-full-ref "$RELEASE_PUBLISH_FULL_REF" \
             --release-publish-parent-state-policy "$RELEASE_PUBLISH_PARENT_STATE_POLICY"
+          if [[ -n "$PREPARED_NPM_ARTIFACT" ]]; then
+            node scripts/plugin-npm-prepared-release.mjs authorize --source-sha "$PREPARED_NPM_SOURCE_SHA"
+          fi
           HOME="$publish_home" \
             NPM_CONFIG_GLOBALCONFIG=/dev/null \
             NPM_CONFIG_IGNORE_SCRIPTS=true \
