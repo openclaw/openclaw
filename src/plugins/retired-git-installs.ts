@@ -5,7 +5,10 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { visitConfigValueTree } from "../config/value-tree.js";
 import { ignoreMissingPath } from "../infra/errno.js";
+import { resolveUserPath } from "../infra/home-dir.js";
 import { isPathStrictlyInside } from "../infra/path-guards.js";
 import { normalizePluginId } from "./config-state.js";
 import { resolveDefaultPluginGitDir } from "./install-paths.js";
@@ -27,6 +30,34 @@ type RetiredGitInstallMarker = {
 
 export function retiredGitInstallMarkerDirectory(env?: NodeJS.ProcessEnv): string {
   return path.join(resolveDefaultPluginGitDir(env), RETIRED_GIT_INSTALL_MARKER_DIR);
+}
+
+/** True when a published Git retirement still needs the cleanup owner. */
+export async function hasRetiredGitPluginInstallCandidates(
+  env?: NodeJS.ProcessEnv,
+): Promise<boolean> {
+  let names: string[] = [];
+  try {
+    names = await fs.readdir(retiredGitInstallMarkerDirectory(env));
+  } catch (error: unknown) {
+    ignoreMissingPath(error);
+  }
+  return names.some((name) => name.endsWith(".json"));
+}
+
+/** Absolute and home-relative config values that may still name a retired checkout. */
+export function collectConfiguredPluginReferencePaths(configs: Iterable<unknown>): string[] {
+  const configuredPaths: string[] = [];
+  visitConfigValueTree([...configs], (value) => {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (path.isAbsolute(trimmed) || trimmed.startsWith("~/") || trimmed.startsWith("~\\")) {
+        configuredPaths.push(resolveUserPath(trimmed));
+      }
+    }
+    return true;
+  });
+  return configuredPaths;
 }
 
 function markerPathFor(target: string, env?: NodeJS.ProcessEnv): string {
@@ -139,39 +170,45 @@ function readMarker(contents: string): RetiredGitInstallMarker | null {
   } catch {
     return null;
   }
-  if (!parsed || typeof parsed !== "object") {
+  if (!isRecord(parsed)) {
     return null;
   }
-  const marker = parsed as Partial<RetiredGitInstallMarker>;
+  const { version, pluginId, target, parentDir, dev, ino } = parsed;
   if (
-    marker.version !== 1 ||
-    typeof marker.pluginId !== "string" ||
-    typeof marker.target !== "string" ||
-    typeof marker.parentDir !== "string" ||
-    typeof marker.dev !== "string" ||
-    typeof marker.ino !== "string"
+    version !== 1 ||
+    typeof pluginId !== "string" ||
+    typeof target !== "string" ||
+    typeof parentDir !== "string" ||
+    typeof dev !== "string" ||
+    typeof ino !== "string"
   ) {
     return null;
   }
-  return marker as RetiredGitInstallMarker;
+  return { version, pluginId, target, parentDir, dev, ino };
 }
 
 /** Remove retired Git checkouts that are no longer loaded or configured. */
 export async function cleanupRetiredGitPluginInstalls(params: {
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
+  installOwners?: readonly string[];
   protectPaths: readonly string[];
   assertCurrent?: () => void | Promise<void>;
+  beforePersistentApply?: () => void;
 }): Promise<{ removed: number; warnings: string[] }> {
   const warnings: string[] = [];
   const markerDir = retiredGitInstallMarkerDirectory(params.env);
-  const names = await fs.readdir(markerDir).catch((error: unknown) => {
+  let names: string[] = [];
+  try {
+    names = await fs.readdir(markerDir);
+  } catch (error: unknown) {
     ignoreMissingPath(error);
-    return [] as string[];
-  });
-  const wanted = params.pluginIds
-    ? new Set(params.pluginIds.map((pluginId) => normalizePluginId(pluginId)))
-    : null;
+  }
+  const wanted = new Set<string>();
+  const scoped = params.pluginIds !== undefined || params.installOwners !== undefined;
+  for (const pluginId of [...(params.pluginIds ?? []), ...(params.installOwners ?? [])]) {
+    wanted.add(normalizePluginId(pluginId));
+  }
   let removed = 0;
   for (const name of names) {
     if (!name.endsWith(".json")) {
@@ -184,7 +221,7 @@ export async function cleanupRetiredGitPluginInstalls(params: {
       await fs.rm(markerPath, { force: true });
       continue;
     }
-    if (wanted && !wanted.has(normalizePluginId(marker.pluginId))) {
+    if (scoped && !wanted.has(normalizePluginId(marker.pluginId))) {
       continue;
     }
     const checkout = managedGitCheckout(
@@ -219,10 +256,13 @@ export async function cleanupRetiredGitPluginInstalls(params: {
       continue;
     }
     await params.assertCurrent?.();
-    const result = await applyPluginUninstallDirectoryRemoval({
-      target: checkout.target,
-      cleanup: { kind: "git", parentDir: checkout.parentDir },
-    });
+    const result = await applyPluginUninstallDirectoryRemoval(
+      {
+        target: checkout.target,
+        cleanup: { kind: "git", parentDir: checkout.parentDir },
+      },
+      params.beforePersistentApply,
+    );
     warnings.push(...result.warnings);
     if (result.directoryRemoved) {
       removed += 1;

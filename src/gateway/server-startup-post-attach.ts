@@ -209,15 +209,28 @@ export async function startGatewayPostAttachRuntime(params: {
     }
     pluginRegistry = loaded.pluginRegistry;
     if (!params.isClosing?.()) {
-      const { cleanupRetiredGitPluginInstalls, gitInstallProtectPaths } =
-        await import("../plugins/retired-git-installs.js");
+      const {
+        cleanupRetiredGitPluginInstalls,
+        collectConfiguredPluginReferencePaths,
+        gitInstallProtectPaths,
+      } = await import("../plugins/retired-git-installs.js");
+      const { getRuntimeConfigSnapshot } = await import("../config/runtime-snapshot.js");
+      const assertStartupCurrent = () => {
+        if (params.isClosing?.()) {
+          throw new Error("Gateway is closing");
+        }
+      };
       await cleanupRetiredGitPluginInstalls({
-        protectPaths: gitInstallProtectPaths({ plugins: pluginRegistry.plugins }),
-        assertCurrent: () => {
-          if (params.isClosing?.()) {
-            throw new Error("Gateway is closing");
-          }
-        },
+        protectPaths: gitInstallProtectPaths({
+          plugins: pluginRegistry.plugins,
+          extra: collectConfiguredPluginReferencePaths([
+            params.cfgAtStart,
+            params.getConfig(),
+            getRuntimeConfigSnapshot(),
+          ]),
+        }),
+        assertCurrent: assertStartupCurrent,
+        beforePersistentApply: assertStartupCurrent,
       }).catch((error: unknown) => {
         if (!params.isClosing?.()) {
           params.log.warn(`retired git plugin cleanup failed: ${String(error)}`);

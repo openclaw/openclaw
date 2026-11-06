@@ -1,3 +1,4 @@
-153
-# Git checkout retirement after a failed plugin activation. The install regression
-# and the cleanup boundaries do not fit in the inherited test-line slack.
+219
+# Git checkout retirement after a failed plugin activation. The install regression,
+# cleanup boundaries, and the review regressions for authority, package owners,
+# configured paths, and background retry do not fit in the inherited slack.

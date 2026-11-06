@@ -1,8 +1,5 @@
-import path from "node:path";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { visitConfigValueTree } from "../config/value-tree.js";
-import { resolveUserPath } from "../infra/home-dir.js";
 
 export async function cleanupGatewayRetiredPluginArtifacts(params: {
   log: {
@@ -25,17 +22,20 @@ export async function cleanupGatewayRetiredPluginArtifacts(params: {
       captures,
       { hasPluginNativeCaptureCleanupCandidates },
       paths,
+      gitInstalls,
     ] = await Promise.all([
       import("../plugins/managed-npm-retention.js"),
       import("../plugins/plugin-source-capture-report.js"),
       import("../plugins/plugin-source-capture-directory.js"),
       import("../config/paths.js"),
+      import("../plugins/retired-git-installs.js"),
     ]);
     assertCurrent();
     const stateDir = paths.resolveStateDir();
     const candidates = await Promise.all([
       hasRetainedManagedNpmInstallCandidates(),
       hasPluginNativeCaptureCleanupCandidates(stateDir),
+      gitInstalls.hasRetiredGitPluginInstallCandidates(),
     ]);
     assertCurrent();
     if (!candidates.some(Boolean)) {
@@ -75,29 +75,22 @@ export async function cleanupGatewayRetiredPluginArtifacts(params: {
             params.log.warn(warning);
           }
           await assertInventoryCurrent();
-          const configuredPaths: string[] = [];
           // Config can deliberately pin executables/assets from an older generation.
           // Keep both boot-time users and current references; an incidental path
           // may retain extra files, which is preferable to breaking a configured tool.
-          visitConfigValueTree([params.startupConfig, getRuntimeConfigSnapshot()], (value) => {
-            if (typeof value === "string") {
-              const trimmed = value.trim();
-              if (
-                path.isAbsolute(trimmed) ||
-                trimmed.startsWith("~/") ||
-                trimmed.startsWith("~\\")
-              ) {
-                configuredPaths.push(resolveUserPath(trimmed));
-              }
-            }
-            return true;
-          });
-          const { cleanupRetiredGitPluginInstalls, gitInstallProtectPaths } =
-            await import("../plugins/retired-git-installs.js");
+          const configuredPaths = gitInstalls.collectConfiguredPluginReferencePaths([
+            params.startupConfig,
+            getRuntimeConfigSnapshot(),
+          ]);
           const { getActivePluginRegistry } = await import("../plugins/runtime.js");
           const activePlugins = getActivePluginRegistry()?.plugins;
-          const removedGitInstalls = await cleanupRetiredGitPluginInstalls({
-            protectPaths: gitInstallProtectPaths({
+          const assertRemovalCurrent = () => {
+            params.signal.throwIfAborted();
+            params.assertCurrent();
+            installedIndex.assertCurrent();
+          };
+          const removedGitInstalls = await gitInstalls.cleanupRetiredGitPluginInstalls({
+            protectPaths: gitInstalls.gitInstallProtectPaths({
               installPaths: [
                 ...params.startupInstallPaths,
                 ...configuredPaths,
@@ -108,6 +101,7 @@ export async function cleanupGatewayRetiredPluginArtifacts(params: {
               plugins: activePlugins,
             }),
             assertCurrent: assertInventoryCurrent,
+            beforePersistentApply: assertRemovalCurrent,
           });
           for (const warning of removedGitInstalls.warnings) {
             params.log.warn(warning);

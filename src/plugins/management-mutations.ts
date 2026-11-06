@@ -544,6 +544,8 @@ export async function reloadManagedPlugin(
         return {
           pluginId,
           pluginIds: ownedPluginIds,
+          installOwner:
+            ownership.value.kind === "package" ? ownership.value.installOwner : undefined,
           sourceDigests,
         };
       });
@@ -563,6 +565,9 @@ export async function reloadManagedPlugin(
     }
     const resolved = await resolveTargets();
     const pluginIds = [...new Set(resolved.flatMap((target) => target.pluginIds))].toSorted();
+    const installOwners = [
+      ...new Set(resolved.flatMap((target) => (target.installOwner ? [target.installOwner] : []))),
+    ].toSorted();
     const expected = new Map<string, string>();
     for (const target of resolved) {
       for (const [id, digest] of Object.entries(target.sourceDigests)) {
@@ -581,19 +586,26 @@ export async function reloadManagedPlugin(
       ...(expected.size ? { expectedSourceDigests: Object.fromEntries(expected) } : {}),
       assertInvokerOwned: beforePersistentApply,
     });
-    const { cleanupRetiredGitPluginInstalls, gitInstallProtectPaths } =
-      await import("./retired-git-installs.js");
+    const {
+      cleanupRetiredGitPluginInstalls,
+      collectConfiguredPluginReferencePaths,
+      gitInstallProtectPaths,
+    } = await import("./retired-git-installs.js");
+    const { getRuntimeConfigSnapshot } = await import("../config/runtime-snapshot.js");
     const { getActivePluginRegistry } = await import("./runtime.js");
     const retired = await cleanupRetiredGitPluginInstalls({
       env,
       pluginIds,
+      installOwners,
       protectPaths: gitInstallProtectPaths({
         installPaths: Object.values(metadata.index.installRecords ?? {}).map(
           (record) => record.installPath,
         ),
         plugins: getActivePluginRegistry()?.plugins,
+        extra: collectConfiguredPluginReferencePaths([config, getRuntimeConfigSnapshot()]),
       }),
       assertCurrent: beforePersistentApply,
+      beforePersistentApply,
     });
     return {
       pluginIds: resolved.map((target) => target.pluginId),

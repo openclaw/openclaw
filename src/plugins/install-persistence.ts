@@ -532,12 +532,8 @@ async function persistPluginInstallOwned(
           sourceDigests: source?.sourceDigests ?? {},
           write: receipt,
         });
-        await refreshManagedPluginMetadata({
-          config: next,
-          assertCurrent: params.beforePersistentApply,
-        });
-        // The record now names the new checkout. Keep the old Git directory until
-        // activation finishes; a drain failure must still be able to retire it later.
+        // The record now names the new checkout. Record the old Git directory
+        // before metadata refresh so a later failure can still retire it.
         if (replacedInstallRemoval?.cleanup?.kind === "git") {
           await rememberRetiredGitPluginInstall({
             pluginId: params.pluginId,
@@ -545,6 +541,10 @@ async function persistPluginInstallOwned(
             env: params.env,
           });
         }
+        await refreshManagedPluginMetadata({
+          config: next,
+          assertCurrent: params.beforePersistentApply,
+        });
         // Publish and drain the previous generation before removing its source files.
         await lease.assertOwned();
         await params.applyRuntime?.({
