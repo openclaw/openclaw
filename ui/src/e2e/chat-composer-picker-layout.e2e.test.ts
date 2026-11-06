@@ -95,10 +95,10 @@ suite.define(() => {
   });
 
   it.each(["chromium", "webkit"] as const)(
-    "keeps the mobile permission menu content-sized when anchored popovers stretch in %s",
+    "centers the mobile permission menu with tight rows and working selection in %s",
     async (engine) => {
       const options = {
-        viewport: { width: 393, height: 720 },
+        viewport: { width: 320, height: 720 },
         isMobile: true,
         hasTouch: true,
         serviceWorkers: "block" as const,
@@ -110,6 +110,7 @@ suite.define(() => {
       const page = await context.newPage();
       page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
       try {
+        await page.emulateMedia({ reducedMotion: "reduce" });
         const session = createControlUiSessionRow("agent:main:main", "Main", 1, {
           permissionMode: "guarded",
         });
@@ -118,37 +119,50 @@ suite.define(() => {
           sessionKey: session.key,
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
-        // Emulation of the reported iOS Safari geometry: the popover block size resolves
-        // as auto and position-area `normal` alignment as stretch. Author rules still win.
-        await page.addStyleTag({
-          content: ":where(.oc-overlay) { height: auto; align-self: stretch; }",
-        });
-        await page.locator(".agent-chat__input textarea").click();
+        for (const width of [320, 390]) {
+          await page.setViewportSize({ width, height: 720 });
+          await page.locator(".agent-chat__input textarea").click();
+          const trigger = page.locator("[data-chat-permission-select]");
+          await trigger.click();
+          const panel = page.locator(".chat-controls__permission-menu:popover-open");
+          const rows = panel.locator("[data-chat-permission-option]");
+          await expect.poll(() => rows.count()).toBe(5);
+          const geometry = await panel.evaluate((element) => {
+            const box = element.getBoundingClientRect();
+            const rowBoxes = [...element.querySelectorAll("[data-chat-permission-option]")].map(
+              (row) => row.getBoundingClientRect(),
+            );
+            return {
+              center: box.x + box.width / 2,
+              bottom: box.bottom,
+              gaps: rowBoxes.slice(1).map((row, index) => row.top - rowBoxes[index]!.bottom),
+              rowsBottom: rowBoxes.at(-1)!.bottom,
+            };
+          });
+          const triggerBox = (await trigger.boundingBox())!;
+          expect(Math.abs(geometry.center - width / 2)).toBeLessThanOrEqual(1);
+          expect(Math.max(...geometry.gaps)).toBeLessThanOrEqual(4);
+          expect(geometry.bottom - geometry.rowsBottom).toBeLessThanOrEqual(12);
+          expect(geometry.bottom).toBeLessThanOrEqual(triggerBox.y);
+          expect(triggerBox.y - geometry.bottom).toBeLessThanOrEqual(12);
+
+          await page.keyboard.press("Escape");
+          await panel.waitFor({ state: "hidden" });
+        }
         const trigger = page.locator("[data-chat-permission-select]");
         await trigger.click();
         const panel = page.locator(".chat-controls__permission-menu:popover-open");
-        const rows = panel.locator("[data-chat-permission-option]");
-        await expect.poll(() => rows.count()).toBe(5);
-        const geometry = await panel.evaluate((element) => {
-          const box = element.getBoundingClientRect();
-          const rowBoxes = [...element.querySelectorAll("[data-chat-permission-option]")].map(
-            (row) => row.getBoundingClientRect(),
-          );
-          return {
-            bottom: box.bottom,
-            gaps: rowBoxes.slice(1).map((row, index) => row.top - rowBoxes[index]!.bottom),
-            rowsBottom: rowBoxes.at(-1)!.bottom,
-          };
-        });
-        const triggerBox = (await trigger.boundingBox())!;
-        expect(Math.max(...geometry.gaps)).toBeLessThanOrEqual(4);
-        expect(geometry.bottom - geometry.rowsBottom).toBeLessThanOrEqual(12);
-        expect(geometry.bottom).toBeLessThanOrEqual(triggerBox.y);
-        expect(triggerBox.y - geometry.bottom).toBeLessThanOrEqual(12);
-
         const patch = { key: session.key, permissionMode: "workspace" };
         await panel.locator('[data-chat-permission-option="workspace"]').click();
         await gateway.waitForRequest("sessions.patch", { match: patch });
+        await panel.waitFor({ state: "hidden" });
+        expect(await trigger.evaluate((node) => node === document.activeElement)).toBe(true);
+        await trigger.press("Enter");
+        await panel.waitFor();
+        await page.keyboard.press("3");
+        await gateway.waitForRequest("sessions.patch", {
+          match: { key: session.key, permissionMode: "guarded" },
+        });
       } finally {
         await (engine === "chromium" ? suite.closeBrowserContext(context) : context.close());
       }
