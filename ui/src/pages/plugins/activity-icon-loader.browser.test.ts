@@ -181,9 +181,9 @@ describe.runIf("__vitest_browser__" in globalThis)("plugin activity icon decoder
     onTestFinished,
   }) => {
     const fetch = vi.spyOn(globalThis, "fetch");
-    for (const [pluginId, transform] of [
-      ["ordinary-transform", "translate(1 2) scale(1.5)"],
-      ["long-transform", "scale(1) ".repeat(40)],
+    for (const { pluginId, transform } of [
+      { pluginId: "ordinary-transform", transform: "translate(1 2) scale(1.5)" },
+      { pluginId: "long-transform", transform: "scale(1) ".repeat(40) },
     ]) {
       fetch.mockImplementation(
         async () =>
