@@ -64,6 +64,29 @@ it("changes minute labels only at their boundary and applies timing changes with
   expect(view.label()).toBe("3m 2s");
 });
 
+it("releases an offscreen clock and catches up immediately when it returns", async () => {
+  const view = mount({ startMs: NOW - 5_000 });
+  expect(view.label()).toBe("5s");
+  expect(vi.getTimerCount()).toBe(1);
+
+  view.update({ paused: true });
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(vi.getTimerCount()).toBe(0);
+  expect(view.label()).toBe("5s");
+
+  view.update({ paused: false });
+  expect(view.label()).toBe("1m 5s");
+  expect(vi.getTimerCount()).toBe(1);
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(view.label()).toBe("1m 6s");
+
+  view.update({ paused: true, endMs: NOW + 5_000 });
+  expect(view.label()).toBe("10s");
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(view.label()).toBe("10s");
+  expect(vi.getTimerCount()).toBe(0);
+});
+
 it.each([
   [{ startMs: NOW - 60_000 }, "1m", "1m 0s"],
   [{ startMs: NOW - 3_665_000 }, "1h 1m", "1h 1m 5s"],

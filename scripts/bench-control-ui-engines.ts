@@ -46,6 +46,12 @@ import {
   type EngineScenario,
 } from "./lib/control-ui-engine-boot-scenarios.ts";
 import { createEngineCompletedRunScenarios } from "./lib/control-ui-engine-completed-run-scenarios.ts";
+import {
+  createEngineIdleScenarios,
+  isEngineIdleScenario,
+  readEngineIdleState,
+  verifyEngineIdleClocks,
+} from "./lib/control-ui-engine-idle-scenarios.ts";
 import { createEngineMemoryScenarios } from "./lib/control-ui-engine-memory-scenarios.ts";
 import { createEngineMemoryCollector } from "./lib/control-ui-engine-memory.ts";
 import {
@@ -84,6 +90,7 @@ import {
   type ControlUiPageObservation,
 } from "./lib/control-ui-page-observer.ts";
 import { installControlUiResourceCounts } from "./lib/control-ui-resource-counts.ts";
+import { launchTalkObservationBrowser } from "./lib/control-ui-talk-fixture.ts";
 import {
   createWorkboardResourceFixture,
   prepareWorkboardResourceSource,
@@ -278,6 +285,17 @@ type Observation = {
   native?: ReturnType<typeof summarizeControlUiNativeTrace>;
   computedTheme?: Record<string, string>;
   layers?: ControlUiLayerAudit;
+  idle?: {
+    before: Awaited<ReturnType<typeof readEngineIdleState>>;
+    after?: Awaited<ReturnType<typeof readEngineIdleState>>;
+    revealed?: Awaited<ReturnType<typeof readEngineIdleState>>;
+    fixture: { sessions: number; transcriptMessages: number };
+    clockRecovery?: Awaited<ReturnType<typeof verifyEngineIdleClocks>>;
+    taskMsPerMinute?: number | null;
+    scriptMsPerMinute?: number | null;
+    resourceIntervalMs?: number;
+    layerIntervalMs?: number;
+  };
   requests?: Record<string, number>;
   evidence?: InteractionEvidence;
   navigationPreloads?: InteractionNavigationPreloads;
@@ -334,6 +352,7 @@ try {
     ...createEngineBootScenarios(servers[0]!.server.baseUrl),
     ...createEngineActionScenarios(),
     ...createEngineCompletedRunScenarios(servers[0]!.server.baseUrl),
+    ...createEngineIdleScenarios(),
     ...createChatComposerScenarios(),
     ...createChatMessageScenarios(),
     ...createChatPanelScenarios().map((scenario) =>
@@ -399,6 +418,9 @@ try {
           "./lib/control-ui-cpu-census.ts",
           "./lib/control-ui-engine-boot-scenarios.ts",
           "./lib/control-ui-engine-completed-run-scenarios.ts",
+          "./lib/control-ui-engine-idle-scenarios.ts",
+          "./lib/control-ui-resource-counts.ts",
+          "./lib/control-ui-talk-fixture.ts",
           "./lib/control-ui-long-session-probe.ts",
           "../ui/src/test-helpers/control-ui-team-scale-history-fixture.ts",
           "./lib/control-ui-chat-composer-scenarios.ts",
@@ -527,19 +549,41 @@ try {
               await writeJson("observations.json", observations);
               continue;
             }
+            if (scenario.visibility === "hidden" && engine === "webkit") {
+              observation.status = "skipped";
+              observation.skipReason =
+                "WebKit has no supported native headless hiding API; no simulated visibility proof.";
+              observations.push(observation);
+              await writeJson(`${artifactPrefix}.json`, observation);
+              await writeJson("observations.json", observations);
+              continue;
+            }
             if (scenario.memory || !browsers.get(engine)!.isConnected()) {
               await browsers.get(engine)!.close();
               browsers.set(engine, await launchEngine(engine));
             }
-            const observationBrowser = browsers.get(engine)!;
-            const context = await observationBrowser.newContext({
-              viewport: { width: viewport.width, height: viewport.height },
-              isMobile: viewport.name === "mobile",
-              hasTouch: viewport.name === "mobile",
-              serviceWorkers: "block",
-              colorScheme: "light",
-            });
+            // Use the existing runner-owned full Chrome helper for both idle states.
+            // Normal Playwright contexts force visibility even after minimization.
+            const nativeBrowser =
+              (isEngineIdleScenario(scenario) || scenario.visibility === "hidden") &&
+              engine === "chromium"
+                ? await launchTalkObservationBrowser(artifactDir, false)
+                : undefined;
+            const observationBrowser = nativeBrowser?.browser ?? browsers.get(engine)!;
+            const context =
+              nativeBrowser?.context ??
+              (await observationBrowser.newContext({
+                viewport: { width: viewport.width, height: viewport.height },
+                isMobile: viewport.name === "mobile",
+                hasTouch: viewport.name === "mobile",
+                serviceWorkers: "block",
+                colorScheme: "light",
+              }));
             const page = await context.newPage();
+            if (nativeBrowser) {
+              await page.setViewportSize(viewport);
+              await page.emulateMedia({ colorScheme: "light" });
+            }
             page.setDefaultTimeout(scenario.id.startsWith("chat-actions-") ? 15_000 : 30_000);
             const traceAction = values.trace && !scenario.navigation;
             const errors: Array<{ message: string; phase: string }> = [];
@@ -551,6 +595,7 @@ try {
             let layerAudit: Awaited<ReturnType<typeof createControlUiLayerAudit>> | undefined;
             let memory: Awaited<ReturnType<typeof createEngineMemoryCollector>> | undefined;
             let throttle: Awaited<ReturnType<typeof context.newCDPSession>> | undefined;
+            let minimizedWindow: number | undefined;
             try {
               if (cpuThrottle !== 1) {
                 throttle = await context.newCDPSession(page);
@@ -561,7 +606,7 @@ try {
                 await installControlUiPageObserver(page);
               }
               await page.addInitScript(installInteractionNavigationPreloadObserver);
-              if (scenario.memory) {
+              if (scenario.memory || isEngineIdleScenario(scenario)) {
                 await page.addInitScript(installControlUiResourceCounts);
               }
               await page.addInitScript(() => performance.setResourceTimingBufferSize(2048));
@@ -687,12 +732,56 @@ try {
                 );
               }
               const actionTiming =
-                !scenario.navigation && !scenario.memory
+                !scenario.navigation &&
+                !scenario.memory &&
+                !isEngineIdleScenario(scenario) &&
+                scenario.visibility !== "hidden"
                   ? await page.evaluateHandle(createEngineActionTiming, traceAction)
                   : undefined;
               if (values["native-audit"]) {
                 layerAudit = await createControlUiLayerAudit(page);
-                await layerAudit.capture();
+              }
+              if (scenario.visibility === "hidden") {
+                const visibility = await context.newCDPSession(page);
+                try {
+                  const { windowId } = await visibility.send("Browser.getWindowForTarget");
+                  minimizedWindow = windowId;
+                  await visibility.send("Browser.setWindowBounds", {
+                    windowId,
+                    bounds: { windowState: "minimized" },
+                  });
+                  await page.waitForFunction(
+                    () => document.visibilityState === "hidden",
+                    undefined,
+                    { polling: 50, timeout: 5_000 },
+                  );
+                } finally {
+                  await visibility.detach();
+                }
+              }
+              // Hide first so minimizing does not become part of hidden-idle paint counts.
+              // Creation above obtains the compositor inventory while a surface is visible.
+              await layerAudit?.capture();
+              if (isEngineIdleScenario(scenario)) {
+                const idleBefore = await readEngineIdleState(page);
+                if (
+                  idleBefore.document.visibility !== (scenario.visibility ?? "visible") ||
+                  idleBefore.document.gatewayPhase !== "connected"
+                ) {
+                  throw new Error(
+                    "Idle requires the requested native visibility and a connected Gateway",
+                  );
+                }
+                observation.idle = {
+                  before: idleBefore,
+                  fixture: {
+                    sessions: fixture.sessions.length,
+                    transcriptMessages: Object.values(fixture.sessionTranscripts ?? {}).reduce(
+                      (total, transcript) => total + transcript.messages.length,
+                      0,
+                    ),
+                  },
+                };
               }
               measurement = await startEngineMeasurement(page, engine, {
                 trace: values.trace,
@@ -708,7 +797,9 @@ try {
               }
               const timeOrigin = actionTiming
                 ? await actionTiming.evaluate((timing) => timing.start())
-                : await page.evaluate(() => performance.timeOrigin);
+                : isEngineIdleScenario(scenario)
+                  ? 0
+                  : await page.evaluate(() => performance.timeOrigin);
               if (memory) {
                 // Bind checkpoints to this document, independently of wall-clock adjustments.
                 await page.evaluate((identity) => {
@@ -769,7 +860,9 @@ try {
                 };
               }
               observation.scenarioMs = performance.now() - start;
-              observation.settleFrameIntervalMs = await frames(page);
+              if (!isEngineIdleScenario(scenario) && scenario.visibility !== "hidden") {
+                observation.settleFrameIntervalMs = await frames(page);
+              }
               observation.wallMs = performance.now() - start;
               observation.settleWaitMs = observation.wallMs - observation.scenarioMs;
               if (scenario.id.startsWith("page-")) {
@@ -783,13 +876,53 @@ try {
               measurement = undefined;
               const captured = await activeMeasurement.stop();
               observation.metrics = captured.metrics;
+              if (observation.idle) {
+                observation.idle.after = await readEngineIdleState(page);
+                const { before: idleBefore, after } = observation.idle;
+                if (
+                  after.document.visibility !== idleBefore.document.visibility ||
+                  after.document.gatewayPhase !== "connected" ||
+                  after.document.route !== idleBefore.document.route
+                ) {
+                  throw new Error("Idle changed route, Gateway connection, or native visibility");
+                }
+                const factor = 60_000 / observation.wallMs;
+                observation.idle.taskMsPerMinute =
+                  captured.metrics.taskMs === null ? null : captured.metrics.taskMs * factor;
+                observation.idle.scriptMsPerMinute =
+                  captured.metrics.scriptMs === null ? null : captured.metrics.scriptMs * factor;
+                // Counter endpoints include profiler draining; do not divide them by CPU's window.
+                observation.idle.resourceIntervalMs =
+                  after.document.atMs - idleBefore.document.atMs;
+              }
               if (values["native-audit"]) {
+                observation.layers = await layerAudit!.finish();
+                if (observation.idle) {
+                  observation.idle.layerIntervalMs =
+                    Date.parse(observation.layers.after.capturedAt) -
+                    Date.parse(observation.layers.before.capturedAt);
+                }
                 await writeJson(`${artifactPrefix}.native.json`, captured);
                 observation.native = summarizeControlUiNativeTrace(
                   captured.timeline ?? [],
                   captured.profile,
                 );
-                observation.layers = await layerAudit!.finish();
+              }
+              if (minimizedWindow !== undefined) {
+                const visibility = await context.newCDPSession(page);
+                try {
+                  await visibility.send("Browser.setWindowBounds", {
+                    windowId: minimizedWindow,
+                    bounds: { windowState: "normal" },
+                  });
+                  await page.waitForFunction(() => document.visibilityState === "visible");
+                  await frames(page);
+                  if (observation.idle) {
+                    observation.idle.revealed = await readEngineIdleState(page);
+                  }
+                } finally {
+                  await visibility.detach();
+                }
               }
               if (values["native-audit"] || scenario.id === "theme-switch-cycles") {
                 observation.computedTheme = await page.evaluate(() => {
@@ -800,6 +933,14 @@ try {
                       .map((name) => [name, styles.getPropertyValue(name).trim()]),
                   );
                 });
+              }
+              if (scenario.id.startsWith("idle-sidebar-clock-") && observation.idle) {
+                if (pair === 0) {
+                  await page.screenshot({
+                    path: path.join(artifactDir, `${artifactPrefix}.before-scroll.png`),
+                  });
+                }
+                observation.idle.clockRecovery = await verifyEngineIdleClocks(page, gateway);
               }
               if (values["cpu-profile"]) {
                 // SAFETY: This mode is Chromium-only; Profiler.stop returns V8's
@@ -901,6 +1042,7 @@ try {
                   observation.retiredProcess = processMemory(observationBrowser);
                 }
               } finally {
+                await nativeBrowser?.close();
                 if (scenario.memory) {
                   await observationBrowser.close();
                 }

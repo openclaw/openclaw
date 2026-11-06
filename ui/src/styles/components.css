@@ -3172,9 +3172,14 @@ select.data-table-pagination__size {
 }
 
 .session-glyph__ring--queued,
-.session-run-indicator--offscreen,
 .session-glyph__trace--queued .session-glyph__trace-run {
   animation-play-state: paused;
+}
+
+/* A paused transform still promotes offscreen rows and their overlapping labels.
+   Restart when the row returns instead of retaining those compositor layers. */
+.session-run-indicator--offscreen {
+  animation: none;
 }
 
 .session-glyph__ring--background,
