@@ -1,0 +1,2 @@
+1259
+# Runtime skill-selection audit observation tests: companion table persistence, hidden-run attribution, bounded pruning, and gateway audit readback.
