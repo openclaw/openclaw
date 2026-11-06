@@ -238,12 +238,17 @@ function inspectPrivilegedDestination(filePath: string): {
     "  const st = fs.statSync(cur);",
     "  existing = { uid: st.uid, gid: st.gid, mode: st.mode & 0o7777 };",
     "} catch (error) {}",
-    'const listed = require("node:child_process").spawnSync("/bin/ls", ["-lde", cur], { encoding: "utf-8" });',
-    "if (listed.status !== 0) {",
-    '  process.stderr.write((listed.stderr || "ls -lde failed") + "\\n");',
-    "  process.exit(1);",
+    // A destination that does not exist yet is a privileged first creation:
+    // there is no policy to capture, and ls would fail on the missing path.
+    "let acl = [];",
+    "if (existing) {",
+    '  const listed = require("node:child_process").spawnSync("/bin/ls", ["-lde", cur], { encoding: "utf-8" });',
+    "  if (listed.status !== 0) {",
+    '    process.stderr.write((listed.stderr || "ls -lde failed") + "\\n");',
+    "    process.exit(1);",
+    "  }",
+    '  acl = String(listed.stdout || "").split("\\n").map((line) => line.trim()).filter((line) => /^\\d+:\\s/.test(line)).map((line) => line.replace(/^\\d+:\\s*/, ""));',
     "}",
-    'const acl = String(listed.stdout || "").split("\\n").map((line) => line.trim()).filter((line) => /^\\d+:\\s/.test(line)).map((line) => line.replace(/^\\d+:\\s*/, ""));',
     "process.stdout.write(JSON.stringify({ target: cur, existing, acl }));",
   ].join("");
   const inspected = spawnSync("sudo", [process.execPath, "-e", script, filePath], {
