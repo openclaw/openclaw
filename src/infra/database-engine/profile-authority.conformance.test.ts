@@ -3,9 +3,9 @@ import { Client } from "pg";
 import { describe, expect, it, vi } from "vitest";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { sessionSqlFixture } from "../../commands/doctor-session-sqlite.sql.test-support.js";
+import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
 import { authorizationClient } from "../../gateway/server-methods.authorization.test-support.js";
 import { preparePersonalProfileAction } from "../../gateway/server-methods/personal-profile-authorization.js";
-import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -34,6 +34,7 @@ import type { BridgeRequest } from "../postgres-sync/protocol.js";
 import { isPostgresSqlConnection } from "../sql-connection.js";
 import { withEngineStoreAdmission as admit } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
+import { getPostgresPhysicalFacts } from "./physical-facts.js";
 
 // Drop only an acknowledged real COMMIT reply; every other bridge operation stays native.
 vi.mock("node:worker_threads", async (importOriginal) => {
@@ -64,11 +65,10 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           updatedAt: person.updatedAt,
         },
       });
-      const context = {
+      const context = createDirectChatContext({
         getRuntimeConfig: () => ({}),
-        getClientConnIds: (filter?: (candidate: typeof client) => boolean) =>
-          new Set(!filter || filter(client) ? [connId] : []),
-      } as GatewayRequestContext;
+        getClientConnIds: (filter) => new Set(!filter || filter(client) ? [connId] : []),
+      });
       return preparePersonalProfileAction({ client, context }, "operator.write");
     };
     const custody = (subject: string) =>
@@ -107,7 +107,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         const { db } = admit(() => openOpenClawStateDatabase());
         const execute = db.exec.bind(db);
         let commits = 0;
-        using _commit = vi.spyOn(db, "exec").mockImplementation((sql) => {
+        using _ = vi.spyOn(db, "exec").mockImplementation((sql) => {
           if (sql === "COMMIT") {
             commits++;
             expect([bound(), readBound(), readSettled()]).toEqual([false, "pending", "pending"]);
@@ -242,9 +242,13 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         if (!isPostgresSqlConnection(db)) {
           throw new Error("Expected the configured PostgreSQL state owner");
         }
+        const physical = admit(() => getPostgresPhysicalFacts(db));
+        if (!physical) {
+          throw new Error("Expected admitted PostgreSQL state metadata");
+        }
         const close = db.close.bind(db);
         let beforeClose: string | undefined;
-        using _closed = vi.spyOn(db, "close").mockImplementation(() => {
+        using _ = vi.spyOn(db, "close").mockImplementation(() => {
           beforeClose = readSettled();
           return close();
         });
@@ -289,7 +293,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         await observer.connect();
         try {
           const durable = await observer.query(
-            `SELECT role FROM "${db.schema}".user_profiles WHERE id = $1`,
+            `SELECT role FROM "${physical.namespace}".user_profiles WHERE id = $1`,
             [person.id],
           );
           expect(durable.rows).toEqual([{ role: "member" }]);
