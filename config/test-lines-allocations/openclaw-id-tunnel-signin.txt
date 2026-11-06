@@ -5,5 +5,5 @@
 # Includes canonical OCID HTTP/WS profile, live admission/run-role and ambient-origin regressions.
 # Includes peer-bound restart, native/sandbox streams, HTTP roles, real condition effects and script-source retention.
 # Includes native-command source, Gateway-stop lifetime, cross-operator control and standing-ceiling regressions.
-# Includes same-profile device timing edits, binding-writer start order, plugin-route principal, child exit and tunnel node-pairing regressions.
-5131
+# Includes same-profile device timing edits, binding-writer start order, plugin-route principal, child exit, tunnel node-pairing and binding-loader regressions.
+5167
