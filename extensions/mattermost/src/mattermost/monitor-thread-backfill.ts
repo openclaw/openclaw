@@ -106,7 +106,9 @@ export function createMattermostThreadBackfill(params: {
         post.id === turn.currentPostId ||
         post.channel_id !== turn.channelId ||
         (post.id !== turn.threadRootId && post.root_id !== turn.threadRootId) ||
-        post.type ||
+        // Person-authored posts can carry non-system types (e.g. "slack_attachment"
+        // for a link-preview card); only system posts are excluded from history.
+        post.type?.startsWith("system_") ||
         !post.user_id ||
         typeof post.create_at !== "number" ||
         post.create_at > turn.currentPostTimestamp ||

@@ -130,6 +130,34 @@ it("retains host admission for an ordinary post in its final thread session", as
   });
 });
 
+it("processes person posts that carry a slack_attachment type", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = setup({
+      requireMention: false,
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["sender"],
+    });
+    await withRegisteredChannelIngress(
+      { plugin: mattermostPlugin, config: f.monitor.cfg, setRuntime: setMattermostRuntime },
+      async (runtime) => {
+        f.core.channel.inbound.ingress = runtime.channel.inbound.ingress;
+        f.core.channel.inbound.buildContext = runtime.channel.inbound.buildContext;
+        f.core.channel.routing.resolveAgentRoute = runtime.channel.routing.resolveAgentRoute;
+        // A link-preview card stores the author's post with type
+        // "slack_attachment"; it is a person message, not a system post.
+        await f.receivePost({
+          type: "slack_attachment",
+          props: { attachments: JSON.stringify([{ text: "preview card" }]) },
+        });
+        expect(dispatch).toHaveBeenCalledTimes(1);
+        expect(f.monitor.logVerboseMessage).not.toHaveBeenCalledWith(
+          "mattermost: drop post (system post type=slack_attachment)",
+        );
+      },
+    );
+  });
+});
+
 const policy = {
   implicitMentions: { threadParticipation: true },
   accounts: { work: { implicitMentions: { threadParticipation: false } } },
