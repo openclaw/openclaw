@@ -11,7 +11,7 @@ import path from "node:path";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { expect, it, describe, afterEach } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { type NativeRuntimeConfig } from "../worker/native-runtime-config.js";
+import type { NativeRuntimeConfig } from "../worker/native-runtime-config.js";
 import { createNativeRuntime } from "../worker/native-runtime.js";
 import { nativeProviderFixture, closeNativeServers } from "../worker/native-worker.test-support.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
