@@ -227,9 +227,6 @@ function toSlashCommand(command: CommandLike, source: "local" | "remote"): Slash
     tier: source === "local" ? mapTier(command) : "standard",
     ...(resolvedSource ? { source: resolvedSource } : {}),
     ...(command.skillDisplayName ? { skillDisplayName: command.skillDisplayName } : {}),
-    ...(command.skillModelVisible !== undefined
-      ? { skillModelVisible: command.skillModelVisible }
-      : {}),
     ...(command.skillReferenceable !== undefined
       ? { skillReferenceable: command.skillReferenceable }
       : {}),
@@ -302,7 +299,6 @@ export function buildSlashCommandsFromEntries(entries: CommandEntry[]): SlashCom
         category: entry.category,
         source: entry.source,
         skillDisplayName: entry.skillDisplayName?.trim() || undefined,
-        skillModelVisible: entry.skillModelVisible,
         skillReferenceable: entry.skillReferenceable,
         clientPresentation: entry.source === "plugin" ? entry.clientPresentation : undefined,
       };
