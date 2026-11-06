@@ -495,8 +495,12 @@ export async function authorizeGatewayConnectDevice(
             : {}),
           ...(resolution ? { waitForResolution: true } : {}),
           deviceId: device.id,
-          requestedRole: role,
-          requestedScopes: scopes,
+          // Approval grants the merged pending request, which can carry an earlier role.
+          requestedRole:
+            (pairing.request.roles ?? [pairing.request.role]).find(
+              (pendingRole) => pendingRole && !approvedRoles.includes(pendingRole),
+            ) ?? role,
+          requestedScopes: pairing.request.scopes ?? scopes,
           ...(approvedRoles.length > 0 ? { approvedRoles } : {}),
           ...(approvedScopes.length > 0 ? { approvedScopes } : {}),
         });
