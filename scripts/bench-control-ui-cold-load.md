@@ -1058,7 +1058,28 @@ node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
   --output .artifacts/streaming-profile
 ```
 
-This workload delivers the 645-delta Markdown reply at 150 deltas/s in bursts
+To isolate the first answer token, select `--steps streaming-onset` in that
+companion. It starts from a settled active run over 2,000 rich history messages;
+`streaming-onset-short` uses 400. Onset delivers one nonempty answer delta.
+`streaming-working-preparation` instead starts from the same settled history
+without an active run, then delivers an empty first delta and ends at the new
+working-indicator mutation. This measures preparation before the answer token,
+including adoption of the run, separately from onset. It does not measure sending
+a user message. Both phases retain the pre-action transcript rows for comparison.
+The browser-local `applicationMs` ends at the matching transcript mutation;
+`eventToFrameMs` includes two subsequent animation frames, not paint. Chromium
+thread CPU includes the complete action and settlement. Use separate traced
+runs for native task attribution and untraced rotated comparisons with an
+unchanged bundle control for timing claims.
+
+For qualification, select
+`--steps streaming-onset,streaming-working-preparation,streaming-mixed-fast,session-switch,chat-typing`
+with `--compare-bundle-dir <head> --control-bundle-dir <base> --pairs 20
+--engines chromium,webkit --viewport desktop`. The control repeats the base in
+each rotated triplet. `session-switch` shows both retained 400-message transcripts
+in turn; `chat-typing` checks 26 native typed characters without sending a message.
+
+`streaming-mixed-fast` delivers the 645-delta Markdown reply at 150 deltas/s in bursts
 of five, with reasoning, 24 tool calls and results, and an image arriving midway.
 It requires `--viewport desktop`: mobile's modal navigation drawer prevents
 simultaneous composer and sidebar input.
