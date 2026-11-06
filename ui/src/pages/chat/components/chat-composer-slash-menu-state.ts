@@ -142,11 +142,7 @@ export function createSlashMenu() {
     draft: string,
   ) {
     const selectedArg =
-      state.slashMenuOpen &&
-      state.slashMenuMode === "args" &&
-      !state.slashMenuCompletion?.inline &&
-      state.slashMenuCommand?.name === command.name &&
-      state.slashMenuArgDraft === draft
+      state.slashMenuMode === "args" && state.slashMenuArgDraft === draft
         ? state.slashMenuArgItems[state.slashMenuIndex]
         : undefined;
     state.slashMenuArgDraft = draft;
@@ -154,10 +150,7 @@ export function createSlashMenu() {
     state.slashMenuCommand = command;
     state.slashMenuArgItems = args;
     state.slashMenuOpen = true;
-    state.slashMenuIndex = Math.max(
-      0,
-      args.findIndex((arg) => arg === selectedArg),
-    );
+    state.slashMenuIndex = Math.max(0, args.indexOf(selectedArg ?? ""));
     state.slashMenuItems = [];
   }
 
