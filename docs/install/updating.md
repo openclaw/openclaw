@@ -53,6 +53,14 @@ backup.
 
 ## Update implementation contract
 
+Interactive failed-update triage preserves the invoking operator's `PATH`, home,
+and authentication environment before candidate admission enters the managed
+Gateway environment. Repair agents still receive the latest target installation's
+state, config, and workspace selectors and require launch confirmation. The
+installed updater must contain this fix; a downloaded candidate cannot repair
+the older updater's already-captured environment. No schema or config migration
+is required.
+
 SQLite header-probe timeouts report the discovery path count and link to the
 manual package-manager hop. Probe batching, backup refusal, and rollback safety
 are unchanged. This diagnostic requires the updater performing discovery to
@@ -1885,6 +1893,11 @@ upstream source, respecting the repository's ref mappings and exclusions. It doe
 not download unrelated branches or change the repository's shallow boundary.
 Stable and beta target inspection fetches release tags only, without refreshing
 remote branches.
+An implicit dev-channel switch from a detached release-tag checkout can use the
+fetched `main` commit even when the configured fetch refspecs only map tags. The
+updater leaves those mappings unchanged and still honors explicit branch exclusions.
+When it creates `main`, it records the selected remote and merge source so later
+dev updates remain managed. It does not take over an existing unmanaged `main`.
 
 On source installs, Doctor and plugin updates keep plugins built with the host.
 A registry plugin with the same version string can target a different SDK, so

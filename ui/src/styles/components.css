@@ -1841,7 +1841,8 @@ openclaw-tooltip:last-child > .btn.refresh-button {
   align-self: center;
 }
 
-.code-block-wrapper--long :is(.code-block-copy, .code-block-wrap) {
+.code-block-wrapper--long .code-block-copy,
+.code-block-wrapper--long .code-block-wrap {
   position: sticky;
   top: 4px;
   z-index: 1;

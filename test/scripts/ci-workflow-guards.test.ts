@@ -2888,7 +2888,12 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       jobId?: string;
       jobCondition?: string;
     }> = [];
-    const rubySetups: Array<{ file: string; step: WorkflowStep }> = [];
+    const rubySetups: Array<{
+      file: string;
+      step: WorkflowStep;
+      jobId?: string;
+      jobCondition?: string;
+    }> = [];
     for (const file of [
       ...findYamlFiles(".github/workflows"),
       ...findYamlFiles(".github/actions"),
@@ -2911,7 +2916,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
             directCaches.push({ file, step, jobId, jobCondition });
           }
           if (step.uses?.startsWith("ruby/setup-ruby@")) {
-            rubySetups.push({ file, step });
+            rubySetups.push({ file, step, jobId, jobCondition });
           }
           if (
             step.uses === "./.github/actions/setup-node-env" ||
@@ -2925,11 +2930,20 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       }
     }
     expect(rubySetups.length).toBeGreaterThan(0);
-    for (const { file, step } of rubySetups) {
+    for (const { file, step, jobId, jobCondition } of rubySetups) {
       const bundlerCache = step.with?.["bundler-cache"] ?? false;
       expect([false, true, "false", "true"], `${file}: ${step.name}`).toContain(bundlerCache);
       if (bundlerCache === true || bundlerCache === "true") {
-        expect(String(step.if), `${file}: ${step.name}`).toContain("cache_write_allowed == 'true'");
+        if (file === ".github/workflows/ios-store-release.yml" && jobId === "release") {
+          expectIncludes(jobCondition, [
+            "github.repository == 'openclaw/openclaw'",
+            "github.ref == 'refs/heads/main'",
+          ]);
+        } else {
+          expect(String(step.if), `${file}: ${step.name}`).toContain(
+            "cache_write_allowed == 'true'",
+          );
+        }
       }
     }
     expect(callers.length).toBeGreaterThan(0);

@@ -8,6 +8,9 @@ export const databaseWorkerExtensionTestRoots = [
 
 export const databaseWorkerExtensionTestFiles = [
   "extensions/google/research-gateway.test.ts",
+  "extensions/deep-research/src/jobs.test.ts",
+  "extensions/deep-research/src/jobs.cancel.test.ts",
+  "extensions/deep-research/src/jobs.wake.test.ts",
   "extensions/alibaba/video-generation-provider.test.ts",
   "extensions/mcp-events/src/service.test.ts",
   "extensions/codex/src/conversation-binding.test.ts",
