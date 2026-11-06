@@ -237,13 +237,54 @@ enum ChatMarkdownPreprocessor {
         let lines = raw.replacingOccurrences(of: "\r\n", with: "\n").split(
             separator: "\n",
             omittingEmptySubsequences: false)
-        let filtered = lines.filter { line in
-            String(line).range(of: self.messageIdHintPattern, options: .regularExpression) == nil
+        let insideFences = self.fencedCodeLineFlags(lines)
+        let filtered = lines.enumerated().filter { index, line in
+            insideFences[index]
+                || String(line).range(of: self.messageIdHintPattern, options: .regularExpression) == nil
         }
         guard filtered.count != lines.count else {
             return raw
         }
-        return filtered.map(String.init).joined(separator: "\n")
+        return filtered.map(\.1).map(String.init).joined(separator: "\n")
+    }
+
+    /// Marks lines that belong to a fenced code block (the opening fence, its
+    /// body, and the closing fence). Literal timestamp prefixes and message-id
+    /// hints inside fenced code are user content, not chat metadata.
+    private static func fencedCodeLineFlags(_ lines: [Substring]) -> [Bool] {
+        var flags = [Bool](repeating: false, count: lines.count)
+        var fenceCharacter: Character?
+        var fenceLength = 0
+        for (index, rawLine) in lines.enumerated() {
+            let indentCount = rawLine.prefix { $0 == " " }.count
+            let trimmed = rawLine.dropFirst(indentCount)
+            if let openFence = fenceCharacter {
+                flags[index] = true
+                let closing = trimmed.prefix(fenceLength)
+                if closing.count == fenceLength,
+                   closing.allSatisfy({ $0 == openFence }),
+                   trimmed.dropFirst(fenceLength).allSatisfy({ $0 == " " || $0 == "\t" })
+                {
+                    fenceCharacter = nil
+                    fenceLength = 0
+                }
+                continue
+            }
+            // CommonMark: an opening fence is up to three spaces of indent
+            // followed by at least three identical ` or ~ characters.
+            guard indentCount < 4 else { continue }
+            let fenceRun = trimmed.prefix { $0 == "`" || $0 == "~" }
+            guard fenceRun.count >= 3,
+                  fenceRun.allSatisfy({ $0 == fenceRun.first })
+            else { continue }
+            let info = trimmed.dropFirst(fenceRun.count)
+            // Backtick fences cannot contain backticks in the info string.
+            if fenceRun.first == "`" && info.contains("`") { continue }
+            fenceCharacter = fenceRun.first
+            fenceLength = fenceRun.count
+            flags[index] = true
+        }
+        return flags
     }
 
     private static func stripInboundContextBlocks(_ raw: String) -> String {
@@ -278,8 +319,21 @@ enum ChatMarkdownPreprocessor {
     }
 
     private static func stripPrefixedTimestamps(_ raw: String) -> String {
-        let pattern = #"(?m)^\[[A-Za-z]{3}\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?\s+(?:GMT|UTC)[+-]?\d{0,2}\]\s*"#
-        return raw.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
+        guard raw.contains("[") else { return raw }
+        let lines = raw.split(separator: "\n", omittingEmptySubsequences: false)
+        let insideFences = self.fencedCodeLineFlags(lines)
+        var changed = false
+        let stripped = lines.enumerated().map { index, line -> Substring in
+            guard !insideFences[index] else { return line }
+            let replaced = line.replacingOccurrences(
+                of: #"\[[A-Za-z]{3}\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?\s+(?:GMT|UTC)[+-]?\d{0,2}\]\s*"#,
+                with: "",
+                options: .regularExpression)
+            if replaced != line { changed = true }
+            return replaced[...]
+        }
+        guard changed else { return raw }
+        return stripped.joined(separator: "\n")
     }
 
     private static func normalize(_ raw: String) -> String {

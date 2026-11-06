@@ -110,6 +110,45 @@ struct ChatMarkdownPreprocessorTests {
         #expect(result.images.isEmpty)
     }
 
+    @Test func preservesTimestampPrefixesAndMessageIdHintsInsideFencedCode() {
+        let markdown = """
+        ```text
+        [Fri 2026-11-06 12:34 UTC] job started
+        [message_id: example-42]
+        [Fri 2026-11-06 12:35 UTC] job finished
+        ```
+        """
+
+        let result = ChatMarkdownPreprocessor.preprocess(markdown: markdown)
+
+        #expect(result.cleaned == markdown)
+    }
+
+    @Test func preservesTimestampPrefixesInsideTildeFence() {
+        let markdown = """
+        ~~~
+        [Fri 2026-11-06 12:34 UTC] kept
+        ~~~
+        """
+
+        let result = ChatMarkdownPreprocessor.preprocess(markdown: markdown)
+
+        #expect(result.cleaned == markdown)
+    }
+
+    @Test func stillStripsTimestampPrefixesAndMessageIdHintsOutsideFences() {
+        let markdown = """
+        Intro
+        [Fri 2026-11-06 12:34 UTC] job started
+        [message_id: example-42]
+        job body
+        """
+
+        let result = ChatMarkdownPreprocessor.preprocess(markdown: markdown)
+
+        #expect(result.cleaned == "Intro\njob started\njob body")
+    }
+
     @Test func preservesImageSyntaxInsideInlineCode() {
         let markdown = "Use `![Logo](https://example.com/logo.png)` verbatim."
 
