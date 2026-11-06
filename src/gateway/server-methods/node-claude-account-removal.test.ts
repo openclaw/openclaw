@@ -2,6 +2,7 @@
 // arrive on its websocket. No test socket and no injected success result.
 import path from "node:path";
 import { expect, it } from "vitest";
+import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { withTestRunAdmission } from "../../agents/admitted-run-context.test-support.js";
 import { createApiKeyCredential } from "../../agents/auth-profiles/credential-fixtures.test-support.js";
 import {
@@ -14,12 +15,19 @@ import {
   createCliCredentialUseCheck,
 } from "../../agents/cli-runner/auth-profile-preparation-error.js";
 import { executeNodeClaudeRun } from "../../agents/cli-runner/execute-node-claude.js";
+import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import type { CliExecutionHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+  validateAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import { approveNodePairing, requestNodePairing } from "../../infra/device-pairing-node.js";
 import { NODE_AGENT_CLI_CLAUDE_RUN_COMMAND } from "../../infra/node-commands.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { pairDeviceIdentity } from "../device-authz.test-helpers.js";
+import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../method-scopes.js";
 import { captureGatewayKernel } from "../server.capture-kernel.test-support.js";
 import { connectGatewayClient } from "../test-helpers.e2e.js";
 import { installGatewayTestHooks, startServerWithClient } from "../test-helpers.js";
@@ -36,6 +44,21 @@ type InvokeFrame = { id?: string; nodeId?: string; command?: string };
 
 function successPayload() {
   return { exitCode: 0, stderrTail: "", truncated: false };
+}
+
+function approvalPayload() {
+  return {
+    approvalRequired: true,
+    security: "allowlist",
+    ask: "always",
+    systemRunPlan: {
+      argv: ["claude", "-p"],
+      commandText: "claude -p",
+      cwd: null,
+      agentId: "main",
+      sessionKey: "agent:main:account-trace",
+    },
+  };
 }
 
 it("traces paired-node Claude dispatch and account removal on a loopback Gateway", async () => {
@@ -71,6 +94,7 @@ it("traces paired-node Claude dispatch and account removal on a loopback Gateway
     callerScopes: ["operator.admin", "operator.write"],
   });
   const requests: InvokeFrame[] = [];
+  let askApproval = false;
   const node = await connectGatewayClient({
     url: `ws://127.0.0.1:${gateway.port}`,
     token: "trace-token",
@@ -87,6 +111,7 @@ it("traces paired-node Claude dispatch and account removal on a loopback Gateway
         return;
       }
       const frame = event.payload as InvokeFrame;
+      const replyWithApproval = askApproval && requests.length === 0;
       requests.push({ command: frame.command });
       if (!frame.id || !frame.nodeId) {
         return;
@@ -95,19 +120,46 @@ it("traces paired-node Claude dispatch and account removal on a loopback Gateway
         id: frame.id,
         nodeId: frame.nodeId,
         ok: true,
-        payloadJSON: JSON.stringify(successPayload()),
+        payloadJSON: JSON.stringify(replyWithApproval ? approvalPayload() : successPayload()),
       });
     },
   });
-  const run = (history?: () => Promise<void>) => {
+  const approvalIds: string[] = [];
+  let approvalFault: unknown;
+  const approver = await connectGatewayClient({
+    url: `ws://127.0.0.1:${gateway.port}`,
+    token: "trace-token",
+    role: "operator",
+    scopes: [ADMIN_SCOPE, APPROVALS_SCOPE],
+    caps: [GATEWAY_CLIENT_CAPS.EXEC_APPROVALS],
+    clientName: GATEWAY_CLIENT_NAMES.TEST,
+    clientDisplayName: "Account trace approver",
+    mode: GATEWAY_CLIENT_MODES.TEST,
+    onEvent: (event) => {
+      if (event.event !== "exec.approval.requested" || !event.payload) {
+        return;
+      }
+      const id = (event.payload as { id?: string }).id;
+      if (!id) {
+        return;
+      }
+      approvalIds.push(id);
+      void removeAuthProfilesAcrossOwnerStores({ agentDir, profileIds: [profileId] })
+        .then(() => approver.request("exec.approval.resolve", { id, decision: "allow-once" }))
+        .catch((error: unknown) => {
+          approvalFault = error;
+        });
+    },
+  });
+  const run = (options?: { history?: () => Promise<void>; approval?: boolean }) => {
     const context = buildPreparedCliRunContext({
-      timeoutMs: 15_000,
+      timeoutMs: options?.approval ? 20_000 : 15_000,
       agentId: "main",
       sessionKey: "agent:main:account-trace",
     });
     context.executionTarget = { kind: "node", placement: { nodeId: identity.deviceId } };
     context.preparedBackend.prepareCredentialUse = check;
-    if (history) {
+    if (options?.history) {
       context.cliHistoryWriter = {
         target: {
           agentId: "main",
@@ -118,7 +170,7 @@ it("traces paired-node Claude dispatch and account removal on a loopback Gateway
         runId: "account-trace",
         authFingerprint: "trace",
         assertCurrent: () => {},
-        assertReadable: history,
+        assertReadable: options.history,
         bindsNativeLogin: false,
         checkNativeLoginBoundary: () => {},
         bindExecutionEnv: () => {},
@@ -132,22 +184,47 @@ it("traces paired-node Claude dispatch and account removal on a loopback Gateway
         runId: context.params.runId,
         agentId: "main",
       },
-      (admitted) => {
+      async (admitted) => {
         context.params.admittedRunContext = admitted;
-        return withPluginRuntimeGatewayRequestScope(
-          { context: kernel.gatewayRequestContext, isWebchatConnect: () => false },
-          () =>
-            executeNodeClaudeRun({
-              context,
-              nodePlacement: { nodeId: identity.deviceId },
-              executionArgs: ["-p"],
-              stdinPayload: "hello",
-              noOutputTimeoutMs: 2_000,
-              prepareCredentialUse: check,
-              consumeStdout: () => {},
-              consumeStderr: () => {},
-            }),
-        );
+        const execute = () =>
+          withPluginRuntimeGatewayRequestScope(
+            { context: kernel.gatewayRequestContext, isWebchatConnect: () => false },
+            () =>
+              executeNodeClaudeRun({
+                context,
+                nodePlacement: { nodeId: identity.deviceId },
+                executionArgs: ["-p"],
+                stdinPayload: "hello",
+                noOutputTimeoutMs: 2_000,
+                prepareCredentialUse: check,
+                consumeStdout: () => {},
+                consumeStderr: () => {},
+              }),
+          );
+        if (!options?.approval) {
+          return await execute();
+        }
+        askApproval = true;
+        try {
+          const authority = claimAgentRunDelegatedAuthority(admitted.operationalRunInstance);
+          try {
+            return await withGatewayToolCallerIdentity(
+              {
+                agentId: "main",
+                sessionKey: "agent:main:account-trace",
+                operationalRunInstance: admitted.operationalRunInstance,
+                approvalAuthority: authority,
+                receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
+                gatewayContextResolver: () => kernel.gatewayRequestContext,
+              },
+              execute,
+            );
+          } finally {
+            releaseAgentRunDelegatedAuthority(authority);
+          }
+        } finally {
+          askApproval = false;
+        }
       },
     );
   };
@@ -164,7 +241,7 @@ it("traces paired-node Claude dispatch and account removal on a loopback Gateway
     requests.length = 0;
     await expect(run()).rejects.toBeInstanceOf(CliCredentialRemovedError);
     expect(requests).toEqual([]);
-    trace("preparation: account removed after setup and before dispatch; node frames=0");
+    trace("preparation: account removed before the post-setup dispatch check; node frames=0");
 
     await upsertAuthProfileAsync({
       profileId,
@@ -173,16 +250,35 @@ it("traces paired-node Claude dispatch and account removal on a loopback Gateway
     });
     requests.length = 0;
     await expect(
-      run(async () => {
-        await removeAuthProfilesAcrossOwnerStores({ agentDir, profileIds: [profileId] });
+      run({
+        history: async () => {
+          await removeAuthProfilesAcrossOwnerStores({ agentDir, profileIds: [profileId] });
+        },
       }),
     ).rejects.toBeInstanceOf(CliCredentialRemovedError);
     expect(requests).toEqual([]);
     trace("history authorization: account removed during the wait; node frames=0");
+
+    await upsertAuthProfileAsync({
+      profileId,
+      agentDir,
+      credential: createApiKeyCredential("anthropic", "sk-test"),
+    });
+    requests.length = 0;
+    approvalIds.length = 0;
+    await expect(run({ approval: true })).rejects.toBeInstanceOf(CliCredentialRemovedError);
+    expect(approvalFault).toBeUndefined();
+    expect(approvalIds).toHaveLength(1);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.command).toBe(NODE_AGENT_CLI_CLAUDE_RUN_COMMAND);
+    trace(
+      "approval retry: account removed while the approval was pending; node frames=1 and no second invoke",
+    );
   } finally {
+    await approver.stopAndWait();
     await node.stopAndWait();
     gateway.ws.close();
     await gateway.server.close();
     gateway.envSnapshot.restore();
   }
-}, 120_000);
+}, 180_000);
