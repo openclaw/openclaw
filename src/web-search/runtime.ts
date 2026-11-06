@@ -535,17 +535,12 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
         : "web_search is disabled or no provider is available.",
     );
   }
-  const allowFallback =
-    !(
-      params.modelSelection?.authProfileId &&
-      candidates[0]?.authProviderId === params.modelSelection.provider
-    ) &&
-    !hasExplicitWebSearchSelection({
-      search,
-      runtimeWebSearch,
-      providerId: params.providerId,
-      providers: candidates,
-    });
+  const allowAutomaticFallback = !hasExplicitWebSearchSelection({
+    search,
+    runtimeWebSearch,
+    providerId: params.providerId,
+    providers: candidates,
+  });
   const assertCurrent = params.assertCurrent;
   return await withGuardedFetchRequestAuthority(
     assertCurrent
@@ -558,6 +553,12 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
       // Keep the selected provider's failure, including null or undefined rejections.
       let firstFailure: WebSearchProviderError | undefined;
       for (const candidate of candidates) {
+        const allowFallback =
+          allowAutomaticFallback &&
+          !(
+            params.modelSelection?.authProfileId &&
+            candidate.authProviderId === params.modelSelection.provider
+          );
         params.signal?.throwIfAborted();
         assertRequestCurrent?.();
         try {
@@ -604,9 +605,10 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
           if (isTrustedToolExecutionPreflightError(error)) {
             throw error;
           }
-          firstFailure ??= new WebSearchProviderError(candidate.id, error);
+          const failure = new WebSearchProviderError(candidate.id, error);
+          firstFailure ??= failure;
           if (!allowFallback) {
-            throw firstFailure;
+            throw failure;
           }
         }
       }

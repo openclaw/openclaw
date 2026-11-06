@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { SessionEntryCohortReader } from "../config/sessions/session-entry-read-runtime.types.js";
+import type { WebSearchProviderToolExecutionContext } from "../plugins/web-provider-types.js";
 import {
   createOAuthAuthProfileStore,
   createWebSearchTestProvider,
@@ -109,6 +110,52 @@ it.each([
     );
   },
 );
+
+it("carries invocation authority through assembled search preparation", async () => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const effect = vi.fn();
+  let allowed = true;
+  const assertInvocationCurrent = () => {
+    if (!allowed) {
+      throw new Error("Search invocation retired");
+    }
+  };
+  resolveProviders.mockReturnValue([
+    createWebSearchTestProvider({
+      pluginId: "test-search",
+      id: "test-search",
+      requiresCredential: false,
+      credentialPath: "plugins.entries.test-search.config.apiKey",
+      createTool: () => ({
+        description: "Fixture search",
+        parameters: {},
+        async execute(_args, context?: WebSearchProviderToolExecutionContext) {
+          entered.resolve();
+          await release.promise;
+          context?.assertCurrent?.();
+          effect();
+          return { results: [] };
+        },
+      }),
+    }),
+  ]);
+  const tools = await createOpenClawToolsAsync({
+    config: { tools: { web: { search: { provider: "test-search" } } } },
+    assertInvocationCurrent,
+    disableMessageTool: true,
+    disablePluginTools: true,
+    wrapBeforeToolCallHook: false,
+  });
+  const search = tools.find((tool) => tool.name === "web_search");
+  expect(search).toBeDefined();
+  const pending = search!.execute("retired-search", { query: "synthetic query" });
+  await entered.promise;
+  allowed = false;
+  release.resolve();
+  await expect(pending).rejects.toThrow("Search invocation retired");
+  expect(effect).not.toHaveBeenCalled();
+});
 
 it.each([
   ["unconfigured", undefined, false, false],
