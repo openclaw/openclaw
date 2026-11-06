@@ -1,0 +1,5 @@
+172
+# fsGroup PVC remount regressions for restorePrivateStateStoreModes: broadened
+# directories, files and SQLite sidecars, world-bit and symlink refusals, the
+# already-private no-op, canonical path coverage, and credential-owner admission
+# on a remounted installation (#192959).

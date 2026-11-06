@@ -106,8 +106,11 @@ export function restorePrivateStateStoreModes(env: NodeJS.ProcessEnv): void {
   if (process.platform === "win32") {
     return;
   }
+  // The state root itself is deliberately left alone: a shared, group-accessible
+  // state root is a supported layout, and config publication preserves its mode
+  // (src/config/io.write-config.test.ts). Only the private stores under and
+  // beside it must be private.
   const stateDir = path.resolve(resolveStateDir(env));
-  restorePrivateStoreMode(stateDir, OPENCLAW_STATE_DIR_MODE);
   restorePrivateStoreMode(`${stateDir}${UPDATE_CAPTURE_ROOT_SUFFIX}`, OPENCLAW_STATE_DIR_MODE);
   for (const [directory, file] of PRIVATE_STATE_STORES) {
     restorePrivateStoreMode(path.join(stateDir, directory), OPENCLAW_STATE_DIR_MODE);

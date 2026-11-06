@@ -54,14 +54,12 @@ describe.runIf(process.platform !== "win32")("restorePrivateStateStoreModes", ()
 
     restorePrivateStateStoreModes(env);
 
-    for (const directory of [
-      stateDir,
-      path.dirname(credentials),
-      path.dirname(runtimePins),
-      captures,
-    ]) {
+    for (const directory of [path.dirname(credentials), path.dirname(runtimePins), captures]) {
       expect(mode(directory)).toBe(0o700);
     }
+    // A shared, group-accessible state root is a supported layout, and config
+    // publication preserves its mode, so the restore must leave it untouched.
+    expect(mode(stateDir)).toBe(0o2770);
     for (const store of [credentials, runtimePins]) {
       expect(mode(store)).toBe(0o600);
       expect(fs.readFileSync(store, "utf8")).toBe(`retained ${path.basename(store)}`);
@@ -109,16 +107,15 @@ describe.runIf(process.platform !== "win32")("restorePrivateStateStoreModes", ()
 
     expect(fs.lstatSync(path.dirname(credentials)).isSymbolicLink()).toBe(true);
     expect(mode(foreign)).toBe(0o2770);
-    expect(mode(stateDir)).toBe(0o700);
+    expect(mode(stateDir)).toBe(0o2770);
   });
 
   it("leaves an already-private installation untouched", () => {
-    const { env, stateDir, credentials } = installation();
+    const { env, credentials } = installation();
     const before = fs.lstatSync(credentials).ctimeMs;
 
     restorePrivateStateStoreModes(env);
 
-    expect(mode(stateDir)).toBe(0o700);
     expect(mode(credentials)).toBe(0o600);
     expect(fs.lstatSync(credentials).ctimeMs).toBe(before);
   });
