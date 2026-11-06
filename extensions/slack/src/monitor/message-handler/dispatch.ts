@@ -22,7 +22,10 @@ import { normalizeSlackOutboundText } from "../../format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES } from "../../limits.js";
 import { emitSlackMessageSentHooks } from "../../message-sent-hook.js";
 import { resolveSlackReplyRenderPlan } from "../../reply-blocks.js";
-import { recordSlackThreadParticipation } from "../../sent-thread-cache.js";
+import {
+  recordSlackThreadParticipation,
+  resolveSlackParticipationTeamId,
+} from "../../sent-thread-cache.js";
 import { resolveSlackReplyThreadTs } from "../../thread-ts.js";
 import { countSlackTextUtf8Bytes } from "../../truncate.js";
 import { registerSlackSessionRun } from "../session-run-targets.js";
@@ -130,7 +133,12 @@ async function dispatchSlackMessageWithSetup(
     accountId: account.accountId,
     channelId: message.channel,
     failureNoticeThreadTs: message.thread_ts,
-    failureNoticeTeamId: prepared.eventScope?.teamId,
+    failureNoticeTeamId: resolveSlackParticipationTeamId({
+      eventTeamId: prepared.eventScope?.teamId,
+      workspaceTeamId: ctx.teamId,
+    }),
+    participationEventTeamId: prepared.eventScope?.teamId,
+    participationWorkspaceTeamId: ctx.teamId,
     statusThreadTs,
   };
   const failurePolicy = createSlackFailureNoticePolicy(
@@ -564,7 +572,10 @@ async function dispatchSlackMessageWithSetup(
   if (anyReplyDelivered && participationThreadTs) {
     recordSlackThreadParticipation(account.accountId, message.channel, participationThreadTs, {
       agentId: route.agentId,
-      teamId: prepared.eventScope?.teamId,
+      teamId: resolveSlackParticipationTeamId({
+        eventTeamId: prepared.eventScope?.teamId,
+        workspaceTeamId: ctx.teamId,
+      }),
     });
   }
   if (dispatchError) {

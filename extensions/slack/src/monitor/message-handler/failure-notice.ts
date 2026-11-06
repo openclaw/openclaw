@@ -3,8 +3,8 @@ import type { GetReplyOptions, MsgContext, ReplyPayload } from "openclaw/plugin-
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   clearSlackThreadFailureNotice,
+  hasInboundSlackThreadParticipation,
   hasSlackThreadFailureNotice,
-  hasSlackThreadParticipation,
   recordSlackThreadFailureNotice,
 } from "../../sent-thread-cache.js";
 
@@ -17,6 +17,9 @@ type SlackFailurePolicyParams = {
   channelId: string;
   failureNoticeThreadTs?: string;
   failureNoticeTeamId?: string;
+  /** Raw scopes for the participation lookup; notice keys use failureNoticeTeamId. */
+  participationEventTeamId?: string;
+  participationWorkspaceTeamId?: string;
   statusThreadTs?: string;
 };
 
@@ -31,6 +34,8 @@ export function createSlackFailureNoticePolicy(
     channelId,
     failureNoticeThreadTs,
     failureNoticeTeamId,
+    participationEventTeamId,
+    participationWorkspaceTeamId,
     statusThreadTs,
   } = params;
   let sawTerminalFailurePayload = false;
@@ -80,12 +85,13 @@ export function createSlackFailureNoticePolicy(
       failureNoticeThreadTs &&
       !explicitlyAddressed &&
       context.MentionSource !== "implicit_thread" &&
-      !hasSlackThreadParticipation(
-        notice.accountId,
-        notice.channelId,
-        failureNoticeThreadTs,
-        failureNoticeTeamId,
-      )
+      !hasInboundSlackThreadParticipation({
+        accountId: notice.accountId,
+        channelId: notice.channelId,
+        threadTs: failureNoticeThreadTs,
+        eventTeamId: participationEventTeamId,
+        workspaceTeamId: participationWorkspaceTeamId ?? failureNoticeTeamId,
+      })
     ) {
       logVerbose("slack: suppressed passive failure before thread participation");
       return null;
