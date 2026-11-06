@@ -1,5 +1,6 @@
 // Ways to keep the recovery kit (OCF-286): a text file, the browser's print
 // dialog. Nothing here logs the kit or sends it to a server.
+import { reserveExternalWindowForDeferredNavigation } from "../open-external-url.ts";
 import type { OpenClawIdKit } from "./link.ts";
 
 /** What the kit page names besides the secret. */
@@ -43,7 +44,7 @@ export function downloadRecoveryKit(details: RecoveryKitDetails): void {
  * (which also offers Save as PDF). Returns false when the window was blocked.
  */
 export function printRecoveryKit(details: RecoveryKitDetails): boolean {
-  const view = window.open("", "_blank", "popup,width=640,height=720");
+  const view = reserveExternalWindowForDeferredNavigation({ popup: true });
   if (!view) {
     return false;
   }
