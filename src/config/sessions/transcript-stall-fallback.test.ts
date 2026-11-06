@@ -19,9 +19,9 @@ describe("retained-result transcript fallback", () => {
     const sessionId = "stall-fallback-session";
     const scope = { agentId: "main", sessionKey, sessionId, storePath: fixture.storePath() };
     await replaceSessionEntry(scope, { sessionId, chatType: "direct", updatedAt: 1 });
-    vi.spyOn(transcript, "appendAssistantMessageToSessionTranscript").mockRejectedValueOnce(
-      new Error("transient append"),
-    );
+    const append = vi
+      .spyOn(transcript, "appendAssistantMessageToSessionTranscript")
+      .mockRejectedValueOnce(new Error("transient append"));
     const params = {
       requesterSessionKey: sessionKey,
       requesterSessionId: sessionId,
@@ -38,6 +38,11 @@ describe("retained-result transcript fallback", () => {
     });
     await expect(deliverRequesterStallFallback(params)).resolves.toMatchObject({ delivered: true });
     await expect(deliverRequesterStallFallback(params)).resolves.toMatchObject({ delivered: true });
+    expect(append.mock.calls.map(([call]) => call.idempotencyKey)).toEqual([
+      params.idempotencyKey,
+      params.idempotencyKey,
+      params.idempotencyKey,
+    ]);
     const messages = (await loadTranscriptEvents(scope)).flatMap((event) => {
       const message = asOptionalRecord(event)?.message;
       return message ? [message] : [];

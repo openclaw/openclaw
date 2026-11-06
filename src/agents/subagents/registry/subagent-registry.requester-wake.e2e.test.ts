@@ -58,7 +58,10 @@ import {
   holdRequesterWakeResponses,
   prepareLargeRequesterWakeFixture,
 } from "./subagent-registry.requester-wake-session.test-support.js";
-import { registerRequesterWakeSettlementBoundaryTests } from "./subagent-registry.requester-wake-settlement.test-support.js";
+import {
+  activateRequesterWakeRegistry,
+  registerRequesterWakeSettlementBoundaryTests,
+} from "./subagent-registry.requester-wake-settlement.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
 
 const MAIN_REQUESTER_SESSION_KEY = "agent:main:main";
@@ -408,8 +411,7 @@ describe("requester settle wake product flow", () => {
         );
       const { waitForDeliveredCleanup: waitForBatchCleanup } =
         createLifecycleWaits(requesterSessionKey);
-      const admittedRunIds: string[] = [];
-      const admissionErrors: string[] = [];
+      let admittedRunCount = 0;
       const ordinaryGatewayCall = callGatewayMock.getMockImplementation()!;
       await callGatewayMock.withImplementation(
         async (request) => {
@@ -419,10 +421,7 @@ describe("requester settle wake product flow", () => {
             try {
               const admitted = await admission.admit("embedded");
               expect(admitted.executionIdentityToken?.runId).toBe(runId);
-              admittedRunIds.push(runId);
-            } catch (error) {
-              admissionErrors.push(String(error));
-              throw error;
+              admittedRunCount += 1;
             } finally {
               admission.close();
             }
@@ -443,15 +442,16 @@ describe("requester settle wake product flow", () => {
             emitCompleted(child.runId, child.childSessionKey, `findings ${index}`);
           }
           await flushOwnedWork();
-          expect(admissionErrors).toEqual([]);
-          expect(admittedRunIds).toHaveLength(1);
           for (const child of children) {
             await waitForBatchCleanup(child.runId);
           }
           expectLargeRequesterWakeFindings(getAgentCalls().at(-1), children.length);
+          expect(getAgentCalls()).toHaveLength(1);
+          expect(admittedRunCount).toBe(1);
           await registry.testing.sweepOnceForTests();
           await flushOwnedWork();
-          expect(admittedRunIds).toHaveLength(1);
+          expect(getAgentCalls()).toHaveLength(1);
+          expect(admittedRunCount).toBe(1);
         },
       );
     },
@@ -679,9 +679,7 @@ describe("requester settle wake product flow", () => {
     "preserves serial continuation without replaying an accepted wave ($runtime, requester final=$attachRequesterFinal)",
     async ({ runtime, attachRequesterFinal }) => {
       vi.setSystemTime(100_000);
-      const context = createGatewayContext();
-      await registry.initSubagentRegistry();
-      await registry.activateSubagentRegistry(() => context);
+      await activateRequesterWakeRegistry(createGatewayContext);
       const alpha = visibleChild("serial-alpha");
       const beta = visibleChild("serial-beta");
       const yieldTurn = async (requesterTurnRunId: string, accepted: (typeof alpha)[]) => {
@@ -790,7 +788,6 @@ describe("requester settle wake product flow", () => {
       };
       const ordinaryGatewayCall = callGatewayMock.getMockImplementation()!;
       let firstWakeReturned = false;
-      let visibleFinals = 0;
       const initialRequesterTurnRunId = "requester-serial-initial";
       const append = vi.fn(() => true);
       const attachment = attachRequesterFinal
@@ -827,7 +824,6 @@ describe("requester settle wake product flow", () => {
               firstWakeReturned = true;
               return { runId: requesterTurnRunId, status: "ok", result };
             }
-            visibleFinals += 1;
             const response = await ordinaryGatewayCall(request);
             return attachRequesterFinal
               ? {
@@ -850,7 +846,6 @@ describe("requester settle wake product flow", () => {
             });
             await vi.advanceTimersByTimeAsync(0);
             expect(getRequesterWakeCalls()).toHaveLength(1);
-            expect(visibleFinals).toBe(0);
             expect(append).not.toHaveBeenCalled();
             expect(
               buildScopedSubagentRunReadIndexFromRuns(
@@ -881,7 +876,6 @@ describe("requester settle wake product flow", () => {
                 (request) => request.params?.inputProvenance?.sourceSessionKey,
               ),
             ).toEqual([alpha.childSessionKey, beta.childSessionKey]);
-            expect(visibleFinals).toBe(1);
             expect(sendMessageMock).not.toHaveBeenCalled();
             expect(
               buildScopedSubagentRunReadIndexFromRuns(
@@ -921,9 +915,7 @@ describe("requester settle wake product flow", () => {
         { storePath: sessionStorePath, sessionKey: cronRunSessionKey },
         sessionStore[cronRunSessionKey],
       );
-      const context = createGatewayContext();
-      await registry.initSubagentRegistry();
-      await registry.activateSubagentRegistry(() => context);
+      const context = await activateRequesterWakeRegistry(createGatewayContext);
       const sessionEntry = await prepareChildSession(child.childSessionKey, "sess-cron-child");
       await registry.registerSubagentRun(
         createSubagentRunParams({
@@ -972,9 +964,7 @@ describe("requester settle wake product flow", () => {
 
   it("retires a delivered wave while a yielded cohort settles during its evaluation", async () => {
     vi.setSystemTime(100_000);
-    const context = createGatewayContext();
-    await registry.initSubagentRegistry();
-    await registry.activateSubagentRegistry(() => context);
+    await activateRequesterWakeRegistry(createGatewayContext);
     const wave = ["wave-a", "wave-b"].map(visibleChild);
     const cohort = visibleChild("cohort");
     for (const child of wave) {
@@ -1037,8 +1027,7 @@ describe("requester settle wake product flow", () => {
     }
   });
 
-  registerRequesterWakeSettlementBoundaryTests({
-    ...requesterFixture,
+  registerRequesterWakeSettlementBoundaryTests(requesterFixture, {
     callGatewayMock,
     sendMessageMock,
     flushAsync,

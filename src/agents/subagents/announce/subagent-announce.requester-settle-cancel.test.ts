@@ -565,10 +565,7 @@ it.each([
             pauseReason: undefined,
             delivery: { status: "not_required" },
             killReconciliation: { taskCancellationAccepted: true, suppressTaskDelivery: true },
-          });
-          expect(cancelledRequester?.execution).toMatchObject({
-            status: "terminal",
-            outcome: { status: "error", error: "killed" },
+            execution: { status: "terminal", outcome: { status: "error", error: "killed" } },
           });
           // This fixture has no requester controller operation to confirm its kill.
           // Exercise the dormant reconciliation owner before expecting row retirement.
@@ -590,8 +587,6 @@ it.each([
             expect(subagentRuns.has(originalRequester.runId)).toBe(false);
           }
           expect(resolveSubagentSessionStatus(nestedPublications.at(-1))).toBe("killed");
-          expect(persisted.has("nested")).toBe(false);
-          expect(subagentRuns.has("nested")).toBe(false);
         }
       }
       expect(subagentRuns.get("nested")?.requesterSettleWake).toBeUndefined();
@@ -600,12 +595,12 @@ it.each([
         for (const published of nestedPublications) {
           expect(published.execution.outcome).toEqual(completedNestedOutcome);
         }
-        if (phase === "requester reset" || phase === "requester replacement") {
-          expect(subagentRuns.get("nested")?.execution.outcome).toEqual(completedNestedOutcome);
-        } else {
-          expect(subagentRuns.has("nested")).toBe(false);
-          expect(loadSubagentRegistryFromSqlite().has("nested")).toBe(false);
-        }
+      }
+      if (phase === "requester reset" || phase === "requester replacement") {
+        expect(subagentRuns.get("nested")?.execution.outcome).toEqual(completedNestedOutcome);
+      } else {
+        expect(subagentRuns.has("nested")).toBe(false);
+        expect(loadSubagentRegistryFromSqlite().has("nested")).toBe(false);
       }
     } finally {
       execute.resolve();
