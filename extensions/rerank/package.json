@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/rerank-provider",
-  "version": "2026.10.9",
+  "version": "2026.11.5-beta.2",
   "private": true,
   "description": "OpenClaw rerank Decision provider plugin",
   "type": "module",
