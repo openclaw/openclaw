@@ -502,7 +502,7 @@ export function ChatEffortPickerPanel(props: ChatEffortPickerPanelProps) {
       )}
       {props.fastMode.supported && (
         <div class="chat-controls__speed-panel chat-controls__speed-panel--inline">
-          <span class="chat-controls__effort-row-label">{t("chat.modelControls.speed")}</span>
+          <span class="oc-menu-heading__label">{t("chat.modelControls.speed")}</span>
           <ChatPreferenceSegments
             kind="speed"
             label={t("chat.modelControls.speed")}

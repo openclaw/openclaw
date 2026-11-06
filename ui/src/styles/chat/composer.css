@@ -2916,12 +2916,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   font-weight: 500;
 }
 
-/* Speed and Daybreak are rows: the menu's label size in full ink. */
-.chat-controls__effort-row-label {
-  color: var(--text);
-  font-size: calc(13px * var(--control-ui-text-scale));
-}
-
 .chat-controls__effort-value {
   min-width: 0;
   text-align: end;
