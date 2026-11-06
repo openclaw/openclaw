@@ -101,6 +101,9 @@ it.skipIf(process.platform === "win32").each(["empty", "repository"] as const)(
     });
     registerNodeWorkspaces(api);
     const service = registerService.mock.calls[0]![0];
+    if (!service || service.apiVersion === 2 || service.apiVersion === 3) {
+      throw new Error("Expected service API version 1");
+    }
     const transport = vi.fn(createNodeWorkspaceTestTransport(api, remote));
     const scheduler = createTestPluginServiceScheduler();
     const context = {

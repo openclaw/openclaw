@@ -3645,7 +3645,7 @@ try {
       await cdp.send("Tracing.start", {
         categories: values["filmstrip-only"]
           ? "blink.user_timing,disabled-by-default-devtools.screenshot"
-          : "toplevel,blink.user_timing,devtools.timeline,disabled-by-default-devtools.timeline.stack,v8",
+          : "toplevel,blink.user_timing,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.stack,disabled-by-default-devtools.timeline.invalidationTracking,blink.debug,v8",
         transferMode: "ReportEvents",
       });
     }
