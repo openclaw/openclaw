@@ -1,6 +1,6 @@
 name: iOS Store Release
 
-run-name: Current-main signed archive cache qualification
+run-name: Balanced cold-CAS signed archive comparison
 
 # Temporary diagnostic branch only: signed archives and exports, with no
 # Store/TestFlight uploads or staging. Never merge this workflow replacement.
@@ -9,10 +9,9 @@ on:
 
 permissions:
   contents: read
-  actions: read
 
 concurrency:
-  group: ios-archive-cache-qualification
+  group: ios-archive-cold-cache
   cancel-in-progress: false
 
 env:
@@ -22,7 +21,7 @@ jobs:
   archive-cache-probe:
     if: github.event_name == 'workflow_dispatch' && github.repository == 'openclaw/openclaw'
     runs-on: xcode-27-xlarge
-    timeout-minutes: 120
+    timeout-minutes: 75
     environment: ios-store-release
     steps:
       - name: Reserve host CPU for archive probe
@@ -34,9 +33,6 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 2
           persist-credentials: false
-
-      - name: Select ordinary qualification source
-        run: git checkout --detach "$GITHUB_SHA^"
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -84,7 +80,6 @@ jobs:
           set -euo pipefail
           xcode="$(xcodebuild -version | shasum -a 256 | cut -d ' ' -f 1)"
           echo "xcode=$xcode" >> "$GITHUB_OUTPUT"
-          echo "key=ios-signed-archive-cas-qualification-v2-$GITHUB_SHA-$xcode-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
           echo "OPENCLAW_WATCH_RTC_CACHE_DIR=$RUNNER_TEMP/openclaw-watch-rtc-release-libraries" >> "$GITHUB_ENV"
 
       - name: Create readonly signing token
@@ -145,107 +140,25 @@ jobs:
       - name: Warm verified Watch device libraries
         run: node scripts/ios-archive-cache-probe.mjs prepare
 
-      - name: Produce cold signed seed (excluded from warm statistics)
-        run: node scripts/ios-archive-cache-probe.mjs seed
+      - name: Unmeasured cache-disabled preparation archive
+        run: node scripts/ios-archive-cache-probe.mjs warmup
 
-      - name: Save immutable signed seed CAS
-        timeout-minutes: 5
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/ios-archive-cache-probe/cache
-          key: ${{ steps.cache-inputs.outputs.key }}
-
-      - name: Baseline 1 - signed archive with caching disabled
+      - name: Pair 1 OFF - fresh DerivedData and empty CAS
         run: node scripts/ios-archive-cache-probe.mjs baseline 1
 
-      - name: Restore immutable seed CAS for candidate 1
-        timeout-minutes: 5
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/ios-archive-cache-probe/cache
-          key: ${{ steps.cache-inputs.outputs.key }}
-          fail-on-cache-miss: true
-
-      - name: Candidate 1 - signed archive with changed metadata
+      - name: Pair 1 ON - fresh DerivedData and empty CAS
         run: node scripts/ios-archive-cache-probe.mjs candidate 1
 
-      - name: Baseline 2 - signed archive with caching disabled
-        run: node scripts/ios-archive-cache-probe.mjs baseline 2
-
-      - name: Restore immutable seed CAS for candidate 2
-        timeout-minutes: 5
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/ios-archive-cache-probe/cache
-          key: ${{ steps.cache-inputs.outputs.key }}
-          fail-on-cache-miss: true
-
-      - name: Candidate 2 - signed archive with changed metadata
+      - name: Pair 2 ON - fresh DerivedData and empty CAS
         run: node scripts/ios-archive-cache-probe.mjs candidate 2
 
-      - name: Baseline 3 - signed archive with caching disabled
-        run: node scripts/ios-archive-cache-probe.mjs baseline 3
+      - name: Pair 2 OFF - fresh DerivedData and empty CAS
+        run: node scripts/ios-archive-cache-probe.mjs baseline 2
 
-      - name: Restore immutable seed CAS for candidate 3
-        timeout-minutes: 5
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/ios-archive-cache-probe/cache
-          key: ${{ steps.cache-inputs.outputs.key }}
-          fail-on-cache-miss: true
+      - name: Compare signed exports after all timed archives
+        run: node scripts/ios-archive-cache-probe.mjs compare
 
-      - name: Candidate 3 - signed archive with changed metadata
-        run: node scripts/ios-archive-cache-probe.mjs candidate 3
-
-      - name: Baseline 4 - signed archive with caching disabled
-        run: node scripts/ios-archive-cache-probe.mjs baseline 4
-
-      - name: Restore immutable seed CAS for candidate 4
-        timeout-minutes: 5
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/ios-archive-cache-probe/cache
-          key: ${{ steps.cache-inputs.outputs.key }}
-          fail-on-cache-miss: true
-
-      - name: Candidate 4 - signed archive with changed metadata
-        run: node scripts/ios-archive-cache-probe.mjs candidate 4
-
-      - name: Baseline 5 - signed archive with caching disabled
-        run: node scripts/ios-archive-cache-probe.mjs baseline 5
-
-      - name: Restore immutable seed CAS for candidate 5
-        timeout-minutes: 5
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/ios-archive-cache-probe/cache
-          key: ${{ steps.cache-inputs.outputs.key }}
-          fail-on-cache-miss: true
-
-      - name: Candidate 5 - signed archive with changed metadata
-        run: node scripts/ios-archive-cache-probe.mjs candidate 5
-
-      - name: Select controlled changed-source revision
-        run: git checkout --detach "$GITHUB_SHA"
-
-      - name: Changed-source baseline - caching disabled
-        run: node scripts/ios-archive-cache-probe.mjs baseline 6
-
-      - name: Restore original immutable seed for invalidation check
-        timeout-minutes: 5
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/ios-archive-cache-probe/cache
-          key: ${{ steps.cache-inputs.outputs.key }}
-          fail-on-cache-miss: true
-
-      - name: Changed-source candidate - prove cache invalidation
-        run: node scripts/ios-archive-cache-probe.mjs candidate 6
-
-      - name: Summarize five interleaved pairs and source invalidation
-        env:
-          GH_TOKEN: ${{ github.token }}
-          OPENCLAW_IOS_ARCHIVE_PROBE_CACHE_KEY: ${{ steps.cache-inputs.outputs.key }}
+      - name: Evaluate prospective paired cold-overhead rule
         run: node scripts/ios-archive-cache-probe.mjs report
 
       - name: Retain archive probe evidence

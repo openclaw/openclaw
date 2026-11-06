@@ -25,17 +25,16 @@ if (process.env.GITHUB_ACTIONS !== "true" || !process.env.RUNNER_TEMP) {
 const probe = path.join(process.env.RUNNER_TEMP, "ios-archive-cache-probe");
 const [phase, sampleText] = process.argv.slice(2);
 const sample = Number(sampleText ?? 0);
-if (!["prepare", "seed", "baseline", "candidate", "report"].includes(phase)) {
+if (!["prepare", "warmup", "baseline", "candidate", "compare", "report"].includes(phase)) {
   throw new Error("Invalid campaign phase");
 }
 if (
   ["baseline", "candidate"].includes(phase) &&
-  (!Number.isInteger(sample) || sample < 1 || sample > 6)
+  (!Number.isInteger(sample) || sample < 1 || sample > 2)
 ) {
-  throw new Error("Expected performance sample 1 through 5, or invalidation sample 6");
+  throw new Error("Expected cold-cache pair 1 or 2");
 }
 const env = { ...process.env, IOS_DEVELOPMENT_TEAM: "FWJYW4S8P8", CARGO_BUILD_JOBS: "2" };
-const sourceFile = "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayConnectionProblem.swift";
 const originalMarker =
   "Sign in to this gateway in the browser, then continue with OpenClaw pairing.";
 const changedMarker = `IOS-CAS-INVALIDATION-CHANGED-${".".repeat(47)}`;
@@ -212,84 +211,58 @@ function payloadManifest(ipa, caseDir, archive) {
   rmSync(unpacked, { recursive: true });
   return { payload: { info, signatures, manifest }, sourceMarker };
 }
-function stats(values) {
-  const sorted = values.toSorted((a, b) => a - b);
-  return {
-    median: sorted[Math.floor(sorted.length / 2)],
-    p95: sorted[Math.ceil(sorted.length * 0.95) - 1],
-    min: sorted[0],
-    max: sorted.at(-1),
-    samples: values,
-  };
-}
-async function cacheTransfers() {
-  const api = async (suffix) => {
-    const response = await fetch(`${env.GITHUB_API_URL}/repos/${env.GITHUB_REPOSITORY}/${suffix}`, {
-      headers: { Authorization: `Bearer ${env.GH_TOKEN}`, Accept: "application/vnd.github+json" },
-      signal: AbortSignal.timeout(30_000),
-    });
-    if (!response.ok) {
-      throw new Error(`Read-only campaign metrics request failed: HTTP ${response.status}`);
-    }
-    return response.json();
-  };
-  const jobs = await api(`actions/runs/${env.GITHUB_RUN_ID}/jobs?per_page=100`);
-  const job = jobs.jobs.find((entry) => entry.name === "archive-cache-probe");
-  if (!job) {
-    throw new Error("Campaign job is missing from Actions metrics");
-  }
-  const seconds = (name) => {
-    const step = job.steps.find((entry) => entry.name === name);
-    if (step?.conclusion !== "success" || !step.started_at || !step.completed_at) {
-      throw new Error(`Missing successful transfer measurement: ${name}`);
-    }
-    const duration = (Date.parse(step.completed_at) - Date.parse(step.started_at)) / 1000;
-    if (!Number.isFinite(duration) || duration < 0) {
-      throw new Error(`Invalid transfer duration: ${name}`);
-    }
-    return duration;
-  };
-  const saveSeconds = seconds("Save immutable signed seed CAS");
-  const restoreSeconds = Array.from({ length: 5 }, (_, i) =>
-    seconds(`Restore immutable seed CAS for candidate ${i + 1}`),
-  );
-  const cacheKey = env.OPENCLAW_IOS_ARCHIVE_PROBE_CACHE_KEY;
-  const caches = await api(`actions/caches?key=${encodeURIComponent(cacheKey)}&per_page=100`);
-  const saved = caches.actions_caches.filter((entry) => entry.key === cacheKey);
-  if (saved.length !== 1 || !(saved[0].size_in_bytes > 0)) {
-    throw new Error("Immutable seed compressed size is missing or ambiguous");
-  }
-  return { saveSeconds, restoreSeconds, cacheBytes: saved[0].size_in_bytes, cacheKey };
-}
 mkdirSync(probe, { recursive: true });
 env.GIT_COMMIT = run("git", ["rev-parse", "HEAD"]);
 const gatewayVersion = load(path.join(root, "package.json")).version;
 if (phase === "prepare") {
-  const variant = env.GITHUB_SHA;
-  const ordinary = run("git", ["rev-parse", `${variant}^`]);
+  const reference = "5581460a5710088e5c6c918782ff47138470b945";
+  const changed = run("git", ["diff", "--name-only", reference, env.GIT_COMMIT])
+    .split("\n")
+    .filter(Boolean);
   if (
-    env.GIT_COMMIT !== ordinary ||
-    run("git", ["diff", "--name-only", ordinary, variant]) !== sourceFile
+    env.GIT_COMMIT !== env.GITHUB_SHA ||
+    changed.some(
+      (file) =>
+        ![
+          ".github/workflows/ios-store-release.yml",
+          "scripts/ios-archive-cache-probe.mjs",
+        ].includes(file),
+    ) ||
+    run("git", ["status", "--porcelain"])
   ) {
     throw new Error(
-      "Expected ordinary tooling commit followed by only the controlled source change",
+      "Cold comparison requires the unchanged signed-qualification source and clean pinned tooling",
     );
   }
-  const originalSource = run("git", ["show", `${ordinary}:${sourceFile}`]);
-  const changedSource = run("git", ["show", `${variant}:${sourceFile}`]);
-  if (
-    originalSource.split(originalMarker).length !== 2 ||
-    originalSource.replace(originalMarker, changedMarker) !== changedSource
-  ) {
-    throw new Error("Controlled source revision is not the exact declared marker replacement");
-  }
-  json(path.join(probe, "source-contract.json"), {
-    ordinary,
-    variant,
-    sourceFile,
-    originalMarker,
-    changedMarker,
-  });
+  const contract = {
+    source: env.GIT_COMMIT,
+    reference,
+    changed,
+    xcode: run("xcodebuild", ["-version"]),
+    preparation: "One unmeasured canonical cache-disabled signed archive/export",
+    order: ["warmup-0", "baseline-1", "candidate-1", "candidate-2", "baseline-2"],
+    freshState: "Remove DerivedData and all CAS storage before EVERY archive; no CAS transfers",
+    acceptance: {
+      wall: "For each pair i: 100 * (candidateSeconds[i] / baselineSeconds[i] - 1) < 20; arithmetic mean of the two paired percentages < 20",
+      memory:
+        "For each pair i: candidate maximum process RSS / baseline maximum process RSS < 1.20",
+      correctness:
+        "Both signed export semantic comparisons accepted; six corruption controls rejected on pair 1",
+      inputs:
+        "Same source, Xcode, release metadata per pair; exact declared serial order; empty CAS and fresh DerivedData",
+    },
+    priorEvidence: {
+      run: "https://github.com/openclaw/openclaw/actions/runs/42161600259",
+      reportSha256: "36702a380bade4d30403f3a51af18a014d53cff080116999b4528e391d4367ee",
+      xcode: "Xcode 27.1\nBuild version 27A9275",
+      reuse:
+        "Warm replay, semantic comparator controls and source invalidation only if unchanged inputs/toolchain; original overall result remains failed",
+    },
+    limitation:
+      "Two balanced pairs on one prepared runner; cold CAS, not a pristine machine or statistical production qualification",
+  };
+  json(path.join(probe, "source-contract.json"), contract);
+  console.log(JSON.stringify(contract, null, 2));
   run(
     "/bin/bash",
     [
@@ -301,113 +274,104 @@ if (phase === "prepare") {
     ],
     { stdio: "inherit" },
   );
+} else if (phase === "compare") {
+  // Compare after all measured work so decoding cannot favor either order.
+  for (const index of [1, 2]) {
+    run(
+      "python3",
+      [
+        "-B",
+        "scripts/ios-archive-cache-compare.py",
+        path.join(probe, `baseline-${index}`),
+        path.join(probe, `candidate-${index}`),
+        "--output",
+        path.join(probe, `candidate-${index}/comparison.json`),
+        ...(index === 1 ? ["--negative-controls"] : []),
+      ],
+      { stdio: "inherit" },
+    );
+  }
 } else if (phase === "report") {
-  const pairs = Array.from({ length: 5 }, (_, i) => ({
-    baseline: load(path.join(probe, `baseline-${i + 1}/summary.json`)),
-    candidate: load(path.join(probe, `candidate-${i + 1}/summary.json`)),
-  }));
-  const transfers = await cacheTransfers();
-  const seed = load(path.join(probe, "seed-0/summary.json"));
-  const invalidation = {
-    baseline: load(path.join(probe, "baseline-6/summary.json")),
-    candidate: load(path.join(probe, "candidate-6/summary.json")),
-    comparison: load(path.join(probe, "candidate-6/comparison.json")),
-  };
   const contract = load(path.join(probe, "source-contract.json"));
+  const warmup = load(path.join(probe, "warmup-0/summary.json"));
+  const pairs = [1, 2].map((index) => {
+    const baseline = load(path.join(probe, `baseline-${index}/summary.json`));
+    const candidate = load(path.join(probe, `candidate-${index}/summary.json`));
+    return {
+      sample: index,
+      baseline,
+      candidate,
+      wallOverheadPercent: (candidate.wallSeconds / baseline.wallSeconds - 1) * 100,
+      rssRatio: candidate.time.maximumResidentSetSize / baseline.time.maximumResidentSetSize,
+      comparison: load(path.join(probe, `candidate-${index}/comparison.json`)),
+    };
+  });
+  const cases = [
+    warmup,
+    pairs[0].baseline,
+    pairs[0].candidate,
+    pairs[1].candidate,
+    pairs[1].baseline,
+  ];
   const report = {
-    source: contract.ordinary,
     sourceContract: contract,
-    seed: load(path.join(probe, "seed-0/summary.json")),
-    baselineWallSeconds: stats(pairs.map((pair) => pair.baseline.wallSeconds)),
-    candidateWallSeconds: stats(pairs.map((pair) => pair.candidate.wallSeconds)),
-    candidateAdjustedWallSeconds: stats(
-      pairs.map(
-        (pair, index) =>
-          pair.candidate.wallSeconds + transfers.restoreSeconds[index] + transfers.saveSeconds,
-      ),
-    ),
-    baselineCpuSeconds: stats(
-      pairs.map((pair) => pair.baseline.time.user + pair.baseline.time.sys),
-    ),
-    candidateCpuSeconds: stats(
-      pairs.map((pair) => pair.candidate.time.user + pair.candidate.time.sys),
-    ),
-    baselineMaximumRssBytes: stats(pairs.map((pair) => pair.baseline.time.maximumResidentSetSize)),
-    candidateMaximumRssBytes: stats(
-      pairs.map((pair) => pair.candidate.time.maximumResidentSetSize),
-    ),
-    pairs: pairs.map(({ baseline, candidate }) => ({
-      sample: baseline.sample,
-      baselineSeconds: baseline.wallSeconds,
-      candidateSeconds: candidate.wallSeconds,
-      comparison: load(path.join(probe, `candidate-${baseline.sample}/comparison.json`)),
-      replay: candidate.replay,
-    })),
-    invalidation,
-    transfers,
+    warmup,
+    pairs,
+    meanPairedWallOverheadPercent:
+      pairs.reduce((sum, pair) => sum + pair.wallOverheadPercent, 0) / pairs.length,
+    priorEvidenceApplicable: contract.xcode === contract.priorEvidence.xcode,
   };
-  report.medianWallReductionPercent =
-    (1 - report.candidateAdjustedWallSeconds.median / report.baselineWallSeconds.median) * 100;
-  report.coldSeedRegressionPercent =
-    (seed.wallSeconds / report.baselineWallSeconds.median - 1) * 100;
   report.checks = {
-    fiveOrdinaryPairs:
-      seed.source === contract.ordinary &&
-      pairs.every(
-        ({ baseline, candidate }) =>
-          baseline.source === contract.ordinary &&
-          candidate.source === contract.ordinary &&
-          baseline.xcode === seed.xcode &&
-          candidate.xcode === seed.xcode,
-      ),
-    semanticComparisons: report.pairs.every((pair) => pair.comparison.accepted),
-    negativeControls: report.pairs[0].comparison.negativeControlsPassed === true,
-    replay: pairs.every(({ candidate }) =>
-      ["OpenClawProtocol", "OpenClawKit", "OpenClawChatUI"].every(
-        (target) => candidate.replay[target]?.hit > 0,
+    inputs: cases.every(
+      (entry) =>
+        entry.source === contract.source &&
+        entry.xcode === contract.xcode &&
+        entry.freshDerivedData &&
+        entry.emptyCas &&
+        entry.caching === (entry.phase === "candidate" ? "YES" : "NO"),
+    ),
+    order: cases.every(
+      (entry, index) =>
+        `${entry.phase}-${entry.sample}` === contract.order[index] &&
+        (index === 0 || Date.parse(entry.startedAt) > Date.parse(cases[index - 1].finishedAt)),
+    ),
+    metadata: pairs.every(({ baseline, candidate }) =>
+      ["gatewayVersion", "revision", "buildNumber", "buildTimestamp"].every((field) =>
+        equal(baseline[field], candidate[field]),
       ),
     ),
-    adjustedMedian: report.medianWallReductionPercent >= 30,
-    adjustedP95: report.candidateAdjustedWallSeconds.p95 <= report.baselineWallSeconds.p95,
-    cpuMedian: report.candidateCpuSeconds.median <= report.baselineCpuSeconds.median,
-    rssMedian: report.candidateMaximumRssBytes.median < report.baselineMaximumRssBytes.median * 1.2,
-    rssP95: report.candidateMaximumRssBytes.p95 < report.baselineMaximumRssBytes.p95 * 1.2,
-    coldSeed: report.coldSeedRegressionPercent < 20,
-    invalidation:
-      invalidation.baseline.source === contract.variant &&
-      invalidation.candidate.source === contract.variant &&
-      invalidation.baseline.xcode === seed.xcode &&
-      invalidation.candidate.xcode === seed.xcode &&
-      invalidation.comparison.accepted &&
-      invalidation.candidate.replay.OpenClawKit?.miss > 0 &&
-      invalidation.candidate.replay.OpenClawProtocol?.hit > 0,
-    sourceMarkers:
-      seed.sourceMarker.original > 0 &&
-      seed.sourceMarker.changed === 0 &&
-      [invalidation.baseline, invalidation.candidate].every(
-        (entry) => entry.sourceMarker.original === 0 && entry.sourceMarker.changed > 0,
+    coldSharedModules: pairs.every(({ candidate }) =>
+      ["OpenClawProtocol", "OpenClawKit", "OpenClawChatUI"].every(
+        (target) => candidate.replay[target]?.miss > 0 && candidate.replay[target]?.hit === 0,
       ),
+    ),
+    semanticComparisons: pairs.every((pair) => pair.comparison.accepted),
+    negativeControls: pairs[0].comparison.negativeControlsPassed === true,
+    wallEachPair: pairs.every(
+      (pair) => pair.candidate.wallSeconds < pair.baseline.wallSeconds * 1.2,
+    ),
+    wallMean: report.meanPairedWallOverheadPercent < 20,
+    rssEachPair: pairs.every((pair) => pair.rssRatio < 1.2),
   };
   report.accepted = Object.values(report.checks).every(Boolean);
   json(path.join(probe, "report.json"), report);
   console.log(JSON.stringify(report, null, 2));
   if (!report.accepted) {
-    throw new Error("Prospective qualification failed; see report checks and per-pair comparisons");
+    throw new Error("Prospective cold-cache comparison failed; see report checks");
   }
 } else {
   const caseDir = path.join(probe, `${phase}-${sample}`);
   mkdirSync(caseDir);
   rmSync(path.join(probe, "DerivedData"), { recursive: true, force: true });
-  if (phase !== "candidate") {
-    rmSync(path.join(probe, "cache"), { recursive: true, force: true });
-  }
+  rmSync(path.join(probe, "cache"), { recursive: true, force: true });
+  mkdirSync(path.join(probe, "cache", "cas"), { recursive: true });
   if (run("git", ["status", "--porcelain"])) {
     throw new Error("Probe source must be clean");
   }
   run("git", ["checkout-index", "--all", "--force"]);
   env.OPENCLAW_BUILD_TIMESTAMP = `2026-11-06T00:0${sample}:00.000Z`;
   env.OPENCLAW_IOS_ARCHIVE_PROBE_DIR = caseDir;
-  env.OPENCLAW_IOS_ARCHIVE_PROBE_CACHING = phase === "baseline" ? "NO" : "YES";
+  env.OPENCLAW_IOS_ARCHIVE_PROBE_CACHING = phase === "candidate" ? "YES" : "NO";
   const resultBundle = path.join(caseDir, "Archive.xcresult");
   const command = [
     "/bin/bash",
@@ -422,6 +386,9 @@ if (phase === "prepare") {
   const metadata = {
     phase,
     sample,
+    freshDerivedData: true,
+    emptyCas: true,
+    caching: env.OPENCLAW_IOS_ARCHIVE_PROBE_CACHING,
     source: env.GIT_COMMIT,
     gatewayVersion,
     revision: sample,
@@ -497,38 +464,8 @@ if (phase === "prepare") {
     ipaSha256: sha(readFileSync(ipa)),
   };
   json(path.join(caseDir, "summary.json"), summary);
-  if (
-    sample === 6
-      ? sourceMarker.original !== 0 || sourceMarker.changed < 1
-      : sourceMarker.original < 1 || sourceMarker.changed !== 0
-  ) {
-    throw new Error("Exported main executable does not contain the declared source marker");
-  }
-  if (phase === "candidate") {
-    const comparisonPath = path.join(caseDir, "comparison.json");
-    const compared = spawnSync(
-      "python3",
-      [
-        "-B",
-        "scripts/ios-archive-cache-compare.py",
-        path.join(probe, `baseline-${sample}`),
-        caseDir,
-        "--output",
-        comparisonPath,
-        ...(sample === 1 ? ["--negative-controls"] : []),
-      ],
-      { cwd: root, env, stdio: "inherit" },
-    );
-    if (compared.error || compared.status !== 0 || !load(comparisonPath).accepted) {
-      throw new Error(`Semantic comparison failed for sample ${sample}`);
-    }
-    for (const target of sample === 6
-      ? ["OpenClawProtocol"]
-      : ["OpenClawProtocol", "OpenClawKit", "OpenClawChatUI"]) {
-      if (!replay[target]?.hit) {
-        throw new Error(`No shared first-party replay hit: ${target}`);
-      }
-    }
+  if (sourceMarker.original < 1 || sourceMarker.changed !== 0) {
+    throw new Error("Exported main executable does not contain the unchanged source marker");
   }
   console.log(
     JSON.stringify({ phase, sample, wallSeconds: metadata.wallSeconds, time, replay }, null, 2),
