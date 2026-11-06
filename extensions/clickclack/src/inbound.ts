@@ -8,6 +8,7 @@ import {
   deriveDurableFinalDeliveryRequirements,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { resolveClickClackInboundAccess, type ClickClackInboundAccess } from "./access.js";
 import { createClickClackActivityPublisher, type ClickClackActivityPublisher } from "./activity.js";
 import { createClickClackClient } from "./http-client.js";
@@ -26,6 +27,11 @@ import type {
 
 const CHANNEL_ID = "clickclack" as const;
 const CLICKCLACK_MESSAGE_ID_PATTERN = /^msg_[0-9a-hjkmnp-tv-z]{26}$/u;
+// The plugin child logger never reaches stdout, where container operators look.
+const agentProgressLog = createSubsystemLogger("clickclack/agent-progress");
+const botLoopLog = createSubsystemLogger("clickclack/bot-loop-protection");
+const modelReplyLog = createSubsystemLogger("clickclack/model-reply");
+const activityLog = createSubsystemLogger("clickclack/agent-activity");
 
 function hasClickClackReplyMedia(payload: {
   mediaUrl?: string;
@@ -82,9 +88,7 @@ export async function handleClickClackInbound(params: {
           params.account.agentId ||
           params.account.accountId,
         onError: (error) => {
-          runtime.logging
-            .getChildLogger({ plugin: "clickclack", feature: "agent-progress" })
-            .warn(`clickclack progress publish failed: ${String(error)}`);
+          agentProgressLog.warn(`clickclack progress publish failed: ${String(error)}`);
         },
       })
     : undefined;
@@ -92,14 +96,12 @@ export async function handleClickClackInbound(params: {
     if (access.botLoopProtection) {
       const loopResult = recordChannelBotPairLoopAndCheckSuppression(access.botLoopProtection);
       if (loopResult.suppressed) {
-        runtime.logging
-          .getChildLogger({ plugin: "clickclack", feature: "bot-loop-protection" })
-          .warn(
-            `[${params.account.accountId}] ClickClack bot-pair loop suppressed for ${Math.max(
-              0,
-              Math.ceil((loopResult.cooldownUntilMs - Date.now()) / 1000),
-            )}s`,
-          );
+        botLoopLog.warn(
+          `[${params.account.accountId}] ClickClack bot-pair loop suppressed for ${Math.max(
+            0,
+            Math.ceil((loopResult.cooldownUntilMs - Date.now()) / 1000),
+          )}s`,
+        );
         return;
       }
     }
@@ -123,9 +125,9 @@ export async function handleClickClackInbound(params: {
       });
       const completion = result.text.trim();
       if (!completion) {
-        modelRuntime.logging
-          .getChildLogger({ plugin: "clickclack", feature: "model-reply" })
-          .warn(`[${modelAccount.accountId}] ClickClack model reply produced no sendable text`);
+        modelReplyLog.warn(
+          `[${modelAccount.accountId}] ClickClack model reply produced no sendable text`,
+        );
         return;
       }
       // Direct completions bypass agent dispatch; use its prefix/model-context owner.
@@ -180,9 +182,7 @@ export async function handleClickClackInbound(params: {
         : { conversationId: message.direct_conversation_id },
       turnId: message.id,
       onError: (error) => {
-        runtime.logging
-          .getChildLogger({ plugin: "clickclack", feature: "agent-activity" })
-          .warn(`clickclack activity publish failed: ${String(error)}`);
+        activityLog.warn(`clickclack activity publish failed: ${String(error)}`);
       },
     });
   }
