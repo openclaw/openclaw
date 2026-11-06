@@ -71,7 +71,10 @@ export async function handleGoogleResearch(
       typeof config.profileId !== "string" ||
       !config.profileId.trim()
     ) {
-      throw new Error("Google managed research is not explicitly enabled with an API-key profile.");
+      throw new GoogleResearchError(
+        "Google managed research is not explicitly enabled. Enable plugins.entries.google.config.research with an API-key profileId.",
+        "blocked",
+      );
     }
     const profileId = config.profileId;
     const request = params.request;
@@ -81,11 +84,11 @@ export async function handleGoogleResearch(
       !("version" in request) ||
       request.version !== 1
     ) {
-      throw new Error("Invalid versioned research request.");
+      throw new GoogleResearchError("Use Google managed-research request version 1.", "blocked");
     }
     const { version: _version, ...body } = request;
     if ("profileId" in body) {
-      throw new Error("Research profile selection is provider-owned.");
+      throw new GoogleResearchError("Research profile selection is provider-owned.", "blocked");
     }
     const input = parseGoogleResearchInput(
       "action" in body && body.action === "start" ? { ...body, profileId } : body,
@@ -100,8 +103,10 @@ export async function handleGoogleResearch(
       (input.action === "poll" || input.action === "cancel") &&
       input.handle.profileId !== profileId
     ) {
-      throw new Error(
-        "Research credential owner changed; the recorded job cannot switch profiles.",
+      throw new GoogleResearchError(
+        "Research credential owner changed; the recorded job cannot switch profiles. Restore its original configured profile before retrying.",
+        "blocked",
+        input.handle,
       );
     }
     const bindings = api.runtime.state.openKeyedStoreV2<InteractionBinding>(

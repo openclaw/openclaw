@@ -634,6 +634,28 @@ describe("pull request node contract owners", () => {
       files: [{ filename: "scripts/lib/ci-node-test-plan.mts", status: "modified" }],
       expected: [true, false],
     },
+    {
+      files: [
+        { filename: "test/vitest/vitest.ui-paths.mjs", status: "modified" },
+        { filename: "ui/src/pages/model-providers/view.tsx", status: "modified" },
+        { filename: "config/test-lines-allocations/ui-coverage.txt", status: "added" },
+      ],
+      expected: [true, false],
+    },
+    {
+      files: [
+        { filename: "ui/src/retired.ts", status: "removed" },
+        { filename: "scripts/new.mjs", status: "modified" },
+      ],
+      expected: [true, true],
+    },
+    {
+      files: [
+        { filename: ".cargo/config.toml", status: "modified" },
+        { filename: "ui/config/control-ui-solid.ts", status: "modified" },
+      ],
+      expected: [true, true],
+    },
     { files: [{ filename: ".cargo/config.toml", status: "modified" }], expected: [false, true] },
     {
       files: [{ filename: "crates/openclaw-node-host/src/main.rs", status: "modified" }],
@@ -773,6 +795,7 @@ describe("node runtime event scope", () => {
     ],
     [["crates/openclaw-node-host/Cargo.toml"], true],
     [[".cargo/config.toml"], true],
+    [["ui/config/control-ui-solid.ts"], true],
     [["rust-toolchain.toml"], true],
     [["test/fixtures/node-sidecar-handshake-v1.json"], true],
     [["crates/openclaw-node-host/tests/fixtures/README.md"], true],

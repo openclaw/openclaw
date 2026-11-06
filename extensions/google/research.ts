@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { withGoogleResearchAuth } from "./research-auth.js";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { containsAsciiControlCharacter } from "openclaw/plugin-sdk/string-normalization-runtime";
+import { withGoogleResearchAuth, type GoogleResearchAuthContext } from "./research-auth.js";
 import { finalResearchOutput } from "./research-output.js";
 
 const ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/interactions";
@@ -21,11 +22,7 @@ export type GoogleResearchInput =
   | { action: "start"; question: string; output?: string; asOf?: string; profileId: string }
   | { action: "poll" | "cancel"; handle: GoogleResearchHandle };
 
-export type GoogleResearchContext = {
-  api: OpenClawPluginApi;
-  agentId: string;
-  signal: AbortSignal;
-  assertCurrent: () => void;
+export type GoogleResearchContext = GoogleResearchAuthContext & {
   /** Provider owner binds the selected credential before any HTTP effect. */
   prepareAccount: (identity: string) => Promise<void>;
   /** Record an accepted native handle before normalizing or publishing its report. */
@@ -77,10 +74,10 @@ export class GoogleResearchError extends Error {
 }
 
 function record(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     throw new Error("Expected an object.");
   }
-  return value as Record<string, unknown>;
+  return value;
 }
 
 function array(value: unknown): unknown[] {
@@ -103,8 +100,7 @@ function boundedString(value: unknown, maxBytes: number): string {
 
 function identifier(value: unknown): string {
   const text = boundedString(value, 2048);
-  // oxlint-disable-next-line eslint/no-control-regex -- Provider identifiers must reject embedded control characters before URL encoding.
-  if (/\s|[\u0000-\u001f\u007f]/u.test(text) || text === "." || text === "..") {
+  if (/\s/u.test(text) || containsAsciiControlCharacter(text) || text === "." || text === "..") {
     throw new Error("Invalid identifier.");
   }
   return text;

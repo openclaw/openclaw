@@ -1330,8 +1330,9 @@ textarea,
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
-    /* A positive duration enables the default transition-property: all, even
-       on static controls. Keep reduced-motion updates immediate instead. */
+    /* Avoid WebKit transition work on static elements. Authored property lists
+       still win; the duration reset keeps their reduced-motion updates immediate. */
+    transition-property: none;
     transition-duration: 0ms !important;
     scroll-behavior: auto !important;
   }
