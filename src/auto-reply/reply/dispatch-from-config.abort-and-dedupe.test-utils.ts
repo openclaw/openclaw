@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { createApprovalNativeRouteReporter } from "../../infra/approval-native-route-coordinator.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { settleReplyDispatcher } from "../dispatch-dispatcher.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { createPluginBindingRecord } from "./conversation-binding.test-fixtures.js";
@@ -28,6 +29,7 @@ import {
   replyMediaPathMocks,
   sessionBindingMocks,
   sessionStoreMocks,
+  transcriptMocks,
   ttsMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
 import {
@@ -413,21 +415,15 @@ describe("dispatchReplyFromConfig", () => {
 
   it("fast-resolves /approve before acquiring the active session operation", async () => {
     setNoAbort();
-    mocks.tryFastApproveFromMessage.mockResolvedValue({
-      handled: true,
-      reply: { text: "✅ Approval allow-once submitted." },
-    });
+    const reply = { text: "✅ Approval allow-once submitted." };
+    mocks.tryFastApproveFromMessage.mockResolvedValue({ handled: true, reply });
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) as ReplyPayload);
-    sessionStoreMocks.currentEntry = {
-      providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-6-20260205",
-      modelOverrideRouteResolution: "resolved",
-      thinkingLevel: "high",
-    };
+    sessionStoreMocks.currentEntry = FAST_ABORT_SESSION_MODEL;
     const onModelSelected = vi.fn();
     const ctx = buildTestCtx({
       Provider: "imessage",
+      MessageSid: "approval-command-message",
       Surface: "imessage",
       Body: "/approve exec-1 allow-once",
       BodyForCommands: "/approve exec-1 allow-once",
@@ -458,10 +454,12 @@ describe("dispatchReplyFromConfig", () => {
         sessionKey: "agent:main:imessage:direct:peer",
       }),
     );
+    await settleReplyDispatcher({ dispatcher });
+    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({ contextFreeCommand: true }),
+    );
     expect(replyResolver).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
-      text: "✅ Approval allow-once submitted.",
-    });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(reply);
     expect(onModelSelected).toHaveBeenCalledWith({
       provider: "anthropic",
       model: "claude-opus-4-6-20260205",

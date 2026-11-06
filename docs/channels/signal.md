@@ -420,6 +420,8 @@ Config:
 
 Signal exec and plugin approval prompts use the top-level `approvals.exec` and `approvals.plugin` routing blocks. Signal has no `channels.signal.execApprovals` block.
 
+Use forwarding mode `session` or `both` for native reaction prompts. Keep the configured agent/session filters and explicit approver allowlists in place.
+
 - `👍` approves once.
 - `👎` denies.
 - Use `/approve <id> allow-always` when a request offers persistent approval.
