@@ -246,7 +246,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     },
     serializeImmediate: true,
     shouldDebounce: (entry) => {
-      // Typed posts must stay separate so batching cannot change their type or admission.
       if (normalizeOptionalString(entry.post.type) !== undefined || entry.post.file_ids?.length) {
         return false;
       }

@@ -92,8 +92,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       monitor.logVerboseMessage(`mattermost: drop post (self sender=${senderId})`);
       return;
     }
-    // A person-authored post can carry a non-system type (a link-preview card
-    // stores the post as type "slack_attachment"); only system posts are noise.
+    // Person-authored link previews carry a non-system post type.
     if (post.type?.startsWith("system_")) {
       monitor.logVerboseMessage(`mattermost: drop post (system post type=${post.type})`);
       return;

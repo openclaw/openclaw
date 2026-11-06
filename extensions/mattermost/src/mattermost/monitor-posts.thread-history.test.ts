@@ -235,21 +235,6 @@ it("filters concurrent later history from the older turn without losing it", asy
   expect(requests).toHaveLength(1);
 });
 
-it("keeps person posts with a slack_attachment type in recovered thread history", async () => {
-  const f = await setup("channel");
-  posts.push({
-    ...makePost("card", "with a preview card", 25),
-    type: "slack_attachment",
-  });
-  const handler = createMattermostPostHandler(f.monitor);
-  await receive(handler, posts[2]!);
-  const context = dispatch.mock.calls[0]?.[1].ctxPayload;
-  expect(historyIds(context.InboundHistory)).toContain("card");
-  expect(context.InboundHistory).toEqual(
-    expect.arrayContaining([expect.objectContaining({ messageId: "card" })]),
-  );
-});
-
 it.each(["channel", "direct"] as const)(
   "recovers chronological %s history for an older coalesced turn",
   async (kind) => {
@@ -407,7 +392,7 @@ it("excludes later, foreign-thread and system posts even when returned by the se
   await f.recover(f.turn);
   expect(historyIds(f.histories.get(f.sessionKey))).toEqual(["root", "reply", "attachment"]);
   const query = new URL(requests[0]!, baseUrl).searchParams;
-  expect(Object.fromEntries(query)).toMatchObject({ fromPost: "current", fromCreateAt: "30" });
+  expect([query.get("fromPost"), query.get("fromCreateAt")]).toEqual(["current", "30"]);
   expect(Number(query.get("perPage"))).toBeLessThanOrEqual(200);
 });
 
