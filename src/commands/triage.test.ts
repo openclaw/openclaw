@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { UpdateCommandFailure } from "../cli/update-cli/update-command-result.js";
 import { withUpdateFailureTriage } from "../cli/update-cli/update-command-triage.js";
+import * as configPaths from "../config/paths.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { resolveInstallationTarget } from "../infra/installation-target-context.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
@@ -392,6 +393,9 @@ describe("triageCommand", () => {
   });
 
   it("reuses the sanitized support exporter with Gateway status and health snapshots", async () => {
+    // This case exercises the default-install branch; the separate-installation case above
+    // proves a redirected state directory must not inspect the host service.
+    vi.spyOn(configPaths, "isDefaultInstallIdentity").mockReturnValue(true);
     const health = { ok: true };
     const status = { gateway: { reachable: true } };
     const bundlePath = path.join(stateDir, "diagnostics.zip");
