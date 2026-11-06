@@ -77,7 +77,13 @@ function generationFixture(layout = "delete") {
   vi.spyOn(readOnlyLocation, "prepareSqliteReadOnlyLocationSyncInProcess").mockImplementation(
     (pathname, _staging, ...rest) => prepare(pathname, staging, ...rest),
   );
-  return { file, staging, prepare };
+  // These fixtures pin the private copy, which owns every refusal.
+  const immutableRead = vi
+    .spyOn(nodeSqlite, "resolveImmutableSqliteFileUri")
+    .mockImplementation(() => {
+      throw new Error("immutable read unavailable");
+    });
+  return { file, staging, prepare, immutableRead };
 }
 
 function expectedClosedGeneration(file: string): string {
@@ -734,4 +740,39 @@ it("captures opened file identity when Windows pathname stats report unknown IDs
     dev: expected.dev,
     ino: expected.ino,
   });
+});
+
+it.each(["delete", "wal-absent", "wal-empty"])(
+  "reads a drained %s family without a copy or a change to its source",
+  async (layout) => {
+    const { file, immutableRead } = generationFixture(layout);
+    const copy = vi.mocked(readOnlyLocation.prepareSqliteReadOnlyLocationSyncInProcess);
+    const pinned = await readUpdatePhysicalDatabaseGenerations([file]);
+    expect(copy).toHaveBeenCalledOnce();
+    const family = () =>
+      ["", "-wal", "-journal", "-shm"].map((suffix) => {
+        const stat = fs.statSync(file + suffix, { bigint: true, throwIfNoEntry: false });
+        return stat && [stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs];
+      });
+    const before = family();
+    immutableRead.mockRestore();
+    copy.mockClear();
+    expect(await readUpdatePhysicalDatabaseGenerations([file])).toEqual(pinned);
+    expect(copy).not.toHaveBeenCalled();
+    expect(family()).toEqual(before);
+  },
+);
+
+it("falls back to the private copy when a write races a drained read", async () => {
+  const { file, immutableRead } = generationFixture();
+  immutableRead.mockRestore();
+  const hash = vi.spyOn(fileGeneration, "readStableSqliteFileGeneration");
+  hash.mockImplementationOnce(() => {
+    throw new Error("SQLite file generation changed while reading");
+  });
+  const copy = vi.mocked(readOnlyLocation.prepareSqliteReadOnlyLocationSyncInProcess);
+  expect(await readUpdatePhysicalDatabaseGenerations([file])).toEqual({
+    [file]: expectedClosedGeneration(file),
+  });
+  expect(copy).toHaveBeenCalledOnce();
 });
