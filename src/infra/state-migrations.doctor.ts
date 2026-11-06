@@ -2328,10 +2328,10 @@ async function executeLegacyStateMigrations(
       });
       legacySessionSurfaces =
         params.legacySessionSurfaces ??
-        (await import("../plugins/legacy-session-surfaces.js")).prepareLegacySessionSurfaces({
-          config: params.cfg,
-          env,
-        });
+        (await import("../plugins/legacy-session-surfaces.js").then(
+          ({ prepareLegacySessionSurfaces }) =>
+            prepareLegacySessionSurfaces({ config: params.cfg, env }),
+        ));
       // Capture ownership before orphan-key rewrites. Atomic replacement can split
       // a configured filesystem alias from the standard target pathname.
       const { sessionMigrationAgentId: ownershipAgentId } = resolveLegacyStateMigrationOwner({

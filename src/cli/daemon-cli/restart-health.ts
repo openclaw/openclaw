@@ -17,6 +17,7 @@ import {
   hasCommandProcessCleanupError,
   ignoreNonCleanupCommandError,
 } from "../../process/exec-result.js";
+import { resolveCommandProcessSignal } from "../../process/exec-spawn.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
 import { sleep } from "../../utils.js";
 import {
@@ -120,7 +121,9 @@ export async function waitForGatewayHealthyRestart(
       | { child: Pick<ChildProcess, "pid" | "exitCode" | "signalCode">; service?: never }
     ),
 ): Promise<GatewayRestartResult> {
-  const signal = params.deadline?.signal ?? params.signal;
+  // A cancelled scope kills native inspections at spawn. Polling on would only ever read
+  // an unknown service while a healthy Gateway keeps the interrupted command waiting.
+  const signal = resolveCommandProcessSignal(params.deadline?.signal ?? params.signal);
   const read = <T>(phase: string, operation: () => Promise<T>) =>
     params.deadline
       ? params.deadline.read(`${params.phase ?? "health-wait"}:${phase}`, operation)

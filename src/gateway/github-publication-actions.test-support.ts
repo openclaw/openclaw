@@ -45,7 +45,7 @@ vi.mock("./worker-environments/session-repository-checkpoints.js", async (import
     >();
   return {
     ...actual,
-    withSessionRepositoryCheckpoint: (...args: unknown[]) => checkpoint(...args),
+    withSessionRepositoryPublicationCheckpoint: (...args: unknown[]) => checkpoint(...args),
   };
 });
 

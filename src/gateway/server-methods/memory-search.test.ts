@@ -289,6 +289,7 @@ describe("memory.search gateway method", () => {
         expect.objectContaining({ results: [] }),
         undefined,
       );
+      expect(manager.close).not.toHaveBeenCalled();
       const closeStarted = createDeferredCore();
       const releaseClose = createDeferredCore();
       manager.close.mockImplementationOnce(async () => {
@@ -316,7 +317,7 @@ describe("memory.search gateway method", () => {
         await request;
       }
       expect(routed).toHaveBeenCalledTimes(1);
-      expect(manager.close).toHaveBeenCalledTimes(2);
+      expect(manager.close).toHaveBeenCalledOnce();
     });
   });
 
@@ -483,7 +484,7 @@ describe("memory.search gateway method", () => {
       undefined,
       expect.objectContaining({ message: expect.stringContaining(notice.warning) }),
     );
-    expect(manager.close).toHaveBeenCalledOnce();
+    expect(manager.close).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -500,7 +501,7 @@ describe("memory.search gateway method", () => {
       maxResults: expected,
       minScore: 0.42,
     });
-    expect(manager.close).toHaveBeenCalledOnce();
+    expect(manager.close).not.toHaveBeenCalled();
   });
 
   it("rejects an unknown agentId without acquiring a manager", async () => {
@@ -608,7 +609,7 @@ describe("memory.search gateway method", () => {
     expect(getActiveMemorySearchManagerCore).toHaveBeenCalledWith({
       cfg,
       agentId: configured,
-      purpose: "cli",
+      purpose: "default",
     });
     expect(resolveDefaultAgentId).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
@@ -659,15 +660,10 @@ describe("memory.search gateway method", () => {
     expect(getActiveMemorySearchManagerCore).toHaveBeenCalledOnce();
   });
 
-  it("does not qualify routine pending index work as a search failure", async () => {
+  it("reports pending index work in a successful search response", async () => {
     const cfg = createConfig(testState.workspaceDir);
     const manager = createStubManager();
-    manager.status.mockReturnValue({
-      backend: "builtin",
-      provider: "none",
-      dirty: true,
-      custom: { searchMode: "fts-only" },
-    });
+    manager.status.mockReturnValue({ ...manager.status(), dirty: true });
     getActiveMemorySearchManagerCore.mockResolvedValue({ manager });
 
     const respond = await invokeMemorySearch({ query: "hidden codeword" }, cfg);
@@ -679,6 +675,10 @@ describe("memory.search gateway method", () => {
         provider: "none",
         searchMode: "fts-only",
         results: [],
+        stale: true,
+        warning: "Memory index has pending updates. Results use the last published index.",
+        action:
+          "Retry after background indexing, or run: openclaw memory status --index --agent main. Rebuilding uses keyword indexing only and does not call an embedding provider.",
       },
       undefined,
     );
@@ -754,7 +754,7 @@ describe("memory.search gateway method", () => {
     );
   });
 
-  it("shares one format repair across concurrent transient Gateway searches", async () => {
+  it("shares one service-owned index and format repair across Gateway searches", async () => {
     const { createMemoryRuntime, configureMemoryCoreDreamingState } = await vi.importActual<{
       createMemoryRuntime: (host: { runInBackgroundContext: <T>(run: () => T) => T }) => Omit<
         MemoryPluginRuntime,
@@ -854,29 +854,30 @@ describe("memory.search gateway method", () => {
       const singleRepairWrites = readRevision() - beforeControl;
       expect(singleRepairWrites).toBeGreaterThan(0);
 
+      await memoryRuntime.closeAllMemorySearchManagers?.();
       markOldProvenance();
       const observer = await memoryRuntime.getMemorySearchManager({
         cfg,
         agentId: "main",
-        purpose: "cli",
+        purpose: "default",
       });
       assert(observer.manager, observer.error ?? "Expected a memory index observer");
       const beforeConcurrent = readRevision();
       const acquired: RegisteredMemorySearchManager[] = [];
       const bothSearching = createDeferredCore();
       let searching = 0;
+      const search = observer.manager.search.bind(observer.manager);
+      const searchSpy = vi.spyOn(observer.manager, "search").mockImplementation(async (...args) => {
+        if (++searching === 2) {
+          bothSearching.resolve();
+        }
+        await bothSearching.promise;
+        return search(...args);
+      });
       getActiveMemorySearchManagerCore.mockImplementation(async (params) => {
         const result = await memoryRuntime.getMemorySearchManager(params);
         if (result.manager) {
           acquired.push(result.manager);
-          const search = result.manager.search.bind(result.manager);
-          vi.spyOn(result.manager, "search").mockImplementationOnce(async (...args) => {
-            if (++searching === 2) {
-              bothSearching.resolve();
-            }
-            await bothSearching.promise;
-            return search(...args);
-          });
         } else {
           bothSearching.resolve();
         }
@@ -886,8 +887,9 @@ describe("memory.search gateway method", () => {
         invokeMemorySearch({ query: "Juniper", agentId: "main" }, cfg),
         invokeMemorySearch({ query: "Juniper", agentId: "main" }, cfg),
       ]);
+      searchSpy.mockRestore();
       expect(acquired).toHaveLength(2);
-      expect(acquired[0]).not.toBe(acquired[1]);
+      expect(acquired[0]).toBe(acquired[1]);
       responses.forEach((response) => expectRecall(response));
       expect(readRevision() - beforeConcurrent).toBe(singleRepairWrites);
       getActiveMemorySearchManagerCore.mockResolvedValueOnce(observer);
@@ -908,25 +910,19 @@ describe("memory.search gateway method", () => {
       const cliSearch = memoryRuntime.searchForCli?.bind(memoryRuntime);
       assert(cliManager && cliSearch, "Expected the real CLI search runtime");
       try {
-        await expectSearchRetrievalBudget(
-          2,
-          () => readMemorySearchManagerStatus(cliManager),
-          async () => {
-            const result = await cliSearch({
-              manager: cliManager,
-              cfg,
-              agentId: "main",
-              query: "Juniper",
-            });
-            expect(result.results).toEqual([
-              expect.objectContaining({
-                path: "memory/orchard.md",
-                snippet: expect.stringContaining("copper lanterns"),
-              }),
-            ]);
-            expect(result).not.toHaveProperty("warning");
-          },
-        );
+        const result = await cliSearch({
+          manager: cliManager,
+          cfg,
+          agentId: "main",
+          query: "Juniper",
+        });
+        expect(result.results).toEqual([
+          expect.objectContaining({
+            path: "memory/orchard.md",
+            snippet: expect.stringContaining("copper lanterns"),
+          }),
+        ]);
+        expect(result).not.toHaveProperty("warning");
       } finally {
         await cliManager.close?.();
       }

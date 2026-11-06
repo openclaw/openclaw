@@ -516,7 +516,7 @@ export async function executeMutableUpdate(
     }
     const postStopStartedAt = Date.now();
     await waitForCurrent();
-    await assertManagedGatewayArtifactPublication({
+    const publicationWarning = await assertManagedGatewayArtifactPublication({
       ...publication,
       selected: preManagedServiceStop,
     });
@@ -531,6 +531,9 @@ export async function executeMutableUpdate(
       cwd: params.root,
       durationMs: Date.now() - postStopStartedAt,
       exitCode: 0,
+      ...(publicationWarning
+        ? { advisory: { kind: "recoverable-maintenance" as const, message: publicationWarning } }
+        : {}),
     };
     activationSteps.push(postStopStep);
     await reportUpdateStepCompletion(params.progress, { ...postStopStep, index: 0, total: 0 });

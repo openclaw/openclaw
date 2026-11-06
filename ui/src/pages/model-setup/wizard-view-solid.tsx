@@ -2,9 +2,10 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, For, Match, Show, Switch } from "solid-js";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { WizardStepControls } from "../../components/wizard-step-controls.tsx";
-import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import "../../components/modal-dialog.tsx";
+import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
 import type { ModelSetupWizardState } from "./state.ts";
@@ -146,9 +147,9 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
             >
               {(warning) => (
                 <Show when={warning()}>
-                  <div class="callout warning" role="alert">
+                  <InlineAlert tone="warning" role="alert">
                     {warning()}
-                  </div>
+                  </InlineAlert>
                 </Show>
               )}
             </For>
@@ -183,12 +184,12 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                   <Show
                     when={props.mode === "auth" && state().phase === "error"}
                     fallback={
-                      <div class="callout danger" role="alert">
+                      <InlineAlert tone="danger" role="alert">
                         {state().message}
-                      </div>
+                      </InlineAlert>
                     }
                   >
-                    <div class="callout danger model-setup-wizard__error" role="alert">
+                    <InlineAlert tone="danger" class="model-setup-wizard__error" role="alert">
                       <p class="model-setup-wizard__error-text">{state().message}</p>
                       <div class="model-setup-wizard__error-copy">
                         <CopyButton
@@ -196,7 +197,7 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                           idleLabel={t("modelSetup.wizard.copy")}
                         />
                       </div>
-                    </div>
+                    </InlineAlert>
                   </Show>
                 )}
               </Match>
@@ -205,13 +206,13 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                   {(state) => (
                     <>
                       <Show when={state().validationError}>
-                        <div
+                        <InlineAlert
+                          tone="danger"
                           id="model-setup-wizard-validation-error"
-                          class="callout danger"
                           role="alert"
                         >
                           {state().validationError}
-                        </div>
+                        </InlineAlert>
                       </Show>
                       <WizardStepControls
                         presentation="model-setup"

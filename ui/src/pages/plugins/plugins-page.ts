@@ -30,7 +30,11 @@ import {
   pluginMutationBlockedReason,
   type PluginMutationAction,
 } from "./plugins-page-model.ts";
-import { pluginIdForRoute, type PluginsRouteData } from "./route-data.ts";
+import {
+  pluginIdForRoute,
+  pluginSettingsNeedsSchema,
+  type PluginsRouteData,
+} from "./route-data.ts";
 import type { PluginSettingsEditorProps } from "./settings-editor.tsx";
 import type { PluginSettingsTab } from "./settings-view.tsx";
 import { createPluginPreview } from "./skill-preview.tsx";
@@ -297,6 +301,7 @@ export function createPluginsPage(options: {
     return () => {
       stopKeydown();
       active = false;
+      promptLaunch.reset();
       catalogTask.cancel();
       details.inspection.release();
       details.catalog.release();
@@ -539,6 +544,8 @@ export function createPluginsPage(options: {
       (activeRoutePluginId() && state.installedDetailTab === "configuration")
     ) {
       void context.runtimeConfig.ensureLoaded();
+    }
+    if (routeData && pluginSettingsNeedsSchema(surface, routeData.location, context.basePath)) {
       void context.runtimeConfig.ensureSchemaLoaded();
     }
     if (!loading() && !state.result && !state.error) {

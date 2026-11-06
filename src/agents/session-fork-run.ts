@@ -87,13 +87,12 @@ const FORK_CONTEXT_LIMITS = {
   toolResultOverflow: "omit",
 } as const;
 
-// The turn's initiating input can sit far behind its completed entry in a long tool loop. Each
-// pass reads further back; the last reads the whole model context through the anchor.
-const FORK_TURN_SEARCH_LIMITS = [
-  { maxBytes: 65_536, maxEvents: 64 },
-  { maxBytes: 4_194_304, maxEvents: 4_096 },
-  undefined,
-] as const;
+// Retain initiating input across long tool loops without hydrating every result body.
+const FORK_TURN_SEARCH_LIMITS = {
+  maxBytes: 8_388_608,
+  maxEvents: 20_000,
+  toolResultOverflow: "omit",
+} as const;
 
 type SessionForkTurn = {
   /** Undefined for a turn stored before requester recording; callers use session facts. */
@@ -104,46 +103,44 @@ type SessionForkTurn = {
 /**
  * Facts of the turn a fork reads through: the requester its initiating user message recorded and
  * the model its last assistant message ran on. The search stops at that turn's initiating input,
- * not at an event count. Returns undefined when the model context no longer holds that input
- * (for example, compacted mid-turn), so callers refuse instead of guessing the requester.
+ * within a bounded window. Returns undefined when that window no longer holds the input
+ * (too large or compacted mid-turn), so callers refuse instead of guessing the requester.
  */
 export async function readSessionForkTurn(
   source: TranscriptEntryAnchor,
   signal?: AbortSignal,
 ): Promise<SessionForkTurn | undefined> {
   let model: SessionForkTurn["model"];
-  for (const limits of FORK_TURN_SEARCH_LIMITS) {
-    const sessionManager = await SessionManager.openModelContextAsync(source, {
-      through: source,
-      ...(limits ? { limits } : {}),
-      ...(signal ? { signal } : {}),
-    });
-    for (const entry of sessionManager.getBranch().toReversed()) {
-      if (entry.type !== "message") {
-        continue;
-      }
-      const message: { role?: unknown; provider?: unknown; model?: unknown } = entry.message;
-      if (
-        !model &&
-        message.role === "assistant" &&
-        typeof message.provider === "string" &&
-        typeof message.model === "string" &&
-        message.provider &&
-        message.model
-      ) {
-        model = { provider: message.provider, model: message.model };
-      }
-      if (message.role !== "user") {
-        continue;
-      }
-      const meta = asOptionalRecord(Reflect.get(message, "__openclaw"));
-      // Steering joins a running turn; the turn's requester is its initiating input.
-      if (typeof meta?.steerTargetRunId === "string") {
-        continue;
-      }
-      const requester = readSessionForkRequesterFromTurn(meta);
-      return { ...(requester ? { requester } : {}), ...(model ? { model } : {}) };
+  const sessionManager = await SessionManager.openModelContextAsync(source, {
+    through: source,
+    limits: FORK_TURN_SEARCH_LIMITS,
+    ...(signal ? { signal } : {}),
+  });
+  for (const entry of sessionManager.getBranch().toReversed()) {
+    if (entry.type !== "message") {
+      continue;
     }
+    const message: { role?: unknown; provider?: unknown; model?: unknown } = entry.message;
+    if (
+      !model &&
+      message.role === "assistant" &&
+      typeof message.provider === "string" &&
+      typeof message.model === "string" &&
+      message.provider &&
+      message.model
+    ) {
+      model = { provider: message.provider, model: message.model };
+    }
+    if (message.role !== "user") {
+      continue;
+    }
+    const meta = asOptionalRecord(Reflect.get(message, "__openclaw"));
+    // Steering joins a running turn; the turn's requester is its initiating input.
+    if (typeof meta?.steerTargetRunId === "string") {
+      continue;
+    }
+    const requester = readSessionForkRequesterFromTurn(meta);
+    return { ...(requester ? { requester } : {}), ...(model ? { model } : {}) };
   }
   return undefined;
 }

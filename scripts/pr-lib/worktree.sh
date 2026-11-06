@@ -708,6 +708,74 @@ list_pr_worktrees() {
   fi
 }
 
+# Explicit task closeout uses the same repository/operation and removal owners
+# as PR GC. It never adopts a branch or manufactures an external merge receipt.
+gc_finalized_task() (
+  local dry_run="$1" pr="$2" selected="$3" head="$4" task="$5" socket="$6" thread_count="$7"
+  shift 7
+  local root helper state plan observation lock_ref="" lock_oid="" status=0
+  root=$(repo_root) || return 1
+  helper="${BASH_SOURCE[0]%/*}/finalized-task.mjs"
+  cd "$root" || return 1
+
+  if [ "$dry_run" = true ]; then
+    # A dry-run does not acquire, retire, or recover a native operation lock.
+    local existing
+    existing=$(pr_git for-each-ref --format='%(refname)' -- "refs/openclaw/pr-operation-locks/$pr" 2>&1) || return 1
+    [ -z "$existing" ] || { echo "Preserving task resources: native PR operation requires recovery or release." >&2; return 1; }
+  else
+    try_acquire_pr_operation_lock "$pr" || return 1
+    lock_ref="$PR_OPERATION_LOCK_REF"
+    lock_oid="$PR_OPERATION_LOCK_OWNER_OID"
+    trap release_pr_operation_lock EXIT
+  fi
+
+  require_finalized_pr() {
+    observation=$(read_pr_view_json "$pr" "number,url,state,headRefOid,baseRepository") || return 1
+    use_pr_observation "$pr" "$observation" || return 1
+    node "$helper" merged-pr "$root" "$pr" "$head" "$observation" || return 1
+    merge_outcome_load_local "$pr" || return 1
+    if [ -n "$MERGE_OUTCOME_OID" ]; then
+      printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e '.phase == "complete"' >/dev/null || {
+        echo "Preserving task resources: unresolved native merge/completion; use merge recovery." >&2
+        return 1
+      }
+    fi
+  }
+  require_finalized_pr || return 1
+  if [ -n "$selected" ]; then
+    state=$(pr_worktree_state "$selected" "" task-cleanup) || return 1
+  else
+    state='{}'
+  fi
+  plan=$(node "$helper" inspect "$root" "$state" "$pr" "$head" "$task" "$socket" "$thread_count" "$@") || return 1
+  if [ "$dry_run" = true ]; then
+    printf '%s\n' "$plan" | jq -r '.artifacts[] | if .identity == "" then "already absent artifact \(.path)" else "would remove artifact \(.path) (recursive; symlink targets preserved)" end'
+    printf '%s\n' "$plan" | jq -r 'select(.worktree != "") | if .worktreeIdentity == "" then "already absent worktree \(.worktree)" else "would remove worktree \(.worktree) (HEAD \(.head); branches preserved)" end'
+    return 0
+  fi
+
+  # Session reads are awaited by the inspector. Refresh PR/native operation
+  # facts before destructive work, and again before native worktree removal.
+  require_finalized_pr || return 1
+  node "$helper" remove-artifacts "$plan" "$lock_ref" "$lock_oid" || return 1
+  if [ -n "$selected" ]; then
+    require_finalized_pr || return 1
+    node "$helper" verify "$plan" "$lock_ref" "$lock_oid" || return 1
+    selected=$(printf '%s\n' "$plan" | jq -r '.worktree') || return 1
+    remove_worktree_if_present "$selected" false "$head" "$pr" || status=$?
+    if [ "$status" -ne 0 ]; then
+      echo "Task closeout incomplete: selected artifacts above were removed; worktree retained at $selected." >&2
+      return "$status"
+    fi
+    if printf '%s\n' "$plan" | jq -e '.worktreeIdentity == ""' >/dev/null; then
+      echo "already absent worktree $selected; branches preserved"
+    else
+      echo "removed worktree $selected; branches preserved"
+    fi
+  fi
+)
+
 gc_pr_worktrees() {
   local dry_run="${1:-false}" selected_pr="${2:-}"
   [ -z "$selected_pr" ] || is_canonical_pr_number "$selected_pr" || return 2

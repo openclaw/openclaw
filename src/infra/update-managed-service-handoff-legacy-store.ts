@@ -5,6 +5,11 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import { resolveServiceTmpDir } from "../daemon/service-tmp-dir.js";
 import {
+  assertManagedUpdateLeaseDatabaseIdentity,
+  prepareManagedHandoffLeaseDatabase,
+  type ManagedUpdateLeaseDatabaseIdentity,
+} from "./update-managed-service-handoff-database.js";
+import {
   prepareManagedHandoffLeaseStore,
   resolveManagedUpdateLeaseDatabasePath,
 } from "./update-managed-service-handoff-lease.js";
@@ -30,9 +35,19 @@ export function resolveLegacyGatewayManagedUpdateLeaseDatabasePath(): string | u
 export async function fenceLegacyGatewayCustody(
   key: string,
   databasePath: string | undefined,
+  currentIdentity?: ManagedUpdateLeaseDatabaseIdentity,
 ): Promise<{ refusal: string } | { release: () => void }> {
   if (!databasePath || !fs.existsSync(databasePath)) {
     return { release: () => {} };
+  }
+  if (currentIdentity) {
+    const database = await prepareManagedHandoffLeaseDatabase(databasePath);
+    if (database.databasePath === currentIdentity.databasePath) {
+      // Root admits ancestor aliases, never a database-leaf alias. The current
+      // executor will acquire through this exact pin and still refuse other owners.
+      assertManagedUpdateLeaseDatabaseIdentity(currentIdentity);
+      return { release: () => {} };
+    }
   }
   const store = await prepareManagedHandoffLeaseStore({
     databasePath,

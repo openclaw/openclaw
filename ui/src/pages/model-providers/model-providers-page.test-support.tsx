@@ -254,6 +254,8 @@ export function createHarness(initialScopeId: string) {
       }
       case "models.list":
         return { models: [] };
+      case "models.probe":
+        return { provider: "fixture", status: "ok", results: [] };
       case "config.get":
         return {
           config: { agents: { defaults: { thinkingDefault: "low", fastModeDefault: "auto" } } },
