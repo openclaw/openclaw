@@ -12,8 +12,8 @@ import {
 import type { AgentIdentityResult, GatewaySessionRow, SessionRunStatus } from "../../api/types.ts";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { Checkbox } from "../../components/solid/checkbox.tsx";
-import { sessionIconMask } from "../../components/solid/icon.tsx";
 import { IconButton, ROW_GLYPH_STROKE } from "../../components/solid/icon-button.tsx";
+import { sessionIconMask } from "../../components/solid/icon.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import {
   formatThinkingOverrideLabel,
@@ -423,9 +423,9 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow; row
               }
               aria-haspopup="menu"
               aria-expanded={props.sessionMenu?.key === row().key ? "true" : "false"}
-              onClick={(event: MouseEvent) => {
+              onClick={(event) => {
                 event.stopPropagation();
-                const trigger = event.currentTarget as HTMLButtonElement;
+                const trigger = event.currentTarget;
                 const rect = trigger.getBoundingClientRect();
                 props.onOpenSessionMenu(row(), { x: rect.right, y: rect.bottom + 4 }, trigger);
               }}

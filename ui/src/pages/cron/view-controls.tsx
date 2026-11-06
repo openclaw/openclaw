@@ -1,7 +1,7 @@
 import { createMemo, createUniqueId, Errored, Loading } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
-import { Icon, sessionIcon } from "../../components/solid/icon.tsx";
 import { iconButtonClass, ROW_GLYPH_STROKE } from "../../components/solid/icon-button.tsx";
+import { Icon, sessionIcon } from "../../components/solid/icon.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
 import { SettingsToggle } from "../../components/solid/settings-ui.tsx";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
