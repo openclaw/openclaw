@@ -519,23 +519,35 @@ it("keeps reads allowed while enforcing explicit outbound post denial", async ()
 });
 
 it.each(["sender send list", "global A2A enablement", "global A2A allow list"])(
-  "rejects a pending cross-agent post when %s is revoked",
+  "rejects a cross-agent post when %s is revoked during injection",
   async (policy) => {
     await withParticipantSessionToolsFixture(
       async ({ cfg, turn, alice }) => {
         const key = "agent:other:dashboard:revoked-post";
+        const sessionId = "revoked-post-session";
+        const marker = "Must not persist after revocation";
         await seedSessionToolsFixtureSession({
           agentId: "other",
           sessionKey: key,
-          sessionId: "revoked-post-session",
+          sessionId,
           creatorId: alice.profileId,
           visibility: "draft",
         });
         const options = {
           agentSessionKey: REQUESTER,
           requesterTurnRunId: turn.runtimeIdentity.operationalRunInstance.runId,
-          callGateway: <T>(request: Parameters<typeof callAgentToolGatewayRequest>[0]) => {
-            if (request.method === "sessions.post") {
+        };
+        const inject = chatInjection.injectGatewayAssistantMessage;
+        const load = sessionStoreWorker.loadGatewaySessionEntryReadOnlyInWorker;
+        let boundaryReached = false;
+        const readSpy = vi.spyOn(sessionStoreWorker, "loadGatewaySessionEntryReadOnlyInWorker");
+        const injectionSpy = vi
+          .spyOn(chatInjection, "injectGatewayAssistantMessage")
+          .mockImplementationOnce(async (...args) => {
+            readSpy.mockImplementationOnce(async (params) => {
+              expect(params.key).toBe(key);
+              const target = await load(params);
+              boundaryReached = true;
               if (policy === "sender send list") {
                 cfg.agents!.entries!.main!.tools!.agentToAgent!.send = [];
               } else if (policy === "global A2A enablement") {
@@ -544,31 +556,37 @@ it.each(["sender send list", "global A2A enablement", "global A2A allow list"])(
                 cfg.tools!.agentToAgent!.allow = ["main"];
               }
               setRuntimeConfigSnapshot({ ...cfg });
-            }
-            return callAgentToolGatewayRequest<T>(request);
-          },
-        };
-        await expect(
-          createSessionsSendTool(options).execute("revoked-post", {
-            sessionKey: key,
-            user: alice.profileId,
-            mode: "post",
-            message: "Must not persist after revocation",
-          }),
-        ).rejects.toThrow(/tools\.agentToAgent/);
+              return target;
+            });
+            return inject(...args);
+          });
+        try {
+          await expect(
+            createSessionsSendTool(options).execute("revoked-post", {
+              sessionKey: key,
+              user: alice.profileId,
+              mode: "post",
+              message: marker,
+            }),
+          ).rejects.toThrow(/tools\.agentToAgent/);
+        } finally {
+          injectionSpy.mockRestore();
+          readSpy.mockRestore();
+        }
+        expect(boundaryReached).toBe(true);
         const messages = await loadTranscriptEvents({
           agentId: "other",
           sessionKey: key,
-          sessionId: "revoked-post-session",
+          sessionId,
         });
-        expect(JSON.stringify(messages)).not.toContain("Must not persist after revocation");
+        expect(JSON.stringify(messages)).not.toContain(marker);
       },
       { visibility: "all", mainSend: ["other"], agentToAgent: { enabled: true } },
     );
   },
 );
 
-it("rejects a pending same-agent post when visibility is restricted to self", async () => {
+it("rejects a same-agent post when requester visibility is revoked during injection", async () => {
   await withParticipantSessionToolsFixture(
     async ({ cfg, turn, alice }) => {
       const key = "agent:main:dashboard:visibility-revoked-post";
@@ -586,22 +604,38 @@ it("rejects a pending same-agent post when visibility is restricted to self", as
       const options = {
         agentSessionKey: REQUESTER,
         requesterTurnRunId: turn.runtimeIdentity.operationalRunInstance.runId,
-        callGateway: <T>(request: Parameters<typeof callAgentToolGatewayRequest>[0]) => {
-          if (request.method === "sessions.post") {
+      };
+      const inject = chatInjection.injectGatewayAssistantMessage;
+      const load = sessionStoreWorker.loadGatewaySessionEntryReadOnlyInWorker;
+      let boundaryReached = false;
+      const readSpy = vi.spyOn(sessionStoreWorker, "loadGatewaySessionEntryReadOnlyInWorker");
+      const injectionSpy = vi
+        .spyOn(chatInjection, "injectGatewayAssistantMessage")
+        .mockImplementationOnce(async (...args) => {
+          readSpy.mockImplementationOnce(async (params) => {
+            expect(params.key).toBe(key);
+            const target = await load(params);
+            boundaryReached = true;
             cfg.tools!.sessions!.visibility = "self";
             setRuntimeConfigSnapshot({ ...cfg });
-          }
-          return callAgentToolGatewayRequest<T>(request);
-        },
-      };
-      await expect(
-        createSessionsSendTool(options).execute("visibility-revoked-post", {
-          sessionKey: key,
-          user: alice.profileId,
-          mode: "post",
-          message: "Must not persist after visibility revocation",
-        }),
-      ).rejects.toThrow(/tools\.sessions\.visibility/);
+            return target;
+          });
+          return inject(...args);
+        });
+      try {
+        await expect(
+          createSessionsSendTool(options).execute("visibility-revoked-post", {
+            sessionKey: key,
+            user: alice.profileId,
+            mode: "post",
+            message: "Must not persist after visibility revocation",
+          }),
+        ).rejects.toThrow(/tools\.sessions\.visibility/);
+      } finally {
+        injectionSpy.mockRestore();
+        readSpy.mockRestore();
+      }
+      expect(boundaryReached).toBe(true);
       const messages = await loadTranscriptEvents({
         agentId: "main",
         sessionKey: key,
