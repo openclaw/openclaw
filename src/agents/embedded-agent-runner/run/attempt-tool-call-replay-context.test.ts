@@ -143,7 +143,7 @@ it("keeps synthetic context rows and stored input media facts separate", () => {
   expect(sanitize(model, [withMedia, extension]).messages).toEqual([withMedia, extension]);
 });
 
-it("keeps operator updates separate while Bedrock still merges every adjacent user", () => {
+it("keeps user rows separate until provider media materialization, including Bedrock", () => {
   const update: UserMessage = { ...user("Operator update"), operatorMessage: { turnScoped: true } };
   expect(sanitize(model, [current, update, user("Steering")]).messages).toEqual([
     current,
@@ -152,13 +152,5 @@ it("keeps operator updates separate while Bedrock still merges every adjacent us
   ]);
   expect(
     sanitize({ ...model, api: "bedrock-converse-stream" }, [current, carrier]).messages,
-  ).toMatchObject([
-    {
-      role: "user",
-      content: [
-        { type: "text", text: current.content },
-        { type: "text", text: carrier.content },
-      ],
-    },
-  ]);
+  ).toEqual([current, carrier]);
 });

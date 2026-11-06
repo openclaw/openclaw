@@ -330,7 +330,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     },
   );
 
-  it("preserves valid Bedrock tool calls while merging appended user turns", () => {
+  it("preserves valid Bedrock tool calls and defers user merging to the provider boundary", () => {
     const assistant = {
       role: "assistant",
       content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
@@ -357,14 +357,8 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     expect(context.messages[0]).toBe(assistant);
     expect(context.messages).toEqual([
       assistant,
-      {
-        role: "user",
-        content: [
-          { type: "text", text: "earlier" },
-          { type: "text", text: "continue" },
-        ],
-        timestamp: undefined,
-      },
+      { role: "user", content: "earlier" },
+      { role: "user", content: "continue" },
     ]);
   });
 

@@ -63,6 +63,108 @@ const layout = (slots: MediaImageLayout["slots"], suppressedFactIndexes: number[
 afterEach(() => vi.restoreAllMocks());
 
 describe("structured prompt media replay", () => {
+  it.each(["persisted", "runtime"] as const)(
+    "keeps an earlier %s attachment when replay merges consecutive user turns",
+    async (source) => {
+      const bytes = png(0, 0, 255);
+      const media = mediaAt(await writeImage(workspaceDir, "earlier.png", bytes));
+      const earlier = buildPersistedUserTurnMessage({ text: "", timestamp: 1 });
+      if (source === "persisted") {
+        earlier["__openclaw"] = { media };
+      } else {
+        attachRuntimePromptMediaFacts(earlier, media);
+      }
+      const messages = [earlier, buildPersistedUserTurnMessage({ text: "inspect", timestamp: 2 })];
+      const original = JSON.stringify(messages);
+      const result = await materializeProviderContext({
+        workspaceDir,
+        workspaceOnly: true,
+        context: { messages: convertToLlm(messages) },
+        mergeUserTurns: { preserveContextBoundaries: true },
+      });
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0]?.content).toEqual([
+        { type: "text", text: "" },
+        image(bytes.toString("base64")),
+        { type: "text", text: "inspect" },
+      ]);
+      expect(JSON.stringify(messages)).toBe(original);
+    },
+  );
+
+  it("materializes an earlier video after canonical hydration and a user merge", async () => {
+    const bytes = Buffer.from("0000001c6674797069736f6d0000000069736f6d0000000000000000", "hex");
+    const file = await writeImage(workspaceDir, "earlier.mp4", bytes);
+    const messages = [
+      buildPersistedUserTurnMessage({
+        text: "clip",
+        media: [{ path: file, kind: "video", contentType: "video/mp4" }],
+        timestamp: 1,
+      }),
+      buildPersistedUserTurnMessage({ text: "inspect", timestamp: 2 }),
+    ];
+    const hydrated = await hydratePromptMediaMessages(messages, {
+      ...options(),
+      workspaceOnly: true,
+    });
+    const result = await materializeProviderContext({
+      workspaceDir,
+      workspaceOnly: true,
+      context: { messages: convertToLlm(hydrated) },
+      mergeUserTurns: { preserveContextBoundaries: true },
+    });
+    expect(result.messages[0]?.content).toEqual([
+      { type: "text", text: "clip" },
+      { type: "video", mimeType: "video/mp4", data: bytes.toString("base64") },
+      { type: "text", text: "inspect" },
+    ]);
+  });
+
+  it("keeps each row's image order and pinned omissions through repeated merged requests", async () => {
+    const red = png(255);
+    const blue = png(0, 0, 255);
+    const latePath = path.join(workspaceDir, "late.png");
+    const messages = [
+      buildPersistedUserTurnMessage({
+        text: "earlier",
+        idempotencyKey: "earlier",
+        media: mediaAt(await writeImage(workspaceDir, "red.png", red), latePath),
+      }),
+      attachRuntimePromptMediaFacts(
+        buildPersistedUserTurnMessage({ text: "current", idempotencyKey: "current" }),
+        mediaAt(await writeImage(workspaceDir, "blue.png", blue)),
+      ),
+      { role: "user" as const, content: [image()], timestamp: 3 },
+    ];
+    const sessionOptions = {
+      ...options(),
+      workspaceOnly: true,
+      imageSessionKey: promptImageSessionKey({
+        sessionId: "merged",
+        agentId: "main",
+        workspaceDir,
+      }),
+    };
+    const hydrated = await hydratePromptMediaMessages(messages, sessionOptions);
+    const original = JSON.stringify(hydrated);
+    await writeImage(workspaceDir, "late.png", png(0, 255));
+    for (let request = 0; request < 2; request++) {
+      const result = await materializeProviderContext({
+        ...sessionOptions,
+        context: { messages: convertToLlm(hydrated) },
+        mergeUserTurns: { preserveContextBoundaries: true },
+      });
+      expect(result.messages).toHaveLength(1);
+      const content = result.messages[0]?.content;
+      expect(Array.isArray(content) && content.filter((block) => block.type === "image")).toEqual([
+        image(red.toString("base64")),
+        image(blue.toString("base64")),
+        image(),
+      ]);
+      expect(JSON.stringify(hydrated)).toBe(original);
+    }
+  });
+
   it("keeps omitted images omitted and resized inline images included on later requests", async () => {
     const imagePath = path.join(workspaceDir, "late.png");
     // A steered inline copy above the model limit is resized again on every request.
@@ -121,31 +223,43 @@ describe("structured prompt media replay", () => {
       expect(result).toHaveProperty(field, value);
     }
   });
-  it("preserves shipped carrier metadata through provider media materialization", async () => {
+  it.each<Partial<UserMessage>>([
+    { runtimeContextCarrier: true, runtimeContextCarrierRetained: false },
+    { runtimeContext: { retained: false } },
+    { operatorMessage: { turnScoped: true } },
+    { synthetic: true },
+  ])("preserves context boundaries through provider media materialization (%j)", async (marker) => {
     const imagePath = await writeImage(workspaceDir, "attachment.png", png(0, 0, 255));
     const message: UserMessage = attachRuntimePromptMediaFacts(
       {
         role: "user" as const,
         content: "legacy runtime context",
         timestamp: 1,
-        runtimeContextCarrier: true,
-        runtimeContextCarrierRetained: false,
+        ...marker,
       },
       mediaAt(imagePath),
       ["offloaded"],
     );
 
     const result = await materializeProviderContext({
-      context: { messages: [message] },
+      context: { messages: [message, { role: "user", content: "next", timestamp: 2 }] },
       workspaceDir,
+      mergeUserTurns: { preserveContextBoundaries: true },
     });
 
     expect(result.messages[0]).toMatchObject({
       role: "user",
-      runtimeContextCarrier: true,
-      runtimeContextCarrierRetained: false,
+      ...marker,
       content: expect.arrayContaining([{ type: "text", text: "legacy runtime context" }]),
     });
+    expect(result.messages).toHaveLength(2);
+    const strict = await materializeProviderContext({
+      context: { messages: [message, { role: "user", content: "next", timestamp: 2 }] },
+      workspaceDir,
+      mergeUserTurns: { preserveContextBoundaries: false },
+    });
+    expect(strict.messages).toHaveLength(1);
+    expect(strict.messages[0]?.content).toContainEqual({ type: "text", text: "next" });
   });
 
   it("keeps persisted facts and asks the active turn to resend an unreadable image", async () => {
