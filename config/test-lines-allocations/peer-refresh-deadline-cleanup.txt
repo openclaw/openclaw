@@ -1,3 +1,0 @@
-# Keep the existing deadline case and deterministically cover expiry before peer preparation finishes.
-# Allocate only this change's net test growth; do not absorb inherited debt.
-17
