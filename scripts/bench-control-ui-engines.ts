@@ -704,10 +704,12 @@ try {
               if (scenario.navigation !== "measured") {
                 await page.goto(new URL(scenario.route, slot.server.baseUrl).href);
                 await waitForControlUiInitialRoster(page, 30_000);
-                await page.waitForFunction(
-                  (locale) => document.documentElement.lang === locale,
-                  configuration.locale,
-                );
+                if (!scenario.standalone) {
+                  await page.waitForFunction(
+                    (locale) => document.documentElement.lang === locale,
+                    configuration.locale,
+                  );
+                }
               }
               await scenario.prepare(page, gateway);
               if (scenario.navigation !== "measured") {
@@ -972,7 +974,10 @@ try {
               }
               // Capture/cleanup can also fail after the scenario assertions pass.
               if (observation.status === "passed" && cpuProfile) {
-                cpuCensus.add(`${viewport.name}/${scenario.id}/bundle-${bundle}`, cpuProfile);
+                cpuCensus.add(
+                  `${viewport.name}/${scenario.id}/${configuration.name}/bundle-${bundle}`,
+                  cpuProfile,
+                );
                 await writeJson("cpu-census.json", cpuCensus.report());
               }
               observations.push(observation);
