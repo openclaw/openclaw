@@ -332,6 +332,12 @@ it.each(["plain", "rendered", "unsorted"] as const)(
   },
 );
 
+it("keeps the whole IR when the chunk limit is not finite", () => {
+  const input = markdownToIR("Hello from OpenClaw — **this** message must never vanish.");
+  expect(chunkMarkdownIR(input, Number.NaN)).toEqual([input]);
+  expect(chunkMarkdownIR(input, Number.POSITIVE_INFINITY)).toEqual([input]);
+});
+
 it("handles empty parent with nested items", () => {
   expect(markdownToIR("-\n  - Nested only\n- Normal").text).toContain("  • Nested only");
 });
