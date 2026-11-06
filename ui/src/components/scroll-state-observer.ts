@@ -4,30 +4,6 @@ import { observeFontLoading } from "../lib/reactive/font-loading.ts";
 import { listen } from "../lib/reactive/listener.ts";
 
 export type ScrollState = { scrollable: boolean; atStart: boolean; atEnd: boolean };
-
-export function readScrollState(
-  element: HTMLElement,
-  horizontal = false,
-  restoredPosition?: number,
-): ScrollState {
-  const size = horizontal ? element.scrollWidth : element.scrollHeight;
-  const viewport = horizontal ? element.clientWidth : element.clientHeight;
-  // Horizontal consumers describe physical left/right edges, including in RTL.
-  const position =
-    restoredPosition ??
-    (horizontal
-      ? getComputedStyle(element).direction === "rtl"
-        ? size - viewport + element.scrollLeft
-        : element.scrollLeft
-      : element.scrollTop);
-  const scrollable = size > viewport + 1;
-  return {
-    scrollable,
-    atStart: !scrollable || position <= 1,
-    atEnd: !scrollable || position + viewport >= size - 1,
-  };
-}
-
 type Observation = {
   horizontal: boolean;
   trackScroll: boolean;
@@ -50,7 +26,20 @@ function schedule(element: HTMLElement): void {
     const updates = [...entries].map((entry) => {
       let state = states.get(entry.horizontal);
       if (!state) {
-        state = readScrollState(element, entry.horizontal);
+        const size = entry.horizontal ? element.scrollWidth : element.scrollHeight;
+        const viewport = entry.horizontal ? element.clientWidth : element.clientHeight;
+        // Horizontal consumers describe physical left/right edges, including in RTL.
+        const position = entry.horizontal
+          ? getComputedStyle(element).direction === "rtl"
+            ? size - viewport + element.scrollLeft
+            : element.scrollLeft
+          : element.scrollTop;
+        const scrollable = size > viewport + 1;
+        state = {
+          scrollable,
+          atStart: !scrollable || position <= 1,
+          atEnd: !scrollable || position + viewport >= size - 1,
+        };
         states.set(entry.horizontal, state);
       }
       return { entry, state };
@@ -75,7 +64,7 @@ function onScroll(event: Event): void {
   }
 }
 
-/** Share one observer and frame read across an element's consumers. */
+/** One observer and one frame batch serve component and sidebar scroll state. */
 export function observeScrollState(
   element: HTMLElement,
   publish: (state: ScrollState) => void,

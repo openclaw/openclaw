@@ -21,35 +21,6 @@ const suite = createControlUiE2eSuite({
   name: "Sidebar optional boot imports",
 });
 
-type RestoreTraceEvent = {
-  name: string;
-  ph: string;
-  pid: number;
-  tid: number;
-  ts: number;
-  dur?: number;
-};
-
-function expectRestoreWithoutSynchronousLayout(events: RestoreTraceEvent[]) {
-  const starts = events.filter((event) => event.name === "sidebar-restore-geometry-start");
-  const ends = events.filter((event) => event.name === "sidebar-restore-geometry-end");
-  expect(starts.length).toBeGreaterThan(0);
-  expect(ends).toHaveLength(starts.length);
-  const layout = events.filter(
-    (event) => event.ph === "X" && ["Layout", "UpdateLayoutTree"].includes(event.name),
-  );
-  const synchronous = starts.flatMap((start, index) =>
-    layout.filter(
-      (event) =>
-        event.pid === start.pid &&
-        event.tid === start.tid &&
-        event.ts < ends[index]!.ts &&
-        event.ts + (event.dur ?? 0) > start.ts,
-    ),
-  );
-  expect(synchronous.map((event) => event.name)).toEqual([]);
-}
-
 function expectCachedScroll(
   report: { frames: Array<{ cached: boolean; scrollTop: number }> },
   scrollTop: number,
@@ -110,42 +81,22 @@ suite.define(() => {
             fixture.scenario.sessionGroups ?? [],
           );
           await context.addInitScript(() => {
-            const geometry = Object.getOwnPropertyDescriptor(Element.prototype, "scrollHeight")!;
-            let measured = false;
-            Object.defineProperty(Element.prototype, "scrollHeight", {
-              ...geometry,
-              get(this: Element) {
-                const restoring =
-                  !measured &&
-                  this.isConnected &&
-                  this.classList.contains("sidebar-shell__body") &&
-                  this.closest("aside.sidebar")?.getAttribute("data-snapshot-state") === "cached";
-                if (restoring) {
-                  measured = true;
-                  performance.mark("sidebar-restore-geometry-start");
-                }
-                return geometry.get!.call(this);
-              },
-            });
-            const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
-            Object.defineProperty(Element.prototype, "scrollTop", {
-              ...descriptor,
-              set(this: Element, value: number) {
-                const restoring =
-                  value === 1400 &&
-                  this.isConnected &&
-                  this.classList.contains("sidebar-shell__body") &&
-                  this.closest("aside.sidebar")?.getAttribute("data-snapshot-state") === "cached";
-                if (restoring) {
-                  performance.mark("sidebar-restore-native-start");
-                }
-                descriptor.set!.call(this, value);
-                if (restoring) {
-                  performance.mark("sidebar-restore-native-end");
-                  performance.mark("sidebar-restore-geometry-end");
-                }
-              },
-            });
+            Reflect.set(
+              window,
+              "__sidebarPersisted",
+              new Promise<void>((resolve) => {
+                // oxlint-disable-next-line typescript/unbound-method -- each call preserves its native store receiver.
+                const put = IDBObjectStore.prototype.put;
+                IDBObjectStore.prototype.put = function (value, key) {
+                  const request = put.call(this, value, key);
+                  if (this.name === "sidebarSnapshots" && value.model) {
+                    IDBObjectStore.prototype.put = put;
+                    this.transaction.addEventListener("complete", () => resolve(), { once: true });
+                  }
+                  return request;
+                };
+              }),
+            );
           });
           await context.addInitScript(
             ({ key, entries }) => {
@@ -196,6 +147,7 @@ suite.define(() => {
           await gateway.waitForRequest("connect");
           await gateway.resolveDeferred("connect");
           await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
+          await page.evaluate(() => Reflect.get(window, "__sidebarPersisted"));
           await page.locator(".sidebar-recent-session").nth(10).waitFor();
           expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(hasTouch);
           expect(
@@ -224,50 +176,37 @@ suite.define(() => {
           const saveScroll = (offset: number) =>
             page.evaluate(async (scrollTop) => {
               const scroller = document.querySelector<HTMLElement>(".sidebar-shell__body")!;
-              const saved = new Promise<number>((resolve) => {
-                // oxlint-disable-next-line typescript/unbound-method -- call preserves each native store receiver.
-                const put = IDBObjectStore.prototype.put;
-                IDBObjectStore.prototype.put = function (value, key) {
-                  const request = put.call(this, value, key);
-                  if (
-                    this.name === "sidebarSnapshots" &&
-                    value.model?.scrollTop === scrollTop &&
-                    value.model.windowKeys.length > 0
-                  ) {
-                    IDBObjectStore.prototype.put = put;
-                    this.transaction.addEventListener(
-                      "complete",
-                      () => resolve(value.model.scrollTop),
-                      {
-                        once: true,
-                      },
-                    );
-                  }
-                  return request;
-                };
-              });
               scroller.scrollTop = scrollTop;
               scroller.dispatchEvent(new Event("scroll"));
               await new Promise<void>((resolve) => {
                 requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
               });
               window.dispatchEvent(new Event("pagehide"));
-              return saved;
+              return scroller.scrollTop;
             }, offset);
-          const devtools = await context.newCDPSession(page);
-          let restoreTrace: RestoreTraceEvent[] = [];
-          devtools.on("Tracing.dataCollected", ({ value }: { value: RestoreTraceEvent[] }) =>
-            restoreTrace.push(...value),
-          );
-          try {
-            for (const face of ["chat", "dashboard"] as const) {
-              const artifact = `${hasTouch ? "coarse" : "fine"}-${face}`;
-              await page.goto(
-                controlUiSessionUrl(suite.server.baseUrl, fixture.selectedSessionKey, face),
-              );
+          for (const face of ["chat", "dashboard"] as const) {
+            await page.goto(
+              controlUiSessionUrl(suite.server.baseUrl, fixture.selectedSessionKey, face),
+            );
+            await gateway.waitForRequest("connect");
+            await gateway.resolveDeferred("connect");
+            await page
+              .locator('aside.sidebar[data-snapshot-state="live"][data-snapshot-saved="true"]')
+              .waitFor();
+            for (const inputOffset of [0, 1400]) {
+              // A changed scroll position can legitimately dedupe the same top-window receipt.
+              expect(await saveScroll(inputOffset)).toBe(inputOffset);
+              await page.reload();
               await gateway.waitForRequest("connect");
               await page.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
-              await page.evaluate(() => new Promise(requestAnimationFrame));
+              await page.evaluate(() => Reflect.get(window, "__sidebarPresentation").nextFrame());
+              expect(
+                await page.locator(".sidebar-shell__body").evaluate((element) => element.scrollTop),
+              ).toBe(0);
+              expect(
+                await evaluateControlUiContext(page, (app) => app.gateway.snapshot.hello),
+              ).toBeNull();
+              const artifact = `${hasTouch ? "coarse" : "fine"}-${face}-${inputOffset}`;
               await page
                 .locator("aside.sidebar")
                 .screenshot({ path: path.join(suite.artifactDir, `${artifact}-cached.png`) });
@@ -275,98 +214,23 @@ suite.define(() => {
               await page
                 .locator('aside.sidebar[data-snapshot-state="live"][data-snapshot-saved="true"]')
                 .waitFor();
-              await page.evaluate(() => new Promise(requestAnimationFrame));
+              await page.evaluate(() => Reflect.get(window, "__sidebarPresentation").nextFrame());
               const report = await page.evaluate(() =>
                 Reflect.get(window, "__sidebarPresentation").read(),
               );
               await writeFile(
                 path.join(suite.artifactDir, `${artifact}-parity.json`),
-                JSON.stringify(report, null, 2),
+                JSON.stringify(
+                  { savedInputOffset: inputOffset, expectedOutputOffset: 0, ...report },
+                  null,
+                  2,
+                ),
               );
               expectCachedRows(report, 0);
               await page
                 .locator("aside.sidebar")
                 .screenshot({ path: path.join(suite.artifactDir, `${artifact}-live.png`) });
-
-              expect(await saveScroll(1400)).toBe(1400);
-              restoreTrace = [];
-              await devtools.send("Tracing.start", {
-                categories: "devtools.timeline,blink.user_timing",
-                transferMode: "ReportEvents",
-              });
-              try {
-                await page.reload();
-                await gateway.waitForRequest("connect");
-                await page.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
-                await page.evaluate(() => Reflect.get(window, "__sidebarPresentation").nextFrame());
-                expect(
-                  await page
-                    .locator(".sidebar-shell__body")
-                    .evaluate((element) => element.scrollTop),
-                ).toBe(1400);
-                expect(
-                  await evaluateControlUiContext(page, (app) => app.gateway.snapshot.hello),
-                ).toBeNull();
-              } finally {
-                const complete = new Promise<void>((resolve) => {
-                  devtools.once("Tracing.tracingComplete", () => resolve());
-                });
-                await devtools.send("Tracing.end");
-                await complete;
-                await writeFile(
-                  path.join(suite.artifactDir, `${artifact}-scroll-restore.trace.json`),
-                  JSON.stringify({ traceEvents: restoreTrace }),
-                );
-              }
-              expectRestoreWithoutSynchronousLayout(restoreTrace);
-              await gateway.resolveDeferred("connect");
-              await page
-                .locator('aside.sidebar[data-snapshot-state="live"][data-snapshot-saved="true"]')
-                .waitFor();
-              await page.evaluate(() => new Promise(requestAnimationFrame));
-              const scrollPresentation = await page.evaluate(() =>
-                Reflect.get(window, "__sidebarPresentation").read(),
-              );
-              await writeFile(
-                path.join(suite.artifactDir, `${artifact}-scroll-presentation.json`),
-                JSON.stringify(scrollPresentation, null, 2),
-              );
-              expectCachedRows(scrollPresentation, 1400);
-              if (hasTouch) {
-                const end = await page
-                  .locator(".sidebar-shell__body")
-                  .evaluate((element) => element.scrollHeight - element.clientHeight);
-                expect(end).toBeGreaterThan(1400);
-                expect(await saveScroll(end)).toBe(end);
-                await page.reload();
-                await gateway.waitForRequest("connect");
-                await page.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
-                await page.evaluate(() => new Promise(requestAnimationFrame));
-                const cachedEndTop = await page
-                  .locator(".sidebar-shell__body")
-                  .evaluate((element) => element.scrollTop);
-                expect(
-                  await evaluateControlUiContext(page, (app) => app.gateway.snapshot.hello),
-                ).toBeNull();
-                await gateway.resolveDeferred("connect");
-                await page
-                  .locator('aside.sidebar[data-snapshot-state="live"][data-snapshot-saved="true"]')
-                  .waitFor();
-                await page.evaluate(() => new Promise(requestAnimationFrame));
-                const endPresentation = await page.evaluate(() =>
-                  Reflect.get(window, "__sidebarPresentation").read(),
-                );
-                await writeFile(
-                  path.join(suite.artifactDir, `${artifact}-end-presentation.json`),
-                  JSON.stringify({ savedEnd: end, cachedEndTop, ...endPresentation }, null, 2),
-                );
-                expect(cachedEndTop).toBe(end);
-                expectCachedScroll(endPresentation, end);
-              }
-              expect(await saveScroll(0)).toBe(0);
             }
-          } finally {
-            await devtools.detach();
           }
         },
       );

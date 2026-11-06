@@ -91,12 +91,8 @@ export function createSidebarSessionWindow(
   const restoreAnchor = scroll.readAnchor();
   const anchorAt = (top: number) =>
     top < 0 || top >= totalHeight ? undefined : positions.findLast((item) => item.top <= top);
-  const publish = () => {
-    const scroller = scroll.element();
-    if (!scroller) {
-      return;
-    }
-    const top = scroll.top() - margin;
+  const windowAt = (offset: number) => {
+    const top = offset - margin;
     const first = positions.findIndex((item) => item.top + item.height > top);
     const beyond = positions.findIndex((item) => item.top >= top + viewportHeight);
     const start = first < 0 ? positions.length : Math.max(0, first - 2);
@@ -104,12 +100,19 @@ export function createSidebarSessionWindow(
     const end =
       beyond < 0 ? positions.length : beyond === 0 ? 0 : Math.min(positions.length, beyond + 2);
     // Scroll can precede geometry's retention update after selection or focus.
-    const items = positions.filter(
+    return positions.filter(
       (item, index) =>
         (index >= start && index < end) ||
         current[index]!.retained ||
         retained(item.row, focusedKey()),
     );
+  };
+  const publish = () => {
+    const scroller = scroll.element();
+    if (!scroller) {
+      return;
+    }
+    const items = windowAt(scroller.scrollTop);
     setView((previous) =>
       previous?.height === totalHeight &&
       previous.items.length === items.length &&
@@ -126,8 +129,8 @@ export function createSidebarSessionWindow(
   };
   const rebuild = () => {
     const scroller = scroll.element();
-    const anchor = scroller && anchorAt(scroll.top() - margin);
-    const offset = anchor ? scroll.top() - margin - anchor.top : 0;
+    const anchor = scroller && anchorAt(scroller.scrollTop - margin);
+    const offset = anchor ? scroller.scrollTop - margin - anchor.top : 0;
     let top = 0;
     positions = current.map((input, index) => {
       const known = measured.get(input.row.key);
@@ -240,11 +243,21 @@ export function createSidebarSessionWindow(
         return;
       }
       publish();
-      const top = scroll.top() - margin;
+      const top = scroller.scrollTop - margin;
       const anchor = anchorAt(top);
       if (anchor) {
         scroll.captureAnchor({ key: anchor.row.key, offset: top - anchor.top });
       }
+    }),
+  );
+  onSettled(() =>
+    // Reload starts at zero; capture that range without another layout read.
+    scroll.registerWindow(() => {
+      const source = inputs();
+      if (source.length === 0) {
+        return [];
+      }
+      return view() && current === source ? windowAt(0).map((item) => item.row.key) : undefined;
     }),
   );
   const items = createMemo(() => {

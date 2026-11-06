@@ -1,17 +1,15 @@
 import { createContext, createSignal } from "solid-js";
 import { elementRef } from "../lib/reactive/element-ref.ts";
-import { createLayoutMeasurement } from "../lib/reactive/layout-measurement.ts";
-import { observeResize } from "../lib/reactive/observers.ts";
 import type { AppSidebarOwner } from "./app-sidebar-owner.tsx";
 import type { SidebarSessionsScrollState } from "./app-sidebar-session-types.ts";
-import { readScrollState, type ScrollState } from "./scroll-state-observer.ts";
+import { observeScrollState } from "./scroll-state-observer.ts";
 
 export const SidebarScrollContext = createContext<{
   element(): HTMLElement | undefined;
   content(): HTMLElement | undefined;
-  top(): number;
   rowFloor(): number;
   captureRowFloor(value: number): void;
+  registerWindow(read: () => readonly string[] | undefined): () => void;
   readAnchor(): { key: string; offset: number } | undefined;
   captureAnchor(anchor: { key: string; offset: number }): void;
   subscribeScroll(listener: () => void): () => void;
@@ -27,60 +25,51 @@ export function createSidebarScroll(
   const positions = new Map<string, number>();
   const anchors = new Map<string, { key: string; offset: number }>();
   const scrollListeners = new Set<() => void>();
+  const windows = new Set<() => readonly string[] | undefined>();
+  let rowFloor: number | undefined;
   const [state, setState] = createSignal<SidebarSessionsScrollState>("none");
-  // Cached DOM can bind after this owner's initial settle.
-  const [viewportRevision, setViewportRevision] = createSignal(0);
   let presentedKey = "sessions";
   let scroller: HTMLElement | undefined;
   let content: HTMLElement | undefined;
-  let pendingTop: number | undefined;
-  let knownRowFloor: number | undefined;
+  let observation: ReturnType<typeof observeScrollState> | undefined;
   const key = () =>
     host.navigationView === "sessions"
       ? (host.contextualSidebar?.key ?? "sessions")
       : host.navigationView;
-  // Window selection uses the saved offset until the shared layout pass applies it.
-  const top = () => pendingTop ?? scroller?.scrollTop ?? 0;
-  const publish = (next: ScrollState) =>
-    setState(!next.scrollable ? "none" : next.atStart ? "top" : next.atEnd ? "bottom" : "middle");
-  const measure = createLayoutMeasurement(
-    () => {
-      viewportRevision();
-      return key();
-    },
-    () => {
-      const element = scroller;
-      if (!element || pendingTop !== undefined) {
-        return undefined;
-      }
-      const next = readScrollState(element);
-      return () => {
-        if (scroller !== element) {
-          return;
-        }
-        publish(next);
-      };
-    },
-    {
-      targets: () => (scroller ? [scroller, ...(content ? [content] : [])] : []),
-      fonts: true,
-    },
-  );
   return {
     state,
-    top,
-    rowFloor: () => knownRowFloor ?? host.sidebarSnapshot?.rowFloor ?? 32,
-    captureRowFloor: (value: number) => (knownRowFloor = value),
+    rowFloor: () => rowFloor ?? host.sidebarSnapshot?.rowFloor ?? 32,
+    captureRowFloor(value: number) {
+      rowFloor = value;
+      host.snapshot.capture();
+    },
+    registerWindow(read: () => readonly string[] | undefined) {
+      windows.add(read);
+      return () => {
+        windows.delete(read);
+      };
+    },
+    windowKeys() {
+      const keys = new Set<string>();
+      for (const read of windows) {
+        const window = read();
+        if (!window) {
+          return undefined;
+        }
+        for (const key of window) {
+          keys.add(key);
+        }
+      }
+      return [...keys];
+    },
     element: () => scroller,
     content: () => content,
     createContentRef() {
       return elementRef((element: HTMLElement) => {
         content = element;
-        setViewportRevision((revision) => revision + 1);
         return () => {
           if (content === element) {
             content = undefined;
-            setViewportRevision((revision) => revision + 1);
           }
         };
       });
@@ -97,39 +86,24 @@ export function createSidebarScroll(
       // The frame can disappear while its containing sidebar retains destination offsets.
       return elementRef((element: HTMLElement) => {
         scroller = element;
-        presentedKey = key();
-        // Zero needs no native write; it would still synchronously flush dirty layout.
-        pendingTop =
-          Math.max(0, host.sidebarSnapshot?.scrollTop ?? positions.get(presentedKey) ?? 0) ||
-          undefined;
-        // Native resize delivery follows layout and restores before this frame paints.
-        const stopRestore =
-          pendingTop === undefined
-            ? undefined
-            : observeResize([element], () => {
-                if (!element.isConnected || pendingTop === undefined) {
-                  return;
-                }
-                const next = readScrollState(element, false, pendingTop);
-                element.scrollTop = pendingTop;
-                pendingTop = undefined;
-                publish(next);
-                stopRestore?.();
-              });
-        setViewportRevision((revision) => revision + 1);
+        const bound = observeScrollState(element, (next) =>
+          setState(
+            !next.scrollable ? "none" : next.atStart ? "top" : next.atEnd ? "bottom" : "middle",
+          ),
+        );
+        observation = bound;
         return () => {
-          stopRestore?.();
-          if (scroller === element) {
+          bound.disconnect();
+          if (observation === bound) {
+            observation = undefined;
             scroller = undefined;
-            pendingTop = undefined;
-            setViewportRevision((revision) => revision + 1);
           }
         };
       });
     },
     capture() {
       if (host.isConnected && key() !== presentedKey && scroller) {
-        positions.set(presentedKey, top());
+        positions.set(presentedKey, scroller.scrollTop);
       }
     },
     restore() {
@@ -139,22 +113,19 @@ export function createSidebarScroll(
       const next = key();
       if (next !== presentedKey) {
         presentedKey = next;
-        pendingTop = undefined;
         if (scroller) {
           scroller.scrollTop = positions.get(next) ?? 0;
         }
       }
-      measure();
+      observation?.schedule();
     },
     onScroll: () => {
       if (scroller) {
-        measure();
         positions.set(presentedKey, scroller.scrollTop);
         anchors.delete(presentedKey);
         for (const listener of scrollListeners) {
           listener();
         }
-        host.snapshot.capture();
       }
     },
   };

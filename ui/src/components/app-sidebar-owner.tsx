@@ -472,9 +472,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
         host={host()}
         empty={visibleSessions().length === 0}
         sections={sections()}
-        nativeSessionsHaveMore={
-          host().sidebarSnapshot?.hasMore ?? host().sessionData.sessionsResult?.hasMore === true
-        }
+        nativeSessionsHaveMore={host().sessionData.sessionsResult?.hasMore === true}
         nativeSessionsLoading={host().sessionData.sessionsLoading}
         catalogRenderer={Catalog}
         catalogs={{
