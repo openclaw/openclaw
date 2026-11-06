@@ -49,8 +49,8 @@ async function toSigner(pair: StoredDeviceKey): Promise<StatementSigner> {
   };
 }
 
-/** Creates a new non-extractable device key (not stored until `saveOwnerDeviceKey`). */
-export async function generateOwnerDeviceKey(): Promise<{
+// Creates a new non-extractable device key; `retainKey` stores it.
+async function generateOwnerDeviceKey(): Promise<{
   pair: StoredDeviceKey;
   signer: StatementSigner;
 }> {
@@ -66,16 +66,15 @@ export async function loadOwnerDeviceSigner(clawId: string): Promise<StatementSi
   return pair ? await toSigner(pair) : undefined;
 }
 
-/** A mailbox-only peer proof key. It is never enrolled in the claw or granted tunnel access. */
-export async function loadMailboxPeerSigner(clawId: string): Promise<StatementSigner> {
-  const key = `${clawId}:mailbox`;
+// The signer for the key stored under `key`, storing a new key first when there is none.
+// Two tabs may start together; the first stored key is kept instead of being replaced.
+async function retainKey(key: string): Promise<StatementSigner> {
   const stored = await run<StoredDeviceKey | undefined>("readonly", (store) => store.get(key));
   if (stored) {
     return toSigner(stored);
   }
   const generated = await generateOwnerDeviceKey();
   try {
-    // Two tabs may start together; retain the first key instead of replacing a bound W.
     await run("readwrite", (store) => store.add(generated.pair, key));
     return generated.signer;
   } catch (error) {
@@ -87,8 +86,21 @@ export async function loadMailboxPeerSigner(clawId: string): Promise<StatementSi
   }
 }
 
-/** Stores this origin's owner device key for a claw. */
-export async function saveOwnerDeviceKey(clawId: string, pair: StoredDeviceKey): Promise<void> {
-  await run("readwrite", (store) => store.put(pair, clawId));
+/** A mailbox-only peer proof key. It is never enrolled in the claw or granted tunnel access. */
+export async function loadMailboxPeerSigner(clawId: string): Promise<StatementSigner> {
+  return await retainKey(`${clawId}:mailbox`);
+}
+
+/**
+ * This origin's owner device signer for a claw, stored before the link that enrolls it
+ * is sent: if the Gateway's answer is lost, the key the claw admitted is still here. A
+ * key this origin already holds for the claw is reused, never replaced.
+ */
+export async function ensureOwnerDeviceSigner(clawId: string): Promise<StatementSigner> {
+  return await retainKey(clawId);
+}
+
+/** Tells approval lifetimes that this browser now holds a linked claw's owner key. */
+export function announceOwnerDeviceKey(): void {
   keyListeners.forEach((listener) => listener());
 }
