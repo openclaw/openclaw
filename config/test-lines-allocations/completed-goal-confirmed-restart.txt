@@ -1,4 +1,4 @@
-# Confirmed completed-goal starts: exactly +257 test lines versus the PR base.
+# Confirmed completed-goal starts: exactly +281 test lines versus the PR base.
 # Extends existing SQLite, send-normalization (including closed preconditions),
 # busy-admission and UI suites; removes restart-specific helpers and coverage.
-257
+281

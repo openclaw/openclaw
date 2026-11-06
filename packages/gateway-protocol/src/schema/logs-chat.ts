@@ -350,8 +350,9 @@ export const ChatSendIntentSchema = closedObject({
   kind: Type.Literal("session-goal-start"),
   version: Type.Literal(1),
   issuedAtMs: Type.Integer({ minimum: 0 }),
+  // Both selected keys are required, so the count cap also closes this JSON object.
   expectedCompletedGoal: Type.Optional(
-    Type.Pick(SessionGoalSchema, ["id", "updatedAt"], { additionalProperties: false }),
+    Type.Pick(SessionGoalSchema, ["id", "updatedAt"], { maxProperties: 2 }),
   ),
 });
 export type ChatSendIntent = Static<typeof ChatSendIntentSchema>;

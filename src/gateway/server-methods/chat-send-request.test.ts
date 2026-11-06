@@ -1,5 +1,8 @@
 import { createHmac } from "node:crypto";
+import { Value } from "typebox/value";
 import { expect, it, vi } from "vitest";
+import { validateChatSendParams } from "../../../packages/gateway-protocol/src/index.js";
+import { ChatSendParamsSchema } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { loadChatRequestIdentityKeyAsync } from "../../infra/device-identity-async.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -180,6 +183,33 @@ it("binds confirmed completed-goal identity and revision into start and retry fi
 });
 
 it.each([
+  [{ id: "completed-goal", updatedAt: 2 }, true],
+  [null, false],
+  [[], false],
+  [{}, false],
+  [{ id: "completed-goal" }, false],
+  [{ updatedAt: 2 }, false],
+  [{ id: "", updatedAt: 2 }, false],
+  [{ id: 1, updatedAt: 2 }, false],
+  [{ id: null, updatedAt: 2 }, false],
+  [{ id: [], updatedAt: 2 }, false],
+  [{ id: {}, updatedAt: 2 }, false],
+  [{ id: "completed-goal", updatedAt: "2" }, false],
+  [{ id: "completed-goal", updatedAt: null }, false],
+  [{ id: "completed-goal", updatedAt: [] }, false],
+  [{ id: "completed-goal", updatedAt: {} }, false],
+  [{ id: "completed-goal", updatedAt: 2, status: "complete" }, false],
+  [{ id: "completed-goal", updatedAt: 2, arbitrary: true }, false],
+] as const)(
+  "keeps canonical and compiled completed-goal shape closed for %j",
+  (expectedCompletedGoal, valid) => {
+    const params = requestParams({ intent: { ...goalIntent(), expectedCompletedGoal } });
+    expect(Value.Check(ChatSendParamsSchema, params)).toBe(valid);
+    expect(validateChatSendParams(params)).toBe(valid);
+  },
+);
+
+it.each([
   { message: "/stop", workContext: { page: "chat" } },
   { workContext: { page: "chat", selection: "x".repeat(641) } },
   { workContext: { page: " " } },
@@ -268,12 +298,6 @@ it.each([
   { intent: { kind: "session-goal-resume", version: 1, issuedAtMs: 1 } },
   { intent: { kind: "session-goal-start", version: 2, issuedAtMs: 1 } },
   { intent: { kind: "session-goal-start", version: 1 } },
-  {
-    intent: {
-      ...goalIntent(),
-      expectedCompletedGoal: { id: "completed-goal", updatedAt: 2, status: "complete" },
-    },
-  },
   {
     intent: { kind: "session-goal-start", version: 1, issuedAtMs: 1, objective: "second target" },
   },
