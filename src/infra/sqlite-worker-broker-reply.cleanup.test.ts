@@ -3,12 +3,13 @@ import type { MessagePort } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
+  receiveSqliteWorkerReply,
   settleFailedSqliteWorkerJobs,
   settleSqliteWorkerJob,
   withSqliteWorkerCleanupFailure,
 } from "./sqlite-worker-broker-reply.js";
 import type { Job } from "./sqlite-worker-broker.types.js";
-import { SqliteWorkerError } from "./sqlite-worker-contract.js";
+import { hasSqliteWorkerOutcomeUnknown, SqliteWorkerError } from "./sqlite-worker-contract.js";
 import type { SqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
 
@@ -18,7 +19,7 @@ const effects = vi.hoisted(() => {
   const forbidden = vi.fn((): never => {
     throw new Error("Pure settlement proof crossed a native or unrelated effect boundary");
   });
-  return { events, warnings, forbidden };
+  return { events, warnings, forbidden, retainPayload: vi.fn() };
 });
 
 vi.mock("node:worker_threads", async (importOriginal) => ({
@@ -37,7 +38,7 @@ vi.mock("node:child_process", () => ({
   fork: effects.forbidden,
 }));
 vi.mock("../state/openclaw-state-worker-error.js", () => ({
-  retainOpenClawStateWorkerErrorPayload: effects.forbidden,
+  retainOpenClawStateWorkerErrorPayload: effects.retainPayload,
 }));
 vi.mock("./sqlite-transaction.js", () => ({
   retainSqliteWriteAdmissionService: effects.forbidden,
@@ -138,6 +139,52 @@ afterEach(() => {
 });
 
 describe("SQLite worker settlement cleanup lineage", { concurrent: false }, () => {
+  it.each(["Error", "SqliteWorkerError"])(
+    "retains canonical outcome provenance for a %s reply",
+    (name) => {
+      const { job } = jobWithCleanup();
+      job.request.stateContext = { environment: { OPENCLAW_STATE_DIR: "/synthetic-state" } };
+      const finish = vi.fn();
+      receiveSqliteWorkerReply(
+        { current: job, worker: { postMessage: effects.forbidden } },
+        {
+          id: job.request.id,
+          ok: false,
+          error: {
+            name,
+            message: "Backend result unavailable",
+            code: "outcome-unknown",
+            sharedState: { version: 1, root: 0, nodes: [] },
+          },
+        },
+        { fail: effects.forbidden, finish, dispatch: vi.fn() },
+      );
+      const failure: unknown = finish.mock.calls[0]?.[1];
+      expect(failure).toMatchObject({ name, code: "outcome-unknown" });
+      expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(name === "SqliteWorkerError");
+      expect(effects.retainPayload).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])("gates shared-state error payloads on job context: %s", (withContext) => {
+    const { job } = jobWithCleanup();
+    if (withContext) {
+      job.request.stateContext = { environment: { OPENCLAW_STATE_DIR: "/synthetic-state" } };
+    }
+    const sharedState = { version: 1 as const, root: 0, nodes: [] };
+    const reply = {
+      id: job.request.id,
+      ok: false as const,
+      error: { name: "Error", message: "Ordinary failure", sharedState },
+    };
+    receiveSqliteWorkerReply({ current: job, worker: { postMessage: effects.forbidden } }, reply, {
+      fail: effects.forbidden,
+      finish: vi.fn(),
+      dispatch: vi.fn(),
+    });
+    expect(effects.retainPayload).toHaveBeenCalledTimes(withContext ? 1 : 0);
+  });
+
   it.each([
     { outcome: "value", retired: true },
     { outcome: "error", retired: true },
