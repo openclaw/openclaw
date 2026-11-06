@@ -212,20 +212,30 @@ export function resolveExecutable(cmd: string): string {
   const envPath = resolveEnvironmentValue(process.env, "PATH") ?? "";
   const entries = envPath.split(";").filter(Boolean);
   const extensions = resolveWindowsExecutableExtensions(cmd, process.env);
-  const matches: string[] = [];
+  // PATH order is the installation priority. The wrapper preference below must
+  // stay inside one directory: a stale .cmd shim in a later entry may not
+  // outrank an .exe that PATH selects earlier.
+  const extensionOf = (candidate: string) =>
+    normalizeLowercaseStringOrEmpty(path.extname(candidate));
   for (const entry of entries) {
+    const directoryMatches: string[] = [];
     for (const ext of extensions) {
       const candidate = path.join(entry, cmd + ext);
       if (isExecutableFile(candidate, { env: process.env })) {
-        matches.push(candidate);
+        directoryMatches.push(candidate);
       }
+    }
+    if (directoryMatches.length === 0) {
+      continue;
+    }
+    const preferred =
+      directoryMatches.find((match) => extensionOf(match) === ".cmd") ??
+      directoryMatches.find((match) => extensionOf(match) === ".exe") ??
+      directoryMatches[0];
+    if (preferred !== undefined) {
+      return preferred;
     }
   }
 
-  return (
-    matches.find((match) => normalizeLowercaseStringOrEmpty(path.extname(match)) === ".cmd") ??
-    matches.find((match) => normalizeLowercaseStringOrEmpty(path.extname(match)) === ".exe") ??
-    matches[0] ??
-    cmd
-  );
+  return cmd;
 }
