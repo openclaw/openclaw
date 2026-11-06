@@ -6689,7 +6689,7 @@ describe("ci workflow guards", () => {
         step.uses === "./.ci-harness/.github/actions/sdk-declarations" &&
         String(step.with?.mode).startsWith("restore"),
     );
-    for (const shared of ["true", "false"]) {
+    for (const sharing of ["true", "false"]) {
       for (const needsSdk of [true, false]) {
         const selected = coreRestores.filter((step: WorkflowStep) =>
           evaluateWorkflowCondition(expectDefined(step.if, "SDK restore condition"), {
@@ -6698,14 +6698,14 @@ describe("ci workflow guards", () => {
             runAttempt: 1,
             matrix: { requires_sdk_declarations: needsSdk },
             preflightOutputs: {
-              shared_sdk_declarations: shared,
+              shared_sdk_declarations: sharing,
               runner_profile: "github",
               cache_mode: "read",
             },
           }),
         );
         expect(selected.map((step: WorkflowStep) => step.with?.mode)).toEqual([
-          shared === "true" && needsSdk ? "restore-run" : "restore-main",
+          sharing === "true" && needsSdk ? "restore-run" : "restore-main",
         ]);
         expect(selected[0]?.["continue-on-error"]).not.toBe(true);
       }
@@ -6792,7 +6792,7 @@ describe("ci workflow guards", () => {
       "needs.preflight.outputs.cache_mode != 'off' && matrix.group == 'extension-package-boundary' && steps.extension-boundary-inputs.outputs.enabled == 'true'",
     );
     expect(hostedCoreCache.if).toBe(
-      "needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.runner_profile == 'github' && !inputs.release_gate",
+      "(needs.preflight.outputs.shared_sdk_declarations != 'true' || matrix.requires_sdk_declarations != true) && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.runner_profile == 'github' && !inputs.release_gate",
     );
     for (const cache of [hostedLintCache, hostedCoreCache]) {
       expect(cache.uses).toBe("./.ci-harness/.github/actions/sdk-declarations");
