@@ -19,7 +19,6 @@ import {
 import { VERSION } from "../version.js";
 import { isTruthyEnvValue } from "./env.js";
 import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
-import type { GatewayScheduler } from "./gateway-scheduler.js";
 import {
   EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
   isGatewayExternallySupervised,
@@ -35,23 +34,17 @@ import {
   type UpdateChannel,
 } from "./update-channels.js";
 import {
-  createGatewayUpdateLifecycle,
   currentUpdateCheckLifecycle,
   type UpdateCheckLifecycle,
 } from "./update-check-lifecycle.js";
 import { resolveNpmChannelTag, type UpdateCheckResult } from "./update-check.js";
 import { devUpdateTargetFromGitTarget } from "./update-dev-target.js";
-import {
-  prepareStartupUpdateInstall,
-  resolveStartupInstallStatus,
-  withUpdateInstallStatus,
-} from "./update-install-status.js";
+import { prepareStartupUpdateInstall, withUpdateInstallStatus } from "./update-install-status.js";
 import type { StartupInstallStatus } from "./update-install-status.types.js";
 import { runCampaignUpdate, type AutoUpdateRunner } from "./update-startup-auto-run.js";
 import { canRunDevGitCampaign, resolveDevGitUpdate } from "./update-startup-refresh.js";
 import {
   getUpdateSchedule,
-  resetUpdateStatusState,
   setUpdateAvailableCache,
   setUpdateScheduleCache,
   withoutUpdateCampaign,
@@ -74,17 +67,12 @@ type UpdateCheckState = {
 };
 
 export async function getUpdateEffectiveChannel(): Promise<UpdateChannel> {
-  const { status } = await initializeGatewayUpdateStatus();
+  const { status } = await currentUpdateCheckLifecycle().initialize();
   return resolveEffectiveUpdateChannel({
     currentVersion: VERSION,
     installKind: status.installKind,
     git: status.git,
   }).channel;
-}
-
-export function resetUpdateAvailableStateForTest(scheduler: GatewayScheduler): void {
-  resetUpdateStatusState();
-  createGatewayUpdateLifecycle(scheduler);
 }
 
 const UPDATE_CHECK_STATE_KEY = "update.checkState";
@@ -220,11 +208,6 @@ function clearAutoState(nextState: UpdateCheckState): void {
   delete nextState.autoFirstSeenVersion;
   delete nextState.autoFirstSeenTag;
   delete nextState.autoFirstSeenAt;
-}
-
-/** Shares local install discovery within the Gateway lifecycle. */
-export function initializeGatewayUpdateStatus(): ReturnType<typeof resolveStartupInstallStatus> {
-  return currentUpdateCheckLifecycle().initialize();
 }
 
 async function recordAutoUpdateAttempt(version: string): Promise<void> {

@@ -15,6 +15,7 @@ type CheckRow = {
   check_name: string;
   task: string;
   runner: string;
+  runner_label?: string;
   type_graph_names_json?: string;
   core_type_graph_names_json?: string;
   core_type_concurrency?: number;
@@ -23,6 +24,7 @@ type StripeRow = {
   stripe: number;
   lint_selection_json?: string;
   shared_central_lint_selection_json?: string;
+  requires_sdk_declarations?: true;
   type_graph_names_json?: string;
   root_type_stripe?: string;
 };
@@ -307,6 +309,7 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
           {
             ...template,
             lint_selection_json: JSON.stringify(withExtensions(selected, extensionStripes)),
+            ...(extensionStripes.length > 0 ? { requires_sdk_declarations: true as const } : {}),
           },
         ];
       });
@@ -466,11 +469,17 @@ function parseInput(value: unknown): CiCheckPlanInput {
         !isRecord(row) ||
         typeof row.check_name !== "string" ||
         typeof row.task !== "string" ||
-        typeof row.runner !== "string"
+        typeof row.runner !== "string" ||
+        (row.runner_label !== undefined && typeof row.runner_label !== "string")
       ) {
         throw new Error("Check planning requires canonical check templates");
       }
-      return { check_name: row.check_name, task: row.task, runner: row.runner };
+      return {
+        check_name: row.check_name,
+        task: row.task,
+        runner: row.runner,
+        ...(typeof row.runner_label === "string" ? { runner_label: row.runner_label } : {}),
+      };
     }),
     coreTypeMatrix: matrix(value.coreTypeMatrix, stripe),
     lintCoreMatrix: matrix(value.lintCoreMatrix, stripe),
