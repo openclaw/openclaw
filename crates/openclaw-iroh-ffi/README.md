@@ -98,8 +98,17 @@ the endpoint rather than retrying the same write. UniFFI 0.31.2 Swift does not
 propagate `Task.cancel()` into Rust. For a single dial, pass a `CancelToken` to
 `connect` and call `cancel()` from the task's cancellation handler; that dial fails
 with `Cancelled` and the endpoint stays usable. For streams, use stop/reset; for a
-whole route, shut down the endpoint. Kotlin coroutine cancellation already frees the
-Rust future, so Kotlin callers may omit the token. Last connection-handle release
+whole route, shut down the endpoint.
+
+**Kotlin must not cancel a coroutine around a native call either.** UniFFI 0.31.2
+lowers a result (an object handle or byte buffer) as soon as the Rust future is
+ready. If the coroutine is cancelled after that but before the result is lifted, the
+generated code frees the future and the lowered result leaks: a leaked `Connection`
+is never closed, and keep-alive holds it open; a leaked `Endpoint` keeps running
+with its key until shutdown. Run every suspend call in `withContext(NonCancellable)`
+and cancel with the same explicit signals as Swift (`CancelToken`, stop/reset,
+endpoint shutdown). If the caller was cancelled while the call ran, close or shut
+down the returned object. Last connection-handle release
 closes that connection; retain it while using its streams. Foreign task cancellation
 must be paired with endpoint shutdown when retiring an entire route.
 
