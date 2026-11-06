@@ -68,7 +68,7 @@ public struct OpenClawIDNodeEnrollmentClient: Sendable {
         self.sleep = sleep
     }
 
-    /// Validates inputs, sends one redemption, and persists verified public trust before returning.
+    /// Validates inputs, retries one immutable redemption, and persists verified public trust before returning.
     /// 403 remains pending (not a claim of denial). Cancellation never installs a route.
     public func enroll(joinLink: String, discoveryOrigin: String, identity: OpenClawIDNodeIdentity,
                        description: OpenClawIDNodeEnrollmentDescription,
@@ -105,9 +105,8 @@ public struct OpenClawIDNodeEnrollmentClient: Sendable {
         await onVerificationCode(Self.verificationCode(link: link, peerKey: identity.peerKey, description: description))
         let body = OpenClawIDCanonicalJSON.object(["to": .string("gateway"),
             "payload": .object(["kind": .string("node_redemption"), "redemption": redemption])]).encoded
-        let mail = try await call(origin: origin, clawID: link.clawID, identity: identity, mail: body)
-        guard (200...299).contains(mail.status) else { throw OpenClawIDNodeEnrollmentError.discoveryRejected(mail.status) }
-        // Pending responses back off to 15 seconds; never resubmit an uncertain mailbox write.
+        try await deliverRedemption(body, origin: origin, clawID: link.clawID, identity: identity)
+        // Pending responses back off to 15 seconds after mail delivery succeeds.
         var delay: UInt64 = 1
         let started = now()
         while true {
@@ -138,6 +137,34 @@ public struct OpenClawIDNodeEnrollmentClient: Sendable {
             }
             try await sleep(wait * 1_000_000_000)
             delay = min(delay * 2, 15)
+        }
+    }
+
+    private func deliverRedemption(_ body: Data, origin: URL, clawID: String,
+                                   identity: OpenClawIDNodeIdentity) async throws {
+        // Discovery deduplicates the signed redemption, not just W. Preserve the exact
+        // bytes (including requested_at and signature) if a successful POST response is lost.
+        // Only the outer request authentication is refreshed on each attempt.
+        var delay: UInt64 = 1
+        for attempt in 0..<5 {
+            var retry: UInt64 = 0
+            do {
+                let response = try await call(origin: origin, clawID: clawID, identity: identity, mail: body)
+                if (200...299).contains(response.status) { return }
+                guard [429, 503].contains(response.status), attempt < 4 else {
+                    throw OpenClawIDNodeEnrollmentError.discoveryRejected(response.status)
+                }
+                retry = Self.retryAfter(response.body)
+            } catch let error as URLError {
+                guard [.timedOut, .networkConnectionLost, .notConnectedToInternet,
+                       .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed].contains(error.code), attempt < 4
+                else { throw error }
+            }
+            try Task.checkCancellation()
+            let wait = max(delay, retry)
+            guard wait < 3600 else { throw OpenClawIDNodeEnrollmentError.timeout }
+            try await sleep(wait * 1_000_000_000)
+            delay *= 2
         }
     }
 
