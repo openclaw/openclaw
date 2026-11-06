@@ -100,6 +100,16 @@ SwiftFormat run inside the moved Apple jobs and move with them; no new jobs are
 introduced. Standalone native Periphery workflows and iOS screenshot jobs retain
 their existing selection.
 
+For ordinary current-checkout PRs, known Python skill changes select that skill's
+complete Ruff and pytest suite. Shared, missing, unknown or mixed inputs retain
+all skill suites. Scheduled and release runs retain full coverage.
+
+Android phone source changes can skip Wear unit tests. Wear test/debug-only
+changes can skip phone unit tests. Both phone lint variants remain selected,
+including when third-party lint moves from the omitted Wear row to its phone
+row. Wear production strings feed phone generation, so those changes, shared
+modules, build inputs, missing files and full validation retain all unit rows.
+
 ### Published-driver update cell
 
 `scripts/lib/ci-published-driver-update-plan.mts` excludes ordinary PRs, even
