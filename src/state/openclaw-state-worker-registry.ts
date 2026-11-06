@@ -7,6 +7,8 @@ import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
 const loaders = {
   durableProcess: () =>
     import("../agents/bash-durable-process-store.js").then((m) => m.durableProcessOperations),
+  gatewayQuestion: () =>
+    import("../gateway/question-store.js").then((m) => m.gatewayQuestionOperations),
   sandboxPersistentExec: () =>
     import("../agents/sandbox/persistent-exec-store.worker.js").then(
       (m) => m.sandboxPersistentExecOperations,

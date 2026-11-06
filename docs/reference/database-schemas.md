@@ -14,7 +14,9 @@ OpenClaw stores control-plane state in the shared state database and agent data 
 Linux [durable background exec](/gateway/background-process) stores its restart
 ownership facts in the first-use `durable_background_processes` shared-state table.
 See [durable process storage](/reference/database-schemas/layout#durable-background-processes)
-for fields, retention, and upgrade behavior.
+for fields, retention, and upgrade behavior. Pending Gateway questions are kept in
+the first-use `gateway_questions` table so a restart can report them as expired; see
+[Gateway questions](/reference/database-schemas/layout#gateway-questions).
 
 For runtime contributors, start with
 [database access in workers](/reference/database-schemas/worker-access): execution

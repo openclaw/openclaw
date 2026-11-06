@@ -43,6 +43,7 @@ import {
 } from "./operator-approval-placement-grants.js";
 import { recoverOperatorApprovalsOnStartup } from "./operator-approval-store.js";
 import { QuestionManager } from "./question-manager.js";
+import { createGatewayQuestionStore } from "./question-store.js";
 import { publishAppliedApprovalResolution } from "./server-methods/approval-publication.js";
 import {
   cancelAgentRuntimeBoundApprovals,
@@ -97,7 +98,7 @@ export function createGatewayAuxHandlers(
   const placementStandingGrants = createPlacementStandingGrantRuntime({
     runtimeEpoch: approvalPersistence.runtimeEpoch,
   });
-  const ready = recoverOperatorApprovalsOnStartup({
+  const approvalRecovery = recoverOperatorApprovalsOnStartup({
     runtimeEpoch: approvalPersistence.runtimeEpoch,
     nowMs: Date.now(),
   });
@@ -182,9 +183,18 @@ export function createGatewayAuxHandlers(
     },
     { cacheRejections: true },
   );
-  const questionManager = new QuestionManager(params.scheduler, () =>
-    params.log.warn?.("Question terminal publication failed; answer state retained."),
+  const questionManager = new QuestionManager(
+    params.scheduler,
+    () => params.log.warn?.("Question terminal publication failed; answer state retained."),
+    createGatewayQuestionStore(),
   );
+  // Restored questions are visible before requests are accepted; a failed read only loses them.
+  const ready = Promise.all([
+    approvalRecovery,
+    questionManager.restore().catch((error: unknown) => {
+      params.log.warn?.(`Question restart recovery failed: ${String(error)}`);
+    }),
+  ]).then(() => undefined);
   const loadQuestionHandlers = createLazyPromise(
     async () => {
       const [{ createQuestionHandlers }, storeWriteService] = await Promise.all([

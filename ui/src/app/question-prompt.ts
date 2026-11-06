@@ -34,7 +34,7 @@ export type QuestionDraft = {
 
 export type QuestionPrompt = Pick<
   QuestionRecord,
-  "id" | "questions" | "createdAtMs" | "expiresAtMs"
+  "id" | "questions" | "createdAtMs" | "expiresAtMs" | "resolvedBy"
 > & {
   agentId?: string;
   sessionKey?: string;
@@ -312,6 +312,13 @@ export function isQuestionNotFoundError(error: unknown): boolean {
     isRecord(error.details) &&
     error.details.reason === "QUESTION_NOT_FOUND"
   );
+}
+
+/** Gateway restarts drop pending questions; name that cause instead of a bare expiry. */
+export function questionExpiredLabelKey(prompt: QuestionPrompt) {
+  return prompt.resolvedBy === "gateway-restart"
+    ? "chat.questions.expiredGatewayRestart"
+    : "chat.questions.expired";
 }
 
 function markRecoveryUnavailable(state: QuestionPromptState, prompt: QuestionPrompt): void {

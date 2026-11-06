@@ -454,6 +454,17 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/gateway/question-store.ts",
+    [
+      {
+        tier: "W",
+        operations: ["writeGatewayQuestion", "listGatewayQuestions"],
+        evidence:
+          "Only openclaw-state-worker-registry.ts loads gatewayQuestionOperations for gatewayQuestion.write (writeGatewayQuestion), and openclaw-state-read-operation-registry.ts loads gatewayQuestionReadOperations for gatewayQuestion.list (listGatewayQuestions). The main-thread createGatewayQuestionStore facade only awaits those worker operations.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-read.ts",
     [
       {

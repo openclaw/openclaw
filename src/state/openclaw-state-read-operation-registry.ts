@@ -11,6 +11,8 @@ import {
 const loaders = {
   durableProcess: () =>
     import("../agents/bash-durable-process-store.js").then((m) => m.durableProcessReadOperations),
+  gatewayQuestion: () =>
+    import("../gateway/question-store.js").then((m) => m.gatewayQuestionReadOperations),
   workerEnvironments: () =>
     import("../gateway/worker-environments/store-row-codec.js").then(
       (m) => m.workerEnvironmentReadOperations,

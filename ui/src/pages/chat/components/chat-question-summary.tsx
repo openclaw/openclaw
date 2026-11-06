@@ -1,5 +1,5 @@
 import { For, Show } from "solid-js";
-import type { QuestionPrompt } from "../../../app/question-prompt.ts";
+import { questionExpiredLabelKey, type QuestionPrompt } from "../../../app/question-prompt.ts";
 import { registerChatQuestionsEnglish } from "../../../i18n/locales/en-chat-questions.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import type { QuestionPanelQuestion } from "./chat-question-types.ts";
@@ -11,7 +11,7 @@ export function terminalAnswer(prompt: QuestionPrompt, question: QuestionPanelQu
     return t("chat.questions.skipped");
   }
   if (prompt.status === "expired") {
-    return t("chat.questions.expired");
+    return t(questionExpiredLabelKey(prompt));
   }
   if (prompt.status === "unavailable") {
     return t("chat.questions.unavailable");

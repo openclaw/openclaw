@@ -16,6 +16,7 @@ import {
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { QuestionManager } from "../question-manager.js";
+import type { GatewayQuestionStore } from "../question-store.js";
 import type { GatewayBroadcastFn } from "../server-broadcast-types.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createQuestionHandlers } from "./question.js";
@@ -30,10 +31,11 @@ export let adminRequestClient: GatewayClient;
 export let broadcast: ReturnType<typeof vi.fn<GatewayBroadcastFn>>;
 export let storeWriteService: ReturnType<typeof createSecretStoreWriteService>;
 let handlers: ReturnType<typeof createQuestionHandlers>;
+let store: GatewayQuestionStore | undefined;
 type SecretStoreReload = Parameters<typeof createSecretStoreWriteService>[0]["reloadSecrets"];
 export let reloadSecrets: ReturnType<typeof vi.fn<SecretStoreReload>>;
 
-export function installQuestionTestHooks() {
+export function installQuestionTestHooks(createStore?: () => GatewayQuestionStore) {
   beforeEach(() => {
     setRuntimeConfigSnapshot({});
     // Keep projection metadata alive independently of the exact admitted authority.
@@ -44,7 +46,8 @@ export function installQuestionTestHooks() {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     scheduler = createTestGatewayScheduler("fake-timers");
-    manager = new QuestionManager(scheduler);
+    store = createStore?.();
+    manager = new QuestionManager(scheduler, undefined, store);
     requesterAuthority = claimAgentRunDelegatedAuthority({
       instanceId: "requester-instance",
       runId: requestParams.runId,
@@ -80,6 +83,20 @@ export function installQuestionTestHooks() {
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
+}
+
+/** Retires the manager as Gateway shutdown does, then starts a successor on the same store. */
+export async function restartQuestionManager() {
+  await manager.drain();
+  scheduler.beginClose();
+  // Shutdown's run teardown cancels questions after the scheduler closes; rows must survive.
+  releaseAgentRunDelegatedAuthority(requesterAuthority);
+  manager.close();
+  await manager.drain();
+  scheduler = createTestGatewayScheduler("fake-timers");
+  manager = new QuestionManager(scheduler, undefined, store);
+  await manager.restore();
+  handlers = createQuestionHandlers(manager, storeWriteService, scheduler);
 }
 
 export async function callQuestionRpc(

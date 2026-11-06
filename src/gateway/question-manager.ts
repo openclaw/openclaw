@@ -1,4 +1,4 @@
-// Tracks transient operator questions and short-lived terminal records in memory.
+// Tracks operator questions in memory; an optional store lets restarts report dropped ones.
 import { randomUUID } from "node:crypto";
 import {
   resolveExpiresAtMsFromDurationMs,
@@ -14,8 +14,10 @@ import type {
 } from "../../packages/gateway-protocol/src/index.js";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { bindMcpFormQuestionRecord } from "../agents/mcp-form-resource-context.js";
+import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   retainGatewayRootWorkAdmissionContinuationScope,
   type GatewayRootWorkAdmissionContinuationScope,
@@ -25,9 +27,11 @@ import type {
   QuestionClientAuthorization,
   QuestionSessionAccess,
 } from "./question-session-access.types.js";
+import type { GatewayQuestionStore } from "./question-store.js";
 
 /** Grace period for late question.waitAnswer and question.get calls. */
 const QUESTION_RESOLVED_ENTRY_GRACE_MS = 15_000;
+const log = createSubsystemLogger("gateway/questions");
 
 export const QuestionManagerErrorCodes = {
   NOT_FOUND: "QUESTION_NOT_FOUND",
@@ -88,6 +92,8 @@ type QuestionEntry = {
   committing?: boolean;
   commitUnknown?: boolean;
   retired?: boolean;
+  /** Serializes this entry's best-effort store writes. */
+  persisted?: Promise<void>;
 };
 
 /** Private entry identity. Never reselect a successor by its public question id. */
@@ -127,6 +133,10 @@ function canonicalizeQuestionAnswer(question: Question, value: string): string {
   return matched ? (matched.value ?? matched.label) : candidate;
 }
 
+function isOrdinary(questions: Question[]): boolean {
+  return !questions.some((question) => question.isSecret || question.secretStore);
+}
+
 /** Process-local lifecycle owner for pending questions. */
 export class QuestionManager {
   private readonly entries = new Map<string, QuestionEntry>();
@@ -137,7 +147,50 @@ export class QuestionManager {
   constructor(
     private readonly scheduler: GatewayScheduler,
     private readonly onPublicationError?: () => void,
+    private readonly store?: GatewayQuestionStore,
   ) {}
+
+  /** Questions dropped by a restart stay visibly expired until their original deadline. */
+  async restore(): Promise<void> {
+    const stored = (await this.store?.list()) ?? [];
+    const now = this.scheduler.now();
+    for (const { record } of stored) {
+      if (this.closed || this.entries.has(record.id)) {
+        continue;
+      }
+      const entry: QuestionEntry = {
+        record: { ...record, status: "expired", resolvedBy: "gateway-restart" },
+        ordinary: isOrdinary(record.questions),
+        waiters: new Set(),
+        admissionContinuation: null,
+        job: this.scheduler.schedule({
+          id: `${this.scheduleId}:${record.id}`,
+          delayMs: Math.max(record.expiresAtMs - now, QUESTION_RESOLVED_ENTRY_GRACE_MS),
+          run: () => {
+            if (this.entries.get(record.id) === entry) {
+              this.entries.delete(record.id);
+              this.persist(entry, (store) => store.remove(record.id));
+            }
+          },
+        }),
+      };
+      this.entries.set(record.id, entry);
+    }
+  }
+
+  /** Best effort and never awaited by RPCs. Shutdown keeps rows for the next Gateway. */
+  private persist(entry: QuestionEntry, write: (store: GatewayQuestionStore) => Promise<void>) {
+    const store = this.store;
+    if (!store || this.closed || this.scheduler.signal.aborted) {
+      return;
+    }
+    const previous = entry.persisted ?? Promise.resolve();
+    entry.persisted = this.publications
+      .track(() => previous.then(() => write(store)))
+      .catch((error: unknown) => {
+        log.warn(`question ${entry.record.id} persistence failed: ${String(error)}`);
+      });
+  }
 
   async drain(): Promise<void> {
     if (this.closed) {
@@ -185,7 +238,7 @@ export class QuestionManager {
     };
     const entry: QuestionEntry = {
       record,
-      ordinary: !params.questions.some((question) => question.isSecret || question.secretStore),
+      ordinary: isOrdinary(params.questions),
       job: this.scheduler.schedule({
         id: `${this.scheduleId}:${id}`,
         delayMs: timeoutMs,
@@ -203,6 +256,8 @@ export class QuestionManager {
       admissionContinuation: retainGatewayRootWorkAdmissionContinuationScope(),
     };
     this.entries.set(record.id, entry);
+    const sessionId = params.runId ? getAgentRunContext(params.runId)?.sessionId : undefined;
+    this.persist(entry, (store) => store.upsert({ record, ...(sessionId ? { sessionId } : {}) }));
     bindMcpFormQuestionRecord(
       record,
       () =>
@@ -584,6 +639,7 @@ export class QuestionManager {
 
   private finish(entry: QuestionEntry): Promise<void> {
     entry.job.cancel();
+    this.persist(entry, (store) => store.remove(entry.record.id));
     const continuation = entry.admissionContinuation;
     entry.admissionContinuation = null;
     let settled = false;
