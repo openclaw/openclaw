@@ -191,6 +191,7 @@
   "allowlist-config-edit",
   "browser-cdp",
   "browser-config",
+  "browser-extension-host",
   "boolean-param",
   "channel-contract-testing",
   "channel-dm-policy",

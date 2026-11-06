@@ -6,6 +6,7 @@ import {
   resolveLivePluginConfigObject,
 } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { registerAutofill } from "./src/autofill-registration.js";
 import type { AuditRow, PendingAuthorization, StandingGrant } from "./src/broker.js";
 import { OnePasswordBroker } from "./src/broker.js";
 import { MAX_REGISTERED_ITEMS, parseOnePasswordConfig } from "./src/config.js";
@@ -19,10 +20,10 @@ export default definePluginEntry({
   id: "onepassword",
   name: "1Password",
   description:
-    "1Password SecretRef resolver and curated agent broker with approval policy and SQLite audit history.",
+    "1Password SecretRefs, audited secret access, and an opt-in Agentic Autofill preview.",
   register(api) {
     const startupConfig = parseOnePasswordConfig(api.pluginConfig);
-    const resolveCurrentConfig = () => {
+    const resolveCurrentPluginConfig = () => {
       const liveConfig = api.runtime.config.current() as OpenClawConfig;
       const livePluginConfig = resolveLivePluginConfigObject(
         () => liveConfig,
@@ -36,8 +37,10 @@ export default definePluginEntry({
         rootConfig: liveConfig,
         enabledByDefault: livePluginConfig !== undefined,
       }).enabled;
-      return enabled ? parseOnePasswordConfig(livePluginConfig) : undefined;
+      return enabled ? livePluginConfig : undefined;
     };
+    const resolveCurrentConfig = () => parseOnePasswordConfig(resolveCurrentPluginConfig());
+    registerAutofill(api, resolveCurrentPluginConfig);
     const grants = api.runtime.state.openKeyedStoreV2<StandingGrant>({
       namespace: "grants",
       // Evicting the oldest grant is fail-closed: that agent must approve again.
@@ -91,13 +94,16 @@ export default definePluginEntry({
       async ({ program, config }) => {
         const { registerOnePasswordCommands } = await import("./src/cli.js");
         const { registerOnePasswordSecretRefCommands } = await import("./src/secret-ref-cli.js");
+        const { registerAutofillCommands } = await import("./src/autofill-cli.js");
         registerOnePasswordCommands({
           program,
           resolveConfig: resolveCurrentConfig,
           resolveOpClient: resolveCurrentOpClient,
           auditStore: audit,
-          registerAdditionalCommands: (command) =>
-            registerOnePasswordSecretRefCommands({ command, config, tokenFile }),
+          registerAdditionalCommands: (command) => {
+            registerOnePasswordSecretRefCommands({ command, config, tokenFile });
+            registerAutofillCommands(command);
+          },
         });
       },
       {

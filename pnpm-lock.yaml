@@ -2026,10 +2026,26 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/onepassword:
+    dependencies:
+      '@solidjs/web':
+        specifier: 2.0.0-rc.18
+        version: 2.0.0-rc.18(patch_hash=6d6b2e52e607edf3c9cfcc1a26f331d013537d051f43bbb4f3e7877ed08fa5cf)(solid-js@2.0.0-rc.18)
+      solid-js:
+        specifier: 2.0.0-rc.18
+        version: 2.0.0-rc.18
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+      '@solidjs/compiler':
+        specifier: 2.0.0-rc.18
+        version: 2.0.0-rc.18
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
 
   extensions/onnx:
     dependencies:

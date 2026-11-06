@@ -51,3 +51,8 @@ For scripting and debugging, the Gateway exposes a small **loopback-only HTTP
 control API** plus a matching `openclaw browser` CLI (snapshots, refs, wait
 power-ups, JSON output, debug workflows). See
 [Browser control API](/tools/browser-control) for the full reference.
+
+Plugins can request a vetted unpacked extension before managed Chromium launch.
+That runtime request selects full Playwright-cache Chromium instead of branded
+Chrome, reserves one person's profile, and provides exclusive extension
+operations. See [Managed browser extension hosts](/plugins/sdk-runtime#managed-browser-extension-hosts).

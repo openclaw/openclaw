@@ -435,3 +435,8 @@ export function stopBrowserScreencasts(): Promise<void> {
   );
   return Promise.allSettled(drains).then(() => {});
 }
+
+/** Continuous captures must settle before an extension can expose transient secrets. */
+export function hasBrowserScreencast(matchesEndpoint: (cdpUrl: string) => boolean): boolean {
+  return [...sessions.values()].some((session) => matchesEndpoint(session.params.cdpUrl));
+}

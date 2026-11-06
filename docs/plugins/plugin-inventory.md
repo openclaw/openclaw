@@ -162,7 +162,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[omlx](/plugins/reference/omlx)** (`@openclaw/omlx-provider`) - included in OpenClaw. Adds Omlx model provider support to OpenClaw.
 
-- **[onepassword](/plugins/reference/onepassword)** (`@openclaw/onepassword`) - included in OpenClaw. 1Password SecretRef resolver and curated agent broker with approval policy and SQLite audit history.
+- **[onepassword](/plugins/reference/onepassword)** (`@openclaw/onepassword`) - included in OpenClaw. 1Password SecretRefs, audited secret access, and an opt-in Agentic Autofill preview.
 
 - **[openai](/plugins/reference/openai)** (`@openclaw/openai-provider`) - included in OpenClaw. Adds OpenAI model provider support to OpenClaw.
 

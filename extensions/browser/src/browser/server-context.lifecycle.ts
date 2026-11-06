@@ -14,6 +14,10 @@ import { stopOpenClawChrome, stopOwnedOpenClawChrome } from "./chrome.js";
 import { withChromeProfileLifecycleLock } from "./chrome.profile-lifecycle-lock.js";
 import { isLocalManagedProfile, type ResolvedBrowserProfile } from "./config.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
+import {
+  releaseBrowserExtensionDeclarations,
+  withExtensionProfileGate,
+} from "./extension-host-state.js";
 import type { ExtensionRelayResource } from "./extension-relay/relay-access.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { getLoadedPwAiModule } from "./pw-ai-module.js";
@@ -243,6 +247,8 @@ export async function withProfileOperationLease<T>(params: {
   signal?: AbortSignal;
   /** Shared producers belong to the lifecycle, never to their first caller. */
   ownership?: "caller" | "lifecycle";
+  /** Whole-profile exclusion for extension operations that temporarily expose secrets. */
+  exclusive?: boolean;
   run: (signal: AbortSignal) => Promise<T>;
   commit?: (result: T) => void | Promise<void>;
 }): Promise<T> {
@@ -251,6 +257,11 @@ export async function withProfileOperationLease<T>(params: {
   const inherited = profileLeaseStorage.getStore();
   const parent = params.ownership === "lifecycle" ? undefined : inherited?.get(params.runtime);
   if (parent) {
+    if (params.exclusive) {
+      throw new BrowserProfileUnavailableError(
+        "Exclusive extension operations cannot be nested inside another browser operation.",
+      );
+    }
     const signal = combineSignals(parent.signal, params.signal);
     signal.throwIfAborted();
     assertProfileCurrent(params);
@@ -274,21 +285,23 @@ export async function withProfileOperationLease<T>(params: {
       ? lifecycleSignal
       : combineSignals(lifecycleSignal, params.signal);
   signal.throwIfAborted();
-  const release = createLease(actor);
-  try {
-    const leases = new Map(inherited);
-    leases.set(params.runtime, { signal });
-    const result = await profileLeaseStorage.run(leases, async () => await params.run(signal));
-    signal.throwIfAborted();
-    assertProfileCurrent(params);
-    // This assertion is the operation's linearization point. Once admitted,
-    // an async persistent commit keeps its lease until complete; a later
-    // reset/delete/stop drains behind it instead of partially cancelling it.
-    await params.commit?.(result);
-    return result;
-  } finally {
-    release();
-  }
+  return await withExtensionProfileGate(params.runtime, params.exclusive === true, async () => {
+    const release = createLease(actor);
+    try {
+      const leases = new Map(inherited);
+      leases.set(params.runtime, { signal });
+      const result = await profileLeaseStorage.run(leases, async () => await params.run(signal));
+      signal.throwIfAborted();
+      assertProfileCurrent(params);
+      // This assertion is the operation's linearization point. Once admitted,
+      // an async persistent commit keeps its lease until complete; a later
+      // reset/delete/stop drains behind it instead of partially cancelling it.
+      await params.commit?.(result);
+      return result;
+    } finally {
+      release();
+    }
+  });
 }
 
 /** Queue one lifecycle-owned start, coalescing callers with the same start key. */
@@ -479,6 +492,9 @@ export function beginProfileTransition(
         }
         cleanupCompleted = true;
         await params.afterCleanup?.();
+        if (params.terminal) {
+          releaseBrowserExtensionDeclarations(state, ownerProfile.name);
+        }
         actor.blockedReason = null;
         return { stopped };
       };

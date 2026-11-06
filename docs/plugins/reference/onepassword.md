@@ -1,5 +1,5 @@
 ---
-summary: "1Password SecretRef resolver and curated agent broker with approval policy and SQLite audit history."
+summary: "1Password SecretRefs, audited secret access, and an opt-in Agentic Autofill preview."
 read_when:
   - You are installing, configuring, or auditing the onepassword plugin
 title: "Onepassword plugin reference"
@@ -10,7 +10,7 @@ Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
 between the openclaw-plugin-reference:manual-start and
 openclaw-plugin-reference:manual-end comment markers. -->
 
-1Password SecretRef resolver and curated agent broker with approval policy and SQLite audit history.
+1Password SecretRefs, audited secret access, and an opt-in Agentic Autofill preview.
 
 ## Distribution
 

@@ -48,8 +48,12 @@ import {
   type BrowserExecutable,
   assertBrowserExecutableSupportsLaunch,
   processCommandUsesHeadlessChrome,
-  resolveBrowserExecutableForPlatform,
 } from "./chrome.executables.js";
+import {
+  extensionLaunchArgs,
+  resolveBrowserExecutable,
+  resolveChromeLaunchExecutable,
+} from "./chrome.extension-launch.js";
 import {
   headlessShellProfileInUseReason,
   isHeadlessShellExecutable,
@@ -74,6 +78,7 @@ import {
 } from "./config.js";
 import { DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME } from "./constants.js";
 import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "./errors.js";
+import { extensionDeclarations, type ExtensionDeclaration } from "./extension-launch-state.js";
 import { ensureOutputDirectory } from "./output-directories.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
 import type { ManagedBrowserHeadlessSource } from "./profile.types.js";
@@ -475,6 +480,7 @@ async function ensureManagedChromePortAvailable(
 
 export type RunningChrome = {
   pid: number;
+  extensionDeclaration?: ExtensionDeclaration;
   exe: BrowserExecutable;
   userDataDir: string;
   cdpPort: number;
@@ -496,16 +502,6 @@ export class ManagedChromeCleanupError extends Error {
     super(message);
     this.name = "ManagedChromeCleanupError";
   }
-}
-
-function resolveBrowserExecutable(
-  resolved: ResolvedBrowserConfig,
-  profile: ResolvedBrowserProfile,
-): BrowserExecutable | null {
-  return resolveBrowserExecutableForPlatform(
-    { ...resolved, executablePath: profile.executablePath ?? resolved.executablePath },
-    process.platform,
-  );
 }
 
 export function resolveOpenClawUserDataDir(profileName = DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME) {
@@ -718,13 +714,8 @@ async function launchOpenClawChromeLocked(
     );
   }
 
-  const exe = resolveBrowserExecutable(resolved, profile);
-  if (!exe) {
-    throw new Error(
-      "No supported browser found (Chrome/Brave/Edge/Chromium on macOS, Linux, or Windows).",
-    );
-  }
-
+  const extensionDeclaration = extensionDeclarations.get(profile.name);
+  const exe = resolveChromeLaunchExecutable(resolved, profile, extensionDeclaration);
   assertBrowserExecutableSupportsLaunch(exe, headlessMode.headless, process.platform);
   fs.mkdirSync(userDataDir, { recursive: true });
   await ensureOutputDirectory(DEFAULT_DOWNLOAD_DIR);
@@ -780,6 +771,7 @@ async function launchOpenClawChromeLocked(
     if (resolved.extraArgs.length > 0) {
       args.push(...resolved.extraArgs);
     }
+    args.push(...extensionLaunchArgs(extensionDeclaration, resolved.extraArgs));
     const env: NodeJS.ProcessEnv = {
       ...omitChromeProxyEnv(process.env),
       // Reduce accidental sharing with the user's env.
@@ -840,6 +832,7 @@ async function launchOpenClawChromeLocked(
   const runningForProcess = (proc: ChildProcess, pid: number): RunningChrome => ({
     pid,
     exe,
+    extensionDeclaration,
     userDataDir,
     cdpPort: profile.cdpPort,
     proc,

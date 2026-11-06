@@ -42,7 +42,7 @@ export type {
 type ProfileOperationRunner = <T>(
   signal: AbortSignal | undefined,
   run: (signal: AbortSignal, runtime: ProfileRuntimeState) => Promise<T>,
-  options?: { commit?: (result: T) => void | Promise<void> },
+  options?: { commit?: (result: T) => void | Promise<void>; exclusive?: boolean },
 ) => Promise<T>;
 
 const profileOperationRunners = new WeakMap<ProfileContext, ProfileOperationRunner>();
@@ -52,7 +52,7 @@ export function runProfileContextOperation<T>(
   profileCtx: ProfileContext,
   signal: AbortSignal | undefined,
   run: (signal: AbortSignal, runtime: ProfileRuntimeState) => Promise<T>,
-  options?: { commit?: (result: T) => void | Promise<void> },
+  options?: { commit?: (result: T) => void | Promise<void>; exclusive?: boolean },
 ): Promise<T> {
   const runner = profileOperationRunners.get(profileCtx);
   if (!runner) {
@@ -86,6 +86,15 @@ function createProfileContext(
     if (current !== runtimeState || !isBrowserRuntimeRunning(runtimeState)) {
       throw new BrowserProfileUnavailableError("Browser runtime changed or is stopping.");
     }
+    // Config refresh can settle cleanup before a captured caller resumes. Keep
+    // that context bound to its configured endpoint, not a replacement profile.
+    const configured = getOwnBrowserProfile(current.resolved.profiles, profile.name);
+    if (
+      !configured ||
+      resolveProfile(current.resolved, profile.name)?.cdpPort !== profile.cdpPort
+    ) {
+      throw new BrowserProfileUnavailableError("Browser profile configuration changed.");
+    }
     return runtimeState;
   };
 
@@ -114,7 +123,7 @@ function createProfileContext(
   const withLease = async <T>(
     callerSignal: AbortSignal | undefined,
     run: (signal: AbortSignal, runtime: ProfileRuntimeState) => Promise<T>,
-    options?: { commit?: (result: T) => void | Promise<void> },
+    options?: { commit?: (result: T) => void | Promise<void>; exclusive?: boolean },
   ): Promise<T> =>
     await withProfileOperationLease({
       state: state(),
@@ -122,6 +131,7 @@ function createProfileContext(
       signal: callerSignal,
       run: async (lifecycleSignal) => await run(lifecycleSignal, profileState),
       commit: options?.commit,
+      exclusive: options?.exclusive,
     });
 
   const { ensureBrowserAvailable, stopRunningBrowser } = rawAvailability;
