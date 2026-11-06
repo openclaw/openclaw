@@ -173,6 +173,12 @@ the update. Do not weaken recovery permissions or delete the activation journal;
 if Doctor reports a live owner or cannot identify the runtime, follow that
 diagnostic before retrying.
 
+If OpenClaw 2026.9.7 or 2026.9.8 reports `Package publication recovery permissions
+are unsafe`, Doctor cannot clear it: use the
+[manual procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+once. OpenClaw 2026.10.10 and later name the rejected object, its mode, and its
+link count.
+
 For `node-runtime-preflight`, upgrade the runtime named in the message to a
 version satisfying both the candidate's full engine range and the updater's
 supported Node range. The suggested version is the lowest supported release in
