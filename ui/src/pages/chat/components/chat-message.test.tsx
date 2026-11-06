@@ -74,6 +74,27 @@ it.each([
 });
 
 describe("grouped chat rendering", () => {
+  it.each([{ tools: [] }, { tools: ["upload"] }])(
+    "explains an unavailable steer without offering a no-op (%j)",
+    ({ tools }) => {
+      renderGroupedMessage(createUserMessage("Use the shorter approach."), "user", {
+        pendingSteer: () => ({
+          id: "steer",
+          runId: "send",
+          acceptedAt: 1,
+          state: "queued",
+          message: {},
+          steerNow: { status: "blocked", tools },
+        }),
+        onSteerNow: vi.fn(),
+      });
+      expectPresent(".chat-bubble");
+      expect(elementText(".chat-steer-now")).toContain(
+        tools.length ? "cannot interrupt safely" : "this runtime cannot interrupt tools",
+      );
+      expectAbsent(".chat-steer-now button");
+    },
+  );
   function applyNotice(
     host: ReturnType<typeof createHost>,
     seq: number,

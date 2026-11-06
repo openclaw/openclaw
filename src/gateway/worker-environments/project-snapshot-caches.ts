@@ -35,13 +35,13 @@ export const NORMALIZE_PROJECT_SNAPSHOT_CACHES_JS = `(root, input, sourceRef, pr
   const current = directory(prepared, input.cacheKey, "prepared");
   if (fs.readdirSync(current).sort().join("\\0") !== "home\\0workspace") fail("unapproved-entry", "prepared");
   const manifests = directory(root, "manifests", "manifests");
-  const retained = new Set([sourceRef, preparedRef].map((ref) => ref.slice(7) + ".json"));
+  const retained = new Set([sourceRef, preparedRef].map((ref) => ref.slice(7)));
   for (const name of fs.readdirSync(manifests)) {
-    if (!/^[a-f0-9]{64}[.]json$/.test(name)) fail("unapproved-entry", "manifests");
+    if (!/^[a-f0-9]{64}[.](?:json|memo)$/.test(name)) fail("unapproved-entry", "manifests");
     const file = path.join(manifests, name);
     const stat = fs.lstatSync(file);
     if (!stat.isFile() || stat.nlink !== 1 || fs.realpathSync(file) !== file) fail("cache-path", "manifests");
-    if (!retained.has(name)) removals.push(file);
+    if (!retained.has(name.slice(0, -5))) removals.push(file);
   }
   // Validate the entire plan before removing anything; obsolete owned content needs no rescan.
   for (const target of removals) fs.rmSync(target, { recursive: true });

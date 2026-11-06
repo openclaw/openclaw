@@ -71,7 +71,8 @@ export async function prepareCrabboxWorkerRuntime(params: {
   });
   const timeoutMs = resolveCrabboxNodeEnrollmentTimeoutMs(runtime.bootstrapTimeoutMs);
   return {
-    timeoutMs,
+    // Capture lifetime must also cover the prepared project's post-scrub verification.
+    timeoutMs: timeoutMs + (params.project?.preparation ? CRABBOX_SETUP_TIMEOUT_MS : 0),
     async run(scrubScript?: string) {
       params.context.signal?.throwIfAborted();
       runtime.signal?.throwIfAborted();
@@ -181,6 +182,7 @@ export async function prepareCrabboxProjectFiles(params: {
       throw new Error("Enrolled project cannot verify its completed workspace");
     }
     await params.project.inspectPreparedWorkspace({
+      recordRecipePreparation: params.recordRecipePreparation,
       runScript: (input, signal) => run(leaseRunArgs(params), signal, () => input),
     });
     return undefined;

@@ -324,6 +324,17 @@ export type WorkerRecipePreparation = {
   ignoredPropertiesNote?: string;
   note?: string;
   phaseDurationsMs?: {
+    retainedGit?: number;
+    retainedManifest?: number;
+    inspection?: number;
+    seedPreparation?: number;
+    seedTransfer?: number;
+    seedVerification?: number;
+    seedCheckout?: number;
+    seedManifest?: number;
+    gitUpdate?: number;
+    toolchainPreparation?: number;
+    preparedManifest?: number;
     onCreate?: number;
     updateContent?: number;
     detectedInstall?: number;
@@ -450,6 +461,7 @@ export type WorkerProvider = {
         /** Verify an already enrolled allocation without transferring, running setup, or capturing it. */
         inspectPreparedWorkspace?: (transport: {
           runScript: (script: string, signal: AbortSignal) => Promise<string>;
+          recordRecipePreparation?: (value: WorkerRecipePreparation) => Promise<void>;
         }) => Promise<void>;
         /** Bound to this preparation attempt; retained callbacks reject after it closes. */
         prepare: (transport: {

@@ -22,7 +22,15 @@ async function fixture() {
   await fs.mkdir(oldSeed);
   await fs.writeFile(path.join(oldSeed, "obsolete"), "previous cache");
   await fs.writeFile(oldManifest, "obsolete manifest need not be scanned");
-  return { ...f, operation, prepared, root, oldSeed, oldManifest };
+  const oldMemo = oldManifest.replace(/json$/, "memo");
+  await fs.writeFile(oldMemo, "obsolete memo need not be scanned");
+  for (const ref of new Set([prepared.sourceManifestRef, prepared.preparedManifestRef])) {
+    await fs.writeFile(
+      path.join(root, "manifests", ref.slice(7) + ".memo"),
+      "retained optional hint",
+    );
+  }
+  return { ...f, operation, prepared, root, oldSeed, oldManifest, oldMemo };
 }
 
 it("normalizes only snapshot publication, preserving the verified current project", async () => {
@@ -32,12 +40,13 @@ it("normalizes only snapshot publication, preserving the verified current projec
   await f.operation.project.prepareSnapshot!(f);
   await expect(fs.stat(f.oldSeed)).rejects.toMatchObject({ code: "ENOENT" });
   await expect(fs.stat(f.oldManifest)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(fs.stat(f.oldMemo)).rejects.toMatchObject({ code: "ENOENT" });
   expect(await fs.readFile(path.join(f.prepared.workspaceDir, "input.txt"), "utf8")).toBe(
     "prepared base\n",
   );
   expect((await fs.readdir(path.join(f.root, "manifests"))).toSorted()).toEqual(
     [...new Set([f.prepared.sourceManifestRef, f.prepared.preparedManifestRef])]
-      .map((ref) => ref.slice(7) + ".json")
+      .flatMap((ref) => [ref.slice(7) + ".json", ref.slice(7) + ".memo"])
       .toSorted(),
   );
 });
@@ -67,4 +76,9 @@ it("rejects unsafe cache state before removing any obsolete artifacts", async ()
     expect((await fs.stat(f.oldSeed)).isDirectory()).toBe(true);
     await fs.unlink(entry);
   }
+  await expect(
+    f.operation.project.prepareSnapshot!({
+      runScript: async () => "private fixture output",
+    }),
+  ).rejects.toThrow(/^Project snapshot verification returned invalid JSON$/);
 });
