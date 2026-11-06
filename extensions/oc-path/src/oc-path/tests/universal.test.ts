@@ -83,6 +83,16 @@ describe("resolveOcPath", () => {
 
 describe("setOcPath", () => {
   it.each([
+    ["absent", "unresolved"],
+    ["+added", "not-writable"],
+  ])("rejects descent beyond a frontmatter leaf with %s", (suffix, reason) => {
+    const ast = parseMd("---\nname: drafter\nrole: writer\n---\n");
+    const uri = `oc://X.md/[frontmatter]/name/${suffix}`;
+    expect(resolve(ast, uri)).toBeNull();
+    expectEditError(ast, uri, "changed", reason);
+  });
+
+  it.each([
     ['{"é":true,"e\\u0301":true}', "e\u0301", "false", '{"é":true,"e\\u0301":false}', false],
     [
       '{"a":{"b":{"c":{"d":{"e":{"k":"deny"}}}}}}',
