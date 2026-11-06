@@ -92,3 +92,24 @@ it("records messaging tool side effects", () => {
     },
   ]);
 });
+
+
+it("counts a cron add made through the MCP-exposed automations tool (#193958)", () => {
+  const telemetry = recordTelemetry({
+    toolName: "mcp__openclaw__automations",
+    result: textToolResult("Scheduled.", { jobId: "job-1" }),
+    args: { action: "add" },
+  });
+
+  expect(telemetry.successfulCronAdds).toBe(1);
+});
+
+it("does not count a non-add automations call", () => {
+  const telemetry = recordTelemetry({
+    toolName: "mcp__openclaw__automations",
+    result: textToolResult("Listed.", {}),
+    args: { action: "list" },
+  });
+
+  expect(telemetry.successfulCronAdds ?? 0).toBe(0);
+});
