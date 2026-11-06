@@ -7,6 +7,7 @@ import type {
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import "../../components/agent-select-registration.ts";
 import "../../components/modal-dialog.tsx";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
@@ -101,8 +102,7 @@ function Collection(props: {
     <div class="settings-row settings-row--stacked memory-import__collection">
       <div class="memory-import__collection-header">
         <label class="memory-import__collection-choice">
-          <input
-            type="checkbox"
+          <Checkbox
             checked={checked()}
             disabled={selectableIds().length === 0 || props.disabled}
             onChange={(event) =>

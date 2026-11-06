@@ -1,5 +1,6 @@
 import { createMemo, For, Loading, Show } from "solid-js";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
@@ -392,8 +393,7 @@ function BulkDialog(props: SecretsStoreViewProps) {
           })}
         </div>
         <label class="secrets-store-checkbox">
-          <input
-            type="checkbox"
+          <Checkbox
             checked={props.state.bulkAutoDetect}
             disabled={props.busy}
             onChange={(event) =>

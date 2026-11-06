@@ -450,7 +450,10 @@ it.concurrent.for([
       "scripts/lib/swift-toolchain.sh": "workflow Swift toolchain helper\n",
       "scripts/ci-xcodebuild.py": "workflow Xcode diagnostics helper\n",
     };
-    const preflightScripts = readFiles(["scripts/ci-build-manifest.mjs"]);
+    const preflightScripts = readFiles([
+      "scripts/ci-build-manifest.mjs",
+      "scripts/lib/ci-blacksmith-capacity.mjs",
+    ]);
     const simulatorScripts = readFiles(["scripts/lib/ci-ios-smoke-plan.mjs"]);
     const releasePolicy = readFiles([
       "scripts/lib/release-context.mjs",

@@ -5,6 +5,7 @@ import type { ChannelsPairingAccount, ChannelsPairingRequest } from "../../api/t
 import { Picker } from "../../components/select-picker.ts";
 import "../../components/modal-dialog.tsx";
 import { ChannelPicker } from "../../components/solid/channel-picker.tsx";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
@@ -369,8 +370,7 @@ function PairingPromptContent(params: {
   const dialogTitle = () => t(`channels.pairing.${params.prompt.kind}DialogTitle`);
   const option = (field: "notify" | "bootstrapCommandOwner", label: string) => (
     <label class="channels-pairing-dialog__option">
-      <input
-        type="checkbox"
+      <Checkbox
         checked={params.prompt[field]}
         onChange={(event) =>
           params.props.onPairingPromptChange({ [field]: event.currentTarget.checked })
