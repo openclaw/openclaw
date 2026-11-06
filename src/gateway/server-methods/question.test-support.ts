@@ -86,7 +86,9 @@ export function installQuestionTestHooks(createStore?: () => GatewayQuestionStor
 }
 
 /** Retires the manager as Gateway shutdown does, then starts a successor on the same store. */
-export async function restartQuestionManager() {
+export async function restartQuestionManager(
+  continueRestored?: ConstructorParameters<typeof QuestionManager>[3],
+) {
   await manager.drain();
   scheduler.beginClose();
   // Shutdown's run teardown cancels questions after the scheduler closes; rows must survive.
@@ -94,7 +96,7 @@ export async function restartQuestionManager() {
   manager.close();
   await manager.drain();
   scheduler = createTestGatewayScheduler("fake-timers");
-  manager = new QuestionManager(scheduler, undefined, store);
+  manager = new QuestionManager(scheduler, undefined, store, continueRestored);
   await manager.restore();
   handlers = createQuestionHandlers(manager, storeWriteService, scheduler);
 }

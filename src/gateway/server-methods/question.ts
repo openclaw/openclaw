@@ -470,6 +470,14 @@ export function createQuestionHandlers(
           return;
         }
         const { question, observation, authorize } = selected;
+        if (manager.refusesAnswerWhileClosing(request.id)) {
+          respondError(
+            respond,
+            ErrorCodes.UNAVAILABLE,
+            "Gateway is restarting; answer after it reconnects.",
+          );
+          return;
+        }
         let reload: { name: string; result: ReturnType<QuestionManager["resolve"]> } | undefined;
         let save: Promise<void> | undefined;
         await selected.withCurrent(() => {
@@ -490,6 +498,22 @@ export function createQuestionHandlers(
               return;
             }
             authorize.assertCurrent();
+            const restored = manager.resolveRestored(
+              request.id,
+              request.answers,
+              request.resolvedBy,
+            );
+            if (restored) {
+              save = restored.then(
+                (result) => respond(true, result, undefined),
+                (error: unknown) => {
+                  if (!managerError(error, respond)) {
+                    throw error;
+                  }
+                },
+              );
+              return;
+            }
             respond(
               true,
               manager.resolve(request.id, request.answers, request.resolvedBy, {

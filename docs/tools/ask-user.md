@@ -151,7 +151,11 @@ does not pause or extend that attempt's execution budget.
 If the question expires or is cancelled before an answer arrives, the tool
 returns `status: "no_answer"`. The agent then continues with its best judgment.
 An aborted agent run cancels its pending Gateway question. A Gateway restart
-ends pending questions: after reconnecting, clients see them as expired with
+keeps an ordinary question pending until its original deadline. Answering it after
+the restart continues the conversation in a new turn that carries the answer; if it
+expires or is skipped instead, the new turn says so. Answers sent while the Gateway is
+shutting down are refused; answer again after it reconnects. Secret and form
+questions do not survive a restart: clients see them as expired with
 `resolvedBy: "gateway-restart"`, and the Control UI shows "Expired — Gateway restarted".
 
 Gateway question records include the optional originating `runId`. Clients can

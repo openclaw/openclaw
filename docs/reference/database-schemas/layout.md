@@ -108,19 +108,25 @@ session reset invalidates completion eligibility through the recorded session ID
 
 The Gateway question manager owns `gateway_questions` in the shared state database.
 Each row has the question `id` primary key and manager-owned `record_json`: the
-pending question record as requested (wording, options, secret-store binding names and
-allowed hosts, agent, session key, run ID, creation and expiry times) and, when known,
-the requesting session ID. Answers, secret values, requester authority, and waiter
-state are never stored.
+question record as requested (wording, options, secret-store binding names and
+allowed hosts, agent, session key, run ID, creation and expiry times), the requesting
+session ID when known, and `resume: true` for ordinary session questions that are not
+forms or host-authorized prompts. Secret values, requester authority, and waiter state
+are never stored. A restored resumable question's answer is stored only until its
+continuation turn is adopted.
 
 The shared-state writer installs the STRICT table on the first question request; reads
 of absent storage create nothing, and state schema version 39 is unchanged. PostgreSQL
 receives the equivalent first-use fragment. Writes are best effort and never delay the
 question RPC. A question's row is deleted when it is answered, cancelled, or expires,
-but not during Gateway shutdown. On startup each remaining row becomes an `expired`
-question with `resolvedBy: "gateway-restart"`, which `question.get` returns until the
-original expiry (at least 15 seconds), and then the row is deleted. Rollback to a
-binary without this table leaves the rows untouched.
+but not during Gateway shutdown. On startup a resumable row comes back pending until
+its original expiry. Its answer is committed to the row first, and the answer, skip, or
+expiry then admits one new turn in the asking session under that session's recorded
+principal. Adoption of that turn deletes the row; if admission fails, the session gets
+a transcript notice and the row is retried on the next start. Every other row becomes an
+`expired` question with `resolvedBy: "gateway-restart"`, which `question.get` returns
+until the original expiry (at least 15 seconds), and then the row is deleted. Rollback
+to a binary without this table leaves the rows untouched.
 
 ### Linux database page cache
 

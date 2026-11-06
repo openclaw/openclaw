@@ -42,7 +42,7 @@ import {
   type PlacementStandingGrantRuntime,
 } from "./operator-approval-placement-grants.js";
 import { recoverOperatorApprovalsOnStartup } from "./operator-approval-store.js";
-import { QuestionManager } from "./question-manager.js";
+import { QuestionManager, type RestoredQuestion } from "./question-manager.js";
 import { createGatewayQuestionStore } from "./question-store.js";
 import { publishAppliedApprovalResolution } from "./server-methods/approval-publication.js";
 import {
@@ -183,10 +183,25 @@ export function createGatewayAuxHandlers(
     },
     { cacheRejections: true },
   );
+  // Startup outcomes wait for the request context; later ones continue immediately.
+  const restoredQuestions: RestoredQuestion[] = [];
+  const continueRestoredQuestion = (question: RestoredQuestion) => {
+    const context = approvalPublicationContext;
+    if (!context) {
+      restoredQuestions.push(question);
+      return;
+    }
+    void import("./question-resume.js")
+      .then(({ resumeRestoredQuestion }) => resumeRestoredQuestion(context, question))
+      .catch((error: unknown) => {
+        params.log.warn?.(`Restored question continuation failed: ${String(error)}`);
+      });
+  };
   const questionManager = new QuestionManager(
     params.scheduler,
     () => params.log.warn?.("Question terminal publication failed; answer state retained."),
     createGatewayQuestionStore(),
+    continueRestoredQuestion,
   );
   // Restored questions are visible before requests are accepted; a failed read only loses them.
   const ready = Promise.all([
@@ -287,6 +302,9 @@ export function createGatewayAuxHandlers(
     approvalPublicationContext = context;
     for (const publication of pendingAuthorityPublications.splice(0)) {
       publishAuthorityClosure(publication);
+    }
+    for (const question of restoredQuestions.splice(0)) {
+      continueRestoredQuestion(question);
     }
   };
   const unregisterApprovalAuthorityClosedObserver = registerAgentRunDelegatedAuthorityClosedHandler(

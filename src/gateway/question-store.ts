@@ -10,8 +10,12 @@ import { createOpenClawStateSchemaEnsurer } from "../state/openclaw-state-featur
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { WorkerWriteOperationContext } from "../state/worker-operation-registry.js";
 
-/** Pending record as requested; never answers, secret values, requester authority, or waiters. */
-export type StoredQuestion = { record: QuestionRecord; sessionId?: string };
+/**
+ * Requested record, plus the answer of a restored question awaiting its continuation.
+ * Never secret values, requester authority, or waiters. `resume` marks ordinary questions
+ * that continue their session in a new turn after a restart.
+ */
+export type StoredQuestion = { record: QuestionRecord; sessionId?: string; resume?: true };
 type Mutation = { id: string; recordJson?: string };
 const ensureSchema = createOpenClawStateSchemaEnsurer({
   table: "gateway_questions",

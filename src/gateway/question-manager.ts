@@ -23,11 +23,12 @@ import {
   type GatewayRootWorkAdmissionContinuationScope,
 } from "../process/gateway-work-admission.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { canonicalizeQuestionAnswers } from "./question-answers.js";
 import type {
   QuestionClientAuthorization,
   QuestionSessionAccess,
 } from "./question-session-access.types.js";
-import type { GatewayQuestionStore } from "./question-store.js";
+import type { GatewayQuestionStore, StoredQuestion } from "./question-store.js";
 
 /** Grace period for late question.waitAnswer and question.get calls. */
 const QUESTION_RESOLVED_ENTRY_GRACE_MS = 15_000;
@@ -94,6 +95,16 @@ type QuestionEntry = {
   retired?: boolean;
   /** Serializes this entry's best-effort store writes. */
   persisted?: Promise<void>;
+  stored?: StoredQuestion;
+  /** Restored after a restart: its outcome continues the session instead of a waiting tool. */
+  detached?: true;
+};
+
+/** A restored question's outcome, ready to continue its session in one new turn. */
+export type RestoredQuestion = {
+  stored: StoredQuestion & { sessionId: string };
+  /** Called once the continuation turn is adopted; deletes the row. */
+  onAdopted: () => Promise<void>;
 };
 
 /** Private entry identity. Never reselect a successor by its public question id. */
@@ -120,19 +131,6 @@ function waitResult(entry: QuestionEntry, includeResolutionId: boolean): Questio
   };
 }
 
-function canonicalizeQuestionAnswer(question: Question, value: string): string {
-  if (question.options.some((option) => option.value !== undefined && option.value === value)) {
-    return value;
-  }
-  const preserveBytes = question.isSecret || question.presentation === "form";
-  const candidate = preserveBytes ? value : value.trim();
-  const matches = question.options.filter(
-    (option) => (preserveBytes ? option.label : option.label.trim()) === candidate,
-  );
-  const matched = matches.length === 1 ? matches[0] : undefined;
-  return matched ? (matched.value ?? matched.label) : candidate;
-}
-
 function isOrdinary(questions: Question[]): boolean {
   return !questions.some((question) => question.isSecret || question.secretStore);
 }
@@ -143,39 +141,127 @@ export class QuestionManager {
   private closed = false;
   private readonly publications = new AsyncWorkScope();
   private readonly scheduleId = `questions:${randomUUID()}`;
+  /** Restored questions whose continuation turn has not been adopted yet. */
+  private readonly unadopted = new Map<string, QuestionRecord>();
 
   constructor(
     private readonly scheduler: GatewayScheduler,
     private readonly onPublicationError?: () => void,
     private readonly store?: GatewayQuestionStore,
+    private readonly continueRestored?: (question: RestoredQuestion) => void,
   ) {}
 
-  /** Questions dropped by a restart stay visibly expired until their original deadline. */
+  /**
+   * Resumable questions come back pending until their original deadline; their outcome
+   * continues the session. Others, dropped by the restart, stay visibly expired.
+   */
   async restore(): Promise<void> {
-    const stored = (await this.store?.list()) ?? [];
+    const rows = (await this.store?.list()) ?? [];
     const now = this.scheduler.now();
-    for (const { record } of stored) {
+    for (const stored of rows) {
+      const { record } = stored;
       if (this.closed || this.entries.has(record.id)) {
         continue;
       }
+      const resumable = stored.resume === true && stored.sessionId !== undefined;
+      const pending = resumable && record.status === "pending" && record.expiresAtMs > now;
       const entry: QuestionEntry = {
-        record: { ...record, status: "expired", resolvedBy: "gateway-restart" },
+        record: !resumable
+          ? { ...record, status: "expired", resolvedBy: "gateway-restart" }
+          : record.status === "pending" && !pending
+            ? { ...record, status: "expired" }
+            : record,
         ordinary: isOrdinary(record.questions),
+        stored,
+        ...(resumable ? { detached: true as const } : {}),
         waiters: new Set(),
         admissionContinuation: null,
         job: this.scheduler.schedule({
           id: `${this.scheduleId}:${record.id}`,
-          delayMs: Math.max(record.expiresAtMs - now, QUESTION_RESOLVED_ENTRY_GRACE_MS),
+          delayMs: pending
+            ? record.expiresAtMs - now
+            : Math.max(record.expiresAtMs - now, QUESTION_RESOLVED_ENTRY_GRACE_MS),
           run: () => {
+            if (pending) {
+              this.expire(record.id);
+              return this.drain();
+            }
             if (this.entries.get(record.id) === entry) {
               this.entries.delete(record.id);
-              this.persist(entry, (store) => store.remove(record.id));
+              if (!resumable) {
+                this.persist(entry, (store) => store.remove(record.id));
+              }
             }
+            return undefined;
           },
         }),
       };
       this.entries.set(record.id, entry);
+      if (resumable) {
+        this.unadopted.set(record.id, record);
+        if (!pending) {
+          // Answered or expired before a crash: continue the session now.
+          this.continueEntry(entry);
+        }
+      }
     }
+  }
+
+  /** Restart resume defers to a restored question whose outcome will continue the session. */
+  hasPendingResumable(agentId: string, sessionKey: string): boolean {
+    return [...this.unadopted.values()].some(
+      (record) =>
+        record.sessionKey === sessionKey && (!record.agentId || record.agentId === agentId),
+    );
+  }
+
+  /** An answer during shutdown would be lost; the next Gateway accepts it instead. */
+  refusesAnswerWhileClosing(id: string): boolean {
+    return this.scheduler.signal.aborted && this.entries.get(id)?.stored?.resume === true;
+  }
+
+  /** Restored questions commit their answer row before the continuation is admitted. */
+  resolveRestored(
+    id: string,
+    answers: QuestionAnswers,
+    resolvedBy?: string,
+  ): Promise<QuestionResolveResult> | undefined {
+    const entry = this.entries.get(id);
+    const { store } = this;
+    if (!entry?.detached || !entry.stored || !store) {
+      return undefined;
+    }
+    const stored = entry.stored;
+    return this.resolveWithCommit(id, answers, resolvedBy, {
+      commit: () =>
+        store.upsert({
+          ...stored,
+          record: {
+            ...entry.record,
+            status: "answered",
+            answers: this.validateAnswers(entry.record.questions, answers),
+            ...(resolvedBy ? { resolvedBy } : {}),
+          },
+        }),
+    });
+  }
+
+  private continueEntry(entry: QuestionEntry): void {
+    const { store, continueRestored } = this;
+    const sessionId = entry.stored?.sessionId;
+    if (!store || !continueRestored || !sessionId || this.closed || this.scheduler.signal.aborted) {
+      return;
+    }
+    const { id } = entry.record;
+    continueRestored({
+      stored: { ...entry.stored, sessionId, record: entry.record },
+      onAdopted: async () => {
+        this.unadopted.delete(id);
+        await store.remove(id).catch((error: unknown) => {
+          log.warn(`question ${id} persistence failed: ${String(error)}`);
+        });
+      },
+    });
   }
 
   /** Best effort and never awaited by RPCs. Shutdown keeps rows for the next Gateway. */
@@ -257,7 +343,21 @@ export class QuestionManager {
     };
     this.entries.set(record.id, entry);
     const sessionId = params.runId ? getAgentRunContext(params.runId)?.sessionId : undefined;
-    this.persist(entry, (store) => store.upsert({ record, ...(sessionId ? { sessionId } : {}) }));
+    // Ordinary session questions (ask_user, harness) can continue their session after a
+    // restart; secret, form, and host-authorized questions only report that they expired.
+    const resume =
+      entry.ordinary &&
+      !params.authorizeClient &&
+      params.sessionKey &&
+      sessionId &&
+      !params.questions.some((question) => question.presentation);
+    const stored: StoredQuestion = {
+      record,
+      ...(sessionId ? { sessionId } : {}),
+      ...(resume ? { resume: true } : {}),
+    };
+    entry.stored = stored;
+    this.persist(entry, (store) => store.upsert(stored));
     bindMcpFormQuestionRecord(
       record,
       () =>
@@ -570,61 +670,14 @@ export class QuestionManager {
 
   /** Validates answers against stored questions and returns them in canonical form. */
   private validateAnswers(questions: Question[], answers: QuestionAnswers): QuestionAnswers {
-    const submittedIds = Object.keys(answers.answers);
-    const questionsById = new Map(questions.map((question) => [question.questionId, question]));
-    const unknownId = submittedIds.find((id) => !questionsById.has(id));
-    if (unknownId) {
-      throw this.invalidAnswer(unknownId, "is not part of this request");
-    }
-    // Canonical rebuilds every key as an own property, so downstream readers of
-    // resolved answers can index the record directly without prototype checks.
-    const canonical: QuestionAnswers = { answers: {} };
-    for (const question of questions) {
-      // Object.hasOwn: the id grammar admits "constructor"; a plain index read
-      // would return the inherited prototype member instead of undefined.
-      const values = Object.hasOwn(answers.answers, question.questionId)
-        ? answers.answers[question.questionId]
-        : undefined;
-      if (!values || values.length === 0) {
-        if (question.allowEmpty) {
-          canonical.answers[question.questionId] = [];
-          continue;
-        }
-        throw this.invalidAnswer(question.questionId, "requires an answer");
-      }
-      if (
-        values.some((value) =>
-          question.isSecret || question.presentation === "form"
-            ? value.length === 0
-            : !value.trim(),
-        )
-      ) {
-        throw this.invalidAnswer(question.questionId, "contains an empty answer");
-      }
-      if (!question.multiSelect && values.length > 1) {
-        throw this.invalidAnswer(question.questionId, "does not allow multiple answers");
-      }
-      // Store the option's canonical value (value ?? label) so installed clients
-      // sending labels and clients sending values converge on the same answer.
-      const canonicalValues = values.map((value) => canonicalizeQuestionAnswer(question, value));
-      if (
-        question.options.length > 0 &&
-        !question.isOther &&
-        canonicalValues.some(
-          (value) => !question.options.some((option) => (option.value ?? option.label) === value),
-        )
-      ) {
-        throw this.invalidAnswer(question.questionId, "contains an unknown option");
-      }
-      canonical.answers[question.questionId] = canonicalValues;
-    }
-    return canonical;
-  }
-
-  private invalidAnswer(id: string, reason: string): QuestionManagerError {
-    return new QuestionManagerError(
-      QuestionManagerErrorCodes.INVALID_ANSWER,
-      `question '${id}' ${reason}`,
+    return canonicalizeQuestionAnswers(
+      questions,
+      answers,
+      (id, reason) =>
+        new QuestionManagerError(
+          QuestionManagerErrorCodes.INVALID_ANSWER,
+          `question '${id}' ${reason}`,
+        ),
     );
   }
 
@@ -639,7 +692,11 @@ export class QuestionManager {
 
   private finish(entry: QuestionEntry): Promise<void> {
     entry.job.cancel();
-    this.persist(entry, (store) => store.remove(entry.record.id));
+    if (entry.detached) {
+      this.continueEntry(entry);
+    } else {
+      this.persist(entry, (store) => store.remove(entry.record.id));
+    }
     const continuation = entry.admissionContinuation;
     entry.admissionContinuation = null;
     let settled = false;
