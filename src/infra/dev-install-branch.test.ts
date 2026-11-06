@@ -49,6 +49,7 @@ async function resolveBranch(
 // package-root discovery is stubbed, so the exact production git invocations
 // execute against real checkouts).
 async function resolveBranchRealGit(packageRoot: string): Promise<string | null> {
+  // mock-isolation: The real-git controls must point the resolver at a temp repo.
   vi.doMock("./openclaw-root.js", () => ({
     resolveOpenClawPackageRoot: vi.fn(async () => packageRoot),
   }));
