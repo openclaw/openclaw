@@ -1,10 +1,12 @@
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { INTERNAL_SESSION_PATH_PARAM } from "../app-route-paths.ts";
 import { pathForSession } from "../app-session-path-builder.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { readOutboxQueue } from "./chat-outbox-payloads.test-support.ts";
+import { captureSnapshotRouteEvidence } from "./chat-snapshot-route-evidence.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -16,21 +18,27 @@ const transcript = "The cached conversation is ready before route resolution.";
 const row = createControlUiSessionRow(sessionKey, "Snapshot conversation", 1);
 
 async function openCachedRoute(page: Page) {
-  const gateway = await installMockGateway(page, {
-    subscriptionInitialHistory: false,
-    sessionKey,
-    authMethod: "trusted-proxy",
-    authMode: "trusted-proxy",
-    sessions: [],
-    heldMethods: ["sessions.resolve", "chat.startup", "chat.send"],
-    sessionTranscripts: {
-      [sessionKey]: { messages: [{ role: "assistant", content: transcript }] },
+  const gateway = await installMockGateway(
+    page,
+    {
+      subscriptionInitialHistory: false,
+      sessionKey,
+      authMethod: "trusted-proxy",
+      authMode: "trusted-proxy",
+      sessions: [],
+      heldMethods: ["sessions.resolve", "chat.startup", "chat.send"],
+      sessionTranscripts: {
+        [sessionKey]: { messages: [{ role: "assistant", content: transcript }] },
+      },
+      methodResponses: {
+        "sessions.describe": { session: row },
+        "sessions.resolve": { ok: true, ...row },
+      },
     },
-    methodResponses: {
-      "sessions.describe": { session: row },
-      "sessions.resolve": { ok: true, ...row },
+    {
+      afterInitScript: `;(${captureSnapshotRouteEvidence.toString()})(${JSON.stringify(INTERNAL_SESSION_PATH_PARAM)});`,
     },
-  });
+  );
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
   await gateway.waitForRequest("chat.startup");
   await gateway.resolveDeferred("chat.startup");
