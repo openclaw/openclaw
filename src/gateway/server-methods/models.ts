@@ -191,8 +191,9 @@ export const modelsHandlers: GatewayRequestHandlers = {
                     client,
                   ),
                   currentConfig,
-                  // Session and role-filtered catalogs must not reveal other configured providers.
-                  params.view === "provider-config" && !scope && !policy,
+                  // Settings reads the configured catalog; only unrestricted whole-catalog
+                  // reads may also disclose configured providers with no model rows.
+                  params.view !== "all" && !params.provider && !scope && !policy,
                 ),
                 undefined,
               );

@@ -170,7 +170,7 @@ export const ModelCatalogProviderOutcomeSchema = closedObject({
 
 export const ModelsListResultSchema = closedObject({
   models: Type.Array(ModelChoiceSchema),
-  /** Includes model-less configured providers only in unrestricted provider-config views. */
+  /** Includes model-less configured providers in unrestricted, unfiltered configuration views. */
   providerPresentations: Type.Optional(Type.Record(NonEmptyString, ProviderPresentationSchema)),
   /** Matches the authorized session row's saved model-selection inputs. */
   sessionModelRevision: Type.Optional(NonEmptyString),

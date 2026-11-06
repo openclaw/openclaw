@@ -1,4 +1,3 @@
-import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, onCleanup, Show } from "solid-js";
 import {
   fetchGatewayContextResource,
@@ -6,30 +5,36 @@ import {
 } from "../../lib/identity-avatar-context.ts";
 import { iconData, type IconName } from "../icon-data.ts";
 import { resolveProviderIconName } from "../provider-icon-data.ts";
-import type { ProviderPresentation } from "../provider-icon-data.ts";
 import { Icon } from "./icon.tsx";
 import { ProviderBrandIcon } from "./provider-icon.tsx";
 
-type ConfiguredIcon = NonNullable<ProviderPresentation["providerIcon"]>;
 function isBuiltinIconName(name: string): name is IconName {
   return Object.hasOwn(iconData, name);
 }
 
 /** Optional artwork and icon-registry code stays out of the ordinary provider-brand path. */
-export default function ConfiguredProviderIcon(props: {
-  icon: ConfiguredIcon;
-  class?: JSX.ClassValue;
-  fallback: JSX.Element;
-}) {
+export default function ConfiguredProviderIcon(props: Parameters<typeof ProviderBrandIcon>[0]) {
   const [failed, setFailed] = createSignal(false);
+  // The outer keyed boundary owns icon changes; omit artwork from the fallback to
+  // retain the configured label without recursively loading this component.
+  const icon = () => props.presentation!.providerIcon!;
+  const fallback = () => (
+    <ProviderBrandIcon
+      provider={props.provider}
+      presentation={{ providerName: props.presentation?.providerName }}
+      class={props.class}
+    />
+  );
   const builtin = () => {
-    const icon = props.icon;
-    return icon.source === "builtin" && isBuiltinIconName(icon.name) ? icon.name : undefined;
+    const selected = icon();
+    return selected.source === "builtin" && isBuiltinIconName(selected.name)
+      ? selected.name
+      : undefined;
   };
   const artwork = createMemo(
     async () => {
-      const icon = props.icon;
-      if (icon.source !== "asset") {
+      const selected = icon();
+      if (selected.source !== "asset") {
         return undefined;
       }
       let active = true;
@@ -42,7 +47,8 @@ export default function ConfiguredProviderIcon(props: {
       });
       try {
         const { origin, resourceBasePath } = readAvatarGatewayContext();
-        const url = new URL(resourceBasePath + icon.url, origin ?? globalThis.location.origin).href;
+        const url = new URL(resourceBasePath + selected.url, origin ?? globalThis.location.origin)
+          .href;
         const response = await fetchGatewayContextResource(url, 5_000);
         if (!response.ok) {
           return undefined;
@@ -59,8 +65,10 @@ export default function ConfiguredProviderIcon(props: {
     },
     { lazy: true },
   );
-  const brand = () =>
-    props.icon.source === "builtin" ? resolveProviderIconName(props.icon.name) : null;
+  const brand = () => {
+    const selected = icon();
+    return selected.source === "builtin" ? resolveProviderIconName(selected.name) : null;
+  };
   return (
     <Show
       when={builtin()}
@@ -68,7 +76,7 @@ export default function ConfiguredProviderIcon(props: {
         <Show
           when={brand()}
           fallback={
-            <Show when={!failed() && artwork()} fallback={props.fallback}>
+            <Show when={!failed() && artwork()} fallback={fallback()}>
               {(url) => (
                 <img
                   class={["provider-brand-icon", props.class]}

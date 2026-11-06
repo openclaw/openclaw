@@ -53,8 +53,7 @@ describe("models.list provider presentation", () => {
         expect(JSON.stringify(payload)).not.toContain("images.example.com");
         expect(JSON.stringify(payload)).not.toContain("Hidden provider");
       }
-      const settings = await listModels({
-        view: "provider-config",
+      const configured = {
         loadGatewayModelCatalog: vi.fn(async () => []),
         runtimeConfig: {
           models: {
@@ -68,16 +67,29 @@ describe("models.list provider presentation", () => {
             },
           },
         },
-      });
-      expect(settings.mock.calls[0]?.[1]).toMatchObject({
-        models: [],
-        providerPresentations: {
-          workstation: {
-            providerName: "Workstation",
-            providerIcon: { source: "builtin", name: "server" },
+      } satisfies Parameters<typeof listModels>[0];
+      for (const view of [undefined, "default", "configured", "provider-config"] as const) {
+        const settings = await listModels({ ...configured, view });
+        expect(settings.mock.calls[0]?.[1]).toMatchObject({
+          models: [],
+          providerPresentations: {
+            workstation: {
+              providerName: "Workstation",
+              providerIcon: { source: "builtin", name: "server" },
+            },
           },
-        },
-      });
+        });
+      }
+      for (const filter of [
+        { view: "all" },
+        { view: "configured", provider: "workstation" },
+        { view: "provider-config", provider: "workstation" },
+        { view: "configured", sessionKey: "agent:main:provider-presentation" },
+      ] as const) {
+        const filtered = await listModels({ ...configured, ...filter });
+        expect(filtered.mock.calls[0]?.[0]).toBe(true);
+        expect(filtered.mock.calls[0]?.[1]).not.toHaveProperty("providerPresentations");
+      }
     });
   });
 });

@@ -17,7 +17,9 @@ import { modelsHandlers } from "./models.js";
 import type { RespondFn } from "./types.js";
 
 export function requestModelsList(params: {
-  view: "default" | "configured" | "provider-config" | "all";
+  view?: "default" | "configured" | "provider-config" | "all";
+  provider?: string;
+  sessionKey?: string;
   agentId?: string;
   runtimeConfig?: OpenClawConfig;
   loadGatewayModelCatalog: (params?: {
@@ -99,7 +101,9 @@ export function requestModelsList(params: {
     },
   });
   const requestParams = {
-    view: params.view,
+    ...(params.view === undefined ? {} : { view: params.view }),
+    ...(params.provider ? { provider: params.provider } : {}),
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.includeDefaultModels === undefined
       ? {}
       : { includeDefaultModels: params.includeDefaultModels }),

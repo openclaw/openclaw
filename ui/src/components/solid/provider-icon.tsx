@@ -57,10 +57,10 @@ export function ProviderBrandIcon(props: {
   };
   return (
     <Show when={props.presentation?.providerIcon} keyed fallback={defaultIcon()}>
-      {(selected) => (
+      {(_selected) => (
         <Errored fallback={defaultIcon}>
           <Loading fallback={defaultIcon()}>
-            <ConfiguredProviderIcon icon={selected} class={props.class} fallback={defaultIcon()} />
+            <ConfiguredProviderIcon {...props} />
           </Loading>
         </Errored>
       )}
@@ -72,10 +72,7 @@ export function CloudProfileIcon(props: { profile?: CloudProfileIdentity; class?
   const data = createMemo(() => resolveCloudProfileIconData(props.profile));
   return (
     <span class={["cloud-profile-icon", props.class]} aria-hidden="true">
-      <Show
-        when={data().providerId}
-        fallback={<Show when={data().iconName}>{(name) => <Icon name={name()} />}</Show>}
-      >
+      <Show when={data().providerId} fallback={<Icon name={data().iconName!} />}>
         {(providerId) => (
           <ProviderAsset
             icon={providerId()}
