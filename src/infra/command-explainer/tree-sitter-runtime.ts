@@ -38,6 +38,11 @@ function parseBashForCommandExplanation(
   if (source.length > MAX_COMMAND_EXPLANATION_SOURCE_CHARS) {
     throw new Error("Shell command is too large to explain");
   }
+  // tree-sitter treats these as whitespace, but POSIX shells treat them as word bytes.
+  // Reject the whole source, including decoded wrapper payloads, rather than rewrite it.
+  if (/[\r\v\f]/u.test(source)) {
+    throw new Error("Shell command contains unsupported control characters");
+  }
   const deadlineMs = performance.now() + MAX_COMMAND_EXPLANATION_PARSE_MS;
   let timedOut = false;
   const tree = parser.parse(source, null, {

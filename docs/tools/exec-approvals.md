@@ -491,6 +491,11 @@ APIs still accept the legacy shape as input and normalize it before saving. See
 Shell chains such as `echo ok && pwd` still need every top-level segment
 to satisfy allowlist rules.
 
+POSIX shell text containing raw carriage returns, vertical tabs, or form feeds
+requires approval of the complete command rather than automatic allowlist matching.
+This includes quoted text and decoded shell-wrapper payloads. Use ordinary spaces,
+tabs, and line feeds for automatically matched commands.
+
 Examples:
 
 - `rg`
