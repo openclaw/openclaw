@@ -2095,6 +2095,31 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/openclaw-id-access:
+    dependencies:
+      '@openclaw/openclaw-id-protocol':
+        specifier: workspace:*
+        version: link:../../packages/openclaw-id-protocol
+      '@solidjs/web':
+        specifier: 2.0.0-rc.18
+        version: 2.0.0-rc.18(patch_hash=6d6b2e52e607edf3c9cfcc1a26f331d013537d051f43bbb4f3e7877ed08fa5cf)(solid-js@2.0.0-rc.18)
+      solid-js:
+        specifier: 2.0.0-rc.18
+        version: 2.0.0-rc.18
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      '@solidjs/compiler':
+        specifier: 2.0.0-rc.18
+        version: 2.0.0-rc.18
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/opencode:
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -3138,6 +3163,9 @@ importers:
 
   ui:
     dependencies:
+      '@1password/save-button':
+        specifier: 1.3.0
+        version: 1.3.0
       '@codemirror/commands':
         specifier: 6.11.1
         version: 6.11.1
@@ -3315,6 +3343,9 @@ importers:
         version: 5.0.5(patch_hash=a2a78abe9470cc2ceb0d4eeb81acfc62d6180e9990bc866a7771ba60b1320ea6)(@opentelemetry/api@1.9.1)(@types/node@26.6.6)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
 
 packages:
+
+  '@1password/save-button@1.3.0':
+    resolution: {integrity: sha512-jyVhFEwZEigiWimyjnPlOdEepiIZbPuCc4YpkWrghi5nwl5IYT3dk1yxL2drz/JrleUpBoaYDJUAZw0CX9ZU7Q==}
 
   '@acemir/cssom@0.9.32':
     resolution: {integrity: sha512-OijrAUu7rrJhSIoHNg6LMPS5e344nwUHA+1EFYYjrh64D+GmytUsfBQjci45TjT+rd5Spsp8B5xsZDT+TgyXXQ==}
@@ -11069,6 +11100,8 @@ packages:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
 
 snapshots:
+
+  '@1password/save-button@1.3.0': {}
 
   '@acemir/cssom@0.9.32': {}
 

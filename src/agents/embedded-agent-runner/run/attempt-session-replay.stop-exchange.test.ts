@@ -19,6 +19,8 @@ import { withInterruptedTurn, withReplaySession } from "./attempt-session-replay
 registerAgentSessionLoopTestLifecycle();
 
 type Fixture = Parameters<Parameters<typeof withInterruptedTurn>[1]>[0];
+const appendNothing = () => vi.fn(async () => {});
+type AppendFn = ReturnType<typeof appendNothing>;
 
 const appendStopExchange = (fixture: Fixture) =>
   vi.fn(async () => {
@@ -55,10 +57,7 @@ const appendWorkshopNotice = (fixture: Fixture) =>
     expect(appended.ok).toBe(true);
   });
 
-async function runAcross(
-  makeAppend: (fixture: Fixture) => ReturnType<typeof vi.fn>,
-  selectedOwner: boolean,
-) {
+async function runAcross(makeAppend: (fixture: Fixture) => AppendFn, selectedOwner: boolean) {
   const outcome: {
     modelCalls?: number;
     thrown?: string;
@@ -118,8 +117,6 @@ async function runAcross(
   );
   return outcome;
 }
-
-const appendNothing = () => vi.fn(async () => {});
 
 describe("queued follow-up replay admission vs. a /stop command exchange", () => {
   it.each([false, true])(
