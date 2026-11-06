@@ -3,7 +3,10 @@
 // participant the same way, so both depend on deferredLaneOccupancy="release" to admit
 // later same-lane members. Cover them together — a lane regression breaks both at once.
 import path from "node:path";
-import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
+  DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -1027,7 +1030,7 @@ describe("Telegram durable ingress coalescing", () => {
     }
   });
 
-  it("bounds repeated session-start conflicts and drains the next Telegram update", async () => {
+  it("dead-letters aged session-start conflicts and drains the next Telegram update", async () => {
     const poison = textUpdate({ updateId: 801, messageId: 1, text: "poison" });
     const after = textUpdate({ updateId: 802, messageId: 2, text: "after" });
     const poisonId = telegramQueueEventId(poison.update_id);
@@ -1041,7 +1044,11 @@ describe("Telegram durable ingress coalescing", () => {
       }
       return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
     });
-    await writeTelegramSpooledUpdate({ stateDir, update: poison });
+    await writeTelegramSpooledUpdate({
+      stateDir,
+      update: poison,
+      now: Date.now() - DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
+    });
     await writeTelegramSpooledUpdate({ stateDir, update: after });
     const queue = openTelegramIngressQueue({ stateDir });
     for (let attempt = 1; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
@@ -1060,7 +1067,11 @@ describe("Telegram durable ingress coalescing", () => {
     monitor.start();
     await monitor.waitForIdle();
     expect(await queue.listFailed?.({ limit: "all" })).toEqual([
-      expect.objectContaining({ id: poisonId, reason: "session-start-conflict-retry-limit" }),
+      expect.objectContaining({
+        id: poisonId,
+        reason: "retry-limit-exceeded",
+        attempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+      }),
     ]);
     expect(await queue.listPending({ limit: "all" })).toEqual([]);
     expect(
