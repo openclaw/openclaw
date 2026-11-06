@@ -20,10 +20,7 @@ const failed = (code: string) => ({
 });
 
 it.each([
-  [
-    "ETIMEDOUT",
-    /timed out after 10000 ms while checking 4097 backup paths\..*#alternative-manual/u,
-  ],
+  ["ETIMEDOUT", /timed out after 10000 ms while checking 4097 backup paths.*alternative-manual/u],
   ["ENOENT", /Check that the backup worker can run and the source files are readable/u],
 ] as const)("refuses an incomplete inventory on %s", (code, message) => {
   const failure = failed(code);
