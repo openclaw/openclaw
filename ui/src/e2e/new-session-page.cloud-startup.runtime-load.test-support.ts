@@ -170,7 +170,7 @@ async function recoverStartup(
     await expect
       .poll(() =>
         alert.evaluate((element) => {
-          const text = element.querySelector(".chat-error__content")!.getBoundingClientRect();
+          const text = element.querySelector(".app-toast__body")!.getBoundingClientRect();
           const action = element.querySelector(".chat-error__discard")!.getBoundingClientRect();
           return action.top >= text.bottom && action.right <= innerWidth && action.left >= 0;
         }),

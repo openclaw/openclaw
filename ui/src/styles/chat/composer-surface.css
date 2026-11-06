@@ -96,12 +96,7 @@
 
 .chat-footer
   .chat-footer__context
-  :is(
-    .session-progress-card__body,
-    .chat-queue__scroll,
-    .agent-chat__goal-detail-objective,
-    .chat-error__diagnostic
-  ) {
+  :is(.session-progress-card__body, .chat-queue__scroll, .agent-chat__goal-detail-objective) {
   overscroll-behavior: auto;
 }
 

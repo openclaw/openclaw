@@ -490,7 +490,7 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
         await setHtml(
           page,
           ".agent-chat__composer-notices",
-          '<span class="chat-composer-lit-content" style="display:contents"><div class="chat-composer-neighbor-card chat-error">Model unavailable</div></span>',
+          '<span class="chat-composer-lit-content" style="display:contents"><div class="app-toast chat-error">Model unavailable</div></span>',
         );
         await waitForLayoutSettled(page, ".chat-main__conversation, .agent-chat__composer-shell");
         expect(await page.getByText("Disk space low").isVisible()).toBe(true);
@@ -524,9 +524,13 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
         const position = (selector: string) => style(page, selector, "position");
         expect(await position(".chat-topbar-notices")).toBe("absolute");
         const header = await getBoundingBox(page, ".chat-pane__header");
-        for (const selector of [".chat-topbar-notices", ".chat-gutter-stack", ".app-toast"]) {
+        for (const selector of [
+          ".chat-topbar-notices",
+          ".chat-gutter-stack",
+          ".app-toast-lane .app-toast",
+        ]) {
           const top = (await getBoundingBox(page, selector)).y;
-          if (label.startsWith("mobile") || selector === ".app-toast") {
+          if (label.startsWith("mobile") || selector === ".app-toast-lane .app-toast") {
             expect(top, selector).toBeGreaterThanOrEqual(header.y + header.height);
           } else if (selector === ".chat-topbar-notices") {
             expect(top).toBeCloseTo(header.y + header.height + 8, 0);

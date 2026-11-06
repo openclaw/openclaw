@@ -1861,15 +1861,103 @@ openclaw-tooltip:last-child > .btn.refresh-button {
   color: var(--muted);
 }
 
+.lazy-view-error__summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  margin-block-start: 6px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  color: var(--text);
+  font: 500 calc(13px * var(--control-ui-text-scale)) / 20px var(--font-body);
+  list-style: none;
+  cursor: var(--cursor-action);
+  user-select: none;
+}
+
+.lazy-view-error__summary:hover {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text-strong);
+}
+
+.lazy-view-error__summary:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.lazy-view-error__summary::-webkit-details-marker {
+  display: none;
+}
+
+.lazy-view-error__chevron {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  transition: rotate 150ms var(--ease-out);
+}
+
+.lazy-view-error__details[open] .lazy-view-error__chevron {
+  rotate: 180deg;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lazy-view-error__chevron {
+    transition: none;
+  }
+}
+
+/* Match the transcript's diagnostic well, with Copy in its own top-right cell. */
+.lazy-view-error__well {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-block-start: 8px;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
 .lazy-view-error__detail {
   display: block;
-  margin-top: 8px;
+  flex: 1;
+  min-width: 0;
   max-width: 100%;
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 11px;
-  line-height: 1.5;
+  margin: 0;
+  color: var(--text);
+  font: calc(12px * var(--control-ui-text-scale)) / 1.65 var(--mono);
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.lazy-view-error__action {
+  display: inline-flex;
+  flex: none;
+}
+
+.lazy-view-error__action .chat-copy-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: var(--cursor-action);
+}
+
+.lazy-view-error__action .chat-copy-btn:hover {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text-strong);
+}
+
+@media (hover: none) {
+  .lazy-view-error__action .chat-copy-btn {
+    width: 32px;
+    height: 32px;
+  }
 }
 
 .code-block {
