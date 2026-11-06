@@ -108,10 +108,12 @@ vi.mock("./agent.shared.js", () => ({
   withPlaywrightRouteContext: vi.fn(),
   withRouteTabContext: vi.fn(
     async (params: {
+      req: { signal?: AbortSignal };
       run: (ctx: {
         profileCtx: typeof routeState.profileCtx;
         tab: { targetId: string; url: string; wsUrl: string; wsLookup: typeof tabLookup };
         cdpUrl: string;
+        signal: AbortSignal;
       }) => Promise<void>;
     }) =>
       await params.run({
@@ -123,6 +125,7 @@ vi.mock("./agent.shared.js", () => ({
           wsLookup: tabLookup,
         },
         cdpUrl: "http://127.0.0.1:18800",
+        signal: params.req.signal ?? new AbortController().signal,
       }),
   ),
 }));
@@ -144,6 +147,14 @@ function snapshotRoute(state = snapshotState()) {
   const { app, getHandlers } = createBrowserRouteApp();
   registerBrowserAgentSnapshotRoutes(app, { state: () => state } as never);
   return getHandlers.get("/snapshot");
+}
+
+function screenshotRoute() {
+  const { app, postHandlers } = createBrowserRouteApp();
+  registerBrowserAgentSnapshotRoutes(app, {
+    state: () => ({ resolved: { extraArgs: [] }, profiles: browserRuntime.profiles }),
+  } as never);
+  return postHandlers.get("/screenshot");
 }
 
 async function snapshot(query: BrowserRequest["query"], handler = snapshotRoute()) {
@@ -176,6 +187,21 @@ describe("local-managed browser snapshot routes", () => {
     cdp.snapshotRoleViaCdp.mockReset();
     playwright.module = null;
     navigation.assertBrowserNavigationResultAllowed.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("forwards request cancellation to direct CDP screenshot capture", async () => {
+    const controller = new AbortController();
+    cdp.captureScreenshot.mockResolvedValueOnce(Buffer.from("png"));
+
+    const response = await runRoute(screenshotRoute(), {
+      body: { type: "png" },
+      signal: controller.signal,
+    });
+
+    expectResponseContaining(response, { ok: true });
+    expect(cdp.captureScreenshot).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ signal: controller.signal }),
+    );
   });
 
   it("blocks AI CDP role snapshots when the current tab violates browser navigation policy", async () => {
