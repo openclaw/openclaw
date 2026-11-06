@@ -205,7 +205,6 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
           : showSecretRevealDialog({
               // The title names the device; the body reassures about the outcome.
               title: t("devices.inventory.rotateWithheldTitle", { device: device.name }),
-              status: "success",
               message: t("devices.inventory.rotateWithheldNext"),
               callout: t("devices.inventory.rotateWithheldException"),
               acknowledgeLabel: t("common.close"),

@@ -495,30 +495,34 @@ function readSandboxRegistryRowInDatabase(
   );
 }
 
-export function readSandboxRegistryInDatabase(
-  db: EngineConnection,
-  workspaceDir?: string,
-): SandboxRegistryEntry[] {
-  return readRegistryRows(db, "container")
-    .map((row) => rowToContainerEntry(row, workspaceDir))
-    .filter((entry): entry is SandboxRegistryEntry => entry !== null);
-}
-
-export function readSandboxRuntimeIdsInDatabase(
-  db: EngineConnection,
-  filter: { backendId: string; scopeKey: string },
-): string[] {
-  return readRegistryRows(db, "container", filter)
-    .map((row) => rowToContainerEntry(row))
-    .filter((entry): entry is SandboxRegistryEntry => entry !== null)
-    .map((entry) => entry.containerName);
-}
-
-export function readSandboxBrowserRegistryInDatabase(
-  db: EngineConnection,
-  workspaceDir?: string,
-): SandboxBrowserRegistryEntry[] {
-  return readRegistryRows(db, "browser")
-    .map((row) => rowToBrowserEntry(row, workspaceDir))
-    .filter((entry): entry is SandboxBrowserRegistryEntry => entry !== null);
-}
+export const sandboxRegistryReadOperations = {
+  "sandboxRegistry.list": ({ workspaceDir }: { workspaceDir?: string }, db: EngineConnection) => ({
+    type: "sandboxRegistry.list" as const,
+    entries: readRegistryRows(db, "container")
+      .map((row) => rowToContainerEntry(row, workspaceDir))
+      .filter((entry): entry is SandboxRegistryEntry => entry !== null),
+  }),
+  "sandboxRegistry.get": ({ containerName }: { containerName: string }, db: EngineConnection) => ({
+    type: "sandboxRegistry.get" as const,
+    entry: readSandboxRegistryEntryInDatabase(db, containerName),
+  }),
+  "sandboxRegistry.runtimeIds": (
+    filter: { backendId: string; scopeKey: string },
+    db: EngineConnection,
+  ) => ({
+    type: "sandboxRegistry.runtimeIds" as const,
+    runtimeIds: readRegistryRows(db, "container", filter)
+      .map((row) => rowToContainerEntry(row))
+      .filter((entry): entry is SandboxRegistryEntry => entry !== null)
+      .map((entry) => entry.containerName),
+  }),
+  "sandboxRegistry.browsers": (
+    { workspaceDir }: { workspaceDir?: string },
+    db: EngineConnection,
+  ) => ({
+    type: "sandboxRegistry.browsers" as const,
+    entries: readRegistryRows(db, "browser")
+      .map((row) => rowToBrowserEntry(row, workspaceDir))
+      .filter((entry): entry is SandboxBrowserRegistryEntry => entry !== null),
+  }),
+};

@@ -59,6 +59,7 @@ export {
   stripSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
 export {
+  applyProviderPayloadHook,
   createEmptyTransportUsage,
   mergeTransportHeaders,
   createProviderWaitObserver,

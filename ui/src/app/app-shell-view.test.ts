@@ -39,7 +39,9 @@ function mockMobile(read: () => boolean) {
   vi.stubGlobal(
     "matchMedia",
     vi.fn((query: string) =>
-      Object.assign(new EventTarget(), { matches: read() && !query.includes("600px") }),
+      Object.assign(new EventTarget(), {
+        matches: read() && !query.includes("600px") && !query.includes("640px"),
+      }),
     ),
   );
 }

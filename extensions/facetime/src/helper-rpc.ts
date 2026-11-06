@@ -214,8 +214,7 @@ export class FaceTimeHelperSocketServer {
       if (!this.#socketPeers.has(socket)) {
         socket.destroy();
       }
-    }, AUTH_DEADLINE_MS);
-    authDeadline.unref?.();
+    }, AUTH_DEADLINE_MS).unref();
     this.#authDeadlineTimers.set(socket, authDeadline);
     let buffer = "";
     socket.on("data", (chunk) => {

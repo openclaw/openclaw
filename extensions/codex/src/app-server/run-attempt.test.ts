@@ -583,7 +583,8 @@ async function runSettledFailureClientReplacementTest(
   );
   const { run, started } = startClockControlledAttempt(createParams(sessionFile, workspaceDir));
   await failedThreadRead.promise;
-  await vi.advanceTimersByTimeAsync(2_000);
+  // Codex's 10s unload confirmation window (thread-lifecycle-adoption.ts).
+  await vi.advanceTimersByTimeAsync(10_000);
   const [readyClient] = await Promise.all([turnStarted.promise, started]);
   readyClient.notify({
     method: "turn/completed",

@@ -152,7 +152,19 @@ it.each([
 });
 
 it("submits, polls, and downloads while dropping malformed duration metadata", async () => {
-  const result = await completeVideo({}, undefined, { duration: 1.5, model: undefined });
+  vi.useFakeTimers();
+  fetchWithTimeoutMock
+    .mockResolvedValueOnce(taskResponse({ status: "queued" }))
+    .mockResolvedValueOnce(taskResponse({ status: "running" }))
+    .mockResolvedValueOnce(taskResponse({ duration: 1.5, model: undefined }))
+    .mockResolvedValueOnce(videoResponse("webm-bytes", "video/webm"));
+
+  const pending = generateVideo();
+  await vi.advanceTimersByTimeAsync(0);
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(5_000);
+  const result = await pending;
   expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
   expect(postRequest().url).toBe(
     "https://ark.ap-southeast.bytepluses.com/api/v3/contents/generations/tasks",
@@ -165,6 +177,12 @@ it("submits, polls, and downloads while dropping malformed duration metadata", a
 it.each([
   ["BytePlus video status response missing task status", { status: undefined }],
   ["BytePlus video generation completed with malformed content", { content: [videoUrl] }],
+  [
+    "BytePlus video status response returned unknown task status: unexpected",
+    { status: "unexpected" },
+  ],
+  ["synthetic job failed", { status: "failed", error: { message: "  synthetic job failed  " } }],
+  ["BytePlus video generation failed", { status: "cancelled", error: { message: " " } }],
 ] as const)("rejects invalid task responses: %s", async (message, task) => {
   fetchWithTimeoutMock.mockResolvedValueOnce(taskResponse({ ...task, model: undefined }));
   await expect(generateVideo()).rejects.toThrow(message);

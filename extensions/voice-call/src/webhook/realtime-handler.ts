@@ -540,7 +540,7 @@ export class RealtimeCallHandler {
       this.pendingStreamTokens.set(token, { expiry, ...meta });
       const host = this.publicOrigin || DEFAULT_HOST;
       const streamPathPattern = this.getStreamPathPattern();
-      const timer = setTimeout(() => {
+      setTimeout(() => {
         if (!this.pendingStreamTokens.delete(token)) {
           return;
         }
@@ -555,8 +555,7 @@ export class RealtimeCallHandler {
         console.warn(
           `[voice-call] Realtime stream WebSocket never connected within ${STREAM_TOKEN_TTL_MS / 1000}s${call}${participants} — the provider could not reach wss://${host}${streamPathPattern}/<token>. Verify the stream path is exposed (tailscale serve/funnel --set-path).`,
         );
-      }, STREAM_TOKEN_TTL_MS);
-      timer.unref?.();
+      }, STREAM_TOKEN_TTL_MS).unref();
     }
     const host = this.publicOrigin || DEFAULT_HOST;
     const streamUrl = `wss://${host}${this.getStreamPathPattern()}/${token}`;
@@ -905,13 +904,12 @@ export class RealtimeCallHandler {
             if (this.forcedConsultsByCallId.get(callId) !== state) {
               coordinator.remove(handle);
             } else {
-              const cleanupTimer = setTimeout(() => {
+              setTimeout(() => {
                 if (this.forcedConsultsByCallId.get(callId) === state) {
                   this.forcedConsultsByCallId.delete(callId);
                   coordinator.remove(handle);
                 }
-              }, FORCED_CONSULT_NATIVE_DEDUPE_MS);
-              cleanupTimer.unref?.();
+              }, FORCED_CONSULT_NATIVE_DEDUPE_MS).unref();
             }
           }
         }
@@ -1064,8 +1062,7 @@ export class RealtimeCallHandler {
           const timer = setTimeout(() => {
             state.recentFinal = undefined;
             state.recentFinalTimer = undefined;
-          }, RECENT_FINAL_USER_TRANSCRIPT_TTL_MS);
-          timer.unref?.();
+          }, RECENT_FINAL_USER_TRANSCRIPT_TTL_MS).unref();
           state.recentFinalTimer = timer;
         }
         const event: NormalizedEvent = {
@@ -1397,11 +1394,6 @@ export class RealtimeCallHandler {
     this.activeTelephonyBindingsByCallId.set(callId, telephonyBinding);
     telephonyBinding.noteMediaActivity();
     activity.start();
-    if (this.config.idleHangupMs) {
-      console.log(
-        `[voice-call] Realtime speech idle monitor armed callId=${callId} providerCallId=${callSid} timeoutMs=${this.config.idleHangupMs}`,
-      );
-    }
     if (previousTelephonyBinding && previousTelephonyBinding !== telephonyBinding) {
       previousTelephonyBinding.retire();
     }

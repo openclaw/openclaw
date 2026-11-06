@@ -1,16 +1,18 @@
 /** Acyclic contracts for capabilities stored in the installed plugin registry. */
 import type { SessionDiscussionInfo } from "../../packages/gateway-protocol/src/schema/session-discussion.js";
+import type {
+  MemoryCliSearchParams,
+  MemorySearchManager,
+} from "../../packages/memory-host-sdk/src/host/search-manager.types.js";
 import type { ConversationRecallContext } from "../agents/conversation-recall.types.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngine } from "../context-engine/types.js";
 import type {
   LegacyMemoryReadResult,
-  MemoryCliSearchParams,
   MemoryCliSearchResult,
   MemoryOriginClass,
   MemoryReadResult,
-  MemorySearchManager,
   MemorySearchResult,
 } from "../memory-host-sdk/host/types.js";
 import type {
@@ -343,14 +345,14 @@ export type MemoryPluginCapability = {
  */
 export type LearnMedium = "skills" | "memory";
 
-export type LearnGuidance = {
+type LearnGuidance = {
   /** Lines for the /learn prompt body. */
   lines: readonly string[];
   /** Reference blocks the host appends after the closing instruction, each after a blank line. */
   appendix?: readonly string[];
 };
 
-export type LearnSubcommandContext = {
+type LearnSubcommandContext = {
   /** Text after the subcommand name. */
   args: string;
   config: OpenClawConfig;
@@ -361,7 +363,7 @@ export type LearnSubcommandContext = {
 };
 
 /** A reply without a model turn, or the prompt that replaces this turn's user message. */
-export type LearnSubcommandResult = { text: string } | { prompt: string };
+type LearnSubcommandResult = { text: string } | { prompt: string };
 
 export type LearnSubcommand = {
   /** The word after /learn, matched case-insensitively. */
@@ -398,6 +400,11 @@ export type LearnContribution = {
   }) => LearnGuidance;
   /** Words after /learn that this contribution handles instead of a learning request. */
   subcommands?: readonly LearnSubcommand[];
+  /**
+   * Reply when /learn cannot learn here and this contribution's medium is the only one
+   * registered (or its subcommand was asked for). Default: a generic remedy.
+   */
+  unavailableText?: string;
 };
 
 export type LearnContributionRegistration = {

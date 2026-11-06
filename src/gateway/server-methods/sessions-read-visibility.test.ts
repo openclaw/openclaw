@@ -41,6 +41,91 @@ afterEach(async () => {
   await closeStateDatabaseForTest();
 });
 
+test("session-only roles cannot read another person's timeline through profile filters", async () => {
+  const viewer = ensureProfileForEmail("timeline-viewer@example.test").id;
+  const foreign = ensureProfileForEmail("timeline-foreign@example.test").id;
+  for (const id of [viewer, foreign]) {
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: `agent:main:timeline-${id}` },
+      {
+        sessionId: id,
+        updatedAt: Date.now(),
+        visibility: "shared",
+        createdActor: { type: "human", source: "profile", id },
+      },
+    );
+  }
+  const client = identifiedClient(viewer);
+  client.connect.scopes = ["operator.sessions.write"];
+  for (const cap of ["view", "none", "write"] as const) {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        roles: {
+          default: "limited",
+          definitions: {
+            limited: {
+              sessions: { others: cap },
+              agents: "*",
+              scopes: ["operator.sessions.write"],
+            },
+            member: { sessions: { others: "write" }, agents: "*", scopes: ["operator.write"] },
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    setUserProfileRole(viewer, "limited");
+    const context = requestContext(cfg);
+    const read = (request: Parameters<typeof listSessions>[0]["request"]) =>
+      listSessions({
+        client,
+        context,
+        request: {
+          source: "activity",
+          includePeople: true,
+          includeOwnerSessionCounts: true,
+          activityPulseBoundaries: [0, Date.now() + 1],
+          ...request,
+        },
+      });
+    for (const selector of [
+      { involvingProfileId: foreign },
+      { involvingProfileId: foreign.replaceAll("-", "").slice(0, 12) },
+      { profileRelation: { profileId: foreign, relationship: "involving" as const } },
+      { creatorId: foreign },
+      { ownerId: foreign },
+    ]) {
+      await expect(read(selector)).rejects.toMatchObject({ error: { code: "FORBIDDEN" } });
+    }
+    const own = await read({ involvingProfileId: viewer });
+    expect(own.sessions.map((row) => row.sessionId)).toEqual([viewer]);
+    expect(own.people?.map((person) => person.identity.id)).toEqual([viewer]);
+    for (const key of ["creatorId", "ownerId"] as const) {
+      const ownPadded = await read({ [key]: ` ${viewer} ` });
+      expect(ownPadded.sessions.map((row) => row.sessionId)).toEqual([viewer]);
+    }
+    if (cap !== "none") {
+      const ordinary = await read({});
+      expect(ordinary.sessions).toHaveLength(2);
+      expect(ordinary.sessions.map((row) => row.sessionId)).toEqual(
+        expect.arrayContaining([viewer, foreign]),
+      );
+      expect(ordinary.people?.map((person) => person.identity.id)).toEqual([viewer]);
+      expect(ordinary.ownerSessionCounts?.map((owner) => owner.profileId)).toEqual([viewer]);
+      expect(ordinary).toMatchObject({
+        totalCount: 2,
+        peopleSessionCount: 1,
+        activityPulse: { people: 1 },
+      });
+    }
+    // A member can request reduced socket scopes without becoming a guest.
+    setUserProfileRole(viewer, "member");
+    expect(
+      (await read({ involvingProfileId: foreign })).sessions.map((row) => row.sessionId),
+    ).toEqual([foreign]);
+  }
+});
+
 test("projects recap eligibility from current sharing authority, including capped shared viewers", async () => {
   const now = Date.now();
   using _ = vi.spyOn(Date, "now").mockReturnValue(now);

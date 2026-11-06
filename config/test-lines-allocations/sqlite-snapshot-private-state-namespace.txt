@@ -1,0 +1,2 @@
+# Exact net regression growth: Doctor's private state copy keeps its installation's swept snapshot namespace instead of a per-run one, while a state dir that is a namespace or sits outside one keeps its own hash.
+25

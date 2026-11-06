@@ -23,6 +23,24 @@ import { WebSocketServer, WebSocket } from "ws";
 // and OPENCLAW_IOS_CONNECTION_STATE_FIXTURE_URL via TEST_RUNNER_ to
 // OpenClawUITests/GatewayConnectionStateUITests/testIndependentConnectionAndDismissal.
 const connectionStateMode = process.argv.includes("--connection-state");
+// AgentWorkspacePaginationUITests uses --workspace-pagination and forwards
+// OPENCLAW_IOS_WORKSPACE_PAGINATION_URL plus OPENCLAW_IOS_LIVE_SETUP_CODE via TEST_RUNNER_.
+const workspacePaginationMode = process.argv.includes("--workspace-pagination");
+let workspacePageRejected = true;
+const workspacePageReads = [];
+const workspacePageWaiters = new Set();
+const workspaceEntries = Array.from({ length: 251 }, (_, i) => {
+  const name = i === 250 ? "Summary.md" : `File ${String(i + 1).padStart(3, "0")}.txt`;
+  return { name, path: name, kind: "file" };
+});
+function notifyWorkspacePageWaiters() {
+  for (const waiter of workspacePageWaiters) {
+    if (workspacePageReads.length >= waiter.count) {
+      waiter.res.end(JSON.stringify({ reads: workspacePageReads }));
+      workspacePageWaiters.delete(waiter);
+    }
+  }
+}
 const port = Number(process.argv.find((arg) => arg.startsWith("--port="))?.slice(7) ?? 19876);
 if (!Number.isInteger(port) || port < 1024 || port > 65535) {
   throw new Error("Fixture port must be an unprivileged TCP port");
@@ -176,6 +194,7 @@ const methods = [
   "models.list",
   "sessions.preview",
   "chat.send",
+  ...(workspacePaginationMode ? ["agents.workspace.list", "agents.workspace.get"] : []),
   ...(attachmentMode ? ["artifacts.download"] : []),
 ];
 
@@ -302,6 +321,16 @@ const server = createServer((req, res) => {
     return;
   }
   const url = new URL(req.url, "http://127.0.0.1");
+  if (workspacePaginationMode && url.pathname === "/workspace-pagination") {
+    if (req.method === "POST") {
+      workspacePageRejected = url.searchParams.get("reject") !== "0";
+    }
+    const waiter = { res, count: Number(url.searchParams.get("reads") ?? 0) };
+    workspacePageWaiters.add(waiter);
+    res.once("close", () => workspacePageWaiters.delete(waiter));
+    notifyWorkspacePageWaiters();
+    return;
+  }
   if (attachmentMode && url.pathname === "/attachment-ready") {
     attachmentReadyWaiters.add(res);
     res.once("close", () => attachmentReadyWaiters.delete(res));
@@ -413,6 +442,56 @@ wss.on("connection", (ws) => {
       return;
     }
     switch (req.method) {
+      case "agents.workspace.list": {
+        if (!workspacePaginationMode) {
+          fail(`Unsupported synthetic method: ${req.method}`);
+          break;
+        }
+        const offset = params.offset ?? 0;
+        const rows = workspaceEntries.slice(offset, offset + (params.limit ?? 250));
+        const failed = offset > 0 && workspacePageRejected;
+        workspacePageReads.push({
+          offset,
+          limit: params.limit ?? null,
+          count: failed ? 0 : rows.length,
+          paths: failed ? [] : rows.map((entry) => entry.path),
+          failed,
+        });
+        if (failed) {
+          fail("Synthetic workspace page unavailable");
+        } else {
+          reply({
+            agentId: "main",
+            path: "",
+            offset,
+            entries: rows,
+            totalEntries: workspaceEntries.length,
+          });
+        }
+        notifyWorkspacePageWaiters();
+        break;
+      }
+      case "agents.workspace.get":
+        if (
+          !workspacePaginationMode ||
+          !workspaceEntries.some((entry) => entry.path === params.path)
+        ) {
+          fail(`Unsupported synthetic method: ${req.method}`);
+          break;
+        }
+        reply({
+          agentId: "main",
+          file: {
+            name: params.path,
+            path: params.path,
+            size: 26,
+            updatedAtMs: created,
+            mimeType: "text/plain",
+            encoding: "utf8",
+            content: "Synthetic directory file.",
+          },
+        });
+        break;
       case "connect": {
         ws.proofRole = params.role;
         ws.proofScopes = guestModelPolicy
@@ -727,6 +806,10 @@ server.listen(port, "127.0.0.1", () =>
 );
 function stop() {
   clearInterval(tick);
+  for (const waiter of workspacePageWaiters) {
+    waiter.res.destroy();
+  }
+  workspacePageWaiters.clear();
   for (const waiter of connectionWaiters) {
     waiter.res.destroy();
   }

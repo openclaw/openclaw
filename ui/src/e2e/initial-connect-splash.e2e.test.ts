@@ -350,7 +350,7 @@ suite.define(() => {
     expect(new URL(page.url()).pathname).toBe("/settings/model-setup");
     await gateway.waitForRequest("openclaw.setup.detect");
     expect(await gateway.getRequests("openclaw.setup.detect")).toHaveLength(1);
-    const loading = page.getByText("Checking this Gateway for available AI access…", {
+    const loading = page.getByText("Loading models…", {
       exact: true,
     });
     await loading.waitFor();
@@ -364,7 +364,7 @@ suite.define(() => {
     await waitForControlUiProofSurface(page.locator(".shell"), [loadingSections]);
     const sectionTitles = [
       "Use an installed agent",
-      "Found on this Gateway",
+      "Available models",
       "Run a model locally",
       "Set up and verify a model",
       "Connect with an API key or token",
@@ -420,11 +420,11 @@ suite.define(() => {
       workspace: "/tmp/openclaw-e2e",
     });
     await loading.waitFor({ state: "detached" });
-    await page.getByRole("heading", { name: "Connect a verified AI model" }).waitFor();
+    await page.getByRole("heading", { name: "Set up a model" }).waitFor();
     // Restoring desktop starts a grid-row transition after the responsive Lit update.
     await page.locator(".shell:not(.shell--mobile-nav)").waitFor();
     await waitForControlUiProofSurface(page.locator(".shell"), [
-      page.getByRole("heading", { name: "Connect a verified AI model" }),
+      page.getByRole("heading", { name: "Set up a model" }),
     ]);
     const readySectionTops = await Promise.all(
       sectionTitles.map(

@@ -188,12 +188,13 @@ type WebSearchRequestContext = {
   config?: OpenClawConfig;
   search?: WebSearchConfig;
   runtimeWebSearch?: RuntimeWebSearchMetadata;
+  sandboxed?: boolean;
 };
 
 function resolveWebSearchRequestContext(
   options?: Pick<
     ResolveWebSearchDefinitionParams,
-    "config" | "preferInputConfig" | "runtimeWebSearch"
+    "config" | "preferInputConfig" | "runtimeWebSearch" | "sandboxed"
   >,
 ): WebSearchRequestContext {
   const config = resolveWebSearchRuntimeConfig({
@@ -205,6 +206,7 @@ function resolveWebSearchRequestContext(
     search: resolveSearchConfig(config),
     runtimeWebSearch:
       options?.runtimeWebSearch ?? getActiveRuntimeWebToolsMetadataFromState()?.search,
+    sandboxed: options?.sandboxed,
   };
 }
 
@@ -237,6 +239,7 @@ function loadSortedWebSearchProviders(
   return sortPluginEntriesForAutoDetect(
     resolveProviders({
       config: params.config,
+      sandboxed: params.sandboxed,
       ...(pluginId ? { onlyPluginIds: [pluginId] } : {}),
     }),
   );
@@ -246,16 +249,14 @@ async function resolveWebSearchCandidates(
   options?: ResolveWebSearchDefinitionParams,
   context = resolveWebSearchRequestContext(options),
 ): Promise<PluginWebSearchProviderEntry[]> {
-  const { config, search, runtimeWebSearch } = context;
+  const { config, search } = context;
   if (search?.enabled === false) {
     return [];
   }
 
   await prepareBundledDiscoveryMode();
   const providers = loadSortedWebSearchProviders({
-    config,
-    search,
-    runtimeWebSearch,
+    ...context,
     providerId: options?.providerId,
     preferRuntimeProviders: options?.preferRuntimeProviders,
   });
@@ -400,7 +401,6 @@ function selectWebSearchCandidates(
 }
 
 type WebSearchConfigurationParams = ResolveWebSearchDefinitionParams & {
-  authStore?: AuthProfileStore;
   resolveAuthProfileStoreSource?: () => boolean;
 };
 
@@ -529,7 +529,11 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
     context,
   );
   if (candidates.length === 0) {
-    throw new Error("web_search is disabled or no provider is available.");
+    throw new Error(
+      params.sandboxed
+        ? "web_search is unavailable. Enable or select a bundled or verified official search provider for sandboxed agents."
+        : "web_search is disabled or no provider is available.",
+    );
   }
   const allowFallback = !hasExplicitWebSearchSelection({
     search,

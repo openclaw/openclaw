@@ -20,7 +20,6 @@ import "../styles/app-sidebar.css";
 import "../styles/sidebar-rail.css";
 import "../styles/sidebar-pinned-agents.css";
 import "../styles/sidebar-agent-roster.css";
-import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
 import { renderSessionListToolbar } from "./app-sidebar-session-filter-summary.tsx";
 import { renderSessionList as SessionList } from "./app-sidebar-session-list-render.tsx";
 import type {
@@ -301,6 +300,24 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     super.connectedCallback();
   }
 
+  override updated() {
+    super.updated();
+    const sections = this.zonedVisibleSections(
+      this.selectedAgentSessionRows(this.getSessionNavigationState()),
+    ).sections;
+    const disclosure = this.sessionProjection.children;
+    const selected = sections.find((section) =>
+      section.rows.some((row) => row.key === disclosure.selectedRootKey && !row.visuallyActive),
+    );
+    if (
+      selected &&
+      disclosure.revealOnce("section:" + selected.id) &&
+      this.sessionOrganizer.collapsedSessionSections.has(selected.id)
+    ) {
+      this.sessionOrganizer.toggleSection(selected.id);
+    }
+  }
+
   toggleSessionPin(session: SidebarRecentSession): void {
     this.sessionOrganizer.setPersonalSessionPin(
       session.key,
@@ -308,20 +325,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     );
   }
 
-  toggleSessionMenu(
-    session: SidebarRecentSession,
-    trigger: HTMLElement,
-    catalogMenu?: CatalogSessionMenuRequest,
-  ): void {
-    if (catalogMenu) {
-      if (this.sidebarMenus.catalogMenu.isOpenFor(catalogMenu.key)) {
-        this.sidebarMenus.catalogMenu.close();
-        return;
-      }
-      const rect = trigger.getBoundingClientRect();
-      this.sidebarMenus.catalogMenu.open(catalogMenu, rect.right, rect.bottom + 4, trigger);
-      return;
-    }
+  toggleSessionMenu(session: SidebarRecentSession, trigger: HTMLElement): void {
     if (this.sidebarMenus.sessionMenu?.session.key === session.key) {
       this.sidebarMenus.closeSessionMenu();
       return;

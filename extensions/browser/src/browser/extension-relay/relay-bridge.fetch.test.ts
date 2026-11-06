@@ -244,6 +244,43 @@ it("retires the physical scope when owner-close cleanup is completion-ambiguous"
   await check(observer, "Page.getFrameTree", peerSession, undefined, denied);
 });
 
+it("retires only a request Chromium already ended, keeping the attachment and other pauses", async () => {
+  const cancelled = await enablePaused("cancelled-request");
+  emitPaused("live-request");
+  const live = pausedRequestId(owner, sessionId);
+  reply = (message) =>
+    message.type === "cdp" &&
+    message.method === "Fetch.continueRequest" &&
+    asOptionalRecord(message.params)?.requestId === "cancelled-request"
+      ? { type: "error", seq: message.seq, message: "Invalid InterceptionId." }
+      : replyFor(message);
+  await check(owner, "Fetch.continueRequest", sessionId, { requestId: cancelled }, denied);
+  await flush();
+  expect.soft(frames("detach")).toEqual([]);
+  await check(owner, "Fetch.continueRequest", sessionId, { requestId: live });
+  await check(owner, "Fetch.disable", sessionId);
+  expect
+    .soft(commands().map((frame) => frame.method))
+    .toEqual(["Fetch.enable", "Fetch.continueRequest", "Fetch.continueRequest", "Fetch.disable"]);
+  await check(observer, "Page.getFrameTree", peerSession);
+  expectOpenClients();
+});
+
+it("finishes owner-close cleanup when Chromium already ended the paused request", async () => {
+  await enablePaused("cancelled-request");
+  reply = (message) =>
+    message.type === "cdp" && message.method === "Fetch.failRequest"
+      ? { type: "error", seq: message.seq, message: "Invalid InterceptionId." }
+      : replyFor(message);
+  await owner.close();
+  await flush();
+  expect
+    .soft(commands().map((frame) => frame.method))
+    .toEqual(["Fetch.enable", "Fetch.failRequest", "Fetch.disable"]);
+  expect(frames("detach")).toEqual([]);
+  await check(observer, "Page.getFrameTree", peerSession);
+});
+
 it("owns child Fetch independently of the root physical scope", async () => {
   const { ownerChild, observerChild } = await attachChild();
   await check(owner, "Fetch.enable", ownerChild);

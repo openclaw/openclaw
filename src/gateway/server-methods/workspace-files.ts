@@ -13,6 +13,7 @@ import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { BROWSER_IMAGE_MIME_TYPES } from "../../shared/browser-image-mime-types.js";
+import { isWorkspaceScratchPath, SCRATCH_EXPIRED_MESSAGE } from "../../shared/scratch-expiry.js";
 import { foldSearchCase } from "../../shared/search-case.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
 import { resolveSessionFileReadTarget, type SessionFileReadBoundary } from "./session-file-read.js";
@@ -191,7 +192,14 @@ async function toSessionFileEntry(
     return undefined;
   }
   if (!stat?.isFile) {
-    return { ...base, missing: true };
+    return {
+      ...base,
+      name:
+        !stat && isWorkspaceScratchPath(target.absolutePath)
+          ? `${SCRATCH_EXPIRED_MESSAGE}: ${base.name}`
+          : base.name,
+      missing: true,
+    };
   }
   const entry: SessionFileEntry = {
     ...base,

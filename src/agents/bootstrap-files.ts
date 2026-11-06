@@ -13,6 +13,7 @@ import { rememberBoundedKey } from "../infra/dedupe.js";
 import { isMemoryOriginEligibleForAutomaticInjection } from "../memory-host-sdk/host/types.js";
 import { classifyActiveMemoryWorkspacePaths } from "../plugins/memory-runtime.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { settleCurrentReadPreparations } from "../shared/current-read-authority.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import type { BootstrapContextRunKind } from "./bootstrap-mode.js";
@@ -282,19 +283,14 @@ async function resolveBootstrapFiles(
     chatType: params.chatType,
     workspaceDir: params.workspaceDir,
   };
-  const workspaceSetupCompleted = await isWorkspaceSetupCompletedForContext(
-    params.workspaceDir,
-    params.readOnlyState,
-  );
-  const rawFiles = await loadWorkspaceBootstrapFiles(params.workspaceDir);
+  const [workspaceSetupCompleted, rawFiles, personalFile] = await settleCurrentReadPreparations([
+    isWorkspaceSetupCompletedForContext(params.workspaceDir, params.readOnlyState),
+    loadWorkspaceBootstrapFiles(params.workspaceDir),
+    loadPersonalUserBootstrapFile(params.workspaceDir, params.bootstrapUserProfileId, params.warn),
+  ] as const);
   for (const file of rawFiles) {
     file.origin = { kind: "agent-workspace", rootPath: resolveUserPath(params.workspaceDir) };
   }
-  const personalFile = await loadPersonalUserBootstrapFile(
-    params.workspaceDir,
-    params.bootstrapUserProfileId,
-    params.warn,
-  );
   const userIndex = rawFiles.findIndex((file) => file.name === DEFAULT_USER_FILENAME);
   if (personalFile) {
     rawFiles.splice(userIndex < 0 ? rawFiles.length : userIndex + 1, 0, personalFile);

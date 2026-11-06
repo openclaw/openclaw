@@ -233,6 +233,10 @@ While admitted work drains, ordinary model catalog, auth-status, and chat metada
 
 Session lists wait for replacement provider policy when the previous runtime has retired. Disconnecting a reader cancels only that reader’s wait; other readers and the reload continue. Lists resume with the published replacement catalog and never invoke retired provider callbacks.
 
+Queued replies refused during plugin replacement wait for that replacement to settle while retaining FIFO custody. Source cancellation, mailbox cancellation, and Gateway shutdown release the replacement wait. Every pre-execution retry yields for at least 250 ms before releasing its claim, including errors without a replacement promise, then rechecks live authority. Deferred durable input keeps an in-flight deduplication receipt until adoption or terminal consumption. A replay arriving before the old source finishes cleanup backs off from one second up to the channel retry cap without spending its failure budget for up to 30 minutes. After that, ordinary attempt and age limits apply, so a stuck source cannot hold its lane invisibly forever. A retained dead-letter row can coexist with an original source that finishes later; the wait budget does not cancel that source. A queued runner failure before adoption abandons its source so durable ingress can retry it. Channel shutdown can return unexecuted durable input to ingress for the replacement channel to reclaim. A failed reload can resume the original instance. If the plugin stays disabled, the source records abandonment and remains durable for re-enablement; it does not keep an in-process retry loop alive.
+
+A deferred source admitted through `api.runtime.channel.inbound` retains a work consumer until source settlement. If preparation waits for the same replacement, the pre-stop drain can wait on that consumer before it reaches channel shutdown. The shared 60-second drain budget bounds this cycle: expiration fails the reload and resumes the previous generation so pending work can continue. `--wait` extends the bound to ten minutes.
+
 Retained work and in-flight calls share a 60-second pre-stop budget. Retained runs finish before ordinary call admission closes. Existing calls then settle while published metadata remains readable. Sidecars release their capability consumers before the remaining finite consumers drain; memory teardown retains cleanup authority for its exact retiring provider instances until the raw cleanup settles. Replacement stops services and channels only after that handoff. Idle service and channel custody stops later with its owners. If work does not finish, the reload fails once, resumes admission, and clears the reload status; the previous plugin generation keeps serving. The deadline does not cancel agent runs or permit disposal of unfinished writes. Retry `openclaw plugins reload <id>` after that work finishes, or explicitly select `--wait` for a shared ten-minute pre-stop drain budget, matching the plugin lifecycle wait budget. Both modes hold new agent runs behind the replacement gate until completion or rollback; `status` exposes the pending reload and its drain deadline in JSON. The extended wait also expires with the previous generation serving. The explicit wait belongs to its requesting connection: Ctrl+C or disconnect cancels the pre-publication wait and runs the same rollback. Cancellation never disposes admitted work, bypasses cleanup, or reverses a committed publication. Service shutdown and recovery retain their bounded deadlines. Successful publication logs the applied replacement and emits `plugins.changed`.
 
 Automatic config reloads treat an admitted-work timeout with successful rollback as deferred. The previous generation resumes serving, and the config watcher retries the latest saved configuration after that generation's work and cleanup settle. A waiting config-write receipt still reports that the bounded attempt did not apply: keeping it open could prevent the writing turn itself from releasing the old generation. Check `config.get` after the work settles to confirm the active revision. The retry observation does not keep plugin admission closed or extend the drain budget. Explicit plugin reload requests still report their bounded drain failure; cleanup failures and failures after publication remain errors.
@@ -298,6 +302,14 @@ rebuild first when the installation loads compiled output. Embedded executable c
 changes require a newly built executable. External on-disk plugins continue to
 capture updated source and dependencies on explicit reload.
 
+For development, `OPENCLAW_DEV_RELOAD_BUNDLED_PLUGINS=1` lets an explicit reload
+capture a bundled plugin's own code: its package tree and the build chunks that
+`dist/runtime-dependency-ownership.json` lists for that plugin. Those chunks are used
+only by plugins, though other plugins may share them. Imports of host,
+SDK, and core-shared chunks resolve to the Gateway's loaded modules, including from
+captured Workers. Standalone executables ignore the variable. See
+[Development: reload edited bundled code](/cli/plugins/uninstall-and-update#development-reload-edited-bundled-code).
+
 WebAssembly libraries remain ordinary captured assets even when they use a `.so`
 filename. Directory asset references reuse an active capture walk; filesystem
 directory cycles still fail capture.
@@ -308,6 +320,10 @@ progress hint only: the host still services the transport and checks the actual
 task receipt and deadline. Readers retain bounded polling for worker failures.
 
 Doctor retains an unexecuted source snapshot across its maintenance phases.
+Selected setup sources are prepared by the existing plugin preparation worker
+before Doctor binds callbacks, so source capture does not block its main event
+loop. Preparation rechecks the selected inventory after awaiting the worker;
+canceled or retired work settles its cleanup before releasing source custody.
 Each phase admits fresh callback instances with private module files and settles
 their cleanup before releasing its lifecycle lease. The snapshot is reused for
 the whole operation; edit plugin sources between Doctor runs, not between phases.
@@ -520,6 +536,12 @@ system-temporary instance and reports a warning. Normal disposal still removes
 that instance; automatic cleanup does not scan unrelated system-temporary roots.
 There is no total disk quota, and an active instance may legitimately exceed the
 one-hour cleanup grace period.
+Before allocating a capture or staging an installed source snapshot, OpenClaw
+checks the destination volume and refuses when less than 512 MiB is available.
+The error asks the operator to free space and retry. State-volume refusal keeps
+the existing temporary-volume fallback; setup preparation records source failure
+without stopping startup. Unavailable disk statistics keep best-effort loading.
+This preflight is a free-space floor, not a size reservation for an in-flight copy.
 If its payload directory is removed while the instance still holds custody, the
 next capture recreates that directory under the same lease. This does not restore
 previously deleted captured files or recreate a missing ownership directory.

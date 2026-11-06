@@ -182,7 +182,8 @@ targets:
           NSAllowsLocalNetworking: true
         NSBonjourServices:
           - _openclaw-gw._tcp
-        NSCameraUsageDescription: OpenClaw uses the camera when you scan a Gateway setup QR code or ask your paired Gateway or assistant to capture a photo or short video from this iPhone, for example to connect to your Gateway or show your assistant a document, device screen, or workspace.
+        NSBluetoothAlwaysUsageDescription: OpenClaw uses Bluetooth to securely set up a nearby ESP device when you choose device setup.
+        NSCameraUsageDescription: OpenClaw uses the camera when you scan a Gateway or device setup QR code or ask your paired Gateway or assistant to capture a photo or short video from this iPhone, for example to connect to your Gateway or show your assistant a document, device screen, or workspace.
         NSCalendarsUsageDescription: OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.
         NSCalendarsFullAccessUsageDescription: OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.
         NSCalendarsWriteOnlyAccessUsageDescription: OpenClaw uses your calendars to add events when you enable calendar access.
@@ -451,6 +452,8 @@ targets:
         group: Tests
       - path: ../shared/OpenClawKit/Tests/OpenClawKitTests/ChatPasteboardTests.swift
         group: Tests
+      - path: ../shared/OpenClawKit/Tests/OpenClawKitTests/ChatMediaImagePreviewTests.swift
+        group: Tests
       - path: WatchApp/Sources/WatchDeferredPayloadOrdering.swift
         group: WatchApp/Sources
     dependencies:
@@ -470,6 +473,7 @@ targets:
         SWIFT_STRICT_CONCURRENCY: complete
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/OpenClaw.app/OpenClaw"
         BUNDLE_LOADER: "$(TEST_HOST)"
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) OPENCLAW_APP_TESTS"
       configs:
         Debug:
           PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_DEBUG_APP_BUNDLE_ID).tests"

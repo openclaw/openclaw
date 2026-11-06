@@ -14,6 +14,7 @@ import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-con
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { USER_PROFILE_AVATAR_MIME_TYPES } from "../shared/avatar-limits.js";
+import { userProfileDisplayName } from "../shared/user-profile-display-name.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { stageUserProfileEmailBindingChange } from "./user-profile-events.js";
 import type { UserProfileMutationContext } from "./user-profile-mutation.js";
@@ -453,7 +454,12 @@ export function projectUserProfileDisplay(
   const avatarMime = normalizeUserProfileAvatarMime(profile.avatar_mime);
   return {
     id: profile.id,
-    displayName: profile.display_name,
+    displayName:
+      userProfileDisplayName(
+        profile.id,
+        profile.display_name,
+        profile.githubIdentity?.login ?? profile.githubLogin,
+      ) ?? null,
     avatarRevision:
       profile.avatar_sha256 && avatarMime
         ? `${profile.avatar_sha256}-${avatarMime.slice("image/".length)}`

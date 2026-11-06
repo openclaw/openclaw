@@ -5,7 +5,6 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { sandboxRecreateCommand } from "../../commands/sandbox.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -13,7 +12,6 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
-import { ensureSandboxContainer, PODMAN_SANDBOX_ENGINE } from "./docker.js";
 import { readRegistryEntry, updateRegistry } from "./registry.js";
 import { buildSandboxContainerName, slugifySessionKey } from "./shared.js";
 
@@ -42,6 +40,8 @@ afterEach(async () => {
 it.each([false, true])(
   "recovers a HOST-pinned sandbox before switching connections (Machine: %s)",
   async (machine) => {
+    vi.resetModules();
+    const { ensureSandboxContainer, PODMAN_SANDBOX_ENGINE } = await import("./docker.js");
     const root = dirs.make("openclaw-podman-upgrade-");
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
     vi.spyOn(os, "homedir").mockReturnValue(root);
@@ -195,7 +195,13 @@ it.each([false, true])(
       },
     };
     const recreateOptions = { session: scopeKey, all: false, browser: false, force: true };
-    const recreate = () => sandboxRecreateCommand(recreateOptions, runtime);
+    const recreate = async () => {
+      // Each CLI invocation discovers its own process target after operator env changes.
+      vi.resetModules();
+      (await import("../../config/config.js")).setRuntimeConfigSnapshot(config);
+      const { sandboxRecreateCommand } = await import("../../commands/sandbox.js");
+      return sandboxRecreateCommand(recreateOptions, runtime);
+    };
     const expectUntouched = async () => {
       expect(await snapshotWorkspace()).toEqual(originalWorkspace);
       expect(await readRegistryEntry("unrelated-runtime")).toEqual(unrelatedEntry);

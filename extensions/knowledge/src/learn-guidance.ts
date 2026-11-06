@@ -3,7 +3,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 type LearnContribution = Parameters<OpenClawPluginApi["registerLearnContribution"]>[0];
 
 /** Tools a /learn turn needs to build subject pages, attached claims and supersession. */
-export const KNOWLEDGE_LEARN_TOOL_NAMES = [
+const KNOWLEDGE_LEARN_TOOL_NAMES = [
   "knowledge_attach_file",
   "knowledge_publish_batch",
   "knowledge_save_page",
@@ -18,9 +18,7 @@ export const KNOWLEDGE_LEARN_TOOL_NAMES = [
 const REQUIRED = ["knowledge_save_page", "knowledge_create_claim", "knowledge_grep"];
 
 /** /learn guidance for Knowledge; the method lives in knowledge-ingest's learning section. */
-export const buildKnowledgeLearnGuidance: LearnContribution["buildGuidance"] = ({
-  availableTools,
-}) => {
+const buildKnowledgeLearnGuidance: LearnContribution["buildGuidance"] = ({ availableTools }) => {
   const supersede = availableTools.has("knowledge_correct")
     ? " When someone explicitly replaces an earlier standing statement, supersede the old claim with `knowledge_correct`."
     : "";

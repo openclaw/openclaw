@@ -15,12 +15,12 @@ import type { DevicePlacementOption } from "../pages/new-session/device-placemen
 import type { DraftCloudProfile } from "../pages/new-session/discovery.ts";
 import { DraftCloudMachineState } from "../pages/new-session/draft-cloud-machine-state.ts";
 import "../styles/session-placement-move.css";
+import { resolveCloudProfileIconData } from "./cloud-profile-icon-data.ts";
 import { withPromiseModalHost } from "./promise-modal-host.ts";
-import { resolveCloudProfileIconData } from "./provider-icon-data.ts";
 import { observeScrollState } from "./scroll-state-observer.ts";
+import { CloudProfileIcon } from "./solid/cloud-profile-icon.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Menu } from "./solid/menu.tsx";
-import { CloudProfileIcon } from "./solid/provider-icon.tsx";
 
 registerSessionOrganizationEnglish();
 

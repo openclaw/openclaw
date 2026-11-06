@@ -1,6 +1,6 @@
 import { createMemo, For, Show } from "solid-js";
 import { normalizeToolPolicyName } from "../../../../src/agents/tool-policy-shared.js";
-import type { ToolsEffectiveEntry, ToolsEffectiveResult } from "../../api/types.ts";
+import type { ToolsEffectiveResult } from "../../api/types.ts";
 import {
   SettingsSection,
   SettingsEmpty,
@@ -22,28 +22,14 @@ export function renderToolMetaBadges(labels: string[]) {
   );
 }
 
-export function buildToolPresentation(
-  section: AgentToolSection,
-  tool: AgentToolEntry,
-  activeEntry: ToolsEffectiveEntry | null,
-) {
+export function buildToolPresentation(section: AgentToolSection, tool: AgentToolEntry) {
   const source = tool.source ?? section.source;
   const pluginId = tool.pluginId ?? section.pluginId;
   const sourceLabel =
     source === "plugin" && pluginId
       ? t("agentTools.plugin", { id: pluginId })
       : t("agentTools.builtIn");
-  const badges: string[] = [];
-  if (activeEntry && !activeEntry.deniedBySession) {
-    badges.push(t("agentTools.inPreview"));
-  }
-  if (source === "core" || (source === "plugin" && pluginId)) {
-    badges.push(sourceLabel);
-  }
-  if (tool.optional) {
-    badges.push(t("agentTools.optional"));
-  }
-  return { badges, sourceLabel };
+  return { sourceLabel };
 }
 
 export function toToolAnchorId(toolId: string) {
@@ -162,7 +148,7 @@ export function ToolRuntime(props: {
       title={t("agentTools.previewTitle")}
       description={
         <>
-          {t("agentTools.previewSubtitle")}
+          {t("agentTools.previewSubtitle")}{" "}
           <span class="mono">{props.sessionKey || t("agentTools.noSession")}</span>
         </>
       }
@@ -192,9 +178,8 @@ export function ToolListed(props: { preview: EffectivePreview }) {
 
 export function ToolPreview(props: {
   preview: EffectivePreview;
-  section: AgentToolSection;
   tool: AgentToolEntry;
-  part: "summary" | "badges" | "details" | "policy";
+  part: "details" | "policy";
   configDirty: boolean;
 }) {
   const status = () => previewStatus(props.preview);
@@ -224,35 +209,6 @@ export function ToolPreview(props: {
         : availability().reason || availability().summary;
   };
   return (
-    <>
-      {props.part === "summary" ? (
-        <>
-          {availability().summary}
-          {availability().reason ? <div class="muted">{availability().reason}</div> : undefined}
-        </>
-      ) : props.part === "badges" ? (
-        renderToolMetaBadges(buildToolPresentation(props.section, props.tool, activeEntry()).badges)
-      ) : props.part === "details" ? (
-        label()
-      ) : (
-        renderToolPolicyDetails(diagnostic(), toolAccess())
-      )}
-    </>
-  );
-}
-
-export function ToolListedCount(props: { preview: EffectivePreview; tools: AgentToolEntry[] }) {
-  const count = () =>
-    props.tools.filter((tool) =>
-      props.preview.facts?.available.has(normalizeToolPolicyName(tool.id)),
-    ).length;
-  return (
-    <Show when={count()}>
-      {(value) => (
-        <span>
-          {t(`agentTools.listedTools${value() === 1 ? "One" : ""}`, { count: String(value()) })}
-        </span>
-      )}
-    </Show>
+    <>{props.part === "details" ? label() : renderToolPolicyDetails(diagnostic(), toolAccess())}</>
   );
 }

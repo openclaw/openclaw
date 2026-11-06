@@ -78,7 +78,9 @@ describe("DevicesPage policy saves", () => {
       expect(save.disabled).toBe(outcome === "accepted");
       if (outcome === "rejected") {
         expect(page.container.textContent).toContain("Policy changed; reload before saving.");
-        const mode = page.container.querySelector<HTMLSelectElement>('select[aria-label="Mode"]');
+        const mode = page.container.querySelector<HTMLSelectElement>(
+          'select[aria-label="Security"]',
+        );
         expect(mode?.value).toBe("allowlist");
       }
     },
@@ -101,24 +103,13 @@ describe("DevicesPage policy saves", () => {
     );
   });
 
-  it("shows binding-save progress through the runtime config owner's accepted receipt", async () => {
-    const saved = createDeferred();
-    const config = { tools: { exec: { node: "original-node" } } };
-    const updated = { tools: { exec: { node: "node-1" } } };
-    let accepted = false;
+  it("saves a binding on its own, with no Save beside it", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "config.get") {
-        return {
-          config: accepted ? updated : config,
-          hash: accepted ? "config-saved" : "config-base",
-          valid: true,
-          issues: [],
-        };
+        return { config: { tools: { exec: {} } }, hash: "config-base", valid: true, issues: [] };
       }
       if (method === "config.set") {
-        await saved.promise;
-        accepted = true;
-        return { config: updated, hash: "config-saved" };
+        return { config: { tools: { exec: { node: "node-1" } } }, hash: "config-saved" };
       }
       return responseFor(method);
     });
@@ -131,11 +122,18 @@ describe("DevicesPage policy saves", () => {
     await runtimeConfig.ensureLoaded();
     runtimeConfig.patchForm(["tools", "exec", "node"], "node-1");
     const page = mountPage(fixture, { nodes: [{ nodeId: "node-1" }] }, undefined, runtimeConfig);
-    const save = await startSave(page.container);
-    saved.resolve();
-    await waitForSolid(() => expect(save.textContent?.trim()).toBe(t("common.save")));
-    expect(runtimeConfig.state.configSnapshot?.hash).toBe("config-saved");
+    expect(runtimeConfig.state.configFormDirty).toBe(true);
+    expect(
+      [...page.container.querySelectorAll("button")].filter(
+        (candidate) => candidate.textContent?.trim() === t("common.save") && !candidate.disabled,
+      ),
+    ).toHaveLength(0);
+    await waitForSolid(
+      () => expect(runtimeConfig.state.configSnapshot?.hash).toBe("config-saved"),
+      {
+        timeout: 3_000,
+      },
+    );
     expect(runtimeConfig.state.configFormDirty).toBe(false);
-    expect(save.disabled).toBe(true);
   });
 });

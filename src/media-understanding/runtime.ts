@@ -3,6 +3,10 @@
 import path from "node:path";
 import { kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
+import {
+  findDecisionReason,
+  normalizeDecisionReason,
+} from "../../packages/media-understanding-common/src/format.js";
 import { resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { resolveImageCompressionModelPolicy } from "../agents/image-compression-policy.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -21,11 +25,7 @@ import {
   normalizeMediaProviderId,
 } from "./provider-registry.js";
 import { resolveMaxBytes, resolveMediaRuntimeTimeoutMs, resolveModelEntries } from "./resolve.js";
-import {
-  findDecisionReason,
-  normalizeDecisionReason,
-  type MediaRequestOverrides,
-} from "./runner.entries.js";
+import type { MediaRequestOverrides } from "./runner.entries.js";
 import {
   buildProviderRegistry,
   createMediaAttachmentCache,
