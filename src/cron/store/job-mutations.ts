@@ -23,11 +23,32 @@ import {
   reconcileRuntimeAuthority,
 } from "../service/jobs-tool-policy.js";
 import { applyDeclarativeJobSpec, applyJobPatch, createJob } from "../service/jobs.js";
-import { applyCronStreamOperatorSource } from "../stream-operator-source.js";
+import { cronUpdateRequiresStreamExecAuthority } from "../stream-exec-authority.js";
+import { decodeCronStreamOperatorSource } from "../stream-operator-source.js";
 import type { CronStoredJob, CronStoreFile } from "../types.js";
 import type { CronJobMutation, CronJobMutationPlan } from "./job-mutations.types.js";
 import { createCronMutationLogger } from "./runtime-mutation.worker.js";
 import type { CronSchedulerConfig } from "./scheduler-actor.types.js";
+
+// Only existing stream-exec edges replace the process grant; payload edits retain it.
+function applyCronStreamOperatorSource(params: {
+  job: CronStoredJob;
+  previousJob?: CronStoredJob;
+  source?: CronStoredJob["streamOperatorSource"];
+  patch: Record<string, unknown>;
+}): void {
+  const { job, previousJob, source, patch } = params;
+  if (job.schedule.kind !== "stream" || job.streamSandbox) {
+    delete job.streamOperatorSource;
+    return;
+  }
+  if (
+    source !== undefined &&
+    (!previousJob || cronUpdateRequiresStreamExecAuthority(patch, previousJob))
+  ) {
+    job.streamOperatorSource = decodeCronStreamOperatorSource(source);
+  }
+}
 
 type CronJobMutationContext = Pick<
   CronSchedulerConfig,
