@@ -16,6 +16,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logWarn } from "../../logger.js";
 import { createLazyRuntimeMethod } from "../../shared/lazy-runtime.js";
+import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
 import {
   executeMcpAppOperation,
   resolveMcpAppRequesterId,
@@ -204,8 +205,13 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
     // side effect: the reload waits behind acquisition chains, and a caller
     // revoked during that wait must not trigger it (#164642 Rev 3).
     authority.assertCurrent();
+    // This command rebuilds runtimes from the Gateway's published snapshot; it
+    // is not the config-application owner. With gateway.reload.mode=off pending
+    // on-disk edits stay unapplied, so the response reports that instead of
+    // implying the caller's new config is live (#164642 Rev 5).
+    const configApplied = resolveGatewayReloadSettings(cfg).mode !== "off";
     await reloadSessionMcpRuntimes({ cfg, reloadPlugins: false });
-    return { ok: true, reloaded: true };
+    return { ok: true, reloaded: true, configApplied };
   }),
   "mcp.app.formResource": mcpAppHandler(async (options) => {
     const { executeMcpAppFormResource } = await import("../mcp-app-form-resources.js");

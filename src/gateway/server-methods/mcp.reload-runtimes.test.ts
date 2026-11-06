@@ -5,7 +5,7 @@ import * as managerApi from "../../agents/agent-bundle-mcp-manager-api.js";
 import { expectDefined } from "../../plugin-sdk/expect-runtime.js";
 import { mcpAppHandlers } from "./mcp-app.js";
 
-function handlerOptions() {
+function handlerOptions(cfg: Record<string, unknown> = {}) {
   const respond = vi.fn();
   const hasCurrentClientAuthority = vi.fn(() => true);
   const options = {
@@ -14,7 +14,7 @@ function handlerOptions() {
     respond,
     client: {},
     hasCurrentClientAuthority,
-    context: { getRuntimeConfig: () => ({}) },
+    context: { getRuntimeConfig: () => cfg },
   } as unknown as Parameters<(typeof mcpAppHandlers)["mcp.reloadRuntimes"]>[0];
   return { options, respond, hasCurrentClientAuthority };
 }
@@ -34,8 +34,24 @@ describe("mcp.reloadRuntimes", () => {
     expect(hasCurrentClientAuthority).toHaveBeenCalled();
     expect(reloadSpy).toHaveBeenCalledTimes(1);
     expect(reloadSpy.mock.calls[0]?.[0]).toMatchObject({ reloadPlugins: false });
-    expect(respond).toHaveBeenCalledWith(true, { ok: true, reloaded: true });
+    expect(respond).toHaveBeenCalledWith(true, { ok: true, reloaded: true, configApplied: true });
     reloadSpy.mockRestore();
+  });
+
+  it("reports unapplied config instead of claiming the caller's edits are live", async () => {
+    vi.spyOn(managerApi, "reloadSessionMcpRuntimes").mockResolvedValue(undefined);
+    const { options, respond } = handlerOptions({
+      gateway: { reload: { mode: "off" } },
+    });
+    const handler = expectDefined(
+      mcpAppHandlers["mcp.reloadRuntimes"],
+      "expected the mcp.reloadRuntimes handler",
+    );
+
+    await handler(options);
+
+    expect(respond).toHaveBeenCalledWith(true, { ok: true, reloaded: true, configApplied: false });
+    vi.restoreAllMocks();
   });
 
   it("reports reload failures instead of acknowledging them", async () => {

@@ -25,12 +25,10 @@ import { parseConfigValue } from "../auto-reply/reply/config-value.js";
 import { renderEnvTemplateToken, scanEnvTemplateTokens } from "../config/env-substitution.js";
 import { listConfiguredMcpServers, redactMcpServersForDisplay } from "../config/mcp-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { callGatewayCli } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { executableFileExists, safeStat } from "../infra/path-existence.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
 import { defaultRuntime } from "../runtime.js";
-import { createLazyRuntimeMethod } from "../shared/lazy-runtime.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
@@ -44,15 +42,11 @@ import {
   configureMcpServerOffline,
   updateMcpToolsOffline,
 } from "./mcp-cli-state-owner.js";
+import { registerMcpReloadCommand } from "./mcp-cli.reload.js";
 import { exitCliAfterOutput, requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { parseKeyValueEntries } from "./parse-key-value-entries.js";
 import { collectOption } from "./program/helpers.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
-
-const disposeAllSessionMcpRuntimes = createLazyRuntimeMethod(
-  () => import("../agents/agent-bundle-mcp-manager-api.js"),
-  (runtime) => runtime.disposeAllSessionMcpRuntimes,
-);
 
 function fail(message: string, json?: boolean): never {
   if (json) {
@@ -1108,37 +1102,7 @@ export function registerMcpCli(program: Command) {
       }),
     );
 
-  mcp
-    .command("reload")
-    .description("Dispose cached MCP runtimes so new config is used on the next turn")
-    .action(async () => {
-      let gatewayReloaded = false;
-      let gatewayError: string | undefined;
-      try {
-        // The Gateway process owns its own cached session MCP runtimes; the
-        // CLI-local dispose below cannot reach them (#164642).
-        await callGatewayCli({
-          method: "mcp.reloadRuntimes",
-          params: {},
-          timeoutMs: 10_000,
-        });
-        gatewayReloaded = true;
-      } catch (err) {
-        gatewayError = err instanceof Error ? err.message : String(err);
-      }
-      await disposeAllSessionMcpRuntimes();
-      if (gatewayReloaded) {
-        defaultRuntime.log(
-          "Reloaded MCP runtimes (Gateway + CLI). Active agents use new MCP config on their next runtime build.",
-        );
-      } else {
-        defaultRuntime.log(
-          gatewayError
-            ? `Disposed cached CLI-local MCP runtimes. Gateway-side reload was not confirmed (${gatewayError}); active Gateway agents may keep the previous MCP config until the Gateway reloads it.`
-            : "Disposed cached CLI-local MCP runtimes. No Gateway is configured, so CLI-local runtimes were the only cached ones.",
-        );
-      }
-    });
+  registerMcpReloadCommand(mcp);
 
   mcp
     .command("unset")
