@@ -291,7 +291,13 @@ export function SkillDiscovery(props: SkillsProps) {
             !props.loading &&
             props.state.connected && (
               <SettingsGroup>
-                <SettingsEmpty message={<span role="status">{t("skillsPage.empty")}</span>} />
+                <SettingsEmpty
+                  message={
+                    <span role="status">
+                      {t(query().trim() ? "skillsPage.noMatches" : "skillsPage.empty")}
+                    </span>
+                  }
+                />
               </SettingsGroup>
             )}
         </Loading>

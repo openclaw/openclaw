@@ -20,6 +20,29 @@
   display: none;
 }
 
+/* Only the displayed pane owns the shade: cached Incognito chats must not tint
+   the regular chat that replaces them. Pending creation uses the same host. */
+.chat-pane-cache__pane--visible:has(.agent-chat__input[data-incognito="true"]) {
+  --chat-header-tint: var(--text-strong);
+  --chat-header-tint-strength: 7%;
+
+  background: linear-gradient(
+    color-mix(in srgb, var(--chat-header-tint) var(--chat-header-tint-strength), transparent) 44px,
+    transparent 240px
+  );
+}
+
+openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobile) {
+  background: transparent;
+}
+
+/* Dark mode deepens the canvas rather than adding a glow. */
+:root[data-theme-mode="dark"]
+  .chat-pane-cache__pane--visible:has(.agent-chat__input[data-incognito="true"]) {
+  --chat-header-tint: black;
+  --chat-header-tint-strength: 32%;
+}
+
 .chat-pane-cache {
   display: grid;
   flex: 1 1 0;
@@ -203,57 +226,6 @@
   }
 }
 
-.chat-pane__incognito {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 7px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--bg-elevated);
-  color: var(--text);
-  font-size: 11px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.chat-pane__incognito > span {
-  display: inline-flex;
-}
-
-.chat-pane__incognito-notice {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 10px 16px;
-  border-bottom: 1px dashed var(--border);
-  background: var(--bg-elevated);
-  color: var(--text);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.chat-pane__incognito-notice p {
-  margin: 0;
-}
-
-.chat-pane__incognito-limits {
-  color: var(--muted);
-}
-
-.chat-pane__incognito-notice-icon {
-  display: inline-flex;
-  flex: 0 0 auto;
-  padding-top: 2px;
-}
-
-.chat-pane__incognito-notice-icon svg {
-  width: 18px;
-  height: 18px;
-}
-
-.chat-pane__incognito svg,
 .chat-pane__workspace-chip svg {
   width: 14px;
   height: 14px;
@@ -567,10 +539,6 @@
   overscroll-behavior: contain;
 }
 
-.chat-pane__sharing-menu--capped > .oc-menu {
-  height: min(420px, 60vh);
-}
-
 .chat-pane__sharing-title,
 .chat-pane__sharing-status {
   color: var(--muted);
@@ -663,15 +631,6 @@
 }
 
 @container (max-width: 480px) {
-  .chat-pane__header-leading:has(.chat-pane__incognito) {
-    flex-wrap: wrap;
-    row-gap: 0;
-  }
-
-  .chat-pane__header-leading:has(.chat-pane__incognito) .chat-pane__crumbs {
-    flex-basis: 100%;
-  }
-
   .chat-pane__presence {
     display: none;
   }
@@ -767,7 +726,7 @@
 .chat-pane__sharing-menu--desktop .chat-pane__sharing-trigger-state {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
 }
 
 /* Size the disclosure glyph without attenuating its shared foreground again. */
@@ -911,26 +870,10 @@
     color: var(--muted);
   }
 
+  /* The row owns switch semantics; the shared indicator draws it. */
   & .chat-pane__sharing-switch {
+    display: inline-flex;
     justify-self: center;
-  }
-
-  /* The row owns switch semantics; the shared native control owns its geometry. */
-  & .chat-pane__sharing-public-toggle[aria-checked="true"] .settings-toggle__control {
-    background: var(--accent);
-    border-color: var(--accent);
-  }
-
-  & .chat-pane__sharing-public-toggle[aria-checked="true"] .settings-toggle__control::before {
-    transform: translateX(var(--settings-toggle-travel));
-    background: var(--bg);
-  }
-
-  &
-    .chat-pane__sharing-public-toggle[aria-checked="true"]
-    .settings-toggle:dir(rtl)
-    .settings-toggle__control::before {
-    transform: translateX(calc(var(--settings-toggle-travel) * -1));
   }
 
   & .chat-pane__sharing-disclosure {

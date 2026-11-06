@@ -1,7 +1,7 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { Show } from "solid-js";
-import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { ErrorDetails } from "../config-error.tsx";
 import { statusIconPaths } from "../icon-data-status.ts";
 import { LoadingState } from "./loading-state.tsx";
 import { StrokeIcon } from "./stroke-icon.tsx";
@@ -134,7 +134,7 @@ export function LazyViewError(props: {
             </button>
           </>
         }
-        detail={props.hideDetail ? undefined : formatUiError(props.error)}
+        detail={props.hideDetail ? undefined : props.error}
         inline={props.inline ?? Boolean(props.render)}
         stale={props.stale}
       />
@@ -145,7 +145,7 @@ export function LazyViewError(props: {
 export function PanelErrorState(props: {
   actions?: SolidJSX.Element;
   class?: string;
-  detail?: string;
+  detail?: unknown;
   inline?: boolean;
   role?: "alert" | "status";
   stale?: boolean;
@@ -168,12 +168,7 @@ export function PanelErrorState(props: {
       </div>
       <div class="lazy-view-error__title">{props.title}</div>
       <div class="lazy-view-error__subtitle">{props.subtitle}</div>
-      {props.detail ? (
-        <details class="lazy-view-error__details">
-          <summary>{t("chat.details")}</summary>
-          <code class="lazy-view-error__detail">{props.detail}</code>
-        </details>
-      ) : undefined}
+      <ErrorDetails error={props.detail} />
       {props.actions ? (
         <openclaw-modal-actions class="lazy-view-error__actions">
           {props.actions}

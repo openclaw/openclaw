@@ -295,7 +295,8 @@
   vertical-align: middle;
 }
 
-.chat-text :where(th:last-child, td:last-child) {
+.chat-text :where(th:last-child),
+.chat-text :where(td:last-child) {
   border-right: none;
 }
 
@@ -303,7 +304,8 @@
   border-bottom: none;
 }
 
-.chat-text :where(th:first-child, td:first-child) {
+.chat-text :where(th:first-child),
+.chat-text :where(td:first-child) {
   min-width: 8rem;
   overflow-wrap: normal;
   word-break: normal;
@@ -513,12 +515,14 @@
   }
 }
 
-:is(.chat-text, .chat-thinking) {
+.chat-text,
+.chat-thinking {
   --chat-markdown-indent: var(--space-6);
   --chat-markdown-marker-gap: var(--space-2);
 }
 
-:is(.chat-text, .chat-thinking) :where(ul, ol) {
+:is(.chat-text, .chat-thinking) :where(ul),
+:is(.chat-text, .chat-thinking) :where(ol) {
   padding-inline-start: var(--chat-markdown-indent);
 }
 
@@ -725,6 +729,10 @@
 
 .chat-text :where(.markdown-link-favicon.is-loaded) {
   visibility: visible;
+}
+
+.chat-text :where(.markdown-link-favicon[data-link-favicon-state="failed"]) {
+  display: none;
 }
 
 .chat-text :where(a:has(> .markdown-link-favicon.is-loaded)) {
@@ -1404,33 +1412,31 @@
 }
 
 /* renderBody is shared by normal bubbles and expanded tool output. */
-:is(.chat-bubble, .chat-tool-msg-body, .chat-message-avatar-anchor) {
-  > :is(
-    .chat-message-images,
-    .chat-assistant-attachments,
-    .chat-assistant-attachment-card,
-    .chat-pairing-qr-notices,
-    .chat-thinking,
-    .chat-tool-card__widget-host,
-    .chat-text,
-    .chat-message-disclosure,
-    .chat-message-avatar-anchor,
-    .chat-tools-inline
-  ) {
+.chat-bubble,
+.chat-tool-msg-body,
+.chat-message-avatar-anchor {
+  > .chat-message-images,
+  > .chat-assistant-attachments,
+  > .chat-assistant-attachment-card,
+  > .chat-pairing-qr-notices,
+  > .chat-thinking,
+  > .chat-tool-card__widget-host,
+  > .chat-text,
+  > .chat-message-disclosure,
+  > .chat-message-avatar-anchor,
+  > .chat-tools-inline {
     margin-block: 0;
 
-    + :is(
-      .chat-message-images,
-      .chat-assistant-attachments,
-      .chat-assistant-attachment-card,
-      .chat-pairing-qr-notices,
-      .chat-thinking,
-      .chat-tool-card__widget-host,
-      .chat-text,
-      .chat-message-disclosure,
-      .chat-message-avatar-anchor,
-      .chat-tools-inline
-    ) {
+    + .chat-message-images,
+    + .chat-assistant-attachments,
+    + .chat-assistant-attachment-card,
+    + .chat-pairing-qr-notices,
+    + .chat-thinking,
+    + .chat-tool-card__widget-host,
+    + .chat-text,
+    + .chat-message-disclosure,
+    + .chat-message-avatar-anchor,
+    + .chat-tools-inline {
       margin-block-start: var(--chat-block-gap);
     }
   }
@@ -1466,4 +1472,25 @@
 /* Sticky insets start inside the transcript's top padding. */
 .chat-thread .code-block-wrapper--long :is(.code-block-copy, .code-block-wrap) {
   top: calc(4px - var(--chat-thread-padding-top));
+}
+
+.markdown-template-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--bg-accent);
+  color: var(--text-strong);
+  font-weight: 600;
+  text-decoration: none;
+  vertical-align: baseline;
+}
+.markdown-template-link::before {
+  content: "◇";
+  color: var(--accent);
+  font-size: 0.9em;
+}
+.markdown-template-link:hover {
+  background: var(--bg-hover);
 }

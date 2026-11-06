@@ -30,7 +30,11 @@ import {
   pluginMutationBlockedReason,
   type PluginMutationAction,
 } from "./plugins-page-model.ts";
-import { pluginIdForRoute, type PluginsRouteData } from "./route-data.ts";
+import {
+  pluginIdForRoute,
+  pluginSettingsNeedsSchema,
+  type PluginsRouteData,
+} from "./route-data.ts";
 import type { PluginSettingsEditorProps } from "./settings-editor.tsx";
 import type { PluginSettingsTab } from "./settings-view.tsx";
 import { createPluginPreview } from "./skill-preview.tsx";
@@ -197,6 +201,8 @@ export function createPluginsPage(options: {
     };
   };
 
+  onSettled(() => context.overlays.subscribe(publish));
+
   const canMutate = () => state.result?.mutationAllowed === true && accessBlockedReason() === null;
 
   const mutationPresentation = createPluginsMutationPresentation({
@@ -295,6 +301,7 @@ export function createPluginsPage(options: {
     return () => {
       stopKeydown();
       active = false;
+      promptLaunch.reset();
       catalogTask.cancel();
       details.inspection.release();
       details.catalog.release();
@@ -347,13 +354,9 @@ export function createPluginsPage(options: {
       event.stopPropagation();
       return;
     }
-    if (state.detail) {
+    // Settings details bubble to the shell's shared, location-aware parent navigation.
+    if (state.detail && surface === "discovery") {
       setState({ detail: null });
-      if (surface === "settings") {
-        context.replace("plugin-settings", {
-          pathname: pathForRoute("plugin-settings", context.basePath),
-        });
-      }
       event.stopPropagation();
     }
   };
@@ -541,6 +544,8 @@ export function createPluginsPage(options: {
       (activeRoutePluginId() && state.installedDetailTab === "configuration")
     ) {
       void context.runtimeConfig.ensureLoaded();
+    }
+    if (routeData && pluginSettingsNeedsSchema(surface, routeData.location, context.basePath)) {
       void context.runtimeConfig.ensureSchemaLoaded();
     }
     if (!loading() && !state.result && !state.error) {
@@ -573,6 +578,8 @@ export function createPluginsPage(options: {
     return pluginMutationBlockedReason({
       connected,
       hasAdminAccess: hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null),
+      actorKind:
+        context.gateway.snapshot.hello?.auth.roleAllowsAdmin === false ? "member" : "browser",
       mutationAllowed,
     });
   }

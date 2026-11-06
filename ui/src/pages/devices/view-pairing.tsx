@@ -4,6 +4,7 @@ import { handleCopyButton } from "../../components/copy-button-state.ts";
 import "../../components/modal-dialog.tsx";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { Radio } from "../../components/solid/radio.tsx";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import type {
   DevicePairSetupAccess,
@@ -115,7 +116,11 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
       await presentRefresh(operation, lifecycle);
     } catch (error) {
       if (props.open && props.lifecycle === lifecycle) {
-        showToast({ message: formatUiError(error), severity: "error" });
+        showToast({
+          message: t("devices.pairing.failed"),
+          detail: formatUiError(error),
+          severity: "error",
+        });
       }
     }
   }
@@ -192,18 +197,16 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                 <legend>{t("devices.pairing.accessTitle")}</legend>
                 <For each={PAIRING_ACCESS_OPTIONS}>
                   {(option) => (
-                    <label>
-                      <input
-                        type="radio"
-                        name="device-pair-access"
-                        checked={props.lifecycle.access === option[0]}
-                        onChange={() => props.onAccessChange(option[0])}
-                      />
+                    <Radio
+                      name="device-pair-access"
+                      checked={props.lifecycle.access === option[0]}
+                      onChange={() => props.onAccessChange(option[0])}
+                    >
                       <span>
                         <strong>{t(option[1])}</strong>
                         <small>{t(option[2])}</small>
                       </span>
-                    </label>
+                    </Radio>
                   )}
                 </For>
               </fieldset>
@@ -404,9 +407,18 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                           <button
                             class={["btn", { primary: props.pendingCount === 0 }]}
                             type="button"
-                            onClick={(event) =>
-                              void handleCopyButton(event, code, copyLabel(), { label })
-                            }
+                            onClick={(event) => {
+                              void handleCopyButton(event, code, copyLabel(), { label }).then(
+                                (copied) => {
+                                  if (!copied && props.open) {
+                                    showToast({
+                                      severity: "error",
+                                      message: t("devices.pairing.copyFailed"),
+                                    });
+                                  }
+                                },
+                              );
+                            }}
                           >
                             <Icon name="copy" />{" "}
                             <span ref={(element) => (label = element)} data-copy-label>

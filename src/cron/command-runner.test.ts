@@ -13,6 +13,7 @@ import * as execSpawn from "../process/exec-spawn.js";
 import * as processExecution from "../process/exec.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { runCronCommandJob } from "./command-runner.js";
+import { buildCronCommandShellArgv } from "./command-shell.js";
 import { cronTestJob } from "./service.fixture-builders.test-support.js";
 import type { CronJob } from "./types.js";
 
@@ -375,3 +376,17 @@ it.each(["missing", "transient"])("classifies %s command start failures", async 
     runCommand?.mockRestore();
   }
 });
+
+it.runIf(process.platform === "win32")(
+  "runs a quoted Windows shell command through cmd.exe",
+  async () => {
+    const command = `"${process.execPath}" -e "process.stdout.write('quoted ok')"`;
+    const result = await runCronCommandJob({
+      job: makeCommandJob({
+        argv: buildCronCommandShellArgv(command, "win32"),
+        timeoutSeconds: 10,
+      }),
+    });
+    expectOutcome(result, { status: "ok", summary: "quoted ok" });
+  },
+);

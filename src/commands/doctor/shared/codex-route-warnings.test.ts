@@ -223,9 +223,10 @@ describe("collectCodexRouteWarnings", () => {
       "openai/gpt-5.6-terra": nativeParams({ fast_mode: "on" }),
     });
     expect(repaired.cfg.plugins?.entries?.codex?.config).toEqual({ appServer: { command } });
-    expect(repaired.warnings.join("\n")).toContain(
+    expect(repaired.advisories.join("\n")).toContain(
       "Custom Codex app-server command bypasses OpenClaw's managed exact-version binary.",
     );
+    expect(repaired.warnings.join("\n")).toContain("includes inline arguments");
     expect(repaired.warnings.join("\n")).toContain("agents.defaults.params.temperature");
     expect(repaired.warnings.join("\n")).toContain(
       "agents.defaults.models.openai/gpt-5.6-sol.params.temperature",

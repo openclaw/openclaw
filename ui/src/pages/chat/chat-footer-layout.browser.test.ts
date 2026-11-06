@@ -431,7 +431,7 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
         );
         await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head>
           <body style="margin:0;height:100vh;overflow:hidden">
-            <div class="shell shell--chat ${label.startsWith("mobile") ? "shell--mobile-nav shell--merged-chat-chrome" : ""}">
+            <div class="shell shell--chat shell--session ${label.startsWith("mobile") ? "shell--mobile-nav shell--merged-chat-chrome" : ""}">
               <main class="content content--chat" style="padding:0"><div class="sidebar-region">
                 ${nest("sidebar-region__header", '<header class="chat-pane__header">Session</header>')}
                 <div class="sidebar-region__primary" data-region="main"><section class="chat">${chat}</section></div>
@@ -461,6 +461,17 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
         expect(await page.locator(".chat-topbar-notices").isVisible()).toBe(false);
         expect(await page.locator(".agent-chat__composer-notices").isVisible()).toBe(false);
         expect(await page.locator(".chat-footer__context").isVisible()).toBe(withPullRequest);
+        const restingGutterPadding = await style(page, ".chat-gutter-stack", "padding-top");
+        await page.locator(".sidebar-region__header").evaluate((header) => {
+          const indicator = document.createElement("span");
+          indicator.className = "chat-pane__connection";
+          header.append(indicator);
+        });
+        expect(await style(page, ".chat-gutter-stack", "padding-top")).toBe("38px");
+        expect(await style(page, ".chat-topbar-notices", "padding-top")).toBe("38px");
+        await page.locator(".chat-pane__connection").evaluate((indicator) => indicator.remove());
+        expect(await style(page, ".chat-gutter-stack", "padding-top")).toBe(restingGutterPadding);
+        expect(await style(page, ".chat-topbar-notices", "padding-top")).toBe("0px");
         const before = await geometry();
         await page.locator(".chat-footer__context").evaluate((node) => {
           const notices = node.querySelector(".agent-chat__composer-notices")!;

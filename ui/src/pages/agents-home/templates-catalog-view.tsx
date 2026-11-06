@@ -9,6 +9,7 @@ import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
 import "../../styles/templates-catalog.css";
 import { PluginDetailLoadingHero } from "../plugins/detail-loading-hero.tsx";
+import { TemplatePreviewView } from "./template-preview-view.tsx";
 import type { TemplatesCatalogViewProps } from "./templates-catalog-view-props.ts";
 import { TemplatesDetailView } from "./templates-detail-view.tsx";
 
@@ -49,31 +50,33 @@ function CatalogRead(props: TemplatesCatalogViewProps & { children: JSX.Element 
 
 export function TemplatesCatalogView(props: TemplatesCatalogViewProps) {
   return (
-    <Show
-      when={props.selected}
-      fallback={
-        <SettingsPage wide>
-          <section
-            class="plugin-catalog-detail plugin-catalog-detail--loading"
-            aria-label={t("templatesCatalog.title")}
-          >
-            <a
-              class="plugin-catalog-detail__back"
-              href={pathForRoute("templates", props.basePath)}
-              onClick={(event) => handleNavigationClick(event, () => props.onBack())}
+    <Show when={!props.modal} fallback={<TemplatePreviewView view={props} />}>
+      <Show
+        when={props.selected}
+        fallback={
+          <SettingsPage wide>
+            <section
+              class="plugin-catalog-detail plugin-catalog-detail--loading"
+              aria-label={t("templatesCatalog.title")}
             >
-              {t("templatesCatalog.back")}
-            </a>
-            <CatalogRead {...props}>
-              <Show when={props.readEntries().length > 0}>
-                <CatalogLoading />
-              </Show>
-            </CatalogRead>
-          </section>
-        </SettingsPage>
-      }
-    >
-      <TemplatesDetailView view={props} />
+              <a
+                class="plugin-catalog-detail__back"
+                href={pathForRoute("templates", props.basePath)}
+                onClick={(event) => handleNavigationClick(event, () => props.onBack())}
+              >
+                {t("templatesCatalog.back")}
+              </a>
+              <CatalogRead {...props}>
+                <Show when={props.readEntries().length > 0}>
+                  <CatalogLoading />
+                </Show>
+              </CatalogRead>
+            </section>
+          </SettingsPage>
+        }
+      >
+        <TemplatesDetailView view={props} />
+      </Show>
     </Show>
   );
 }

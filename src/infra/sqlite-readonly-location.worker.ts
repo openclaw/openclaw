@@ -42,9 +42,11 @@ import {
   SQLITE_READONLY_WORKER_MAX_BUFFER,
   SQLITE_INSPECTION_CONTENTION_PREFIX,
   SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX,
+  SQLITE_SNAPSHOT_CAPACITY_PREFIX,
   isSqliteSnapshotStagingMode,
   type SqliteReadOnlyWorkerResult,
 } from "./sqlite-readonly-worker-protocol.js";
+import { isSqliteSnapshotCapacityError } from "./sqlite-snapshot-capacity-error.js";
 import { beginSqliteSnapshotRetirement } from "./sqlite-snapshot-retirement.js";
 import {
   createSqliteSnapshotStagingTokenSync,
@@ -228,6 +230,7 @@ async function inspect(
       (mode === "staging-create" || mode === "staging-create-legacy") &&
       isPrivateDirectoryCreationRefused(error);
     const prefix =
+      (isSqliteSnapshotCapacityError(error) ? SQLITE_SNAPSHOT_CAPACITY_PREFIX : "") +
       (contention ? SQLITE_INSPECTION_CONTENTION_PREFIX : "") +
       (allocationRefused ? SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX : "");
     return {

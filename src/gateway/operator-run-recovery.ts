@@ -1,3 +1,4 @@
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
@@ -8,8 +9,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPairedDeviceTokenIdentityCurrent } from "../infra/device-pairing-identity.js";
 import { loadPairedDevicePairingStoreRecordReadOnly } from "../infra/device-pairing-store-readonly.js";
 import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
+import { getCanonicalGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
-import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
+import {
+  operatorScopeSatisfied,
+  intersectOperatorScopes,
+} from "../shared/operator-scope-compat.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { profileCatalogPath } from "../state/user-profile-identity.read.js";
 import {
@@ -19,11 +24,19 @@ import {
 } from "../state/user-profile-list.js";
 import { captureGatewayAuthPolicy, isGatewayAuthGrantCurrent } from "./auth-policy.js";
 import type { GatewayAuthPolicy } from "./auth-policy.types.js";
+import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
+import { gatewayPersonPrincipalAuthError } from "./auth.js";
 import { prepareChannelOperatorAuthority } from "./channel-operator-authority.js";
 import {
   captureGatewayDeviceRevocation,
   onGatewayDeviceSourceRevoked,
 } from "./device-revocation.js";
+import {
+  isOpenClawIdTunnelPrincipalCurrent,
+  onOpenClawIdTunnelPrincipalsChanged,
+  openclawIdTunnelRolePolicy,
+  prepareOpenClawIdTunnelPrincipal,
+} from "./openclaw-id/tunnel-principal.js";
 import {
   GatewayOperatorAccessDeniedError,
   resumeGatewayOperatorAccessGrant,
@@ -46,6 +59,8 @@ import {
   decodeQueuedOperatorRecoverySource,
   type OperatorRunRecoverySnapshot,
 } from "./operator-run-recovery-source.codec.js";
+import { getGatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
+import { restoreIngressPrincipalRecovery } from "./remote-ingress-principal-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import type { GatewayAuthenticatedUserProfile } from "./server/client-identity-types.js";
 
@@ -117,6 +132,27 @@ async function restoreGatewayOperatorSnapshot(params: {
       return undefined;
     }
     const snapshot = prepared.snapshot;
+    const ingress =
+      snapshot.sourceIngress === "principal"
+        ? await restoreIngressPrincipalRecovery(
+            context,
+            snapshot.ingress,
+            snapshot.profileId,
+            snapshot.scopes,
+          )
+        : undefined;
+    assertLifetime();
+    if (ingress) {
+      ingress.signal.addEventListener("abort", revoke, { once: true });
+      subscriptions.push(() => ingress.signal.removeEventListener("abort", revoke));
+    }
+    const principal = snapshot.openclawIdPrincipal;
+    const membershipPolicy = openclawIdTunnelRolePolicy(principal);
+    if (principal) {
+      await prepareOpenClawIdTunnelPrincipal(principal);
+    }
+    assertLifetime();
+    assertCurrent();
     const generationOwner = context.sharedGatewaySessionGenerationState;
     if (snapshot.sharedGeneration !== undefined) {
       if (!generationOwner || generationOwner.requiredGeneration !== snapshot.sharedGeneration) {
@@ -140,16 +176,18 @@ async function restoreGatewayOperatorSnapshot(params: {
     if (releaseDeviceNotification) {
       subscriptions.push(releaseDeviceNotification);
     }
-    let authPolicy: GatewayAuthPolicy = snapshot.authPolicy;
+    let authPolicy: GatewayAuthPolicy | undefined = snapshot.authPolicy;
     let sourceConfig: OpenClawConfig | undefined;
     let sourceRevision: object | undefined;
     let sourcePublication: object | undefined;
     const assertSourcePolicy = () => {
       assertLifetime();
+      ingress?.assertCurrent();
       const cfg = getConfig();
       const revision = readOperatorRoleConfigRevision(gatewayOwner);
       const publication = runtimeConfigPublication.current?.revision;
       if (
+        (principal && !isOpenClawIdTunnelPrincipalCurrent(principal)) ||
         !device.isCurrent() ||
         (snapshot.sharedGeneration !== undefined &&
           context.sharedGatewaySessionGenerationState !== generationOwner)
@@ -163,23 +201,26 @@ async function restoreGatewayOperatorSnapshot(params: {
           !isOperatorRoleSourcePolicyCurrent(
             snapshot.rolePolicy,
             sourceRolePolicy(
-              resolveOperatorRolePolicyForAssignment(
-                snapshot.profileId,
-                snapshot.assignedRole,
-                cfg,
-                snapshot.githubLogin,
-              ),
+              membershipPolicy ??
+                resolveOperatorRolePolicyForAssignment(
+                  snapshot.profileId,
+                  snapshot.assignedRole,
+                  cfg,
+                  snapshot.githubLogin,
+                ),
             ),
             snapshot.scopes,
           )) ||
-        !isGatewayAuthGrantCurrent(authPolicy, cfg)
+        (authPolicy !== undefined && !principal && !isGatewayAuthGrantCurrent(authPolicy, cfg))
       ) {
         throw new GatewayOperatorRecoveryAuthorizationError(
           "Restart recovery operator source policy changed.",
         );
       }
       // Retain this config's issued policy only after validating the original grant.
-      authPolicy = captureGatewayAuthPolicy(cfg, authPolicy);
+      if (authPolicy) {
+        authPolicy = captureGatewayAuthPolicy(cfg, authPolicy);
+      }
       // The decoded admission is frozen. Reconcile it once per live owner's publication;
       // profile assignments, device lifetime, and plugin grants still check every use.
       sourceConfig = cfg;
@@ -212,6 +253,9 @@ async function restoreGatewayOperatorSnapshot(params: {
         }
       }),
     );
+    if (principal) {
+      subscriptions.push(onOpenClawIdTunnelPrincipalsChanged(recheck));
+    }
     assertRecoveryCurrent();
     identity = await prepareUserProfileIdentity(snapshot.profileId);
     const profileIdentity = identity;
@@ -237,6 +281,24 @@ async function restoreGatewayOperatorSnapshot(params: {
         githubAccountIds ??= profile.githubAccountIds ?? [];
         profileFacts = profile;
         profileRevision = revision;
+      }
+      if (
+        snapshot.sourceIngress === "principal" &&
+        snapshot.profileId !== GATEWAY_OWNER_PROFILE_ID
+      ) {
+        // The transport owns effective auth overrides; headless contexts resolve their config.
+        const resolver = context.resolveGatewayContext
+          ? getCanonicalGatewayContextResolver(context.resolveGatewayContext)
+          : undefined;
+        const host = resolver ? getGatewayControlUiIngressHost(resolver) : undefined;
+        const eligibilityError = gatewayPersonPrincipalAuthError(
+          host?.getResolvedAuth() ?? resolveGatewayAuthForConfig({ config: cfg }),
+          cfg,
+          profileFacts.emails,
+        );
+        if (eligibilityError) {
+          throw new GatewayOperatorRecoveryAuthorizationError(eligibilityError);
+        }
       }
       return { cfg, profile: profileFacts };
     };
@@ -286,6 +348,7 @@ async function restoreGatewayOperatorSnapshot(params: {
     assertRecoveryCurrent();
     const live = captureChannelOperatorRunAuthority({
       profileId: snapshot.profileId,
+      openclawIdPrincipal: principal,
       assignedRole: snapshot.assignedRole,
       githubLogin: snapshot.githubLogin,
       scopes: snapshot.scopes,
@@ -335,7 +398,8 @@ async function restoreGatewayOperatorSnapshot(params: {
         assertPolicy();
       },
       authenticatedUserProfile: { profileId: id, ...display, updatedAt: profile.updated_at },
-      controlUiAdmin: snapshot.controlUiAdmin,
+      controlUiAdmin:
+        snapshot.controlUiAdmin && operatorScopeSatisfied("operator.admin", authority.scopes),
       release,
     };
   } catch (error) {
@@ -347,25 +411,27 @@ async function restoreGatewayOperatorSnapshot(params: {
 /** Restore owner-held continuation evidence through the shared authentication owner. */
 export async function restoreGatewayOperatorSource(params: {
   snapshot: OperatorRunRecoverySnapshot;
-  target: { agentId: string; sessionKey: string; sessionId: string };
+  target?: { agentId: string; sessionKey: string; sessionId: string };
   context: GatewayRequestContext;
   assertCurrent: () => void;
   prepareCurrent?: () => Promise<void>;
 }): Promise<RestoredGatewayOperatorAuthority> {
-  const target = { ...params.target };
+  const target = params.target ? { ...params.target } : undefined;
   const restored = await restoreGatewayOperatorSnapshot({
     context: params.context,
     assertCurrent: params.assertCurrent,
-    subscribeToClaim: (revoke) =>
-      onSessionIdentityMutation((mutation) => {
-        if (
-          mutation.agentId === target.agentId &&
-          (mutation.previous.sessionId === target.sessionId ||
-            mutation.previous.sessionKeys.includes(target.sessionKey))
-        ) {
-          revoke();
-        }
-      }),
+    subscribeToClaim: target
+      ? (revoke) =>
+          onSessionIdentityMutation((mutation) => {
+            if (
+              mutation.agentId === target.agentId &&
+              (mutation.previous.sessionId === target.sessionId ||
+                mutation.previous.sessionKeys.includes(target.sessionKey))
+            ) {
+              revoke();
+            }
+          })
+      : undefined,
     prepareSource: async () => ({
       snapshot: params.snapshot,
       revalidate: async () => {

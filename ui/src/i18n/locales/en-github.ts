@@ -60,7 +60,7 @@ const enGitHub = {
       retryPublication: "Retry publication",
       openPublishedPr: "Open PR",
       cloudPublicationGuidance:
-        "Start a live agent turn and ask it to publish this cloud workspace after reconciliation.",
+        "Ask the agent to publish this Cloud workspace after accepting its changes.",
       actions: "Actions for pull request {reference}",
       dismiss: "Dismiss pull request {reference}",
       dismissBranch: "Hide {branch} for this session",
@@ -102,14 +102,14 @@ const enGitHub = {
       couldNotUpdateMany: "Couldn’t update pull requests",
       couldNotLoad: "Couldn’t load pull request",
       couldNotLoadMany: "Couldn’t load pull requests",
-      tryAgain: "Please try again.",
+      tryAgain: "Try again.",
       lastUpdated: "Last updated {time}",
       retry: "Retry",
-      empty: "No pull requests in this session",
+      empty: "No pull requests yet.",
       rateLimited:
         "GitHub API rate limit reached. Pull request status may be out of date until the limit resets.",
       unavailable:
-        "GitHub status could not be refreshed. Showing the last known state; check GitHub for the latest.",
+        "Couldn’t refresh GitHub status. Check GitHub for the latest; this is the last known status.",
     },
   },
   githubPublication: {
@@ -121,16 +121,16 @@ const enGitHub = {
     publishAs: "Publish as @{account}",
     account: "Publication account",
     newAction: en.githubPublication.newAction,
-    failedAttempt: "Publication attempt failed",
+    failedAttempt: "Couldn’t publish. Try again.",
     capacity: en.githubPublication.capacity,
     confirm: "Confirm original publication",
     check: "Check publication",
     refresh: "Refresh publication",
-    statusFailed: "Publication failed",
+    statusFailed: "Couldn’t publish",
     statusConfirm: "Confirmation needed",
     statusRequested: "Publication queued",
     statusPublishing: "Publication in progress",
-    statusUnavailable: "Publication status unavailable",
+    statusUnavailable: "Couldn’t load publication status",
     statusUnknown: "Outcome unknown",
     unknown:
       "The outcome is unknown. Retry keeps the original account and request; it does not switch accounts.",
@@ -146,20 +146,20 @@ const enGitHub = {
     effectPush: "push",
     effectPullRequest: "pull request",
     personalWorkspace:
-      "Wait for work to finish and reclaim the workspace to publish with My GitHub.",
+      "Wait for work to finish and bring it back to the computer running OpenClaw to publish with My GitHub.",
     unidentified: "Sign in with a personal profile to use My GitHub.",
     sharedUnavailable: {
       unavailable:
-        "No usable GitHub credential is available in the Gateway environment. Sign in with gh auth login on the Gateway runtime host, or optionally add a connection in Settings \u2192 Profile \u2192 GitHub connections. My GitHub is separate and optional.",
-      changed: "The Gateway GitHub account changed. Reload and retry publication.",
+        "No GitHub account is available on the computer running OpenClaw. Sign in with gh auth login on the computer running OpenClaw, or add an account in Settings \u2192 Profile \u2192 GitHub accounts. My GitHub is separate and optional.",
+      changed: "The shared GitHub account changed. Reload and try publishing again.",
       rate_limited:
-        "GitHub rate-limited account verification. Wait and retry publication; reconnecting is not needed.",
+        "Couldn’t verify the GitHub account because of a rate limit. Wait and try publishing again; you don’t need to reconnect.",
       unverified:
-        "GitHub account verification is unavailable. Retry publication or check gh auth status on the Gateway runtime host.",
+        "Couldn’t verify the GitHub account. Try publishing again or check gh auth status on the computer running OpenClaw.",
       unsupported_workspace:
-        "Publish PR needs a session-owned worktree or repository workspace. Normal agent gh commands still work; reconnecting GitHub will not help.",
+        "Publishing a PR needs a repository workspace owned by this session. Agent gh commands still work; reconnecting GitHub won’t help.",
       unknown:
-        "GitHub publication account verification is unavailable. Reload and retry, or check gh auth status on the Gateway runtime host. Settings connections are optional; My GitHub is separate.",
+        "Couldn’t verify the publishing account. Reload and try again, or check gh auth status on the computer running OpenClaw. Accounts in Settings are optional; My GitHub is separate.",
     },
   },
 } satisfies TranslationMap;

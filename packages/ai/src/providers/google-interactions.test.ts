@@ -789,6 +789,36 @@ describe("google-interactions provider", () => {
   });
 
   it.each([
+    ["priority", "priority", 1.8],
+    ["priority", "standard", 1],
+    ["flex", null, 0.5],
+  ] as const)("prices requested %s fulfilled as %s", async (requested, fulfilled, multiplier) => {
+    const headers: Record<string, string> = { "Content-Type": "text/event-stream" };
+    if (fulfilled) {
+      headers["x-gemini-service-tier"] = fulfilled;
+    }
+    const usage = {
+      total_input_tokens: 1_000_000,
+      total_output_tokens: 0,
+      total_tokens: 1_000_000,
+    };
+    const sse = completedSse({ usage }) + "data: [DONE]\n\n";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(sse, { status: 200, headers })),
+    );
+    const model = {
+      ...makeInteractionsModel(),
+      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+    };
+    const result = await streamGoogleInteractions(model, basicContext, {
+      apiKey: "test-api-key",
+      onPayload: (body) => ({ ...(body as object), service_tier: requested }),
+    }).result();
+    expect(result.usage.cost.total).toBeCloseTo(multiplier);
+  });
+
+  it.each([
     {
       modelId: "gemini-2.5-flash",
       reasoning: "low" as const,

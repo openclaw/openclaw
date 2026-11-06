@@ -56,6 +56,17 @@ function createFakeClient(options?: {
             item: {
               id: "search-1",
               type: "webSearch",
+              results: [
+                {
+                  type: "text_result",
+                  url: "https://example.com/source",
+                  title: "Source",
+                  snippet: "Provider prose, not fetched evidence",
+                  future_field: true,
+                },
+                { url: "javascript:alert(1)" },
+                { url: "https://example.com/source", title: "Source" },
+              ],
               query,
               action: { type: "search", query, queries: [query] },
             },
@@ -123,6 +134,32 @@ function searchFixture(options?: Parameters<typeof createFakeClient>[0], pluginC
 }
 
 describe("codex web search provider", () => {
+  it("uses the selected model and exact profile instead of the native default", async () => {
+    const { client, requests } = createFakeClient({
+      models: [baseModel("gpt-5.5"), baseModel("gpt-5.4")],
+    });
+    let selectedProfile: string | null | undefined;
+    vi.spyOn(shared, "createIsolatedCodexAppServerClient").mockImplementation(async (options) => {
+      selectedProfile = options?.authProfileId;
+      return client;
+    });
+    const provider = createCodexWebSearchProvider();
+    const result = await createSearchTool(provider)?.execute(
+      { query },
+      {
+        modelSelection: { provider: "openai", model: "gpt-5.4", authProfileId: "openai:research" },
+      },
+    );
+    expect(selectedProfile).toBe("openai:research");
+    expect(requests.find((request) => request.method === "thread/start")?.params).toMatchObject({
+      model: "gpt-5.4",
+      modelProvider: "openai",
+    });
+    expect(result).toMatchObject({
+      model: "gpt-5.4",
+      citations: [{ url: "https://example.com/source", title: "Source" }],
+    });
+  });
   it("registers a selectable keyless provider contract", () => {
     const provider = createContractCodexWebSearchProvider();
 
@@ -175,6 +212,8 @@ describe("codex web search provider", () => {
     const result = await tool?.execute({ query });
 
     expect(result).toMatchObject({
+      kind: "answer",
+      citations: [{ url: "https://example.com/source", title: "Source" }],
       query,
       provider: "codex",
       model: "gpt-5.5",
@@ -205,7 +244,7 @@ describe("codex web search provider", () => {
         "features.code_mode": false,
         "features.code_mode_only": false,
         "features.hooks": false,
-        "features.standalone_web_search": false,
+        "features.standalone_web_search": true,
         notify: [],
         web_search: "live",
         "tools.web_search.allowed_domains": ["example.com"],
@@ -287,7 +326,7 @@ describe("codex web search provider", () => {
     {
       name: "ungrounded answer",
       options: { emitWebSearch: false },
-      error: "Codex hosted search completed without invoking web search.",
+      error: "Codex native search completed without invoking web search.",
     },
   ])("fails closed for $name", async ({ options, pluginConfig, error, methods }) => {
     const { tool, requests } = searchFixture(options, pluginConfig);

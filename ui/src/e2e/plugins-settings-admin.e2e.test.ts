@@ -750,7 +750,7 @@ suite.define(() => {
       await search.fill("Allow prompt changes");
       await page.getByRole("heading", { name: "Permissions", exact: true }).waitFor();
       expect(await page.locator(".plugin-editor__empty").count()).toBe(0);
-      const permissionRow = page.locator('[data-setting="hooks.allowPromptInjection"]');
+      const permissionRow = page.locator('[data-setting="hooks.allowPromptModification"]');
       const permission = permissionRow.getByRole("checkbox");
       const inspections = (await gateway.getRequests("plugins.inspect")).length;
       await gateway.deferNext("plugins.inspect");
@@ -775,7 +775,7 @@ suite.define(() => {
           entries: {
             workboard: {
               enabled: false,
-              hooks: { allowPromptInjection: true },
+              hooks: { allowPromptModification: true },
               config: { refreshMinutes: 15, notifications: false },
             },
           },

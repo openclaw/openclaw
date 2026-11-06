@@ -3,6 +3,7 @@ import acpCorePackageJson from "../../packages/acp-core/package.json" with { typ
 import normalizationCorePackageJson from "../../packages/normalization-core/package.json" with { type: "json" };
 import { pluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mts";
 import privateLocalOnlyPluginSdkSubpaths from "../../scripts/lib/plugin-sdk-private-local-only-subpaths.json" with { type: "json" };
+import { createVitestSourcePackageAliases } from "./vitest.source-package-alias.ts";
 
 const sourcePluginSdkSubpaths = [
   ...new Set([...pluginSdkSubpaths, ...privateLocalOnlyPluginSdkSubpaths]),
@@ -10,28 +11,8 @@ const sourcePluginSdkSubpaths = [
 
 // Native fixture configs need aliases without loading the test runner plugins.
 export function createVitestResolveConfig(repoRoot: string) {
-  function sourcePackageAlias(packageId: string, subpath?: string) {
-    return {
-      find: `@openclaw/${packageId}${subpath ? `/${subpath}` : ""}`,
-      replacement: path.join(
-        repoRoot,
-        "packages",
-        packageId,
-        "src",
-        ...(subpath ? subpath.split("/") : ["index"]).map((part, index, parts) =>
-          index === parts.length - 1 ? `${part}.ts` : part,
-        ),
-      ),
-    };
-  }
-
-  function sourcePackageAliasesFromExports(packageId: string, exports: Record<string, unknown>) {
-    return Object.keys(exports)
-      .map((exportKey) => (exportKey === "." ? undefined : exportKey.slice(2)))
-      .filter((subpath) => subpath === undefined || (subpath && !subpath.includes("..")))
-      .toSorted((a, b) => (a ?? "").localeCompare(b ?? ""))
-      .map((subpath) => sourcePackageAlias(packageId, subpath));
-  }
+  const { sourcePackageAlias, sourcePackageAliasesFromExports } =
+    createVitestSourcePackageAliases(repoRoot);
 
   return {
     alias: [

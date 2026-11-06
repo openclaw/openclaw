@@ -13,34 +13,43 @@ import {
   resolveMSTeamsAccountEntryKey,
 } from "./accounts.js";
 
-export function resolveMSTeamsWebhookCollisionIssue(cfg: OpenClawConfig): string | undefined {
-  const owners = new Map<string, string>();
-  for (const accountId of listMSTeamsAccountIds(cfg)) {
+const LEGACY_MESSAGES_PATH = "/api/messages";
+
+function listEnabledMSTeamsWebhookPaths(cfg: OpenClawConfig) {
+  return listMSTeamsAccountIds(cfg).flatMap((accountId) => {
     const account = resolveMSTeamsAccountConfig(cfg, accountId);
     if (account.enabled === false) {
-      continue;
+      return [];
     }
-    const path = account.webhook?.path || "/api/messages";
-    const paths =
-      accountId === DEFAULT_ACCOUNT_ID && path !== "/api/messages"
-        ? [path, "/api/messages"]
-        : [path];
-    for (const routePath of paths) {
-      const canonical = resolvePluginRoutePathContext(routePath).canonicalPath;
-      const owner = owners.get(canonical);
-      if (owner && owner !== accountId) {
-        return (
-          "Microsoft Teams webhook path " +
-          routePath +
-          " is shared by accounts " +
-          owner +
-          " and " +
-          accountId +
-          ". Configure distinct webhook.path values."
-        );
-      }
-      owners.set(canonical, accountId);
+    const path = account.webhook?.path || LEGACY_MESSAGES_PATH;
+    return [{ accountId, path, canonical: resolvePluginRoutePathContext(path).canonicalPath }];
+  });
+}
+
+/** Enabled account whose configured webhook path is /api/messages, if any. */
+export function resolveMSTeamsLegacyMessagesOwner(cfg: OpenClawConfig): string | undefined {
+  const legacy = resolvePluginRoutePathContext(LEGACY_MESSAGES_PATH).canonicalPath;
+  return listEnabledMSTeamsWebhookPaths(cfg).find(({ canonical }) => canonical === legacy)
+    ?.accountId;
+}
+
+export function resolveMSTeamsWebhookCollisionIssue(cfg: OpenClawConfig): string | undefined {
+  const owners = new Map<string, string>();
+  // The default account's legacy /api/messages alias yields to an account configured on it.
+  for (const { accountId, path, canonical } of listEnabledMSTeamsWebhookPaths(cfg)) {
+    const owner = owners.get(canonical);
+    if (owner && owner !== accountId) {
+      return (
+        "Microsoft Teams webhook path " +
+        path +
+        " is shared by accounts " +
+        owner +
+        " and " +
+        accountId +
+        ". Configure distinct webhook.path values."
+      );
     }
+    owners.set(canonical, accountId);
   }
   return undefined;
 }

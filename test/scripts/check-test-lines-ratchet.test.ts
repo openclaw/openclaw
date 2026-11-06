@@ -1,14 +1,16 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { devNull } from "node:os";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { main } from "../../scripts/check-test-lines-ratchet.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
 import { fixtureFiles } from "./script-fixture-files.test-support.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
+beforeEach(() => vi.stubEnv("OPENCLAW_RELEASE_CONTEXT_REF", "main"));
 afterEach(() => vi.restoreAllMocks());
+afterEach(() => vi.unstubAllEnvs());
 const baseline = "config/test-lines-baseline.txt";
 const allocation = (name: string) => `config/test-lines-allocations/${name}.txt`;
 
@@ -43,6 +45,18 @@ function fixture(initial: Record<string, string>) {
       main(files.root, ["--base", ref, "--no-merge-base", ...args]),
   };
 }
+
+it("does not require test-line allocations on release branches", () => {
+  vi.stubEnv("OPENCLAW_RELEASE_CONTEXT_REF", "");
+  vi.stubEnv("GITHUB_ACTIONS", "");
+  const f = fixture({ [baseline]: "1\n", "a.test.ts": "one\n" });
+  f.write("a.test.ts", "one\ntwo\n");
+  f.git("branch", "-m", "release/2026.11.4");
+  expect(f.check()).toBe(0);
+  expect(f.read(baseline)).toBe("1\n");
+  f.git("branch", "-m", "main");
+  expect(f.check()).toBe(1);
+});
 
 it("counts tracked test lines, gates net growth, and only prunes the ceiling downward", () => {
   const files = [

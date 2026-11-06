@@ -17,7 +17,7 @@ suite.define(() => {
           name: pluginId === "github" ? "GitHub" : "Workboard",
           origin: "bundled",
         };
-        const entry = { enabled: true, hooks: { allowPromptInjection: false } };
+        const entry = { enabled: true, hooks: { allowPromptModification: false } };
         const config = { plugins: { entries: { [pluginId]: entry } } };
         const entrySchema =
           configMocks["config.schema"].schema.properties.plugins.properties.entries.properties

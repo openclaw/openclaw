@@ -264,7 +264,12 @@ describe("Cloud environments", () => {
     "renders recorded setup phases and failures with a newer successful profile: %s",
     async (newerSuccessfulProfile) => {
       const result = localSnapshot();
-      const phaseDurationsMs = { onCreate: 1200, updateContent: 6400 };
+      const phaseDurationsMs = {
+        inspection: 100,
+        onCreate: 1200,
+        updateContent: 6400,
+        preparedManifest: 8400,
+      };
       const failed = {
         ...result.images[0]!,
         recipePreparationAtMs: 1000,
@@ -298,8 +303,9 @@ describe("Cloud environments", () => {
         "github.com/acme/appNeeds attention",
       );
       expect(details.querySelector(".cloud-environments__step--longest")?.textContent).toContain(
-        "updateContentCommand",
+        "Capture prepared manifest",
       );
+      expect(details.textContent).toContain("Inspect retained workspace");
       expect(details.querySelector(".cloud-environments__output")?.textContent).toBe(
         "synthetic package unavailable",
       );

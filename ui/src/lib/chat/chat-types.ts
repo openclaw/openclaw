@@ -1,5 +1,6 @@
 import type { HumanMention, SessionPermissionMode } from "@openclaw/gateway-protocol";
 import type { MediaKind } from "@openclaw/media-core/constants";
+import type { ChatAppContextAttachment } from "../../../../packages/gateway-protocol/src/chat-app-context.js";
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
 import type { NodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
 import type {
@@ -170,6 +171,7 @@ export type ChatQueueItem = {
   storageScope?: string;
   /** UI question associated with this input; delivery and retry stay outbox-owned. */
   asyncQuestionItemId?: string;
+  appContext?: ChatAppContextAttachment[];
   workContext?: ChatWorkContext;
   workContextUnavailable?: true;
   text: string;
@@ -271,6 +273,7 @@ export type ChatItem =
       isStreaming: boolean;
       replyToSender?: SenderIdentity;
       replyToMessage?: MessageGroup["replyToMessage"];
+      replyPreviousMessageId?: string;
       runId?: string;
       boundaryId?: string;
     }
@@ -366,6 +369,8 @@ export type MessageGroup = {
   sourceClients?: MessageClientSource[];
   replyToSender?: SenderIdentity;
   replyToMessage?: { message: unknown; key: string };
+  /** Last visible message before this group, even when search hides that row. */
+  replyPreviousMessageId?: string;
   /** Reply context: more than one person speaks in the conversation. */
   replyShared?: true;
   /** Assistant reply context: the user prompt that opened this turn. */

@@ -455,5 +455,5 @@ created are rejected instead of changing what the node executes.
 ## Related
 
 - [CLI reference](/cli)
-- [Connect a machine](/cli/connect)
+- [Connect a device](/cli/connect)
 - [Nodes](/nodes)

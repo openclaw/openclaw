@@ -80,17 +80,22 @@ function replayAdmitted(
   ]);
   const cached = replaySnapshots.entries.get(key);
   // Custom-entry rewrites rotate generation; appends preserve earlier IDs and bytes.
-  if (
+  const prefix =
     cached?.generation === generation &&
-    cached.ids.length === entries.length &&
-    entries.every((entry, index) => isRecord(entry) && entry.id === cached.ids[index])
-  ) {
+    cached.ids.length <= entries.length &&
+    cached.ids.every((id, index) => {
+      const entry = entries[index];
+      return isRecord(entry) && entry.id === id;
+    })
+      ? cached
+      : undefined;
+  if (prefix && prefix.ids.length === entries.length) {
     replaySnapshots.entries.delete(key);
-    replaySnapshots.entries.set(key, cached);
-    return cached.projection;
+    replaySnapshots.entries.set(key, prefix);
+    return prefix.projection;
   }
   discardReplaySnapshot(key);
-  const projection = replay(entries);
+  const projection = replay(entries, prefix?.projection, prefix?.ids.length);
   // Bound metadata as well as JSON. Large histories keep the uncached replay path.
   if (entries.length > 4096 || projection.size > 1024) {
     return projection;
@@ -222,10 +227,15 @@ function applyWrites(projection: Projection, writes: ReadonlyMap<string, StoredV
   return next;
 }
 
-function replay(entries: readonly unknown[]): Projection {
-  const projection: Projection = new Map();
+function replay(entries: readonly unknown[], initial?: Projection, start = 0): Projection {
+  // Earlier runs may still hold the admitted projection. Extend a private copy.
+  const projection: Projection = new Map(initial);
   let bytes = 0;
-  for (const entry of entries) {
+  for (const value of projection.values()) {
+    bytes += value.bytes;
+  }
+  for (let index = start; index < entries.length; index++) {
+    const entry = entries[index];
     if (!isRecord(entry) || entry.type !== "custom" || entry.customType !== CUSTOM_TYPE) {
       continue;
     }
