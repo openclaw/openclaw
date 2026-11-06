@@ -13,19 +13,23 @@ const transport: StreamFn = async (model, _context, options) => {
   return undefined as never;
 };
 
-vi.mock("./stream-resolution.js", () => ({
+vi.mock("./stream-resolution.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./stream-resolution.js")>()),
   resolveEmbeddedAgentApiKey: async () => undefined,
   resolveEmbeddedAgentBaseStreamFn: () => transport,
   resolveEmbeddedAgentStream: () => ({ streamFn: transport }),
 }));
-vi.mock("../../plugins/provider-runtime.js", () => ({
+vi.mock("../../plugins/provider-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/provider-runtime.js")>()),
   resolveProviderTextTransforms: () => undefined,
 }));
-vi.mock("../../plugins/provider-hook-runtime.js", () => ({
+vi.mock("../../plugins/provider-hook-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/provider-hook-runtime.js")>()),
   getModelProviderRuntimePluginHandle: () => undefined,
 }));
 // Provider/config payload shaping wraps the gate, as on a turn, so the gate sees its output.
-vi.mock("./extra-params.js", () => ({
+vi.mock("./extra-params.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./extra-params.js")>()),
   applyExtraParamsToAgent: (agent: { streamFn: StreamFn }) => {
     const inner = agent.streamFn;
     agent.streamFn = (model, context, options) =>
