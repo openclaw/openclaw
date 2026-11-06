@@ -217,15 +217,22 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Batches113–118, pinned main `a07facd84480`: qualify six Control UI test
-nominees in one scoped change. The native destination disconnect, History search,
-session-read observer, dictation close negatives and annotation fixture lifetime
-require actual boundary proof before repair. Two fallback-divider clone-only
-expansions are candidates for contraction while preserving their five declarations
-and distinct contracts. This draft carries only the ledger prerequisite for native
-physical dependency qualification; all six test sources remain unchanged and
-runtime proof is pending. Completed source classifications and durable census
-counts remain unchanged.
+Batches113–118, pinned main `a07facd84480`, use one native checkout and
+separate scoped proofs. Unchanged baselines passed: destinations6, History1,
+read coalescing1, fallback8, dictation33 and annotation lifetime11.
+Completed source classifications and durable census counts remain unchanged.
+
+- Batch116: collapsed two clone-only fallback-divider axes, preserving all five
+  declarations, the distinct embedded/separate-answer vectors, cloned inputs,
+  independent equality, identity, restoration and malformed/unknown-marker checks.
+  Candidate6/6 passed versus baseline8/8; two redundant expansions were removed,
+  with no new source-classification credit. No actual history reload is claimed.
+- Batches113–115/117–118: causal qualification and repairs remain in progress.
+  Existing UI unit diagnostics identified four listeners retained after the
+  annotation publication/Undo case; the ordinary root route does not run that
+  per-case diagnostic. A separate first-case theme-style diagnostic is unchanged.
+
+Final scoped checks, removal scans, independent review and hosted gates are pending.
 
 Prior qualified batches remain unlanded: [192672](https://github.com/openclaw/openclaw/pull/192672)
 has two HTTP502 landing responses and retained checkouts; [192719](https://github.com/openclaw/openclaw/pull/192719)
