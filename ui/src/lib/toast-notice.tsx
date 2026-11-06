@@ -1,4 +1,5 @@
 import type { JSX } from "@solidjs/web";
+import "../styles/toast.css";
 import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { ErrorDetails } from "../components/config-error.tsx";
 import { Icon, type IconName } from "../components/solid/icon.tsx";

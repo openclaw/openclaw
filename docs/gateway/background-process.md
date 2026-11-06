@@ -137,9 +137,11 @@ Durable commands have no interactive input: `pty: true`
 and `awaitResults: true` are refused, as are `process write`, `send-keys`, `submit`,
 and `paste`. Exec security policy, approvals, managed environment preparation, cwd
 restrictions, and process timeouts remain in effect. `timeoutSeconds` maps to
-`RuntimeMaxSec`; `timeoutSeconds: 0` disables that lifetime bound. The ordinary
-host-exec memory calculation supplies `MemoryMax`, enforced by the unit's cgroup
-instead of the sampled watchdog. Durable processes do not block safe Gateway
+`RuntimeMaxSec`; `timeoutSeconds: 0` disables that lifetime bound. Durable work shares the automatic
+[host-exec memory budget](/tools/exec#host-memory-protection) with ordinary commands.
+The shared sampler accounts their cgroup usage, including descendants after the
+initial shell exits. Each new unit also has hard RAM and swap bounds equal to the
+full shared allowance. Durable processes do not block safe Gateway
 restart or cooperative suspension. Ordinary background processes retain their
 existing restart and suspension behavior.
 

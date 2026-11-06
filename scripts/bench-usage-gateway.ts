@@ -21,6 +21,7 @@ import { acquireGatewayE2ePortBlock } from "../src/gateway/test-helpers.listener
 import { isAbortError } from "../src/infra/abort-signal.ts";
 import { createRedactingStreamWriter } from "../src/logging/redacting-stream.ts";
 import { CONTROL_UI_TOKEN_SESSION_KEY_PREFIX } from "../src/shared/control-ui-storage.js";
+import { controlUiBenchOrder } from "./lib/control-ui-bench-order.ts";
 import {
   mapColdLoadCpuProfile,
   prepareColdLoadTraceEvent,
@@ -109,6 +110,7 @@ const helperFiles = [
   "lib/usage-bench-observer.mjs",
   "lib/usage-bench-rtt.ts",
   "lib/control-ui-renderer-metrics.ts",
+  "lib/control-ui-bench-order.ts",
   "lib/control-ui-cold-load-trace.ts",
   "lib/control-ui-interaction-trace.ts",
   "lib/control-ui-engine-metrics.ts",
@@ -1736,8 +1738,8 @@ try {
                 : pairs * 2 + (values["profile-last-pair"] ? 2 : 0);
         for (let iteration = 0; iteration < iterations; iteration++) {
           const pair = Math.floor(iteration / 2);
-          const order = pair % 2 ? pages.toReversed() : pages;
-          for (const entry of order) {
+          const order = controlUiBenchOrder(pages, pair);
+          for (const [position, entry] of order.entries()) {
             const { owner, page, cdp, processSession, usage } = entry;
             const { responses } = usage;
             const model = `fixture-model-${iteration % 2 ? "01" : "00"}-end`;
@@ -1819,6 +1821,7 @@ try {
               ...(structure === undefined ? {} : { structure }),
               ...(entry.wire ? { wireStart, wireEnd } : {}),
               pair,
+              position,
               cpu,
               rtt,
               model,
@@ -2054,6 +2057,8 @@ try {
         lastStep: activeStep,
         preparationSamples: preparations.length,
         samples: samples.length,
+        order:
+          "Build positions rotate and reverse across pairs; each model uses the same order within a pair.",
         browserResourceSamples: samples.filter((sample) => sample.browserResources?.complete)
           .length,
         mode: values["cold-backend"]

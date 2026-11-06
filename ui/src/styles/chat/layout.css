@@ -136,8 +136,9 @@ openclaw-pending-session-create {
   color: var(--muted);
 }
 
-/* Same system colors as browser find, so matches read in every theme. */
-::highlight(openclaw-chat-search) {
+/* Search ranges only span .chat-text; keep browser-find colors without making
+   unrelated UI elements participate in highlight matching. */
+.chat-text::highlight(openclaw-chat-search) {
   background-color: Mark;
   color: MarkText;
 }
@@ -223,7 +224,8 @@ openclaw-pending-session-create {
   corner-shape: superellipse(1.5);
 }
 
-:is(.chat-composer-neighbor-card, .session-suggestion) {
+.chat-composer-neighbor-card,
+.session-suggestion {
   padding: 10px 12px;
 }
 
@@ -521,8 +523,8 @@ openclaw-pending-session-create {
 }
 
 .chat-virtual-block {
-  /* The outer extent owns scroll height. This positioned row window must not
-     contribute a second changing box when saved rows become live rows. */
+  /* Keep the row window in local coordinates, even near a long transcript's
+     tail. The outer extent owns scroll height; parked rows have no layout. */
   contain: size;
   position: absolute;
   top: 0;
@@ -555,7 +557,7 @@ openclaw-pending-session-create {
 }
 
 /* Message jumps need real mounted-row sizes before their target settles. */
-.chat-thread-inner[data-measuring-rows] .chat-virtual-row {
+.chat-thread-inner[data-measuring-rows] .chat-virtual-row:not([data-prepared-row]) {
   content-visibility: visible;
   contain: none;
 }

@@ -36,15 +36,40 @@ must perform (`disconnect`, `invalidate_tokens`, `cancel_runs`, `notify_owners`,
 Root supremacy: an R-signed statement is accepted wherever a device-signed one is, plus over
 the mailbox. A refusal leaves the state unchanged and has no events.
 
-### Owner reset is out of scope (OCF-319)
+### Owner reset (OCF-319)
 
-A claw's root R never changes in this version. There is no root rotation, no owner-key
-regeneration, no root epoch and no frozen state: `root_epoch` stays in OwnerDeviceCert,
-ServerBinding and Revocation as the constant 1 (`ROOT_EPOCH`), so statements signed before
-this change still verify, and any other value is `malformed`. A lost recovery kit means
-unlinking and relinking the claw. Owner reset is being redesigned as a machine-local reset
-vouched for by the Gateway key (OCF-319); it will reuse the `local_operator` channel and the
-`not_local_operator` refusal that linking uses.
+The person at the machine always wins. Owner reset replaces a claw's root R with a new one R'
+from a new recovery kit, for a lost or leaked kit or a claw the owner no longer controls
+remotely. It is offered only on the machine: `openclaw id reset` (also with the Gateway
+stopped) and a Control UI button on a direct `local_operator` connection. Over the tunnel the
+Gateway refuses it with `not_local_operator` and the UI does not show it. Anyone who can run
+processes on the Gateway host can reset; that is accepted, because operator access already
+implies it.
+
+Reset:
+
+- makes a new kit (S', R'). The kit is shown once and never stored on the Gateway; R' signs the
+  new ServerBinding and is dropped;
+- removes every owner device, member and invite, closes every tunnel session and invalidates
+  every tunnel-bound token. Local access is unaffected;
+- keeps K_srv, K_gw, the claw id, the hostname and all claw data. The membership `seq` keeps
+  counting up (Discovery and clients order snapshots by it);
+- publishes, together, the new binding (signed by R', same claw, hostname, K_srv and K_gw,
+  binding_seq + 1) and a `RootReset { claw_id, new_root_pub: R', binding_seq, issued_at }`
+  signed by K_gw, the key in the binding being replaced (discovery.md, "Owner reset").
+
+There is no root rotation, no root epoch and no frozen state: `root_epoch` stays in
+OwnerDeviceCert, ServerBinding and Revocation as the constant 1 (`ROOT_EPOCH`), and any other
+value is `malformed`. Nothing R signed counts under R'.
+
+A browser pinned to R that reads the new descriptor gets `owner_reset` from
+`verifyBindingForPin` when the reset is valid and signed by the K_gw its pin stored: it opens no socket, keeps no new pin and shows
+"The owner reset access to this claw. Set up this browser again." It is set up again with the
+new kit (kit enrollment below) or an approval from a new owner device. A root change without a
+valid RootReset is still `root_mismatch`, the substitution warning.
+
+Trade-off: K_gw now vouches for a root change, so whoever holds K_gw (the machine) can reset
+the claw. Moving a claw to new machine keys is a separate operation, not designed yet.
 
 Owner device certificates have **no expiry unless the person approving the device enters
 one** (`expires_at: null`). A device stops being an owner when it is removed from the claw's

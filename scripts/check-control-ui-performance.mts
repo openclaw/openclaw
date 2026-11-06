@@ -49,10 +49,12 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Profile's zero-CLS reservation changes only hashed import names in boot code.
-  // Measured Chat/New are 1,287,605/800,599 B; retain 192 B headroom.
-  chatBootJsGzipBytes: 1_287_797,
-  newBootJsGzipBytes: 800_791,
+  // CPU-backed theme readback cuts Appearance latency 7–20% across both engines.
+  // After the medium-transcript merge: 1,295,862 B + 192 B generated-name headroom.
+  chatBootJsGzipBytes: 1_296_054,
+  // The same theme readback win also affects New Session's shared bundle.
+  // After the merge: 802,351 B + 192 B generated-name headroom.
+  newBootJsGzipBytes: 802_543,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
@@ -67,10 +69,10 @@ const controlUiPerformanceBudgets = {
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
-  // Profile's mobile reservation eliminates 0.114 CLS for 86 B gzip / 398 B raw.
-  // Exact head is 323,604 B gzip / 1,668,829 B raw; retain 64 B headroom.
-  totalCssGzipBytes: 323_668,
-  totalCssRawBytes: 1_668_893,
+  // Separately indexed class lists avoid universal selector buckets.
+  // Measured total CSS is 323,552 B gzip / 1,672,385 B raw; retain 64 B headroom.
+  totalCssGzipBytes: 323_616,
+  totalCssRawBytes: 1_672_449,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

@@ -327,9 +327,13 @@ module.exports.stateMigrations = ${JSON.stringify(actions)}.map(action => ({
             },
           ],
         });
-        await doctor();
+        const result = await doctor();
         expect((await f.read()).plugins).toEqual(config.plugins);
         if (source === "absent") {
+          expect(result.configChanged).toBe(true);
+          expect(result.snapshot.config.plugins?.entries?.[f.pluginId]?.config).toEqual({
+            enabled: false,
+          });
           expect(readDeferredPluginMigrations({ includeDeferred: true })).toEqual([]);
         } else {
           f.pending({ requiresStateMigration: true });
@@ -784,7 +788,7 @@ module.exports.stateMigrations = ${JSON.stringify(actions)}.map(action => ({
         await fs.unlink(path.join(f.root, "doctor-contract-api.cjs"));
         await f.stateless();
         const original = await f.raw();
-        await doctor(prepared);
+        expect((await doctor(prepared)).configChanged).toBe(false);
         expect(readDeferredPluginMigrations()).toEqual([]);
         expect(note).toHaveBeenCalledWith(
           '- Plugin "fixture" version "1.0.0": no plugin migration contract. No migration ran; existing data and settings have been kept.',

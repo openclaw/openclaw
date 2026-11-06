@@ -1,2 +1,2 @@
-# Qualified Markdown input reuse and fallback contracts.
-85
+# Qualified Markdown inputs, companion owners, worker policy, and source admission.
+229
