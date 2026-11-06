@@ -190,7 +190,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/solid/panel-loading-skeleton.tsx":
     case "ui/src/components/solid/sanitized-html.tsx":
     case "ui/src/lib/session-progress-cards.ts":
-    case "ui/src/components/markdown-template-links.ts":
+    case "ui/src/pages/templates/creator-publication.ts":
+    case "src/agents/core-tool-facts.ts":
+    case "src/agents/tools/automations-tool-name.ts":
       // These shared helpers load together in Chat without retaining its renderers.
       return "deferred-ui-support";
     case "ui/src/styles/panel-loading-skeleton.css":
@@ -464,6 +466,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/markdown-icon.ts":
     case "ui/src/components/markdown-json.ts":
     case "ui/src/components/markdown-link-boundary.ts":
+    case "ui/src/components/markdown-link-display.ts":
     case "ui/src/components/markdown-raw-content.ts":
     case "ui/src/components/markdown-render-options.ts":
     case "ui/src/components/markdown-sanitizer.ts":

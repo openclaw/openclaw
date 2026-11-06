@@ -354,7 +354,7 @@ describe("Control UI build chunking", () => {
     const usage = modulePath("../pages/usage/usage-page.tsx");
     const meetings = modulePath("../pages/meetings/meetings-page.tsx");
     const markdownTables = modulePath("../components/markdown-tables.ts");
-    const markdownTemplateLinks = modulePath("../components/markdown-template-links.ts");
+    const markdownLinkDisplay = modulePath("../components/markdown-link-display.ts");
     const markdownBlockPresentation = modulePath("../components/markdown-block-presentation.ts");
     const reactiveFormat = modulePath("../lib/reactive/format.ts");
     const permissionError = modulePath("../lib/permission-error.ts");
@@ -386,6 +386,14 @@ describe("Control UI build chunking", () => {
     const cronPagination = modulePath("../components/cron-jobs-pagination.tsx");
     const agents = modulePath("../pages/agents/agents-page.tsx");
     const agentsCron = modulePath("../pages/agents/panel-cron.tsx");
+    const templates = modulePath("../pages/templates/page.tsx");
+    const creatorFlow = modulePath("../pages/templates/creator-flow.ts");
+    const creatorPublication = modulePath("../pages/templates/creator-publication.ts");
+    const security = modulePath("../pages/config/security.tsx");
+    const uiToolCatalog = modulePath("../lib/agents/tool-catalog.ts");
+    const coreToolCatalog = modulePath("../../../src/agents/tool-catalog.ts");
+    const coreToolFacts = modulePath("../../../src/agents/core-tool-facts.ts");
+    const automationsName = modulePath("../../../src/agents/tools/automations-tool-name.ts");
     const validator = modulePath("../../../packages/normalization-core/src/json-schema.ts");
     const sessions = modulePath("../pages/sessions/sessions-page.tsx");
     const welcomeCopy = modulePath("../i18n/locales/en-chat-welcome.ts");
@@ -424,13 +432,30 @@ describe("Control UI build chunking", () => {
     const inlineStyle = `${optionalStyle}?inline`;
     const entry = "\0cold-load-fixture";
     const sources = new Map([
+      [templates, `export { creator } from ${JSON.stringify(creatorFlow)};`],
+      [creatorFlow, `export { owner as creator } from ${JSON.stringify(creatorPublication)};`],
+      [creatorPublication, "export const owner = () => 'publication';"],
+      [security, `export { catalog } from ${JSON.stringify(uiToolCatalog)};`],
+      [
+        uiToolCatalog,
+        `import { catalog } from ${JSON.stringify(coreToolCatalog)}; import { name } from ${JSON.stringify(automationsName)}; export { catalog }; export const label = name;`,
+      ],
+      [
+        coreToolCatalog,
+        `import { facts } from ${JSON.stringify(coreToolFacts)}; import { name } from ${JSON.stringify(automationsName)}; export const catalog = facts + name;`,
+      ],
+      [
+        coreToolFacts,
+        `import { name } from ${JSON.stringify(automationsName)}; export const facts = name + 'facts';`,
+      ],
+      [automationsName, "export const name = 'automations';"],
       [meetings, `export { table } from ${JSON.stringify(markdownTables)};`],
       [
         markdownTables,
-        `import { parked } from ${JSON.stringify(markdownBlockPresentation)}; import { template } from ${JSON.stringify(markdownTemplateLinks)}; export const table = () => parked() + template;`,
+        `import { parked } from ${JSON.stringify(markdownBlockPresentation)}; import { display } from ${JSON.stringify(markdownLinkDisplay)}; export const table = () => parked() + display;`,
       ],
       [markdownBlockPresentation, "export const parked = () => false;"],
-      [markdownTemplateLinks, "export const template = 'catalog-link';"],
+      [markdownLinkDisplay, "export const display = 'session-title';"],
       [
         usage,
         `import { format } from ${JSON.stringify(reactiveFormat)}; import { denied } from ${JSON.stringify(permissionError)}; export const render = () => format(denied());`,
@@ -443,11 +468,11 @@ describe("Control UI build chunking", () => {
       [permissionCopy, "export const copy = 'permission denied';"],
       [
         entry,
-        `export const chat = () => import(${JSON.stringify(chat)}); export const usage = () => import(${JSON.stringify(usage)}); export const meetings = () => import(${JSON.stringify(meetings)}); export const newSession = () => import(${JSON.stringify(newSession)}); export const portals = () => import(${JSON.stringify(portals)}); export const devices = () => import(${JSON.stringify(devices)}); export const sessions = () => import(${JSON.stringify(sessions)}); export const cron = () => import(${JSON.stringify(cron)}); export const agents = () => import(${JSON.stringify(agents)}); export { validate } from ${JSON.stringify(validator)}; export const talk = () => import(${JSON.stringify(talk)}); export const styleOnly = () => import(${JSON.stringify(styleOnly)}); export const plugins = () => import(${JSON.stringify(pluginLoader)}); export const mutate = () => import(${JSON.stringify(mutations)});`,
+        `export const templates = () => import(${JSON.stringify(templates)}); export const security = () => import(${JSON.stringify(security)}); export const chat = () => import(${JSON.stringify(chat)}); export const usage = () => import(${JSON.stringify(usage)}); export const meetings = () => import(${JSON.stringify(meetings)}); export const newSession = () => import(${JSON.stringify(newSession)}); export const portals = () => import(${JSON.stringify(portals)}); export const devices = () => import(${JSON.stringify(devices)}); export const sessions = () => import(${JSON.stringify(sessions)}); export const cron = () => import(${JSON.stringify(cron)}); export const agents = () => import(${JSON.stringify(agents)}); export { validate } from ${JSON.stringify(validator)}; export const talk = () => import(${JSON.stringify(talk)}); export const styleOnly = () => import(${JSON.stringify(styleOnly)}); export const plugins = () => import(${JSON.stringify(pluginLoader)}); export const mutate = () => import(${JSON.stringify(mutations)});`,
       ],
       [
         chat,
-        `import ${JSON.stringify(sharedStyle)}; import ${JSON.stringify(transcriptStyle)}; import { label } from ${JSON.stringify(sharedUi)}; import { action } from ${JSON.stringify(pluginActions)}; import { people } from ${JSON.stringify(peopleCopy)}; import { patch } from ${JSON.stringify(mutations)}; export { version } from ${JSON.stringify(inlineView)}; export { parked } from ${JSON.stringify(markdownBlockPresentation)}; export { skeleton } from ${JSON.stringify(skeleton)}; export { poll } from ${JSON.stringify(visiblePoll)}; export { card } from ${JSON.stringify(permissionCard)}; export { row as process } from ${JSON.stringify(processRow)}; export { renderRun, renderPreview } from ${JSON.stringify(runFrame)}; export { format } from ${JSON.stringify(reactiveFormat)}; export { denied } from ${JSON.stringify(permissionError)}; export class Chat { label = patch(action(label + people)); } export const openPanel = () => import(${JSON.stringify(optional)});`,
+        `import ${JSON.stringify(sharedStyle)}; import ${JSON.stringify(transcriptStyle)}; import { label } from ${JSON.stringify(sharedUi)}; import { action } from ${JSON.stringify(pluginActions)}; import { people } from ${JSON.stringify(peopleCopy)}; import { patch } from ${JSON.stringify(mutations)}; export { version } from ${JSON.stringify(inlineView)}; export { owner } from ${JSON.stringify(creatorPublication)}; export { facts } from ${JSON.stringify(coreToolFacts)}; export { parked } from ${JSON.stringify(markdownBlockPresentation)}; export { skeleton } from ${JSON.stringify(skeleton)}; export { poll } from ${JSON.stringify(visiblePoll)}; export { card } from ${JSON.stringify(permissionCard)}; export { row as process } from ${JSON.stringify(processRow)}; export { renderRun, renderPreview } from ${JSON.stringify(runFrame)}; export { format } from ${JSON.stringify(reactiveFormat)}; export { denied } from ${JSON.stringify(permissionError)}; export class Chat { label = patch(action(label + people)); } export const openPanel = () => import(${JSON.stringify(optional)});`,
       ],
       [
         newSession,
@@ -630,6 +655,25 @@ describe("Control UI build chunking", () => {
     expect(staticImports(chunks.find((chunk) => chunk.isEntry)!.fileName)).not.toContain(
       markdownChunk.fileName,
     );
+    const startup = staticImports(chunks.find((chunk) => chunk.isEntry)!.fileName);
+    const displayChunk = chunks.find((chunk) => markdownLinkDisplay in chunk.modules)!;
+    expect(staticImports(meetingsChunk.fileName)).toContain(displayChunk.fileName);
+    expect(startup).not.toContain(displayChunk.fileName);
+    for (const [page, helpers] of [
+      [templates, [creatorPublication]],
+      [security, [coreToolFacts, automationsName]],
+    ] as const) {
+      const pageChunk = chunks.find((chunk) => page in chunk.modules)!;
+      const imports = staticImports(pageChunk.fileName);
+      expect(imports).not.toContain(chatChunk.fileName);
+      expect(imports).not.toContain(newSessionChunk.fileName);
+      expect(startup).not.toContain(pageChunk.fileName);
+      for (const helper of helpers) {
+        const chunk = chunks.find((entry) => helper in entry.modules)!;
+        expect(imports).toContain(chunk.fileName);
+        expect(startup).not.toContain(chunk.fileName);
+      }
+    }
     const sessionsChunk = chunks.find((chunk) => sessions in chunk.modules)!;
     expect(staticImports(sessionsChunk.fileName)).not.toContain(chatChunk.fileName);
     expect(staticImports(sessionsChunk.fileName)).not.toContain(newSessionChunk.fileName);

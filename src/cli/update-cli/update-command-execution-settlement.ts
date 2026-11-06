@@ -6,7 +6,10 @@ import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { restoreFailedUpdateDatabases } from "./update-command-database-backup.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
-import { recordMutableUpdateInterruption } from "./update-command-mutable-signals.js";
+import {
+  recordMutableUpdateInterruption,
+  runMutableUpdateRecovery,
+} from "./update-command-mutable-signals.js";
 import {
   recordServiceReconciliationWarning,
   type MutableUpdateExecutionResult,
@@ -68,15 +71,17 @@ export async function settleMutableUpdateResult(
     // databases in place; the rollback owner checks schemas before restoring.
     // Execution has not entered finalization or admitted any candidate Gateway.
     // Restore before schema inspection can hand an incompatible ledger to the candidate.
-    await restoreFailedUpdateDatabases({
-      backup: databaseBackup,
-      result,
-      runId: originalRun.runId,
-      env: settlement.env ?? originalRun.env,
-      assertCurrent: settlement.assertCurrent,
-      assertRollbackSafe: packageTransaction?.assertRollbackSafe,
-      progress: params.progress,
-    });
+    await runMutableUpdateRecovery(() =>
+      restoreFailedUpdateDatabases({
+        backup: databaseBackup,
+        result,
+        runId: originalRun.runId,
+        env: settlement.env ?? originalRun.env,
+        assertCurrent: settlement.assertCurrent,
+        assertRollbackSafe: packageTransaction?.assertRollbackSafe,
+        progress: params.progress,
+      }),
+    );
   }
   return result;
 }
