@@ -4,6 +4,10 @@ import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { handleUpdateCommand } from "./commands-update.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
+import {
+  REPLY_OPERATION_RUN_STATE,
+  type ReplyOperationRunState,
+} from "./reply-operation-run-state.js";
 
 const { dispatch, callGatewayTool, readChannelContextGatewayContextResolver, host } = vi.hoisted(
   () => ({
@@ -214,4 +218,33 @@ it("turns a gateway transport error into a visible failure reply", async () => {
   await expectStopped(
     "⚠️ Couldn't confirm the update. Open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
   );
+});
+
+it.each([
+  { ackDelivered: true, ackQueued: false, outcome: "delivered" },
+  { ackDelivered: true, ackQueued: true, outcome: "delivered" },
+  { ackDelivered: false, ackQueued: true, outcome: "pending" },
+] as const)(
+  "records update acknowledgement custody ($ackDelivered/$ackQueued)",
+  async ({ ackDelivered, ackQueued, outcome }) => {
+    const runState: ReplyOperationRunState = {
+      replyCompletion: { expectation: "required", outcome: "missing" },
+    };
+    params.opts = { [REPLY_OPERATION_RUN_STATE]: runState };
+    dispatch.mockResolvedValueOnce(startedHandoff({ ackDelivered, ackQueued }));
+    await expectStopped();
+    expect(runState.replyCompletion).toEqual({ expectation: "required", outcome });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  },
+);
+
+it("keeps unacknowledged updates visible without claiming custody", async () => {
+  const runState: ReplyOperationRunState = {
+    replyCompletion: { expectation: "required", outcome: "missing" },
+  };
+  params.opts = { [REPLY_OPERATION_RUN_STATE]: runState };
+  dispatch.mockResolvedValueOnce(startedHandoff({ ackDelivered: false, ackQueued: false }));
+  const result = await run();
+  expect(result?.reply?.text).toBeTruthy();
+  expect(runState.replyCompletion?.outcome).toBe("missing");
 });

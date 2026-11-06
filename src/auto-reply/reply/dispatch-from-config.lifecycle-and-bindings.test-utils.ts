@@ -143,7 +143,7 @@ describe("dispatchReplyFromConfig", () => {
 
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(result).toEqual({ queuedFinal: true, counts: { tool: 0, block: 0, final: 0 } });
+    dispatchHarness.expectEmptyDispatch(result, { queuedFinal: true, replyDelivery: "delivered" });
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
     const [event, hookContext] = firstMockCall(
       hookMocks.runner.runMessageReceived,
@@ -1830,7 +1830,7 @@ describe("dispatchReplyFromConfig", () => {
 
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(result).toEqual({ queuedFinal: true, counts: { tool: 0, block: 0, final: 0 } });
+    dispatchHarness.expectEmptyDispatch(result, { queuedFinal: true, replyDelivery: "delivered" });
     expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
       "binding-command-escape-1",
       undefined,

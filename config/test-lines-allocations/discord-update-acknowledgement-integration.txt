@@ -1,0 +1,2 @@
+# PR 192653: joined real SQLite lifecycle custody through producer/core and shipped Discord adapter; synthetic transports and noack recovery control.
+205

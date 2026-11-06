@@ -343,9 +343,12 @@ describe("channel turn pipeline", () => {
     expect(warning).not.toHaveProperty("cause");
   });
 
-  it("does not warn for a steer deferred to the active run", async () => {
+  it.each([
+    { deferredToActiveRun: "steer" },
+    { replyDelivery: "delivered" },
+    { replyDelivery: "pending" },
+  ] as const)("does not warn for owned reply custody %j", async (signal) => {
     const log = vi.fn();
-    const signal = { deferredToActiveRun: "steer" } as const;
     const result = await runPreparedChannelTurn({
       ...fixture.turnContext(storePath),
       log,

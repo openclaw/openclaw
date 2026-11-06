@@ -1,3 +1,4 @@
+import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import {
   callInProcessGatewayTool,
   getInProcessGatewayToolContext,
@@ -13,6 +14,7 @@ import { renderUpdateRunSummary } from "../../infra/update-run-notice.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { commandReply, defineGatewayControlCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
+import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 
 export const handleUpdateCommand: CommandHandler = defineGatewayControlCommand(
   "/update",
@@ -40,6 +42,15 @@ export const handleUpdateCommand: CommandHandler = defineGatewayControlCommand(
       // The Gateway sends the acknowledgement before handing off its process;
       // its durable notice owner also delivers completion and failure reports.
       if (summary.ackDelivered || summary.ackQueued) {
+        const runState = resolveReplyOperationRunState(params.opts);
+        if (runState) {
+          // Lifecycle notices bypass this turn's delivery ledger. Carry their
+          // delivery or durable custody so finalization cannot add a false failure.
+          runState.replyCompletion = resolveReplyCompletion(
+            runState.replyCompletion?.expectation ?? "required",
+            summary.ackDelivered ? "delivered" : "pending",
+          );
+        }
         return { shouldContinue: false };
       }
       if (summary.ok && summary.acknowledgement) {

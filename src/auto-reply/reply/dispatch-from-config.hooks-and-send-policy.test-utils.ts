@@ -32,6 +32,7 @@ import {
 } from "./dispatch-from-config.shared.test-harness.js";
 import {
   dispatchReplyFromConfig,
+  expectEmptyDispatch,
   setNoAbort,
   firstMockCall,
   firstRouteReplyCall,
@@ -766,10 +767,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
 
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
+    expectEmptyDispatch(result, { queuedFinal: false, replyDelivery: "pending" });
   });
 
   it("delivers core no-visible-reply fallback for disallowed empty mentioned group turns", async () => {
@@ -790,9 +788,9 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       isError: true,
       isStatusNotice: true,
     });
-    expect(result).toEqual({
+    expectEmptyDispatch(result, {
       queuedFinal: true,
-      counts: { tool: 0, block: 0, final: 0 },
+      replyDelivery: "delivered",
       noVisibleReplyFallbackDelivered: true,
     });
     expect(result.noVisibleReplyFallbackEligible).toBeUndefined();

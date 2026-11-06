@@ -612,6 +612,9 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   const result = state.attachSourceReplyDeliveryMode({
     queuedFinal,
     counts,
+    ...(completion.outcome === "delivered" || completion.outcome === "pending"
+      ? { replyDelivery: completion.outcome }
+      : {}),
     ...(collaborativeSteeringRefused ? { collaborativeSteeringRefused: true as const } : {}),
     ...(state.routeState.sessionMetadataChangesForResult
       ? { sessionMetadataChanges: state.routeState.sessionMetadataChangesForResult }

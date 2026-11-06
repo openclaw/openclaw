@@ -9,6 +9,7 @@ export type ChannelTurnDispatchResultLike =
         counts: Partial<Record<ReplyDispatchKind, { delivered: number; failedAfterSend: number }>>;
       };
       observedReplyDelivery?: boolean;
+      replyDelivery?: "delivered" | "pending";
       deferredToActiveRun?: "steer" | "followup";
     }
   | null
@@ -32,6 +33,7 @@ const hasVisibleSignal = (
   result: ChannelTurnDispatchResultLike,
   signals: ChannelTurnVisibleDeliverySignals,
 ) =>
+  result?.replyDelivery === "delivered" ||
   result?.observedReplyDelivery === true ||
   signals.observedReplyDelivery === true ||
   hasFinalSignal(signals);

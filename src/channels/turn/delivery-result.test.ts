@@ -116,3 +116,12 @@ it("normalizes visible dispatch checks", () => {
   expect(hasVisibleChannelTurnDispatch(undefined, { observedReplyDelivery: true })).toBe(true);
   expect(resolveChannelTurnDispatchCounts(undefined)).toEqual({ tool: 0, block: 0, final: 0 });
 });
+
+it.each(["delivered", "pending"] as const)(
+  "distinguishes %s reply custody from dispatch counts",
+  (replyDelivery) => {
+    const result = { replyDelivery, counts: { tool: 0, block: 0, final: 0 } };
+    expect(hasVisibleChannelTurnDispatch(result)).toBe(replyDelivery === "delivered");
+    expect(resolveChannelTurnDispatchCounts(result)).toEqual({ tool: 0, block: 0, final: 0 });
+  },
+);

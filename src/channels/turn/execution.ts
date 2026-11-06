@@ -270,7 +270,7 @@ export async function runPreparedChannelTurnCore<
             return;
           }
           const visibleResult = dispatchResult as ChannelTurnDispatchResultLike;
-          if (visibleResult?.deferredToActiveRun) {
+          if (visibleResult?.deferredToActiveRun || visibleResult?.replyDelivery === "pending") {
             return;
           }
           // The canonical visible signal includes observed delivery paths with zero queued counts.
