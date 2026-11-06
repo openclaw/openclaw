@@ -362,7 +362,7 @@ export function getSlashCommandCompletions(
   let commands = options?.inlineOnly
     ? SLASH_COMMANDS.filter(
         (command) =>
-          (command.source === "skill" && command.skillModelVisible === true) ||
+          command.source === "skill" ||
           (executesInlineImmediately(command) && options.allowImmediateInlineCommands !== false),
       )
     : SLASH_COMMANDS;
@@ -430,9 +430,7 @@ export function getSkillDisplayName(command: SlashCommandDef): string {
 export function getSkillCommandCompletions(filter: string): SlashCommandDef[] {
   const lower = normalizeLowercaseStringOrEmpty(filter).normalize("NFC");
   const normalized = lower.replace(/[\s_]+/gu, "-");
-  return SLASH_COMMANDS.filter(
-    (command) => command.source === "skill" && command.skillModelVisible === true,
-  )
+  return SLASH_COMMANDS.filter((command) => command.source === "skill")
     .filter((command) => {
       const displayName = normalizeLowercaseStringOrEmpty(getSkillDisplayName(command)).normalize(
         "NFC",

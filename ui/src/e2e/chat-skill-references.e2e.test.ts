@@ -30,7 +30,7 @@ suite.define(() => {
       },
       async ({ page }) => {
         const commands = [
-          command("autoreview", "Mu\u0308nchen"),
+          { ...command("autoreview", "Mu\u0308nchen"), skillModelVisible: false },
           command("technical_documentation", "Home Caf\u00e9"),
           command("status_report", "Status Report"),
           command("status"),
@@ -60,10 +60,14 @@ suite.define(() => {
             );
           }
         };
-        await composer.fill("Review this with $m\u00fcnchen");
-
+        await composer.fill("$");
         const picker = page.getByRole("listbox", { name: "Skill references" });
         await picker.waitFor({ state: "visible" });
+        await screenshot("skill-reference-manual-only.png", picker);
+        await expect
+          .poll(() => picker.getByRole("option").allTextContents())
+          .toContainEqual(expect.stringContaining("Mu\u0308nchen"));
+        await composer.fill("Review this with $m\u00fcnchen");
         await expect
           .poll(() => picker.getByRole("option").allTextContents())
           .toEqual([expect.stringContaining("Mu\u0308nchen")]);
