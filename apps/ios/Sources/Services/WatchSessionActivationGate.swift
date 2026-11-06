@@ -70,7 +70,7 @@ final class WatchMessageSendCompletion: @unchecked Sendable {
 func sendReachableWatchMessage(
     _ payload: [String: Any],
     with session: WCSession,
-    isolation: isolated (any Actor)? = #isolation) async throws
+    isolation _: isolated (any Actor)? = #isolation) async throws
 {
     // WatchConnectivity callbacks use their own executor and can race despite their
     // documented exactly-once contract; only the first callback owns this continuation.
