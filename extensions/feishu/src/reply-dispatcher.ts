@@ -390,8 +390,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
   };
 
-  // Core moves a block's assistantMessageIndex with every message start, so it runs at previewEpoch
-  // plus an offset that delivered blocks reveal. A block behind it comes from an earlier message.
+  // Within a subscription, core's block index runs at previewEpoch plus a learned offset.
+  // A restarted subscription can reuse an index, so the index alone is not a unique source ID.
   let sourceIndexOffset = 0;
   const isCurrentSource = (source: number | undefined) => {
     if (source === undefined) {
@@ -401,13 +401,33 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     return source - sourceIndexOffset === previewEpoch;
   };
 
-  // An earlier message's block that an accepted card already shows is consumed there, not appended.
-  let earlierRest = "";
-  const consumeEarlierBlock = (text: string) => {
+  // An accepted earlier copy leaves a matching current preview occurrence free to cover its block.
+  const earlierRests = new Map<number, string>();
+  let openEarlierRest = "";
+  let openEarlierEpoch = -1;
+  let openEarlierSource = -1;
+  const consumeEarlierBlock = (text: string, source: number | undefined) => {
+    const earlierRest = source === undefined ? "" : (earlierRests.get(source) ?? "");
     const rest = earlierRest.startsWith(text) ? earlierRest : earlierRest.trimStart();
-    const shown = rest.startsWith(text);
-    earlierRest = shown ? rest.slice(text.length) : earlierRest;
-    return shown;
+    const current = previewText.slice(previewBlockOffset);
+    const currentRest = current.startsWith(text) ? current : current.trimStart();
+    const currentMatches = currentRest.startsWith(text);
+    if (source !== undefined && rest.startsWith(text)) {
+      earlierRests.set(source, rest.slice(text.length));
+      if (currentMatches) {
+        queueStreamingUpdate(text, "delta");
+      }
+      return currentMatches;
+    }
+    const openRest = openEarlierRest.startsWith(text)
+      ? openEarlierRest
+      : openEarlierRest.trimStart();
+    const sameOpen = source === openEarlierSource && openEarlierEpoch + 1 === previewEpoch;
+    if (!hasStreamingFinalText && sameOpen && openRest.startsWith(text) && currentMatches) {
+      openEarlierRest = "";
+      return true;
+    }
+    return false;
   };
 
   const queueStreamingUpdate = (nextText: string, mode: "snapshot" | "delta" | "append") => {
@@ -500,6 +520,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   };
 
   const resetStreamingState = () => {
+    openEarlierRest = "";
     streaming = null;
     streamingStartPromise = null;
     partialUpdateQueue = Promise.resolve();
@@ -1424,9 +1445,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               // Some runtimes emit block payloads without onPartial/final callbacks.
               // Mirror block text into streamText so onIdle close still sends content.
               const consumedBefore = previewBlockOffset;
-              // An earlier message's block is mirrored, but may not consume this message's preview.
+              // An earlier block may use this preview only when its earlier copy was accepted.
               const mode = isCurrentSource(info.assistantMessageIndex) ? "delta" : "append";
-              if (mode === "delta" || !consumeEarlierBlock(text)) {
+              if (mode === "delta" || !consumeEarlierBlock(text, info.assistantMessageIndex)) {
                 queueStreamingUpdate(text, mode);
               }
               if (previewBlockOffset > consumedBefore) {
@@ -1585,7 +1606,23 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             // correct a card opened after this start. Freeze the earlier prose without that credit.
             undoProvisionalCredit?.();
             if (closedPreviewText) {
-              earlierRest = closedPreviewText.slice(previewBlockOffset);
+              earlierRests.set(
+                previewEpoch + sourceIndexOffset,
+                closedPreviewText.slice(previewBlockOffset),
+              );
+            }
+            if (
+              !hasStreamingFinalText &&
+              streaming?.isActive() &&
+              previewBlockOffset > 0 &&
+              previewText &&
+              streamText.endsWith(continuedPreview(previewText))
+            ) {
+              openEarlierRest = previewText.slice(
+                Math.max(previewBlockOffset, closedPreviewText.length),
+              );
+              openEarlierEpoch = previewEpoch;
+              openEarlierSource = previewEpoch + sourceIndexOffset;
             }
             // Snapshots cover one assistant message. Freeze earlier prose at the
             // source boundary so tool continuations cannot replace it.
