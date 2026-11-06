@@ -14,6 +14,7 @@ import {
   signStatement,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { reserveTestPortListener } from "../../test-utils/port-claims.js";
+import { VERSION } from "../../version.js";
 import { openclawIdHandlers } from "../server-methods/openclaw-id.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
 import { createOpenClawIdAuthority } from "./authority.js";
@@ -74,11 +75,22 @@ describe("accountless node authority", () => {
       client: { internal: { isLocalClient: true } },
       context: {
         openclawIdService: service,
-        getRuntimeConfig: () => ({ gateway: { openclawId: { enabled: true } } }),
+        getRuntimeConfig: () => ({
+          gateway: {
+            openclawId: { enabled: true, discoveryUrl: "https://directory.example.test" },
+          },
+        }),
       },
       respond,
     } as unknown as GatewayRequestHandlerOptions);
-    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ status: "applied" }));
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        status: "applied",
+        discoveryUrl: "https://directory.example.test",
+        version: VERSION,
+      }),
+    );
     await claw.authority.redeemNode(redemption);
     const pending = await service.linkStatus();
     expect(pending.nodeInvites?.[0]?.pending).toMatchObject({

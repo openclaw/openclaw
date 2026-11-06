@@ -149,6 +149,23 @@ test("approves the reviewed subset, prompts for additions, and never re-pairs af
   expect(
     (await listDevicePairing()).pending.find((request) => request.deviceId === deviceId)?.silent,
   ).not.toBe(true);
+  const requests = await listDevicePairing();
+  const repair = requests.pending.find((request) => request.deviceId === deviceId)!;
+  await approveDevicePairing(repair.requestId, { callerScopes: ["operator.admin"] });
+  expect((await connect(peer, path)).ok).toBe(true);
+  expect((await getPairedDevice(deviceId))?.tokens?.node?.approval?.peerKey).toBe(peer);
+  // A second installation using the same admitted W also remains manual, but binds on connect.
+  const secondPath = identityPath("ocid-node-manual-second");
+  const secondId = loadOrCreateDeviceIdentity({ path: secondPath }).deviceId;
+  expect((await connect(peer, secondPath)).ok).toBe(false);
+  const secondRequest = (await listDevicePairing()).pending.find(
+    (request) => request.deviceId === secondId,
+  )!;
+  await approveDevicePairing(secondRequest.requestId, { callerScopes: ["operator.admin"] });
+  expect((await connect(peer, secondPath)).ok).toBe(true);
+  expect((await removeNodePairings([peer])).toSorted()).toEqual([deviceId, secondId].toSorted());
+  expect(await getPairedDevice(deviceId)).toBeNull();
+  expect(await getPairedDevice(secondId)).toBeNull();
   expect(ssh).not.toHaveBeenCalled();
 });
 

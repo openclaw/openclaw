@@ -384,7 +384,7 @@ export function createOpenClawIdService(params: {
     if (closed) {
       return;
     }
-    await effects?.reconcileNodePairings?.(owner.isCurrentNodeListing);
+    await effects?.reconcileNodePairings?.((source) => owner.isCurrentNodeListing(source));
   };
 
   // Performs the side effects of an accepted write in a fixed order: find the

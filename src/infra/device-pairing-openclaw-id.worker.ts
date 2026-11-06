@@ -58,7 +58,7 @@ export function approveOpenClawIdNodeInWorker(
       .insertInto("config_machine_state")
       .values({
         state_key: receiptKey(input.peerKey),
-        value_json: JSON.stringify({ deviceId: input.deviceId, publicKey: input.publicKey }),
+        value_json: "true",
         updated_at_ms: input.nowMs,
       })
       .onConflict((conflict) => conflict.column("state_key").doNothing())
@@ -97,42 +97,24 @@ export function approveOpenClawIdNodeInWorker(
   return result;
 }
 
-/** Remove only the role granted by these peers; receipts remain permanent suppression tombstones. */
-export function removeOpenClawIdNodePairingsInWorker(
-  db: EngineConnection,
-  input: {
-    peerKeys: readonly string[];
-    sources?: readonly OpenClawIdNodePairingProvenance[];
-    nowMs: number;
-  },
-): string[] {
-  const kysely = getNodeSqliteKysely<DB>(db);
+/** Remove every peer-bound node role, including manual re-pairings; suppression receipts stay. */
+export function removeOpenClawIdNodePairingsInWorker(input: {
+  peerKeys: readonly string[];
+  sources?: readonly OpenClawIdNodePairingProvenance[];
+  nowMs: number;
+}): string[] {
+  const peers = new Set(input.peerKeys);
   const removed: string[] = [];
-  for (const peerKey of new Set(input.peerKeys)) {
-    const row = executeSqliteQueryTakeFirstSync(
-      db,
-      kysely
-        .selectFrom("config_machine_state")
-        .select("value_json")
-        .where("state_key", "=", receiptKey(peerKey)),
-    );
-    if (!row) {
-      continue;
-    }
-    // SAFETY: This transaction is the sole writer of the typed receipt payload.
-    const receipt = JSON.parse(row.value_json) as { deviceId: string; publicKey: string };
-    const device = loadDevicePairingStateForMutation(input.nowMs).pairedByDeviceId[
-      receipt.deviceId
-    ];
-    const provenance = device?.tokens?.node?.approval;
+  const state = loadDevicePairingStateForMutation(input.nowMs);
+  for (const device of Object.values(state.pairedByDeviceId)) {
+    const provenance = device.tokens?.node?.approval;
     if (
-      !device ||
-      device.publicKey !== receipt.publicKey ||
-      provenance?.peerKey !== peerKey ||
+      !provenance ||
+      !peers.has(provenance.peerKey) ||
       (input.sources &&
         !input.sources.some(
           (source) =>
-            source.peerKey === peerKey &&
+            source.peerKey === provenance.peerKey &&
             source.authority.clawId === provenance.authority.clawId &&
             source.authority.rootPub === provenance.authority.rootPub &&
             source.authority.listedSeq === provenance.authority.listedSeq,
@@ -142,12 +124,12 @@ export function removeOpenClawIdNodePairingsInWorker(
     }
     if (
       removePairedDeviceRoleInWorker({
-        deviceId: receipt.deviceId,
+        deviceId: device.deviceId,
         role: "node",
         nowMs: input.nowMs,
       })
     ) {
-      removed.push(receipt.deviceId);
+      removed.push(device.deviceId);
     }
   }
   return removed;

@@ -123,6 +123,27 @@ addresses are never evidence for trusted-CIDR or SSH-verified auto-approval.
 
 For connection setup, see [OpenClaw ID nodes](/gateway/remote#openclaw-id-nodes-labs).
 
+### Gateway API for owner clients
+
+- Register the signed cap with `openclawId.authority`, action
+  `register_node_invite`, using `{cap, proofKey}`; `proofKey` is base64url.
+  Owner tunnel clients can also use `POST /_openclaw-id/v1/node-invites` with
+  `{cap, proof_key}`. The RPC response includes `discoveryUrl` (null when not
+  configured) and `version` so the UI can build ready-to-paste commands locally.
+  The secret-bearing join link stays in the browser and is never sent to this
+  RPC. Both UI-generated commands must include the configured `--discovery-url`;
+  there is no inferred Discovery default.
+- Approve, remove, or deny through the same authority RPC's `submit` action,
+  carrying an owner-signed `MembershipChange` (`add_node`, `remove_node`, or
+  `deny_invite`). The Gateway verifies the signer, capability, and sequence.
+- Read `openclawId.people` for the owner-only `{link}` projection. `link.nodes`
+  lists admitted nodes; `link.nodeInvites` includes each pending description,
+  `verificationCode`, `peerKey`, `requestedAt`, and `decideBy`. Proof keys are
+  never returned. Tunnel membership uses the field names `nodes` and
+  `node_invites`.
+- Refetch this view on the existing keyless `openclawId.people.changed` event.
+  Receiving an event or opening the view must not submit an approval.
+
 ## CLI workflow (headless friendly)
 
 For manual device admission, first run on the Gateway:
