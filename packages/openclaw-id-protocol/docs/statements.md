@@ -103,7 +103,7 @@ MembershipChange targets:
 | `remove`           | account_id                                                                        |
 | `set_role`         | account_id, role                                                                  |
 | `revoke_device`    | peer_key (one member browser)                                                     |
-| `add_owner_device` | cert: the new device's OwnerDeviceCert (signed by R or a current owner device)    |
+| `add_owner_device` | cert: the new device's OwnerDeviceCert (signed by the change's own signer)        |
 | `deny_invite`      | invite_id (declines a pending redemption; the invite is consumed)                 |
 
 `seq` must equal the Gateway's current membership seq + 1 (compare-and-set). This stops a
@@ -143,11 +143,17 @@ Each claw's Gateway keeps an **allowlist**: the owner devices and members it has
 nothing else. There are no certificate chains and no list of revoked keys.
 
 - **Approval.** A new owner device needs a certificate signed by R (the recovery kit) or by a
-  device currently on the claw's owner list with `approve_device`. The Gateway stores
-  `approved_by` with the device (`root`, or the approver's fingerprint) and its granted
-  `caps`: an owner device grants only caps it holds itself, and re-adding a listed device
-  through an owner device never raises its caps (`caps_escalation`). R may grant any caps.
-  Signing checks read the stored caps, not the certificate.
+  device currently on the claw's owner list with `approve_device`, carried in a
+  MembershipChange signed by the same key (else `wrong_signer`). The change's current
+  authority is the grant's authority, so an old R-signed certificate carried by an owner
+  device's change grants nothing. The Gateway stores `approved_by` with the device (`root`, or
+  the approver's fingerprint) and its granted `caps`: an owner device grants only caps it
+  holds itself. An owner device may re-add (to change peer keys or lower caps) only itself or
+  a device it approved, directly or through devices it approved (else `target_mismatch`). The
+  re-add never raises caps (`caps_escalation`) and keeps `approved_by`, so no device can move
+  a device, or attach a peer key, outside the removal cascade below. R may re-add any device
+  and grant any caps; a device R re-adds is recorded as approved by `root`. Signing checks read the
+  stored caps, not the certificate.
 - **Removal deletes.** Revoking an owner device (a Revocation with `target_kind`
   `owner_device`) deletes it **and every device it approved**, directly or through devices it
   approved, computed from `approved_by` at removal time. A `peer_key` Revocation removes that
@@ -268,10 +274,15 @@ A snapshot from the future is never stored. The Gateway re-signs at least every
 `SNAPSHOT_REPUBLISH_SECONDS` (1 h), so an honest claw's snapshot is always well inside the 3 h
 window. A K_srv rotation must publish the new binding and a snapshot with its binding_seq together.
 
-**Residual risk:** an attacker holding both the old K_srv and the old K_gw can sign fresh snapshots
-for the old binding until the client has seen a snapshot for the newer binding. Closing it needs
-freshness from the live Gateway over the tunnel (a K_gw-signed answer to a client nonce), which v1
-does not have. A K_gw holder can also deny service to an origin for good by signing an inflated
+**Accepted v1 limitation:** an attacker holding both the old K_srv and the old K_gw can sign
+fresh snapshots for the old binding until the client has pinned the newer binding.
+A K_gw-signed answer to a client nonce would not close this: it shows that a holder of that K_gw
+is live, not that the K_gw is still the claw's current key, and this attacker holds the old
+K_gw. Closing it needs evidence of the current binding that does not depend on the replaced
+keys, which v1 does not have. If the attacker can also choose what the client reads from
+Discovery, the old K_gw can sign a RootReset to a root of the attacker's choosing, so a browser
+whose pin stored that K_gw gets `owner_reset` and is asked to set itself up again. That browser
+opens no connection and releases no credential. A K_gw holder can also deny service to an origin for good by signing an inflated
 binding_seq; K_gw can already refuse service.
 
 ## Test vectors
@@ -303,8 +314,8 @@ node --import ./scripts/tsx.mjs -e 'const { buildStatementVectors } = await impo
 - Revocation carries `claw_id` and `seq` and covers only keys listed at or before that seq, so
   a replayed revocation cannot remove a key that was approved again.
 - An InviteCap lasts at most a week, and a claw keeps at most 100 invites.
-- Owner devices are added at a claw with `MembershipChange { op: "add_owner_device", cert }`;
-  a pending redemption is declined with `{ op: "deny_invite", invite_id }`.
+- Owner devices are added at a claw with `MembershipChange { op: "add_owner_device", cert }`,
+  where the change and the certificate have the same signer; a pending redemption is declined with `{ op: "deny_invite", invite_id }`.
 - MembershipChange.seq is a compare-and-set on the Gateway's seq.
 - New statement type `InviteRedemption` (spec section 6.3 step 2), self-signed by D_I.
 - MembershipSnapshot adds `owner_devices` (key and granted caps), `owner_peer_keys` and
