@@ -125,12 +125,13 @@ it("finishes Windows fallback partial writes through the same descriptor", async
       },
     }),
   };
-  const { prepared: stage, guarded } = await prepare(f, io);
+  const { prepared: stage, guarded } = await prepare(f, io, { ...f.options, validateUtf8: true });
   await using prepared = stage;
   expect(prepared.publish().method).toBe("copy-fallback");
   guarded.assertPublishedIdentity();
   expect(calls).toBeGreaterThan(1);
-  expect(fs.readFileSync(f.target, "utf8")).toBe(content);
+  expect(fs.readFileSync(f.target)).toEqual(Buffer.from(content));
+  expect(fs.readFileSync(`${f.target}.bak`)).toEqual(Buffer.from(original));
 });
 
 it("does not swallow a transient assertion failure during awaited backup preparation", async () => {

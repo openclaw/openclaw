@@ -436,8 +436,10 @@ export function assertBaseSnapshotStillCurrent(
   const expectedHash = snapshot.raw === null ? null : hashConfigRaw(snapshot.raw);
   let currentRaw: string | null = null;
   let currentExists = true;
+  // Owned fallback bytes may end mid-character until the next short write completes.
   try {
-    currentRaw = readSource(configPath);
+    currentRaw =
+      snapshot.raw === null ? ioFs.readFileSync(configPath, "utf-8") : readSource(configPath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
       throw error;
