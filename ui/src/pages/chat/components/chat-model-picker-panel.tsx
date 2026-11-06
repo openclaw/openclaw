@@ -24,7 +24,11 @@ import {
   handleModelSearchKeydown,
   updateModelSearch,
 } from "./chat-model-picker-search-view.ts";
-import { ChatModelSearchContext, type ChatModelSearchCatalog } from "./chat-model-picker-search.ts";
+import {
+  chatModelSearchState,
+  ChatModelSearchContext,
+  type ChatModelSearchCatalog,
+} from "./chat-model-picker-search.ts";
 import { createModelPickerWindow } from "./chat-model-picker-window.tsx";
 import type { ChatModelPickerParams } from "./chat-model-picker.tsx";
 import { ChatModelProviderHeading } from "./chat-model-provider-heading.tsx";
@@ -445,7 +449,9 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
                     onToggle: (event) => {
                       // Saving disables every heart; move focus before the browser drops it.
                       if (event.currentTarget === document.activeElement) {
-                        search?.focusInput();
+                        chatModelSearchState(event.currentTarget)?.input?.focus({
+                          preventScroll: true,
+                        });
                       }
                       favorites.toggle(modelPickerOptionKey(props.entry));
                     },
