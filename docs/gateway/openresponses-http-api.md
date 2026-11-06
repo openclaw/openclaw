@@ -40,6 +40,12 @@ If a routed session is archived, non-streaming requests return HTTP `409` with
 requests report the same error in the stream. Unarchive the session before
 retrying; the rejected request preserves its archived state and history.
 
+If session state changes or is invalidated while work is starting, non-streaming
+requests return HTTP `409` with `session_conflict_error`. Streaming requests keep
+HTTP `200` and report the conflict in `response.failed` before `[DONE]`.
+Check the session state before retrying: the error does not guarantee that the
+request had no earlier effects, and the Gateway does not automatically replay it.
+
 If the request includes an OpenResponses `user` string, the Gateway derives a stable session key from it so repeated calls can share an agent session.
 
 `previous_response_id` reuses the earlier response's session when the request stays within the same agent/user/requested-session scope (matched by auth subject, agent id, and `x-openclaw-session-key`).

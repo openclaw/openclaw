@@ -7,6 +7,10 @@ import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { resetConfigRuntimeState, type GatewayAuthConfig } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  createSessionWorkStartChangedError,
+  SessionWorkStartInvalidatedError,
+} from "../config/sessions/work-start-error.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import * as agentEvents from "../infra/agent-events.js";
 import { getGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
@@ -926,6 +930,43 @@ describe("OpenResponses HTTP API (e2e)", () => {
         await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
       } finally {
         unsubscribe();
+      }
+    },
+  );
+
+  it.each(
+    [
+      createSessionWorkStartChangedError("private-session"),
+      new SessionWorkStartInvalidatedError("private-session invalidated"),
+      { code: "SESSION_WORK_START_CHANGED", message: "private-session changed" },
+      { code: "SESSION_WORK_START_INVALIDATED", message: "private-session invalidated" },
+    ].flatMap((error) => [false, true].map((stream) => ({ error, stream }))),
+  )(
+    "reports a sanitized session conflict ($error.code, stream=$stream)",
+    async ({ error, stream }) => {
+      agentCommandMock.mockClear();
+      agentCommandMock.mockRejectedValueOnce(error);
+      const res = await post({ stream });
+      expect(res.status).toBe(stream ? 200 : 409);
+      const { text, events, response } = await readResponse(res, stream, "response.failed");
+      expect(response).toMatchObject({
+        status: "failed",
+        error: {
+          code: "session_conflict_error",
+          message:
+            "Session changed or was invalidated while starting work. Check the session state before retrying.",
+        },
+      });
+      expect(text).not.toContain("private-session");
+      expect(agentCommandMock).toHaveBeenCalledTimes(1);
+      if (stream) {
+        expect(
+          collectSseEventTypes(events).filter((type) =>
+            ["response.failed", "response.completed", "response.incomplete"].includes(type),
+          ),
+        ).toEqual(["response.failed"]);
+        expect(events.filter((event) => event.data === "[DONE]")).toHaveLength(1);
+        expect(events.at(-1)?.data).toBe("[DONE]");
       }
     },
   );

@@ -16,6 +16,10 @@ import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { recordAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  createSessionWorkStartChangedError,
+  SessionWorkStartInvalidatedError,
+} from "../config/sessions/work-start-error.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { getGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
@@ -1348,6 +1352,43 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       expect(body).not.toContain("raw provider detail should stay private");
     }
   });
+
+  it.each(
+    [
+      createSessionWorkStartChangedError("private-session"),
+      new SessionWorkStartInvalidatedError("private-session invalidated"),
+      { code: "SESSION_WORK_START_CHANGED", message: "private-session changed" },
+      { code: "SESSION_WORK_START_INVALIDATED", message: "private-session invalidated" },
+    ].flatMap((error) => [false, true].map((stream) => ({ error, stream }))),
+  )(
+    "reports a sanitized session conflict ($error.code, stream=$stream)",
+    async ({ error, stream }) => {
+      agentCommandMock.mockClear();
+      agentCommandMock.mockRejectedValueOnce(error);
+      const res = await postChatCompletions(enabledPort, chatRequest({ stream }));
+      expect(res.status).toBe(stream ? 200 : 409);
+      const text = await res.text();
+      const expected = {
+        error: {
+          type: "session_conflict_error",
+          message:
+            "Session changed or was invalidated while starting work. Check the session state before retrying.",
+        },
+      };
+      if (stream) {
+        const data = parseSseDataLines(text);
+        const chunks = parseChunks(data);
+        expect(chunks.filter((chunk) => "error" in chunk)).toEqual([expected]);
+        expect(streamChoices(chunks).every((choice) => choice.finish_reason === null)).toBe(true);
+        expect(data.filter((line) => line === "[DONE]")).toHaveLength(1);
+        expect(data.at(-1)).toBe("[DONE]");
+      } else {
+        expect(JSON.parse(text)).toEqual(expected);
+      }
+      expect(text).not.toContain("private-session");
+      expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it.each(streamingFailureCases)(
     "rejects resolved streaming agent failures from $label",
