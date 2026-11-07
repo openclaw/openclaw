@@ -44,15 +44,10 @@ type RunwayTaskDetailResponse = {
 
 type RunwaySourceAsset = Pick<VideoGenerationSourceAsset, "buffer" | "mimeType" | "url">;
 
-const TEXT_ONLY_MODELS = new Set(["gen4.5", "veo3.1", "veo3.1_fast", "veo3"]);
-const IMAGE_MODELS = new Set([
-  "gen4.5",
-  "gen4_turbo",
-  "gen3a_turbo",
-  "veo3.1",
-  "veo3.1_fast",
-  "veo3",
-]);
+const VEO_MODELS = new Set(["veo3.1", "veo3.1_fast", "veo3"]);
+const VEO_DURATION_SECONDS = new Set([4, 6, 8]);
+const TEXT_ONLY_MODELS = new Set(["gen4.5", ...VEO_MODELS]);
+const IMAGE_MODELS = new Set(["gen4.5", "gen4_turbo", "gen3a_turbo", ...VEO_MODELS]);
 const VIDEO_MODELS = new Set(["gen4_aleph"]);
 const RUNWAY_TEXT_ASPECT_RATIOS = ["16:9", "9:16"] as const;
 const RUNWAY_EDIT_ASPECT_RATIOS = ["1:1", "16:9", "9:16", "3:4", "4:3", "21:9"] as const;
@@ -120,13 +115,20 @@ function buildCreateBody(
   req: VideoGenerationRequest,
   endpoint: "/v1/text_to_video" | "/v1/image_to_video" | "/v1/video_to_video",
 ): Record<string, unknown> {
+  const model = normalizeOptionalString(req.model) ?? DEFAULT_RUNWAY_MODEL;
   const normalizedDuration = normalizeVideoGenerationDuration({
     durationSeconds: req.durationSeconds,
   });
-  const duration =
+  let duration =
     normalizedDuration === undefined || !Number.isSafeInteger(req.durationSeconds)
       ? 5
       : Math.max(2, Math.min(MAX_DURATION_SECONDS, normalizedDuration));
+  if (VEO_MODELS.has(model)) {
+    if (req.durationSeconds !== undefined && !VEO_DURATION_SECONDS.has(req.durationSeconds)) {
+      throw new Error(`Runway ${model} requires durationSeconds to be 4, 6, or 8.`);
+    }
+    duration = req.durationSeconds ?? 4;
+  }
   const hasReferenceInput =
     (req.inputImages?.length ?? 0) > 0 || (req.inputVideos?.length ?? 0) > 0;
   const ratio =
@@ -136,7 +138,6 @@ function buildCreateBody(
   if (!hasReferenceInput && ratio !== "1280:720" && ratio !== "720:1280") {
     throw new Error("Runway text-to-video currently supports only 16:9 or 9:16 output ratios.");
   }
-  const model = normalizeOptionalString(req.model) ?? DEFAULT_RUNWAY_MODEL;
   if (endpoint !== "/v1/video_to_video") {
     const imageToVideo = endpoint === "/v1/image_to_video";
     const models = imageToVideo ? IMAGE_MODELS : TEXT_ONLY_MODELS;
