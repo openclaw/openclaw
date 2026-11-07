@@ -126,6 +126,127 @@ async function fixture(sessionId = "one", agentId = "main", messages?: Transcrip
 }
 
 describe("memory transcript read adapters", () => {
+  it("does not revive an abandoned branch when admission clips the current active leaf", async () => {
+    const { scope, actor, binding } = await fixture("branched-admission", "main", [
+      message("root", null, "user", "Root"),
+      control("custom_message", "root-carrier", "root", {
+        customType: "openclaw.runtime-context",
+        content: "Root facts",
+        display: false,
+      }),
+      message("abandoned", "root-carrier", "user", "Wrong branch"),
+      control("custom_message", "abandoned-carrier", "abandoned", {
+        customType: "openclaw.runtime-context",
+        content: "Wrong context",
+        display: false,
+      }),
+      message("current", "root-carrier", "user", "Current input"),
+    ]);
+    const anchor = actor
+      .snapshot(authority)!
+      .transcript.anchors.find((entry) => entry.entryId === "current");
+    assert(anchor);
+    const receipt = { ...anchor, role: "user" as const, logicalTurnId: "branch-turn" };
+    const read = () =>
+      withSessionTranscriptDeltaReader(scope, (reader) =>
+        reader.replayGroups({ entryIds: ["root", "abandoned", "current"] }),
+      );
+    const result = await runWithSessionActorStorage(binding, () =>
+      runWithSessionTranscriptReadFence(receipt, read),
+    );
+    expect(result).toMatchObject([
+      { entryId: "root", message: { content: "Root" }, carriers: [{ content: "Root facts" }] },
+    ]);
+    await expect(
+      runWithSessionTranscriptReadFence({ ...receipt, generation: "stale" }, read),
+    ).rejects.toThrow("anchor changed");
+  });
+
+  it("reads bounded canonical user/carrier groups from memory without a database or worker", async () => {
+    const { scope } = await fixture("replay", "main", [
+      message("root", null, "user", "Root"),
+      message("abandoned", "root", "user", "Wrong branch"),
+      control("custom_message", "abandoned-carrier", "abandoned", {
+        customType: "openclaw.runtime-context",
+        content: "Wrong context",
+        display: false,
+      }),
+      message("selected", "root", "user", "Selected"),
+      control("thinking_level_change", "thinking", "selected", { thinkingLevel: "high" }),
+      control("custom", "snapshot", "thinking", {
+        customType: "model-snapshot",
+        data: { padding: "x".repeat(20_000) },
+      }),
+      control("custom_message", "runtime", "snapshot", {
+        customType: "openclaw.runtime-context",
+        content: "Runtime facts",
+        display: false,
+      }),
+      control("session_info", "info", "runtime", { name: "Canonical replay" }),
+      control("custom_message", "update", "info", {
+        customType: "openclaw.system-update",
+        content: "Operator facts",
+        display: false,
+      }),
+      message("assistant", "update", "assistant", "x".repeat(20_000)),
+      control("custom_message", "later-carrier", "assistant", {
+        customType: "openclaw.runtime-context",
+        content: "Later context",
+        display: false,
+      }),
+      {
+        ...message("pending", "later-carrier", "assistant", "Background result"),
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "automation-result",
+          content: "Background result",
+          excludeFromContext: true,
+          openclawModelPlacement: "pending",
+        },
+      },
+      message("placed-user", "pending", "user", "Before placement"),
+      control("custom", "placement", "placed-user", {
+        customType: "openclaw.background-result-placement",
+        data: { afterEntryId: "placed-user", resultEntryIds: ["pending"] },
+      }),
+      control("custom_message", "placed-carrier", "placement", {
+        customType: "openclaw.runtime-context",
+        content: "After placement",
+        display: false,
+      }),
+    ]);
+    await withSessionTranscriptDeltaReader(scope, async (reader) => {
+      const result = await reader.replayGroups({
+        entryIds: [
+          "selected",
+          "root",
+          "abandoned",
+          "assistant",
+          "missing",
+          "selected",
+          "placed-user",
+        ],
+        maxBytes: 2000,
+      });
+      expect(result).toMatchObject([
+        {
+          entryId: "selected",
+          message: { role: "user", content: "Selected" },
+          carriers: [
+            { role: "custom", content: "Runtime facts" },
+            { role: "custom", content: "Operator facts" },
+          ],
+        },
+        { entryId: "root", message: { role: "user", content: "Root" }, carriers: [] },
+        { entryId: "placed-user", message: { content: "Before placement" }, carriers: [] },
+      ]);
+      await expect(reader.replayGroups({ entryIds: ["selected"], maxBytes: 100 })).rejects.toThrow(
+        "exceeds maxBytes",
+      );
+    });
+  });
+
   it("reads sparse post-reset user context without custom messages during a reply append", async () => {
     const { binding, scope, append } = await fixture("snapshot", "main", [
       message("before", null, "user", "Before reset"),
@@ -348,6 +469,9 @@ describe("memory transcript read adapters", () => {
           const visible = await reader.visible({});
           assert(visible.kind === "page");
           expect(ids(visible.events.map((row) => row.event))).toEqual(["user", "answer"]);
+          expect(await reader.replayGroups({ entryIds: ["user", "current-user"] })).toMatchObject([
+            { entryId: "user", message: { role: "user", content: "Question" }, carriers: [] },
+          ]);
         });
       }),
     );
