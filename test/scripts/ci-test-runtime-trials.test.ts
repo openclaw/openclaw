@@ -39,6 +39,7 @@ const sessionWeakRefFiles = [
 ];
 const uiRetentionFiles = [
   "ui/src/pages/chat/chat-pane-resident-navigation.test.ts",
+  "ui/src/pages/chat/components/chat-transcript-message-index-long-runs.test.ts",
   "ui/src/components/desktop/desktop-mobile-keyboard-retention.test.ts",
   "ui/src/pages/chat/components/chat-transcript-layout-retention.test.ts",
   "ui/src/pages/chat/session-snapshot-store-retention.test.ts",
