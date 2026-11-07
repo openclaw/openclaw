@@ -561,7 +561,7 @@ describe("mobile release CI tools", () => {
     expect(Object.keys(workflow.on)).toEqual(["workflow_dispatch"]);
     expect(workflow.on.workflow_dispatch.inputs.operation).toMatchObject({
       default: "boot",
-      options: ["boot", "screenshots"],
+      options: ["boot", "screenshots", "parallel-benchmark"],
     });
     expect(workflow.permissions).toEqual({ contents: "read" });
     for (const activeJob of [validationJob, job]) {
@@ -1107,7 +1107,7 @@ describe("mobile release CI tools", () => {
     });
     expect(source).not.toMatch(/\$\{\{\s*secrets\./u);
     expect(source).not.toContain("environment:");
-    expect(source).not.toMatch(/\b(?:pnpm|gradle|fastlane)\b/iu);
+    expect(JSON.stringify([validationJob, job])).not.toMatch(/\b(?:pnpm|gradle|fastlane)\b/iu);
     expect(source).not.toMatch(/apps-signing|MATCH_PASSWORD|GOOGLE_PLAY|upload-and-record/iu);
   });
 
