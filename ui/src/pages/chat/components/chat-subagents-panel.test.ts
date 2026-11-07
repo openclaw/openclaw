@@ -528,6 +528,17 @@ it.each([false, true])(
     expect(mark()).toHaveLength(2);
     expect(mark()[0]!.disabled).toBe(false);
 
+    // A retired connection ends the retry without a receipt: still not read.
+    const patch = vi.spyOn(f.sessions, "patch").mockResolvedValueOnce(null);
+    mark()[0]!.click();
+    await waitForSolid(() => expect(patch).toHaveBeenCalledOnce());
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(toast.toasts).toHaveLength(1);
+    expect(toast.toasts[0]?.options.severity).toBe("error");
+    await waitForSolid(() => expect(mark()[0]!.disabled).toBe(false));
+
     mark()[0]!.click();
     await waitForSolid(() => expect(mark()).toHaveLength(1));
     expect(f.keys()).toEqual(["agent:worker:subagent:a"]);

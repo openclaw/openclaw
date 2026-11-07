@@ -80,7 +80,12 @@ export async function dismissSessionFailures(
     };
     rejectionToast = toast;
     showToast(toast);
-  } else if (rejectionToast && results.length > 0) {
+  } else if (
+    rejectionToast &&
+    results.length > 0 &&
+    // A retired connection ends a patch without a receipt; that is not a successful retry.
+    results.every((result) => result.status === "fulfilled" && result.value !== null)
+  ) {
     rejectionToast = undefined;
     showToast({
       dedupeKey: RESULT_TOAST_KEY,

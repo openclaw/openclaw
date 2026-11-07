@@ -5,6 +5,7 @@ import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/con
 import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { sessionProgressCardsForGateway } from "../lib/session-progress-cards.ts";
+import { patchReceipt } from "../lib/sessions/session-rpc.test-support.ts";
 import "../lib/toast-host.tsx";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { sessionProgressHoverTargetFromEvent } from "./session-progress-hovercard-target.ts";
@@ -219,8 +220,11 @@ describe("session progress hovercard ownership", () => {
     const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
     await toast.updateComplete;
     const patch = vi
-      .fn<ApplicationContext["sessions"]["patch"]>(async () => null)
-      .mockRejectedValueOnce(new Error("Session store unavailable"));
+      .fn<ApplicationContext["sessions"]["patch"]>(async (key) =>
+        patchReceipt(key, { sessionId: "child-session" }),
+      )
+      .mockRejectedValueOnce(new Error("Session store unavailable"))
+      .mockResolvedValueOnce(null);
     const harness = createHovercard({
       sessionKey: "agent:research:main",
       scopes: ["operator.read", "operator.write"],
@@ -248,11 +252,38 @@ describe("session progress hovercard ownership", () => {
     );
     expect(toast.toasts[0]?.options.severity).toBe("error");
     expect(dismiss()?.disabled).toBe(false);
+    const messages = () => toast.toasts.map((entry) => entry.options.message);
+    // A retired connection ends the retry without a receipt: still not read.
     dismiss()!.click();
-    await waitForSolid(() =>
-      expect(toast.toasts.map((entry) => entry.options.message)).toEqual(["Marked as read"]),
-    );
-    expect(patch).toHaveBeenCalledTimes(2);
+    await waitForSolid(() => expect(patch).toHaveBeenCalledTimes(2));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(messages()).toEqual(["Couldn't mark as read. Try again. Session store unavailable"]);
+    await waitForSolid(() => expect(dismiss()?.disabled).toBe(false));
+    dismiss()!.click();
+    await waitForSolid(() => expect(messages()).toEqual(["Marked as read"]));
+    expect(patch).toHaveBeenCalledTimes(3);
+  });
+
+  it("offers no Dismiss for a restored failure without its session id", async () => {
+    const harness = createHovercard({
+      sessionKey: "agent:research:main",
+      scopes: ["operator.read", "operator.write"],
+      sessionsPatch: vi.fn<ApplicationContext["sessions"]["patch"]>(async () => null),
+      rowDetails: {
+        attention: {
+          kind: "error",
+          reason: "Synthetic child failure",
+          sourceSessionKey: "agent:research:subagent:child",
+        },
+      },
+    });
+    document.body.append(harness.provider);
+    flush();
+    await harness.focus();
+    await waitForSolid(() => expect(portalText()).toContain("Synthetic child failure"));
+    expect(getPortal()?.querySelector(".session-hovercard__dismiss")).toBeNull();
   });
 
   it("retires a removed provider while its progress request is pending", async () => {

@@ -89,7 +89,8 @@ function failureDismissal(
   fallbackAgentId: string | undefined,
 ) {
   const attention = row?.attention;
-  if (!context || attention?.kind !== "error") {
+  // A restored snapshot row has no session id yet; without it the read could clear a successor.
+  if (!context || attention?.kind !== "error" || !attention.sourceSessionId) {
     return undefined;
   }
   const target = {
