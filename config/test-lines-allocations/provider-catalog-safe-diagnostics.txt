@@ -1,0 +1,2 @@
+# Prove provider catalog discovery failures log closed diagnostics, never raw error text.
+198
