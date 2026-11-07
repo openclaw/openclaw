@@ -1,6 +1,11 @@
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import {
+  replaceFileAtomicSync,
+  type ReplaceFileAtomicSyncFileSystem,
+} from "@openclaw/fs-safe/atomic";
 import type { Command } from "commander";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
@@ -61,24 +66,416 @@ function run(cmd: string, args: string[], opts?: RunOpts): string {
   return typeof res.stdout === "string" ? res.stdout : "";
 }
 
-function writeFileSudoIfNeeded(filePath: string, content: string): void {
-  // Zone/CoreDNS paths may be root-owned; fall back to sudo tee only after normal write fails.
+/**
+ * Resolve the publication destination the plain write replaced.
+ *
+ * writeFileSync follows symlinks, so an operator's Corefile may be a link to a
+ * managed file elsewhere. Resolve the whole chain to the final target — the
+ * atomic publisher rejects destination symlinks — while leaving the operator's
+ * link itself in place. A dangling link resolves to its missing target, which
+ * the plain write would have created.
+ */
+function resolvePublicationTarget(filePath: string): string {
+  let current = path.resolve(filePath);
+  for (let hops = 0; hops < 32; hops += 1) {
+    const stats = fs.lstatSync(current, { throwIfNoEntry: false });
+    if (!stats?.isSymbolicLink()) {
+      return path.join(fs.realpathSync.native(path.dirname(current)), path.basename(current));
+    }
+    const target = fs.readlinkSync(current);
+    current = path.isAbsolute(target) ? target : path.join(path.dirname(current), target);
+  }
+  throw new Error(
+    `CoreDNS configuration symlink chain is too deep to publish through: ${filePath}`,
+  );
+}
+
+function isPermissionFailure(error: unknown): boolean {
+  // SAFETY: Node fs errors carry the errno string on a code property.
+  const code = (error as { code?: string }).code;
+  if (code === "EACCES" || code === "EPERM") {
+    return true;
+  }
+  // SAFETY: AggregateError-style writers chain the original fs error on cause.
+  const cause = (error as { cause?: unknown }).cause;
+  return cause instanceof Error && cause !== error && isPermissionFailure(cause);
+}
+
+/**
+ * A captured macOS access-policy entry: its position in the original ACL and
+ * its re-appliable form (numeric prefix and inherited marker stripped).
+ */
+type MacOsAclEntry = { position: number; entry: string };
+
+/**
+ * Read the macOS access policy entries of a file.
+ *
+ * macOS carries per-file ACLs beside the mode, and a replacement inode does
+ * not inherit them. The entries are printed as "0: user:name deny read"; they
+ * are re-applied at their recorded positions with chmod +a# before the staged
+ * file replaces the original — chmod +a would canonicalize the order and
+ * silently change who the policy admits. The inherited marker is dropped from
+ * the re-appliable form (the marker records where the entry came from, not
+ * what it grants), while its position and effect are preserved.
+ * The system ls is used explicitly: a user-installed GNU ls rejects the macOS
+ * ACL flags, and a capture failure has to abort the publication instead of
+ * silently dropping the operator's policy.
+ */
+function readMacOsAclEntries(filePath: string): MacOsAclEntry[] {
+  if (os.platform() !== "darwin") {
+    return [];
+  }
+  const listed = spawnSync("/bin/ls", ["-lde", filePath], { encoding: "utf-8" });
+  if (listed.status !== 0 || typeof listed.stdout !== "string") {
+    const reason = typeof listed.stderr === "string" ? listed.stderr.trim() : "";
+    throw new Error(
+      `could not read the configuration's access policy: ${reason || "ls -lde failed"}`,
+    );
+  }
+  return listed.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^\d+:\s/.test(line))
+    .map((line) => {
+      const position = Number.parseInt(line, 10);
+      const entry = line
+        .replace(/^\d+:\s*/, "")
+        .replace(/\binherited\b/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+      return { position, entry };
+    });
+}
+
+/**
+ * Read the entries a new file inherits from its directory.
+ *
+ * macOS applies file_inherit entries to files created inside the directory;
+ * the staging inode strips them (so an ambient grant cannot expose the bytes
+ * while they are staged), and a fresh publication restores them so a
+ * protective denial - or any other inherited policy - survives creation the
+ * way the plain write's inherited behavior provided it. The inheritance
+ * flags are dropped from the re-applied form, matching chmod +a semantics.
+ */
+function readInheritedMacOsAclEntries(dirPath: string): string[] {
+  if (os.platform() !== "darwin") {
+    return [];
+  }
+  return readMacOsAclEntries(dirPath)
+    .filter((entry) => entry.includes("file_inherit"))
+    .map((entry) =>
+      entry
+        .replace(/\bfile_inherit\b/g, "")
+        .replace(/\bdirectory_inherit\b/g, "")
+        .replace(/\blimit_inherit\b/g, "")
+        .replace(/\bonly_inherit\b/g, "")
+        .replace(/\s+/g, " ")
+        .trim(),
+    )
+    .filter((entry) => entry.length > 0);
+}
+
+/** Restore the captured access policy on the staged file at its original positions. */
+function applyMacOsAclEntries(
+  filePath: string,
+  entries: MacOsAclEntry[],
+  privileged: boolean,
+): void {
+  for (const { position, entry } of entries) {
+    const applied = privileged
+      ? spawnSync("sudo", ["/bin/chmod", "+a#", String(position), entry, filePath], {
+          encoding: "utf-8",
+        })
+      : spawnSync("/bin/chmod", ["+a#", String(position), entry, filePath], {
+          encoding: "utf-8",
+        });
+    if (applied.status !== 0) {
+      const reason = typeof applied.stderr === "string" ? applied.stderr.trim() : "";
+      throw new Error(
+        `failed to restore the configuration access policy (${entry}): ${reason || "chmod failed"}`,
+      );
+    }
+  }
+}
+
+/**
+ * Publish an operator-owned CoreDNS file through a same-directory rename.
+ *
+ * A plain write truncates the destination first, so an interrupted or failed
+ * write leaves the operator's Corefile empty or partial with no recovery copy.
+ */
+/**
+ * A filesystem view whose freshly created files carry no inherited access
+ * policy. macOS directories can grant principals read access to new files
+ * through file_inherit entries; those grants land on the staged inode at
+ * creation and a later 0600 mode does not remove them, so the configuration
+ * bytes would be readable to an account outside the operator's readership
+ * for as long as they sit in the staging file. Clearing the policy at
+ * creation - before any byte is written - closes that window; the operator's
+ * own entries are restored in beforeRename.
+ */
+function stagingFilesystem(): ReplaceFileAtomicSyncFileSystem {
+  const fileSystem: ReplaceFileAtomicSyncFileSystem = {
+    ...fs,
+    // Only the exclusive staging-file creation is intercepted. The atomic
+    // writer also opens the parent directory for mode application and
+    // synchronization; stripping grants there would permanently remove the
+    // operator's directory policy and expose sibling files.
+    openSync(pathname, flags, mode?) {
+      const fd =
+        mode === undefined ? fs.openSync(pathname, flags) : fs.openSync(pathname, flags, mode);
+      const stagedPath = String(pathname);
+      if (
+        os.platform() === "darwin" &&
+        flags === "wx" &&
+        path.basename(stagedPath).startsWith(".openclaw-dns-config")
+      ) {
+        const stripped = spawnSync("chmod", ["-N", stagedPath], { encoding: "utf-8" });
+        if (stripped.status !== 0) {
+          // Configuration must not be written while an inherited grant may
+          // still allow an excluded principal to read the staging file.
+          fs.closeSync(fd);
+          try {
+            fs.unlinkSync(stagedPath);
+          } catch {
+            // The failed publication leaves the operator's file untouched.
+          }
+          throw new Error(
+            `could not clear inherited access grants on the staging file: ${
+              (stripped.stderr ?? "").trim() || "chmod -N failed"
+            }`,
+          );
+        }
+      }
+      return fd;
+    },
+  };
+  return fileSystem;
+}
+
+function publishConfigFile(filePath: string, content: string): void {
+  const target = resolvePublicationTarget(filePath);
+  const existing = fs.statSync(target, { throwIfNoEntry: false });
+  const aclEntries = existing ? readMacOsAclEntries(target) : [];
+  const inheritedEntries = existing ? [] : readInheritedMacOsAclEntries(path.dirname(target));
+  replaceFileAtomicSync({
+    filePath: target,
+    content,
+    fileSystem: stagingFilesystem(),
+    // The atomic writer applies dirMode to the parent directory, so pass the
+    // operator's own mode instead of tightening the CoreDNS directory.
+    dirMode: fs.statSync(path.dirname(target)).mode & 0o7777,
+    // Stage privately: the staged file is created 0600 and only becomes the
+    // operator's mode after the ownership hand-off, so no account that cannot
+    // read the operator's file can read the staged configuration - not even
+    // during the window between writing it and publishing it.
+    mode: 0o600,
+    beforeRename: ({ tempPath }) => {
+      if (existing) {
+        // A rename publishes a new inode: hand the staged file the operator's
+        // ownership before it replaces theirs. Setting a group outside
+        // the invoking account's memberships fails EPERM and routes the
+        // publication through the privileged path below.
+        fs.chownSync(tempPath, existing.uid, existing.gid);
+        // The mode alone does not carry the operator's access policy. The deny
+        // and allow entries are restored while the staged file is still at its
+        // private 0600 mode, so the policy is in place before any permission
+        // is widened; restoring it after the widening would expose the
+        // configuration to accounts the operator had excluded.
+        applyMacOsAclEntries(tempPath, aclEntries, false);
+        fs.chmodSync(tempPath, existing.mode & 0o7777);
+        return;
+      }
+      // A fresh file keeps both contracts of the plain write it replaced:
+      // the inherited creation policy of its directory (a protective denial,
+      // for example) and the umask-sensitive 0666-filtered mode.
+      applyMacOsAclEntries(tempPath, inheritedEntries, false);
+      fs.chmodSync(tempPath, 0o666 & ~process.umask());
+    },
+    syncTempFile: true,
+    syncParentDir: true,
+    tempPrefix: ".openclaw-dns-config",
+    throwOnCleanupError: true,
+  });
+}
+
+/**
+ * Flush a path's data as root before it is published.
+ *
+ * macOS `sync` ignores pathname operands and only schedules a global sync that
+ * may return before the flush completes, so the descriptor has to be
+ * synchronized explicitly. The repository's atomic writer does the same for
+ * unprivileged publication.
+ */
+function flushPrivileged(targetPath: string): void {
+  const script = [
+    'const fs = require("node:fs");',
+    'const fd = fs.openSync(process.argv[1], "r");',
+    "try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }",
+  ].join("");
+  const flushed = spawnSync("sudo", [process.execPath, "-e", script, targetPath], {
+    encoding: "utf-8",
+    stdio: ["ignore", "ignore", "inherit"],
+  });
+  assertSpawnSucceeded(`privileged flush ${targetPath}`, flushed);
+}
+
+/**
+ * Resolve the publication destination and read its metadata as root.
+ *
+ * The privileged fallback runs when the invoking account cannot reach the
+ * destination - a root-owned 0700 conf.d hides the Corefile from unprivileged
+ * lstat and readlink entirely - so the resolution, metadata and access-policy
+ * capture all have to run under the same privilege as the publication itself.
+ * One script returns everything; a capture failure aborts the fallback with
+ * the operator's file untouched instead of dropping its policy.
+ */
+/** Build the root-runtime script that resolves and inspects a destination. */
+export function privilegedInspectionScript(): string {
+  return [
+    'const fs = require("node:fs");',
+    'const path = require("node:path");',
+    "let cur = path.resolve(process.argv[1]);",
+    "for (let hops = 0; hops < 32; hops += 1) {",
+    "  let st;",
+    '  try { st = fs.lstatSync(cur); } catch (error) { if (error && error.code === "ENOENT") break; throw error; }',
+    "  if (!st.isSymbolicLink()) break;",
+    "  const link = fs.readlinkSync(cur);",
+    "  cur = path.isAbsolute(link) ? link : path.join(path.dirname(cur), link);",
+    "}",
+    "let existing;",
+    "let inheritedParent = [];",
+    "try {",
+    "  const st = fs.statSync(cur);",
+    "  existing = { uid: st.uid, gid: st.gid, mode: st.mode & 0o7777 };",
+    "} catch (error) {",
+    '  const parent = require("node:child_process").spawnSync("/bin/ls", ["-lde", path.dirname(cur)], { encoding: "utf-8" });',
+    "  if (parent.status !== 0) {",
+    '  process.stderr.write((parent.stderr || "ls -lde failed") + "\\n");',
+    "    process.exit(1);",
+    "  }",
+    '  inheritedParent = String(parent.stdout || "").split("\\n").map((line) => line.trim()).filter((line) => /^\\d+:\\s/.test(line) && line.includes("file_inherit")).map((line) => ({ position: Number.parseInt(line, 10), entry: line.replace(/^\\d+:\\s*/, "").replace(/\\bfile_inherit\\b/g, "").replace(/\\bdirectory_inherit\\b/g, "").replace(/\\blimit_inherit\\b/g, "").replace(/\\bonly_inherit\\b/g, "").replace(/\\binherited\\b/g, "").replace(/\\s+/g, "").trim() })).filter((item) => item.entry.length > 0);',
+    "}",
+    // A destination that does not exist yet is a privileged first creation:
+    // there is no policy to capture, and ls would fail on the missing path.
+    "let acl = [];",
+    "if (existing) {",
+    '  const listed = require("node:child_process").spawnSync("/bin/ls", ["-lde", cur], { encoding: "utf-8" });',
+    "  if (listed.status !== 0) {",
+    '  process.stderr.write((listed.stderr || "ls -lde failed") + "\\n");',
+    "    process.exit(1);",
+    "  }",
+    '  acl = String(listed.stdout || "").split("\\n").map((line) => line.trim()).filter((line) => /^\\d+:\\s/.test(line)).map((line) => ({ position: Number.parseInt(line, 10), entry: line.replace(/^\\d+:\\s*/, "").replace(/\\binherited\\b/g, "").replace(/\\s+/g, "").trim() })).filter((item) => item.entry.length > 0);',
+    "}",
+    "process.stdout.write(JSON.stringify({ target: cur, existing, acl, inheritedParent }));",
+  ].join("");
+}
+
+function inspectPrivilegedDestination(filePath: string): {
+  target: string;
+  existing: { uid: number; gid: number; mode: number } | undefined;
+  aclEntries: string[];
+  inheritedParentEntries: string[];
+} {
+  const script = privilegedInspectionScript();
+  const inspected = spawnSync("sudo", [process.execPath, "-e", script, filePath], {
+    encoding: "utf-8",
+  });
+  assertSpawnSucceeded("privileged destination inspection", inspected);
+  // SAFETY: the inspected runtime writes exactly this JSON shape on success.
+  const parsed = JSON.parse(inspected.stdout) as {
+    target: string;
+    existing: { uid: number; gid: number; mode: number } | undefined;
+    acl: string[];
+    inheritedParent: string[];
+  };
+  return {
+    target: parsed.target,
+    existing: parsed.existing,
+    aclEntries: parsed.acl,
+    inheritedParentEntries: parsed.inheritedParent,
+  };
+}
+
+/** Publish through a privileged staging file when the operator's path is not writable. */
+function publishConfigFileWithSudo(filePath: string, content: string): void {
+  const { target, existing, aclEntries, inheritedParentEntries } =
+    inspectPrivilegedDestination(filePath);
+  // The parent policy comes from the root inspection: the unprivileged read
+  // cannot reach a root-owned parent, and ordinary publication captures it
+  // directly.
+  const inheritedEntries = existing ? [] : inheritedParentEntries;
+  const tempPath = path.join(
+    path.dirname(target),
+    `.${path.basename(target)}.openclaw-${process.pid}.tmp`,
+  );
   try {
-    fs.writeFileSync(filePath, content, "utf-8");
+    // Stage privately before any configuration byte exists: the staging file
+    // is created exclusive and mode 0600, so an interrupted publication never
+    // leaves restricted configuration readable by other local accounts.
+    run("sudo", ["rm", "-f", tempPath]);
+    run("sudo", ["install", "-m", "600", "/dev/null", tempPath]);
+    // Inherited directory grants land on the staged inode at creation and a
+    // 0600 mode does not remove them; strip them before any configuration
+    // byte exists, and restore the operator's own entries below.
+    if (os.platform() === "darwin") {
+      run("sudo", ["chmod", "-N", tempPath]);
+    }
+    const staged = spawnSync("sudo", ["tee", tempPath], {
+      input: content,
+      encoding: "utf-8",
+      stdio: ["pipe", "ignore", "inherit"],
+    });
+    assertSpawnSucceeded(`sudo tee ${tempPath}`, staged);
+    if (existing) {
+      // The rename replaces the file, so carry its ownership over.
+      run("sudo", ["chown", `${existing.uid}:${existing.gid}`, tempPath]);
+    }
+    // The mode alone does not carry the operator's access policy. The entries
+    // are restored while the staged file is still at its private 0600 mode, so
+    // the policy is in place before any permission is widened; restoring it
+    // after the widening would expose the configuration to accounts the
+    // operator had excluded.
+    applyMacOsAclEntries(tempPath, [...inheritedEntries, ...aclEntries], true);
+    if (existing) {
+      run("sudo", ["chmod", (existing.mode & 0o7777).toString(8), tempPath]);
+    } else {
+      run("sudo", ["chmod", (0o666 & ~process.umask()).toString(8), tempPath]);
+    }
+    // Flush the staged bytes before the rename, matching the ordinary
+    // publisher's durability: a crash after the rename must not leave the
+    // published name pointing at missing or incomplete content.
+    flushPrivileged(tempPath);
+    const published = spawnSync("sudo", ["mv", "-f", tempPath, target], {
+      encoding: "utf-8",
+      stdio: "inherit",
+    });
+    assertSpawnSucceeded(`sudo mv ${tempPath} ${target}`, published);
+    // Flush the directory entry so the rename itself survives a crash.
+    flushPrivileged(path.dirname(target));
+  } catch (error) {
+    // The staged file is inert and the operator's file was never touched.
+    spawnSync("sudo", ["rm", "-f", tempPath], {
+      encoding: "utf-8",
+      stdio: "ignore",
+    });
+    throw error;
+  }
+}
+
+function publishConfigFileIfNeeded(filePath: string, content: string): void {
+  // Zone/CoreDNS paths may be root-owned; fall back to a privileged publish
+  // only after the ordinary atomic publish reports a permission failure.
+  try {
+    publishConfigFile(filePath, content);
     return;
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code !== "EACCES" && code !== "EPERM") {
-      throw err instanceof Error ? err : new Error(String(err));
+  } catch (error) {
+    if (!isPermissionFailure(error)) {
+      throw error instanceof Error ? error : new Error(String(error));
     }
   }
 
-  const res = spawnSync("sudo", ["tee", filePath], {
-    input: content,
-    encoding: "utf-8",
-    stdio: ["pipe", "ignore", "inherit"],
-  });
-  assertSpawnSucceeded(`sudo tee ${filePath}`, res);
+  publishConfigFileWithSudo(filePath, content);
 }
 
 function mkdirSudoIfNeeded(dirPath: string): void {
@@ -224,12 +621,12 @@ export function registerDnsCli(program: Command) {
       mkdirSudoIfNeeded(confDir);
 
       if (!fs.existsSync(corefilePath)) {
-        writeFileSudoIfNeeded(corefilePath, `import ${importGlob}\n`);
+        publishConfigFileIfNeeded(corefilePath, `import ${importGlob}\n`);
       } else {
         const existing = fs.readFileSync(corefilePath, "utf-8");
         if (!existing.includes(importGlob)) {
           const next = `${existing.replace(/\s*$/, "")}\n\nimport ${importGlob}\n`;
-          writeFileSudoIfNeeded(corefilePath, next);
+          publishConfigFileIfNeeded(corefilePath, next);
         }
       }
 
@@ -246,7 +643,7 @@ export function registerDnsCli(program: Command) {
         `}`,
         ``,
       ].join("\n");
-      writeFileSudoIfNeeded(serverPath, server);
+      publishConfigFileIfNeeded(serverPath, server);
 
       // Ensure the gateway can write its zone file path.
       if (zoneFileNeedsBootstrap(zonePath)) {
