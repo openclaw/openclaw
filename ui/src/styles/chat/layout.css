@@ -1547,6 +1547,57 @@ openclaw-chat-video-player {
   white-space: nowrap;
 }
 
+/* Label and destinations share one grid cell, so revealing them never resizes
+   or repositions the toolbar. */
+.chat-selection-popup__ask {
+  display: grid;
+}
+
+.chat-selection-popup__ask-label,
+.chat-selection-popup__ask-options {
+  grid-area: 1 / 1;
+  transition: opacity 0.12s var(--ease-out);
+}
+
+.chat-selection-popup__ask-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--menu-item-height);
+  padding: 6px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+  color: var(--text);
+  pointer-events: none;
+}
+
+.chat-selection-popup__ask-options {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+}
+
+.chat-selection-popup__ask:hover .chat-selection-popup__ask-label,
+.chat-selection-popup__ask:focus-within .chat-selection-popup__ask-label {
+  opacity: 0;
+}
+
+.chat-selection-popup__ask:hover .chat-selection-popup__ask-options,
+.chat-selection-popup__ask:focus-within .chat-selection-popup__ask-options {
+  opacity: 1;
+}
+
+/* Touch has no hover to reveal destinations; show them directly. */
+@media (hover: none) {
+  .chat-selection-popup__ask-label {
+    opacity: 0;
+  }
+
+  .chat-selection-popup__ask-options {
+    opacity: 1;
+  }
+}
+
 /* The conversation's top-right gutter, owned by one column so its members
    stack instead of overlapping (the positioned ancestor is
    .chat-main__conversation); content scrolls underneath it. The column is as

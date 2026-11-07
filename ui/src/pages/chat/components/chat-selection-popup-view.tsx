@@ -68,13 +68,28 @@ export function showChatSelectionToolbar(
               {t("chat.messages.addToChat")}
             </button>
           ) : undefined}
-          <button
-            type="button"
-            aria-label={t("chat.messages.askInSideChat")}
-            onClick={() => activate(() => actions.onAskSideChat(source, anchor))}
-          >
-            {t("chat.messages.askInSideChat")}
-          </button>
+          {/* One stable-width slot: hover or focus swaps the label for its destinations. */}
+          <div class="chat-selection-popup__ask" role="group" aria-label={t("chat.messages.askIn")}>
+            <span class="chat-selection-popup__ask-label" aria-hidden="true">
+              {t("chat.messages.askIn")}
+            </span>
+            <span class="chat-selection-popup__ask-options">
+              <button
+                type="button"
+                aria-label={t("chat.messages.askInSideChat")}
+                onClick={() => activate(() => actions.onAskSideChat(source, anchor))}
+              >
+                {t("chat.messages.sideChatOption")}
+              </button>
+              <button
+                type="button"
+                aria-label={t("chat.messages.askInNewSession")}
+                onClick={() => activate(() => actions.onAskNewSession(source))}
+              >
+                {t("chat.messages.newSessionOption")}
+              </button>
+            </span>
+          </div>
         </div>
       </Portal>
     ),

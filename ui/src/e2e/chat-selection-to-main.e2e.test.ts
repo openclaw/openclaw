@@ -525,4 +525,32 @@ suite.define(() => {
       expect(params.attachments ?? []).toHaveLength(0);
     });
   });
+
+  it("starts a new session from the launcher with the selected excerpt attached", async () => {
+    await withPage(async ({ page, composer, toolbar }) => {
+      const gateway = await openSelection(page);
+      await composer.fill(draft);
+      await selectText(selectedSource(page));
+      await toolbar.waitFor({ state: "visible" });
+      const destinations = toolbar.getByRole("group", { name: "Ask in…", exact: true });
+      await destinations.hover();
+      await button(destinations, "Ask in new session").click();
+      const palette = page.locator("openclaw-command-palette");
+      const input = palette.locator(".cmd-palette__input");
+      await input.waitFor({ state: "visible" });
+      const chip = palette.locator(".chat-selection-annotations__chip");
+      await chip.click();
+      await button(palette, "Delete comment").waitFor({ state: "visible" });
+      // The launcher has no transcript anchor to reopen the editor against.
+      expect(await palette.getByRole("button", { name: "Edit comment 1" }).count()).toBe(0);
+      await input.fill("Summarize the risks.");
+      await input.press("ControlOrMeta+Enter");
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        message: `> ${selectedText}\n\nSummarize the risks.`,
+      });
+      expect(create.params).not.toHaveProperty("attachments");
+      expect(await composer.inputValue()).toBe(draft);
+    });
+  });
 });
