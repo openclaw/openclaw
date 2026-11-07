@@ -490,6 +490,7 @@ test("search preserves the eager predicate's rows and order across vocabulary su
           provider: choose(providers) ?? "openai",
           model: choose(models) ?? "gpt-4.1",
           storedOverrideSource: null,
+          selectionSource: "configured",
         },
         rowModelIdentity: { provider: choose(providers), model: choose(models) },
         thinkingProjection: {
