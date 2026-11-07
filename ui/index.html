@@ -1166,6 +1166,12 @@
         --mount-fallback-tile-border: #23252a;
         --mount-fallback-link: var(--link, #ff7070);
         --mount-fallback-ring: var(--ring, #ff5c5c);
+        --mount-fallback-ground: radial-gradient(
+          closest-side,
+          rgb(0 0 0 / 0.42),
+          rgb(0 0 0 / 0.16) 60%,
+          transparent
+        );
 
         margin: 0;
         color: var(--mount-fallback-text);
@@ -1390,49 +1396,157 @@
         flex: 1;
       }
 
-      /* Every status page shares one anatomy: a left-aligned column whose title holds a
-         fixed height a little above centre, so it never jumps between states. */
+      /* Every status page shares one anatomy: the OpenClaw mascot stands above a centred
+         title, which holds a fixed height a little above centre, so nothing jumps. */
       .mount-fallback__main {
         position: relative;
       }
 
       .mount-fallback__panel {
         position: absolute;
-        top: 34%;
+        top: 38%;
         left: 50%;
         box-sizing: border-box;
-        width: min(440px, calc(100% - 48px));
+        width: min(460px, calc(100% - 48px));
         transform: translateX(-50%);
+        text-align: center;
       }
 
-      /* The app session spinner hangs in the title's margin while recovery runs. */
-      .mount-fallback__mark {
+      /* The mascot is the busy indicator while recovery runs; once it stops, the mascot
+         stands still and looks down toward Reload. */
+      .mount-fallback__mascot {
+        --mascot-size: 88px;
+        --mascot-gx: 0px;
+        --mascot-gy: 0px;
         position: absolute;
-        top: 7px;
-        left: -26px;
-        color: var(--mount-fallback-accent);
+        top: calc(-24px - var(--mascot-size));
+        left: 50%;
+        width: var(--mascot-size);
+        height: var(--mascot-size);
+        transform: translateX(-50%);
+        pointer-events: none;
       }
 
-      .mount-fallback__spinner {
+      .mount-fallback__mascot-ground {
+        position: absolute;
+        bottom: 0;
+        left: 50%;
+        width: 62px;
+        height: 9px;
+        margin-left: -31px;
+        border-radius: 50%;
+        background: var(--mount-fallback-ground);
+      }
+
+      .mount-fallback__mascot-figure {
+        position: absolute;
+        top: 0;
+        left: 0;
         display: block;
-        width: 14px;
-        height: 14px;
-        border-radius: 9999px;
-        background: currentColor;
-        mask: var(
-          --spinner-mask,
-          url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='1.5'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 0.75px)}%3C/style%3E%3Ccircle opacity='.2'/%3E%3Ccircle pathLength='100' stroke-dasharray='26 74' stroke-linecap='round'/%3E%3C/svg%3E")
-        );
-        animation: mount-fallback-spin 0.9s linear infinite;
+        width: 100%;
+        height: auto;
+        aspect-ratio: 124 / 112;
+        overflow: visible;
       }
 
-      .mount-fallback[data-recovery="stopped"] .mount-fallback__mark {
-        display: none;
+      .mount-fallback__mascot-eyes {
+        transform: translate(var(--mascot-gx), var(--mascot-gy));
+        transition: transform 0.5s cubic-bezier(0.3, 0, 0.2, 1);
       }
 
-      @keyframes mount-fallback-spin {
+      .mount-fallback__mascot-lids {
+        transform-origin: 60px 35px;
+      }
+
+      .mount-fallback__mascot-claw-left {
+        transform-origin: 28px 52px;
+      }
+
+      .mount-fallback__mascot-claw-right {
+        transform-origin: 92px 52px;
+      }
+
+      .mount-fallback[data-recovery="stopped"] .mount-fallback__mascot {
+        --mascot-gy: 2.8px;
+      }
+
+      .mount-fallback:not([data-recovery="stopped"]) .mount-fallback__mascot-figure {
+        animation: mount-fallback-bob 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+      }
+
+      .mount-fallback:not([data-recovery="stopped"]) .mount-fallback__mascot-ground {
+        animation: mount-fallback-ground 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+      }
+
+      .mount-fallback:not([data-recovery="stopped"]) .mount-fallback__mascot-claw-left {
+        animation: mount-fallback-pinch-left 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite
+          alternate;
+      }
+
+      .mount-fallback:not([data-recovery="stopped"]) .mount-fallback__mascot-claw-right {
+        animation: mount-fallback-pinch-right 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite
+          alternate;
+      }
+
+      .mount-fallback:not([data-recovery="stopped"]) .mount-fallback__mascot-eyes {
+        animation: mount-fallback-gaze 4.8s cubic-bezier(0.45, 0, 0.2, 1) infinite;
+      }
+
+      .mount-fallback:not([data-recovery="stopped"]) .mount-fallback__mascot-lids {
+        animation: mount-fallback-blink 4.8s linear infinite;
+      }
+
+      @keyframes mount-fallback-bob {
         to {
-          transform: rotate(360deg);
+          transform: translateY(-5px);
+        }
+      }
+
+      @keyframes mount-fallback-ground {
+        to {
+          transform: scaleX(0.82);
+          opacity: 0.7;
+        }
+      }
+
+      @keyframes mount-fallback-pinch-left {
+        to {
+          transform: rotate(-7deg);
+        }
+      }
+
+      @keyframes mount-fallback-pinch-right {
+        to {
+          transform: rotate(7deg);
+        }
+      }
+
+      @keyframes mount-fallback-gaze {
+        0%,
+        8%,
+        82%,
+        100% {
+          transform: translate(0, 0);
+        }
+        18%,
+        40% {
+          transform: translate(-3.2px, 0.6px);
+        }
+        50%,
+        72% {
+          transform: translate(3.2px, 0.6px);
+        }
+      }
+
+      @keyframes mount-fallback-blink {
+        0%,
+        90%,
+        96%,
+        100% {
+          transform: scaleY(1);
+        }
+        93% {
+          transform: scaleY(0.12);
         }
       }
 
@@ -1469,16 +1583,18 @@
         display: flex;
         flex-wrap: wrap;
         align-items: center;
+        justify-content: center;
         gap: 8px;
         min-height: 32px;
         margin-top: 20px;
       }
 
       .mount-fallback__panel .mount-fallback__help {
-        display: inline-flex;
+        display: flex;
         align-items: center;
         gap: 6px;
-        margin-top: 40px;
+        width: max-content;
+        margin: 32px auto 0;
         font-size: 13px;
         line-height: 16px;
         text-decoration: none;
@@ -1560,6 +1676,12 @@
         --mount-fallback-tile-border: #eaeaea;
         --mount-fallback-link: var(--link, #ad3623);
         --mount-fallback-ring: var(--ring, #bd4531);
+        --mount-fallback-ground: radial-gradient(
+          closest-side,
+          rgb(32 32 32 / 0.16),
+          rgb(32 32 32 / 0.06) 60%,
+          transparent
+        );
       }
 
       html[data-theme-mode="light"] .mount-fallback__button--primary {
@@ -1591,7 +1713,7 @@
         }
 
         .mount-fallback__panel {
-          top: 30%;
+          top: 36%;
           right: 24px;
           left: 24px;
           width: auto;
@@ -1603,8 +1725,8 @@
           line-height: 26px;
         }
 
-        .mount-fallback__mark {
-          display: none;
+        .mount-fallback__mascot {
+          --mascot-size: 80px;
         }
       }
 
@@ -1620,6 +1742,18 @@
       @media (prefers-reduced-motion: reduce) {
         .mount-fallback__button {
           transition: none;
+        }
+
+        .mount-fallback:not([data-recovery="stopped"]) .mount-fallback__mascot-eyes {
+          animation-duration: 12s;
+        }
+
+        .mount-fallback__mascot-figure,
+        .mount-fallback__mascot-ground,
+        .mount-fallback__mascot-claw-left,
+        .mount-fallback__mascot-claw-right,
+        .mount-fallback .mount-fallback__mascot-lids {
+          animation: none !important;
         }
       }
     </style>
@@ -2019,9 +2153,43 @@
         </header>
         <div class="mount-fallback__stage">
           <div class="mount-fallback__panel" tabindex="-1">
-            <div class="mount-fallback__mark" aria-hidden="true">
-              <span class="mount-fallback__spinner"></span>
-            </div>
+            <span class="mount-fallback__mascot" aria-hidden="true"
+              ><span class="mount-fallback__mascot-ground"></span
+              ><svg class="mount-fallback__mascot-figure" viewBox="-2 2 124 112" focusable="false">
+                <defs>
+                  <linearGradient id="mount-fallback-mascot-shell" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stop-color="#ff4d4d" />
+                    <stop offset="100%" stop-color="#991b1b" />
+                  </linearGradient>
+                </defs>
+                <g fill="none" stroke="#ff4d4d" stroke-width="3" stroke-linecap="round">
+                  <path d="M45 15 Q35 5 30 8" />
+                  <path d="M75 15 Q85 5 90 8" />
+                </g>
+                <g class="mount-fallback__mascot-claw-left">
+                  <path
+                    d="M20 45 C5 40 0 50 5 60 C10 70 20 65 25 55 C28 48 25 45 20 45Z"
+                    fill="url(#mount-fallback-mascot-shell)"
+                  />
+                </g>
+                <g class="mount-fallback__mascot-claw-right">
+                  <path
+                    d="M100 45 C115 40 120 50 115 60 C110 70 100 65 95 55 C92 48 95 45 100 45Z"
+                    fill="url(#mount-fallback-mascot-shell)"
+                  />
+                </g>
+                <path
+                  d="M60 10 C30 10 15 35 15 55 C15 75 30 95 45 100 L45 110 L55 110 L55 100 C55 100 60 102 65 100 L65 110 L75 110 L75 100 C90 95 105 75 105 55 C105 35 90 10 60 10Z"
+                  fill="url(#mount-fallback-mascot-shell)"
+                />
+                <g class="mount-fallback__mascot-eyes">
+                  <g class="mount-fallback__mascot-lids">
+                    <circle cx="45" cy="35" r="6" fill="#181A1F" />
+                    <circle cx="75" cy="35" r="6" fill="#181A1F" />
+                    <circle cx="46" cy="34" r="2.5" fill="#DDE2E9" opacity="0.82" />
+                    <circle cx="76" cy="34" r="2.5" fill="#DDE2E9" opacity="0.82" /></g
+                ></g></svg
+            ></span>
             <h1 id="openclaw-mount-fallback-title">Control UI didn’t start</h1>
             <p id="openclaw-mount-fallback-summary">
               The page loaded, but the app didn’t start. Trying again automatically.
