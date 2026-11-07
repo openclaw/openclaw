@@ -82,6 +82,24 @@ it("blocks interactive channel login commands from exec", async () => {
 });
 
 describeNonWin("exec script preflight", () => {
+  it("rejects Python shell injection before launch after an empty env option value", async () => {
+    await expectNotStarted(
+      execScripts('env --argv0 "" python3 bad.py', { "bad.py": "payload = $DM_JSON" }),
+      injection,
+    );
+  });
+
+  it("executes a Node preload after empty inline code", async () => {
+    const result = await execScripts('node --eval "" --require ./preload.js', {
+      "preload.js": 'const $VALUE = "preload"; process.stdout.write($VALUE);',
+    });
+    expect(result.details).toMatchObject({
+      status: "completed",
+      exitCode: 0,
+      aggregated: "preload",
+    });
+  });
+
   it("releases prepared launch authority when approval preparation finishes after cancellation", async () => {
     const controller = new AbortController();
     const releaseSpawn = vi.fn();
