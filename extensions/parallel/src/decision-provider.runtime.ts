@@ -23,6 +23,8 @@ export async function evaluateParallelDecision(
   const modelRef = "parallel/" + context.model.id;
   const hasParams = [
     providerConfig?.params,
+    context.model.params,
+    context.config.agents?.defaults?.params,
     context.config.agents?.defaults?.models?.[modelRef]?.params,
     agent?.models?.[modelRef]?.params,
     agent?.params,
@@ -58,16 +60,33 @@ export async function evaluateParallelDecision(
   };
   try {
     assertActive();
-    const configuredRequest = sanitizeConfiguredModelProviderRequest(providerConfig?.request);
+    const configuredRequest = providerConfig?.request;
+    // Credential selection and replacement auth already belong to the host. Only
+    // carry network policy here; replaying auth would overwrite prepared headers.
+    const request = sanitizeConfiguredModelProviderRequest(
+      configuredRequest
+        ? {
+            proxy: configuredRequest.proxy,
+            tls: configuredRequest.tls,
+            allowPrivateNetwork: configuredRequest.allowPrivateNetwork,
+          }
+        : undefined,
+    );
     const requestConfig = resolveProviderHttpRequestConfig({
+      provider: "parallel",
+      capability: "llm",
+      transport: "http",
       defaultBaseUrl: "https://api.parallel.ai/v1",
-      baseUrl: providerConfig?.baseUrl,
+      baseUrl: context.model.baseUrl ?? providerConfig?.baseUrl,
       defaultHeaders: {
         "Content-Type": "application/json",
-        ...(context.auth.apiKey ? { "x-api-key": context.auth.apiKey } : {}),
+        ...(context.auth.apiKey &&
+        (!configuredRequest?.auth || configuredRequest.auth.mode === "provider-default")
+          ? { "x-api-key": context.auth.apiKey }
+          : {}),
       },
       headers: context.model.headers,
-      request: configuredRequest,
+      request,
     });
     const url = requestConfig.baseUrl.replace(/\/+$/u, "") + "/decisions";
     const guarded = await fetchWithProviderHttpGuard({
