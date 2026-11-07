@@ -1,2 +1,2 @@
-92
-# Deferred syntax owner: remount reuse, source/language identity, bounded eviction and retryable failures.
+94
+# Deferred syntax owner: remount reuse, source/language identity, bounded eviction, retryable failures and native decode-probe inventory.
