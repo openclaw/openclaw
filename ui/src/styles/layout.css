@@ -4387,7 +4387,7 @@ html.openclaw-native-web-chrome
 }
 
 /* Session-row metrics (.sidebar-shell): 32px rows, 18px avatar centered 24px in, title at 42px.
-   The text wordmark starts on that avatar column; the status view carries the mascot. */
+   The wordmark's mascot sits on that avatar column. */
 .sidebar-connection-skeleton {
   padding-top: 10.3px;
   pointer-events: none;
@@ -4395,7 +4395,7 @@ html.openclaw-native-web-chrome
 .sidebar-connection-skeleton__brand img {
   width: auto;
   height: 25.35px;
-  margin-inline-start: 3.5px;
+  margin-inline-start: 0.5px;
 }
 .sidebar-connection-skeleton__brand-dark,
 :root[data-theme-mode="light"] .sidebar-connection-skeleton__brand-light {
@@ -4451,10 +4451,9 @@ html.openclaw-native-web-chrome
   justify-content: center;
 }
 
-.topbar-connection-brand img {
+.topbar-connection-brand svg {
   width: 101px;
   height: 32px;
-  object-fit: contain;
 }
 
 .topbar-connection-brand__light,

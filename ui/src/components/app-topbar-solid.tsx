@@ -8,21 +8,13 @@ import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import type { GatewayStatusProps } from "./gateway-status.ts";
+import { GatewayWordmarkText } from "./solid/gateway-connection-view.tsx";
 import { GatewayStatus } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd, ShortcutText } from "./solid/kbd.tsx";
 import { MobileHeaderNotice } from "./solid/mobile-header-notice.tsx";
 import { MobileNavToggle } from "./solid/mobile-nav-toggle.tsx";
 import "./tooltip.ts";
-
-const wordmarkDarkText = new URL(
-  "../assets/brand/openclaw-horizontal-dark-text.svg",
-  import.meta.url,
-).href;
-const wordmarkLightText = new URL(
-  "../assets/brand/openclaw-horizontal-light-text.svg",
-  import.meta.url,
-).href;
 
 type Props = {
   navDrawerOpen: boolean;
@@ -102,15 +94,15 @@ defineSolidBridge<Props>(
                     }
                   >
                     <span class="topbar-connection-brand">
-                      <img
+                      <GatewayWordmarkText
                         class="topbar-connection-brand__light"
-                        src={wordmarkDarkText}
-                        alt={t("connection.workspace.header")}
+                        fill="#20242A"
+                        label={t("connection.workspace.header")}
                       />
-                      <img
+                      <GatewayWordmarkText
                         class="topbar-connection-brand__dark"
-                        src={wordmarkLightText}
-                        alt={t("connection.workspace.header")}
+                        fill="#F6F7F9"
+                        label={t("connection.workspace.header")}
                       />
                     </span>
                   </Show>
