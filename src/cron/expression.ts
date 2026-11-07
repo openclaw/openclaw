@@ -11,8 +11,8 @@ export function resolveCronTimezone(tz?: string) {
 }
 
 /**
- * Checks whether a cron expression parses under the same croner rules the scheduler
- * applies, so callers can reject expressions the scheduler would throw on later.
+ * Checks for a cron pattern under the same croner rules the scheduler applies,
+ * excluding absolute timestamps that croner also accepts as one-shot schedules.
  */
 export function isValidCronExpression(expr: string, timezone?: string): boolean {
   const trimmed = expr.trim();
@@ -20,8 +20,10 @@ export function isValidCronExpression(expr: string, timezone?: string): boolean 
     return false;
   }
   try {
-    void new Cron(trimmed, { timezone: resolveCronTimezone(timezone), catch: false });
-    return true;
+    return (
+      new Cron(trimmed, { timezone: resolveCronTimezone(timezone), catch: false }).getPattern() !==
+      undefined
+    );
   } catch {
     return false;
   }

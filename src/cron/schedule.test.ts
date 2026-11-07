@@ -1,6 +1,7 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { Cron } from "croner";
 import { describe, expect, it, vi } from "vitest";
+import { isValidCronExpression } from "./expression.js";
 import { computeNextRunAtMs, computePreviousRunAtMs } from "./schedule.js";
 import type { CronSchedule } from "./types.js";
 
@@ -11,6 +12,16 @@ function expectOccurrences(schedule: CronSchedule, now: string, next?: string, p
 }
 
 describe("cron schedule", () => {
+  it.each(["2027-02-01T09:00:00Z", "2027-02-01T09:00:00-05:00"])(
+    "rejects timestamp input but preserves evaluation of previously stored schedules: %s",
+    (expr) => {
+      expect(isValidCronExpression(expr, "UTC")).toBe(false);
+      expect(
+        computeNextRunAtMs({ kind: "cron", expr, tz: "UTC" }, Date.parse("2027-01-01T00:00:00Z")),
+      ).toBe(Date.parse(expr));
+    },
+  );
+
   describe("daylight-saving transitions", () => {
     it.each([
       [

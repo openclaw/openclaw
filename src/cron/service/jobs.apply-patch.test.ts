@@ -32,6 +32,27 @@ const clearedFailureDestination = {
 const failureDefaults = { channel: "slack", to: "C123", accountId: "bot-b" };
 
 describe("applyJobPatch schedule retention", () => {
+  it.each(["create", "patch"] as const)(
+    "rejects a timestamp authored as cron via %s",
+    (operation) => {
+      const now = Date.parse("2027-01-01T00:00:00Z");
+      const schedule = { kind: "cron", expr: "2027-02-01T09:00:00Z" } as const;
+      expect(() =>
+        operation === "create"
+          ? createJob({ deps: { nowMs: () => now } }, { ...makeMainJob(), schedule })
+          : applyJobPatch(makeMainJob(), { schedule }, { scheduleValidationNowMs: now }),
+      ).toThrow(/invalid cron expression/);
+    },
+  );
+
+  it("allows ordinary edits to a legacy timestamp schedule", () => {
+    const job = makeMainJob();
+    job.schedule = { kind: "cron", expr: "2027-02-01T09:00:00Z" };
+    applyJobPatch(job, { name: "Renamed legacy reminder" });
+    expect(job.name).toBe("Renamed legacy reminder");
+    expect(job.schedule.expr).toBe("2027-02-01T09:00:00Z");
+  });
+
   it.each([undefined, false] as const)(
     "converts recurring to at with cleanup policy %s",
     (policy) => {
