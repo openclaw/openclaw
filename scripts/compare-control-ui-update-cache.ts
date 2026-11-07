@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
 
 type Bytes = { raw: number; gzip: number; brotli: number };
 type OfflineAsset = { path: string; integrity: string };
@@ -54,10 +55,6 @@ function category(file: string): string {
     return "locale-js";
   }
   return file.endsWith(".js") ? "js" : "other";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function readOfflineBuild(directory: string): OfflineBuild {
