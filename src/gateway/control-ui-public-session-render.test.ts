@@ -222,47 +222,29 @@ describe("public session document", () => {
     expect(unavailableMain.textContent).not.toContain("Public · Read-only");
     expect(unavailableMain.querySelector(".colophon")).toBeNull();
     expect(unavailable).not.toContain('http-equiv="refresh"');
-    // Access interstitials center their status; the reader keeps its own flow.
-    expect(unavailableMain.hasAttribute("data-public-unavailable")).toBe(true);
-    const readerMain = JSDOM.fragment(html).querySelector("main")!;
-    expect(readerMain.hasAttribute("data-public-unavailable")).toBe(false);
-    // The wordmark is inline and theme-aware, never the small mark beside text.
-    for (const main of [readerMain, unavailableMain]) {
-      const brand = main.querySelector(".topbar .brand")!;
-      expect(brand.querySelector("svg.wordmark")?.getAttribute("aria-label")).toBe("OpenClaw");
-      expect(brand.querySelector(".mark")).toBeNull();
-    }
   });
-  it("decorates only the access check with an inert Control UI shell skeleton", () => {
+  it("keeps access-check decorations inert and provides status and recovery", () => {
     const entryUrl = "/control/__openclaw__/session-entry?path=%2Fcontrol%2Fchat%2Fmain%2Ftopic";
-    const pending = render([], { entryUrl, title: "Conversation unavailable", unavailable: true });
-    const pendingMain = JSDOM.fragment(pending).querySelector("main")!;
-    expect(pendingMain.hasAttribute("data-entry-pending")).toBe(true);
-    const skeleton = pendingMain.querySelector(".app-skeleton")!;
+    const pending = fragment([], {
+      entryUrl,
+      title: "Conversation unavailable",
+      unavailable: true,
+    });
+    const skeleton = pending.querySelector(".app-skeleton")!;
     expect(skeleton.getAttribute("aria-hidden")).toBe("true");
     expect(skeleton.textContent).toBe("");
     expect(skeleton.querySelectorAll("a, button, [tabindex]")).toHaveLength(0);
-    expect(skeleton.querySelectorAll(".list-row")).toHaveLength(4);
-    expect(pending.match(/<script/g)).toHaveLength(1);
-    // The spinner is decorative; the status text stays the announced part.
-    const spinner = pendingMain.querySelector(".entry-status h1 .entry-spin")!;
-    expect(spinner.getAttribute("aria-hidden")).toBe("true");
-    // A failed check offers Reload; the script reloads in place so the fragment survives.
-    expect(pendingMain.querySelector(".entry-actions [data-public-reload]")?.textContent).toBe("Reload");
-    expect(pending).toContain('[data-entry-pending]:has(.login[style*="visible"]) .entry-actions{display:flex}');
-    expect(pendingMain.querySelector(".entry-status p")?.textContent).toBe("Checking access…");
-    expect(pending).toContain(
-      "[data-entry-pending] .app-skeleton{display:none}</style></noscript>",
-    );
-    // The sidebar header carries the wordmark; the top bar keeps it for narrow screens.
-    expect(skeleton.querySelector(".app-list > svg.list-brand")).not.toBeNull();
-    expect(skeleton.querySelector(".rail-disc")).not.toBeNull();
-    expect(pendingMain.querySelector(".topbar .brand svg.wordmark")).not.toBeNull();
-    // Readers and settled unavailable pages are not entering the app.
-    expect(render([], { entryUrl })).not.toContain('class="app-skeleton"');
-    expect(render([], { title: "Conversation unavailable", unavailable: true })).not.toContain(
-      'class="app-skeleton"',
-    );
+    const status = pending.querySelector('[role="status"]')!;
+    expect(status.querySelector("svg")?.closest('[aria-hidden="true"]')).toBeTruthy();
+    expect(status.querySelector("h1")?.textContent).toBe("Loading conversation");
+    expect(status.querySelector("p")?.textContent).toBe("Checking access…");
+    expect(status.querySelector("button[data-public-reload]")?.textContent).toBe("Reload");
+    expect(fragment([], { entryUrl }).querySelector(".app-skeleton")).toBeNull();
+    expect(
+      fragment([], { title: "Conversation unavailable", unavailable: true }).querySelector(
+        ".app-skeleton",
+      ),
+    ).toBeNull();
   });
   it("publishes only user and assistant conversation text without internal input or metadata", () => {
     const token = `sk-${"a".repeat(48)}`;

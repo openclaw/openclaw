@@ -9,7 +9,7 @@ import {
 } from "../shared/control-ui-storage.js";
 import { escapeHtml } from "../shared/html-escape.js";
 import { openClawMascotStyles, renderOpenClawMascot } from "../shared/openclaw-mascot.js";
-import { OPENCLAW_WORDMARK_SVG, OPENCLAW_WORDMARK_TEXT_SVG } from "../shared/openclaw-wordmark.js";
+import { openClawWordmarkSvg, openClawWordmarkTextSvg } from "../shared/openclaw-wordmark.js";
 import { PUBLIC_SESSION_COPY } from "../shared/public-session-copy.js";
 import {
   buildPublicSessionMediaUrl,
@@ -284,10 +284,9 @@ function railIcon(paths: string): string {
 // The sidebar header carries the full lockup; while access is checked the phone header carries
 // only the text, since the page's own mascot stands right below it. The shell's aria-hidden
 // covers the sidebar copy's label.
-const SIDEBAR_WORDMARK = OPENCLAW_WORDMARK_SVG.replace(
-  'class="wordmark" role="img" aria-label="OpenClaw"',
-  'class="list-brand"',
-).replaceAll("openclaw-wordmark-shell", "openclaw-sidebar-shell");
+const SIDEBAR_WORDMARK = openClawWordmarkSvg
+  .replace('class="wordmark" role="img" aria-label="OpenClaw"', 'class="list-brand"')
+  .replaceAll("openclaw-wordmark-shell", "openclaw-sidebar-shell");
 const APP_SHELL_SKELETON_HTML = `<div class="app-skeleton" aria-hidden="true"><div class="app-rail"><span class="rail-button"><span class="rail-disc"></span></span><span class="rail-create"><span class="rail-new">${railIcon('<path d="M5 12h14M12 5v14"/>')}</span></span><span class="rail-button">${railIcon('<rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/>')}</span><span class="rail-button active">${railIcon('<path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"/>')}</span><span class="rail-button">${railIcon('<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>')}</span><span class="rail-button">${railIcon('<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>')}</span><span class="rail-bottom"><span class="rail-button idle">${railIcon('<path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>')}</span><span class="rail-button idle">${railIcon('<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="m5.45 5.11-3.45 6.89v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89a2 2 0 0 0-1.79-1.11h-9.52a2 2 0 0 0-1.79 1.11z"/>')}</span><span class="rail-button"><span class="rail-avatar"></span></span></span></div><div class="app-list">${SIDEBAR_WORDMARK}<span class="list-rows"><span class="list-row"><span></span><span></span></span><span class="list-row"><span></span><span></span></span><span class="list-row"><span></span><span></span></span><span class="list-row"><span></span><span></span></span></span></div></div>`;
 
 const PUBLIC_SESSION_PITCH_HTML = `<section class="colophon" aria-labelledby="openclaw-pitch"><div class="fleuron" aria-hidden="true">${LOBSTER_MARK}</div><p class="kicker">${copyMarkup("madeWith")}</p><h2 id="openclaw-pitch">${copyMarkup("pitchTitle")}</h2><p>${copyMarkup("pitchBody")}</p><div class="code install"><pre><code>curl -fsSL https://openclaw.ai/install.sh | bash</code></pre></div><p class="links"><a class="button primary" href="https://docs.openclaw.ai/start/getting-started" rel="noreferrer noopener">${copyMarkup("getStarted")} <span aria-hidden="true">→</span></a><a href="https://docs.openclaw.ai/start/why-openclaw" rel="noreferrer noopener">${copyMarkup("whyOpenClaw")}</a><a href="https://github.com/openclaw/openclaw" rel="noreferrer noopener">GitHub</a></p></section>`;
@@ -505,7 +504,7 @@ ${PUBLIC_SESSION_STYLES}
 </style>${entryPending ? "<noscript><style>[data-entry-pending] .entry-result{display:block}[data-entry-pending] .entry-status{display:none}[data-entry-pending] .login{visibility:visible}[data-entry-pending] .app-skeleton{display:none}</style></noscript>" : ""}</head><body><main data-public-session${params.unavailable ? " data-public-unavailable" : ""}${entryPending ? " data-entry-pending" : ""} data-public-refresh="${isLatest ? "true" : "false"}">
 <svg class="defs" aria-hidden="true" focusable="false"><linearGradient id="openclaw-shell" x1="0" y1="0" x2="1" y2="1"><stop offset="0" class="shell-light"/><stop offset="1" class="shell-dark"/></linearGradient></svg>
 ${entryPending ? APP_SHELL_SKELETON_HTML : ""}<div class="page">
-<header class="topbar"><a class="brand" href="https://openclaw.ai" rel="noreferrer noopener">${OPENCLAW_WORDMARK_SVG}${entryPending ? OPENCLAW_WORDMARK_TEXT_SVG : ""}</a>${entryLink}</header>
+<header class="topbar"><a class="brand" href="https://openclaw.ai" rel="noreferrer noopener">${openClawWordmarkSvg}${entryPending ? openClawWordmarkTextSvg : ""}</a>${entryLink}</header>
 <header class="article-head">${entryPending ? '<div class="entry-status" role="status">' + renderOpenClawMascot("openclaw-mascot-shell") + "<h1>" + copyMarkup("loadingConversation") + '</h1><p class="intro">' + copyMarkup("checkingAccess") + '</p><div class="entry-actions"><button class="button primary" type="button" data-public-reload>' + copyMarkup("reload") + '</button></div></div><div class="entry-result">' : ""}${eyebrow}<h1 dir="auto">${params.unavailable ? copyMarkup("unavailableTitle") : !stripInternalMetadataForDisplay(params.title).trim() ? copyMarkup("sharedConversation") : title}</h1><p class="intro">${
     params.unavailable
       ? copyMarkup("unavailable")
