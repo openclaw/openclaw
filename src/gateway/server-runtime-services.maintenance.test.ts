@@ -66,7 +66,7 @@ describe("post-ready maintenance scheduling", () => {
       ready.resolve();
       await pending;
       expect(runGatewayPostReadyStartupMaintenance).not.toHaveBeenCalled();
-      expect(facts).not.toHaveBeenCalled();
+      expect(facts).toHaveBeenCalledOnce();
       expect(runtimeServiceMocks.warmGatewayDatabasePageCache).not.toHaveBeenCalled();
       expect(startMaintenance).toHaveBeenCalledOnce();
       expect(cron.start).toHaveBeenCalledOnce();

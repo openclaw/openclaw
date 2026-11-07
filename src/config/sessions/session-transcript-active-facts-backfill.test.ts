@@ -1,8 +1,9 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import * as workerStores from "../../state/openclaw-agent-worker-store.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState as withState } from "../../test-utils/openclaw-test-state.js";
 import { readRecentSessionTranscriptActiveEvents } from "./session-accessor.sqlite-active-events.js";
@@ -85,13 +86,21 @@ it("fills historical active facts exactly and resumes without rereading covered 
     expect(first.rowsFilled).toBeLessThanOrEqual(16);
     expect(first.done).toBe(false);
     // Losing the process cursor starts an index-only coverage scan, not another payload fill.
+    const open = vi.spyOn(workerStores, "openOpenClawAgentSqliteWorkerStoreV2");
     const resume = createSessionTranscriptFactsBackfill({
       database: f.scope,
       assertCurrent: () => signal.throwIfAborted(),
-      log: { info() {} },
+      signal,
+      log: { info() {}, warn() {} },
     });
-    while (!(await resume(signal))) {
-      signal.throwIfAborted();
+    try {
+      while (!(await resume.runBatch()).complete) {
+        signal.throwIfAborted();
+      }
+      expect(open).toHaveBeenCalledOnce();
+    } finally {
+      await resume.close();
+      open.mockRestore();
     }
     expect(f.facts()).toEqual(
       f.events.map((event, seq) => ({
@@ -102,6 +111,34 @@ it("fills historical active facts exactly and resumes without rereading covered 
     );
     expect(readRecentSessionTranscriptActiveEvents(f.scope, 40)).toEqual(before);
     expect(f.drain()).toMatchObject({ done: true, rowsFilled: 0, bytesRead: 0 });
+  }));
+
+it("prioritizes recent active paths by size before larger inactive paths", () =>
+  withState({ label: "active-facts-order", scenario: "minimal" }, async ({ env }) => {
+    const f = fixture(env);
+    const now = Date.now();
+    for (const [sessionId, count, ageDays] of [
+      ["old-large", 4, 9],
+      ["recent-small", 1, 1],
+      ["old-small", 2, 8],
+      ["recent-large", 3, 6],
+    ] as const) {
+      await replaceTranscriptEvents(
+        { ...f.scope, sessionId, sessionKey: `agent:main:${sessionId}` },
+        f.events.slice(0, count),
+      );
+      f.write(({ db }) =>
+        db
+          .prepare("UPDATE session_transcript_index_state SET updated_at = ? WHERE session_id = ?")
+          .run(now - ageDays * 86_400_000, sessionId),
+      );
+    }
+    expect(discover(f.db()).map((row) => row.sessionId)).toEqual([
+      "recent-large",
+      "recent-small",
+      "old-large",
+      "old-small",
+    ]);
   }));
 
 it("leaves malformed historical rows unknown instead of inventing noncandidate facts", () =>

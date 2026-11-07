@@ -15,11 +15,14 @@ import {
   schedulePendingSessionDeliveries,
   startSessionDeliveryRuntime,
 } from "../infra/session-delivery-queue-runtime.js";
+import { getQueueSize } from "../process/command-queue.js";
 import {
+  getActiveGatewayRootWorkCount,
   isGatewayRestartDrainError,
   isGatewayWorkAdmissionClosed,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { CommandLane } from "../process/lanes.js";
 import { startSessionUpstreamMonitor } from "../sessions/session-upstream-monitor.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -30,7 +33,7 @@ import {
 } from "./scheduled-run-gateway-context.js";
 import type { GatewayCronState } from "./server-cron-contract.js";
 import type { GatewayCronReconciliation } from "./server-cron-reconciled.js";
-import { isGatewayBackgroundMaintenanceBusy, scheduleGatewayIdleTask } from "./server-idle-task.js";
+import { scheduleGatewayIdleTask } from "./server-idle-task.js";
 import {
   clearGatewayMaintenanceHandles,
   type GatewayMaintenanceHandles,
@@ -107,12 +110,16 @@ export function scheduleGatewayPostReadyMaintenance(params: {
   log: GatewayPostReadyLogger;
   recordPostReadyMemory: () => void;
 }): void {
+  const isRecovering = () =>
+    getQueueSize(CommandLane.Background) > 0 ||
+    getQueueSize(CommandLane.RestartRecovery) > 0 ||
+    getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0;
   const idle = {
     scheduler: params.scheduler,
     delayMs: params.delayMs,
     retryDelayMs: Math.max(1_000, params.delayMs),
     isClosing: () => params.signal.aborted || params.isClosing(),
-    isBusy: isGatewayBackgroundMaintenanceBusy,
+    isBusy: isRecovering,
     waitForReady: params.waitForPostReadyWork,
     log: params.log,
   };
@@ -161,15 +168,6 @@ export function scheduleGatewayPostReadyMaintenance(params: {
             signal,
             log: params.log,
           });
-          signal.throwIfAborted();
-          const { scheduleGatewaySessionFactsBackfill } =
-            await import("./server-startup-session-migration.js");
-          scheduleGatewaySessionFactsBackfill({
-            databases: params.startupMaintenance.startupSessionDatabases,
-            scheduler: params.scheduler,
-            signal,
-            log: params.log,
-          });
         },
       );
     },
@@ -188,6 +186,18 @@ export function scheduleGatewayPostReadyMaintenance(params: {
             return;
           }
           try {
+            const { scheduleGatewaySessionFactsBackfill } =
+              await import("./server-startup-session-migration.js");
+            if (params.isClosing() || params.signal.aborted) {
+              return;
+            }
+            // Registration must not wait for optional globally idle maintenance.
+            scheduleGatewaySessionFactsBackfill({
+              databases: params.startupMaintenance.startupSessionDatabases,
+              scheduler: params.scheduler,
+              signal: params.signal,
+              log: params.log,
+            });
             if (!params.isClosing()) {
               const maintenance = await params.startMaintenance();
               if (params.isClosing()) {

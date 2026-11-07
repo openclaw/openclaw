@@ -3,6 +3,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import * as factsBackfill from "../config/sessions/session-transcript-facts-backfill.js";
 import * as agentRuns from "../infra/agent-run-registry.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import * as commandQueue from "../process/command-queue.js";
 import {
   beginGatewayRestartSignalAdmission,
   getActiveGatewayRootWorkCount,
@@ -10,6 +11,7 @@ import {
   tryBeginGatewayIndependentRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { CommandLane } from "../process/lanes.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -61,21 +63,32 @@ function scheduleHandler(load: () => Promise<void>, log: { warn: (message: strin
 }
 
 it.each(["complete", "shutdown"] as const)(
-  "paces facts backfill outside foreground work and stops on %s",
+  "paces facts backfill during foreground work after recovery and stops on %s",
   async (outcome) => {
-    const liveRuns = vi.spyOn(agentRuns, "getActiveAgentRunContextCount").mockReturnValue(1);
+    vi.spyOn(agentRuns, "getActiveAgentRunContextCount").mockReturnValue(1);
+    let recovering = true;
+    vi.spyOn(commandQueue, "getQueueSize").mockImplementation((lane) =>
+      lane === CommandLane.RestartRecovery ? Number(recovering) : 1,
+    );
     const entered = createDeferred();
-    const runBatch = vi.fn(async (signal: AbortSignal) => {
+    let passSignal: AbortSignal;
+    const runBatch = vi.fn(async () => {
+      if (runBatch.mock.calls.length === 1) {
+        return { complete: false, delayMs: 750 };
+      }
       entered.resolve();
       if (outcome === "shutdown") {
         await new Promise<void>((resolve) => {
-          signal.addEventListener("abort", () => resolve(), { once: true });
+          passSignal.addEventListener("abort", () => resolve(), { once: true });
         });
-        expect(signal.aborted).toBe(true);
+        expect(passSignal.aborted).toBe(true);
       }
-      return outcome === "complete";
+      return { complete: outcome === "complete", delayMs: 250 };
     });
-    vi.spyOn(factsBackfill, "createSessionTranscriptFactsBackfill").mockReturnValue(runBatch);
+    vi.spyOn(factsBackfill, "createSessionTranscriptFactsBackfill").mockImplementation((params) => {
+      passSignal = params.signal;
+      return { runBatch, close: async () => {} };
+    });
     const foreground = tryBeginGatewayIndependentRootWorkAdmission("test:foreground");
     expect(foreground).not.toBeNull();
     scheduleGatewaySessionFactsBackfill({
@@ -88,20 +101,22 @@ it.each(["complete", "shutdown"] as const)(
     });
     await clock.advanceBy(250);
     expect(runBatch).not.toHaveBeenCalled();
-    foreground!.release();
+    recovering = false;
     await clock.advanceBy(1_000);
-    expect(runBatch).not.toHaveBeenCalled();
-    liveRuns.mockReturnValue(0);
-    const tick = clock.advanceBy(1_000);
+    expect(runBatch).toHaveBeenCalledOnce();
+    await clock.advanceBy(749);
+    expect(runBatch).toHaveBeenCalledOnce();
+    const tick = clock.advanceBy(1);
     await entered.promise;
     if (outcome === "shutdown") {
       await scheduler.stop();
     }
     await tick;
-    expect(runBatch).toHaveBeenCalledOnce();
+    expect(runBatch).toHaveBeenCalledTimes(2);
+    foreground!.release();
     expect(getActiveGatewayRootWorkCount()).toBe(0);
     await clock.advanceBy(60_000);
-    expect(runBatch).toHaveBeenCalledOnce();
+    expect(runBatch).toHaveBeenCalledTimes(2);
   },
 );
 

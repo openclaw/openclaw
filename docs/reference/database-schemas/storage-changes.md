@@ -3228,11 +3228,19 @@ does not narrow that engine's backup scope.
 
 After readiness and restart recovery, the Gateway's idle maintenance scheduler
 backfills historical SQLite facts in its existing agent database worker. It
-prioritizes the largest active paths, then recent activity, and finishes each
-session before advancing. Each batch yields the writer; foreground work and live
-runs defer the next batch. Drain cancels pending work and permits only an already
+prioritizes sessions updated within seven days, largest active path first, then
+older sessions by size, and finishes each session before advancing. Background
+writer admission waits for the foreground FIFO to drain; active runs and other
+background work do not prevent progress. The delay after each batch is at least
+250 ms and twenty times its transaction duration. Lock contention doubles a
+separate backoff up to five seconds; a clean batch resets it. One worker client
+serves the pass and closes on completion or cancellation. Drain cancels pending work and permits only an already
 admitted bounded transaction to settle. This work never runs during database
 open, migration, or readiness.
+
+A foreground operation arriving mid-transaction waits for that transaction.
+An indivisible cold payload read or commit can exceed the soft time budget;
+the following delay limits the backfill's writer duty cycle.
 
 Each transaction reads the current active rows and derives facts with the same
 helpers as ordinary writers. Cold, rebuilding, and malformed rows retain their

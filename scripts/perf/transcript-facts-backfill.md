@@ -8,15 +8,18 @@ Gateway proof in addition to this owner run.
 All generated state, libraries, and profiles belong on the fixture volume. Keep the
 normal `TMPDIR`. A ten-million-row hybrid fixture uses full-size payloads on its four
 long paths and compact payloads elsewhere. It allocates and deletes ordinary SQLite
-rows to fragment overflow chains. Only `synthetic-0` has finalized identities and a
-session header for hydration; the other paths supply storage and index cardinality.
+rows to fragment overflow chains. By default only `synthetic-0` has finalized identities
+and a session header. `--finalize-long-sessions` prepares all four long paths with
+headers, unique IDs and parents, and alternating valid user/assistant messages.
+Their IDs are recorded in the fixture report; select one with `--session synthetic-2`
+for the 49,000-event path. Other paths supply storage and index cardinality.
 
 ```sh
 mkdir -p .local/facts-backfill
 python3 scripts/perf/transcript-active-facts.py \
   --output .local/facts-backfill --schema src/state/openclaw-agent-schema.sql \
   --name ten-million --rows 10000000 --mode hybrid --schema-version 41 \
-  --longest-session-rows 49000
+  --longest-session-rows 49000 --finalize-long-sessions
 clang -O2 -Wall -Wextra -Werror -dynamiclib -I/opt/homebrew/opt/sqlite/include \
   scripts/perf/transcript-active-facts-vfs.c -o .local/facts-backfill/bufprobe.dylib
 node --import ./scripts/tsx.mjs scripts/perf/transcript-facts-backfill.ts \
@@ -40,7 +43,7 @@ untraced timing comparison. Five untraced hydration samples establish medians/sp
 not a p99. Batch percentiles require the sample counts in the lane's decision rules.
 `--skip-backfill` runs identical-code before/after hydration controls without changing
 coverage. `--skip-hydration` measures only the backfill; use it for the other fixture
-sessions, whose identities are not finalized for actor hydration.
+sessions that were not finalized for actor hydration.
 
 The normal pacing run retains one native connection. Its repeated non-resident actor
 hydrates can reuse the existing exact-version accounting cache; they do not establish
@@ -70,3 +73,23 @@ adverse result. A partial-session or selected-session result is not a complete
 
 The final native close timing is not Gateway shutdown latency. Delete the synthetic
 SQLite files and sidecars after the campaign; keep the small reports needed by the PR.
+
+## Worker-client lifecycle CPU
+
+`transcript-facts-backfill-client.ts` compares reopening a V2 client for each call
+with retaining one client across calls. Both execute the same real backfill command
+over one covered tail identity, with admission and module loading warmed first:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/transcript-facts-backfill-client.ts \
+  --fixture .local/facts-backfill/ten-million.sqlite --session synthetic-2 \
+  --after-position 48998 --output .local/facts-backfill --label client-cost
+```
+
+The fixture report must identify the selected finalized path. The unmeasured first
+call may fill its final fact. A fresh test-state owner supplies isolated config and
+cleans up its workers and state. Timing uses one A/A pair and two AB/BA pairs with
+1,000 calls per arm; sampled host allocation runs separately. Process CPU includes
+Worker threads, while thread CPU and sampled allocation cover the host. The final
+open/close-only loop isolates host lifecycle work. This does not claim that each
+client open reopens SQLite, or measure payload batch cost or Gateway scheduling.

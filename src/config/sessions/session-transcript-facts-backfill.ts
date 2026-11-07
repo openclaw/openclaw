@@ -1,18 +1,28 @@
+import { addAbortListener } from "node:events";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
-import { openOpenClawAgentSqliteWorkerStoreV2 } from "../../state/openclaw-agent-worker-store.js";
+import {
+  openOpenClawAgentSqliteWorkerStoreV2,
+  type OpenClawAgentSqliteWorkerStoreV2,
+} from "../../state/openclaw-agent-worker-store.js";
 import type {
   TranscriptActiveFactsBackfillOperations,
   TranscriptActiveFactsBackfillSession,
 } from "./session-transcript-active-facts-backfill.worker.js";
 
-/** The existing post-ready scheduler owns cadence, foreground yielding, and cancellation. */
+export type SessionTranscriptFactsBackfill = {
+  runBatch(): Promise<{ complete: boolean; delayMs: number }>;
+  close(): Promise<void>;
+};
+
+/** The scheduler owns cadence; background writer admission yields to the foreground FIFO. */
 export function createSessionTranscriptFactsBackfill(params: {
   database: OpenClawAgentDatabaseOptions;
   assertCurrent: () => void;
-  log: { info: (message: string) => void };
-}): (signal: AbortSignal) => Promise<boolean> {
+  signal: AbortSignal;
+  log: { info: (message: string) => void; warn: (message: string) => void };
+}): SessionTranscriptFactsBackfill {
   let sessions: TranscriptActiveFactsBackfillSession[] | undefined;
   let sessionIndex = 0;
   let afterPosition = -1;
@@ -22,14 +32,33 @@ export function createSessionTranscriptFactsBackfill(params: {
   let batchMs = 0;
   let pauses = 0;
   let lastReport = 0;
-  return async (signal) => {
-    const assertCurrent = () => {
-      signal.throwIfAborted();
-      params.assertCurrent();
-    };
-    assertCurrent();
-    const client =
-      await openOpenClawAgentSqliteWorkerStoreV2<TranscriptActiveFactsBackfillOperations>(
+  let contentionDelayMs = 250;
+  let closed = false;
+  let client:
+    | Promise<OpenClawAgentSqliteWorkerStoreV2<TranscriptActiveFactsBackfillOperations>>
+    | undefined;
+  const assertCurrent = () => {
+    params.signal.throwIfAborted();
+    params.assertCurrent();
+  };
+  const close = async () => {
+    closed = true;
+    abortListener[Symbol.dispose]();
+    await (await client)?.close();
+  };
+  const abortListener = addAbortListener(params.signal, () => {
+    // Database lifecycle ownership also joins this idempotent close during shutdown.
+    void close().catch((error: unknown) =>
+      params.log.warn(`Transcript facts backfill cleanup failed: ${String(error)}`),
+    );
+  });
+  const runBatch = async () => {
+    if (closed) {
+      return { complete: true, delayMs: 250 };
+    }
+    try {
+      assertCurrent();
+      client ??= openOpenClawAgentSqliteWorkerStoreV2<TranscriptActiveFactsBackfillOperations>(
         params.database,
         { version: 2, assertCurrent },
         {
@@ -40,34 +69,41 @@ export function createSessionTranscriptFactsBackfill(params: {
           priority: "background",
         },
       );
-    try {
+      const store = await client;
       if (!sessions) {
-        const discovery = await client.execute(
+        const discovery = await store.execute(
           { type: "discover", input: undefined },
           assertCurrent,
-          { signal },
+          { signal: params.signal },
         );
         if (!discovery.supported) {
           params.log.info(
             "session: transcript facts backfill skipped: background backfill supports SQLite only",
           );
-          return true;
+          await close();
+          return { complete: true, delayMs: 250 };
         }
         sessions = discovery.sessions;
         params.log.info(
           `session: transcript facts backfill discovered ${sessions.length} active session(s)`,
         );
-        return sessions.length === 0;
+        if (sessions.length === 0) {
+          await close();
+        }
+        return { complete: sessions.length === 0, delayMs: 250 };
       }
       const session = sessions[sessionIndex];
       if (!session) {
-        return true;
+        await close();
+        return { complete: true, delayMs: 250 };
       }
-      const batch = await client.execute(
+      const batch = await store.execute(
         { type: "batch", input: { sessionId: session.sessionId, afterPosition } },
         assertCurrent,
-        { signal },
+        { signal: params.signal },
       );
+      contentionDelayMs = batch.busy ? Math.min(5_000, contentionDelayMs * 2) : 250;
+      const delayMs = Math.max(250, 20 * batch.elapsedMs, contentionDelayMs);
       afterPosition = batch.afterPosition;
       rowsFilled += batch.rowsFilled;
       rowsSkipped += batch.rowsSkipped;
@@ -91,10 +127,13 @@ export function createSessionTranscriptFactsBackfill(params: {
       }
       if (complete) {
         sessions = [];
+        await close();
       }
-      return complete;
-    } finally {
-      await client.close();
+      return { complete, delayMs };
+    } catch (error) {
+      await close();
+      throw error;
     }
   };
+  return { runBatch, close };
 }

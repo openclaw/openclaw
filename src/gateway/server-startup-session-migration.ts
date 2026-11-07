@@ -1,21 +1,23 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
+import type { SessionTranscriptFactsBackfill } from "../config/sessions/session-transcript-facts-backfill.js";
 import {
   runSessionStartupMigration,
   type SessionStartupMigrationLogger,
 } from "../config/sessions/startup-migration-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getActiveAgentRunContextCount } from "../infra/agent-run-registry.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
 } from "../infra/sqlite-worker-identity.js";
+import { getQueueSize } from "../process/command-queue.js";
+import { CommandLane } from "../process/lanes.js";
 import { captureAgentDatabaseAdmission } from "../state/agent-database-admission.js";
 import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db-contract.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateReadContext } from "../state/openclaw-state-worker-context.js";
-import { isGatewayBackgroundMaintenanceBusy, scheduleGatewayIdleTask } from "./server-idle-task.js";
+import { scheduleGatewayIdleTask } from "./server-idle-task.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 
 export type PreparedStartupSessionDatabase = {
@@ -32,48 +34,37 @@ export function scheduleGatewaySessionFactsBackfill(params: {
 }): void {
   for (const { database, assertCurrent } of params.databases) {
     let complete = false;
-    let pauses = 0;
-    let lastPauseReport = 0;
-    let runBatch: ((signal: AbortSignal) => Promise<boolean>) | undefined;
+    let delayMs = 250;
+    let backfill: SessionTranscriptFactsBackfill | undefined;
     scheduleGatewayIdleTask({
       id: `maintenance:transcript-facts:${database.path}`,
       scheduler: params.scheduler,
       delayMs: 250,
-      repeatDelayMs: 250,
+      repeatDelayMs: () => delayMs,
       retryDelayMs: 1_000,
       isClosing: () => complete || params.signal.aborted,
-      isBusy: () => {
-        const busy = isGatewayBackgroundMaintenanceBusy() || getActiveAgentRunContextCount() > 0;
-        if (busy) {
-          pauses++;
-          const now = Date.now();
-          if (now - lastPauseReport >= 60_000) {
-            params.log.info(
-              `session: transcript facts backfill waiting for foreground work (${pauses} pauses)`,
-            );
-            lastPauseReport = now;
-          }
-        }
-        return busy;
-      },
+      isBusy: () => getQueueSize(CommandLane.RestartRecovery) > 0,
       log: params.log,
       errorMessage: "Transcript facts backfill failed",
       run: async (signal) => {
         signal.throwIfAborted();
         params.signal.throwIfAborted();
         assertCurrent();
-        if (!runBatch) {
+        if (!backfill) {
           const { createSessionTranscriptFactsBackfill } =
             await import("../config/sessions/session-transcript-facts-backfill.js");
-          runBatch = createSessionTranscriptFactsBackfill({
+          backfill = createSessionTranscriptFactsBackfill({
             database,
             assertCurrent,
+            signal: AbortSignal.any([signal, params.signal]),
             log: params.log,
           });
         }
-        complete = await runBatch(AbortSignal.any([signal, params.signal]));
+        // A foreground arrival can wait for this bounded transaction. One indivisible
+        // cold read can exceed its soft budget; the next delay limits writer duty cycle.
+        ({ complete, delayMs } = await backfill.runBatch());
         if (complete) {
-          runBatch = undefined;
+          backfill = undefined;
         }
       },
     });
