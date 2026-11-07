@@ -75,6 +75,63 @@ function makeGoal(overrides: Partial<NonNullable<SessionEntry["goal"]>>) {
 }
 
 describe("goal tools", () => {
+  it("records an immediate human wait durably without completing the goal", async () => {
+    const original = makeGoal({ tokenBudget: 100, tokensUsed: 12 });
+    const { options, readGoal } = await createStoreConfig("global", { goal: original });
+    const tool = createUpdateGoalTool(options);
+    const args = { status: "waiting_on_human", note: "Approve the configuration change" };
+    expect(Value.Check(tool.parameters, args)).toBe(true);
+    const result = await tool.execute("wait", args);
+    expect(result.details).toMatchObject({
+      status: "updated",
+      goal: {
+        ...original,
+        status: "blocked",
+        updatedAt: expect.any(Number),
+        blockedAt: expect.any(Number),
+        lastStatusNote: "Waiting on human: Approve the configuration change",
+      },
+    });
+    expect(readGoal()?.completedAt).toBeUndefined();
+    expect((await createGetGoalTool(options).execute("read", {})).details).toMatchObject({
+      goal: readGoal(),
+    });
+    const waiting = readGoal();
+    await tool.execute("wait-retry", args);
+    expect(readGoal()).toEqual(waiting);
+  });
+
+  it("lets the caller correct a human wait missing its decision note", async () => {
+    const { options, readGoal } = await createStoreConfig("global", { goal: makeGoal({}) });
+    const original = readGoal();
+    const tool = createUpdateGoalTool(options);
+    await expect(tool.execute("wait", { status: "waiting_on_human" })).rejects.toThrow(
+      "note required",
+    );
+    expect(readGoal()).toEqual(original);
+    const corrected = await tool.execute("wait-with-note", {
+      status: "waiting_on_human",
+      note: "Approve the configuration change",
+    });
+    expect(corrected.details).toMatchObject({ status: "updated", goal: { status: "blocked" } });
+  });
+
+  it.each(["paused", "complete", "blocked", "budget_limited", "usage_limited"] as const)(
+    "does not replace a %s goal with a new human wait",
+    async (status) => {
+      const { options, readGoal } = await createStoreConfig("global", {
+        goal: makeGoal({ status }),
+      });
+      const original = readGoal();
+      const result = await createUpdateGoalTool(options).execute("wait", {
+        status: "waiting_on_human",
+        note: "Approve the configuration change",
+      });
+      expect(result.details).toMatchObject({ status: "error" });
+      expect(readGoal()).toEqual(original);
+    },
+  );
+
   it("keeps get_goal read-only when accounting changes are projected", async () => {
     const { options, readGoal } = await createStoreConfig("global", {
       totalTokens: 125,

@@ -176,7 +176,7 @@ OpenClaw exposes three goal tools to agent harnesses:
 | ------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `get_goal`    | Read the current session goal: status, objective, token usage, and token budget.                                         |
 | `create_goal` | Create a goal only when the user or system instructions explicitly request one. Fails if the session already has a goal. |
-| `update_goal` | Mark the goal `complete` or `blocked`.                                                                                   |
+| `update_goal` | Mark the goal `complete`, `blocked`, or immediately report `waiting_on_human`.                                           |
 
 The model cannot silently pause, resume, clear, or replace a goal. Those stay
 operator/session controls through `/goal` and reset commands, so the agent
@@ -189,6 +189,19 @@ mark a goal `blocked` only after the same blocking condition recurs for at least
 three consecutive goal turns, not for ordinary difficulty or missing polish.
 Resuming a blocked goal starts a fresh count of three consecutive turns. Earlier
 blocked turns do not count toward it.
+
+When explicit human authorization or a required decision prevents further progress,
+use `update_goal({ status: "waiting_on_human", note: "Describe the pending decision" })`
+immediately, without waiting for three turns. OpenClaw stores this as `blocked`
+with a `Waiting on human:` status note. The objective, identity, budget, and usage
+remain intact; it is not completion. Both turn settlement and admission of an
+already queued Goal nudge require `active`, so this durable blocker also stops
+automatic continuation after recovery. Ordinary messages and automatic inputs
+do not resume it. After the decision, use `/goal resume` or **Resume** to continue
+the same goal. Resume itself does not grant permission for the pending action.
+A human wait requires a nonempty decision note and cannot replace a paused,
+completed, limited, or differently blocked goal.
+
 A nearly exhausted budget does not justify marking unfinished work complete.
 Updating goal status does not send a chat reply. The agent must still provide
 the user's requested final response.
@@ -198,7 +211,7 @@ the user's requested final response.
 Every user/chat turn with an active goal includes this user-role context line:
 
 ```text
-Active goal: <objective> — advance; keep active until fully achieved; block only after the same blocker on 3 consecutive turns; after update_goal, provide the requested visible final.
+Active goal: <objective> — advance; keep active until fully achieved; use update_goal waiting_on_human immediately for required human authorization/decisions, with a note; otherwise block only after the same blocker on 3 consecutive turns; after update_goal, provide the requested visible final.
 ```
 
 OpenClaw keeps the line compact by truncating long objectives. Paused,
