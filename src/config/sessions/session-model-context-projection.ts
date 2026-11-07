@@ -45,17 +45,12 @@ function projectDeepModelContextSql(
       if (typeof raw !== "string") {
         throw new TypeError("Deep transcript projection requires canonical JSON text");
       }
-      // SAFETY: This is the same canonical entry decoded by the native context reader.
-      const entry = JSON.parse(raw) as SessionTreeEntry;
-      return JSON.stringify(
-        nav === 1
-          ? projectSessionModelContextNavigation(entry)
-          : projectSessionModelContextEntry(entry, {
-              entry,
-              omitCheckpoint: omit === 1,
-              toolResultOmission: typeof omission === "string" ? omission : undefined,
-            }),
-      );
+      return nav === 1
+        ? projectCanonicalModelContextNavigation(raw)
+        : projectCanonicalModelContextEvent(raw, {
+            omitCheckpoint: omit === 1,
+            toolResultOmission: typeof omission === "string" ? omission : undefined,
+          });
     });
     registeredDeepProjectors.add(db);
   }
@@ -314,11 +309,33 @@ export function projectModelContextNavigationSql(
     ELSE ${projectDeepModelContextSql(db, event, true)} END`;
 }
 
+/** Model-only payload for canonical text that native JSON cannot decode (deep SQLite, unmatched-surrogate PostgreSQL). */
+export function projectCanonicalModelContextEvent(
+  eventJson: string,
+  { omitCheckpoint, toolResultOmission }: { omitCheckpoint: boolean; toolResultOmission?: string },
+): string {
+  const entry = parseCanonicalEntry(eventJson);
+  return JSON.stringify(
+    projectSessionModelContextEntry(entry, { entry, omitCheckpoint, toolResultOmission }),
+  );
+}
+
+/** Navigation counterpart of {@link projectCanonicalModelContextEvent}. */
+export function projectCanonicalModelContextNavigation(eventJson: string): string {
+  return JSON.stringify(projectSessionModelContextNavigation(parseCanonicalEntry(eventJson)));
+}
+
+function parseCanonicalEntry(eventJson: string): SessionTreeEntry {
+  // SAFETY: This is the same canonical entry decoded by the native context reader.
+  return JSON.parse(eventJson) as SessionTreeEntry;
+}
+
 /** Project only the caller's bounded page; no write path uses this relation. */
 export function projectPostgresModelContextRowsSql(
   rows: Expression<{ seq: number; event_json: string | null; navigation_json: string | null }>,
 ): RawBuilder<{
   seq: number;
+  undecodable_json: string | null;
   navigation_json: string;
   model_bytes: number;
   retained_bytes: number;
@@ -327,6 +344,8 @@ export function projectPostgresModelContextRowsSql(
     /* kysely-allow-raw: Fixed parsed-event column from this page projection. */ sql.ref<string>(
       "context_projected.event",
     );
+  // JSONB rejects unmatched surrogate escapes that canonical JSON text accepts; JavaScript projects those rows.
+  const native = /* kysely-allow-raw: PostgreSQL 16+ checks JSONB decodability without raising. */ sql<boolean>`coalesce(pg_input_is_valid(event_json, 'jsonb'), false)`;
   const message =
     /* kysely-allow-raw: Fixed message column derived once for the selected page. */ sql.ref<string>(
       "context_projected.message",
@@ -343,14 +362,18 @@ export function projectPostgresModelContextRowsSql(
     /* kysely-allow-raw: Native role lookup in the once-derived message. */ sql`context_parts.message ->> 'role'`,
   );
   return /* kysely-allow-raw: One bounded read shares parsed JSONB and native model bytes across its projections. */ sql`(
-    WITH context_input AS MATERIALIZED (
-      SELECT seq, CASE WHEN navigation_json IS NULL THEN event_json::jsonb END AS event,
-        navigation_json::jsonb AS metadata FROM (${rows}) AS selected
+    WITH context_checked AS MATERIALIZED (
+      SELECT seq, event_json, navigation_json,
+        CASE WHEN navigation_json IS NULL THEN ${native} END AS decodable FROM (${rows}) AS selected
+    ), context_input AS MATERIALIZED (
+      SELECT seq, CASE WHEN decodable THEN event_json::jsonb END AS event,
+        CASE WHEN NOT decodable THEN event_json END AS undecodable_json,
+        navigation_json::jsonb AS metadata FROM context_checked
     ), context_parts AS MATERIALIZED (
       SELECT *, event -> 'message' AS message, event #> '{message,content}' AS content FROM context_input
     ), context_projected AS MATERIALIZED (
       SELECT *, ${model} AS model FROM context_parts
-    ) SELECT seq,
+    ) SELECT seq, undecodable_json,
       CASE WHEN metadata IS NULL THEN ${postgresModelNavigationSql(event, message, content, type)}::text
         ELSE (metadata -> 'model')::text END AS navigation_json,
       CASE WHEN metadata IS NULL THEN octet_length(model::text)

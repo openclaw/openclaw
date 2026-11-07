@@ -170,7 +170,10 @@ it.skipIf(typeof connection !== "string")(
                 ).as("context"),
               )
               .selectAll(),
-          );
+          ).map(({ undecodable_json: undecodable, ...row }) => {
+            expect(undecodable).toBeNull();
+            return row;
+          });
         expect(native()).toEqual(legacy);
         // Existing stored envelopes bypass canonical JSON parsing even when its text is unavailable.
         setEnvelope(

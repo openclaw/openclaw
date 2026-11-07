@@ -1,0 +1,2 @@
+# PostgreSQL context readers keep unmatched surrogate escapes, for #194517.
+36
