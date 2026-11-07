@@ -28,39 +28,39 @@ const questionPayload = (question: string, text = answer): ReplyPayload => ({
 });
 
 describe("resolveFollowupDeliveryPayloads", () => {
-  it("drops payloads without visible content", () => {
-    expect(resolve([{ text: " \t\n " }, { text: "", mediaUrls: [" "] }])).toEqual([]);
+  it("drops payloads without visible content", async () => {
+    expect(await resolve([{ text: " \t\n " }, { text: "", mediaUrls: [" "] }])).toEqual([]);
   });
 
-  it("keeps rich content when text is blank", () => {
-    expect(resolve([{ text: " ", mediaUrl: "file:///tmp/reply.png" }])).toMatchObject([
+  it("keeps rich content when text is blank", async () => {
+    expect(await resolve([{ text: " ", mediaUrl: "file:///tmp/reply.png" }])).toMatchObject([
       { mediaUrl: "file:///tmp/reply.png" },
     ]);
   });
 
-  it("drops a durable reasoning payload when reasoningPayloadsEnabled is not set", () => {
+  it("drops a durable reasoning payload when reasoningPayloadsEnabled is not set", async () => {
     expect(
-      resolve([{ text: "internal reasoning", isReasoning: true }, { text: "final answer" }]),
+      await resolve([{ text: "internal reasoning", isReasoning: true }, { text: "final answer" }]),
     ).toEqual([{ text: "final answer" }]);
   });
 
-  it("drops commentary unless its delivery lane is enabled", () => {
+  it("drops commentary unless its delivery lane is enabled", async () => {
     const payload = { text: "internal commentary", isCommentary: true };
-    expect(resolve([payload])).toEqual([]);
-    expect(resolve([payload], { commentaryPayloadsEnabled: true })).toMatchObject([payload]);
+    expect(await resolve([payload])).toEqual([]);
+    expect(await resolve([payload], { commentaryPayloadsEnabled: true })).toMatchObject([payload]);
   });
 
-  it("drops heartbeat ack payloads without media", () => {
-    expect(resolve([{ text: "HEARTBEAT_OK" }])).toStrictEqual([]);
+  it("drops heartbeat ack payloads without media", async () => {
+    expect(await resolve([{ text: "HEARTBEAT_OK" }])).toStrictEqual([]);
   });
 
-  it("preserves transcript ownership when stripping heartbeat text", () => {
+  it("preserves transcript ownership when stripping heartbeat text", async () => {
     const payload = setReplyPayloadMetadata(
       { text: "HEARTBEAT_OK still working" },
       { assistantTranscriptOwned: true },
     );
 
-    const [resolved] = resolve([payload]);
+    const [resolved] = await resolve([payload]);
 
     expect(getReplyPayloadMetadata(resolved ?? {})).toEqual({
       assistantTranscriptOwned: true,
@@ -75,10 +75,10 @@ describe("resolveFollowupDeliveryPayloads", () => {
     [questionPayload("second"), sideReply("first", answer), threadId, false],
   ] as const)(
     "dedupes only the same question and route: %j",
-    (payload, sentText, originThread, duplicate) => {
+    async (payload, sentText, originThread, duplicate) => {
       const delivered = vi.fn();
       expect(
-        resolve([payload], {
+        await resolve([payload], {
           messageProvider: "slack",
           originatingTo: "channel:C1",
           originatingThreadId: originThread,
@@ -93,9 +93,9 @@ describe("resolveFollowupDeliveryPayloads", () => {
     },
   );
 
-  it("delivers distinct replies when originating channel resolves the provider", () => {
+  it("delivers distinct replies when originating channel resolves the provider", async () => {
     expect(
-      resolve([{ text: "hello world!" }], {
+      await resolve([{ text: "hello world!" }], {
         messageProvider: "heartbeat",
         originatingChannel: "telegram",
         originatingTo: "268300329",

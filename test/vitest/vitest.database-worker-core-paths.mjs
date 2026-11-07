@@ -368,6 +368,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/reply-tool-authority.worker.test.ts",
   "src/auto-reply/reply/session-event-automation-result.test.ts",
   "src/auto-reply/reply/session-event-config-readmission.test.ts",
+  "src/auto-reply/reply/session-event-media.test.ts",
   "src/auto-reply/reply/session-event-handoff.test.ts",
   "src/auto-reply/reply/session-event-permissions.test.ts",
   "src/auto-reply/reply/session-reset-prompt.test.ts",

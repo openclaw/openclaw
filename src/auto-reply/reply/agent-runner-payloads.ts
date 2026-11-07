@@ -7,7 +7,6 @@ import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-f
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
@@ -25,6 +24,7 @@ import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { normalizeReplyPayloadDirectives, type DirectBlockDelivery } from "./reply-delivery.js";
 import { shouldRetryReplyDispatch } from "./reply-dispatch-outcome.js";
+import { normalizeSentMediaUrlsForDedupe } from "./reply-media-dedupe.js";
 import { applyReplyThreading, resolveReplyThreadingPayloads } from "./reply-payloads-base.js";
 import { createReplyDeliveryContext } from "./reply-threading.js";
 
@@ -32,38 +32,6 @@ const replyPayloadsDedupeRuntimeLoader = createLazyImportLoader(
   () => import("./reply-payloads-dedupe.js"),
 );
 const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
-
-async function normalizeSentMediaUrlsForDedupe(params: {
-  sentMediaUrls: string[];
-  normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
-}): Promise<string[]> {
-  if (params.sentMediaUrls.length === 0 || !params.normalizeMediaPaths) {
-    return params.sentMediaUrls;
-  }
-
-  const normalizedUrls = new Set<string>();
-  for (const raw of params.sentMediaUrls) {
-    const trimmed = raw.trim();
-    if (!trimmed) {
-      continue;
-    }
-    normalizedUrls.add(trimmed);
-    try {
-      const normalized = await params.normalizeMediaPaths({
-        mediaUrl: trimmed,
-        mediaUrls: [trimmed],
-      });
-      const normalizedMediaUrls = resolveSendableOutboundReplyParts(normalized).mediaUrls;
-      for (const mediaUrl of normalizedMediaUrls) {
-        normalizedUrls.add(mediaUrl);
-      }
-    } catch (err) {
-      logVerbose(`messaging tool sent-media normalization failed: ${String(err)}`);
-    }
-  }
-
-  return [...normalizedUrls];
-}
 
 function sanitizeFinalReplyText(
   payload: ReplyPayload,
