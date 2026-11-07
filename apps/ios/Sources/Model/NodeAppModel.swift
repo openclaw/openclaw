@@ -7383,7 +7383,7 @@ extension NodeAppModel {
                 + "reason=\(result.reason) "
                 + "chat=\(chat?.rawValue ?? "skipped") "
                 + "disposition=\(disposition) "
-                + "durationMs=\(result.durationMs)"
+                + "durationMs=\(max(0, Int(Date().timeIntervalSince(wakeStartedAt) * 1000)))"
         self.pushWakeLogger.info("\(outcomeMessage, privacy: .public)")
         return disposition
     }
@@ -7409,7 +7409,7 @@ extension NodeAppModel {
                 + "handled=\(result.handled) "
                 + "reason=\(result.reason) "
                 + "chat=\(chat?.rawValue ?? "skipped") "
-                + "durationMs=\(result.durationMs)"
+                + "durationMs=\(max(0, Int(Date().timeIntervalSince(wakeStartedAt) * 1000)))"
         self.pushWakeLogger.info("\(outcomeMessage, privacy: .public)")
         return !Task.isCancelled && result.handled
     }
