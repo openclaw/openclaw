@@ -8,7 +8,8 @@ import { formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helper
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { extractErrorCode, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { getChildLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
-import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
+import { enqueueSystemEvent, peekSystemEvents } from "openclaw/plugin-sdk/system-event-runtime";
+import { resetSystemEventsForTest, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, expect, it, vi } from "vitest";
 import { getActiveWebListener } from "./active-listener.js";
 import { WhatsAppAuthUnstableError, resolveWebCredsPath } from "./auth-store.js";
@@ -552,6 +553,23 @@ it("gives a reconnected listener a fresh watchdog window", async () => {
     await Promise.resolve();
     await waitForScriptedListeners(scripted, 3, true);
   });
+});
+
+it("keeps one connection notice queued across reconnects", async () => {
+  resetSystemEventsForTest();
+  const sessionKey = "agent:main:main";
+  const monitor = startMonitor({
+    reconnect: { initialMs: 1, maxMs: 1, maxAttempts: 50, factor: 1 },
+  });
+  const { scripted } = monitor;
+  await waitForScriptedListeners(scripted, 1);
+  for (let i = 0; i < 12; i++) {
+    scripted.resolveClose(i, { status: 499, isLoggedOut: false, error: "watchdog" });
+    await waitForScriptedListeners(scripted, i + 2);
+  }
+  expect(peekSystemEvents(sessionKey)).toEqual(["WhatsApp gateway connected."]);
+  expect(enqueueSystemEvent("hook finished", { sessionKey })).toBe(true);
+  await stopMonitor(monitor);
 });
 
 it("passes live debounce config to the listener", async () => {
