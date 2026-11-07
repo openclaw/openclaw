@@ -87,6 +87,34 @@ describe("iMessage sent-message echo cache", () => {
     expect(await cache.has(scope, { messageId: "ok" })).toBe(false);
   });
 
+  it("requires matching text and the reflection window for text-bound message-id lookups", async () => {
+    const cache = timedCache();
+    const options = { requireMessageIdTextMatch: true };
+
+    await rememberEcho({ scope, text: "Reflected reply", messageId: "guid-1" });
+
+    expect(await cache.has(scope, { text: "Reflected reply", messageId: "guid-1" }, options)).toBe(
+      true,
+    );
+    expect(await cache.has(scope, { text: "User response", messageId: "guid-1" }, options)).toBe(
+      false,
+    );
+    expect(
+      await cache.has(
+        "acct:imessage:+1666",
+        { text: "Reflected reply", messageId: "guid-1" },
+        options,
+      ),
+    ).toBe(false);
+
+    vi.advanceTimersByTime(4_001);
+
+    expect(await cache.has(scope, { text: "Reflected reply", messageId: "guid-1" }, options)).toBe(
+      false,
+    );
+    expect(await cache.has(scope, { messageId: "guid-1" })).toBe(true);
+  });
+
   it("keeps message-id lookups longer than text fallback", async () => {
     const cache = timedCache();
 

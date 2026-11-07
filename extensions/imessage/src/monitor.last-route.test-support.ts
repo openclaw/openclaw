@@ -107,6 +107,7 @@ export function createInboundMessage(message: IMessagePayload): IMessagePayload 
     is_group: message.is_group ?? false,
     created_at: message.created_at ?? new Date().toISOString(),
     destination_caller_id: message.destination_caller_id,
+    reply_to_guid: message.reply_to_guid,
   };
 }
 

@@ -52,6 +52,7 @@ export function createSentMessageCache() {
       // Self-chat SQLite row IDs differ from outbound GUIDs; allow text matching after an ID miss.
       skipIdShortCircuit?: boolean;
       includePendingText?: boolean;
+      requireMessageIdTextMatch?: boolean;
     } = {},
   ): Promise<boolean> {
     if (
@@ -62,9 +63,15 @@ export function createSentMessageCache() {
         messageId: lookup.messageId,
         skipIdShortCircuit: options.skipIdShortCircuit,
         includePendingText: options.includePendingText,
+        requireMessageIdTextMatch: options.requireMessageIdTextMatch,
+        messageIdMaxAgeMs: options.requireMessageIdTextMatch ? SENT_MESSAGE_TEXT_TTL_MS : undefined,
       })
     ) {
       return true;
+    }
+    if (options.requireMessageIdTextMatch) {
+      // The ID-only memory cache cannot prove that this GUID and body were sent together.
+      return false;
     }
     cleanup();
     const textKey = normalizeIMessageEchoText(lookup.text);

@@ -18,6 +18,7 @@ import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { createIMessageRpcClient } from "./client.js";
+import { defineIMessageSelfChatLoopBudgetTests } from "./monitor.last-route.self-chat.test-support.js";
 import {
   createAnchorlessDirectPair,
   createChatDb,
@@ -468,36 +469,9 @@ describe("iMessage monitor last-route updates", () => {
     };
   }
 
-  it("delivers eight self-chat turns without counting their paired rows as echo loops", async () => {
-    const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() };
-    const texts = Array.from({ length: 8 }, (_, index) => `self-chat message ${index + 1}`);
-    const createdAt = new Date().toISOString();
-    await runMessageCase({
-      messages: texts.flatMap((text, index) =>
-        [true, false].map((isFromMe) =>
-          createInboundMessage({
-            id: index * 2 + (isFromMe ? 1 : 2),
-            guid: `self-chat-${index}-${isFromMe}`,
-            text,
-            chat_identifier: DEFAULT_SENDER,
-            is_from_me: isFromMe,
-            created_at: createdAt,
-            destination_caller_id: DEFAULT_SENDER,
-          }),
-        ),
-      ),
-      monitor: { runtime },
-    });
-    expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(texts.length);
-    expect(
-      dispatchReplyWithBufferedBlockDispatcherMock.mock.calls.map(
-        ([params]) => params.ctx.BodyForAgent,
-      ),
-    ).toEqual(texts);
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(
-      runtime.log.mock.calls.some(([message]) => String(message).includes("rate limiter tripped")),
-    ).toBe(false);
+  defineIMessageSelfChatLoopBudgetTests({
+    runMessageCase,
+    dispatchReplyWithBufferedBlockDispatcherMock,
   });
 
   it("waits for configured ACP target readiness before dispatching an authorized message", async ({
