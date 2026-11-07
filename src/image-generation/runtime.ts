@@ -82,11 +82,16 @@ async function runImageGeneration(
     prepareCandidate(candidate, provider) {
       const inputImageCount = params.inputImages?.length ?? 0;
       const model = candidate.model.trim();
+      const modelCapabilities = provider.capabilitiesByModel;
+      const capabilities =
+        (modelCapabilities && Object.hasOwn(modelCapabilities, model)
+          ? modelCapabilities[model]
+          : undefined) ?? provider.capabilities;
       let prefixLimit: number | undefined;
       let prefixLength = -1;
       if (model) {
         for (const [prefix, limit] of Object.entries(
-          provider.capabilities.edit.maxInputImagesByModelPrefix ?? {},
+          capabilities.edit.maxInputImagesByModelPrefix ?? {},
         )) {
           if (prefix.length > prefixLength && model.startsWith(prefix)) {
             prefixLimit = limit;
@@ -95,14 +100,14 @@ async function runImageGeneration(
         }
       }
       const maxInputImages =
-        (model ? provider.capabilities.edit.maxInputImagesByModel?.[model] : undefined) ??
+        (model ? capabilities.edit.maxInputImagesByModel?.[model] : undefined) ??
         prefixLimit ??
-        provider.capabilities.edit.maxInputImages;
+        capabilities.edit.maxInputImages;
       const referenceImageError = resolveReferenceImageCapabilityError({
         candidateRef: `${candidate.provider}/${candidate.model}`,
         inputImageCount,
         edit: {
-          enabled: provider.capabilities.edit.enabled,
+          enabled: capabilities.edit.enabled,
           ...(maxInputImages !== undefined ? { maxInputImages } : {}),
         },
       });
@@ -116,16 +121,15 @@ async function runImageGeneration(
           timeoutMs: requestedTimeoutMs,
           providerDefaultTimeoutMs: provider.defaultTimeoutMs,
         });
-        const modelResolutions =
-          provider.capabilities.geometry?.resolutionsByModel?.[candidate.model];
+        const modelResolutions = capabilities.geometry?.resolutionsByModel?.[candidate.model];
         const modeCapabilities = params.inputImages?.length
-          ? provider.capabilities.edit
-          : provider.capabilities.generate;
+          ? capabilities.edit
+          : capabilities.generate;
         const inferredResolution =
           modeCapabilities.supportsResolution === false || modelResolutions?.length === 0
             ? undefined
             : params.inferredResolution;
-        const geometry = provider.capabilities.geometry;
+        const geometry = capabilities.geometry;
         const sanitized = resolveMediaGeometryOverrides({
           size: params.size,
           aspectRatio: params.aspectRatio,
@@ -141,7 +145,7 @@ async function runImageGeneration(
         });
         const ignoredOverrides: ImageGenerationIgnoredOverride[] = sanitized.ignoredOverrides;
         let { quality, outputFormat, background } = params;
-        const output = provider.capabilities.output;
+        const output = capabilities.output;
         const qualities = output?.qualitiesByModel?.[candidate.model] ?? output?.qualities;
         const formats = output?.formatsByModel?.[candidate.model] ?? output?.formats;
         const backgrounds = output?.backgroundsByModel?.[candidate.model] ?? output?.backgrounds;

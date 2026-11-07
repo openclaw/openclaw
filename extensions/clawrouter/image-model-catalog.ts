@@ -15,6 +15,7 @@ import {
   fetchClawRouterCapabilityOffers,
   resolveClawRouterCapabilityHttpContext,
 } from "./capability-offers.js";
+import { GOOGLE_IMAGE_CAPABILITIES, qualifiedGoogleImageOffers } from "./image-google.js";
 
 // Qualified by ClawRouter's JSON Images API contract; not a list of key grants.
 const SUPPORTED_IMAGE_MODELS = new Set([
@@ -48,7 +49,7 @@ type ImageLimits = {
   maxAspectRatio: number;
 };
 type ImageCatalogEntry = UnifiedModelCatalogEntry<ImageGenerationProvider["capabilities"]> & {
-  limits: ImageLimits;
+  limits?: ImageLimits;
 };
 
 function parseImageLimits(value: unknown): ImageLimits | undefined {
@@ -152,9 +153,28 @@ export async function fetchClawRouterImageModels(params: {
   signal?: AbortSignal;
   ssrfPolicy?: ImageGenerationRequest["ssrfPolicy"];
 }): Promise<ImageCatalogEntry[]> {
-  const offers = await fetchClawRouterCapabilityOffers(params);
+  const offers = await fetchClawRouterCapabilityOffers({
+    ...params,
+    requireFreshProxyCatalog: true,
+  });
   const result: ImageCatalogEntry[] = [];
   const seen = new Set<string>();
+  for (const offer of qualifiedGoogleImageOffers(offers)) {
+    const model = String(offer.model!.id);
+    if (seen.has(model)) {
+      continue;
+    }
+    seen.add(model);
+    result.push({
+      kind: "image_generation",
+      provider: "clawrouter",
+      model,
+      label: normalizeOptionalString(offer.model?.displayName) ?? model,
+      source: "live",
+      modes: ["generate", "edit"],
+      capabilities: GOOGLE_IMAGE_CAPABILITIES,
+    });
+  }
   for (const offer of offers) {
     const model = offer.model;
     const id = normalizeOptionalString(model?.id);

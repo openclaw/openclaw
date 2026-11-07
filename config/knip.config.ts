@@ -1243,6 +1243,8 @@ const config = {
         "solid-js",
         "playwright-core",
         "partial-json",
+        // Performance measurement resolves Tokenjuice from extensions/tokenjuice/package.json.
+        "tokenjuice",
         // The bundled AI runtime loads Bun proxy support through a computed import.
         "proxy-from-env",
         // The native Canvas bundle falls back without optional Markdown support.

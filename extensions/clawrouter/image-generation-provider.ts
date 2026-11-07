@@ -16,6 +16,12 @@ import {
 import { mergeSsrFPolicies } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  GOOGLE_IMAGE_MODELS,
+  GOOGLE_IMAGE_CAPABILITIES,
+  generateClawRouterGoogleImage,
+  isClawRouterGoogleImageModel,
+} from "./image-google.js";
+import {
   assertClawRouterImageResponseOk,
   assertClawRouterImageLimits,
   CLAWROUTER_IMAGE_CAPABILITIES,
@@ -34,7 +40,13 @@ export function buildClawRouterImageGenerationProvider(): ImageGenerationProvide
     // No credential-independent models/default: callers select an entitled live row.
     models: [],
     capabilities: CLAWROUTER_IMAGE_CAPABILITIES,
+    capabilitiesByModel: Object.fromEntries(
+      GOOGLE_IMAGE_MODELS.map((model) => [model, GOOGLE_IMAGE_CAPABILITIES]),
+    ),
     async generateImage(req) {
+      if (isClawRouterGoogleImageModel(req.model)) {
+        return generateClawRouterGoogleImage(req);
+      }
       if (req.inputImages?.length) {
         throw new Error("ClawRouter image editing is not supported.");
       }
@@ -116,7 +128,7 @@ export function buildClawRouterImageGenerationProvider(): ImageGenerationProvide
         ssrfPolicy: req.ssrfPolicy,
       });
       const selected = catalog.find((row) => row.model === req.model);
-      if (!selected) {
+      if (!selected?.limits) {
         throw new Error(
           "ClawRouter image model is not available in this key's current catalog; check the deployment, image grants and budget.",
         );

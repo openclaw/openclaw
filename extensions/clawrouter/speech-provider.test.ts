@@ -438,7 +438,7 @@ describe("ClawRouter native speech", () => {
         });
         const provider = speech(cfg);
         const storedCfg = withoutKey(cfg);
-        await expect(provider.synthesize({ ...request(), cfg: storedCfg })).resolves.toMatchObject({
+        await expect(tts({ cfg: storedCfg, timeoutMs: 5000 })).resolves.toMatchObject({
           audioBuffer: AUDIO,
         });
         await expect(
