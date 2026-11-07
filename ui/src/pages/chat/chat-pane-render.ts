@@ -18,7 +18,7 @@ import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
 import { navigateToModelProvider } from "../model-providers/navigation.ts";
 import { isChatBubbleMode } from "./chat-bubble-mode.ts";
-import { chatGoalRecovery, mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
+import { chatGoalPaneCallbacks, submitChatGoalDraft } from "./chat-goals.ts";
 import { chatHistoryOlderSelector } from "./chat-history-request.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { resolveChatModelSetup } from "./chat-model-setup.ts";
@@ -632,8 +632,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
           : (id) => void state.steerQueuedChatMessage(id),
       onQueueMove: sessionParticipationBlocked ? undefined : state.moveQueuedChatMessage,
       queuedEdit: createChatPaneQueuedEditProps(state, sessionParticipationBlocked),
-      goalRecovery: chatGoalRecovery(state),
-      onGoalAction: (goalId, action) => void mutateChatGoal(state, { goalId, action }),
+      ...chatGoalPaneCallbacks(state),
       goalDraftMode: state.chatGoalDraftMode ?? null,
       currentSessionId: state.currentSessionId,
       onGoalDraftModeChange: (mode) => {

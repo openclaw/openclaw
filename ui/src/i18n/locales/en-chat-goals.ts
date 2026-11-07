@@ -42,6 +42,8 @@ const enChatGoals = {
       pause: "Pause goal",
       pauseChip: "Pause",
       resume: "Resume goal",
+      resumeNote: "What changed",
+      resumeNoteRequired: "Enter what changed before resuming.",
       resumeChip: "Resume",
       resuming: "Resuming goal…",
       resumeUnconfirmed: "Resume not confirmed",

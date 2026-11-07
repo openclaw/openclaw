@@ -187,8 +187,9 @@ target.
 verified against the full objective with no required work remaining. It should
 mark a goal `blocked` only after the same blocking condition recurs for at least
 three consecutive goal turns, not for ordinary difficulty or missing polish.
-Resuming a blocked goal starts a fresh count of three consecutive turns. Earlier
-blocked turns do not count toward it.
+Resuming a blocked goal requires a note describing what changed. An empty
+resume leaves the goal blocked. A noted resume starts a fresh count of three
+consecutive turns. Earlier blocked turns do not count toward it.
 A nearly exhausted budget does not justify marking unfinished work complete.
 Updating goal status does not send a chat reply. The agent must still provide
 the user's requested final response.
@@ -393,7 +394,7 @@ Footer examples:
 
 - `Pursuing goal (12k/50k)` for an active goal with a token budget.
 - `Goal paused (/goal resume)` for a paused goal.
-- `Goal blocked (/goal resume)` for a blocked goal.
+- `Goal blocked (/goal resume <what changed>)` for a blocked goal.
 - `Goal hit usage limits (/goal resume)` for a usage-limited goal.
 - `Goal unmet (50k/50k)` for a budget-limited goal.
 - `Goal achieved (42k)` for a completed goal.

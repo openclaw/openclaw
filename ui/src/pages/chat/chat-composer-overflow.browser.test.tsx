@@ -525,7 +525,16 @@ it.each([
   const action = status === "active" ? "pause" : "resume";
   expect(document.activeElement).toBe(query(`.agent-chat__goal-${action}`, commands));
   await userEvent.keyboard("{Enter}");
-  expect(onGoalAction).toHaveBeenCalledExactlyOnceWith(goal.id, action);
+  if (status === "blocked") {
+    expect(onGoalAction).not.toHaveBeenCalled();
+    const note = query(".agent-chat__goal-resume-note", commands) as HTMLInputElement;
+    note.value = "CI passed";
+    note.dispatchEvent(new Event("input", { bubbles: true }));
+    await userEvent.click(query(`.agent-chat__goal-${action}`, commands));
+    expect(onGoalAction).toHaveBeenCalledExactlyOnceWith(goal.id, "resume", "CI passed");
+  } else {
+    expect(onGoalAction).toHaveBeenCalledExactlyOnceWith(goal.id, action);
+  }
   for (const button of commands.querySelectorAll<HTMLButtonElement>("button")) {
     const box = button.getBoundingClientRect();
     expectInside(box, cardBox);
