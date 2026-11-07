@@ -214,6 +214,7 @@ export async function prepareMessageRoute(params: {
     fallbackChannel:
       action === "read" && requestedChannel ? undefined : input.toolContext?.currentChannelProvider,
     agentId,
+    action,
   });
   actionParams.channel = channel;
   const explicitAccountId = await validateExplicitMessageAccountSelection({

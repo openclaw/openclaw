@@ -16,7 +16,6 @@ import { dispatchChannelMessageAction } from "../../channels/plugins/message-act
 import { resolveChannelThreadAddressing } from "../../channels/thread-addressing.js";
 import { createChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
-import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveImplicitMessageActionTarget } from "../../infra/outbound/message-action-normalization.js";
 import {
@@ -72,6 +71,7 @@ import { respondError } from "./response.js";
 import {
   resolveGatewayOutboundTarget,
   resolveRequestedChannel,
+  resolveRequestedMessageActionChannel,
 } from "./send-channel-resolution.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -140,35 +140,18 @@ export const sendHandlers: GatewayRequestHandlers = {
       assertNewInputAllowed: assertClientUploadAllowed,
       replayResults: messageAuthority.assertReadCurrent === undefined,
       resolveChannel: async (requestChannel) => {
-        const resolved = await resolveRequestedChannel({
+        const resolved = await resolveRequestedMessageActionChannel({
           requestChannel,
           unsupportedMessage: (input) => `unsupported channel: ${input}`,
           context,
           config: trustedContext.messageActionConfig,
-          rejectWebchatAsInternalOnly: true,
+          action: request.action,
         });
         if ("error" in resolved) {
           respond(false, undefined, resolved.error);
           return undefined;
         }
-        const { cfg: selectedCfg, channel } = resolved;
-        const cfg = trustedContext.messageActionConfig ?? selectLiveRuntimeConfig(selectedCfg);
-        const plugin = resolveOutboundChannelPlugin({ channel, cfg });
-        const canonicalAction =
-          ((request.action === "send" &&
-            Boolean(plugin?.message?.send?.text || plugin?.outbound?.sendText)) ||
-            (request.action === "poll" && Boolean(plugin?.outbound?.sendPoll))) &&
-          (!plugin?.actions?.handleAction ||
-            plugin.actions.supportsAction?.({ action: request.action }) === false);
-        if (!plugin || (!plugin.actions?.handleAction && !canonicalAction)) {
-          respondError(
-            respond,
-            ErrorCodes.INVALID_REQUEST,
-            `Channel ${channel} does not support action ${request.action}.`,
-          );
-          return undefined;
-        }
-        return { cfg, channel, plugin, canonicalAction };
+        return resolved;
       },
       work: async ({ cfg, channel, plugin, canonicalAction, accountId, dedupeKey, authorize }) => {
         try {

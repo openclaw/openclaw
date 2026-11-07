@@ -166,6 +166,59 @@ describe("outbound channel resolution", () => {
     expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    { action: "send" as const, expected: true },
+    { action: "react" as const, expected: false },
+    { action: undefined, expected: false },
+  ])("selects an action-only runtime only for its supported $action", ({ action, expected }) => {
+    const plugin = {
+      ...createChannelTestPluginBase({ id: "alpha" }),
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] as const }),
+        supportsAction: (request: { action: string }) => request.action === "send",
+        handleAction: vi.fn(async () => ({ content: [] })),
+      },
+    };
+    getLoadedChannelPluginMock.mockReturnValue(plugin);
+    expect(
+      channelResolution.resolveOutboundChannelPlugin({
+        channel: "alpha",
+        cfg: {},
+        allowBootstrap: true,
+        action,
+      }),
+    ).toBe(expected ? plugin : undefined);
+  });
+
+  it("activates an action-only setup shell without borrowing a same-id root handler", () => {
+    const shell = createChannelTestPluginBase({ id: "alpha" });
+    const plugin = {
+      ...shell,
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] as const }),
+        handleAction: vi.fn(async () => ({ content: [] })),
+      },
+    };
+    getLoadedChannelPluginMock.mockReturnValue(plugin);
+    const scoped = createTestRegistry([{ pluginId: "selected", plugin: shell, source: "test" }]);
+    const activated = createTestRegistry([{ pluginId: "selected", plugin, source: "test" }]);
+    resolveRuntimePluginRegistryMock.mockReturnValue(activated);
+    withPluginRuntimeRegistryScope(scoped, () => {
+      expect(
+        channelResolution.resolveOutboundChannelPlugin({ channel: "alpha", action: "send" }),
+      ).toBe(shell);
+      expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+      expect(
+        channelResolution.resolveOutboundChannelPlugin({
+          channel: "alpha",
+          cfg: {},
+          action: "send",
+          allowBootstrap: true,
+        }),
+      ).toBe(plugin);
+    });
+  });
+
   it("bootstraps instead of returning direct outbound metadata from a setup shell", async () => {
     const setupPlugin = { id: "alpha", outbound: { deliveryMode: "direct" } };
     const runtimePlugin = { id: "alpha", outbound: { deliveryMode: "direct", sendText: vi.fn() } };

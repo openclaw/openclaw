@@ -267,7 +267,7 @@ it("reuses hydrated creator origin for script admission across warm cache change
         action: "delete",
         channel: "telegram",
         accountId,
-        params: { target: `telegram:${target}`, messageId },
+        params: { target, messageId },
       });
 
       for (const callerOrigin of [
