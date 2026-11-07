@@ -604,6 +604,26 @@ Example truncate response (`--max-lines 200`):
 }
 ```
 
+## Show a session's checkout diff
+
+Show what one session changed in its git checkout: the branch it worked on, the commits it made, and the files it touched.
+
+```bash
+openclaw sessions diff "agent:main:main"
+```
+
+| Flag              | Description                                                                                                                   |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `--scope <scope>` | `all` (default) diffs the branch and working tree, `uncommitted` only the working tree, `commit` compares against `--commit`. |
+| `--commit <sha>`  | Base for `--scope commit`; must exist in the session checkout.                                                                |
+| `--summary`       | Skip patches and branch history; report file counts and line totals only.                                                     |
+| `--agent <id>`    | Agent id that owns the session (required for global keys).                                                                    |
+| `--json`          | Raw `sessions.diff` response, including per-file patches.                                                                     |
+
+When the Gateway has no diff to read the command exits non-zero, whether the session is unknown, the checkout is not a git repository, the workspace is stopped, or `--commit` is not in history, so a script never reads "no output" as "no changes". A diff the Gateway is still computing is reported as still computing, never as an empty result.
+
+The Gateway resolves the checkout from the session key, so the parent `sessions` list selectors (`--store`, `--all-agents`, `--active`, `--limit`, `--verbose`) do not apply.
+
 ## Related
 
 - [Session config](/gateway/config-agents/sessions#session)
