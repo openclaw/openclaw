@@ -1,0 +1,4 @@
+30
+# Gate the Agent cron panel empty state on a settled jobs read: two new
+# panel-cron tests (no flash while first read is pending; settled empty
+# state shows No automations yet.) — red on base, green with the fix.
