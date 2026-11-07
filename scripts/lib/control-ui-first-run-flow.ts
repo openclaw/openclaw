@@ -372,7 +372,7 @@ export async function runControlUiFirstRunFlow(
       async () => {
         await page.locator(send).click();
         await page.locator(nextReply).waitFor();
-        assert.equal(await page.locator(nextReply).innerText(), "Synthetic first-run reply.");
+        assert.equal(await page.locator(nextReply).textContent(), "Synthetic first-run reply.");
         await wait(`${composer}:not([disabled])`);
       },
       nextReply,
