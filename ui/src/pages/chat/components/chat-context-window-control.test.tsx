@@ -55,7 +55,7 @@ it("keeps multi-option context selection contained and ignores current or disabl
   }
 });
 
-it("toggles between context sizes in numeric order and follows updated selection", () => {
+it("selects between context sizes in numeric order and follows updated selection", () => {
   const onSelect = vi.fn(async (_next: string, _sessionKey: string) => {});
   const [props, setProps] = createSignal<ChatContextWindowControlParams>({
     options: [
@@ -71,15 +71,18 @@ it("toggles between context sizes in numeric order and follows updated selection
   ));
   const bubbled = vi.fn();
   view.container.addEventListener("click", bubbled);
-  const toggle = () => view.getByRole("switch");
+  const choice = (name: string) => view.getByRole("button", { name });
   try {
-    expect(toggle().getAttribute("aria-checked")).toBe("false");
-    toggle().click();
+    expect(choice("200K").getAttribute("aria-pressed")).toBe("true");
+    expect(
+      [...view.container.querySelectorAll("button")].map((button) => button.textContent),
+    ).toEqual(["200K", "1M"]);
+    choice("1M").click();
     expect(onSelect).toHaveBeenLastCalledWith("1m", "agent:main:synthetic");
     setProps({ ...props(), selected: "1m" });
     flush();
-    expect(toggle().getAttribute("aria-checked")).toBe("true");
-    toggle().click();
+    expect(choice("1M").getAttribute("aria-pressed")).toBe("true");
+    choice("200K").click();
     expect(onSelect).toHaveBeenLastCalledWith("200k", "agent:main:synthetic");
     expect(onSelect).toHaveBeenCalledTimes(2);
     expect(bubbled).not.toHaveBeenCalled();

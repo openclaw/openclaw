@@ -169,7 +169,7 @@ it.each([false, true])(
   },
 );
 
-it("groups Anthropic refs pinned to Claude CLI under Claude CLI", async () => {
+it("keeps Anthropic runtime choices under one provider tab", async () => {
   const { container } = mountPicker({
     open: true,
     modelOptions: [
@@ -180,20 +180,20 @@ it("groups Anthropic refs pinned to Claude CLI under Claude CLI", async () => {
     selectedModelValue: "anthropic/claude-opus-4-8",
     triggerModelLabel: "claude-opus-4-8",
     providerAuth: new Map<string, ModelProviderAuthLabel>([
-      ["anthropic", { kind: "subscription", label: "Claude Max" }],
+      ["anthropic", { kind: "subscription", label: "Claude Max", detail: "you@example.com" }],
     ]),
   });
   await waitForMenu(container);
   const provider = (value: string) =>
     control(container, "option", value)?.closest("section")?.dataset.chatModelProviderGroup;
   expect([provider("anthropic/claude-opus-4-8"), provider("claude-cli/claude-haiku-5-5")]).toEqual([
-    "claude-cli",
-    "claude-cli",
+    "anthropic",
+    "anthropic",
   ]);
-  // Claude CLI signs in through the Anthropic account, so its group carries that auth label.
+  // Both runtimes use the Anthropic account label.
   expect(
     container.querySelector(
-      '[data-chat-model-provider-group="claude-cli"] .chat-controls__auth-meta-label',
+      '[data-chat-model-provider-group="anthropic"] .chat-controls__auth-meta-label',
     )?.textContent,
   ).toBe("Claude Max");
   control(container, "provider-toggle", "anthropic")!.click();

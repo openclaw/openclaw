@@ -1,12 +1,11 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, Errored, For, Loading, Show, useContext } from "solid-js";
+import { createMemo, createSignal, Errored, For, Loading, Show, useContext } from "solid-js";
 import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
 import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerSettingsEnglish } from "../../../i18n/locales/en-settings.ts";
 import { canonicalModelAuthProviderId } from "../../../lib/model-auth.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { ChatContextWindowControl } from "./chat-context-window-control.tsx";
 import { ChatModelAccountSectionView } from "./chat-model-account-control.tsx";
 import { ChatModelCatalogRefresh, ChatModelCatalogState } from "./chat-model-catalog-state.tsx";
 import {
@@ -29,6 +28,12 @@ import { ChatModelSearchContext, type ChatModelSearchCatalog } from "./chat-mode
 import { createModelPickerWindow } from "./chat-model-picker-window.tsx";
 import type { ChatModelPickerParams } from "./chat-model-picker.tsx";
 import { ChatModelProviderRail } from "./chat-model-provider-rail.tsx";
+import {
+  ChatModelSettings,
+  modelRuntimeId,
+  modelProviderId,
+  providerRuntimeOptions,
+} from "./chat-model-settings.tsx";
 
 registerSettingsEnglish();
 
@@ -43,12 +48,7 @@ function prepareChatModelPickerPanel(
     isModelPickerOptionSelected(option, params.selectedModelValue, params.selectedAgentRuntime),
   );
   const leadingModelOption = activeModelOption ?? defaultModelOption;
-  // A model reachable only through Claude CLI (an Anthropic ref pinned to that runtime)
-  // belongs to the Claude CLI group, not to an Anthropic API group the user may not have.
-  const groupProvider = (option: ModelPickerOption) =>
-    resolveModelRuntimeRoute(option.provider, option.agentRuntimeId) === "claudeCli"
-      ? "claude-cli"
-      : option.provider;
+  const groupProvider = modelProviderId;
   // Default restores inheritance; it stays ahead of ranked model choices. When a
   // provider recommends models, they follow, and the rest collapse under "All models".
   const recommendingProviders = new Set(
@@ -133,9 +133,25 @@ export function ChatModelPickerPanel(panel: {
   const sessionModelPinned = createMemo(() => panel.params.sessionModelPinned);
   const onModelSetup = createMemo(() => panel.params.onModelSetup);
   const modelSelectionLocked = createMemo(() => panel.params.modelSelectionLocked);
+  const [runtimeOverrides, setRuntimeOverrides] = createSignal<Record<string, string>>({});
+  const providerOptions = createMemo(() => Map.groupBy(modelOptions(), modelProviderId));
+  const providerRuntime = (provider: string) =>
+    runtimeOverrides()[provider] ??
+    modelRuntimeId(
+      providerOptions()
+        .get(provider)
+        ?.find((option) =>
+          isModelPickerOptionSelected(option, selectedModelValue(), selectedAgentRuntime()),
+        ) ?? providerOptions().get(provider)![0]!,
+    );
+  const runtimeModelOptions = createMemo(() =>
+    [...providerOptions()].flatMap(([provider, options]) =>
+      providerRuntimeOptions(options, providerRuntime(provider)),
+    ),
+  );
   const state = createMemo(() =>
     prepareChatModelPickerPanel({
-      modelOptions: modelOptions(),
+      modelOptions: runtimeModelOptions(),
       targetGroups: modelTargetGroups(),
       selectedModelValue: selectedModelValue(),
       selectedAgentRuntime: selectedAgentRuntime(),
@@ -237,7 +253,10 @@ export function ChatModelPickerPanel(panel: {
   const layout = createMemo<string[]>(() => {
     if (searchView?.filtering()) {
       return [
-        ...searchView.matches().map(({ row }) => row.key),
+        ...searchView
+          .matches()
+          .filter(({ row }) => row.list !== "accounts")
+          .map(({ row }) => row.key),
         ...state()
           .targetGroups.filter((group) => !group.options.length)
           .map((group) => `state:target:${group.id}`),
@@ -266,16 +285,6 @@ export function ChatModelPickerPanel(panel: {
       rows.push(...group.options.map((entry) => `target:${group.id}:${entry.value}`));
       if (!group.options.length) {
         rows.push(`state:target:${group.id}`);
-      }
-    }
-    const account = accounts();
-    if (account) {
-      rows.push("heading:accounts");
-      if (account.open) {
-        rows.push(...account.options.map((entry) => `account:${entry.value}`));
-      }
-      if (account.error) {
-        rows.push("error:accounts");
       }
     }
     return rows;
@@ -441,8 +450,7 @@ export function ChatModelPickerPanel(panel: {
           )
         ),
     );
-    const authLabel = () =>
-      showAuth() ? [auth()?.label, auth()?.detail].filter(Boolean).join(" · ") : undefined;
+    const authLabel = () => (showAuth() ? auth()?.label : undefined);
     return (
       <section
         class="chat-controls__provider-model-group"
@@ -453,11 +461,13 @@ export function ChatModelPickerPanel(panel: {
           <div class="chat-controls__provider-heading" data-chat-model-provider={props.provider}>
             <span class="chat-controls__provider-label">{providerLabel()}</span>
             {showAuth() ? (
-              <span class="chat-controls__auth-meta" data-auth-kind={authKind()}>
-                <span class="chat-controls__auth-meta-label">
-                  {authKind() === "api" ? t("modelProviders.status.apiKey") : authLabel()}
+              <openclaw-tooltip prop:content={auth()?.detail ?? ""}>
+                <span class="chat-controls__auth-meta" data-auth-kind={authKind()}>
+                  <span class="chat-controls__auth-meta-label">
+                    {authKind() === "api" ? t("modelProviders.status.apiKey") : authLabel()}
+                  </span>
                 </span>
-              </span>
+              </openclaw-tooltip>
             ) : undefined}
             {panel.params.onProviderSettings ? (
               <button
@@ -638,9 +648,6 @@ export function ChatModelPickerPanel(panel: {
                           );
                         }}
                       </For>
-                      {panel.params.accountSection ? (
-                        <ChatModelAccountSectionView {...accounts()!} renderRow={renderRow} />
-                      ) : undefined}
                     </div>
                   </div>
                   <div
@@ -652,12 +659,33 @@ export function ChatModelPickerPanel(panel: {
                   </div>
                 </div>
               </div>
-              {panel.params.contextWindow ? (
-                <ChatContextWindowControl
-                  contextWindow={panel.params.contextWindow}
-                  sessionKey={panel.params.sessionKey}
-                />
-              ) : undefined}
+              <ChatModelSettings
+                params={panel.params}
+                account={accounts()}
+                providers={providerOptions()}
+                provider={catalog().providers.find((provider) =>
+                  searchView?.providerOpen(provider),
+                )}
+                runtime={providerRuntime}
+                onRuntimeSelect={(provider, runtime, entry) => {
+                  if (entry?.disabled) {
+                    onModelSetup()?.();
+                    return;
+                  }
+                  setRuntimeOverrides((previous) => ({ ...previous, [provider]: runtime }));
+                  if (
+                    entry &&
+                    (entry.value === selectedModelValue() ||
+                      (entry.isDefault && !selectedModelValue()))
+                  ) {
+                    void panel.params.onModelSelect(
+                      entry.commitValue,
+                      panel.params.sessionKey,
+                      entry.runtimeOverride ?? null,
+                    );
+                  }
+                }}
+              />
             </>
           ) : undefined}
         </>

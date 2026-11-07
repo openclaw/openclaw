@@ -8,7 +8,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewaySessionRow } from "../../api/types.ts";
+import type { GatewaySessionRow, ModelAuthStatusResult } from "../../api/types.ts";
 import {
   captureChatOutboxAdmission,
   storedChatOutboxScopeKey,
@@ -51,6 +51,7 @@ describe("chat account selection", () => {
   function mountAccountControl(
     request: GatewayRequestHandler,
     selection: ChatAccountSelection | null,
+    modelAuthStatusResult?: ModelAuthStatusResult,
   ) {
     const container = document.createElement("div");
     let current = true;
@@ -64,6 +65,7 @@ describe("chat account selection", () => {
       () => {
         const section = createMemo(() =>
           renderChatModelAccountControl({
+            modelAuthStatusResult,
             owner: state,
             client: state.client,
             selection: state.chatAccountSelection,
@@ -205,6 +207,88 @@ describe("chat account selection", () => {
     await vi.waitFor(() => expect(view.container.textContent).toContain("Work workspace"));
     expect(view.container.querySelector('[role="alert"]')).toBeNull();
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries in place and shows usage only for the identified account", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("inventory offline"))
+      .mockResolvedValue({
+        profileId: "owner",
+        links: [],
+        accounts: [
+          {
+            provider: "openai",
+            authProfileId: "openai:work",
+            label: "Work",
+            authType: "oauth",
+            selected: false,
+          },
+        ],
+      } satisfies UsersListModelAccountsResult);
+    const view = mountAccountControl(
+      request,
+      {
+        kind: "personal",
+        label: "Personal",
+        authProfileId: "openai:personal",
+        source: "user",
+      },
+      {
+        ts: 1,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            status: "ok",
+            profiles: [
+              {
+                profileId: "openai:personal",
+                type: "oauth",
+                status: "ok",
+                email: "personal@example.com",
+              },
+              { profileId: "openai:work", type: "oauth", status: "ok", email: "work@example.com" },
+            ],
+            usage: {
+              providerId: "openai",
+              accountEmail: "personal@example.com",
+              windows: [
+                { label: "5h", usedPercent: 38 },
+                { label: "Week", usedPercent: 91 },
+              ],
+            },
+          },
+        ],
+      },
+    );
+    expect(view.container.querySelector("[data-chat-account-group-toggle]")?.textContent).toContain(
+      "Personal · personal@example.com",
+    );
+    view.open();
+    await vi.waitFor(() => expect(view.container.querySelector('[role="alert"]')).not.toBeNull());
+    expect(
+      view.container.querySelector('[data-chat-account-option="current"]')?.textContent,
+    ).toContain("5h 62% left");
+    expect(view.container.querySelector("[data-low]")?.textContent).toContain("Week 9% left");
+    view.container.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
+    await vi.waitFor(() =>
+      expect(
+        view.container.querySelector('[data-chat-account-option="account:openai:work"]'),
+      ).not.toBeNull(),
+    );
+    expect(
+      view.container.querySelector(
+        '[data-chat-account-option="account:openai:work"] .chat-controls__account-usage',
+      ),
+    ).toBeNull();
+    expect(view.container.querySelector('[role="alert"]')).toBeNull();
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(
+      view.container
+        .querySelector("[data-chat-account-group-toggle]")
+        ?.getAttribute("aria-expanded"),
+    ).toBe("true");
   });
 
   it("discards a late inventory after leaving its initiating chat", async () => {

@@ -176,9 +176,7 @@ describe("chat model runtime choices", () => {
         model: "openai/gpt-5.6-sol",
         ...(runtimeLocked ? {} : { agentRuntime: null }),
       });
-      expect(Array.from(rows, optionName)).toEqual(
-        runtimeLocked ? ["GPT-5.6 Sol"] : ["GPT-5.6 Sol", "GPT-5.6 Sol"],
-      );
+      expect(Array.from(rows, optionName)).toEqual(["GPT-5.6 Sol"]);
       expect(rows[0]?.getAttribute("data-chat-model-default")).toBeNull();
       expect(rows[0]?.getAttribute("data-chat-model-runtime")).toBe(
         runtimeLocked ? null : "custom-harness",
@@ -251,7 +249,7 @@ describe("chat model runtime choices", () => {
         container.querySelectorAll(".chat-controls__model-option-name"),
         (row) => row.textContent,
       ),
-    ).toEqual(["GPT-5.6 Sol codex", "GPT-5.6 Sol"]);
+    ).toEqual(["GPT-5.6 Sol"]);
     expect(triggerLabel(container)).toBe("GPT-5.6 Sol codex");
   });
 
@@ -275,7 +273,7 @@ describe("chat model runtime choices", () => {
   });
 
   it.each(["missing-auth", "unsupported-runtime", "locked"] as const)(
-    "preserves the %s guard for additional harness rows",
+    "preserves the %s guard for the runtime segment",
     async (guard) => {
       const onSelect = vi.fn();
       const onSetup = vi.fn();
@@ -299,10 +297,15 @@ describe("chat model runtime choices", () => {
       if (guard === "locked") {
         expect(row).toBeNull();
       } else {
-        expect(row && optionName(row)).toBe("GPT-5.6 Sol codex");
-        expect(row?.disabled).toBe(guard === "unsupported-runtime");
+        expect(row?.textContent?.trim()).toBe("Codex");
+        expect(row?.getAttribute("aria-disabled")).toBe(
+          guard === "unsupported-runtime" ? "true" : "false",
+        );
         if (guard === "unsupported-runtime") {
-          expect(row?.title).toBe("This harness is unavailable for this model.");
+          expect(row?.parentElement).toHaveProperty(
+            "content",
+            "This harness is unavailable for this model.",
+          );
         }
         row?.click();
       }

@@ -3,6 +3,7 @@ import type {
   UserModelAccount,
   UsersListModelAccountsResult,
 } from "../../../../../packages/gateway-protocol/src/index.ts";
+import type { UsageWindow } from "../../../../../src/infra/provider-usage.types.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ModelAuthStatusResult } from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
@@ -116,7 +117,7 @@ export function renderChatModelAccountControl(params: {
   const selectedProfile = profiles.find((profile) => profile.profileId === currentId);
   const selectedLabel = selectedProfile?.displayName || selection.label;
   const selectedIdentity = [
-    ...new Set([selectedProfile?.email, selectedLabel].filter(Boolean)),
+    ...new Set([selectedLabel, selectedProfile?.email].filter(Boolean)),
   ].join(" · ");
   const description = (account: UserModelAccount | undefined) =>
     email(account?.authProfileId) ??
@@ -129,15 +130,44 @@ export function renderChatModelAccountControl(params: {
     )
       ? account.authProfileId
       : undefined);
+  const windowsFor = (profileId: string | undefined): UsageWindow[] => {
+    if (!profileId) {
+      return [];
+    }
+    const profile = profiles.find((candidate) => candidate.profileId === profileId);
+    if (!profile || profile.type === "api_key") {
+      return [];
+    }
+    const usage = params.modelAuthStatusResult?.providers.find((candidate) => {
+      if (
+        canonicalModelAuthProviderId(candidate.provider) !== canonicalModelAuthProviderId(provider)
+      ) {
+        return false;
+      }
+      if (candidate.usage?.accountEmail) {
+        return candidate.usage.accountEmail === profile.email;
+      }
+      // A provider-only snapshot identifies an account only when there is one login.
+      return (
+        candidate.profiles.filter((entry) => entry.type === "oauth" || entry.type === "token")
+          .length === 1 && candidate.profiles.some((entry) => entry.profileId === profileId)
+      );
+    })?.usage;
+    return (
+      usage?.windows.filter((window) => window.label === "5h" || window.label === "Week") ?? []
+    );
+  };
   const currentValue = "current";
   const options: ReadonlyArray<{
     value: string;
     label: string;
     description?: string;
     disabled?: boolean;
+    windows?: UsageWindow[];
   }> = [
     {
       value: currentValue,
+      windows: windowsFor(currentId),
       label: selectedLabel,
       description:
         email(currentId) ??
@@ -149,6 +179,7 @@ export function renderChatModelAccountControl(params: {
       .filter((account) => account.provider === provider && account.authProfileId !== currentId)
       .map((account) => ({
         value: `account:${account.authProfileId}`,
+        windows: windowsFor(account.authProfileId),
         label: account.label,
         description: description(account),
       })),
@@ -215,6 +246,7 @@ export function renderChatModelAccountControl(params: {
     error,
     startIndex,
     onToggle: toggleAccounts,
+    onRetry: () => void loadAccounts(),
     onSelect: selectAccount,
   });
   return {

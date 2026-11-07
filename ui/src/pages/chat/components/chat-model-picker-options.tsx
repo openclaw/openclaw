@@ -76,7 +76,7 @@ function optionPresentation(options: ModelPresentationProps) {
     ? runtime?.detail !== undefined
       ? runtimeLabel
       : ""
-    : [formatModelContextMeta(options.entry, t), runtimeLabel].filter(Boolean).join(" · ");
+    : formatModelContextMeta(options.entry, t);
   const accessibleStatus = needsAuth
     ? t("modelSetup.candidates.signInNeeded")
     : options.entry.unavailableReason === "unsupported-runtime"
