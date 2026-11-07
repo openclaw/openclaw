@@ -1,9 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it } from "vitest";
-import { telegramSetupPlugin } from "../../extensions/telegram/api.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayTrustedProxyConfig } from "../config/types.gateway.js";
 import { resolveGatewayProbeAuthSafe } from "../gateway/probe-auth.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
 import { collectSmallModelRiskFindings } from "./audit-extra.summary.js";
 import {
@@ -259,6 +260,9 @@ function absent(cfg: OpenClawConfig, ...ids: string[]) {
 
 describe("security audit trust model findings", () => {
   it("restricts open-account exposure to reachable agents and preserves privileged overrides", async () => {
+    const { telegramSetupPlugin } = await loadBundledPluginFacade<{
+      telegramSetupPlugin: ChannelPlugin;
+    }>({ pluginId: "telegram", artifactBasename: "api.js" });
     const cfg: OpenClawConfig = {
       agents: {
         ownership: "explicit",
