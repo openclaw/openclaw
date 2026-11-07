@@ -301,6 +301,12 @@ does not traverse the installed dependency tree.
 The shared toolchain action's `gradle-cache-mode` override leaves Android SDK
 caching off for these jobs; other callers inherit their existing `cache-mode`.
 
+Android's Gradle daemon uses Parallel GC with the existing 3 GiB heap. A controlled
+phone/Wear release comparison with warm dependencies and fresh build outputs
+reduced median bundle time from 158.78 to 149.10 seconds (6.09%), with lower Java
+CPU time and peak memory. Task selection, lint, R8, signing, and upload behavior
+stay unchanged.
+
 Android Release E2E adds one hosted Ubuntu KVM job to exact-source, full-scope
 manual validation when Android is selected, matching the iOS qualification
 selection. The final CI gate requires its success. Manual Android Store Release

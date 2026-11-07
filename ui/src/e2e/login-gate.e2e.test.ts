@@ -47,7 +47,7 @@ async function expectReconnecting(page: Page) {
 }
 
 suite.define(() => {
-  it("counts down and automatically enters a reachable Gateway after refused upgrades", async () => {
+  it("keeps recovery visible and automatically enters a reachable Gateway after refused upgrades", async () => {
     const page = await newPage();
     await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
     await page.clock.pauseAt(new Date("2026-01-01T00:00:01Z"));
@@ -86,11 +86,10 @@ suite.define(() => {
 
     await page.goto(suite.server.baseUrl);
     await page.clock.runFor(1);
-    const failure = page.locator('.login-gate__failure[data-kind="busy"]');
-    await failure.waitFor();
-    expect((await failure.locator(".login-gate__failure-title").textContent())?.trim()).toBe(
-      "Gateway busy, retrying…",
-    );
+    const recovery = page.locator('.gateway-connection-view[data-connection-state="reconnecting"]');
+    await recovery.waitFor();
+    expect((await recovery.getByRole("heading").textContent())?.trim()).toBe("Still connecting");
+    expect(await page.locator("openclaw-login-gate").count()).toBe(0);
     expect(await gateway.getRequests("connect")).toHaveLength(0);
 
     const retryHealthResponse = page.waitForResponse("**/healthz");
@@ -98,11 +97,12 @@ suite.define(() => {
     // The first probe's busy state can survive while the retry probe is still in flight.
     // Finish its real response before advancing the virtual one-second abort deadline.
     expect(await (await retryHealthResponse).finished()).toBeNull();
-    const countdown = failure.locator(".login-gate__retry");
-    await countdown.filter({ hasText: "Retrying in 2s…" }).waitFor();
+    await recovery.waitFor();
+    expect(await gateway.getRequests("connect")).toHaveLength(0);
     await page.clock.runFor(1_000);
-    expect((await countdown.textContent())?.trim()).toBe("Retrying in 1s…");
-    expect(await page.locator("openclaw-app-shell").count()).toBe(0);
+    expect(await recovery.isVisible()).toBe(true);
+    expect(await gateway.getRequests("connect")).toHaveLength(0);
+    expect(await page.locator("openclaw-app-shell").count()).toBe(1);
 
     await page.clock.runFor(1_000);
     await gateway.waitForRequest("connect");

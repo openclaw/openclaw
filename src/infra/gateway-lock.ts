@@ -61,6 +61,7 @@ import {
 } from "./gateway-state-owner.js";
 
 export type GatewayLockHandle = {
+  previousOwner?: GatewayOwnerLease["previousOwner"];
   lockPath: string;
   stateLockPath: string;
   stateDir: string;
@@ -655,6 +656,7 @@ export async function acquireGatewayLock(
   }
   let released: Promise<void> | undefined;
   return {
+    previousOwner: ownerLease?.previousOwner,
     lockPath: stateOwner.path,
     stateLockPath: paths.stateLockPath,
     stateDir: paths.stateDir,

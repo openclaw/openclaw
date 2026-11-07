@@ -6149,6 +6149,7 @@ jobs:
             -only-testing:OpenClawWatchTests/WatchSpeechPlaybackTests
             -only-testing:OpenClawWatchTests/WatchRealtimeMediaTests
             -only-testing:OpenClawWatchTests/WatchGatewayConfigurationTests
+            -only-testing:OpenClawWatchTests/WatchTypographyTests
           )
           run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawWatchBuild.log xcodebuild \
             "${xcodebuild_args[@]}" "${test_args[@]}" build-for-testing

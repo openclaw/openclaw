@@ -608,11 +608,6 @@
   height: 100%;
 }
 
-.agent-chat__talk-status-text {
-  min-width: 0;
-  flex: 1;
-}
-
 /* Bars-only meter; the stop-voice pill button supplies the chrome around it. */
 .agent-chat__voice-activity {
   position: relative;
@@ -2127,8 +2122,12 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 .chat-controls__effort-menu {
   box-shadow: none;
   padding: var(--menu-padding);
-  width: min(330px, calc(100vw - 24px));
+  width: min(var(--chat-effort-menu-width, 280px), calc(100vw - 24px));
   max-height: min(280px, var(--auto-size-available-height, calc(100vh - 120px)));
+}
+
+.chat-controls__effort-menu:has(> .chat-controls__speed-panel) {
+  --chat-effort-menu-width: 330px;
 }
 
 .chat-controls__permission-menu {

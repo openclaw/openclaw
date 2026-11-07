@@ -363,6 +363,14 @@ translation wave cannot disappear behind an early English render. Use
 One-pair screens only identify candidates: confirm deviations over 20% with ten
 rotated pairs plus `control`, and fixes with twenty pairs within the same configuration.
 
+Full observations, including skipped cells and memory samples, append to
+`observations.jsonl` as each cell completes; complete newline-terminated records
+are available for live progress or after interruption. Per-cell JSON files remain
+available, and `observations.json` retains its array schema and is published once
+with an atomic rename during final cleanup, including the recorded prefix when a
+run fails. The command still propagates failures; a final array does not certify
+a successful run. These artifacts do not use `fsync`.
+
 Every run counts `ResizeObserver loop` errors per observation and summary cell,
 including untraced streaming runs. The report shows error totals and affected
 observations; any browser error fails the observation and command even when its

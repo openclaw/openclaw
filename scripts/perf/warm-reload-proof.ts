@@ -17,10 +17,15 @@ import {
 import { createControlUiE2eArtifactDir } from "../../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../../ui/src/test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../../ui/src/test-helpers/control-ui-e2e-readiness.ts";
+import { qualifyDetailsSubagentsWarmState } from "../lib/control-ui-bench-warm-state.ts";
 import { installPaneChromeProbe } from "../lib/control-ui-pane-chrome-probe.ts";
 import { stopChild } from "../lib/gateway-bench-child.ts";
 import { freeProofPort, startWarmReloadAdmission } from "./warm-reload-admission.ts";
-import { installWarmReloadBrowserProbe, proofRegions } from "./warm-reload-browser-probe.ts";
+import {
+  installWarmReloadBrowserProbe,
+  proofRegions,
+  summarizeDetailsGeometry,
+} from "./warm-reload-browser-probe.ts";
 import { launchWarmReloadBrowser, calibrateWarmReloadPaintHolding } from "./warm-reload-browser.ts";
 import { prepareWarmReloadBuild, createWarmReloadComparison } from "./warm-reload-compare.ts";
 import { seedWarmReloadFixture } from "./warm-reload-fixture.ts";
@@ -44,6 +49,7 @@ const { values } = parseArgs({
     "dashboard-pane-chrome": { type: "boolean", default: false },
     "plugin-activation": { type: "boolean", default: false },
     "details-session-facts": { type: "boolean", default: false },
+    "details-subagent-activity": { type: "boolean", default: false },
     "active-targets": { type: "boolean", default: false },
     "composer-controls": { type: "boolean", default: false },
     "reload-after-navigation": { type: "boolean", default: false },
@@ -61,6 +67,7 @@ if (values.help) {
   --admission signed-in|token --base <dist|ref> --candidate <dist|ref>
   --reloads 11 --sessions 3000 --rtt-ms 80 --capture-ms 8000 --route both|chat|dashboard
   --transcript-late-paint --plugin-activation --active-targets --reload-after-navigation --cpu-profile
+  --details-subagent-activity (two settled ordinary children on the active chat target)
   --init-script <browser-script.js> (repeatable)
 Creates fresh isolated state and Chromium, records cold + warm reloads, then stops both.
 Offline paint audit: --audit-report <report.json> --paint-audit <paint-audit.json>
@@ -144,19 +151,40 @@ async function waitForGateway(url: string, child: ChildProcess) {
 }
 
 async function readProbe(page: Page) {
-  return await page.evaluate(() => {
+  const probe = await page.evaluate(() => {
     const data: NonNullable<ReturnType<typeof installWarmReloadBrowserProbe>> = Reflect.get(
       window,
       "__warmReloadProof",
     );
     data.stopped = true;
+    const rig: { loaf: unknown[]; mut: Map<string, unknown> } | undefined = Reflect.get(
+      window,
+      "__perf",
+    );
+    const detailsPlacement: unknown = Reflect.get(window, "__detailsPlacementReads");
     return {
       ...data,
+      rig: rig
+        ? {
+            loaf: rig.loaf,
+            mutations: [...rig.mut],
+            detailsPlacement,
+          }
+        : undefined,
       paneChrome: Reflect.get(window, "__paneChrome").read(data.firstTranscriptDomMs),
+      modules: performance
+        .getEntriesByType("resource")
+        .flatMap((entry) =>
+          entry instanceof PerformanceResourceTiming &&
+          /\/assets\/.*\.js(?:\?.*)?$/u.test(entry.name)
+            ? [{ url: entry.name, startedAtMs: entry.startTime, arrivedAtMs: entry.responseEnd }]
+            : [],
+        ),
       timeOrigin: performance.timeOrigin,
       capturedUntilMs: performance.now(),
     };
   });
+  return { ...probe, detailsGeometry: summarizeDetailsGeometry(probe.paneChrome.detailsFrames) };
 }
 async function regionBoxes(page: Page) {
   return await page.evaluate((selectors) => {
@@ -490,6 +518,10 @@ async function captureReload(
     const finalDocumentTimeOrigin = probe.timeOrigin;
     const navigationOrigin = documents[0]?.epochMs ?? finalDocumentTimeOrigin;
     const documentOffsetMs = finalDocumentTimeOrigin - navigationOrigin;
+    for (const module of probe.modules) {
+      module.startedAtMs += documentOffsetMs;
+      module.arrivedAtMs += documentOffsetMs;
+    }
     for (const key of [
       "firstAppDomMs",
       "firstMainDomMs",
@@ -498,6 +530,8 @@ async function captureReload(
       "allBoardWidgetsVisibleMs",
       "cachedBoardLayoutMs",
       "firstPaintedRowsMs",
+      "firstDetailsDomMs",
+      "firstDetailsPaintMs",
       "bottomParagraphPaintMs",
       "transcriptTextPaintMs",
       "pluginsCompleteMs",
@@ -736,6 +770,7 @@ const results: Array<{
   route: "chat" | "dashboard";
   coldReset: unknown;
   warmCache: Awaited<ReturnType<typeof inspectWarmCache>> | null;
+  detailsSubagentsWarmState: Awaited<ReturnType<typeof qualifyDetailsSubagentsWarmState>>;
   runs: Array<Awaited<ReturnType<typeof captureReload>>>;
 }> = [];
 try {
@@ -779,6 +814,7 @@ try {
     dashboardPaneChrome: values["dashboard-pane-chrome"],
     pluginActivation: values["plugin-activation"],
     detailsSessionFacts: values["details-session-facts"],
+    detailsSubagentActivity: values["details-subagent-activity"],
     activeTargets: values["active-targets"],
     composerControls: values["composer-controls"],
     ...(admission
@@ -811,11 +847,9 @@ try {
     if (interrupted) {
       throw new Error("Proof interrupted");
     }
-    if (activeUiRoot === arm.build.uiRoot) {
-      return;
-    }
     // Configured custom roots deliberately do not retain asset bytes. Swap only
-    // this tool's copied root while browser pages are frozen; keep Gateway caches warm.
+    // this tool's copied root while browser pages are frozen. Prepare every sample
+    // equally, including A/A and consecutive reloads of the same arm.
     const stage = path.join(directory, "next-ui");
     await cp(arm.build.uiRoot, stage, { recursive: true });
     if (activeUiRoot) {
@@ -1073,6 +1107,7 @@ try {
             route,
             coldReset,
             warmCache: null as Awaited<ReturnType<typeof inspectWarmCache>> | null,
+            detailsSubagentsWarmState: null,
             runs: [
               await captureReload(
                 page,
@@ -1150,11 +1185,23 @@ try {
               .waitFor({ state: "visible" });
           }
           const target = fixture.fixtureSummary.targets[route === "chat" ? 0 : 1]!;
+          if (route === "chat" && fixture.fixtureSummary.ordinaryChildren.length > 0) {
+            const qualified = await page.waitForFunction(qualifyDetailsSubagentsWarmState, {
+              sessionKey: target.key,
+              rows: fixture.fixtureSummary.ordinaryChildren,
+            });
+            results.at(-1)!.detailsSubagentsWarmState = await qualified.jsonValue();
+            await qualified.dispose();
+          }
           const cache = await inspectWarmCache(page, target.key);
           results.at(-1)!.warmCache = cache;
           await writeFile(
             path.join(arm.directory, route, "warm-cache.json"),
-            JSON.stringify(cache, null, 2),
+            JSON.stringify(
+              { ...cache, detailsSubagentsWarmState: results.at(-1)!.detailsSubagentsWarmState },
+              null,
+              2,
+            ),
           );
           if (reloads > 0 && cache.targetSnapshots === 0) {
             throw new Error(
