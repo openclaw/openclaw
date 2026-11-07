@@ -92,6 +92,19 @@ native offers, mismatched upstream identities and unsupported formats do not
 fall back to Chat or local Anthropic/Vercel credentials. This client support does not establish live
 Vercel entitlement or an upstream tariff.
 
+## Fast mode
+
+Eligible native Anthropic routes support the Fast control and `/fast on`.
+OpenClaw sends Anthropic’s native `speed: "fast"` request field and beta header,
+and uses the fast pricing multiplier when estimating usage cost. This also works
+for pooled model IDs: eligibility comes from the catalog’s upstream model and
+pricing card, not the pool suffix. Models whose pricing card disables fast mode
+do not advertise the control.
+
+This is separate from OpenAI priority service tiers. `/fast off` leaves native
+Anthropic requests at their standard speed; `/fast auto` does not enable native
+Anthropic fast mode.
+
 ## Utility model
 
 When `agents.defaults.utilityModel` is unset, a ClawRouter primary model uses a
