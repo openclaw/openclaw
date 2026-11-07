@@ -321,7 +321,7 @@ describe("native completion delivery ownership", () => {
       await client.notify(completedChild("next-child-turn"));
       const receipt = deliveredNativeCompletion();
       receipt.params.turnId = "next-parent-turn";
-      receipt.params.item.id = "next-native-receipt";
+      Object.assign(receipt.params.item, { id: "next-native-receipt" });
       await client.notify(receipt);
       await second.unregister();
       await attempts.settle();
