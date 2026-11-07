@@ -235,6 +235,9 @@ it("surfaces native edit failures on generic device setting rows", async () => {
       "native host rejected",
     ),
   );
+  expect(experience.querySelector(".settings-row__desc")?.textContent).toMatch(
+    /here\.\s+The native host rejected/u,
+  );
   const appearance = row(page, "Appearance");
   const select = appearance.querySelector<HTMLSelectElement>("select")!;
   select.value = "dark";

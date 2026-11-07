@@ -28,6 +28,7 @@ export function createNativeEditFeedback(capability: NativeDeviceSettingsCapabil
       return (
         <>
           {description}
+          {description ? " " : null}
           <Loading on={completion()}>
             <Errored fallback={(error) => <span role="alert">{formatUiError(error())}</span>}>
               {result()}
