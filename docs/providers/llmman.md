@@ -50,6 +50,9 @@ Version scope: this page is verified against [llmman v0.1.334](https://github.co
   </Accordion>
   <Accordion title="Remote llmman hosts">
     A daemon started with `LLMMAN_HOST=0.0.0.0` refuses to start without `LLMMAN_API_KEYS=<key>`. Set OpenClaw's `LLMMAN_API_KEY` to that key; the `llmman-local` marker gets a `401`. A daemon reachable off loopback also refuses to spend its own hosted-provider key for callers that presented none.
+
+    If `baseUrl` is a non-loopback IP address or a name other than `localhost` or one ending in `.local`, `.internal`, or `.localhost`, OpenClaw treats it as a remote endpoint and never asks for streamed usage, so token counts stay unavailable. llmman returns usage, so set `compat: { supportsUsageInStreaming: true }` on each model entry. See [custom providers](/gateway/config-tools/custom-providers#provider-field-details).
+
   </Accordion>
   <Accordion title="Env var substitution">
     `${LLMMAN_API_KEY}` resolves from the Gateway process environment or `~/.openclaw/.env`. If the variable is missing, OpenClaw logs a config warning and treats the provider as unavailable, so put the export where the Gateway can read it. See [Environment](/help/environment).
