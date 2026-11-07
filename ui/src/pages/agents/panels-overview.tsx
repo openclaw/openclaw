@@ -115,17 +115,14 @@ export function AgentOverview(
       (configForm() ? null : resolveModelPrimary(agentModel())),
   );
   const effectivePrimary = createMemo(() => entryPrimary() ?? defaultPrimary() ?? null);
-  const selectedPrimary = createMemo(() => (isDefault() ? effectivePrimary() : entryPrimary()));
   const primaryModelOptions = createMemo(() => {
     const inherited = defaultPrimary();
     return [
       {
         value: "",
-        label: isDefault()
-          ? t("agents.overview.notSet")
-          : inherited
-            ? t("agents.overview.inheritDefaultModel", { model: inherited })
-            : t("agents.overview.inheritDefault"),
+        label: inherited
+          ? t("agents.overview.inheritDefaultModel", { model: inherited })
+          : t("agents.overview.inheritDefault"),
       },
       ...buildModelOptions(
         configForm(),
@@ -412,7 +409,7 @@ export function AgentOverview(
             <ModelPicker
               label={primaryModelLabel()}
               title={effectivePrimary() ?? undefined}
-              value={selectedPrimary() ?? ""}
+              value={entryPrimary() ?? ""}
               options={primaryModelOptions()}
               disabled={disabled()}
               onChange={(value) => params.onModelChange(params.agent.id, value || null)}
