@@ -24,6 +24,8 @@ export function buildTranscriptFollowupRun(
         !resolveRequesterPrincipalKey({ requesterOrigin: base.run.requesterOrigin }) &&
         !requesterCreatorProfileId(base.run.requesterOrigin)),
     prompt: formatSystemTurnPrompt(params.prompt),
+    // A system turn never states the source turn's Stop: the user may have asked to go on.
+    stoppedByUser: undefined,
     disableCollectBatching: true,
     enqueuedAt: Date.now(),
     transcriptPrompt: undefined,

@@ -1,6 +1,6 @@
 /**
  * Tests the session facts a command turn reads and records: a local operator's root chat type,
- * and a user's Stop, which an `agent` RPC turn states without passing reply admission.
+ * and a user's Stop, which an `agent` RPC turn leaves recorded for a turn that states it.
  */
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
@@ -72,44 +72,28 @@ describe("agentCommand operator direct root", () => {
 
 describe("agentCommand user Stop", () => {
   it.each([
-    { name: "says the Stop on an agent turn", says: true, opts: {} },
-    { name: "keeps the Stop past a raw model run", says: false, opts: { modelRun: true } },
-    // Model selection refuses this turn after its session write, before any model runs.
-    { name: "keeps the Stop past a refused model", says: false, opts: { model: "gpt-5.4" } },
-  ] as const)("$name", async ({ says, opts }) => {
+    { name: "a plain agent turn", opts: {} },
+    {
+      name: "an exec-approval follow-up",
+      opts: {
+        inputProvenance: { kind: "inter_session", sourceTool: "exec_approval_followup" },
+      },
+    },
+  ] as const)("leaves a recorded Stop past $name for an admitted reply", async ({ opts }) => {
     const sessionId = "stopped-session";
     const target = { sessionKey: "agent:main:rpc-stop", storePath: requireStorePath() };
     const stop = { userStoppedAt: 5, userStoppedSessionId: sessionId };
     await compactionTestRuntime.replaceSessionEntry(target, { sessionId, updatedAt: 1, ...stop });
     state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text: "ok" }));
-    // An approved exec continuation names its output by prompt range: here, "ask".
-    const execApprovalContinuationPromptRange = { start: 5, end: 8 };
 
-    const run = agentCommandFromGatewayIngress(
-      {
-        ...target,
-        sessionId,
-        message: "next ask",
-        allowModelOverride: false,
-        execApprovalContinuationPromptRange,
-        ...opts,
-      },
+    await agentCommandFromGatewayIngress(
+      { ...target, sessionId, message: "next ask", allowModelOverride: false, ...opts },
       ...GATEWAY_INGRESS_ARGS,
     );
-    await ("model" in opts ? expect(run).rejects.toThrow("not authorized") : run);
 
+    // The turn runs as sent; reply admission or a queued turn states the Stop later.
     const attempt = state.runAgentAttemptMock.mock.calls[0]?.[0];
-    const range = attempt?.opts.execApprovalContinuationPromptRange;
-    expect(
-      attempt?.body.startsWith("Note: The user stopped the previous agent run.") === true,
-    ).toBe(says);
-    expect(range && attempt?.body.slice(range.start, range.end)).toBe(
-      "model" in opts ? undefined : "ask",
-    );
-    expect(attempt?.transcriptBody).toBe("model" in opts ? undefined : "next ask");
-    // A turn that says the Stop retires it; one that cannot leaves it for the next.
-    expect(compactionTestRuntime.loadSessionEntry(target)?.userStoppedAt).toBe(
-      says ? undefined : 5,
-    );
+    expect(attempt?.body).toBe("next ask");
+    expect(compactionTestRuntime.loadSessionEntry(target)).toMatchObject(stop);
   });
 });

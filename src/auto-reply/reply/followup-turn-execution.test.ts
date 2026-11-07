@@ -11,13 +11,17 @@ import {
   getFollowupTurnTestState,
   resetFollowupTurnTestState,
 } from "./followup-turn-execution.test-support.js";
+import { createOverflowSummaryRetrySource } from "./queue/delivery-context.js";
+import type { FollowupRun } from "./queue/types.js";
 import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
 import { resolveReplyOperationAgentTurn } from "./reply-operation-run-state.test-support.js";
+import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
 import { createMockReplyOperation, createMockTypingController } from "./test-helpers.js";
+import { buildTranscriptFollowupRun } from "./transcript-followup-run.js";
 
 const state = getFollowupTurnTestState();
 function mockExecution(run: (params: AgentTurnParams) => void | Promise<void>) {
@@ -563,5 +567,48 @@ describe("executeFollowupTurn lifecycle", () => {
     releaseSlowTask();
     await expect(drain).rejects.toBe(failure);
     expect(order).toEqual(["slow-finished"]);
+  });
+
+  const strandedRetry = (base: FollowupRun) => {
+    const recovery = resolveStrandedReplyRecovery({
+      base,
+      payloads: [],
+      finalText: "Done.",
+      terminalReply: { disposition: "visible", text: "Done." },
+      sourceReplyDeliveryMode: "message_tool_only",
+      sendPolicyDenied: false,
+      successfulSourceReplyDelivery: false,
+      isRoomEvent: false,
+    });
+    return recovery.kind === "retry" ? recovery.run : base;
+  };
+  it.each([
+    { name: "states it in the queued turn", says: true, derive: (run: FollowupRun) => run },
+    {
+      name: "states it in its overflow-summary retry",
+      says: true,
+      derive: createOverflowSummaryRetrySource,
+    },
+    {
+      // Goal continuations and stalled-turn recovery build on this.
+      name: "leaves it out of a system continuation",
+      says: false,
+      derive: (run: FollowupRun) =>
+        buildTranscriptFollowupRun(run, {
+          prompt: "Advance the active goal.",
+          sourceTool: "session_goal_continue",
+          expiredSkillAuthoringMessage: "expired",
+        }),
+    },
+    { name: "leaves it out of a stranded-reply retry", says: false, derive: strandedRetry },
+  ])("after a claimed Stop, $name", async ({ says, derive }) => {
+    const bodies: string[] = [];
+    mockExecution((params) => void bodies.push(params.commandBody));
+    const turn = createTurn();
+    turn.queued = derive({ ...turn.queued, stoppedByUser: true });
+    await executeTestTurn({ turn });
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]?.split("The user stopped the previous agent run")).toHaveLength(says ? 2 : 1);
+    expect(turn.queued.transcriptPrompt ?? "").not.toContain("The user stopped");
   });
 });
