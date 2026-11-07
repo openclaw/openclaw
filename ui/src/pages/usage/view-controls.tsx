@@ -6,6 +6,8 @@ import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
+import { projectGateway } from "../../lib/reactive/application.ts";
+import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { formatIsoDate } from "./helpers.ts";
 import { applySuggestionToQuery, buildQuerySuggestions, removeQueryToken } from "./query.ts";
@@ -53,6 +55,10 @@ export function createUsageControls(
         tool: [],
       },
   );
+  const application = useOptionalApplication();
+  const gateway = application ? projectGateway(application.gateway) : undefined;
+  // "You" leads the identity picker; the viewer is the Gateway's signed-in profile.
+  const viewerId = () => gateway?.read().snapshot.selfUser?.id ?? null;
   const queryTerms = createMemo(() => extractQueryTerms(props.filters.queryDraft));
   const querySuggestions = createMemo(() =>
     buildQuerySuggestions(props.filters.queryDraft, queryTerms(), filterOptions()),
@@ -173,6 +179,8 @@ export function createUsageControls(
     <UsageCreatorFilter
       options={props.data.creatorOptions}
       selectedKey={props.filters.creatorKey}
+      viewerId={viewerId()}
+      placement={ctx.phone() ? "top-start" : "bottom-start"}
       onSelect={(creatorKey) => props.callbacks.filters.onScopeChange({ creatorKey })}
     />
   );
@@ -267,6 +275,9 @@ export function createUsageControls(
           filterKey={filterKey}
           label={t(`usage.filters.${filterKey}`)}
           options={filterOptions()[filterKey]}
+          counts={
+            props.data.readChartSnapshot("filterOptions")?.overview?.filterOptionCounts?.[filterKey]
+          }
           queryDraft={props.filters.queryDraft}
           queryTerms={queryTerms()}
           onQueryDraftChange={props.callbacks.filters.onQueryDraftChange}
