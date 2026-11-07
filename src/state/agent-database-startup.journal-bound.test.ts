@@ -295,6 +295,12 @@ it.each([
   }
   await prepareAgents(1);
   expectAdmission([], ["agent-0"], attempts);
+  if (typeof outcome === "string") {
+    const options = vi.mocked(failPendingAgentDatabase).mock.lastCall![2];
+    const refusal = readAgentDatabaseAdmissionRefusal("agent-0", options);
+    expect(refusal?.repairHint).toContain("retry agents.delete");
+    expect(refusal?.repairHint).not.toContain("doctor --fix");
+  }
 });
 
 it("does not start queued journal reads after Gateway ownership changes", async () => {

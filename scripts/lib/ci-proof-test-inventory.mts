@@ -3859,6 +3859,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "test/scripts/upgrade-survivor-probe-gateway.test.ts",
   "test/scripts/upgrade-survivor-systemd.test.ts",
   "test/scripts/upgrade-survivor-update-result.test.ts",
+  "test/scripts/container-registry-readback.test.ts",
   "test/scripts/vercel-container-registry-publish.test.ts",
   "test/scripts/verify-mac-runtime-fs.test.ts",
   "test/scripts/verify-pr-hosted-gates.test.ts",
