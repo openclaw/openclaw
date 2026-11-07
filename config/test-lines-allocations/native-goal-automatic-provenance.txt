@@ -1,0 +1,2 @@
+# Automatic lifecycle provenance and paused/active recovered-thread coverage; explicit command controls reused unchanged.
+20

@@ -86,6 +86,11 @@ it.each([false, true])(
       expect(result.assistantTexts).toEqual(["Native successor answer"]);
       expect(f.harness.requests.filter(({ method }) => method === "turn/start")).toHaveLength(1);
       expect(f.updates.at(-1)).toEqual({ status: "complete" });
+      for (const { params } of f.harness.requests.filter(
+        ({ method }) => method === "thread/goal/set",
+      )) {
+        expect(params).toMatchObject({ origin: "automatic" });
+      }
     } finally {
       f.revocation.abort();
       await run.catch(() => undefined);
@@ -178,114 +183,124 @@ it("does not begin native execution when the prepared host goal is already revok
   expect(f.harness.requests).toHaveLength(0);
 });
 
-it("resumes the same native goal with a fresh host inference generation before activation", async () => {
-  let activeHarness: ReturnType<typeof createStartedThreadHarness>;
-  const respond: Parameters<typeof createStartedThreadHarness>[0] = async (method, params) => {
-    if (method === "turn/interrupt") {
-      assert(isJsonObject(params) && typeof params.threadId === "string");
-      assert(typeof params.turnId === "string");
-      await activeHarness.notify({
-        method: "turn/completed",
-        params: {
-          threadId: params.threadId,
-          turn: { id: params.turnId, status: "interrupted", items: [] },
-        },
-      });
-      return {};
-    }
-    if (method === "account/read") {
-      return { account: { type: "apiKey" } };
-    }
-    if (method === "thread/resume") {
-      return threadStartResult();
-    }
-    return undefined;
-  };
-  // Use the neighboring wire/lifecycle fixture so the physical connection is
-  // acquired and retired by the real shared-client owner on both runs.
-  const first = fixture(null, respond, { persistedThreads: [] });
-  activeHarness = first.harness;
-  ownCodexInferenceClient(first.harness.client);
-  const firstRun = first.run();
-  const firstSettled = firstRun.catch((error: unknown) => error);
-  try {
-    await first.started(firstRun);
-    const request = first.harness.requests.find(({ method }) => method === "turn/start")?.params;
-    assert(isJsonObject(request) && isJsonObject(request.responsesapiClientMetadata));
-    const generation = request.responsesapiClientMetadata[CODEX_INFERENCE_GENERATION_KEY];
-    assert(typeof generation === "string");
-    const route = getCodexInferenceThread(first.harness.client, "thread-1");
-    assert(route);
-    const body = { instructions: "Native model-owned policy", input: [] };
-    const metadata = { requestKind: "turn", threadId: "thread-1", generation };
-    const oldRequest = route.context.prepare(body, metadata, true);
-    oldRequest.assertCurrent();
-
-    first.revocation.abort(new Error("Host goal paused"));
-    await firstSettled;
-    expect(oldRequest.assertCurrent).toThrow();
-    const paused = first.readStoredGoal();
-    assert(paused?.status === "paused");
-    expect((await readCodexAppServerBinding(first.params.sessionFile))?.threadId).toBe("thread-1");
-    first.harness.close();
-
-    const resumed = fixture(paused, respond, { persistedThreads: ["thread-1"] });
-    activeHarness = resumed.harness;
-    resumed.params.runId = "run-resumed";
-    ownCodexInferenceClient(resumed.harness.client);
-    const resumedRun = resumed.run();
+it.each(["paused", "active"] as const)(
+  "resumes a %s native goal with a fresh host inference generation before activation",
+  async (status) => {
+    let activeHarness: ReturnType<typeof createStartedThreadHarness>;
+    const respond: Parameters<typeof createStartedThreadHarness>[0] = async (method, params) => {
+      if (method === "turn/interrupt") {
+        assert(isJsonObject(params) && typeof params.threadId === "string");
+        assert(typeof params.turnId === "string");
+        await activeHarness.notify({
+          method: "turn/completed",
+          params: {
+            threadId: params.threadId,
+            turn: { id: params.turnId, status: "interrupted", items: [] },
+          },
+        });
+        return {};
+      }
+      if (method === "account/read") {
+        return { account: { type: "apiKey" } };
+      }
+      if (method === "thread/resume") {
+        return threadStartResult();
+      }
+      return undefined;
+    };
+    // Use the neighboring wire/lifecycle fixture so the physical connection is
+    // acquired and retired by the real shared-client owner on both runs.
+    const first = fixture(null, respond, { persistedThreads: [] });
+    activeHarness = first.harness;
+    ownCodexInferenceClient(first.harness.client);
+    const firstRun = first.run();
+    const firstSettled = firstRun.catch((error: unknown) => error);
     try {
-      await resumed.started(resumedRun);
-      const requests = resumed.harness.requests;
-      expect(requests.filter(({ method }) => method === "thread/start")).toHaveLength(0);
-      expect(requests.filter(({ method }) => method === "thread/resume")).toHaveLength(1);
-      expect(requests.filter(({ method }) => method === "turn/start")).toHaveLength(1);
-      const turnStart = requests.findIndex(({ method }) => method === "turn/start");
-      const activation = requests.findIndex(
-        ({ method, params }) =>
-          method === "thread/goal/set" && isJsonObject(params) && params.status === "active",
+      await first.started(firstRun);
+      const request = first.harness.requests.find(({ method }) => method === "turn/start")?.params;
+      assert(isJsonObject(request) && isJsonObject(request.responsesapiClientMetadata));
+      const generation = request.responsesapiClientMetadata[CODEX_INFERENCE_GENERATION_KEY];
+      assert(typeof generation === "string");
+      const route = getCodexInferenceThread(first.harness.client, "thread-1");
+      assert(route);
+      const body = { instructions: "Native model-owned policy", input: [] };
+      const metadata = { requestKind: "turn", threadId: "thread-1", generation };
+      const oldRequest = route.context.prepare(body, metadata, true);
+      oldRequest.assertCurrent();
+
+      first.revocation.abort(new Error("Host goal paused"));
+      await firstSettled;
+      expect(oldRequest.assertCurrent).toThrow();
+      const paused = first.readStoredGoal();
+      assert(paused?.status === "paused");
+      expect((await readCodexAppServerBinding(first.params.sessionFile))?.threadId).toBe(
+        "thread-1",
       );
-      expect(activation).toBeGreaterThan(turnStart);
-      const acceptedRequest = requests[turnStart];
-      assert(acceptedRequest);
-      const next = acceptedRequest.params;
-      assert(isJsonObject(next) && isJsonObject(next.responsesapiClientMetadata));
-      expect(next.threadId).toBe("thread-1");
-      const nextGeneration = next.responsesapiClientMetadata[CODEX_INFERENCE_GENERATION_KEY];
-      assert(typeof nextGeneration === "string");
-      expect(nextGeneration).not.toBe(generation);
-      const nextRoute = getCodexInferenceThread(resumed.harness.client, "thread-1");
-      assert(nextRoute);
-      expect(() => nextRoute.context.prepare(body, metadata, true)).toThrow(
-        "no current admitted parent generation",
-      );
-      nextRoute.context
-        .prepare(body, { ...metadata, generation: nextGeneration }, true)
-        .assertCurrent();
-      expect(resumed.readStoredGoal()).toMatchObject({
-        threadId: "thread-1",
-        objective: paused.objective,
-        status: "active",
-      });
-      expect(
-        requests
-          .filter(({ method }) => method === "thread/goal/set")
-          .every(({ params }) => isJsonObject(params) && params.objective === undefined),
-      ).toBe(true);
-      await resumed.finish();
-      await resumed.harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      expect(readAttemptTerminal(await resumedRun).promptError).toBeNull();
+      first.harness.close();
+
+      const resumed = fixture({ ...paused, status }, respond, { persistedThreads: ["thread-1"] });
+      activeHarness = resumed.harness;
+      resumed.params.runId = "run-resumed";
+      ownCodexInferenceClient(resumed.harness.client);
+      const resumedRun = resumed.run();
+      try {
+        await resumed.started(resumedRun);
+        const requests = resumed.harness.requests;
+        expect(requests.filter(({ method }) => method === "thread/start")).toHaveLength(0);
+        expect(requests.filter(({ method }) => method === "thread/resume")).toHaveLength(1);
+        expect(requests.filter(({ method }) => method === "turn/start")).toHaveLength(1);
+        const turnStart = requests.findIndex(({ method }) => method === "turn/start");
+        const activation = requests.findIndex(
+          ({ method, params }) =>
+            method === "thread/goal/set" && isJsonObject(params) && params.status === "active",
+        );
+        expect(activation).toBeGreaterThan(turnStart);
+        const acceptedRequest = requests[turnStart];
+        assert(acceptedRequest);
+        const next = acceptedRequest.params;
+        assert(isJsonObject(next) && isJsonObject(next.responsesapiClientMetadata));
+        expect(next.threadId).toBe("thread-1");
+        const nextGeneration = next.responsesapiClientMetadata[CODEX_INFERENCE_GENERATION_KEY];
+        assert(typeof nextGeneration === "string");
+        expect(nextGeneration).not.toBe(generation);
+        const nextRoute = getCodexInferenceThread(resumed.harness.client, "thread-1");
+        assert(nextRoute);
+        expect(() => nextRoute.context.prepare(body, metadata, true)).toThrow(
+          "no current admitted parent generation",
+        );
+        nextRoute.context
+          .prepare(body, { ...metadata, generation: nextGeneration }, true)
+          .assertCurrent();
+        expect(resumed.readStoredGoal()).toMatchObject({
+          threadId: "thread-1",
+          objective: paused.objective,
+          status: "active",
+        });
+        expect(
+          requests
+            .filter(({ method }) => method === "thread/goal/set")
+            .every(
+              ({ params }) =>
+                isJsonObject(params) &&
+                params.objective === undefined &&
+                params.origin === "automatic",
+            ),
+        ).toBe(true);
+        await resumed.finish();
+        await resumed.harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+        expect(readAttemptTerminal(await resumedRun).promptError).toBeNull();
+      } finally {
+        resumed.revocation.abort();
+        await resumedRun.catch(() => undefined);
+        resumed.harness.close();
+      }
     } finally {
-      resumed.revocation.abort();
-      await resumedRun.catch(() => undefined);
-      resumed.harness.close();
+      first.revocation.abort();
+      await firstSettled;
+      first.harness.close();
     }
-  } finally {
-    first.revocation.abort();
-    await firstSettled;
-    first.harness.close();
-  }
-});
+  },
+);
 
 it("joins process exit after a failed native Pause before releasing host tools", async () => {
   const pauseError = new Error("Native Pause rejected");
@@ -475,7 +490,7 @@ it("holds successor HTTP inference until the native receipt binds both existing 
 });
 
 it.each(["paused", "blocked", "usageLimited", "budgetLimited", "complete"] as const)(
-  "reconciles changed remaining allowance when explicitly resuming %s",
+  "reconciles %s native goals without inventing a user mutation",
   async (status) => {
     const f = fixture({
       threadId: "thread-1",
@@ -509,9 +524,14 @@ it.each(["paused", "blocked", "usageLimited", "budgetLimited", "complete"] as co
           isJsonObject(params) &&
           params.tokenBudget === 100 &&
           params.status === "paused" &&
-          params.origin === "user",
+          params.origin === "automatic",
       );
       expect(reconcile).toBeGreaterThanOrEqual(0);
+      for (const { params } of f.harness.requests.filter(
+        ({ method }) => method === "thread/goal/set",
+      )) {
+        expect(params).toMatchObject({ origin: "automatic" });
+      }
       expect(f.harness.requests.findIndex(({ method }) => method === "turn/start")).toBeGreaterThan(
         reconcile,
       );
@@ -553,7 +573,7 @@ it("explicitly clears the native finite cap on unlimited Resume without resettin
     });
     expect(
       f.harness.requests.find(({ method }) => method === "thread/goal/set")?.params,
-    ).toMatchObject({ tokenBudget: null, status: "paused", origin: "user" });
+    ).toMatchObject({ tokenBudget: null, status: "paused", origin: "automatic" });
     await f.finish();
     await f.harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;

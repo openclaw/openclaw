@@ -71,7 +71,7 @@ export async function reconcileCodexNativeGoalBudget(
       threadId,
       ...(!existing ? { objective: goal.objective } : {}),
       status: "paused",
-      origin: "user",
+      origin: "automatic",
       // Omission means Keep upstream; null explicitly requests unlimited.
       tokenBudget: budget,
     },

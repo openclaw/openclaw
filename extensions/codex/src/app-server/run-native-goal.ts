@@ -330,7 +330,7 @@ export async function runCodexNativeGoalPursuit(
       if (first) {
         const response = await client.request(
           "thread/goal/set",
-          { threadId, status: "active", origin: "user" },
+          { threadId, status: "active", origin: "automatic" },
           {
             assertCurrent,
             signal: runAbortController.signal,
