@@ -1,3 +1,4 @@
+import { resolveProviderContext, type ProviderContext } from "openclaw/plugin-sdk/llm";
 import { expect, it } from "vitest";
 import * as btw from "./btw.test-support.js";
 
@@ -40,9 +41,13 @@ it("merges unanswered Bedrock input with the side question before streaming", as
     btw.createUserTranscriptMessage([{ type: "text", text: "Unanswered orphan" }]),
     btw.createUserTranscriptMessage([{ type: "text", text: "New question" }]),
   ]);
-  btw.mockDoneAnswer("Bedrock answer.");
+  let providerContext: ProviderContext | undefined;
+  btw.streamSimpleMock.mockImplementation(async (_model, context, options) => {
+    providerContext = await resolveProviderContext(context, options);
+    return btw.makeAsyncEvents([btw.createDoneEvent("Bedrock answer.")]);
+  });
   await btw.runSideQuestion({ provider: "amazon-bedrock" });
-  const messages = btw.contextMessages(btw.streamContext());
+  const messages = btw.contextMessages(providerContext);
   expect(messages).toHaveLength(1);
   expect(messages[0]).toMatchObject({ role: "user" });
   const content = JSON.stringify(messages[0]);

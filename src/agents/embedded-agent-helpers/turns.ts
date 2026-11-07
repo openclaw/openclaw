@@ -44,6 +44,15 @@ export function shouldMergeConsecutiveTurns(
   return !(policy.appendOnlyRuntimeContext && modelApi === "anthropic-messages");
 }
 
+export function resolveUserTurnMergeOptions(
+  policy: Pick<TranscriptPolicy, "validateAnthropicTurns" | "appendOnlyRuntimeContext">,
+  modelApi?: string | null,
+): { preserveContextBoundaries: boolean } | undefined {
+  return policy.validateAnthropicTurns && shouldMergeConsecutiveTurns(policy, modelApi)
+    ? { preserveContextBoundaries: modelApi !== "bedrock-converse-stream" }
+    : undefined;
+}
+
 type AnthropicContentBlock = {
   type: "text" | "toolUse" | "toolCall" | "functionCall" | "toolResult" | "tool";
   text?: string;

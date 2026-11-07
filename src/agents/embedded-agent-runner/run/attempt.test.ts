@@ -544,14 +544,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         anthropicPolicy,
       );
       expect(seen).toEqual(
-        dropped
-          ? [
-              {
-                role: "user",
-                content: [...textUser("first").content, ...textUser("retry").content],
-              },
-            ]
-          : [text, textUser("retry")],
+        dropped ? [textUser("first"), textUser("retry")] : [text, textUser("retry")],
       );
     },
   );

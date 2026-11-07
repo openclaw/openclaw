@@ -11,7 +11,6 @@ import {
   ConversationRole,
   ConverseStreamCommand,
   type ConverseStreamMetadataEvent,
-  ImageFormat,
   type Message,
   StopReason as BedrockStopReason,
   type SystemContentBlock,
@@ -32,12 +31,13 @@ import {
   createHttpProxyAgentsForTarget,
   createToolArgumentPreviewSchedule,
   hasRuntimeContextMarker,
+  resolveProviderContext,
   parseStreamingJson,
   sanitizeSurrogates,
   transformMessages,
   type AssistantMessageEvent,
   type CacheRetention,
-  type Context,
+  type ProviderContext,
   type Model,
   type SimpleStreamOptions,
   type StreamFunction,
@@ -48,7 +48,6 @@ import {
   type ToolCall,
   type ToolResultMessage,
 } from "openclaw/plugin-sdk/llm";
-import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import {
   bindsClaudeThinkingPrefix,
   resolveClaudeFable5ModelIdentity,
@@ -88,6 +87,11 @@ import {
   resolveBedrockPromptCachePolicy,
   type BedrockOptions,
 } from "./bedrock-options.js";
+import {
+  bedrockContextMessages,
+  convertTextImageContent,
+  decodeBedrockBase64,
+} from "./media-content.js";
 import {
   isClaude5BedrockModel,
   resolveBedrockClaudeThinkingProfile,
@@ -401,6 +405,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
 
     let client: BedrockRuntimeClient | undefined;
     try {
+      const requestContext = await resolveProviderContext(context, options);
       options.signal?.throwIfAborted();
       client = new BedrockRuntimeClient(config);
       const cachePolicy = resolveBedrockPromptCachePolicy(model);
@@ -414,15 +419,15 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
         typeof thinking === "object" &&
         (thinking as { type?: unknown }).type === "adaptive";
       const toolConfig = convertToolConfig(
-        context.tools,
+        requestContext.tools,
         fable5 || sendsAdaptiveThinking
           ? normalizeAdaptiveClaudeToolChoice(options.toolChoice)
           : options.toolChoice,
       );
       let commandInput = {
         modelId: model.id,
-        messages: convertMessages(context, model, cachePoint, toolConfig !== undefined),
-        system: buildSystemPrompt(context.systemPrompt, cacheRetention, cachePoint),
+        messages: convertMessages(requestContext, model, cachePoint, toolConfig !== undefined),
+        system: buildSystemPrompt(requestContext.systemPrompt, cacheRetention, cachePoint),
         inferenceConfig: {
           ...(options.maxTokens !== undefined && { maxTokens: options.maxTokens }),
           // Grok 4.6 Converse profiles reject temperature rather than ignoring it.
@@ -808,26 +813,6 @@ function normalizeToolCallId(id: string): string {
   return id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
 }
 
-function convertTextImageContent(
-  blocks: ToolResultMessage["content"],
-  skipEmptyImages: boolean,
-): Array<ContentBlock.TextMember | ContentBlock.ImageMember> {
-  const content: Array<ContentBlock.TextMember | ContentBlock.ImageMember> = [];
-  for (const block of blocks) {
-    if (block.type === "text") {
-      content.push({ text: sanitizeSurrogates(block.text) });
-      continue;
-    }
-    if (
-      block.type === "image" &&
-      (!skipEmptyImages || describeToolResultMediaPlaceholder([block]))
-    ) {
-      content.push({ image: createImageBlock(block.mimeType, block.data) });
-    }
-  }
-  return content;
-}
-
 function createBedrockToolResultContent(
   message: ToolResultMessage,
 ): Array<ContentBlock.TextMember | ContentBlock.ImageMember> {
@@ -861,14 +846,18 @@ function formatToolResultReplayHeader(message: ToolResultMessage): string {
 }
 
 function convertMessages(
-  context: Context,
+  context: ProviderContext,
   model: Model<"bedrock-converse-stream">,
   cachePoint: CachePointBlock | undefined,
   includeToolBlocks: boolean,
 ): Message[] {
   const result: Message[] = [];
   let firstVolatileMessageIndex: number | undefined;
-  const transformedMessages = transformMessages(context.messages, model, normalizeToolCallId);
+  const transformedMessages = transformMessages(
+    bedrockContextMessages(context),
+    model,
+    normalizeToolCallId,
+  );
 
   for (let i = 0; i < transformedMessages.length; i++) {
     const m = expectDefined(transformedMessages[i], "message conversion index is in bounds");
@@ -1210,42 +1199,6 @@ function buildAdditionalModelRequestFields(
   }
 
   return undefined;
-}
-
-const BEDROCK_IMAGE_FORMATS = new Map<string, ImageFormat>([
-  ["image/jpeg", ImageFormat.JPEG],
-  ["image/jpg", ImageFormat.JPEG],
-  ["image/png", ImageFormat.PNG],
-  ["image/gif", ImageFormat.GIF],
-  ["image/webp", ImageFormat.WEBP],
-]);
-
-function createImageBlock(mimeType: string, data: string) {
-  const format = BEDROCK_IMAGE_FORMATS.get(mimeType);
-  if (!format) {
-    throw new Error(`Unknown image type: ${mimeType}`);
-  }
-
-  return {
-    source: {
-      bytes: decodeBedrockBase64(data, "Amazon Bedrock image content has malformed base64"),
-    },
-    format,
-  };
-}
-
-function decodeBedrockBase64(data: string, errorMessage: string): Uint8Array {
-  // Validate before portable decoding so browser runtimes keep working without leaking atob errors.
-  const canonicalBase64 = canonicalizeBase64(data);
-  if (!canonicalBase64) {
-    throw new Error(errorMessage);
-  }
-  const binaryString = atob(canonicalBase64);
-  const bytes = new Uint8Array(binaryString.length);
-  for (let i = 0; i < binaryString.length; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
-  }
-  return bytes;
 }
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
