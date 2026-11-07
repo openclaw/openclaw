@@ -28,15 +28,22 @@ import { listProjectRecents } from "./projects-recents.js";
 import { projectsHandlers as registeredProjectsHandlers } from "./projects.js";
 import { initializeRepository, invokeProjectMethod } from "./projects.test-support.js";
 
+const rpcConfig = { agents: { entries: { main: { workspace: "/workspace" } } } };
+const createRepository = () =>
+  repositoryWorkspaces.getSessionRepositoryWorkspaceStore().create({
+    agentId: "main",
+    sessionKey: "global",
+    url: "https://github.com/octocat/hello-world.git",
+    assertCurrent: () => {},
+  });
+
 const folderRecent = (name: string) => ({
   kind: "folder",
   folder: `/work/${name}`,
   displayName: name,
 });
-function expectRecents(
-  result: Awaited<ReturnType<typeof invokeProjectMethod>>,
-  recents: unknown[],
-) {
+type ProjectMethodResult = Awaited<ReturnType<typeof invokeProjectMethod>>;
+function expectRecents(result: ProjectMethodResult, recents: unknown[]) {
   expect(result?.ok).toBe(true);
   expect(result?.payload).toHaveProperty("recents", recents);
 }
@@ -44,27 +51,18 @@ function expectRecents(
 test.each([undefined, "workspace", "registered", "cloned"] as const)(
   "folder recents preserve different runners beside %s projects",
   async (source) => {
-    const project = source
-      ? {
-          id: "local-app",
-          repoRoot: "/work/app",
-          displayName: "Local app",
-          source,
-          agentId: "main",
-        }
-      : undefined;
+    const project = { id: "app", repoRoot: "/work/app", displayName: "app", agentId: "main" };
     const candidates = [" node-a ", "node-a", "node-b", " ", undefined].map((execNode, index) => ({
       key: `agent:main:folder-${index}`,
       agentId: "main",
       entry: { sessionId: `folder-${index}`, updatedAt: index, execCwd: "/work/app", execNode },
     }));
     const usedSessions = new Set<string>();
-    expect(await listProjectRecents(candidates, project ? [project] : [], usedSessions)).toEqual([
+    const projects = source ? [{ ...project, source }] : [];
+    expect(await listProjectRecents(candidates, projects, usedSessions)).toEqual([
       { kind: "folder", folder: "/work/app", displayName: "app", execNode: "node-a" },
       { kind: "folder", folder: "/work/app", displayName: "app", execNode: "node-b" },
-      project
-        ? { kind: "project", projectId: project.id, displayName: project.displayName }
-        : { kind: "folder", folder: "/work/app", displayName: "app" },
+      source ? { kind: "project", projectId: "app", displayName: "app" } : folderRecent("app"),
     ]);
     expect([...usedSessions]).toEqual([0, 2, 3].map((index) => `agent:main:folder-${index}`));
   },
@@ -90,12 +88,7 @@ test("projects.list returns only the caller's deterministic resolved recents", a
         { agentId: "main", sessionKey: key },
         { sessionId: `session-${key.split(":").at(-1)}`, createdActor: actor, ...entry },
       );
-    const repository = await repositoryWorkspaces.getSessionRepositoryWorkspaceStore().create({
-      agentId: "main",
-      sessionKey: "global",
-      url: "https://github.com/octocat/hello-world.git",
-      assertCurrent: () => {},
-    });
+    const repository = await createRepository();
     for (const key of ["agent:main:a", "agent:main:b"]) {
       seed(key, { updatedAt: 500, projectId: project.id });
     }
@@ -137,12 +130,11 @@ test("projects.list returns only the caller's deterministic resolved recents", a
         execCwd: "/work/incognito",
       },
     );
-    const cfg = { agents: { entries: { main: { workspace: "/workspace" } } } };
     const list = (scopes = ["operator.write"], params = {}, projected = Boolean(projection)) =>
       invokeProjectMethod(
         "projects.list",
         params,
-        cfg,
+        rpcConfig,
         scopes,
         targetProfile.id,
         projected ? registeredProjectsHandlers : undefined,
@@ -162,7 +154,7 @@ test("projects.list returns only the caller's deterministic resolved recents", a
       ...Array.from({ length: 4 }, (_, index) => folderRecent(`folder-${index}`)),
     ];
     expectRecents(writeResult, expectedRecents);
-    projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    projection = await createSessionRowProjection({ cfg: rpcConfig, modelCatalog: [] });
     do {
       await projection.ensureMaterialized();
     } while (projection.needsMaterialization);
@@ -238,7 +230,7 @@ test("projects.list returns only the caller's deterministic resolved recents", a
     } finally {
       repositoryRead.mockRestore();
     }
-    const anonymous = await invokeProjectMethod("projects.list", {}, cfg, ["operator.read"]);
+    const anonymous = await invokeProjectMethod("projects.list", {}, rpcConfig, ["operator.read"]);
     expect(anonymous?.payload).not.toHaveProperty("recents");
     const databasePath = openOpenClawStateDatabase().path;
     projection.dispose();
@@ -255,7 +247,7 @@ test("projects.list returns only the caller's deterministic resolved recents", a
     } finally {
       external.close();
     }
-    projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    projection = await createSessionRowProjection({ cfg: rpcConfig, modelCatalog: [] });
     expect((await list())?.payload).toMatchObject({ recents: [] });
   } finally {
     projection?.dispose();
@@ -270,12 +262,7 @@ test("projects.list retries recents when the caller's profile is merged mid-read
   let projection: SessionRowProjection | undefined;
   try {
     const caller = ensureProfileForEmail("caller@example.test");
-    const repository = await repositoryWorkspaces.getSessionRepositoryWorkspaceStore().create({
-      agentId: "main",
-      sessionKey: "global",
-      url: "https://github.com/octocat/hello-world.git",
-      assertCurrent: () => {},
-    });
+    const repository = await createRepository();
     replaceSessionEntrySync(
       { agentId: "main", sessionKey: "global" },
       {
@@ -285,8 +272,7 @@ test("projects.list retries recents when the caller's profile is merged mid-read
         createdActor: { type: "human", source: "profile", id: caller.id },
       },
     );
-    const cfg = { agents: { entries: { main: { workspace: "/workspace" } } } };
-    projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    projection = await createSessionRowProjection({ cfg: rpcConfig, modelCatalog: [] });
     const canonical = ensureProfileForEmail("canonical@example.test");
     const findRepositories = repositoryWorkspaces.findSessionRepositoryWorkspaces;
     using merging = vi
@@ -301,7 +287,7 @@ test("projects.list retries recents when the caller's profile is merged mid-read
       await invokeProjectMethod(
         "projects.list",
         {},
-        cfg,
+        rpcConfig,
         ["operator.write"],
         caller.id,
         registeredProjectsHandlers,
