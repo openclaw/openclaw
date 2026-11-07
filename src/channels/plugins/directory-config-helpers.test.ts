@@ -61,6 +61,37 @@ describe("directory config helpers", () => {
     expect(entries).toEqual(groups("team/a", "team/b"));
   });
 
+  const canonical = (() => {
+    const composed = "#café".normalize("NFC");
+    return { composed, decomposed: composed.normalize("NFD") };
+  })();
+
+  it.each([
+    ["decomposed query against a composed key", canonical.composed, canonical.decomposed],
+    [
+      "composed query against a decomposed key",
+      canonical.decomposed,
+      canonical.composed.toUpperCase(),
+    ],
+  ])("matches canonically equivalent group queries: %s", (_label, key, query) => {
+    // Prove the fixture really carries two spellings, not one twice.
+    expect(canonical.decomposed).not.toBe(canonical.composed);
+    expect(listDirectoryGroupEntriesFromMapKeys({ groups: { [key]: {} }, query })).toEqual(
+      groups(key),
+    );
+  });
+
+  it("keeps same-form, accent-preserving, and no-match group queries unchanged", () => {
+    const search = (groupKeys: Record<string, unknown>, query: string) =>
+      listDirectoryGroupEntriesFromMapKeys({ groups: groupKeys, query });
+
+    expect(search({ [canonical.composed]: {} }, canonical.composed.toUpperCase())).toEqual(
+      groups(canonical.composed),
+    );
+    expect(search({ [canonical.composed]: {} }, "#cafe")).toEqual([]);
+    expect(search({ [canonical.composed]: {} }, "#absent")).toEqual([]);
+  });
+
   it("returns empty when the inspected account is missing", () => {
     const entries = listInspectedDirectoryEntriesFromSources({
       cfg,
