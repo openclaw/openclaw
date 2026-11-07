@@ -98,7 +98,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   ...[
     "test/scripts/pr-wrapper-source-closure.test.ts",
     "test/scripts/eager-import-closure.test.ts",
-    "test/scripts/update-restart-module-outcome.test.ts",
     "test/scripts/type-suppression-inventory.test.ts",
     "test/scripts/plugin-sdk-surface-report.test.ts",
   ].map((testFile): PolicyTestWatch => ({
@@ -106,6 +105,22 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     sourceOnly: true,
     watchGlobs: ["{src,extensions,packages,scripts,ui/src}/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"],
   })),
+  {
+    // This fixture evaluates named update modules, not arbitrary repository sources.
+    // Include the native integrity worker and its runtime/bootstrap dependencies.
+    testFile: "test/scripts/update-restart-module-outcome.test.ts",
+    sourceOnly: true,
+    watchGlobs: [
+      "{scripts,packages}/**",
+      "src/{cli,daemon,infra,logging,plugins,process,security,shared,state,utils}/**",
+      "src/test-utils/node-process.ts",
+      "test/scripts/ci-workflow.test-support.ts",
+      "test/vitest/**",
+      "test/{setup*,non-isolated-runner}.ts",
+      "*.{mjs,json}",
+      "pnpm-*.yaml",
+    ],
+  },
   {
     includeDotPaths: true,
     testFile: "test/scripts/lint-suppressions.test.ts",
