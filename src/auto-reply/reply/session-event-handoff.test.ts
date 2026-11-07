@@ -537,24 +537,76 @@ describe("session event target custody", () => {
       channels: { telegram: {} },
       commands: { ownerAllowFrom: ["456", "457"] },
     });
-    const capture = (senderId: string) =>
+    const capture = (
+      senderId: string,
+      conversationId = senderId,
+      senderUsername = "alice",
+      groupSpace = "200001",
+    ) =>
       withGatewayToolCallerIdentity(
-        { ...eventScope, requesterOrigin: { sessionKey, messageProvider: "telegram", senderId } },
+        {
+          ...eventScope,
+          requesterOrigin: {
+            sessionKey,
+            messageProvider: "telegram",
+            conversationId,
+            senderId,
+            senderUsername,
+            groupSpace,
+          },
+        },
         () => captureTarget("main", sessionKey, { env, retainRequesterOwner: true }),
       );
-    const owner = await capture("456");
-    const [sameOwner, guest, otherOwner] = await Promise.all([
+    const [
+      owner,
+      sameOwner,
+      guest,
+      otherOwner,
+      ownerElsewhere,
+      sameGuest,
+      otherGuest,
+      renamed,
+      otherGuild,
+    ] = await Promise.all([
+      capture("456"),
       capture("456"),
       capture("789"),
       capture("457"),
+      capture("456", "-100001"),
+      capture("789"),
+      capture("790"),
+      capture("789", "789", "bob"),
+      capture("789", "789", "alice", "200002"),
     ]);
-    expect(combineSessionEventTargetsForHost([owner, sameOwner])).toBeDefined();
-    // Owners share a source label, but each authority rechecks only its own requester.
-    for (const other of [guest, otherOwner]) {
-      expect(() => combineSessionEventTargetsForHost([owner, other])).toThrow(
-        "requester authority",
-      );
-    }
+    const combines = (targets: Awaited<ReturnType<typeof capture>>[]) => {
+      try {
+        return Boolean(combineSessionEventTargetsForHost(targets));
+      } catch (error) {
+        return String(error).includes("requester authority") ? false : String(error);
+      }
+    };
+    // Owners share a source label, but each authority rechecks only its own requester. A
+    // requester allowed only by toolsBySender holds no owner authority, yet the combined turn
+    // restores only the first requester, so another requester's revocation cannot ride along.
+    expect({
+      sameOwner: combines([owner, sameOwner]),
+      guest: combines([owner, guest]),
+      otherOwner: combines([owner, otherOwner]),
+      ownerElsewhere: combines([owner, ownerElsewhere]),
+      sameGuest: combines([guest, sameGuest]),
+      otherGuest: combines([guest, otherGuest]),
+      renamed: combines([guest, renamed]),
+      otherGuild: combines([guest, otherGuild]),
+    }).toEqual({
+      sameOwner: true,
+      guest: false,
+      otherOwner: false,
+      ownerElsewhere: false,
+      sameGuest: true,
+      otherGuest: false,
+      renamed: false,
+      otherGuild: false,
+    });
   });
 
   it("retains store, route and producer limits across lookup", async ({
