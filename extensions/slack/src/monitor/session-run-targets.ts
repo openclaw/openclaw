@@ -13,6 +13,7 @@ type SlackSessionAddress = {
 type SlackSessionRunTarget = {
   route: ResolvedAgentRoute;
   isActive: () => boolean;
+  allowImplicitReplies: boolean;
 };
 
 export async function captureSlackSessionTargetGuard(
@@ -40,6 +41,7 @@ export function registerSlackSessionRun(
   ctx: SlackMonitorContext,
   address: SlackSessionAddress,
   route: ResolvedAgentRoute,
+  options?: { allowImplicitReplies?: boolean },
 ): () => void {
   if (!address.threadTs) {
     return () => {};
@@ -49,7 +51,11 @@ export function registerSlackSessionRun(
   const key = addressKey(address);
   const targets = byAddress.get(key) ?? new Set<SlackSessionRunTarget>();
   byAddress.set(key, targets);
-  const target = { route, isActive: () => targets.has(target) };
+  const target: SlackSessionRunTarget = {
+    route,
+    isActive: () => targets.has(target),
+    allowImplicitReplies: options?.allowImplicitReplies === true,
+  };
   targets.add(target);
   return () => {
     targets.delete(target);
@@ -61,13 +67,19 @@ export function registerSlackSessionRun(
 }
 
 export function getSlackSessionRuns(
-  ctx: SlackMonitorContext,
+  ctx: Pick<SlackMonitorContext, "app">,
   address: SlackSessionAddress,
 ): SlackSessionRunTarget[] {
   const targets = [...(runs.get(ctx.app)?.get(addressKey(address)) ?? [])];
   return [...new Map(targets.map((target) => [target.route.sessionKey, target])).values()].map(
     (target) => ({
       route: target.route,
+      allowImplicitReplies: targets.some(
+        (candidate) =>
+          candidate.route.sessionKey === target.route.sessionKey &&
+          candidate.isActive() &&
+          candidate.allowImplicitReplies,
+      ),
       isActive: () =>
         targets.some(
           (candidate) =>

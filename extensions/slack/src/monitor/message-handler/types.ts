@@ -37,6 +37,7 @@ export type PreparedSlackMessage = {
   forcedReplyThreadTs?: string;
   sessionDisplayName?: string;
   slackMessageMetadata?: MessageMetadata;
+  allowImplicitThreadReplies?: boolean;
   isDirectMessage: boolean;
   isRoomish: boolean;
   ackReactionMessageTs?: string;
