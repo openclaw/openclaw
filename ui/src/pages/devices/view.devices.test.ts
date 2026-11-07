@@ -554,6 +554,54 @@ describe("devices inventory rendering", () => {
     expect(document.activeElement).toBe(copy);
   });
 
+  it("retains warning badges and facts across fresh inventory snapshots", () => {
+    const props = createDevicesViewProps({
+      gatewayVersion: "2026.10.30",
+      nodes: [
+        {
+          nodeId: "node-one",
+          displayName: "Node One",
+          paired: true,
+          connected: false,
+          platform: "win32",
+          coreVersion: "2026.10.29",
+          workerBundle: { status: "missing" },
+        },
+      ],
+    });
+    const container = renderDevicesContainer(props);
+    const row = getSettingsRow(container, "Node One");
+    const badges = Array.from(row.querySelectorAll(".device-entry__alerts > span"));
+    const facts = Array.from(row.querySelectorAll(".device-entry__facts > .device-fact")).slice(
+      0,
+      3,
+    );
+    expect(badges).toHaveLength(3);
+    expect(facts).toHaveLength(3);
+
+    renderDevicesInto(container, { ...props, nodes: props.nodes.map((node) => ({ ...node })) });
+
+    expect(
+      Array.from(row.querySelectorAll(".device-entry__alerts > span")).every(
+        (badge, index) => badge === badges[index],
+      ),
+    ).toBe(true);
+    expect(
+      Array.from(row.querySelectorAll(".device-entry__facts > .device-fact"))
+        .slice(0, 3)
+        .every((fact, index) => fact === facts[index]),
+    ).toBe(true);
+    renderDevicesInto(container, { ...props, gatewayVersion: "2026.11.1" });
+    expect(row.querySelector(".device-entry__alerts > span")).toBe(badges[0]);
+    expect(badges[0].getAttribute("title")).toContain("2026.11.1");
+    expect(facts[0].textContent).toContain("2026.11.1");
+    renderDevicesInto(container, { ...props, gatewayVersion: "2026.10.29" });
+    const remaining = Array.from(row.querySelectorAll(".device-entry__alerts > span"));
+    expect(remaining).toHaveLength(2);
+    expect(remaining.every((badge, index) => badge === badges[index + 1])).toBe(true);
+    expect(badges[0].isConnected).toBe(false);
+  });
+
   it.each([true, false])(
     "reports the device ID copy outcome on the button when clipboard succeeds: %s",
     async (succeeds) => {
