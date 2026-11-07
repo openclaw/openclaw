@@ -183,6 +183,10 @@ event('complete');\n`,
         this: UpdateFinalizationLifecycle,
         phase,
       ) {
+        // Exercise the explicit plugin deadline, not setup or Doctor startup timing.
+        if (explicit !== undefined && phase !== "plugins") {
+          return 30_000;
+        }
         return phase === "plugins" && explicit === undefined ? allowance : budget.call(this, phase);
       });
       await updateFinalizeCommand({
