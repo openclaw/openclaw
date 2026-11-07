@@ -69,9 +69,6 @@ internal val SHARED_ATTACHMENT_MIME_ALLOWLIST =
     "text/markdown",
   )
 
-internal val SHARED_AUDIO_DOCUMENT_MIME_TYPES =
-  SHARED_ATTACHMENT_MIME_ALLOWLIST.filterNot { it == "image/*" || it == "video/*" }.toTypedArray()
-
 /**
  * Parses app-owned navigation actions that should open a specific home tab.
  */
@@ -142,7 +139,7 @@ fun parseShareLaunchIntent(
   val resolved = mutableListOf<SharedAttachment>()
   var unsupportedAttachmentCount = 0
   for (uri in validUris) {
-    // Files past the cap are still supported types. They must not be reported as a type rejection.
+    // Once the cap is full, further files are limit omissions, not type rejections.
     if (resolved.size >= MAX_SHARED_ATTACHMENT_COUNT) continue
     val providerMimeType =
       try {
