@@ -41,7 +41,6 @@ export function installPaneChromeProbe() {
           const panelBox = panel.getBoundingClientRect();
           const host = panel.querySelector("openclaw-chat-details-session");
           const facts = host ? Reflect.get(host, "props") : undefined;
-          const activity = section.querySelector("openclaw-chat-subagent-activity");
           return {
             section:
               section.getAttribute("data-details-group") ??
@@ -80,27 +79,9 @@ export function installPaneChromeProbe() {
             ),
             visible: box.height > 0 && box.top < panelBox.bottom && box.bottom > panelBox.top,
             nodes: section.querySelectorAll("*").length,
-            subagents:
+            activityRows:
               section.getAttribute("data-details-group") === "subagents"
-                ? {
-                    hydrated: facts?.subagentSessionsHydrated,
-                    pending: facts?.subagentSessionsPending,
-                    unavailable: facts?.subagentSessionsUnavailable,
-                    parent: facts?.selectedSession?.key,
-                    roster: facts?.subagentSessions?.map((row: { key: string }) => row.key),
-                    cached: facts?.cachedDetails?.subagents?.rows,
-                    activity: activity && {
-                      rows: Reflect.get(activity, "rows"),
-                      presentation: Reflect.get(activity, "presentation"),
-                    },
-                    rows: Array.from(
-                      section.querySelectorAll("[data-subagent-session-key]"),
-                      (row) => ({
-                        key: row.getAttribute("data-subagent-session-key"),
-                        tag: row.tagName,
-                      }),
-                    ),
-                  }
+                ? section.querySelectorAll(".chat-subagent-activity__row").length
                 : undefined,
             images: Array.from(section.querySelectorAll("img")).map((image) => ({
               loaded: image.complete && image.naturalWidth > 0,
