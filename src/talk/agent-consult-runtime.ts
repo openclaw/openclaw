@@ -35,6 +35,7 @@ import {
   collectRealtimeVoiceAgentConsultVisibleText,
   type RealtimeVoiceAgentConsultTranscriptEntry,
 } from "./agent-consult-tool.js";
+import { resolveDueVoiceSessionReset } from "./voice-session-reset.js";
 
 export type RealtimeVoiceAgentConsultRuntime = PluginRuntimeCore["agent"];
 
@@ -199,6 +200,87 @@ function assertRealtimeVoiceConsultNotInterrupted(
   }
 }
 
+/**
+ * Voice turns honor the configured session reset like typed turns: a stale session rolls over
+ * in place (same session id, reset boundary in its transcript) instead of replaying old context.
+ */
+async function rollOverStaleConsultSession(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+  storePath: string;
+  cwd: string;
+  entry: SessionEntry | undefined;
+  logger: Pick<RuntimeLogger, "warn">;
+  abortSignal?: AbortSignal;
+  assertSourceCurrent?: () => void;
+}): Promise<boolean> {
+  const { agentId, sessionKey, storePath, entry } = params;
+  const reason = await resolveDueVoiceSessionReset(params);
+  if (!reason || !entry) {
+    return false;
+  }
+  const [
+    { resetSessionEntryLifecycle },
+    { createSessionWorkStartChangedError, resolveSessionWorkStartError },
+    { normalizeStoreSessionKey },
+    { clearRotatedSessionMetadata },
+    { clearCommittedSessionResetRuntimeState },
+  ] = await Promise.all([
+    import("../config/sessions/session-accessor.lifecycle.js"),
+    import("../config/sessions/lifecycle.js"),
+    import("../config/sessions/store-entry.js"),
+    import("../agents/session-reset-metadata.js"),
+    import("../auto-reply/reply/session-reset-cleanup.js"),
+  ]);
+  const now = Date.now();
+  await resetSessionEntryLifecycle({
+    agentId,
+    storePath,
+    target: { canonicalKey: normalizeStoreSessionKey(sessionKey), storeKeys: [sessionKey] },
+    // A consult cancelled, or whose caller lost its authority, while preparing must not reset the
+    // session; this is the reset's point of effect, ahead of the run's own authority checks.
+    commitGuard: () => {
+      params.abortSignal?.throwIfAborted();
+      params.assertSourceCurrent?.();
+    },
+    resetBoundary: {
+      context: "preserve-tail",
+      reason,
+      cwd: params.cwd,
+    },
+    buildNextEntry: ({ currentEntry }) => {
+      if (
+        !currentEntry ||
+        currentEntry.sessionId !== entry.sessionId ||
+        currentEntry.lifecycleRevision !== entry.lifecycleRevision ||
+        resolveSessionWorkStartError(sessionKey, currentEntry)
+      ) {
+        throw createSessionWorkStartChangedError(sessionKey);
+      }
+      return {
+        ...clearRotatedSessionMetadata(currentEntry),
+        lifecycleRevision: randomUUID(),
+        agentHarnessId: undefined,
+        sessionStartedAt: now,
+        lastInteractionAt: now,
+        updatedAt: now,
+      };
+    },
+  });
+  clearCommittedSessionResetRuntimeState({
+    previousSessionEntry: entry,
+    agentId,
+    sessionKey,
+    storePath,
+    // Automatic voice rollover clears old context, not unanswered user requests.
+    preserveControllerInputs: true,
+    onError: (error) =>
+      params.logger.warn(`[talk] failed to clear session reset runtime state: ${String(error)}`),
+  });
+  return true;
+}
+
 export async function consultRealtimeVoiceAgent(params: {
   cfg: OpenClawConfig;
   agentRuntime: RealtimeVoiceAgentConsultRuntime;
@@ -211,6 +293,10 @@ export async function consultRealtimeVoiceAgent(params: {
   runIdPrefix: string;
   args: unknown;
   transcript: RealtimeVoiceAgentConsultTranscriptEntry[];
+  onSessionReset?: () => Promise<void>;
+  getTranscript?: () => Promise<RealtimeVoiceAgentConsultTranscriptEntry[]>;
+  /** Owner-held caller authority (operator and device), rechecked when the reset commits. */
+  assertSourceCurrent?: () => void;
   surface: string;
   userLabel: string;
   assistantLabel?: string;
@@ -345,6 +431,22 @@ export async function consultRealtimeVoiceAgent(params: {
     storePath,
   };
   await assertConsultModelSelectionUnlocked(modelLockParams);
+  // Reset before admission: rollover cleanup interrupts work bound to the old incarnation.
+  const sessionReset = await rollOverStaleConsultSession({
+    cfg: params.cfg,
+    agentId,
+    sessionKey: params.sessionKey,
+    storePath,
+    cwd: cwd ?? workspaceDir,
+    entry: initialSessionEntry,
+    logger: params.logger,
+    abortSignal: params.abortSignal,
+    assertSourceCurrent: params.assertSourceCurrent,
+  });
+  if (sessionReset) {
+    await params.onSessionReset?.();
+  }
+  params.abortSignal?.throwIfAborted();
   const lifecycleAbortController = new AbortController();
   const lifecycleInterruption = new Error(
     "Realtime voice agent consult interrupted by a session lifecycle change.",
@@ -452,7 +554,7 @@ export async function consultRealtimeVoiceAgent(params: {
             },
             entryPatch: {
               skipExisting: true,
-              skipped: { ...deliveryFields, updatedAt: now },
+              skipped: { ...deliveryFields, updatedAt: now, lastInteractionAt: now },
               forked: { ...deliveryFields, ...spawnLineage, updatedAt: now },
             },
           });
@@ -486,7 +588,8 @@ export async function consultRealtimeVoiceAgent(params: {
           },
           prepare: (entry) => {
             if (entry.sessionId?.trim()) {
-              return { ...deliveryFields, updatedAt: now };
+              // A spoken request is user interaction for idle reset, whichever voice surface sent it.
+              return { ...deliveryFields, updatedAt: now, lastInteractionAt: now };
             }
             return {
               ...deliveryFields,
@@ -523,6 +626,7 @@ export async function consultRealtimeVoiceAgent(params: {
         : lifecycleAbortController.signal;
       let runPromise: ReturnType<RealtimeVoiceAgentConsultRuntime["runEmbeddedAgent"]>;
       try {
+        const transcript = params.getTranscript ? await params.getTranscript() : params.transcript;
         abortSignal.throwIfAborted();
         await assertConsultModelSelectionUnlocked(modelLockParams);
         abortSignal.throwIfAborted();
@@ -553,7 +657,7 @@ export async function consultRealtimeVoiceAgent(params: {
           workspaceDir,
           cwd,
           config: params.cfg,
-          prompt: buildRealtimeVoiceAgentConsultPrompt(params),
+          prompt: buildRealtimeVoiceAgentConsultPrompt({ ...params, transcript }),
           provider: params.provider,
           model: params.model,
           thinkLevel: params.thinkLevel ?? "high",

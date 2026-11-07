@@ -2167,6 +2167,10 @@ describe("talk.client.create handler", () => {
   it.each(["request", "config"])(
     "uses realtime launch defaults from %s without reading speech provider config",
     async (source) => {
+      const expectedHistory = [
+        { role: "user", text: `2:${"🙂".repeat(799)}` },
+        { role: "assistant", text: `3:${"🙂".repeat(799)}` },
+      ];
       mocks.resolveRealtimeVoiceAgentContextInstructions.mockResolvedValue(
         `${REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS}\n\nBounded profile context.`,
       );
@@ -2234,10 +2238,7 @@ describe("talk.client.create handler", () => {
         silenceDurationMs: 650,
         prefixPaddingMs: 250,
         reasoningEffort: "low",
-        initialItems: [
-          { role: "user", text: `2:${"🙂".repeat(799)}` },
-          { role: "assistant", text: `3:${"🙂".repeat(799)}` },
-        ],
+        initialItems: expectedHistory,
       });
       expect(createInput.instructions).toContain(
         "Additional realtime instructions:\nSpeak warmly.",
@@ -2264,10 +2265,7 @@ describe("talk.client.create handler", () => {
           sessionKey: "agent:main:main",
           storePath: expect.any(String),
           args: { question: "Check the repository" },
-          transcript: [
-            { role: "user", text: `2:${"🙂".repeat(799)}` },
-            { role: "assistant", text: `3:${"🙂".repeat(799)}` },
-          ],
+          transcript: expectedHistory,
           surface: "a browser Talk session",
           abortSignal: consultSignal,
           senderIsOwner: false,
@@ -2295,6 +2293,7 @@ describe("talk.client.create handler", () => {
         16,
         800,
         "model-context",
+        undefined,
       );
       expect(mocks.createOrResumeClientVoiceSession).toHaveBeenCalledWith(
         expect.objectContaining({ provider: "openai" }),
