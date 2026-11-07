@@ -1,2 +1,2 @@
-93
-# Published 2026.11.1 Workboard-only config regression and physical-engine/explicit-override controls.
+239
+# Published 2026.11.1 compatibility: populated-state recognition, direct/include config publication, and scoped Workboard port round-trip.

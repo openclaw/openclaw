@@ -2,12 +2,39 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readBackupEngine } from "../infra/database-engine/physical-store.js";
+import { runSqliteReadOnlyWorkerSync } from "../infra/sqlite-readonly-worker.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveConfigEnvVars } from "./env-substitution.js";
+import { applyMergePatch } from "./merge-patch.js";
 import { resolveStateDir } from "./state-dir.js";
+import type { ConfigFileSnapshot } from "./types.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
 const log = createSubsystemLogger("config");
 
+/** Pin engine siblings before include reconstruction; connection references stay included. */
+export function projectLegacyWorkboardWrite(
+  snapshot: Pick<ConfigFileSnapshot, "authoredConfig" | "sourceConfig" | "parsed">,
+  next: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): unknown {
+  const authored = snapshot.authoredConfig ?? snapshot.sourceConfig;
+  if (normalizeLegacyWorkboardDatabaseConfig(authored, env) === authored) {
+    return snapshot.parsed;
+  }
+  const { engine, families } = next.database ?? {};
+  return applyMergePatch(snapshot.parsed, { database: { engine, families } });
+}
+
 /** Preserve the Workboard-only meaning shipped by openclaw@2026.11.1. */
+export function normalizeLegacyWorkboardDatabaseConfig(
+  raw: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): OpenClawConfig;
+export function normalizeLegacyWorkboardDatabaseConfig(
+  raw: unknown,
+  env: NodeJS.ProcessEnv,
+): unknown;
 export function normalizeLegacyWorkboardDatabaseConfig(
   raw: unknown,
   env: NodeJS.ProcessEnv,
@@ -16,7 +43,10 @@ export function normalizeLegacyWorkboardDatabaseConfig(
     return raw;
   }
   const database = raw.database;
-  if (database.engine !== "postgres" || database.families !== undefined) {
+  if (
+    resolveConfigEnvVars(database.engine, env) !== "postgres" ||
+    database.families !== undefined
+  ) {
     return raw;
   }
   const stateDir = resolveStateDir(env);
@@ -28,13 +58,13 @@ export function normalizeLegacyWorkboardDatabaseConfig(
   // Version stamps cannot disambiguate the release branch from main. Only the
   // released physical layout qualifies; real PostgreSQL state keeps its default.
   if (
-    readBackupEngine(statePath).engine !== "sqlite" ||
+    !runSqliteReadOnlyWorkerSync(statePath, undefined, "state-sqlite-populated") ||
     readBackupEngine(workboardPath).engine !== "postgres"
   ) {
     return raw;
   }
   log.warn(
-    "Preserving the 2026.11.1 Workboard-only PostgreSQL setting: Workboard remains on PostgreSQL; shared state and other families remain on SQLite. Save database.engine=sqlite and database.families.workboard.engine=postgres to record this explicitly.",
+    "Preserving the 2026.11.1 Workboard-only PostgreSQL setting: Workboard remains on PostgreSQL; shared state and other families remain on SQLite. The next config write records this explicitly.",
   );
   return {
     ...raw,

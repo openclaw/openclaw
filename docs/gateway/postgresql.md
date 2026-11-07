@@ -925,13 +925,16 @@ that version adopt PostgreSQL by updating their SQLite installation first, then 
 Published **2026.11.1** supports PostgreSQL for Workboard only. Its database port
 command writes `database.engine: "postgres"` while leaving shared state and agent
 data on SQLite. Current config reads preserve that meaning when no
-`database.families` overrides exist, shared state is physically SQLite, and
+`database.families` overrides exist, shared state contains SQLite state objects, and
 Workboard has a PostgreSQL anchor. They expose the equivalent current config,
 `database.engine: "sqlite"` with
 `database.families.workboard.engine: "postgres"`, and log a warning. No database
-is moved and the source config remains readable without a manual edit. Saving
-that explicit family configuration avoids the compatibility inspection on later
-reads. PostgreSQL shared-state anchors and explicit family overrides retain their
+is moved by a config read, and the source config remains readable without a manual
+edit. Config writes record that explicit intent through the normal backup flow.
+A scoped database port records it before moving Workboard data, so replacing its
+PostgreSQL anchor cannot change the shared-state engine. Later reads no longer
+need the compatibility inspection. Empty shared-state files, PostgreSQL
+shared-state anchors, and explicit family overrides retain their
 configured meaning. This compatibility behavior is separate from the 2026.10.5
 upgrade qualification below.
 
