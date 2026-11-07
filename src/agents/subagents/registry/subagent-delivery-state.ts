@@ -220,6 +220,16 @@ export function ensureDeliveryState(entry: SubagentRunRecord): SubagentCompletio
   return entry.delivery;
 }
 
+/** Settling a private result is not user delivery unless the host confirmed a visible final. */
+export function recordPrivateConsumption(
+  entry: SubagentRunRecord,
+  visibleFinalDelivered: boolean | undefined,
+): void {
+  if (entry.completionTarget === "parent" && visibleFinalDelivered !== true) {
+    ensureDeliveryState(entry).consumedPrivately = true;
+  }
+}
+
 export function clearDeliveryState(entry: SubagentRunRecord): void {
   entry.delivery = {
     status: entry.expectsCompletionMessage === false ? "not_required" : "pending",

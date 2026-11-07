@@ -18,7 +18,11 @@ import {
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
-import { ensureCompletionState, ensureDeliveryState } from "./subagent-delivery-state.js";
+import {
+  ensureCompletionState,
+  ensureDeliveryState,
+  recordPrivateConsumption,
+} from "./subagent-delivery-state.js";
 import { capFrozenResultText } from "./subagent-registry-helpers.js";
 import type {
   SubagentLifecycleCommonContext,
@@ -74,6 +78,7 @@ export const recordAnnounceDeliveryResult = (
     deliveryState.deliveredAt =
       typeof delivery.deliveredAt === "number" ? delivery.deliveredAt : Date.now();
     deliveryState.lastDropReason = undefined;
+    recordPrivateConsumption(entry, delivery.requesterVisibleFinalDelivered);
     const requesterTurnRunId = entry.requesterTurnRunId?.trim();
     if (
       delivery.path === "direct" &&

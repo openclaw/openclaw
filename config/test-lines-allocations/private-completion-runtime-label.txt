@@ -1,0 +1,2 @@
+# Private parent consumption must not read as user delivery; settlement records it in both writers.
+54
