@@ -95,6 +95,8 @@ extension OpenClawChatViewModel {
     }
 
     func restoreEditorAttachments(_ editorAttachments: [OpenClawChatEditorAttachment]?) {
+        self.isApplyingRestoredAttachments = true
+        defer { self.isApplyingRestoredAttachments = false }
         self.attachments = (editorAttachments ?? []).enumerated().compactMap { index, attachment in
             guard let data = Data(base64Encoded: attachment.data),
                   data.count <= Self.maxAttachmentBytes,

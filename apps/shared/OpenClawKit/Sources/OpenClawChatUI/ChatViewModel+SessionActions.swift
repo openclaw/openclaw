@@ -572,6 +572,8 @@ extension OpenClawChatViewModel {
         guard let entryID = Self.sessionMutationEntryID(for: message) else { return }
         guard self.canPerformMessageSessionAction else { return }
         let initiatingSession = self.currentSessionSnapshot()
+        let startingComposerRevision = self.composerRevision(for: initiatingSession.key)
+        let startingAttachmentRevision = self.composerAttachmentRevision(for: initiatingSession.key)
         guard await self.beginOutboxSessionMutation(initiatingSession) else { return }
         guard self.isCurrentSession(initiatingSession) else {
             await self.cancelOutboxSessionMutation(initiatingSession)
@@ -591,9 +593,17 @@ extension OpenClawChatViewModel {
             self.replyTarget = nil
             self.runMessageScopesByRunID.removeAll()
             self.provisionalFinalMessagesByID.removeAll()
-            self.input = result.editorText ?? ""
+            // The composer is one draft: restore the rewound prompt and images only
+            // when nothing about it changed since the request began. Any newer text or
+            // attachment edit keeps the composer's own state instead of mixing the
+            // rewound content into it (#193817).
+            if self.composerRevision(for: initiatingSession.key) == startingComposerRevision,
+               self.composerAttachmentRevision(for: initiatingSession.key) == startingAttachmentRevision
+            {
+                self.input = result.editorText ?? ""
+                self.restoreEditorAttachments(result.editorAttachments)
+            }
             self.narration = ChatNarration()
-            self.restoreEditorAttachments(result.editorAttachments)
             self.invalidateHistoryCursor(replacingCanonicalHistory: true)
             let historyRequest = self.beginHistoryRequest(for: initiatingSession)
             _ = await self.refreshHistoryAfterRun(historyRequest: historyRequest)
