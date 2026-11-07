@@ -641,47 +641,65 @@ function installEventLoadProbe() {
         for (const key of keys) {
           emitRow(key, true, true);
         }
+        if (!options.toolCount) {
+          return;
+        }
         const text = "Event load foreground completed.";
-        histories.get(options.foreground)!.push({
+        const timestamp = 1_800_002_000_000;
+        const messageId = "event-load-final";
+        const messageSeq = ++foregroundMessageSeq;
+        const message = {
           role: "assistant",
           content: text,
-          timestamp: 1_800_002_000_000,
+          timestamp,
+          stopReason: "stop",
           __openclaw: {
-            id: "event-load-final",
-            seq: ++foregroundMessageSeq,
+            id: messageId,
+            seq: messageSeq,
             runId: "event-load-foreground",
           },
-        });
+        };
+        histories.get(options.foreground)!.push(message);
         gateway.setSessionRow({
           ...gateway.getSessionRow(options.foreground),
           status: "done",
           hasActiveRun: false,
           activeRunIds: [],
+          updatedAt: timestamp,
+          snapshotAt: timestamp,
+          lastMessageAt: timestamp,
+          lastMessagePreview: text,
         });
-        if (options.toolCount) {
-          emitSnapshot(
-            "sessions.changed",
-            {
-              sessionKey: options.foreground,
-              agentId: "main",
-              runId: "event-load-foreground",
-              phase: "end",
-              reason: "lifecycle",
-              ts: 1_800_002_000_000,
-              ancestorSessions: [],
-            },
-            gateway.getSessionRow(options.foreground),
-          );
-        }
-        if (options.toolCount) {
-          gateway.emit("chat", {
-            sessionKey: options.foreground,
-            runId: "event-load-foreground",
-            seq: ++sequence,
-            state: "final",
-            message: { role: "assistant", content: [{ type: "text", text }] },
-          });
-        }
+        const envelope = {
+          sessionKey: options.foreground,
+          agentId: "main",
+          runId: "event-load-foreground",
+          ts: timestamp,
+          ancestorSessions: [],
+        };
+        emitSnapshot(
+          "session.message",
+          {
+            ...envelope,
+            messageId,
+            messageSeq,
+            message,
+          },
+          gateway.getSessionRow(options.foreground),
+        );
+        gateway.emit("chat", {
+          sessionKey: options.foreground,
+          runId: "event-load-foreground",
+          seq: ++sequence,
+          state: "final",
+          stopReason: "stop",
+          message: { role: "assistant", content: [{ type: "text", text }], timestamp },
+        });
+        emitSnapshot(
+          "sessions.changed",
+          { ...envelope, phase: "end", reason: "lifecycle" },
+          gateway.getSessionRow(options.foreground),
+        );
       };
       timer = setInterval(() => {
         const producerStarted = performance.now();
@@ -1419,7 +1437,6 @@ export async function verifyEngineEventLoad(page: Page, count: number, toolCount
     await page
       .locator(`${pane} .chat-text`)
       .getByText("Event load foreground completed.", { exact: true })
-      .first()
       .waitFor();
     evidence.foregroundFinalVisible = true;
     const context = await getControlUiContextHandle(page);
