@@ -19,6 +19,7 @@ import {
   resolveSpawnedWorkspaceInheritance,
 } from "../../spawned-context.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
+import { resolveSpawnBillingRoute } from "./subagent-spawn-billing-route.js";
 import {
   rejectSubagentSpawnRequest,
   type SpawnSubagentContext,
@@ -244,6 +245,15 @@ export async function resolveSubagentChildPlan(params: {
     modelPlan.initialSessionPatch.cyberAccessProgram = cyberAccessProgram;
   }
   const resolvedModelMetadata = { resolvedModel, resolvedProvider: modelPlan.modelRef.provider };
+  const billingRoute = await resolveSpawnBillingRoute({
+    cfg: params.cfg,
+    agentId: params.targetAgentId,
+    workspaceDir: spawnedWorkspaceDir,
+    provider: modelPlan.modelRef.provider,
+    model: modelPlan.modelRef.model,
+    authProfileId: modelPlan.initialSessionPatch.authProfileOverride,
+  });
+  params.ctx.assertActive?.();
   const launchAuthorization: SubagentLaunchAuthorization | undefined = params.request.model?.trim()
     ? { modelOverride: modelPlan.modelRef }
     : undefined;
@@ -275,6 +285,7 @@ export async function resolveSubagentChildPlan(params: {
       // Model facts echoed on the accepted spawn result.
       acceptedModelFields: {
         ...resolvedModelMetadata,
+        ...billingRoute,
         modelApplied: modelPlan.modelApplied || undefined,
         cyberAccessProgram,
       },

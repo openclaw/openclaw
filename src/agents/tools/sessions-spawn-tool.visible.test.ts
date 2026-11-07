@@ -207,6 +207,38 @@ describe("sessions_spawn visible work receipts", () => {
     expect(result.details).toMatchObject({ status: "accepted", publicRead: true });
   });
 
+  it("names the child's runtime and API-key credential on the visible receipt", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "synthetic-anthropic-key");
+    hoisted.inProcessCreationMock.mockResolvedValue({
+      key: "agent:main:dashboard:billing-child",
+      sessionId: "billing-child",
+      runStarted: true,
+      runId: "billing-child-run",
+      entry: { sessionId: "billing-child", updatedAt: 1 },
+    });
+    try {
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+        config: {
+          agents: { defaults: { model: "anthropic/claude-opus-4-6" }, entries: { main: {} } },
+        },
+        registerRun: vi.fn(),
+        countActiveRuns: () => 0,
+      });
+      const result = await withGatewayToolCallerIdentity(
+        { agentId: "main", sessionKey: "agent:main:main" },
+        () => tool.execute("billing-spawn", { task: "inspect", visible: true }),
+      );
+      expect(result.details).toMatchObject({
+        status: "accepted",
+        resolvedRuntime: "openclaw",
+        resolvedAuth: "api-key",
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("keeps visible child quotas separate for agents sharing a bare requester key", async () => {
     hoisted.prepareModelChoiceMock.mockResolvedValue({
       kind: "automatic",
