@@ -340,6 +340,7 @@ def run(options):
         if captured(['git', '-C', str(source), 'rev-parse', 'HEAD'], env) != commit or captured(['git', '-C', str(source), 'status', '--porcelain'], env):
             raise RuntimeError('frozen source identity/cleanliness mismatch')
         save(arm / 'source-identity.json', {'commit': commit, 'tree': captured(['git', '-C', str(source), 'rev-parse', 'HEAD^{tree}'], env)})
+        logged(['pnpm', 'install', '--frozen-lockfile'], arm / 'logs' / 'setup.log', env, source)
         plan = json.loads(captured([str(node), str(kova / 'bin' / 'kova.mjs'), 'matrix', 'plan',
                                     '--profile', 'release', '--target', 'local-build:' + str(source),
                                     '--include', FILTERS, '--parallel', '1', '--repeat', '3', '--json'], env, source))
