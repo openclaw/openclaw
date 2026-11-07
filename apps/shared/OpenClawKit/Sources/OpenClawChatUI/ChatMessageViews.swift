@@ -22,6 +22,11 @@ struct ChatSystemNoticeRow: View {
             }
             .foregroundStyle(.secondary)
             .tint(.secondary)
+            #if os(iOS)
+            // Inside the iOS List a default DisclosureGroup turns into an outline row that the
+            // label tap does not toggle; keep the inline label + chevron behaviour.
+            .disclosureGroupStyle(ChatInlineDisclosureStyle())
+            #endif
             .padding(.vertical, 4)
         } else {
             VStack(spacing: 8) {
@@ -41,6 +46,34 @@ struct ChatSystemNoticeRow: View {
         }
     }
 }
+
+#if os(iOS)
+/// Inline label + chevron disclosure for transcript rows inside the iOS List.
+struct ChatInlineDisclosureStyle: DisclosureGroupStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                configuration.isExpanded.toggle()
+            } label: {
+                HStack {
+                    configuration.label
+                    Spacer(minLength: 8)
+                    Image(systemName: configuration.isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(.tint)
+                        .accessibilityHidden(true)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(configuration.isExpanded ? Text("Expanded") : Text("Collapsed"))
+            if configuration.isExpanded {
+                configuration.content
+            }
+        }
+    }
+}
+#endif
 
 struct ChatHistoryDividerRow: View {
     let divider: ChatTranscriptRow.HistoryDivider
@@ -292,6 +325,9 @@ private struct ChatBubbleShape: InsettableShape {
 @MainActor
 struct ChatMessageBubble: View {
     @Environment(\.openClawAssistantUsesReadingColumn) private var usesReadingColumn
+    #if os(iOS)
+    @Environment(\.openClawReaderAnchor) private var readerAnchor
+    #endif
     @Environment(\.openClawAssistantRunContent) private var isRunContent
     @Environment(\.openClawAssistantBubblesInCleanChrome) private var assistantBubblesInClean
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
@@ -464,6 +500,9 @@ extension ChatMessageBubble {
                     markdownVariant: self.markdownVariant,
                     includesThinking: self.displayOptions.contains(.reasoning),
                     textColor: textColor)
+                    #if os(iOS)
+                        .chatReaderAnchor(self.readerAnchor)
+                    #endif
             }
 
             if !self.sourcePreviews.isEmpty {
@@ -1021,11 +1060,44 @@ private struct AssistantBubbleContainerStyle: ViewModifier {
     @Environment(\.openClawAssistantRunContent) private var isRunContent
     let isClean: Bool
     let cornerRadius: CGFloat
+    let joinsAbove: Bool
+    let joinsBelow: Bool
 
     @Environment(\.openClawAssistantBubblesInCleanChrome) private var bubblesInClean
     @Environment(\.openClawAssistantUsesReadingColumn) private var usesReadingColumn
 
+    private var bubbleShape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(
+            topLeadingRadius: self.joinsAbove ? 0 : self.cornerRadius,
+            bottomLeadingRadius: self.joinsBelow ? 0 : self.cornerRadius,
+            bottomTrailingRadius: self.joinsBelow ? 0 : self.cornerRadius,
+            topTrailingRadius: self.joinsAbove ? 0 : self.cornerRadius,
+            style: .continuous)
+    }
+
     func body(content: Content) -> some View {
+        #if os(iOS)
+        Group {
+            if self.isRunContent || (self.isClean && !self.bubblesInClean) {
+                content
+            } else {
+                content
+                    // Clean call sites pre-pad only ~4pt; bubbles need room to breathe.
+                        .padding(.horizontal, self.isClean ? 8 : 0)
+                        .padding(.top, self.isClean && !self.joinsAbove ? 8 : 0)
+                        .padding(.bottom, self.isClean && !self.joinsBelow ? 8 : 0)
+                        .background(self.bubbleShape.fill(OpenClawChatTheme.assistantBubble))
+                        .overlay(
+                            self.bubbleShape
+                                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                                // Joined cells draw only the outside edge, never a seam.
+                                .padding(.top, self.joinsAbove ? -1 : 0)
+                                .padding(.bottom, self.joinsBelow ? -1 : 0)
+                                .clipped())
+            }
+        }
+        .frame(maxWidth: self.usesReadingColumn ? .infinity : ChatUIConstants.bubbleMaxWidth, alignment: .leading)
+        #else
         Group {
             if self.isRunContent || (self.isClean && !self.bubblesInClean) {
                 content
@@ -1042,12 +1114,22 @@ private struct AssistantBubbleContainerStyle: ViewModifier {
             }
         }
         .frame(maxWidth: self.usesReadingColumn ? .infinity : ChatUIConstants.bubbleMaxWidth, alignment: .leading)
+        #endif
     }
 }
 
 extension View {
-    func assistantBubbleContainerStyle(isClean: Bool, cornerRadius: CGFloat = 16) -> some View {
-        modifier(AssistantBubbleContainerStyle(isClean: isClean, cornerRadius: cornerRadius))
+    func assistantBubbleContainerStyle(
+        isClean: Bool,
+        cornerRadius: CGFloat = 16,
+        joinsAbove: Bool = false,
+        joinsBelow: Bool = false) -> some View
+    {
+        modifier(AssistantBubbleContainerStyle(
+            isClean: isClean,
+            cornerRadius: cornerRadius,
+            joinsAbove: joinsAbove,
+            joinsBelow: joinsBelow))
             .focusable(false)
     }
 }
@@ -1072,11 +1154,22 @@ struct ChatStreamingAssistantText {
         self.includesThinking = includesThinking
         self.segments = AssistantTextParser.segments(from: sourceText, includeThinking: includesThinking)
     }
+
+    /// Item source is already inside a parsed assistant segment; do not interpret
+    /// assistant tags again or discard its inherited reasoning typography.
+    init(markdown: String, kind: AssistantTextSegment.Kind) {
+        self.sourceText = markdown
+        self.includesThinking = kind == .thinking
+        self.segments = [AssistantTextSegment(id: 0, kind: kind, text: markdown)]
+    }
 }
 
 @MainActor
 struct ChatStreamingAssistantBubble: View {
     @Environment(\.openClawAssistantRunContent) private var isRunContent
+    #if os(iOS)
+    @Environment(\.openClawReaderAnchor) private var readerAnchor
+    #endif
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
@@ -1105,6 +1198,9 @@ struct ChatStreamingAssistantBubble: View {
                     textColor: self.isDesktopLayout
                         ? OpenClawChatTheme.desktopText(in: self.colorScheme, contrast: self.colorSchemeContrast)
                         : OpenClawChatTheme.assistantText)
+                    #if os(iOS)
+                        .chatReaderAnchor(self.readerAnchor)
+                    #endif
             }
             .padding(self.isClean ? 4 : 12)
             .assistantBubbleContainerStyle(isClean: self.isClean)
@@ -1164,7 +1260,7 @@ private struct ChatAssistantTextBody: View {
 }
 
 @MainActor
-private struct ChatStreamingAssistantTextBody: View {
+struct ChatStreamingAssistantTextBody: View {
     private let inputSnapshot: Snapshot
     let markdownVariant: ChatMarkdownVariant
     let textColor: Color

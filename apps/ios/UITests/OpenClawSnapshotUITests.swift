@@ -135,7 +135,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
             self.clearTextField(input)
             XCTAssertEqual(input.value as? String, "")
             // Dismiss through the transcript gutter, not a diagram that opens its preview on tap.
-            let gutterPoint = app.scrollViews["chat-transcript"]
+            guard let transcript = try? self.chatTranscript(in: app) else { return }
+            let gutterPoint = transcript
                 .coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.05)).screenPoint
             // The layout stays stationary until this tap. Avoid resolving the transcript during synthesis.
             let origin = app.coordinate(withNormalizedOffset: .zero)
@@ -1110,7 +1111,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "keyboard-transcript-visible-after-send")
 
         // Keep repeated typing and reader positioning on the real editor with deterministic history.
-        // The final multiline turn extends below the viewport so the anchored-reply jump is observable.
+        // A multiline turn still follows the live edge; only a reader drag releases following.
         let anchoredPrompt = String(
             repeating: "Reader context keeps the question anchored as the reply arrives.\n",
             count: 9) + "Keep this reply anchored."
@@ -1134,24 +1135,29 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Writing"].waitForNonExistence(timeout: 5))
 
         let jumpToLatest = app.buttons["Jump to latest reply"]
-        XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 3))
-        self.attachScreenshot(named: "reader-reply-anchored")
-        jumpToLatest.tap()
+        // Pin-only policy: sending follows the reply, not the submitted question.
         XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 3))
         let finalReply = app.staticTexts.matching(NSPredicate(
             format: "label CONTAINS %@ AND label CONTAINS %@",
             "I can help with",
             "Keep this reply anchored.")).firstMatch
         XCTAssertTrue(finalReply.exists)
-        self.assertElementHasRenderedContent(finalReply, named: "reader reply after jumping to latest")
-        self.attachScreenshot(named: "reader-jumped-to-latest")
+        self.assertElementHasRenderedContent(finalReply, named: "multiline reply at live edge")
+        self.attachScreenshot(named: "multiline-reply-at-live-edge")
 
         transcript.swipeDown()
         XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 3))
         self.attachScreenshot(named: "reader-manual-departure")
         jumpToLatest.tap()
         XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 3))
-        XCTAssertTrue(finalReply.exists)
+        let replyVisible = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                finalReply.exists && finalReply.frame.intersects(transcript.frame)
+            },
+            object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [replyVisible], timeout: 5), .completed)
+        self.assertElementHasRenderedContent(finalReply, named: "reply after explicit Jump")
+        self.attachScreenshot(named: "reader-returned-to-latest")
     }
 
     func testAnthropicWorkChunksKeepNarrationVisibleInOrder() throws {
@@ -2570,7 +2576,7 @@ extension OpenClawSnapshotUITests {
     }
 
     private func chatTranscript(in app: XCUIApplication) throws -> XCUIElement {
-        let candidates = app.scrollViews.matching(identifier: "chat-transcript").allElementsBoundByIndex
+        let candidates = app.descendants(matching: .any).matching(identifier: "chat-transcript").allElementsBoundByIndex
         return try XCTUnwrap(
             candidates.count == 1 ? candidates.first : nil,
             "Expected one chat transcript")

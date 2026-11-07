@@ -71,9 +71,13 @@ struct ChatReaderScrollStateTests {
             hasTransientContent: true))
     }
 
-    @Test func `drags and system animated scrolls release the follow target`() {
+    @Test func `drags release follow and system scrolls respect the platform policy`() {
         #expect(chatReaderScrollReleasesFollow(.interacting))
+        #if os(iOS)
+        #expect(!chatReaderScrollReleasesFollow(.animating))
+        #else
         #expect(chatReaderScrollReleasesFollow(.animating))
+        #endif
     }
 
     @Test func `idle, touch-down, and deceleration phases keep the follow target`() {

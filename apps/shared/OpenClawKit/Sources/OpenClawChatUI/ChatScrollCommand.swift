@@ -1,9 +1,18 @@
 import SwiftUI
 
-/// The view's own one-shot positioning always runs in a nil-animation transaction, so
-/// `.animating` only comes from system scrolls (status-bar scroll-to-top, keyboard
-/// avoidance). Not releasing there lets the next timeline tick yank the reader back down.
+/// Only the reader's own drag leaves the live edge. System scrolls (keyboard avoidance) and
+/// content height changes must not drop the pin.
 func chatReaderScrollReleasesFollow(_ phase: ScrollPhase) -> Bool {
+    #if os(iOS)
+    switch phase {
+    case .interacting:
+        true
+    case .idle, .tracking, .decelerating, .animating:
+        false
+    @unknown default:
+        false
+    }
+    #else
     switch phase {
     case .interacting, .animating:
         true
@@ -12,6 +21,7 @@ func chatReaderScrollReleasesFollow(_ phase: ScrollPhase) -> Bool {
     @unknown default:
         false
     }
+    #endif
 }
 
 enum ScrollFollowTarget: Equatable {
@@ -28,15 +38,22 @@ final class ChatScrollFollowState {
     var isAtLiveEdge = true
     var isUserScrolling = false
     var hasNewerContentBelow = false
+    #if os(iOS)
+    let readerAnchor = ChatReaderRunAnchor()
+    #endif
 }
 
 struct ChatScrollFollowAnchorModifier: ViewModifier {
     let scroll: ChatScrollFollowState
 
     func body(content: Content) -> some View {
+        #if os(iOS)
+        content
+        #else
         content.defaultScrollAnchor(
             self.scroll.followTarget == .latest && !self.scroll.isUserScrolling ? .bottom : nil,
             for: .sizeChanges)
+        #endif
     }
 }
 
@@ -98,6 +115,10 @@ struct ChatScrollCommandModifier: ViewModifier {
     let currentSessionTarget: @MainActor () -> OpenClawChatSessionTarget
 
     func body(content: Content) -> some View {
+        self.proxyContent(content)
+    }
+
+    private func proxyContent(_ content: Content) -> some View {
         ScrollViewReader { proxy in
             content.onChange(of: self.command.pending) { _, request in
                 guard let request else { return }

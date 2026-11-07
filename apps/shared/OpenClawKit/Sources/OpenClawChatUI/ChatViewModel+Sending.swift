@@ -521,6 +521,7 @@ extension OpenClawChatViewModel {
                 content: userContent,
                 timestamp: userMessageTimestamp,
                 idempotencyKey: "\(runId):user"))
+        self.localSendRevision &+= 1
         pendingLocalUserEchoMessageIDsByRunID[runId] = userMessageID
         runMessageScopesByRunID[runId] = currentRunMessageScope()
 
