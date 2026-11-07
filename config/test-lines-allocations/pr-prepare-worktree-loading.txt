@@ -1,0 +1,2 @@
+# Load the real worktree owner for preparation regressions, including stale-head refresh.
+1

@@ -45,7 +45,8 @@ export function runGatesBash(
     "common",
     "gates",
     ...(options.gatesOnly ? [] : ["review"]),
-    ...(options.sourcePush ? ["worktree", "push"] : []),
+    ...(options.sourcePrepareCore || options.sourcePush ? ["worktree"] : []),
+    ...(options.sourcePush ? ["push"] : []),
     ...(options.sourcePrepareCore ? ["prepare-core"] : []),
   ];
   const setup = options.gatesOnly
