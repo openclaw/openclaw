@@ -197,6 +197,18 @@ sign-in alone does not grant operator admin access or replace Gateway pairing.
 The share extension asks you to send from OpenClaw for an Access-protected
 Gateway. Access credentials are not exported to Apple Watch or cloud workers.
 
+## Share request admission
+
+The share extension shows **Sent** only after the Gateway explicitly accepts the
+request for agent dispatch, not after the agent finishes. Rejected messages and
+attachments leave the draft in the sheet with an error so you can correct it.
+The Gateway limits share message text to 20,000 UTF-16 code units.
+
+Older Gateways return an acknowledgement without confirming admission. The
+extension keeps the draft and asks you to check OpenClaw before retrying and
+update the Gateway. That request might already have been accepted: retries are
+not deduplicated, so do not resend it without checking the destination session.
+
 ## Sessions
 
 Choose **All Sessions…** in the sidebar to browse **Active**, **Snoozed**,
