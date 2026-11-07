@@ -138,7 +138,28 @@ it.each([1280, 390])(
     const draft = view.container.querySelector<HTMLInputElement>(".session-overrides-grid input")!;
     scroller.style.height = "200px";
     draft.value = "Retained draft";
+    await vi.waitFor(async () => {
+      const field = draft.getBoundingClientRect();
+      const scroll = [scroller.scrollTop, scroller.scrollHeight];
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
+      expect([scroller.scrollTop, scroller.scrollHeight]).toEqual(scroll);
+      expect(draft.getBoundingClientRect().top).toBe(field.top);
+    });
     draft.focus();
+    await vi.waitFor(() => {
+      const field = draft.getBoundingClientRect();
+      const viewport = scroller.getBoundingClientRect();
+      expect(field.top).toBeGreaterThanOrEqual(viewport.top);
+      expect(field.bottom).toBeLessThanOrEqual(viewport.bottom);
+    });
+    draft.blur();
+    // After expansion settles, force the native fractional-scroll edge.
+    const clippedTop = scroller.getBoundingClientRect().top - 0.28125;
+    draft.style.translate = `0 ${clippedTop - draft.getBoundingClientRect().top}px`;
+    expect(draft.getBoundingClientRect().top).toBe(clippedTop);
+    draft.focus({ preventScroll: true });
     await vi.waitFor(() => {
       const field = draft.getBoundingClientRect();
       const viewport = scroller.getBoundingClientRect();
