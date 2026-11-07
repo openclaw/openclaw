@@ -35,18 +35,16 @@ for (const [language, definition] of Object.entries({
 }
 hljs.registerAliases("shell", { languageName: "bash" });
 
-/** Highlight a snippet; output is escaped hljs markup safe for unsafeHTML in a code block. */
+/**
+ * Highlight a snippet; output is escaped hljs markup safe for unsafeHTML in a code block.
+ * Unlabeled fences stay plain: auto-detection scores English prose as Python above real code
+ * (keywords like "from", "with", "not"), so prompts and notes rendered as noisy colored text.
+ */
 export function highlightCodeHtml(text: string, lang: string): string {
   const language = lang.trim().toLowerCase();
   try {
     if (language && hljs.getLanguage(language)) {
       return hljs.highlight(text, { language, ignoreIllegals: true }).value;
-    }
-    if (!language && text.trim()) {
-      const result = hljs.highlightAuto(text);
-      if (result.relevance >= 2) {
-        return result.value;
-      }
     }
   } catch {
     // Fall back to escaped plaintext; malformed input should not break chat rendering.
