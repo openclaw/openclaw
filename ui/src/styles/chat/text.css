@@ -1047,6 +1047,29 @@
   --file-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='18' height='18' x='3' y='3' rx='2' ry='2'/%3E%3Ccircle cx='9' cy='9' r='2'/%3E%3Cpath d='m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21'/%3E%3C/svg%3E");
 }
 
+/* The two largest headings are read as titles, so a decorated link inside one
+   keeps only its label: the file and GitHub marks are legible at body size but
+   oversized at h1/h2 scale, and the out-of-flow mark plus its reserved padding
+   break the heading's left edge. Smaller headings sit close to body size and
+   keep their marks. The GitHub mark is bubble-only, so its rules stay on
+   .chat-text; a GitHub item is also a GitHub link, so the mark rule covers both
+   and only the chip's symmetric padding needs its own rule. Favicons are markup,
+   so they are hidden rather than left unpainted. */
+:is(.chat-text, .sidebar-markdown) :is(h1, h2) a.markdown-file-link,
+.chat-text :is(h1, h2) a.markdown-github-link {
+  padding-inline-start: 0;
+}
+
+.chat-text :is(h1, h2) a.markdown-github-item {
+  padding-inline-start: 0.45em;
+}
+
+:is(.chat-text, .sidebar-markdown) :is(h1, h2) a.markdown-file-link::before,
+.chat-text :is(h1, h2) a.markdown-github-link::before,
+:is(.chat-text, .sidebar-markdown) :is(h1, h2) .markdown-link-favicon {
+  display: none;
+}
+
 .chat-text :where(code) {
   font-family: var(--mono);
   font-size: 0.9em;
