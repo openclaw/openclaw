@@ -292,6 +292,19 @@ describe("Code Mode catalog and model-visible surface", () => {
     ]);
   });
 
+  it("prioritizes automations, cron, and message tools in the catalog index", () => {
+    const pluginId = `fake-${"x".repeat(120)}`;
+    const index = catalogIndex([
+      ...Array.from({ length: 500 }, (_, position) =>
+        pluginTool(`fake_${position.toString().padStart(3, "0")}`, "Deferred", pluginId),
+      ),
+      pluginTool("automations", "Manage automations", pluginId),
+      pluginTool("cron", "Manage cron", pluginId),
+      pluginTool("message", "Send message", pluginId),
+    ]);
+    expectFragments(index, ["additional tools omitted", "- automations", "- cron", "- message"]);
+  });
+
   it("skips a single oversized entry instead of blanking the whole index", () => {
     const shortNames = Array.from({ length: 4 }, (_, index) => `b_short_${index}`);
     const index = catalogIndex(
