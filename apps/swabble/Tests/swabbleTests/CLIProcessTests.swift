@@ -59,4 +59,41 @@ final class CLIProcessTests: XCTestCase {
         XCTAssertEqual(try ConfigLoader.load(at: config).audio.deviceIndex, 37)
         XCTAssertEqual(try String(contentsOf: hookOutput, encoding: .utf8), "hello world\n")
     }
+
+    func testServeLeavesUnreadableConfigUntouched() throws {
+        let executable = Bundle(for: Self.self).bundleURL.deletingLastPathComponent()
+            .appendingPathComponent("swabble")
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        // A hand edit that drops the closing brace must not be replaced with defaults.
+        let config = directory.appendingPathComponent("config.json")
+        var settings = SwabbleConfig()
+        settings.hook.command = "/usr/bin/say"
+        try ConfigLoader.save(settings, at: config)
+        let saved = try String(contentsOf: config, encoding: .utf8)
+        let edited = String(saved.dropLast())
+        try edited.write(to: config, atomically: true, encoding: .utf8)
+
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = ["serve", "--config", config.path]
+        process.currentDirectoryURL = directory
+        process.environment = ["HOME": directory.path, "TMPDIR": directory.path, "PATH": "/usr/bin:/bin"]
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        let completed = self.expectation(description: "swabble serve exits")
+        process.terminationHandler = { _ in completed.fulfill() }
+        try process.run()
+        self.wait(for: [completed], timeout: 10)
+        if process.isRunning {
+            process.terminate()
+        }
+        process.waitUntilExit()
+
+        XCTAssertEqual(process.terminationStatus, 1)
+        XCTAssertEqual(try String(contentsOf: config, encoding: .utf8), edited)
+    }
 }
