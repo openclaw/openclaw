@@ -443,6 +443,17 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/config/sessions/transcript-payload.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["clearSessionTranscriptActiveFacts"],
+        evidence:
+          "Cold navigation retention calls this only from session-cold-storage-worker.ts. Exact-row rewrites run in session-message-rewrite.worker.ts, media maintenance, or the native message/correction adapters whose callers require !isMainThread. createTranscriptPayloadUpdater is consumed only by updateSqliteTranscriptEventJsonInTransaction, called by Doctor transcript-label repair and transcript-directives migration. These invalidation callers have no plugin-SDK value export; other payload operations retain their mixed classification.",
+      },
+    ],
+  ],
+  [
     "src/agents/bash-durable-process-store.ts",
     [
       {

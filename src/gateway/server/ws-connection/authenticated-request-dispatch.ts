@@ -405,6 +405,17 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
         } finally {
           // ws queues frames in order: send the result before starting its close handshake.
           policyResponse?.finish();
+          if (
+            client.connect.role === "node" &&
+            asOptionalRecord(error?.details)?.code === "PAIRING_CHANGED" &&
+            context.nodeRegistry.get(client.connect.device?.id ?? client.connect.client.id)
+              ?.connId !== client.connId
+          ) {
+            // A failed lookup or same-connection promotion can also reject an RPC.
+            // Retire only a connection that no longer owns the registered node.
+            setCloseCause("node-pairing-changed", { method: req.method });
+            close(4001, "node pairing changed; reconnect");
+          }
         }
       };
 
