@@ -187,16 +187,34 @@ function normalizeRealtimeBaseUrl(value: unknown): string | undefined {
   return url.toString();
 }
 
+type OpenAIRealtimeApiKeyHeader = "x-api-key";
+
+function normalizeRealtimeApiKeyHeader(value: unknown): OpenAIRealtimeApiKeyHeader | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const header = normalizeOptionalLowercaseString(value);
+  if (header !== "x-api-key") {
+    throw new Error('Invalid OpenAI realtime apiKeyHeader: expected "x-api-key"');
+  }
+  return header;
+}
+
 export function normalizeProviderConfig(config: RealtimeVoiceProviderConfig) {
   const raw = resolveOpenAIProviderConfigRecord(config);
   const baseUrl = normalizeRealtimeBaseUrl(raw.baseUrl);
   const azureEndpoint = normalizeOptionalString(raw.azureEndpoint);
   const azureDeployment = normalizeOptionalString(raw.azureDeployment);
+  const apiKeyHeader = normalizeRealtimeApiKeyHeader(raw.apiKeyHeader);
   if (baseUrl && (azureEndpoint || azureDeployment)) {
     throw new Error("OpenAI realtime baseUrl cannot be combined with Azure endpoint or deployment");
   }
+  if (apiKeyHeader && !baseUrl) {
+    throw new Error("OpenAI realtime apiKeyHeader requires a custom baseUrl");
+  }
   return {
     baseUrl,
+    apiKeyHeader,
     apiKey: normalizeResolvedSecretInputString({
       value: raw.apiKey,
       path: "plugins.entries.voice-call.config.realtime.providers.openai.apiKey",
