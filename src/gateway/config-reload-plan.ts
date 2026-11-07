@@ -31,6 +31,7 @@ export type GatewayReloadPlan = {
     reason: PluginLifecycleReason;
     operationId: string;
     waitForDrain?: boolean;
+    force?: boolean;
     drainSignal?: AbortSignal;
     expectedSourceDigests?: Readonly<Record<string, string>>;
   };
@@ -41,6 +42,20 @@ export type GatewayReloadPlan = {
   restartChannelAccounts?: Map<ChannelKind, Set<string>>;
   noopPaths: string[];
 };
+
+/** Project accepted lifecycle options; cancellation belongs only to a waiting drain. */
+export function buildPluginLifecycleReloadPlan(
+  params: NonNullable<GatewayReloadPlan["pluginLifecycle"]>,
+): NonNullable<GatewayReloadPlan["pluginLifecycle"]> {
+  return {
+    pluginIds: params.pluginIds,
+    reason: params.reason,
+    operationId: params.operationId,
+    ...(params.waitForDrain ? { waitForDrain: true, drainSignal: params.drainSignal } : {}),
+    ...(params.force !== undefined ? { force: params.force } : {}),
+    expectedSourceDigests: params.expectedSourceDigests,
+  };
+}
 
 const RELOAD_ACTIONS = [
   "reloadHooks",

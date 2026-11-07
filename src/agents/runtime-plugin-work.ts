@@ -8,6 +8,7 @@ import { collectRegistryInvocationInstances } from "../plugins/plugin-invocation
 import { watchPluginReplacement } from "../plugins/plugin-replacement-watchers.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
+import { getCurrentSessionControllerOwner } from "../sessions/session-controller.context.js";
 
 /**
  * Mark finite host custody without granting execution or joining instance disposal.
@@ -34,7 +35,7 @@ export function retainRuntimePluginWork(
     for (const registry of registries) {
       for (const instance of collectRegistryInvocationInstances(registry)) {
         if (!instances.has(instance)) {
-          const close = instance.retainWork(reason);
+          const close = instance.retainWork(reason, getCurrentSessionControllerOwner());
           releases.push(close);
           if (onReplacementRequested) {
             const unwatch = watchPluginReplacement(instance, () =>

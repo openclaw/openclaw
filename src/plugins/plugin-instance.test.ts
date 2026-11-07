@@ -786,3 +786,24 @@ it("owns direct SDK registrations in the candidate registry and fences retained 
     expectUnavailable(() => Reflect.apply(callback, undefined, []));
   }
 });
+
+it("keeps exact host owners until their last physical work lease releases", () => {
+  const instance = new PluginInstance("maintenance-custody");
+  const owner = {};
+  const other = {};
+  const first = instance.retainWork("prepared-generation-lease", owner);
+  const second = instance.retainWork("prepared-generation-lease", owner);
+  const unrelated = instance.retainWork("prepared-generation-lease", other);
+  const raw = instance.retainWork();
+  expect(instance.retainedWorkOwners()).toEqual(new Set([owner, other]));
+  expect(instance.retainedWorkCount).toBe(4);
+  first();
+  expect(instance.retainedWorkOwners()).toEqual(new Set([owner, other]));
+  second();
+  expect(instance.retainedWorkOwners()).toEqual(new Set([other]));
+  unrelated();
+  expect(instance.retainedWorkOwners()).toEqual(new Set());
+  expect(instance.retainedWorkCount).toBe(1);
+  raw();
+  expect(instance.retainedWorkCount).toBe(0);
+});

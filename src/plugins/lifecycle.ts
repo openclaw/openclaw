@@ -134,6 +134,7 @@ export type PluginLifecycleRuntimeApply = (params: {
   reason: PluginLifecycleReason;
   /** Explicit reload admission wait; cancellation never owns recovery or published cleanup. */
   waitForDrain?: boolean;
+  force?: boolean;
   drainSignal?: AbortSignal;
   expectedSourceDigests?: Readonly<Record<string, string>>;
   /** Private invoker authority; never part of the published runtime receipt. */

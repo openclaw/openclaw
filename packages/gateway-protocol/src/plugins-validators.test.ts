@@ -79,11 +79,14 @@ describe("plugin lifecycle protocol validators", () => {
       Array.from({ length }, (_, index) => ({ ...target, pluginId: `plugin-${index}` }));
     reload.accepts(
       reloadRequest,
+      { ...reloadRequest, force: true, waitForDrain: true },
+      { ...reloadRequest, force: false },
       { plugins: batch(64) },
       { plugins: [{ ...target, sourceDigests: { alpha: "b".repeat(64) } }] },
       { plugins: [target], acknowledgeCapabilities: { reviewToken: "reviewed-artifact" } },
     );
     reload.rejects(
+      { ...reloadRequest, force: "true" },
       {},
       { plugins: [{ pluginId: "" }] },
       { plugins: [] },

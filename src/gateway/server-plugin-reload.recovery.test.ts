@@ -1,7 +1,8 @@
 import "./server-startup-module-mocks.test-support.js";
 import assert from "node:assert/strict";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import * as maintenance from "../agents/plugin-maintenance-continuation.js";
 import { createTranscriptsTool } from "../agents/tools/transcripts-tool.js";
 import { clearRuntimeConfigSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -1030,3 +1031,37 @@ it.each(["prepare", "drain", "discovery"] as const)(
   "recovers decision admission after early %s failure",
   (boundary) => verifyDecisionEarlyReloadRecovery(createRecoveryFixture, boundary),
 );
+
+it("returns the applied reload before continuation admission can join its config gate", async () => {
+  const fixture = await createRecoveryFixture({ force: true, abortOnCandidateStart: false });
+  const owner = {};
+  const release = fixture.instance().retainWork("prepared-generation-lease", owner);
+  const delivery = createDeferredCore();
+  const finish = vi.fn(() => delivery.promise);
+  const capture = vi
+    .spyOn(maintenance, "capturePluginMaintenanceContinuation")
+    .mockImplementation((candidate) =>
+      candidate === owner
+        ? Promise.resolve({
+            owner,
+            interrupt: async () => release(),
+            settled: Promise.resolve(),
+            finish,
+            cancel: () => {},
+          })
+        : undefined,
+    );
+  onTestFinished(() => {
+    release();
+    delivery.resolve(undefined);
+    capture.mockRestore();
+  });
+  await fixture.reload();
+  expect(finish).toHaveBeenCalledExactlyOnceWith(
+    { ok: true, pluginIds: ["first"] },
+    true,
+    expect.any(Function),
+  );
+  // The caller releases the config admission gate only after reload() returns.
+  delivery.resolve(undefined);
+});

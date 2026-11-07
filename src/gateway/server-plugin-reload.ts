@@ -31,21 +31,22 @@ import {
 import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
 import { preparePluginNodeCapabilityPublication } from "./plugin-node-capability.js";
 import type * as PluginBootstrap from "./server-plugin-bootstrap.js";
+import { createPluginForceReload } from "./server-plugin-force-reload.js";
 import { createPluginReloadChannels } from "./server-plugin-reload-channels.js";
 import {
   createPluginReloadCleanup,
   createPluginReloadDiagnostics,
 } from "./server-plugin-reload-cleanup.js";
-import { createPluginReloadLifecycle } from "./server-plugin-reload-lifecycle.js";
+import {
+  createPluginReloadLifecycle,
+  createPluginReloadOwnershipCheck,
+} from "./server-plugin-reload-lifecycle.js";
 import {
   createPluginReloadRecovery,
   resolvePluginReloadReplacementIds,
 } from "./server-plugin-reload-recovery.js";
 import { createPluginReloadServices } from "./server-plugin-reload-services.js";
-import {
-  GatewayConfigReloadSupersededError,
-  type GatewayReloadHandlerParams,
-} from "./server-reload-contracts.js";
+import type { GatewayReloadHandlerParams } from "./server-reload-contracts.js";
 import { isChannelStartupSuppressedByEnvironment } from "./server-sidecar-startup-mode.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-sidecar-scheduler.js";
 import { listPluginNodeCapabilities } from "./server/plugins-http/route-capability.js";
@@ -97,7 +98,11 @@ export async function reloadGatewayPlugins(
 
   const cache = createPluginCache();
   const lifecycle = createPluginReloadLifecycle(params.pluginLifecycle?.operationId);
+  const { replacementOperation } = lifecycle;
   const requestedIds = new Set(params.pluginLifecycle?.pluginIds ?? []);
+  const forceReload = params.pluginLifecycle?.force
+    ? createPluginForceReload(() => params.assertInvokerOwned?.())
+    : undefined;
   const { warnings, recordWarning, recordCleanup, cleanup } = createPluginReloadDiagnostics(log);
   const replacePluginIds = resolvePluginReloadReplacementIds(
     previousRegistry,
@@ -149,10 +154,11 @@ export async function reloadGatewayPlugins(
     prepareRegistrationFailureCleanup,
     retireUnpublished,
   } = createPluginReloadCleanup({
-    replacementOperation: lifecycle.replacementOperation,
+    replacementOperation,
     previousRegistry,
     changedPluginIds,
     waitForDrain: params.pluginLifecycle?.waitForDrain,
+    prepareForceDrain: forceReload?.drain,
     port,
     pluginWorkspaceDir,
     abortSignal: AbortSignal.any([runtime.requestEntryLifetime.signal, restartDrainSignal]),
@@ -164,23 +170,12 @@ export async function reloadGatewayPlugins(
     retainRetirement: (retire) => kernel.pluginMetadata.retire(cache, retire),
   });
   const previousReloadStatus = pluginRuntimeGeneration.getReloadStatus();
-  const assertCurrent = () => {
-    drainSignal.throwIfAborted();
-    params.assertInvokerOwned?.();
-    if (params.isAborted?.()) {
-      throw new GatewayConfigReloadSupersededError();
-    }
-  };
+  const { assertCurrent, checkpoint } = createPluginReloadOwnershipCheck(params, drainSignal);
   const services = createPluginReloadServices(runtime, stopPreviousServices, previousConfig);
   const retirePrevious = services.prepareRetirement(changedPluginIds, () =>
     runLifecycleHooks(previousRegistry, false, previousConfig, recovery.previousHookIds),
   );
-  const checkpoint = async () => {
-    // Reconcile this operation's file watcher echoes before checking source ownership.
-    await params.checkpoint?.();
-    assertCurrent();
-  };
-  return lifecycle.run(
+  const reload = lifecycle.run(
     {
       previousReloadStatus,
       channels,
@@ -714,11 +709,12 @@ export async function reloadGatewayPlugins(
             pluginIds: [...changedPluginIds].toSorted(),
             phase: facts.phase,
             committed: facts.committed,
-            ...(runtimeRestorationFailed ? { runtimeRestorationFailed: true } : {}),
+            ...lifecycle.restorationFailure(facts, runtimeRestorationFailed),
           },
           { cause: failure },
         );
       }
     },
   );
+  return forceReload?.complete(reload, changedPluginIds, replacementOperation.settled) ?? reload;
 }

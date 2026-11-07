@@ -6,6 +6,7 @@ import {
   runWithSessionTranscriptReadFence,
 } from "../../config/sessions/session-transcript-read-fence.js";
 import { createChatSendLateFollowupDisposition } from "../../gateway/server-methods/chat-send-late-followup.js";
+import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-context-binding.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
@@ -413,6 +414,14 @@ describe("createFollowupRunner", () => {
 
   it("retains its Gateway and drops caller authority through the delivery retry handoff", async () => {
     const resolveGatewayContext = () => undefined;
+    let retired = false;
+    const pluginResolver = () => {
+      if (retired) {
+        throw new Error("Plugin execution view retired");
+      }
+      return resolveGatewayContext();
+    };
+    bindGatewayContextResolver(pluginResolver, resolveGatewayContext);
     const otherGatewayContext = () => undefined;
     const staleAuthority = vi.fn();
     const observed: unknown[] = [];
@@ -436,7 +445,8 @@ describe("createFollowupRunner", () => {
           return { kind: "source-retry" };
         },
       );
-    const run = createRunner({ resolveGatewayContext, typingMode: "instant" });
+    const run = createRunner({ resolveGatewayContext: pluginResolver, typingMode: "instant" });
+    retired = true;
     await withPluginRuntimeGatewayRequestScope(
       {
         resolveGatewayContext: otherGatewayContext,

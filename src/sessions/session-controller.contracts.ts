@@ -431,6 +431,11 @@ export type SessionWorkRun = Readonly<{
   sessionId?: string;
   agentId?: string;
   controlUiVisible?: boolean;
+  /** Retained original requester after its RPC source retires. */
+  abortAuthority?: {
+    requester?: import("./session-controller.rpc-sources.types.js").RpcSourceAdapter["requester"];
+    initiatingPersonalOperator?: import("./session-controller.rpc-sources.types.js").RpcSourceAdapter["initiatingPersonalOperator"];
+  };
 }>;
 export type SessionEffectRef = {
   readonly target: SessionTarget;

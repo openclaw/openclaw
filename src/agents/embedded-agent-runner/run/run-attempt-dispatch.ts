@@ -13,6 +13,7 @@ import { agentHarnessBuildsOpenClawTools } from "../../harness/tool-surface.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
 import { resolveTurnCyberAccessProgram } from "../../model-catalog-access-programs.js";
 import { recordAdmittedModelRoutingDecision } from "../../model-routing-decision.js";
+import { registerPluginMaintenanceContinuation } from "../../plugin-maintenance-continuation.js";
 import { captureAgentPluginRuntimeRefresh } from "../../plugin-runtime-refresh.js";
 import { resolveReplyExpectation } from "../../reply-completion.js";
 import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
@@ -669,10 +670,19 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
   sourceTurn.copyChannelSourceTurnContext(attemptParams, params);
   let rawAttempt: EmbeddedRunAttemptResult;
   try {
-    rawAttempt = await withPreparedEmbeddedGatewayTools(attemptParams, () => {
+    rawAttempt = await withPreparedEmbeddedGatewayTools(attemptParams, async () => {
       assertActiveRun();
       placement?.assertCurrent();
-      return runEmbeddedAttemptWithBackend(attemptParams, nativeSessionRuntime, params.media);
+      const unregisterMaintenance = registerPluginMaintenanceContinuation(attemptParams);
+      try {
+        return await runEmbeddedAttemptWithBackend(
+          attemptParams,
+          nativeSessionRuntime,
+          params.media,
+        );
+      } finally {
+        unregisterMaintenance();
+      }
     });
   } catch (err) {
     throw input.getPostCompactionAbortError() ?? err;

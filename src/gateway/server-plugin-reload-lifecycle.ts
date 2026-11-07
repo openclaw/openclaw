@@ -5,6 +5,32 @@ import { createDeferredCore } from "../shared/deferred.js";
 import type { createPluginReloadChannels } from "./server-plugin-reload-channels.js";
 import type { createPluginReloadRecovery } from "./server-plugin-reload-recovery.js";
 import type { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
+import {
+  GatewayConfigReloadSupersededError,
+  type GatewayReloadHandlerParams,
+} from "./server-reload-contracts.js";
+
+/** Revalidate the accepted lifecycle owner after each awaited preparation/effect. */
+export function createPluginReloadOwnershipCheck(
+  params: Parameters<GatewayReloadHandlerParams["reloadPlugins"]>[0],
+  signal: AbortSignal,
+) {
+  const assertCurrent = () => {
+    signal.throwIfAborted();
+    params.assertInvokerOwned?.();
+    if (params.isAborted?.()) {
+      throw new GatewayConfigReloadSupersededError();
+    }
+  };
+  return {
+    assertCurrent,
+    checkpoint: async () => {
+      // Reconcile this operation's watcher echoes before checking source ownership.
+      await params.checkpoint?.();
+      assertCurrent();
+    },
+  };
+}
 
 type Generation = ReturnType<typeof createGatewayPluginRuntimeGeneration>;
 type Finish = Parameters<Generation["finishReload"]>;
@@ -24,6 +50,15 @@ export function createPluginReloadLifecycle(requestedOperationId?: string) {
   return {
     operationId,
     replacementOperation: { operationId, settled: outcome.promise },
+    restorationFailure(
+      facts: Facts,
+      runtimeRestorationFailed: boolean,
+    ): { runtimeRestorationFailed?: true } {
+      return runtimeRestorationFailed ||
+        (!facts.committed && facts.phase !== "prepare" && !facts.restored)
+        ? { runtimeRestorationFailed: true }
+        : {};
+    },
     async run<T>(
       this: void,
       ports: {
