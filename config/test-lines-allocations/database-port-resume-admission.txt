@@ -1,2 +1,2 @@
-# Cover fresh/resumed descriptor admission, anchor preservation after refusal, and valid current-marker controls.
-165
+# Cover fresh/resumed descriptor admission, anchor preservation, valid controls, and built-CLI recovery without false publication.
+306
