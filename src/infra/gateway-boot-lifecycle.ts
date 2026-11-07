@@ -1,6 +1,6 @@
 // Persists gateway boot outcomes for supervisor crash-loop decisions.
 import { formatCliCommand } from "../cli/command-format.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsystem.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -15,7 +15,7 @@ import {
 } from "./gateway-boot-lifecycle.kernel.js";
 import {
   publishGatewayRecentCrashes,
-  type GatewayCrashEvidence,
+  formatGatewayCrash,
   type GatewayCrashRecord,
 } from "./gateway-crash.js";
 import { resolveGatewayPlatformSupervisor } from "./gateway-supervision.js";
@@ -35,17 +35,31 @@ export async function readGatewayRecentCrashesAsync(
   return reply?.crashes ?? [];
 }
 
-export async function enrichGatewayCrashAsync(
-  bootId: string,
-  evidence: GatewayCrashEvidence,
+/** Reports the predecessor once, after startup, through the boot owner's worker. */
+export async function reportPreviousGatewayCrash(
+  previous: GatewayCrashRecord,
+  log: Pick<SubsystemLogger, "warn">,
   env = process.env,
-): Promise<GatewayCrashRecord | undefined> {
-  const context = captureOpenClawStateWorkerContext({ env });
-  const result = await runOpenClawStateWorkerOperation(context, (scope) =>
-    scope.execute({ type: "gatewayBoot.enrichCrash", input: { bootId, evidence } }),
-  );
-  publishGatewayRecentCrashes(result.crashes);
-  return result.crash;
+): Promise<void> {
+  let crash = previous;
+  try {
+    const { readGatewayCrashCause } = await import("../daemon/gateway-crash-cause.js");
+    const evidence = await readGatewayCrashCause(previous, env);
+    if (evidence) {
+      const context = captureOpenClawStateWorkerContext({ env });
+      const result = await runOpenClawStateWorkerOperation(context, (scope) =>
+        scope.execute({
+          type: "gatewayBoot.enrichCrash",
+          input: { bootId: previous.bootId, evidence },
+        }),
+      );
+      publishGatewayRecentCrashes(result.crashes);
+      crash = result.crash ?? previous;
+    }
+  } catch {
+    // Inspection and enrichment cannot erase the durable unclean-exit fact.
+  }
+  log.warn(`previous Gateway run ended unexpectedly: ${formatGatewayCrash(crash)}`);
 }
 
 export {

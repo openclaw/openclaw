@@ -1,2 +1,2 @@
-# Crash receipt, clean/handoff, supervisor recovery, journal attribution and diagnostic visibility regressions.
-419
+# Crash receipt, clean/handoff, journal attribution and diagnostic regressions: 426 LF; reconciles 10 LF debt on pinned main.
+436

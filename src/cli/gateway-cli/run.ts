@@ -39,6 +39,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import {
   beginGatewayBootLifecycle,
   completeGatewayBootLifecycle,
+  reportPreviousGatewayCrash,
   GATEWAY_CRASH_LOOP_BREAKER_REASON,
   formatGatewayCrashLoopManualChannelStartHint,
   type GatewayBootLifecycleCompletion,
@@ -839,8 +840,6 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
           });
         } finally {
           if (boot?.previousCrash) {
-            const { reportPreviousGatewayCrash } =
-              await import("../../infra/gateway-crash-report.js");
             await reportPreviousGatewayCrash(boot.previousCrash, gatewayLog);
           }
         }

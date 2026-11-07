@@ -94,7 +94,7 @@ it("uses indexed exit matches and limits stall text scanning for a day-long run"
     stderr: "",
   });
   await readGatewayCrashCause({ ...crash, detectedAtMs: 86_400_000 });
-  const exitArgs = execute.mock.calls[0][1];
+  const exitArgs = execute.mock.calls[0]?.[1] ?? [];
   expect(exitArgs.some((arg) => arg.startsWith("--grep"))).toBe(false);
   expect(exitArgs.slice(-5)).toEqual([
     "MESSAGE_ID=98e322203f7a4ed290d09fe03c09fe15",
@@ -103,7 +103,7 @@ it("uses indexed exit matches and limits stall text scanning for a day-long run"
     "MESSAGE_ID=98e322203f7a4ed290d09fe03c09fe15",
     "USER_UNIT=openclaw-gateway.service",
   ]);
-  const stallArgs = execute.mock.calls[1][1];
+  const stallArgs = execute.mock.calls[1]?.[1] ?? [];
   expect(stallArgs).toContain("--since=@86370");
   expect(stallArgs).toContain("--until=@86400");
   expect(stallArgs).toContain(
@@ -148,9 +148,9 @@ it.each([false, true])(
     });
     expect(execute).toHaveBeenCalledTimes(exhausted ? 1 : 2);
     if (!exhausted) {
-      expect(execute.mock.calls[1][1]).toContain("--since=@50");
-      expect(execute.mock.calls[1][1]).toContain("--until=@80");
+      expect(execute.mock.calls[1]?.[1]).toContain("--since=@50");
+      expect(execute.mock.calls[1]?.[1]).toContain("--until=@80");
     }
-    expect(execute.mock.calls[0][2]?.timeout).toBe(1_000);
+    expect(execute.mock.calls[0]?.[2]?.timeout).toBe(1_000);
   },
 );

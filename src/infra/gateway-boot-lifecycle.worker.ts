@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { updateConfigMachineStateInDatabase, writeConfigMachineStateInDatabase } from "../state/config-machine-state-write.js";
+import {
+  updateConfigMachineStateInDatabase,
+  writeConfigMachineStateInDatabase,
+} from "../state/config-machine-state-write.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
@@ -72,36 +75,35 @@ export const gatewayBootOperations = {
           boots.orderBy("started_at_ms", "desc").limit(1),
         );
         let window: GatewayRestartResumeWindow | undefined;
-        const crashState = readGatewayCrashStateInDatabase(db);
-        let previousCrash: GatewayCrashRecord | undefined;
+        // Forced exit can interrupt marker persistence just like a process crash.
         if (
           predecessor &&
-          (predecessor.outcome === null ||
-            predecessor.outcome === "forced_stop" ||
-            predecessor.outcome === "startup_failed")
+          (predecessor.outcome === null || predecessor.outcome === "forced_stop")
         ) {
-          // Forced exit can interrupt restart markers; startup failures have no resumable run.
-          if (predecessor.outcome !== "startup_failed") {
-            let previous: NonNullable<typeof predecessor> = predecessor;
-            // A safe-mode recovery splits one incarnation; a real restart can reuse its PID.
-            while (previous.startup_reason === GATEWAY_CRASH_LOOP_RECOVERED_REASON) {
-              const parent = executeSqliteQueryTakeFirstSync(
-                db,
-                boots
-                  .where("pid", "=", previous.pid)
-                  .where("outcome", "=", "safe_mode_stable")
-                  .where("completed_at_ms", "=", previous.started_at_ms)
-                  .where("started_at_ms", "<", previous.started_at_ms)
-                  .orderBy("started_at_ms", "desc")
-                  .limit(1),
-              );
-              if (!parent) {
-                break;
-              }
-              previous = parent;
+          let previous: NonNullable<typeof predecessor> = predecessor;
+          // A safe-mode recovery splits one incarnation; a real restart can reuse its PID.
+          while (previous.startup_reason === GATEWAY_CRASH_LOOP_RECOVERED_REASON) {
+            const parent = executeSqliteQueryTakeFirstSync(
+              db,
+              boots
+                .where("pid", "=", previous.pid)
+                .where("outcome", "=", "safe_mode_stable")
+                .where("completed_at_ms", "=", previous.started_at_ms)
+                .where("started_at_ms", "<", previous.started_at_ms)
+                .orderBy("started_at_ms", "desc")
+                .limit(1),
+            );
+            if (!parent) {
+              break;
             }
-            window = { startedAt: previous.started_at_ms, endedAt: nowMs };
+            previous = parent;
           }
+          window = { startedAt: previous.started_at_ms, endedAt: nowMs };
+        }
+        const crashState = readGatewayCrashStateInDatabase(db);
+        let previousCrash: GatewayCrashRecord | undefined;
+        // Reuse this boot's recovery window; retained agent windows may predate a clean boot.
+        if (predecessor && (window || predecessor.outcome === "startup_failed")) {
           const run =
             crashState.active?.bootId === predecessor.boot_id ? crashState.active : undefined;
           const heartbeat =
@@ -172,7 +174,12 @@ export const gatewayBootOperations = {
             },
             nowMs,
           );
-        return { restartResumeWindow: window, restartResumeWindows, previousCrash, crashes: crashState.recent };
+        return {
+          restartResumeWindow: window,
+          restartResumeWindows,
+          previousCrash,
+          crashes: crashState.recent,
+        };
       }, context.stateOptions());
       return { decision, id, ...recorded };
     } catch (err) {

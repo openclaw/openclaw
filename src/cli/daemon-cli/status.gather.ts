@@ -48,7 +48,11 @@ import {
 import { VERSION } from "../../version.js";
 import { resolveGatewayLocalPortOverride } from "../gateway-port-option.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
-import { formatGatewayServiceInstallationDrift, normalizeListenerAddress } from "./shared.js";
+import {
+  formatGatewayServiceInstallationDrift,
+  normalizeListenerAddress,
+  type GatewayCrashHistory,
+} from "./shared.js";
 import { readDaemonStatusConfig } from "./status.config.js";
 import { inspectDaemonPortStatuses, resolveGatewayStatusSummary } from "./status.gateway.js";
 import { projectDaemonRuntimeStatus } from "./status.projection.js";
@@ -247,12 +251,12 @@ async function gatherDaemonStatusImpl(
     opts.deep && shouldInspectLocalGateway
       ? await readGatewayLastShutdownAsync(mergedDaemonEnv).catch(() => undefined)
       : undefined;
-  const crashHistory = shouldInspectLocalGateway
+  const crashHistory: GatewayCrashHistory | undefined = shouldInspectLocalGateway
     ? await readGatewayRecentCrashesAsync(mergedDaemonEnv).then(
-        (recentCrashes) => ({ recentCrashes, crashHistoryError: undefined }),
-        (error: unknown) => ({ recentCrashes: undefined, crashHistoryError: String(error) }),
+        (recentCrashes) => ({ recentCrashes }),
+        (error: unknown) => ({ crashHistoryError: String(error) }),
       )
-    : { recentCrashes: undefined };
+    : undefined;
   let duelingScopesWarning: string | null = null;
   if (opts.deep && serviceTargetsProbe && process.platform === "linux") {
     const { findSystemdGatewayInstallation, formatDuelingScopesWarning } =

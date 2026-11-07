@@ -2,10 +2,11 @@ import { constants, DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as crashCause from "../daemon/gateway-crash-cause.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { readConfigMachineStateAsync } from "../state/config-machine-state-async.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -17,7 +18,7 @@ import {
   GATEWAY_CRASH_LOOP_BREAKER_REASON as BREAKER,
   completeGatewayBootLifecycle,
   completeGatewayAgentRestartRecovery,
-  enrichGatewayCrashAsync,
+  reportPreviousGatewayCrash,
   formatGatewayCrashLoopManualChannelStartHint,
   inspectGatewayCrashLoopBreakerAsync,
   readGatewayLastInstallationReplacementAsync,
@@ -63,6 +64,7 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   tempDirs.cleanup();
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   setLoggerOverride(null);
   loggingState.rawConsole = null;
   resetLogger();
@@ -134,17 +136,19 @@ it("retains exact pending crash intervals per physical agent until its recovery 
       main: [{ startedAt: 100, endedAt: 200 }],
       constructor: [{ startedAt: 100, endedAt: 200 }],
     });
+    expect(crash.previousCrash).toMatchObject({ startedAtMs: 100, detectedAtMs: 200 });
     const consecutive = await beginGatewayBootLifecycle(process.env, 300);
     expect(consecutive.restartResumeWindows?.main).toEqual([{ startedAt: 100, endedAt: 300 }]);
     // A late acknowledgement cannot discard the newer crash interval.
     await completeGatewayAgentRestartRecovery("main", 200);
     await completeGatewayBootLifecycle(consecutive.id, { outcome: "clean_stop" }, process.env, 350);
-    await beginGatewayBootLifecycle(process.env, 400);
+    expect((await beginGatewayBootLifecycle(process.env, 400)).previousCrash).toBeUndefined();
     const separated = await beginGatewayBootLifecycle(process.env, 500);
     expect(separated.restartResumeWindows?.main).toEqual([
       { startedAt: 100, endedAt: 300 },
       { startedAt: 400, endedAt: 500 },
     ]);
+    expect(separated.previousCrash).toMatchObject({ startedAtMs: 400, detectedAtMs: 500 });
     await completeGatewayAgentRestartRecovery("main", 500);
     await completeGatewayBootLifecycle(separated.id, { outcome: "clean_stop" }, process.env, 550);
     const afterRetention = await beginGatewayBootLifecycle(process.env, 100_000_000);
@@ -154,6 +158,10 @@ it("retains exact pending crash intervals per physical agent until its recovery 
         { startedAt: 400, endedAt: 500 },
       ],
     });
+    expect(afterRetention.previousCrash).toBeUndefined();
+    expect(
+      (await readConfigMachineStateAsync<GatewayCrashState>("gateway.crashes"))?.recent,
+    ).toHaveLength(3);
     await completeGatewayAgentRestartRecovery("constructor", 500);
     await completeGatewayBootLifecycle(
       afterRetention.id,
@@ -177,7 +185,6 @@ describe("gateway crash-loop breaker", () => {
     });
     const warn = vi.fn();
     if (next.previousCrash) {
-      const { reportPreviousGatewayCrash } = await import("./gateway-crash-report.js");
       await reportPreviousGatewayCrash(next.previousCrash, { warn }, lifecycle.env);
     }
     const readCrashes = async () =>
@@ -238,17 +245,17 @@ describe("gateway crash-loop breaker", () => {
     expect(crashes.some((crash) => crash.bootId === oldest)).toBe(false);
     expect(crashes[0]).toMatchObject({ reason: "startup failed", detectedAtMs: 1_022 });
     const current = crashes[0]!;
-    await enrichGatewayCrashAsync(
-      current.bootId,
-      { signal: "SIGSEGV", uptimeMs: 1 },
-      lifecycle.env,
-    );
+    vi.spyOn(crashCause, "readGatewayCrashCause").mockResolvedValue({
+      signal: "SIGSEGV",
+      uptimeMs: 1,
+    });
+    const warn = vi.fn();
+    await reportPreviousGatewayCrash(current, { warn }, lifecycle.env);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("signal SIGSEGV"));
     const updated = await readGatewayRecentCrashesAsync(lifecycle.env);
     expect(updated[0]).toMatchObject({ bootId: current.bootId, signal: "SIGSEGV", uptimeMs: 1 });
     expect(updated.slice(1)).toEqual(crashes.slice(1));
-    expect(
-      await enrichGatewayCrashAsync("missing", { signal: "SIGABRT" }, lifecycle.env),
-    ).toBeUndefined();
+    await reportPreviousGatewayCrash({ ...current, bootId: "missing" }, { warn }, lifecycle.env);
     expect(await readGatewayRecentCrashesAsync(lifecycle.env)).toEqual(updated);
   });
 

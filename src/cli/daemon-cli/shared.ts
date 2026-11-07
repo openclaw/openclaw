@@ -105,10 +105,12 @@ export function formatGatewayServiceInstallationDrift(
   return guidance ? `${facts} ${guidance}` : facts;
 }
 
-export function formatGatewayCrashHistory(history?: {
+export type GatewayCrashHistory = {
   recentCrashes?: readonly GatewayCrashRecord[];
   crashHistoryError?: string;
-}): string[] {
+};
+
+export function formatGatewayCrashHistory(history?: GatewayCrashHistory): string[] {
   return history?.crashHistoryError
     ? [terminalText`Recent Gateway crashes unavailable: ${history.crashHistoryError}`]
     : (history?.recentCrashes ?? []).map(
