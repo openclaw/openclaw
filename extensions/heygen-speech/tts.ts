@@ -120,6 +120,7 @@ function toFetchResponse(response: IncomingMessage): Response {
       headers.set(name, String(value));
     }
   }
+  // SAFETY: Node creates the global ReadableStream class here.
   return new Response(Readable.toWeb(response) as ReadableStream<Uint8Array>, {
     status: response.statusCode,
     headers,
@@ -256,7 +257,7 @@ export async function heygenSocketTtsStream(params: HeyGenTtsRequest): Promise<H
         return;
       }
       try {
-        handleFrame(JSON.parse(rawDataToString(data)) as HeyGenSocketFrame);
+        handleFrame(JSON.parse(rawDataToString(data)));
       } catch (error) {
         finish(toStringifiedError(error));
       }
