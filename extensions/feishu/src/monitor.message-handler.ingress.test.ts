@@ -17,7 +17,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { PluginRuntime, RuntimeEnv } from "../runtime-api.js";
+import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { normalizeFeishuCommandProbeBody } from "./bot-content.js";
 import { parseFeishuMessageEvent } from "./bot.js";
 import { createFeishuTestEvent } from "./bot.test-support.js";
@@ -326,6 +326,288 @@ it("admits controls during an active turn while ordinary messages retain FIFO or
     await Promise.all(pending);
     vi.useRealTimers();
   }
+});
+
+describe("Feishu topic queue admission", () => {
+  it.each([
+    "fallback-first",
+    "topic-first",
+    "native-roots",
+    "abandoned-fallback",
+    "topic-senders",
+  ] as const)("preserves arrival order with nonzero debounce: %s", async (scenario) => {
+    vi.useFakeTimers();
+    const active = createDeferred<void>();
+    const started: string[] = [];
+    const pending: Promise<unknown>[] = [];
+    const abandoned = createLifecycle();
+    const lifecycles = new Map<unknown, FeishuIngressLifecycle>();
+    vi.spyOn(dedup, "claimUnprocessedFeishuMessage").mockImplementation(async () => ({
+      kind: "claimed",
+      handle: createClaim("buffered-topic"),
+    }));
+    const handler = createFeishuMessageReceiveHandler({
+      cfg: { channels: { feishu: { groupSessionScope: "group_topic" } } },
+      channelRuntime: createPluginRuntimeMock({
+        channel: {
+          commands: { isControlCommandMessage },
+          debounce: { resolveInboundDebounceMs: () => 1000, createInboundDebouncer },
+        },
+      }).channel,
+      accountId: "buffered-topic",
+      runtime: { ...createNonExitingRuntimeEnv(), log: vi.fn(), error: vi.fn() },
+      chatHistories: new Map(),
+      resolveSequentialKey: getFeishuSequentialKey,
+      resolveDebounceText: ({ event }) => parseFeishuMessageEvent(event).content,
+      hasProcessedMessage: async () => false,
+      resolveIngressLifecycle: (data) => lifecycles.get(data),
+      handleMessage: async ({ event, preparedContent, turnAdoptionLifecycle }) => {
+        await turnAdoptionLifecycle?.onAdopted();
+        const text = preparedContent ?? parseFeishuMessageEvent(event).content;
+        started.push(text);
+        if (text.includes("first")) {
+          await active.promise;
+        }
+      },
+    });
+    const receive = (text: string, thread?: string, root?: string) => {
+      const event = createTextEvent(`evt-buffered-${text}`, `om-buffered-${text}`, text);
+      event.message.chat_type = "topic_group";
+      event.message.thread_id = thread;
+      event.message.root_id = root;
+      if (scenario === "topic-senders" && text === "second") {
+        event.sender.sender_id.open_id = "ou-other-sender";
+      }
+      if (scenario === "abandoned-fallback" && text === "second") {
+        lifecycles.set(event, abandoned.lifecycle);
+      }
+      pending.push(handler(event));
+    };
+    try {
+      receive("first", scenario === "fallback-first" ? undefined : "omt-a", "om-root-a");
+      await vi.advanceTimersByTimeAsync(10);
+      receive(
+        "second",
+        scenario === "topic-first" || scenario === "abandoned-fallback" ? undefined : "omt-a",
+        "om-root-b",
+      );
+      await vi.advanceTimersByTimeAsync(890);
+      if (scenario !== "native-roots") {
+        receive("third", scenario === "fallback-first" ? undefined : "omt-a", "om-root-a");
+      }
+      if (scenario === "abandoned-fallback") {
+        abandoned.controller.abort();
+        await abandoned.lifecycle.onAbandoned();
+      }
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(started).toHaveLength(1);
+      if (scenario === "native-roots") {
+        expect(started).toEqual(["first\nsecond"]);
+      } else {
+        expect(started).toEqual(["first"]);
+      }
+      active.resolve();
+      await vi.advanceTimersByTimeAsync(1000);
+      await Promise.all(pending);
+      if (scenario === "abandoned-fallback") {
+        expect(started).toEqual(["first", "third"]);
+        expect(abandoned.calls.adopted).not.toHaveBeenCalled();
+      } else if (scenario !== "native-roots") {
+        expect(started).toEqual(["first", "second", "third"]);
+      }
+    } finally {
+      active.resolve();
+      await vi.advanceTimersByTimeAsync(5000);
+      await Promise.all(pending);
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    {
+      name: "native topics",
+      chatType: "topic_group",
+      scope: "group_topic",
+      first: "a",
+      second: "a",
+      third: "b",
+      parallel: true,
+    },
+    {
+      name: "root fallback",
+      chatType: "group",
+      scope: "group_topic",
+      first: "a",
+      second: "a",
+      third: "b",
+      parallel: true,
+    },
+    {
+      name: "native starter without thread or root",
+      chatType: "topic_group",
+      scope: "group_topic",
+      first: "",
+      second: "a",
+      third: "b",
+      parallel: false,
+    },
+    {
+      name: "native root without thread",
+      chatType: "topic_group",
+      scope: "group_topic",
+      first: "root-only",
+      second: "a",
+      third: "b",
+      parallel: false,
+    },
+    {
+      name: "missing root and thread",
+      chatType: "group",
+      scope: "group_topic",
+      first: "",
+      second: "a",
+      third: "b",
+      parallel: false,
+    },
+    {
+      name: "fallback behind an active topic",
+      chatType: "topic_group",
+      scope: "group_topic",
+      first: "a",
+      second: "",
+      third: "a",
+      parallel: false,
+    },
+    {
+      name: "default group scope",
+      chatType: "topic_group",
+      scope: "group",
+      first: "a",
+      second: "a",
+      third: "b",
+      parallel: false,
+    },
+    {
+      name: "topic sender scope",
+      chatType: "topic_group",
+      scope: "group_topic_sender",
+      first: "a",
+      second: "a",
+      third: "a",
+      thirdSender: "ou-other-sender",
+      parallel: true,
+    },
+    {
+      name: "fallback releases on the existing timeout",
+      chatType: "topic_group",
+      scope: "group_topic",
+      first: "",
+      second: "a",
+      third: "b",
+      parallel: false,
+      settlement: "timeout",
+    },
+    {
+      name: "fallback releases after failure",
+      chatType: "topic_group",
+      scope: "group_topic",
+      first: "",
+      second: "a",
+      third: "b",
+      parallel: false,
+      settlement: "reject",
+    },
+  ] as const)("preserves FIFO and control lanes: $name", async (scenario) => {
+    vi.useFakeTimers();
+    const active = createDeferred<void>();
+    const started: string[] = [];
+    const completed: string[] = [];
+    const pending: Promise<unknown>[] = [];
+    const cfg: ClawdbotConfig = {
+      channels: { feishu: { groupSessionScope: scenario.scope } },
+    };
+    vi.spyOn(dedup, "claimUnprocessedFeishuMessage").mockImplementation(async () => ({
+      kind: "claimed",
+      handle: createClaim("topic-admission"),
+    }));
+    const channelRuntime = createPluginRuntimeMock({
+      channel: {
+        commands: { isControlCommandMessage },
+        debounce: { resolveInboundDebounceMs: () => 0, createInboundDebouncer },
+      },
+    }).channel;
+    const handler = createFeishuMessageReceiveHandler({
+      cfg,
+      channelRuntime,
+      accountId: "topic-admission",
+      runtime: { ...createNonExitingRuntimeEnv(), log: vi.fn(), error: vi.fn() },
+      chatHistories: new Map(),
+      resolveSequentialKey: getFeishuSequentialKey,
+      resolveDebounceText: ({ event }) => parseFeishuMessageEvent(event).content,
+      hasProcessedMessage: async () => false,
+      handleMessage: async ({ event, turnAdoptionLifecycle }) => {
+        await turnAdoptionLifecycle?.onAdopted();
+        const text = parseFeishuMessageEvent(event).content;
+        started.push(text);
+        if (text === "first") {
+          await active.promise;
+        }
+        completed.push(text);
+      },
+    });
+    const receive = (text: string, topic: string) => {
+      const event = createTextEvent(`evt-topic-${text}`, `om-topic-${text}`, text);
+      event.message.chat_type = scenario.chatType;
+      if (text === "third" && "thirdSender" in scenario) {
+        event.sender.sender_id.open_id = scenario.thirdSender;
+      }
+      if (topic) {
+        if (scenario.chatType === "group" || topic === "root-only") {
+          event.message.root_id = `om-${topic}`;
+        } else {
+          event.message.thread_id = `omt-${topic}`;
+        }
+      }
+      pending.push(handler(event));
+    };
+    try {
+      receive("first", scenario.first);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(started).toEqual(["first"]);
+      receive("second", scenario.second);
+      receive("third", scenario.third);
+      for (const text of ["/stop", "/btw progress?", "/status"]) {
+        receive(text, "b");
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(started).not.toContain("second");
+      expect(completed).not.toContain("first");
+      expect(started.includes("third")).toBe(scenario.parallel);
+      expect(completed).toEqual(expect.arrayContaining(["/stop", "/btw progress?", "/status"]));
+      if ("settlement" in scenario && scenario.settlement === "timeout") {
+        await vi.advanceTimersByTimeAsync(5 * 60 * 1000 - 1);
+        expect(started).not.toContain("second");
+        await vi.advanceTimersByTimeAsync(1);
+        expect(started).toEqual(expect.arrayContaining(["second", "third"]));
+        expect(completed).not.toContain("first");
+      } else if ("settlement" in scenario && scenario.settlement === "reject") {
+        active.reject(new Error("synthetic turn failure"));
+      } else {
+        active.resolve();
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.all(pending);
+      expect(completed.indexOf("second")).toBeGreaterThan(completed.indexOf("first"));
+      if (!scenario.parallel && !("settlement" in scenario)) {
+        expect(completed.indexOf("third")).toBeGreaterThan(completed.indexOf("second"));
+      }
+    } finally {
+      active.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.all(pending);
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("Feishu durable ingress debounce lifecycle", () => {
