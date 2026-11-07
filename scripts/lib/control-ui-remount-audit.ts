@@ -148,14 +148,17 @@ export function createControlUiRemountAudit() {
     setter = false,
   ) => {
     const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
-    // oxlint-disable-next-line typescript/unbound-method -- The wrapper forwards the original native receiver.
-    const original = setter ? descriptor?.set : descriptor?.value;
-    if (typeof original !== "function") {
+    if (
+      !descriptor ||
+      (setter ? typeof descriptor.set !== "function" : typeof descriptor.value !== "function")
+    ) {
       return;
     }
+    const invoke = (receiver: Node, args: unknown[]) =>
+      setter ? descriptor.set!.call(receiver, args[0]) : descriptor.value.apply(receiver, args);
     const wrapped = function (this: Node, ...args: unknown[]) {
       if (!active) {
-        return original.apply(this, args);
+        return invoke(this, args);
       }
       collect(observer.takeRecords());
       for (const node of removals(this, args)) {
@@ -164,7 +167,7 @@ export function createControlUiRemountAudit() {
         }
       }
       try {
-        return original.apply(this, args);
+        return invoke(this, args);
       } finally {
         collect(observer.takeRecords());
         pending.clear();
