@@ -1,0 +1,2 @@
+# Bind the reply source in the incomplete-answer case, as channel turns do, and assert no abandonment.
+8
