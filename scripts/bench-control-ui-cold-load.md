@@ -89,10 +89,19 @@ filters and reopens a 1,000-model picker whose rows share one synthetic image,
 checks that the images decode and selection stays unchanged, and reports image
 requests, blob reads and object URL lifetimes. Run it against a build supporting
 custom provider artwork; its instrumented timings are not performance evidence.
+The `-12` variant uses twelve models sharing the same image, separating a small
+local-provider catalog from the 1,000-model stress case. Counts describe actual
+rendered images and distinct assets, not a thousand simultaneously visible rows.
+The `provider-model-picker-artwork-open-12` and
+`provider-model-picker-artwork-reopen-12` scenarios measure decoded-image
+readiness without the blob/object-URL probe; omit `-12` for the stress catalog.
+Compare complete base/head builds with `--compare-bundle-dir`,
+`--control-bundle-dir`, and `--pairs 20` for rotated timing and A/A controls.
 
 ```sh
 node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
-  --steps provider-model-picker-artwork-cycles --engines chromium,webkit,firefox \
+  --steps provider-model-picker-artwork-cycles,provider-model-picker-artwork-cycles-12 \
+  --engines chromium,webkit,firefox \
   --viewport both --output .artifacts/provider-artwork
 ```
 
