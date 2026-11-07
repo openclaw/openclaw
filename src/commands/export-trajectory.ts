@@ -3,6 +3,7 @@ import path from "node:path";
 import { pathScope } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString, readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   resolveAgentOperationAgentId,
   resolveConfiguredAgentId,
@@ -223,12 +224,12 @@ export async function exportTrajectoryCommand(
     [
       "✅ Trajectory exported!",
       "",
-      `📦 Bundle: ${summary.displayPath}`,
-      `🧵 Session: ${summary.sessionId}`,
-      `📊 Events: ${summary.eventCount}`,
-      `🧪 Runtime events: ${summary.runtimeEventCount}`,
-      `📝 Transcript events: ${summary.transcriptEventCount}`,
-      `📁 Files: ${summary.files.join(", ")}`,
+      terminalText`📦 Bundle: ${summary.displayPath}`,
+      terminalText`🧵 Session: ${summary.sessionId}`,
+      terminalText`📊 Events: ${summary.eventCount}`,
+      terminalText`🧪 Runtime events: ${summary.runtimeEventCount}`,
+      terminalText`📝 Transcript events: ${summary.transcriptEventCount}`,
+      terminalText`📁 Files: ${summary.files.join(", ")}`,
     ].join("\n"),
   );
 }
