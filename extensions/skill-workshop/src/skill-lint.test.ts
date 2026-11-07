@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { skillWriteAdvisories } from "./skill-lint.js";
+import { skillReplacementReport, skillWriteAdvisories } from "./skill-lint.js";
 
 const skill = (description: string, body: string) =>
   `---\nname: demo\ndescription: ${description}\n---\n\n${body}\n`;
@@ -8,6 +8,12 @@ const CLEAN_BODY = "1. Run `make deploy`.\n2. Check `/healthz` returns 200.";
 
 describe("skillWriteAdvisories", () => {
   it.each([
+    [
+      "change-note",
+      /title "# Fix: retry the upload" reads as a change note/,
+      skill(CLEAN_DESCRIPTION, `# Fix: retry the upload\n\n${CLEAN_BODY}`),
+      skill(CLEAN_DESCRIPTION, `# Fixing flaky uploads\n\n${CLEAN_BODY}`),
+    ],
     [
       "description-length",
       /description is 161 bytes/,
@@ -59,5 +65,39 @@ describe("skillWriteAdvisories", () => {
       "- Never a.\n- Never b.\n- Never c.\nUPDATE: changed.",
     );
     expect(skillWriteAdvisories("", noisy)).toHaveLength(3);
+  });
+});
+
+describe("skillReplacementReport", () => {
+  const sections = (names: string[]) =>
+    names.map((name) => `## ${name}\n${"1. step\n".repeat(9)}`).join("\n");
+  const live = skill(CLEAN_DESCRIPTION, sections(["Setup", "Deploy", "Rollback", "Verify"]));
+
+  it("reports line change, removed sections, and a shrink advisory for a change-note rewrite", () => {
+    const note = skill(CLEAN_DESCRIPTION, "# Fix: rollback\n\n## Why this exists\nRetry once.");
+    expect(skillReplacementReport(live, note)).toEqual([
+      "SKILL.md body: 43 → 4 lines (-91%).",
+      'Removed sections: "## Setup", "## Deploy", "## Rollback", "## Verify".',
+      expect.stringMatching(
+        /^Advisory \(not blocking\): the new SKILL\.md body is 9% of the previous length\. Content replaces the whole file and is not merged/,
+      ),
+    ]);
+  });
+
+  it("only reports the size change for a full rewrite that keeps the procedure", () => {
+    const tightened = skill(
+      CLEAN_DESCRIPTION,
+      sections(["Setup", "Deploy", "Rollback", "Verify"]),
+    ).replaceAll("1. step\n1. step\n", "1. step\n");
+    expect(skillReplacementReport(live, tightened)).toEqual([
+      "SKILL.md body: 43 → 27 lines (-37%).",
+    ]);
+    // Headings inside code blocks are quoted material, not sections.
+    const quoted = `${live}\n\`\`\`md\n## Example\n\`\`\`\n`;
+    expect(skillReplacementReport(quoted, live)).toEqual(["SKILL.md body: 48 → 43 lines (-10%)."]);
+  });
+
+  it("has nothing to compare when there is no live SKILL.md", () => {
+    expect(skillReplacementReport("", live)).toEqual([]);
   });
 });

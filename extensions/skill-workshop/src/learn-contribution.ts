@@ -31,6 +31,7 @@ function buildDraftReviewPrompt(drafts: readonly WorkshopDraft[], focus: string)
     ...(focus ? [`User focus (JSON string): ${JSON.stringify(focus)}`] : []),
     "",
     "View each draft with skill_workshop action=view draft=<id>, and view the live skill it would change. Judge the drafts together by the method below: most are local fixes, and related drafts merge into one change.",
+    "A draft's SKILL.md replaces the live file whole. When view reports removed sections or a shrink advisory, tell the user; a draft that only describes a change becomes a patch to the live skill.",
     SKILL_LEARNING_METHOD_PROMPT,
     "Do not save anything yet. Show the user each change you would make (the skill, what changes, which drafts it uses) and each draft you would drop and why, then ask which to save.",
     "When the user answers, save the approved changes with create or patch and a short reason, discard the drafts the user approved or rejected, and leave drafts the user did not decide on for a later review.",
