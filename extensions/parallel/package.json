@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/parallel-plugin",
   "version": "2026.11.1",
-  "description": "OpenClaw Parallel web search plugin.",
+  "description": "OpenClaw Parallel web search and Decisions plugin.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"
