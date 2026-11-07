@@ -44,8 +44,32 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
   options: ChannelIngressAdmissionOptions<TRaw, TBody, TStoredPayload, TMetadata>,
 ) {
   type Queue = ChannelIngressQueue<TStoredPayload, TMetadata>;
-  // Admissions run one at a time, so this orders every row this monitor appends.
-  let lastReceivedAt = -Infinity;
+  type LaneTail = { receivedAt: number; id: string };
+  // Pending rows drain by (receivedAt, eventId), so rows that share an arrival time sort by
+  // id, and a lane's arrival order need not be its id order (group lanes mix senders' ids).
+  // Each event keeps its arrival time unless an earlier admission had a later one, or it
+  // would sort ahead of its lane's last row; then it steps 1 ms past that row. Stepped rows
+  // can run ahead of wall time, so the lane tails are read from the queue once, before the
+  // first admission, and a restart cannot let a new event overtake older rows of its lane.
+  // Admissions run one at a time. Tails behind the arrival time cannot be overtaken, so
+  // only lanes stepped ahead stay in memory.
+  let laneTails: Map<string, LaneTail> | undefined;
+  let lastArrivalAt = -Infinity;
+  const readLaneTails = async () => {
+    const queue = options.getQueue();
+    const { pending, claims } = queue.listUnsettled
+      ? await queue.listUnsettled()
+      : { pending: await queue.listPending({ limit: "all" }), claims: await queue.listClaims() };
+    const tails = new Map<string, LaneTail>();
+    for (const { laneKey, receivedAt, id } of [...pending, ...claims]) {
+      const tail = laneKey === undefined ? undefined : tails.get(laneKey);
+      if (laneKey === undefined || (tail && !sortsAfter({ receivedAt, id }, tail))) {
+        continue;
+      }
+      tails.set(laneKey, { receivedAt, id });
+    }
+    return tails;
+  };
   return async (rawEvents: readonly TRaw[], admitOptions: ChannelIngressAdmissionContext) => {
     const prepared: Array<{
       raw: TRaw;
@@ -57,15 +81,21 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
     }> = [];
     const results: ChannelIngressMonitorAdmissionResult<Awaited<ReturnType<Queue["enqueue"]>>>[] =
       [];
-    // Pending rows drain by (receivedAt, eventId), so events that share an arrival time
-    // sort by id. A later admission never ties an earlier one, and the time steps when a
-    // lane's next event would sort ahead of its previous one (group lanes mix senders'
-    // ids), so each lane drains in arrival order.
-    // Accepted edge: stepping can put rows ahead of wall time, and this monitor does not
-    // seed from the queue (Matrix does). After a restart inside that window, a new event
-    // in the same lane can drain ahead of older backlog rows. Rare and nothing is lost.
-    let arrivalAt = Math.max(admitOptions.receivedAt, lastReceivedAt + 1);
-    const lastIdByLane = new Map<string, string>();
+    try {
+      laneTails ??= await readLaneTails();
+    } catch (error) {
+      for (const raw of rawEvents) {
+        await options.onAdmissionFailure?.(raw, error);
+      }
+      throw error;
+    }
+    const arrivalAt = Math.max(admitOptions.receivedAt, lastArrivalAt);
+    lastArrivalAt = arrivalAt;
+    for (const [laneKey, tail] of laneTails) {
+      if (tail.receivedAt < arrivalAt) {
+        laneTails.delete(laneKey);
+      }
+    }
     for (const raw of rawEvents) {
       try {
         const facts = admitOptions.facts ?? (await options.inspect(raw));
@@ -73,14 +103,15 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
           results.push({ kind: "ignored" });
           continue;
         }
-        const lastId = lastIdByLane.get(facts.laneKey);
-        if (lastId !== undefined && facts.eventId < lastId) {
-          arrivalAt += 1;
-        }
-        lastIdByLane.set(facts.laneKey, facts.eventId);
+        const tail = laneTails.get(facts.laneKey);
+        const receivedAt =
+          !tail || sortsAfter({ receivedAt: arrivalAt, id: facts.eventId }, tail)
+            ? arrivalAt
+            : tail.receivedAt + 1;
+        laneTails.set(facts.laneKey, { receivedAt, id: facts.eventId });
         const transformed = await options.prepareAdmission?.(raw, {
           facts,
-          receivedAt: arrivalAt,
+          receivedAt,
           signal: options.signal,
         });
         const preparedRaw = transformed ? transformed.raw : raw;
@@ -95,7 +126,7 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
             throw new Error("Channel ingress transform changed event identity or lane");
           }
         }
-        const body = options.payload.serialize(preparedRaw, { facts, receivedAt: arrivalAt });
+        const body = options.payload.serialize(preparedRaw, { facts, receivedAt });
         const payload =
           options.payload.storage === "raw-event"
             ? ({ version: options.payload.version, rawEvent: body } as TStoredPayload) // SAFETY: raw-event codecs use this envelope.
@@ -103,7 +134,7 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
         prepared.push({
           raw: preparedRaw,
           facts,
-          receivedAt: arrivalAt,
+          receivedAt,
           payload,
           index: results.length,
           assertCurrent: transformed?.assertCurrent,
@@ -114,7 +145,6 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
         throw error;
       }
     }
-    lastReceivedAt = arrivalAt;
     if (prepared.length === 0) {
       return results;
     }
@@ -253,4 +283,13 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
     }
     return results;
   };
+}
+
+function sortsAfter(
+  row: { receivedAt: number; id: string },
+  tail: { receivedAt: number; id: string },
+) {
+  return (
+    row.receivedAt > tail.receivedAt || (row.receivedAt === tail.receivedAt && row.id > tail.id)
+  );
 }

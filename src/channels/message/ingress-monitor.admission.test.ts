@@ -106,26 +106,26 @@ describe("channel ingress monitor admission", () => {
     },
   );
 
-  it("keeps each lane in arrival order when event ids do not sort that way", async () => {
+  it("keeps each lane in arrival order across a restart when event ids do not sort that way", async () => {
     const queue = createQueue();
-    const monitor = createMonitor(queue, {});
+    const first = createMonitor(queue, {});
+    // Group lanes mix senders, so a lane's arrival order need not be its id order.
+    await first.admitBatch([{ id: "sender-b:1" }, { id: "sender-a:2" }], { receivedAt: 1_000 });
+    await first.stop();
+    const restarted = createMonitor(queue, {});
     try {
-      // Group lanes mix senders, so a lane's arrival order need not be its id order.
-      await monitor.admitBatch(
-        [{ id: "sender-b:1" }, { id: "other", lane: "lane:b" }, { id: "sender-a:2" }],
-        {
-          receivedAt: 1_000,
-        },
-      );
-      await monitor.admit({ id: "sender-a:0" }, { receivedAt: 1_000 });
+      await restarted.admit({ id: "sender-a:0" }, { receivedAt: 1_000 });
+      await restarted.admit({ id: "other", lane: "lane:b" }, { receivedAt: 1_000 });
       const pending = await queue.listPending({ limit: "all" });
-      expect(pending.filter((row) => row.laneKey === "lane:a").map((row) => row.id)).toEqual([
-        "sender-b:1",
-        "sender-a:2",
-        "sender-a:0",
+      // Only lane:a steps; the other lane keeps its arrival time.
+      expect(pending.map((row) => [row.id, row.receivedAt])).toEqual([
+        ["other", 1_000],
+        ["sender-b:1", 1_000],
+        ["sender-a:2", 1_001],
+        ["sender-a:0", 1_002],
       ]);
     } finally {
-      await monitor.stop();
+      await restarted.stop();
     }
   });
 
