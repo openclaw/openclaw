@@ -5,6 +5,7 @@ import {
 import {
   buildPollResponseContent,
   isPollStartType,
+  ORG_POLL_RESPONSE,
   parsePollStart,
   type PollStartContent,
 } from "../poll-types.js";
@@ -80,7 +81,7 @@ export async function voteMatrixPoll(
     const maxSelections = parsed.maxSelections;
 
     const content = buildPollResponseContent(pollId, answerIds);
-    const eventId = await client.sendEvent(resolvedRoom, "m.poll.response", content);
+    const eventId = await client.sendEvent(resolvedRoom, ORG_POLL_RESPONSE, content);
     return {
       eventId: eventId ?? null,
       roomId: resolvedRoom,

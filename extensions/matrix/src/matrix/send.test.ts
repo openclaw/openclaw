@@ -968,7 +968,7 @@ describe("editMessageMatrix mentions", () => {
 });
 
 describe("sendPollMatrix mentions", () => {
-  it("adds m.mentions for poll fallback text", async () => {
+  it("sends an MSC3381 poll with fallback mentions", async () => {
     await sendPollMatrix(
       "room:!room:example",
       { question: "@room lunch with @alice:example.org?", options: ["yes", "no"] },
@@ -979,7 +979,7 @@ describe("sendPollMatrix mentions", () => {
     );
 
     expect(mockCallArg(sendEvent, "sendEvent", 0)).toBe("!room:example");
-    expect(mockCallArg(sendEvent, "sendEvent", 1)).toBe("m.poll.start");
+    expect(mockCallArg(sendEvent, "sendEvent", 1)).toBe("org.matrix.msc3381.poll.start");
     const content = requireRecord(mockCallArg(sendEvent, "sendEvent", 2), "poll start content");
     expect(content["m.mentions"]).toEqual({ room: true, user_ids: ["@alice:example.org"] });
   });
@@ -1007,7 +1007,7 @@ describe("voteMatrixPoll", () => {
       optionIndex: 2,
     });
 
-    expect(sendEvent).toHaveBeenCalledWith("!room:example", "m.poll.response", {
+    expect(sendEvent).toHaveBeenCalledWith("!room:example", "org.matrix.msc3381.poll.response", {
       "m.poll.response": { answers: ["a2"] },
       "org.matrix.msc3381.poll.response": { answers: ["a2"] },
       "m.relates_to": {
