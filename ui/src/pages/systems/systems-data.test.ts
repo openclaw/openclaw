@@ -119,19 +119,37 @@ function setup(...responses: unknown[]) {
   return { request, load: (signal?: AbortSignal) => loadSystemsInventory(gateway, { signal }) };
 }
 
-it("loads canonical membership without starting optional resource reads", async () => {
-  const { request, load } = setup({ environments });
+it("loads the existing read contracts and does not create a second session inventory", async () => {
+  const { request, load } = setup({ environments }, { nodes: inventory.nodes }, systemInfo);
   const controller = new AbortController();
   expect(await load(controller.signal)).toEqual({
-    environments,
-    nodes: [],
-    gatewaySystemInfo: null,
-    gatewaySampledAtMs: null,
-    errors: {},
+    ...inventory,
+    gatewaySampledAtMs: expect.any(Number),
   });
   expect(
     request.mock.calls.map(([method, params, options]) => [method, params, options?.signal]),
-  ).toEqual([["environments.list", { includeDesktopSetup: true }, controller.signal]]);
+  ).toEqual([
+    ["environments.list", { includeDesktopSetup: true }, controller.signal],
+    ["node.list", {}, controller.signal],
+    ["system.info", {}, expect.any(AbortSignal)],
+  ]);
+});
+
+it("keeps canonical inventory when auxiliary resource reads fail, with visible errors", async () => {
+  const { load } = setup(
+    { environments },
+    new Error("Node inventory denied"),
+    new Error("System info unavailable"),
+  );
+  expect(await load()).toMatchObject({
+    environments,
+    nodes: [],
+    gatewaySystemInfo: null,
+    errors: {
+      nodes: expect.stringContaining("Node inventory denied"),
+      systemInfo: expect.stringContaining("System info unavailable"),
+    },
+  });
 });
 
 it("propagates inventory failure rather than synthesizing a successful list from nodes", async () => {

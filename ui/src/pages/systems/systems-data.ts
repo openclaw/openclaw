@@ -6,13 +6,10 @@ import type {
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
-export type SystemsInventory = {
-  environments: EnvironmentSummary[];
-  nodes: NodeListNode[];
-  gatewaySystemInfo: SystemInfoResult | null;
-  gatewaySampledAtMs: number | null;
-  errors: { nodes?: string; systemInfo?: string };
-};
+import { formatUiError } from "../../lib/format-error.ts";
+import { readSystemInfo } from "../../lib/system-info.ts";
+
+export type SystemsInventory = NonNullable<Awaited<ReturnType<typeof loadSystemsInventory>>>;
 
 type SystemsSessionRelation = {
   // These are recorded bindings, not proof that a model turn ran on the host.
@@ -27,27 +24,39 @@ export type SystemsInventoryRow = {
   sessions: SystemsSessionRelation[];
 };
 
-/** The page owner schedules and publishes this canonical membership read. */
+/** The route owns refresh scheduling and publication of this snapshot. */
 export async function loadSystemsInventory(
   gateway: ApplicationGateway,
-  options: { signal?: AbortSignal },
-): Promise<SystemsInventory | undefined> {
+  options: { signal?: AbortSignal; fresh?: boolean },
+) {
   const client = gateway.snapshot.client;
   if (!client) {
     return undefined;
   }
-  // Only this list owns membership. Optional measurements load independently in the page owner.
-  const inventory = await client.request<EnvironmentsListResult>(
-    "environments.list",
-    { includeDesktopSetup: true },
-    { signal: options.signal },
-  );
+  const requestOptions = { signal: options.signal };
+  const [inventory, nodes, systemInfo] = await Promise.allSettled([
+    client.request<EnvironmentsListResult>(
+      "environments.list",
+      { includeDesktopSetup: true },
+      requestOptions,
+    ),
+    client.request<{ nodes: NodeListNode[] }>("node.list", {}, requestOptions),
+    readSystemInfo(gateway, options.signal, { fresh: options.fresh }),
+  ]);
+  // Never rebuild inventory from auxiliary node reads: that would resurrect cloud-owned
+  // pairings deliberately suppressed by environments.list and hide inventory failures.
+  if (inventory.status === "rejected") {
+    throw inventory.reason;
+  }
   return {
-    environments: inventory.environments,
-    nodes: [],
-    gatewaySystemInfo: null,
-    gatewaySampledAtMs: null,
-    errors: {},
+    environments: inventory.value.environments,
+    nodes: nodes.status === "fulfilled" ? nodes.value.nodes : [],
+    gatewaySystemInfo: systemInfo.status === "fulfilled" ? systemInfo.value.value : null,
+    gatewaySampledAtMs: systemInfo.status === "fulfilled" ? systemInfo.value.at : null,
+    errors: {
+      ...(nodes.status === "rejected" ? { nodes: formatUiError(nodes.reason) } : {}),
+      ...(systemInfo.status === "rejected" ? { systemInfo: formatUiError(systemInfo.reason) } : {}),
+    },
   };
 }
 

@@ -167,38 +167,6 @@ async function mount(controller: Systems, presented = () => true) {
 }
 
 describe("Systems workspace", () => {
-  it("shows the device inventory while Gateway telemetry is pending", async () => {
-    const telemetry = createDeferred<SystemInfoResult>();
-    const { controller, request } = harness();
-    const respond = request.getMockImplementation()!;
-    request.mockImplementation((method, params, options) => {
-      if (method === "system.info") {
-        return telemetry.promise;
-      }
-      if (method === "node.list") {
-        return Promise.reject(new Error("Node telemetry unavailable"));
-      }
-      return respond(method, params, options);
-    });
-    const { page, sidebar } = await mount(controller);
-    expect(sidebar.textContent).toContain("Cloud worker");
-    expect(text(page, ".systems-heading h2")).toBe("Gateway");
-    expect(text(page, ".systems-no-telemetry")).toBe("Loading…");
-    controller.select(worker.id);
-    await waitForSolid(() => expect(text(page, ".systems-heading h2")).toBe("Cloud worker"));
-    expect(text(page, ".systems-no-telemetry")).toBe(
-      "This device hasn’t reported resource statistics.",
-    );
-    controller.select(host.id);
-    telemetry.reject(new Error("Gateway telemetry unavailable"));
-    await waitForSolid(() =>
-      expect(text(page, ".systems-no-telemetry")).toBe("Gateway telemetry unavailable"),
-    );
-    request.mockImplementation(respond);
-    await controller.refreshTelemetry();
-    await waitForSolid(() => expect(page.querySelector(".systems-metrics")).not.toBeNull());
-  });
-
   const cloudWorker: NonNullable<EnvironmentSummary["worker"]> = {
     providerId: "crabbox",
     profileId: "standard",
