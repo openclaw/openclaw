@@ -684,3 +684,14 @@ it("retains recovery files when publication and rollback both fail", async () =>
     fs.stat(path.join(checkoutDir, recoveryDirs[0]!, "repository", ".git")),
   ).resolves.toBeDefined();
 });
+
+it("refuses to adopt a checkout that appeared after fresh relocation admission", async () => {
+  await fs.mkdir(path.join(checkoutDir, ".git"), { recursive: true });
+  await writeFixtureJson(path.join(checkoutDir, "package.json"), { name: "openclaw" });
+  await fs.writeFile(path.join(checkoutDir, "user.marker"), "keep\n");
+  await expect(checkout(checkoutDir, { requireFresh: true })).rejects.toThrow(
+    "changed after relocation admission",
+  );
+  expect(runCommandWithTimeout).not.toHaveBeenCalled();
+  await expectFile(checkoutDir, "user.marker", "keep\n");
+});

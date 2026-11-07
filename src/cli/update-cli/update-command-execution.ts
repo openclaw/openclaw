@@ -205,11 +205,10 @@ export async function executeMutableUpdate(
     return { ...context, runId, executorFence, inputHash };
   };
   const originalRecovery = () => readOriginalUpdateRecovery(params, updateStepTimeoutMs);
+  const gitInstallRoot = params.gitRelocation?.directory ?? resolveGitInstallDir();
   const gitMutationRoots =
     params.updateInstallKind === "git"
-      ? params.switchToGit
-        ? [params.root, resolveGitInstallDir()]
-        : [params.root]
+      ? [params.root, ...(params.switchToGit ? [gitInstallRoot] : [])]
       : null;
   const stopManagedServiceBeforeMutableUpdate = async (
     mutationRoots: readonly string[] = [params.root],
@@ -439,7 +438,7 @@ export async function executeMutableUpdate(
     await waitForCurrent();
     familyAdmission.assertAdmitted();
     if (params.switchToGit && !opts.run?.sourceArtifactLock) {
-      await admitSourceUpdateArtifacts(resolveGitInstallDir(), opts.run);
+      await admitSourceUpdateArtifacts(gitInstallRoot, opts.run);
       assertExecutionCurrent();
     }
     const env = ownedManagedUpdateContext?.env ?? opts.run?.env ?? process.env;
@@ -604,13 +603,14 @@ export async function executeMutableUpdate(
           : runPackageInstallUpdate(packageUpdate),
       );
     } else {
-      const sourceRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
+      const sourceRoot = params.switchToGit ? gitInstallRoot : params.root;
       const sourceRuntimePrepared = await admitSourceUpdateArtifacts(sourceRoot, opts.run);
       assertExecutionCurrent();
       const gitUpdate: Parameters<typeof updateGitInstall>[0] = {
         ...installOptions,
         sourceRuntimePrepared,
         switchToGit: params.switchToGit,
+        gitRelocation: params.gitRelocation,
         timeoutMs: params.timeoutMs,
         channel: params.channel,
         devTarget: params.devTarget,

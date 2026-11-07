@@ -12,9 +12,7 @@ import { SqliteReadOnlyInspectionContentionError } from "../../infra/sqlite-read
 import { assessInitialUpdateSnapshotCapacity } from "../../infra/update-candidate-snapshot.js";
 import {
   channelToNpmTag,
-  DEFAULT_GIT_CHANNEL,
   EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
-  resolveEffectiveUpdateChannel,
 } from "../../infra/update-channels.js";
 import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-target.js";
 import { resolveExtendedStablePackage, resolveNpmChannelTag } from "../../infra/update-check.js";
@@ -45,12 +43,10 @@ import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
-import { VERSION } from "../../version.js";
 import { CLI_NAME } from "../cli-name.js";
 import {
   DEFAULT_PACKAGE_NAME,
   assertGlobalUpdateOwner,
-  normalizeTag,
   readPackageName,
   readPackageVersion,
   resolveGlobalManager,
@@ -70,6 +66,7 @@ import {
 import { readUpdateCandidateSource } from "./update-command-managed-context.js";
 import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
 import { inspectNpmGlobalDestination } from "./update-command-package-destination.js";
+import { prepareGitUpdateTarget } from "./update-command-relocation.js";
 import { UnreportedUpdateAdmissionOutcome, type RefuseUpdate } from "./update-command-result.js";
 import { recordUpdateCommandTarget, type prepareUpdateCommand } from "./update-command-run.js";
 import { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
@@ -250,30 +247,21 @@ export async function resolveUpdateCommandTarget(
         return undefined;
       }
 
-      const channel =
-        (opts.sourceUpdate ? DEFAULT_GIT_CHANNEL : requestedChannel) ??
-        storedChannel ??
-        (installKind === "git"
-          ? DEFAULT_GIT_CHANNEL
-          : resolveEffectiveUpdateChannel({
-              currentVersion: VERSION,
-              installKind,
-            }).channel);
-      if (channel === "extended-stable" && installKind === "git") {
-        await refuseUpdate("unsupported_git_channel");
+      const gitTarget = await prepareGitUpdateTarget({
+        ...prepared,
+        installKind,
+        root,
+        timeoutMs: updateStepTimeoutMs,
+        storedChannel,
+        sourceUpdate: Boolean(opts.sourceUpdate),
+        tag: opts.tag,
+        refuseUpdate,
+      });
+      if (!gitTarget) {
         return undefined;
       }
-      // An effective dev channel (stored or explicit) selects the git flow — the
-      // documented dev contract is a git checkout. Exception: --tag is a one-run
-      // package-target override, so it keeps a stored-dev package install on the
-      // package path; only an explicitly requested dev channel outranks it.
-      const explicitTag = normalizeTag(opts.tag);
-      const switchToGit =
-        installKind !== "git" &&
-        (requestedChannel === "dev" || (channel === "dev" && explicitTag === null));
-      const switchToPackage =
-        requestedChannel !== null && requestedChannel !== "dev" && installKind === "git";
-      updateInstallKind = switchToGit ? "git" : switchToPackage ? "package" : installKind;
+      const { switchToGit, switchToPackage, gitRelocation, explicitTag, channel } = gitTarget;
+      updateInstallKind = gitTarget.updateInstallKind;
       if (updateInstallKind !== "package") {
         root = discoveredRoot;
         managedServiceRoot = undefined;
@@ -691,6 +679,7 @@ export async function resolveUpdateCommandTarget(
         channel,
         explicitTag,
         switchToGit,
+        ...(gitRelocation ? { gitRelocation } : {}),
         switchToPackage,
         tag,
         currentVersion,

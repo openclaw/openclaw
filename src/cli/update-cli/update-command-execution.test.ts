@@ -84,6 +84,61 @@ async function runParams(root: string, kind: "package" | "git", state = root) {
 }
 
 describe("mutable update execution", () => {
+  it("admits activation artifacts from the selected relocation root", async () => {
+    await withTestDir({ prefix: "openclaw-selected-relocation-" }, async (dir) => {
+      const root = path.join(dir, "installed");
+      const stage = path.join(dir, "candidate");
+      const selected = path.join(dir, "selected");
+      const unselected = path.join(dir, "occupied-default");
+      await Promise.all([
+        fs.mkdir(root),
+        fs.mkdir(stage),
+        fs.mkdir(selected),
+        fs.mkdir(path.join(unselected, ".git"), { recursive: true }),
+        fs.mkdir(path.join(unselected, "scripts"), { recursive: true }),
+      ]);
+      await Promise.all([
+        fs.writeFile(
+          path.join(root, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+        ),
+        fs.writeFile(
+          path.join(stage, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "1.0.1" }),
+        ),
+        fs.writeFile(
+          path.join(unselected, "scripts", "stage-bundled-plugin-runtime.mts"),
+          'throw new Error("unselected checkout loaded");\n',
+        ),
+      ]);
+      mocks.runGitUpdate.mockImplementation(async (options) => {
+        const target = { schemaVersions: { state: 15, agent: 19 } };
+        await options.inspectGitTarget(target);
+        await options.validateCandidate(stage);
+        await options.beforeGitMutation(target);
+        return { ...successfulUpdate, mode: "git" };
+      });
+      const params = executionParams("git");
+      params.root = root;
+      params.switchToGit = true;
+      params.shouldRestart = false;
+      params.gitRelocation = {
+        directory: selected,
+        installTarget: {
+          manager: "npm",
+          command: "npm",
+          globalRoot: path.dirname(root),
+          packageRoot: root,
+        },
+        assertCurrent: async () => {},
+      };
+
+      const execution = await withEnvAsync({ OPENCLAW_GIT_DIR: unselected }, () => execute(params));
+
+      expect(execution?.result.status).toBe("ok");
+    });
+  });
+
   registerServiceCollectionTests();
   it.each(
     (["package", "git"] as const).flatMap((kind) =>
