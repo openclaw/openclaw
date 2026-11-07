@@ -29,9 +29,11 @@ import {
   runSqliteReadOnlyOperation,
   sqliteInspectionTimeoutError,
 } from "../infra/sqlite-readonly-worker.js";
+import { isSqliteSnapshotReuseActive } from "../infra/sqlite-snapshot-reuse.js";
 import {
   forkSqlitePrivateSnapshot,
   prepareSqliteReadOnlyLocation,
+  prepareSqliteReadOnlyLocationAwaited,
   startSqliteReadOnlyLocationAsync,
 } from "../infra/sqlite-snapshot-source.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -213,6 +215,14 @@ export async function prepareOpenClawStateReadSnapshotSource({
         } else {
           prepared = { location: pathname, cleanupAsync: async () => true };
         }
+      } else if (artifactPreserving && isSqliteSnapshotReuseActive()) {
+        prepared = await prepareSqliteReadOnlyLocationAwaited(pathname, {
+          signal: admissionSignal,
+          expectedSourceIdentity: admission.identity,
+          reuse: true,
+        });
+        // A borrowed image settles at once, so cancellation has not been observed yet.
+        admissionSignal.throwIfAborted();
       } else if (artifactPreserving) {
         // Share only the retained read producer, never a generic mutable snapshot lease.
         preparation = startSqliteReadOnlyLocationAsync(pathname, {

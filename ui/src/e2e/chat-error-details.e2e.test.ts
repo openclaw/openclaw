@@ -175,15 +175,15 @@ suite.define(() => {
       });
       const alert = page.locator(".chat-error");
       await alert.waitFor();
-      expect(await alert.locator("summary strong").textContent()).toBe(
-        "Couldn't finish this reply. Check the conversation before trying again.",
+      expect(await alert.locator(".app-toast__message").textContent()).toBe(
+        "Couldn't finish this reply.",
       );
       expect(await alert.locator("summary").textContent()).not.toContain(skillPath);
       expect(await alert.locator("summary").textContent()).not.toContain("INVALID_BUNDLE");
-      expect(await alert.getByLabel("Error details", { exact: true }).isVisible()).toBe(false);
+      expect(await alert.locator(".lazy-view-error__detail").isVisible()).toBe(false);
       expect(await page.locator(".chat-thread").textContent()).toContain(prompt);
       await alert.locator("summary").click();
-      const details = alert.getByLabel("Error details", { exact: true });
+      const details = alert.locator(".lazy-view-error__detail");
       await polledVisible(details).toBe(true);
       expect(await details.textContent()).toBe(safeError);
       await exactButton(alert, "Copy error").click();

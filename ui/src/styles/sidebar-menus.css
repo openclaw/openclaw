@@ -829,7 +829,7 @@
 .sidebar-agent-menu__agent-switch,
 .sidebar-agent-menu__create {
   flex: none;
-  min-height: 44px;
+  min-height: 36px;
   min-width: 0;
   padding: 0 !important;
   color: var(--muted) !important;
@@ -863,8 +863,8 @@
   gap: 10px;
   width: 100%;
   min-width: 0;
-  min-height: 44px;
-  padding: 8px;
+  min-height: 36px;
+  padding: 6px 8px;
 }
 
 .sidebar-agent-menu__agent-avatar {
@@ -1047,9 +1047,10 @@
 }
 
 /* Only the switcher list shrinks and scrolls; the action rows stay visible. */
+/* Agent rows: 36 tall around a 24px avatar. */
 .sidebar-agent-menu {
-  --agent-avatar-size: 28px;
-  --agent-avatar-glyph-size: 18px;
+  --agent-avatar-size: 24px;
+  --agent-avatar-glyph-size: 16px;
 }
 
 .oc-menu.sidebar-agent-menu {
@@ -1080,6 +1081,13 @@
 .oc-menu.sidebar-identity-menu {
   min-width: max(220px, var(--sidebar-identity-menu-min-width, 220px));
   max-height: calc(100dvh - 16px);
+}
+
+/* On touch the identity menu keeps compact 36px rows. */
+@media (pointer: coarse) {
+  .oc-menu.sidebar-identity-menu {
+    --menu-item-height: 36px;
+  }
 }
 
 .sidebar-identity-menu__avatar {
@@ -1156,6 +1164,8 @@
   flex: none;
   width: 28px;
   height: 28px;
+  /* The 28px hit area overhangs the 24px avatar line so the row stays 36. */
+  margin-block: -2px;
   padding: 6px;
   border: 0;
   border-radius: var(--radius-sm);
@@ -1543,4 +1553,66 @@
 
 .sidebar-identity-menu [data-value^="gateway:"] > .oc-menu-item__check {
   display: none;
+}
+
+/* OpenClaw ID uses the same columns and type scale as every sidebar menu. */
+.sidebar-openclaw-id__initial {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--bg-accent);
+  color: var(--text);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+}
+
+.sidebar-openclaw-id__status {
+  display: flex;
+  flex-shrink: 0;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 4px;
+  font-size: calc(13px * var(--control-ui-text-scale));
+}
+
+.sidebar-openclaw-id__lines {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.4;
+}
+
+.sidebar-openclaw-id__detail {
+  color: var(--muted);
+  font-size: calc(12px * var(--control-ui-text-scale));
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.sidebar-openclaw-id__pill,
+.sidebar-openclaw-id__count {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar-openclaw-id__pill {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+}
+
+.sidebar-openclaw-id__pill[data-online="true"] {
+  color: var(--ok);
+}
+
+.sidebar-openclaw-id__sign-in {
+  flex: none;
+  width: 100%;
+  margin-block: 4px;
 }
