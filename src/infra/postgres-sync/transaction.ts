@@ -97,3 +97,39 @@ export function runPostgresTransactionSync<T>(
     }
   });
 }
+
+/**
+ * Opens the read-only snapshot of runPostgresTransactionSync for a serialized worker task
+ * whose reads span awaits. The returned function ends it.
+ */
+export function beginPostgresReadOnlyTransaction(db: PostgresSqlConnection): () => void {
+  if (db.isTransaction) {
+    throw new Error("A held PostgreSQL read snapshot requires an idle connection");
+  }
+  assertPostgresOperationCurrent();
+  let closeReadScope: (() => void) | undefined;
+  const end = () => {
+    try {
+      if (db.isTransaction) {
+        db.exec("ROLLBACK");
+      }
+    } catch {
+      // An unjoinable rollback cannot leave a reusable connection behind.
+      try {
+        db.close();
+      } catch {
+        // The connection is already unusable.
+      }
+    } finally {
+      closeReadScope?.();
+    }
+  };
+  try {
+    db.exec("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+    closeReadScope = beginPostgresReadSnapshotScope(db);
+  } catch (error) {
+    end();
+    throw error;
+  }
+  return end;
+}
