@@ -59,11 +59,16 @@ the cold-owner gain. After completing the selected session, run the separate pro
 ```sh
 node --import ./scripts/tsx.mjs scripts/perf/transcript-facts-backfill.ts \
   --output .local/facts-backfill --name ten-million --label cold-comparison \
-  --compare-hydration --allocation-iterations 100
+  --session synthetic-2 --compare-hydration --baseline-tail-rows 512 \
+  --allocation-iterations 100
 ```
 
-This retains the synthetic facts in memory, alternates empty/full coverage on the
-same fixture, and restores all facts in `finally`. It runs four identical-code A/A
+This retains the synthetic facts in memory, alternates baseline/full coverage on the
+same fixture, and restores all facts in `finally`. `--baseline-tail-rows 512` retains
+the final 512 facts selected by actual active-path position in baseline arms,
+matching the recent writer window. The default zero preserves the empty baseline.
+Reports distinguish partial from empty coverage and record its fact count.
+It runs four identical-code A/A
 pairs, five AB/BA pairs, and two separate allocation AB/BA pairs. Every hydration
 opens a fresh native reader, so its connection-owned accounting cache is empty.
 Untraced timing excludes reader preparation/close. Sampled allocation and traced CPU
