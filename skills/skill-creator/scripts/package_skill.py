@@ -54,6 +54,9 @@ def package_skill(skill_path, output_dir=None):
     if not skill_md.exists():
         print(f"[ERROR] SKILL.md not found in {skill_path}")
         return None
+    if skill_md.is_symlink():
+        print("[ERROR] SKILL.md is a symlink; replace it with a regular file before packaging.")
+        return None
 
     # Run validation before packaging
     print("Validating skill...")

@@ -1,11 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, readFile, writeFile, chmod } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile, chmod } from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
-import { createGunzip } from "node:zlib";
+import { gunzipSync } from "node:zlib";
 import { expect, it } from "vitest";
 import { useTestTempDirs } from "./test-support.js";
 
@@ -88,13 +86,22 @@ it("source manifests are deterministic, content-private, and produce overlap-awa
   expect(result.coverage.uncovered).toStrictEqual([
     { start: "2026-09-28T07:00:00.000Z", end: "2026-10-01T07:00:00.000Z" },
   ]);
-  const plain = path.join(dir, "manifest.txt");
-  await pipeline(createReadStream(current.output), createGunzip(), createWriteStream(plain));
-  expect(await readFile(plain, "utf8")).not.toMatch(/same|new|added/);
+  expect(gunzipSync(await readFile(current.output)).toString()).not.toMatch(/same|new|added/);
   const summary = JSON.parse(await readFile(current.summary, "utf8"));
   expect(summary.manifest_sha256).toMatch(/^[a-f0-9]{64}$/);
   const repeated = await snapshot(dir, "current-repeat", rows.toReversed(), window);
   expect(await readFile(repeated.output)).toStrictEqual(await readFile(current.output));
+  await expect(snapshot(dir, "duplicate", [rows[0], rows[0]], window)).rejects.toThrow(
+    /Duplicate item id/,
+  );
+  const scratch = tempDirs.make("knowledge-source-missing-");
+  expect(() =>
+    run(manifestScript, ["plan", "--current", path.join(scratch, "missing.gz")], {
+      timeout: 10_000,
+      env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch },
+    }),
+  ).toThrow(/ENOENT/);
+  expect(await readdir(scratch)).toEqual([]);
 });
 
 it("newest prior observation wins independent of argument order and partial snapshots do not prove deletion", async () => {
@@ -111,16 +118,6 @@ it("newest prior observation wins independent of argument order and partial snap
   const result = await plan(dir, current.output, newer.output, older.output);
   expect(result.items.deleted).toStrictEqual([]);
   expect(result.items.unresolved_missing).toStrictEqual(["a"]);
-});
-
-it("duplicate stable IDs reject a snapshot", async () => {
-  const dir = tempDirs.make("knowledge-source-ingest-");
-  const rows = [
-    { id: "a", payload: 1 },
-    { id: "a", payload: 2 },
-  ];
-  const window = ["2026-09-01T00:00:00Z", "2026-09-02T00:00:00Z", "2026-09-02T00:00:00Z"];
-  await expect(snapshot(dir, "duplicate", rows, window)).rejects.toThrow(/Duplicate item id/);
 });
 
 const DISCRAWL_SCHEMA =
