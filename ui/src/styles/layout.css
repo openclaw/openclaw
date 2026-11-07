@@ -4395,7 +4395,7 @@ html.openclaw-native-web-chrome
 .sidebar-connection-skeleton__brand img {
   width: auto;
   height: 25.35px;
-  margin-inline-start: 0.5px;
+  margin-inline-start: 3.5px;
 }
 .sidebar-connection-skeleton__brand-dark,
 :root[data-theme-mode="light"] .sidebar-connection-skeleton__brand-light {
