@@ -139,7 +139,7 @@ export interface SessionListHost {
   toggleSessionPin(session: SidebarRecentSession): void;
   toggleSessionMenu(session: SidebarRecentSession, trigger: HTMLElement): void;
   showMoreChildren(sessionKey: string): void;
-  toggleSection(sectionId: string): void;
+  toggleSection(sectionId: string, aliases?: readonly string[]): void;
   expandedAgentId(): string;
   readNewSessionAccess(): SessionMethodAccess;
   readSessionMutationAccess(request: SessionMethodAccessRequest): SessionMethodAccess;
