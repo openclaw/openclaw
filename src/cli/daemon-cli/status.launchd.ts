@@ -14,6 +14,7 @@ type LaunchdJobDiagnostics = {
   staleUpdateLaunchdJobs?: StaleOpenClawUpdateLaunchdJob[];
   foreignLaunchdJobs?: ForeignLaunchdJob[];
   foreignLaunchdInspectionError?: string;
+  foreignLaunchdInspectionWarning?: string;
   forcedRestartSummary?: GatewayForcedRestartSummary;
 };
 
@@ -31,10 +32,13 @@ export async function gatherLaunchdJobDiagnostics(
     diagnostics.staleUpdateLaunchdJobs = stale;
   }
   try {
-    const jobs = await findForeignLaunchdJobs(env);
+    const { jobs, warning } = await findForeignLaunchdJobs(env);
     if (jobs.length) {
       diagnostics.foreignLaunchdJobs = jobs;
       diagnostics.forcedRestartSummary = readGatewayForcedRestartSummary(env);
+    }
+    if (warning) {
+      diagnostics.foreignLaunchdInspectionWarning = warning;
     }
   } catch (error: unknown) {
     diagnostics.foreignLaunchdInspectionError = formatErrorMessage(error);

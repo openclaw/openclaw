@@ -5,14 +5,17 @@ import { appendGatewayLifecycleAuditLog, resolveGatewayRestartLogPath } from "./
 import { readGatewayForcedRestartSummary, warnAboutGatewayRestartStorm } from "./restart-storm.js";
 
 const { findForeignLaunchdJobs } = vi.hoisted(() => ({
-  findForeignLaunchdJobs: vi.fn(async () => [
-    {
-      label: "ai.openclaw.test.storm",
-      keepAlive: true,
-      gatewayActions: ["restart"],
-      safeToRemove: true,
-    },
-  ]),
+  findForeignLaunchdJobs: vi.fn(async () => ({
+    jobs: [
+      {
+        label: "ai.openclaw.test.storm",
+        keepAlive: true,
+        gatewayActions: ["restart"],
+        safeToRemove: true,
+      },
+    ],
+    warning: "Foreign launchd scan incomplete: 1 of 65 candidates not inspected.",
+  })),
 }));
 
 vi.mock("./launchd-foreign-jobs.js", () => ({ findForeignLaunchdJobs }));
@@ -50,7 +53,7 @@ it("warns at the third external restart, names the likely job, and deduplicates 
   restart();
   await warnAboutGatewayRestartStorm(env, warn);
   const message =
-    /3 external CLI restarts in 10 minutes.*ai\.openclaw\.test\.storm.*openclaw doctor --fix/;
+    /3 external CLI restarts in 10 minutes.*ai\.openclaw\.test\.storm.*1 of 65 candidates not inspected.*openclaw doctor --fix/;
   expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(message));
 
   const nextStartup = vi.fn();

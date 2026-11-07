@@ -528,6 +528,10 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     );
     spacer();
   }
+  if (service.foreignLaunchdInspectionWarning) {
+    printWarning(service.foreignLaunchdInspectionWarning);
+    spacer();
+  }
   if (service.foreignLaunchdJobs?.length) {
     const shouldWarn = service.foreignLaunchdJobs.some(
       (job) => job.keepAlive || job.gatewayActions.length > 0,

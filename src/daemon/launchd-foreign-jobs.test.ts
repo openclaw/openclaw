@@ -62,13 +62,13 @@ async function addScript(contents: string, name = "validator.sh") {
 }
 
 async function expectActions(gatewayActions: string[], extra: Partial<ForeignLaunchdJob> = {}) {
-  expect(await findForeignLaunchdJobs({})).toEqual([
+  expect((await findForeignLaunchdJobs({})).jobs).toEqual([
     expect.objectContaining({ gatewayActions, safeToRemove: gatewayActions.length > 0, ...extra }),
   ]);
 }
 
 async function expectShellEnvironmentBlocked(message?: string) {
-  expect((await findForeignLaunchdJobs({}))[0], message).toMatchObject({
+  expect((await findForeignLaunchdJobs({})).jobs[0], message).toMatchObject({
     gatewayActions: [],
     safeToRemove: false,
     diagnostic: "Shell environment alters execution; left unchanged.",
@@ -84,7 +84,7 @@ async function addLifecycleJob(action = "restart", plist: boolean | "agent" = fa
       jobs.set(label, jobs.get(label)!.replace("type = Submitted", "type = LaunchAgent"));
     }
   }
-  return expectDefined((await findForeignLaunchdJobs({}))[0], "detected foreign job");
+  return expectDefined((await findForeignLaunchdJobs({})).jobs[0], "detected foreign job");
 }
 
 beforeEach(() => {
@@ -120,6 +120,18 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("foreign launchd command classification", () => {
+  it("retains inspected jobs and discloses the remainder above the candidate cap", async () => {
+    addJob(label, [cli, "gateway", "restart"]);
+    for (let index = 0; index < 64; index++) {
+      addJob(`${label}.${String(index).padStart(2, "0")}`, ["/usr/bin/true"]);
+    }
+    const scan = await findForeignLaunchdJobs({});
+    expect(scan.jobs).toHaveLength(64);
+    expect(scan.jobs[0]).toMatchObject({ label, gatewayActions: ["restart"], safeToRemove: true });
+    expect(scan.warning).toBe("Foreign launchd scan incomplete: 1 of 65 candidates not inspected.");
+    expect(operations("print")).not.toContainEqual(["print", `${target}.63`]);
+  });
+
   it.each([
     ["upgrade-2026-9-1-beta-1", [cli, "update", "--yes"], []],
     ["maintenance", ["/usr/bin/env", "PATH=/bin", cli, "gateway", "stop"], ["stop"]],
@@ -165,7 +177,7 @@ describe("foreign launchd command classification", () => {
       addJob(name, [cli, "gateway", "restart"]);
     }
     const env = { OPENCLAW_PROFILE: "work", OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.custom" };
-    expect(await findForeignLaunchdJobs(env)).toEqual([]);
+    expect(await findForeignLaunchdJobs(env)).toEqual({ jobs: [] });
     for (const name of protectedLabels) {
       expect(
         (await repairForeignLaunchdJob({ label: name } as ForeignLaunchdJob, env)).removed,
@@ -225,17 +237,17 @@ describe("foreign launchd command classification", () => {
       "gateway",
       "restart",
     ]);
-    expect(await findForeignLaunchdJobs({})).toEqual([]);
+    expect(await findForeignLaunchdJobs({})).toEqual({ jobs: [] });
   });
 
   it("leaves oversized and symlinked shell scripts unverified", async () => {
     const file = await addScript(`openclaw gateway restart\n${"#".repeat(65536)}`);
     addJob(label, ["/bin/sh", file]);
-    expect((await findForeignLaunchdJobs({}))[0]).toMatchObject({ safeToRemove: false });
+    expect((await findForeignLaunchdJobs({})).jobs[0]).toMatchObject({ safeToRemove: false });
     const link = path.join(dir, "link.sh");
     await fs.symlink(file, link);
     addJob(label, ["/bin/sh", link]);
-    expect((await findForeignLaunchdJobs({}))[0]).toMatchObject({ safeToRemove: false });
+    expect((await findForeignLaunchdJobs({})).jobs[0]).toMatchObject({ safeToRemove: false });
   });
 });
 
