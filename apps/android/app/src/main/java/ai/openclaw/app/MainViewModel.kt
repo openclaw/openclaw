@@ -3,6 +3,7 @@ package ai.openclaw.app
 import ai.openclaw.app.chat.ChatActiveRunPresentation
 import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatComposerOwner
+import ai.openclaw.app.chat.ChatHistoryPaging
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
@@ -673,6 +674,10 @@ class MainViewModel internal constructor(
   val chatTranscriptAnchor: StateFlow<ChatTranscriptAnchorState?> =
     runtimeState(initial = null) { it.chat.transcriptAnchor }
   val chatHistoryLoading: StateFlow<Boolean> = runtimeState(initial = false) { it.chat.historyLoading }
+  internal val chatHistoryPaging: StateFlow<ChatHistoryPaging> = runtimeState(initial = ChatHistoryPaging()) { it.chat.historyPaging }
+
+  internal fun loadChatHistoryPage(older: Boolean) = ensureRuntime().chat.loadHistoryPage(older)
+
   internal val chatSessionCreating: StateFlow<Boolean> = runtimeState(initial = false) { it.chat.isCreatingSession }
   val chatError: StateFlow<String?> = runtimeState(initial = null) { it.chat.errorText }
   val chatHealthOk: StateFlow<Boolean> = runtimeState(initial = false) { it.chat.healthOk }

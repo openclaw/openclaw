@@ -46,6 +46,8 @@ internal data class ChatReaderState(
   val latestUserMessageId: String? = null,
   val latestUserMessageVersion: String? = null,
   val latestContentVersion: String? = null,
+  val readingItemKey: String? = null,
+  val readingOffset: Int = 0,
 )
 
 internal fun createChatReaderStateSaver(expectedSessionKey: String? = null) =
@@ -63,6 +65,8 @@ internal fun createChatReaderStateSaver(expectedSessionKey: String? = null) =
         state.latestUserMessageVersion.orEmpty(),
         state.latestContentVersion != null,
         state.latestContentVersion.orEmpty(),
+        state.readingItemKey.orEmpty(),
+        state.readingOffset,
       )
     },
     restore = { saved ->
@@ -76,6 +80,8 @@ internal fun createChatReaderStateSaver(expectedSessionKey: String? = null) =
           latestUserMessageId = (saved[6] as String).takeIf { saved[5] as Boolean },
           latestUserMessageVersion = (saved[8] as String).takeIf { saved[7] as Boolean },
           latestContentVersion = (saved[10] as String).takeIf { saved[9] as Boolean },
+          readingItemKey = (saved.getOrNull(11) as? String)?.takeIf(String::isNotEmpty),
+          readingOffset = saved.getOrNull(12) as? Int ?: 0,
         )
       restored.takeIf { expectedSessionKey == null || it.ownerSessionKey == expectedSessionKey }
     },
@@ -201,17 +207,21 @@ internal fun rememberChatReaderScrollController(
   sessionKey: String,
   timeline: ChatTimeline,
   historyLoading: Boolean,
+  localSendAdmission: String? = null,
+  itemIndexOffset: Int = 0,
 ): ChatReaderScrollController {
-  val listState = rememberLazyListState()
+  val listState = key(sessionKey) { rememberLazyListState() }
   val scope = key(sessionKey) { rememberCoroutineScope() }
   val targetTolerancePx = with(LocalDensity.current) { 24.dp.roundToPx() }
   val currentTimeline by rememberUpdatedState(timeline)
+  val currentItemIndexOffset by rememberUpdatedState(itemIndexOffset)
   val readerStateSaver = remember(sessionKey) { createChatReaderStateSaver(sessionKey) }
   var readerState by
     rememberSaveable(sessionKey, stateSaver = readerStateSaver) {
       mutableStateOf(ChatReaderState(ownerSessionKey = sessionKey))
     }
   var isUserScrolling by remember(sessionKey) { mutableStateOf(false) }
+  var restoring by remember(sessionKey) { mutableStateOf(readerState.readingItemKey != null && readerState.followTarget == null) }
 
   val navigation =
     remember(scope) {
@@ -219,6 +229,7 @@ internal fun rememberChatReaderScrollController(
         // Explicit reading replaces the gesture; its idle must not restore following.
         // The viewport still hides Jump while the latest content remains visible.
         isUserScrolling = false
+        restoring = false
         readerState = readerState.copy(followTarget = null, hasNewerContent = true)
       }
     }
@@ -246,6 +257,7 @@ internal fun rememberChatReaderScrollController(
           // Its reader intent must still retire follow, without consuming the gesture.
           if (source == NestedScrollSource.UserInput && available.y != 0f) {
             navigation.anchors.invalidate()
+            restoring = false
             readerState = readerState.copy(followTarget = null)
             // Bring-into-view also emits UserInput; do not cancel its own reveal.
             navigation.cancelAutomatic()
@@ -263,12 +275,31 @@ internal fun rememberChatReaderScrollController(
       navigation
         .launch(this, automatic = true) {
           if (transition.animated) {
-            listState.animateScrollToItem(index)
+            listState.animateScrollToItem(index + currentItemIndexOffset)
           } else {
-            listState.scrollToItem(index)
+            listState.scrollToItem(index + currentItemIndexOffset)
           }
         }.join()
     }
+
+  // Explicit local admission resumes following; remote user turns never do.
+  LaunchedEffect(sessionKey, localSendAdmission) {
+    if (localSendAdmission != null) applyTransition(readerState.jumpToLatest(currentTimeline))
+  }
+
+  // LazyList's saver stores an index, which can point at another row after live
+  // updates during recreation. Restore a stable row key before resuming observation.
+  LaunchedEffect(sessionKey, timeline, historyLoading) {
+    if (!restoring || timeline.items.isEmpty()) return@LaunchedEffect
+    val index = timeline.items.indexOfFirst { chatTimelineItemKey(it) == readerState.readingItemKey }
+    if (index >= 0) {
+      navigation
+        .launch(this, automatic = true) {
+          listState.scrollToItem(index + currentItemIndexOffset, readerState.readingOffset)
+        }.join()
+    }
+    if (index >= 0 || !historyLoading) restoring = false
+  }
 
   // Loading only changes empty-timeline transitions. A populated-history refresh
   // must not cancel a moving scroll after its content version has been recorded.
@@ -292,26 +323,32 @@ internal fun rememberChatReaderScrollController(
         navigation.anchors.revision,
         listState.layoutInfo,
         listState.canScrollBackward || listState.canScrollForward,
-        navigation.isNavigating,
+        navigation.isNavigating || restoring,
       )
     }.collect { viewport ->
       // Observe geometry during navigation without replaying its suppressed resize later.
       val previous = previousViewport
       previousViewport = viewport
-      if (!readerState.initialized || viewport.navigating) return@collect
+      if (!readerState.initialized || viewport.navigating || restoring) return@collect
       val (scrolling, index, offset) = viewport
       val resizedToFit =
         previous != null && !previous.navigating && !previous.scrolling && previous.canScroll &&
           !viewport.canScroll && viewport.layout.totalItemsCount > 0 &&
           previous.layout.viewportSize != viewport.layout.viewportSize
       if (scrolling) {
+        val item = currentTimeline.items.getOrNull(index - currentItemIndexOffset)
+        if (item != null) readerState = readerState.copy(readingItemKey = chatTimelineItemKey(item), readingOffset = offset)
         navigation.anchors.clearReading()
         isUserScrolling = true
         readerState = readerState.copy(followTarget = null)
         return@collect
       } else if (isUserScrolling || resizedToFit) {
         isUserScrolling = false
-        readerState = readerState.onViewportChanged(index, offset, currentTimeline, targetTolerancePx)
+        readerState = readerState.onViewportChanged(index - currentItemIndexOffset, offset, currentTimeline, targetTolerancePx)
+      }
+      if (readerState.followTarget == null) {
+        val item = currentTimeline.items.getOrNull(index - currentItemIndexOffset)
+        if (item != null) readerState = readerState.copy(readingItemKey = chatTimelineItemKey(item), readingOffset = offset)
       }
       if (readerState.followTarget != null) {
         navigation.anchors.clearReading()
@@ -332,7 +369,7 @@ internal fun rememberChatReaderScrollController(
     remember(listState) {
       derivedStateOf {
         val layoutInfo = listState.layoutInfo
-        val latestItem = layoutInfo.visibleItemsInfo.firstOrNull { it.index == currentTimeline.latestContentIndex }
+        val latestItem = layoutInfo.visibleItemsInfo.firstOrNull { it.index == currentTimeline.latestContentIndex?.plus(currentItemIndexOffset) }
         latestItem?.let { it.offset < layoutInfo.viewportStartOffset } ?: listState.canScrollBackward
       }
     }
@@ -405,7 +442,7 @@ internal fun ChatReaderState.onTimelineChanged(
   }
   val hasNewUserTurn =
     timeline.latestUserMessageVersion != null && timeline.latestUserMessageVersion != latestUserMessageVersion
-  if (hasNewUserTurn) {
+  if (hasNewUserTurn && followTarget != null) {
     // A live turn follows the bottom so the reply streams into view (parity with the
     // iOS reader, #108692/#108693). Re-pinning the prompt here would hide the reply
     // below the fold behind a jump pill.
@@ -447,7 +484,7 @@ internal fun ChatReaderState.onViewportChanged(
 
 internal fun ChatReaderState.jumpToLatest(timeline: ChatTimeline): ChatReaderTransition =
   ChatReaderTransition(
-    state = copy(followTarget = ChatScrollFollowTarget.LatestContent, hasNewerContent = false),
+    state = copy(followTarget = ChatScrollFollowTarget.LatestContent, hasNewerContent = false, readingItemKey = null, readingOffset = 0),
     scrollIndex = timeline.latestContentIndex ?: timeline.readAnchorIndex,
     animated = true,
   )
