@@ -8,7 +8,6 @@ import {
   validateWizardStartParams,
   validateWizardStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { OnboardOptions } from "../../commands/onboard-types.js";
 import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
 import { runOutsidePluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { createNonExitingRuntime, ExitError, type RuntimeEnv } from "../../runtime.js";
@@ -18,6 +17,7 @@ import {
   WizardSession,
   type WizardStep,
 } from "../../wizard/session.js";
+import type { SetupWizardOptions } from "../../wizard/setup.types.js";
 import { canAccessWizardSession } from "../server-wizard-sessions.js";
 import { formatForLog } from "../ws-log.js";
 import { startGatewayWizard, whenAdmittedWizardSessionSettled } from "./setup-admission.js";
@@ -25,7 +25,7 @@ import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./typ
 import { assertValidParams, defineValidatedGatewayHandler, type Validator } from "./validation.js";
 
 export type SetupWizardRunner = (
-  opts: OnboardOptions,
+  opts: SetupWizardOptions,
   runtime: RuntimeEnv,
   prompter: WizardPrompter,
 ) => Promise<void>;
@@ -110,9 +110,14 @@ export const wizardHandlers: GatewayRequestHandlers = {
     }
     const sessionId = randomUUID();
     const flow = params.flow ?? "setup";
-    const createSession = () =>
-      new WizardSession((prompter, _signal, wizardSession) =>
-        runHostedWizard((runtime) =>
+    const createSession = (assertCurrent: () => void) =>
+      new WizardSession((prompter, _signal, wizardSession) => {
+        // Durable effects need a live session and the starting operator's retained grant.
+        const assertPersistentEffectCurrent = () => {
+          wizardSession.assertPersistentEffectCurrent();
+          assertCurrent();
+        };
+        return runHostedWizard((runtime) =>
           flow === "channels"
             ? context.channelWizardRunner(
                 {
@@ -121,8 +126,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
                   // Durable effects (plugin installs, config commit) must finish
                   // even if the client cancels mid-write.
                   beforePersistentEffect: async () => wizardSession.lockCancellation(),
-                  assertPersistentEffectCurrent: () =>
-                    wizardSession.assertPersistentEffectCurrent(),
+                  assertPersistentEffectCurrent,
                 },
                 runtime,
                 prompter,
@@ -132,12 +136,17 @@ export const wizardHandlers: GatewayRequestHandlers = {
                   mode: params.mode,
                   workspace: params.workspace,
                   installDaemon: params.installDaemon,
+                  // Setup continues after its channel credential commit, so cancellation
+                  // stays locked only until the next prompt.
+                  beforePersistentEffect: async () =>
+                    wizardSession.lockCancellationForPreparation(),
+                  assertPersistentEffectCurrent,
                 },
                 runtime,
                 prompter,
               ),
-        ),
-      );
+        );
+      });
     await startGatewayWizard({
       request,
       sessionId,

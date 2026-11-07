@@ -47,6 +47,8 @@ export async function runHostedSetup(params: {
   label: string;
   runtime?: RuntimeEnv;
   beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>;
+  /** Checked by the config writer right before publication; the commit can wait on locks. */
+  assertBeforePublish?: () => void;
   afterWrite?: import("../config/runtime-snapshot.js").ConfigWriteAfterWrite;
   run: (context: { baseConfig: OpenClawConfig; runtime: RuntimeEnv }) => Promise<
     | {
@@ -77,6 +79,9 @@ export async function runHostedSetup(params: {
       const committed = await writeWizardConfigFile(result.nextConfig, {
         allowConfigSizeDrop: false,
         baseHash: snapshot.hash,
+        ...(params.assertBeforePublish
+          ? { writeOptions: { assertBeforePublish: params.assertBeforePublish } }
+          : {}),
         ...(params.afterWrite ? { afterWrite: params.afterWrite } : {}),
       });
       await result.afterWrite?.(committed.path);
@@ -97,24 +102,34 @@ export async function runHostedChannelSetup(
     label: "Channel setup",
     runtime,
     beforePersistentApply,
+    assertBeforePublish: assertPersistentEffectCurrent,
     run: async ({ baseConfig, runtime: setupRuntime }) => {
+      const beforePersistentEffect = async () => await beforePersistentApply(setupRuntime);
       const channelSetup = createChannelSetupHooks({
         runtime: setupRuntime,
-        beforePersistentEffect: async () => await beforePersistentApply(setupRuntime),
+        beforePersistentEffect,
       });
+      const nextConfig = await setupChannels(baseConfig, setupRuntime, prompter, {
+        initialSelection: [channel],
+        forceAllowFromChannels: [channel],
+        allowIMessageInstall: true,
+        allowSignalInstall: true,
+        deferStatusUntilSelection: true,
+        quickstartDefaults: true,
+        skipDmPolicyPrompt: true,
+        skipConfirm: true,
+        beforePersistentEffect,
+        ...(assertPersistentEffectCurrent ? { assertPersistentEffectCurrent } : {}),
+        onPostWriteHook: channelSetup.onPostWriteHook,
+      });
+      const { storeChannelSetupCredentials } =
+        await import("../commands/channels/plugin-config-persistence.js");
       return {
-        nextConfig: await setupChannels(baseConfig, setupRuntime, prompter, {
-          initialSelection: [channel],
-          forceAllowFromChannels: [channel],
-          allowIMessageInstall: true,
-          allowSignalInstall: true,
-          deferStatusUntilSelection: true,
-          quickstartDefaults: true,
-          skipDmPolicyPrompt: true,
-          skipConfirm: true,
-          beforePersistentEffect: async () => await beforePersistentApply(setupRuntime),
-          ...(assertPersistentEffectCurrent ? { assertPersistentEffectCurrent } : {}),
-          onPostWriteHook: channelSetup.onPostWriteHook,
+        nextConfig: await storeChannelSetupCredentials({
+          cfg: nextConfig,
+          previousConfig: baseConfig,
+          beforePersistentEffect,
+          assertCurrent: assertPersistentEffectCurrent,
         }),
         afterWrite: async (configPath) => await channelSetup.runPostWriteHooks(configPath),
       };

@@ -5,6 +5,7 @@ import type {
 } from "../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   sanitizeWizardStepForClient,
@@ -255,6 +256,8 @@ export class ChatWizardHost {
   private bridge: ActiveWizardBridge | null = null;
   private awaitingSetupChannel = false;
   private lastSensitiveChannel: string | undefined;
+  /** Live authority of the Gateway request whose turn is advancing the wizard, if any. */
+  private answeringAuthority: (() => boolean) | undefined;
 
   constructor(
     private readonly options: {
@@ -265,6 +268,15 @@ export class ChatWizardHost {
 
   get active(): boolean {
     return this.bridge !== null;
+  }
+
+  /** Binds a queued turn to the Gateway request that queued it; durable effects act for it. */
+  forTurn<T>(run: () => Promise<T>): () => Promise<T> {
+    const authority = getPluginRuntimeGatewayRequestScope()?.hasCurrentClientAuthority;
+    return async () => {
+      this.answeringAuthority = authority;
+      return await run();
+    };
   }
 
   get sensitiveInputPending(): boolean {
@@ -499,6 +511,9 @@ export class ChatWizardHost {
         owner.assertPersistentEffectCurrent();
         if (this.bridge?.session !== owner) {
           throw new Error("Setup session is no longer active");
+        }
+        if (this.answeringAuthority?.() === false) {
+          throw new Error("Gateway caller authority is no longer active.");
         }
       };
       const result = await params.run(prompter, assertPersistentEffectCurrent);

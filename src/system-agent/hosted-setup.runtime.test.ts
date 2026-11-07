@@ -3,6 +3,7 @@ import { assert, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { SetupChannelsOptions } from "../channels/plugins/setup-wizard-types.js";
 import { committedConfigFiles as hostedConfigFiles } from "../commands/committed-config.test-support.js";
+import { coerceSecretRef } from "../config/types.secrets.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
   bindPluginMetadataSnapshotCache,
@@ -17,10 +18,12 @@ import {
 } from "../plugins/plugin-lifecycle-lease.js";
 import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   getPluginRuntimeGenerationRegistry,
   withPluginRuntimeGenerationScope,
 } from "../plugins/runtime/generation-scope.js";
+import { listSecretStoreEntries, readSecretStoreValue } from "../secrets/store/secret-store.js";
 import * as audit from "./audit.js";
 import {
   createChatEngine,
@@ -463,15 +466,84 @@ describe("SystemAgentChatEngine runtime", () => {
       if (revisionConflict) {
         expect(stopped.text).toContain("configuration changed during channel setup");
         const [config, options] = mocks.writeWizardConfigFile.mock.calls[0] ?? [];
-        expect(config).toMatchObject({ channels: { telegram: { botToken: "123:abc" } } });
+        expect(config).toMatchObject({
+          channels: {
+            telegram: {
+              botToken: { source: "store", provider: "default", id: expect.any(String) },
+            },
+          },
+        });
         expect(options).toMatchObject({ baseHash: "base-hash" });
+        const written: OpenClawConfig = config;
+        const ref = coerceSecretRef(written.channels?.telegram?.botToken);
+        expect(await readSecretStoreValue({ scope: { kind: "team" }, name: ref!.id })).toEqual({
+          ok: true,
+          value: "123:abc",
+        });
         expect(currentConfig).toEqual(changedConfig);
       } else if (phase === "write") {
         expect(mocks.writeWizardConfigFile).not.toHaveBeenCalled();
+        expect(await listSecretStoreEntries({ scope: { kind: "team" } })).toEqual([]);
       } else {
         expect(mocks.writeWizardConfigFile).toHaveBeenCalledOnce();
         expect(hook.run).not.toHaveBeenCalled();
       }
+    },
+  );
+
+  it.each(["store write", "config publication"] as const)(
+    "rejects a hosted channel answer whose client loses authority before the %s",
+    async (phase) => {
+      useTempStateDir();
+      const baseConfig = channelConfig();
+      useSetupConfig(baseConfig, "base-hash");
+      let current = true;
+      useChannelSetup(async (config, prompter) => {
+        const token = await prompter.text({ message: "Bot token" });
+        if (phase === "store write") {
+          current = false;
+        }
+        return { ...config, channels: { ...config.channels, telegram: { botToken: token } } };
+      });
+      const published: OpenClawConfig[] = [];
+      mocks.writeWizardConfigFile.mockImplementation(
+        async (
+          config: OpenClawConfig,
+          opts: { writeOptions?: { assertBeforePublish?: () => void } },
+        ) => {
+          // Authority ends while the commit waits; the writer admits the requester at publication.
+          current = false;
+          opts.writeOptions?.assertBeforePublish?.();
+          published.push(config);
+          return hostedConfigFiles.write(config);
+        },
+      );
+      const configFixture = await createInferenceConfigFixture(baseConfig);
+      const snapshot = configFixture.snapshot;
+      mocks.readConfigFileSnapshot.mockImplementation(configFixture.read);
+      const engine = createEngine({
+        surface: "gateway",
+        verifiedInference: await createAmbientVerifiedBinding(
+          snapshot.runtimeConfig ?? snapshot.config,
+          snapshot,
+        ),
+      });
+      const asAnsweringClient = async <T>(run: () => Promise<T>) =>
+        await withPluginRuntimeGatewayRequestScope(
+          { isWebchatConnect: () => false, hasCurrentClientAuthority: () => current },
+          run,
+        );
+      expect((await asAnsweringClient(() => engine.handle("connect telegram"))).text).toContain(
+        "Bot token",
+      );
+
+      const stopped = await asAnsweringClient(() => engine.handle("123:abc"));
+
+      expect(stopped.text).toContain("Gateway caller authority is no longer active.");
+      expect(published).toEqual([]);
+      expect(await listSecretStoreEntries({ scope: { kind: "team" } })).toHaveLength(
+        phase === "store write" ? 0 : 1,
+      );
     },
   );
 });
@@ -598,7 +670,11 @@ describe("hosted channel post-write hooks", () => {
     expect(reply.text).toContain("matrix is configured");
     expect(mocks.writeWizardConfigFile).toHaveBeenCalledWith(
       { channels: { matrix: { enabled: true } } },
-      { allowConfigSizeDrop: false, baseHash: "hook-base-hash" },
+      {
+        allowConfigSizeDrop: false,
+        baseHash: "hook-base-hash",
+        writeOptions: { assertBeforePublish: expect.any(Function) },
+      },
     );
     expect(hook.run).toHaveBeenCalledWith({
       cfg: committed,
