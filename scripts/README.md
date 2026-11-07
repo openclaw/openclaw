@@ -331,6 +331,54 @@ NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-contr
   --bundle-dir dist/control-ui --pairs 10 --viewport both
 ```
 
+Idle scenarios default to a 30-second Node-side measurement window. Use
+`--idle-duration-ms` for a bounded diagnostic or rotated comparison; the manifest
+records the chosen duration. `--idle-warmup-ms` independently controls settlement
+before measurement. Normalize costs using the measured interval when comparing
+window lengths.
+
+Giant completed runs are opt-in: `--steps completed-direct-run-2000-open,completed-direct-run-2000-scroll,completed-single-run-2000-expand,completed-single-run-2000-scroll`.
+Replace `2000` with `400` for the scaling control. These reuse the cold-load
+long-session fixture and desktop 61-frame scroll trajectory in both engines. Open checks
+the complete cached message count and ready tail; dashboard expansion checks the
+first output; scrolling checks both endpoint entries, zero blank frames and a
+two-pixel endpoint tolerance. Evidence includes fragment/DOM counts and geometry.
+Use `--compare-bundle-dir` and `--control-bundle-dir` for candidate and A/A triplets;
+keep `--trace` attribution separate from untraced timing. These synthetic sweeps
+do not measure native reader scroll latency.
+
+Configuration censuses use the same scenarios and rotate configurations within
+each pair. `--configurations all` selects every built-in theme in light and dark,
+`zh-CN`, `ar`, `de`, device scale 2 and 3, reduced motion, and forced colors.
+Select individual axes with `default,theme:crt:dark,locale:ar,scale:2,reduced-motion,forced-colors`;
+add `control` for a separately named default A/A sample. Theme and locale are
+installed before boot in both saved settings and the synthetic Gateway preferences.
+Browser locale/media and device scale are recorded alongside the resolved app
+configuration; unsupported forced-color emulation is skipped, never counted as proof.
+Each observation records resource request timing/bytes, loaded font faces, computed
+colors/font/direction, and CLS (null where the engine lacks Layout Instability).
+Boot reports both transcript readiness and configuration readiness so a late
+translation wave cannot disappear behind an early English render. Use
+`--steps cold-boot,warm-boot --network-profiles rtt-100ms` to inspect request waves.
+One-pair screens only identify candidates: confirm deviations over 20% with ten
+rotated pairs plus `control`, and fixes with twenty pairs within the same configuration.
+
+Every run counts `ResizeObserver loop` errors per observation and summary cell,
+including untraced streaming runs. The report shows error totals and affected
+observations; any browser error fails the observation and command even when its
+completed timing interval remains in the summary. Use `--observer-origins` for a
+separate diagnostic run that records recent observer creation stacks and targets.
+
+Native clipboard measurements use `--steps chat-actions-native-paste-text,chat-actions-native-paste-image`.
+They paste a 256 KiB draft or a synthetic 2048×2048 PNG through the browser's
+clipboard and keyboard shortcut, and require trusted paste events. Evidence
+separates keydown-to-paste dispatch, paste-to-ready-frame, and their combined
+latency; a ready animation frame is not a paint timestamp. Clipboard preparation
+and image encoding happen before measurement. Use Chromium at `--cpu-throttle 1`
+and `4`; WebKit supports only native CPU speed.
+Generic CPU counters cover the whole scenario, including work before the paste
+keypress. Use a separate trace to attribute CPU within the native input interval.
+
 `--pages` selects the route-catalog census: first visit after boot, each page's
 primary interaction, and route leave. The manifest records redirects,
 unavailable states and pages excluded for an active campaign; none silently
@@ -346,6 +394,17 @@ Measure first-use costs separately with
 These explicit steps are excluded from normal `--pages` runs. Keep first-open
 results separate from route visits and warm interactions; the Terminal step
 creates its session before timing ten typed characters and submission.
+Terminal has direct-document cases at
+`--steps page-terminal-cold-visit,page-terminal-cold-attach-visit`.
+They navigate directly to Terminal without loading an origin route or settling
+preloads first. The first measures its initial Sessions picker; the second
+attaches a synthetic shell and waits for its replay banner in a visible canvas.
+Readiness is sampled in the new document over two frames, from navigation start.
+The banner proves glyph drawing and canvas visibility, not compositor paint or
+real PTY latency. The `page-terminal-first-create-visit` and
+`page-terminal-first-attach-visit` cases instead start from a settled origin;
+the create case includes selecting the automatically created shell from the picker.
+`page-terminal-first-output-revisit` measures restored output on a warm return.
 The Memory Import action now reviews a ten-file collection before deselecting
 it, so its results are not directly comparable with older deselect-only timings.
 Virtualized inventories use their logical row count for readiness, including
@@ -356,7 +415,7 @@ metrics are null. DOM counts are collected after the measured interval so the
 census does not add list-size-dependent work to timings. Use a separate `--trace` pass for WebKit script/style/layout
 attribution; its durations are elapsed time, never action CPU. One-pair sweeps
 rank candidates; performance claims require the paired runs and controls below.
-Every phase starts after New Session reports route-ready. Route-ready time ends
+Default page phases start after New Session reports route-ready. Route-ready time ends
 after the loaded page is visible for two animation frames;
 wall time additionally includes driver round trips and assertions. Page targets
 are a longest task of 50 ms at 1x or 200 ms at 4x, zero CLS, and WebKit ready time

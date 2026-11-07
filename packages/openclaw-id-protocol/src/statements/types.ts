@@ -1,5 +1,6 @@
 // Signed statement bodies (owner-key spec section 3). Field names are the wire names.
 import type { Ed25519PublicKey, IrohEndpointKey, KeyFingerprint } from "../keys.js";
+import type { StatementVersion } from "../version.js";
 
 /** Statement types. The type string is part of the signed domain-separation prefix. */
 export const STATEMENT_TYPES = [
@@ -10,6 +11,7 @@ export const STATEMENT_TYPES = [
   "Revocation",
   "MembershipSnapshot",
   "InviteRedemption",
+  "RootReset",
 ] as const;
 
 /** One of {@link STATEMENT_TYPES}. */
@@ -19,9 +21,9 @@ export type StatementType = (typeof STATEMENT_TYPES)[number];
 export type UnixSeconds = number;
 
 /**
- * The only root epoch in v1-draft. A claw's root never changes (owner reset is out of scope;
- * see OCF-319), so `root_epoch` is a constant: statements carry it, and anything else is
- * malformed.
+ * The only root epoch in v1-draft. There are no root epochs: an owner reset replaces the root
+ * without one (RootReset), so `root_epoch` is a constant: statements carry it, and anything
+ * else is malformed.
  */
 export const ROOT_EPOCH = 1;
 
@@ -164,6 +166,18 @@ export type SnapshotOwnerDevice = { device_pub: Ed25519PublicKey; caps: OwnerCap
 export type SnapshotMember = { account_id: string; role: MemberRole; peer_keys: IrohEndpointKey[] };
 
 /**
+ * Protocol versions a Gateway accepts for new input, per versioned surface, ascending. Clients
+ * pick the highest version they share with it (`selectVersion`). The tunnel is not listed: its
+ * version is negotiated by QUIC ALPN inside the handshake K_srv authenticates.
+ */
+export type ProtocolVersions = {
+  /** Signed statement envelope versions. */
+  statement: number[];
+  /** ClawDescriptor versions. */
+  descriptor: number[];
+};
+
+/**
  * Gateway-signed (K_gw) mirror of the claw's current allowlist for Discovery listing and relay
  * admission. Not an authority, and it carries no history: a removed key is simply absent.
  */
@@ -179,6 +193,12 @@ export type MembershipSnapshotBody = {
   /** Owner device peer keys the relay should admit. */
   owner_peer_keys: IrohEndpointKey[];
   members: SnapshotMember[];
+  /**
+   * The versions this Gateway accepts. Signed by K_gw and only used from a snapshot that passed
+   * `assessFreshness`, so Discovery cannot edit it. It can still replay an older list a client
+   * has not seen; the Gateway refusing unlisted versions is what keeps that harmless.
+   */
+  protocols: ProtocolVersions;
   issued_at: UnixSeconds;
 };
 
@@ -194,6 +214,20 @@ export type InviteRedemptionBody = {
   requested_at: UnixSeconds;
 };
 
+/**
+ * Owner reset (OCF-319): the Gateway, with the K_gw of the claw's current binding, vouches that
+ * the claw's root is now `new_root_pub` from `binding_seq` on. Reset only happens on the claw's
+ * machine. It keeps K_srv and K_gw, so the new binding (signed by the new root at this
+ * binding_seq) names the same keys as the binding it replaces.
+ */
+export type RootResetBody = {
+  claw_id: string;
+  new_root_pub: Ed25519PublicKey;
+  /** The new binding's binding_seq: higher than the binding the reset replaces. */
+  binding_seq: number;
+  issued_at: UnixSeconds;
+};
+
 /** Maps each statement type to its body. */
 export type StatementBodies = {
   OwnerDeviceCert: OwnerDeviceCertBody;
@@ -203,6 +237,7 @@ export type StatementBodies = {
   Revocation: RevocationBody;
   MembershipSnapshot: MembershipSnapshotBody;
   InviteRedemption: InviteRedemptionBody;
+  RootReset: RootResetBody;
 };
 
 /**
@@ -213,7 +248,8 @@ export type StatementBodies = {
  * checked against the claw's current owner devices, which only the Gateway knows.
  */
 export type SignedStatement<T extends StatementType = StatementType> = {
-  v: 1;
+  /** Envelope version; selects the schema and the signing domain. */
+  v: StatementVersion;
   type: T;
   body: StatementBodies[T];
   signer: Ed25519PublicKey;

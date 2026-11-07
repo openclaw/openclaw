@@ -868,7 +868,7 @@ suite.define(() => {
           });
         }
         await page.locator(".agent-select__trigger").click();
-        const pickerTitle = page.locator(".agent-select__menu-title");
+        const pickerTitle = page.locator(".agent-select__menu .oc-menu-heading__label");
         await pickerTitle.waitFor();
         expect(await pickerTitle.textContent()).toBe("Agent");
         expect(

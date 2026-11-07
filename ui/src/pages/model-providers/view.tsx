@@ -1,7 +1,7 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   LearnMoreLink,
@@ -15,13 +15,18 @@ import {
   SettingsStatus,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatTimeMs } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import {
+  ModelProviderIcon,
+  useProviderDisplayLabel,
+} from "../../lib/reactive/provider-presentation.tsx";
 import type { JSX } from "../../types/solid-elements.js";
-import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
 import "../../styles/model-providers.css";
 import "../../styles/usage.css";
+import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import { DefaultModels } from "./default-models-view.tsx";
 import {
@@ -40,8 +45,11 @@ import {
 import type { ModelProvidersViewProps } from "./view-types.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
+// The page header reads subtitles.modelProviders from the route subtitle catalog.
+registerRouteSubtitlesEnglish();
 
 function AddProvider(props: ModelProvidersViewProps) {
+  const displayLabel = useProviderDisplayLabel();
   const busy = () => Boolean(props.busy.add);
   const disabled = () => configMutationDisabled(props) || busy();
   const provider = () =>
@@ -60,8 +68,8 @@ function AddProvider(props: ModelProvidersViewProps) {
         <div class="oc-dialog model-setup-wizard" data-models-key-dialog>
           <div class="oc-dialog__header">
             <h2 class="oc-dialog__title">
-              <ProviderBrandIcon provider={props.addProviderId} class="model-providers__icon" />{" "}
-              {provider()?.displayName ?? props.addProviderId}
+              <ModelProviderIcon provider={props.addProviderId} class="model-providers__icon" />{" "}
+              {provider()?.displayName ?? displayLabel(props.addProviderId)}
             </h2>
             <button
               class="oc-dialog__close"
@@ -77,29 +85,47 @@ function AddProvider(props: ModelProvidersViewProps) {
             </div>
           </div>
           <div class="oc-dialog__body model-setup-wizard__body">
-            <ApiKeyInput
-              value={props.addProviderKey}
-              disabled={disabled()}
-              labelOnly
-              onInput={props.onAddProviderKeyChange}
-            />
+            <Show when={!props.addStartChat}>
+              <ApiKeyInput
+                value={props.addProviderKey}
+                disabled={disabled()}
+                labelOnly
+                onInput={props.onAddProviderKeyChange}
+              />
+            </Show>
             {renderMutationMessage(props.messages.add)}
           </div>
           <openclaw-modal-actions class="oc-dialog__footer model-setup-wizard__footer">
             <button class="btn" disabled={busy()} onClick={() => props.onAddProviderToggle()}>
-              {t("common.cancel")}
+              {t(props.addStartChat ? "common.close" : "common.cancel")}
             </button>
-            <button
-              class="btn primary"
-              disabled={disabled() || !props.addProviderId || !props.addProviderKey.trim()}
-              onClick={() => props.onAddProvider()}
+            <Show
+              when={props.addStartChat}
+              fallback={
+                <button
+                  class="btn primary"
+                  disabled={disabled() || !props.addProviderId || !props.addProviderKey.trim()}
+                  // With no usable model yet, saving also makes this key the agent's model.
+                  onClick={() => props.onAddProvider(needsModelSetup(props))}
+                >
+                  {props.busy["check:add"]
+                    ? t("modelProviders.apiKey.checking")
+                    : busy()
+                      ? t("modelProviders.saving")
+                      : t("modelProviders.add.save")}
+                </button>
+              }
             >
-              {props.busy["check:add"]
-                ? t("modelProviders.apiKey.checking")
-                : busy()
-                  ? t("modelProviders.saving")
-                  : t("modelProviders.add.save")}
-            </button>
+              {(model) => (
+                <button
+                  class="btn primary"
+                  disabled={busy()}
+                  onClick={() => props.onAddStartChat()}
+                >
+                  {t("modelProviders.login.startChat", { model: model().name })}
+                </button>
+              )}
+            </Show>
           </openclaw-modal-actions>
         </div>
       </openclaw-modal-dialog>
@@ -177,6 +203,14 @@ export function ModelProviders(props: ModelProvidersViewProps) {
               canMutate={props.defaultsMutationBlockedReason === null && !props.configBusy}
               mutationBlockedReason={props.defaultsMutationBlockedReason}
               message={props.messages.defaults}
+              // Before any provider or default is set up, providers can't list models and the
+              // setup prompt above is the call to action; a listing failure isn't news then.
+              catalogDiscoveryError={
+                !props.defaultModels.primary &&
+                !props.cards.some((card) => isProviderUsable(card) || card.profiles.length > 0)
+                  ? null
+                  : props.catalogDiscoveryError
+              }
             />
           </div>
           <Show
@@ -190,9 +224,9 @@ export function ModelProviders(props: ModelProvidersViewProps) {
             {props.installedAgents}
             <ProviderAccess {...props} />
             {props.providerUsageStalled ? (
-              <div class="callout warning" role="status">
+              <InlineAlert tone="warning" role="status">
                 {t("usage.providerUsage.stalled")}
-              </div>
+              </InlineAlert>
             ) : undefined}
           </Show>
         </>

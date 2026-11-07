@@ -1,6 +1,7 @@
 // Gateway websocket E2E harness.
 // Starts an unauthenticated loopback gateway and opens connected test clients.
 import { WebSocket } from "ws";
+import { acquireGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { captureEnv } from "../test-utils/env.js";
 import { gatewayFixtureLifetime } from "./gateway-fixture-lifetime.test-support.js";
@@ -64,16 +65,11 @@ export async function startGatewayServerHarness(): Promise<GatewayServerHarness>
     clients.add(ws);
     ws.once("close", () => clients.delete(ws));
     trackConnectChallengeNonce(ws);
-    try {
-      await new Promise<void>((resolve) => {
-        ws.once("open", resolve);
-      });
-      const hello = await connectOk(ws, opts);
-      return { ws, hello };
-    } catch (error) {
-      ws.terminate();
-      throw error;
-    }
+    let hello: unknown;
+    await acquireGatewayTestWebSocket(ws, 10_000, async () => {
+      hello = await connectOk(ws, opts);
+    });
+    return { ws, hello };
   };
 
   const close = async () => {
