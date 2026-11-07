@@ -61,6 +61,10 @@ import {
   prepareTelegramPollAnswerContextAsync,
   settleTelegramPollAnswerContext,
 } from "./poll-answer-context.js";
+import {
+  TELEGRAM_CLIENT_TIMEOUT_BACKSTOP_SECONDS,
+  telegramUploadTimeoutTransformer,
+} from "./request-timeouts.js";
 import type { TelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { createTelegramSequentializer } from "./sequentialize.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
@@ -104,6 +108,7 @@ export async function createTelegramBotCore(
 
   const client: ApiClientOptions = {
     fetch: asTelegramClientFetch(finalFetch),
+    timeoutSeconds: TELEGRAM_CLIENT_TIMEOUT_BACKSTOP_SECONDS,
     ...(normalizedApiRoot ? { apiRoot: normalizedApiRoot } : {}),
   };
   const bot = new Bot(opts.token, {
@@ -111,6 +116,7 @@ export async function createTelegramBotCore(
     ...(opts.botInfo ? { botInfo: opts.botInfo } : {}),
   });
   const accountThrottler = getOrCreateAccountThrottler(opts.token);
+  bot.api.config.use(telegramUploadTimeoutTransformer);
   bot.api.config.use(accountThrottler.transformer);
   const sendChatActionHandler: TelegramSendChatActionHandler = {
     sendChatAction: (chatId, action, threadParams) =>
