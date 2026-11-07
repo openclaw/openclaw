@@ -61,7 +61,10 @@ import {
   markChatAbortTerminalOutcome,
   type ChatAbortTerminalDispatch,
 } from "./chat-abort-lifecycle-internal.js";
-import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
+import {
+  bumpGatewayAccessRevision,
+  sessionIdentityMutationKeys,
+} from "./gateway-access-revision.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import { dispatchEventHandler } from "./server-runtime-event-dispatch.js";
 import type { GatewayEventSubscriptionParams } from "./server-runtime-subscriptions.types.js";
@@ -651,7 +654,9 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
   // Committed resets/rotations can change access after the originating run is gone.
   // Invalidate synchronously before any yielded reader can accept its old access snapshot.
   // Each runtime owns its callback so late disposal cannot remove a replacement's listener.
-  const unsubscribeSessionIdentity = onSessionIdentityMutation(() => bumpGatewayAccessRevision());
+  const unsubscribeSessionIdentity = onSessionIdentityMutation((mutation) =>
+    bumpGatewayAccessRevision(sessionIdentityMutationKeys(mutation)),
+  );
   const unsubscribeProfileChanges = onUserProfilesChanged(() => {
     params.refreshConnectedUserProfiles();
     params.broadcastToConnIds(

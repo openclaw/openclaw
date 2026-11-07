@@ -26,7 +26,10 @@ import { captureGatewayAuthPolicy } from "../auth-policy.js";
 import { invalidateGatewayDeviceRevocation } from "../device-revocation.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import type { ExecApprovalManagerOptions } from "../exec-approval-manager.types.js";
-import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
+import {
+  bumpGatewayAccessRevision,
+  sessionIdentityMutationKeys,
+} from "../gateway-access-revision.js";
 import * as operatorApprovalStore from "../operator-approval-store.js";
 import { publishOperatorRoleConfigChange } from "../operator-role-policy.js";
 import { rolePolicyConfig } from "../session-sharing.test-utils.js";
@@ -386,9 +389,23 @@ it.each([
   }
 });
 
-it("keeps a legacy decision wait when an unrelated agent is added", async () => {
+const otherSessionCreate = sessionIdentityMutationKeys({
+  databaseIdentity: "test",
+  agentId: "main",
+  kind: "create",
+  previous: { sessionKeys: [] },
+  current: { sessionKeys: ["agent:main:active-memory:probe"] },
+});
+it.each([
+  ["an unrelated agent is added", true, () => {}],
+  ["another session changes", true, () => bumpGatewayAccessRevision(["agent:main:other"])],
+  ["another session is created", true, () => bumpGatewayAccessRevision(otherSessionCreate)],
+  ["its own session changes", false, () => bumpGatewayAccessRevision(["agent:main:main"])],
+  ["a bare session key changes", false, () => bumpGatewayAccessRevision(["main"])],
+  ["access changes without a session", false, () => bumpGatewayAccessRevision()],
+] as const)("legacy decision wait when %s (kept: %s)", async (name, kept, change) => {
   const { exec, invoke, record, client, drain } = await createFixture(
-    "wait-unrelated-agent",
+    `wait-${name.replaceAll(" ", "-")}`,
     undefined,
     { sessionKey: "agent:main:main", agentId: "main" },
   );
@@ -411,11 +428,11 @@ it("keeps a legacy decision wait when an unrelated agent is added", async () => 
     const pending = invocation.invoke();
     await waiting.promise;
     publishConfig(unrelatedAgentConfig);
+    change();
     await expect(exec.resolve(record.id, "allow-once")).resolves.toBe(true);
-    await expect(pending).resolves.toMatchObject({
-      ok: true,
-      result: { id: record.id, decision: "allow-once" },
-    });
+    await (kept
+      ? expect(pending).resolves.toMatchObject({ ok: true, result: { decision: "allow-once" } })
+      : expect(pending).rejects.toThrow("Approval requester authority changed"));
   } finally {
     await drain();
   }

@@ -648,7 +648,7 @@ test.each(["unrelated creation", "activity", "visibility", "replacement"])(
       seedProjectSession("listed-project", "/projects/listed", {
         createdActor: { type: "human", source: "profile", id: profile.id },
       });
-      using _ = { [Symbol.dispose]: onSessionIdentityMutation(bumpGatewayAccessRevision) };
+      using _ = { [Symbol.dispose]: onSessionIdentityMutation(() => bumpGatewayAccessRevision()) };
       resolveRepositoryIdentity.mockImplementationOnce(async (checkoutPath) => {
         if (change === "unrelated creation") {
           seedProjectSession("unrelated", "/projects/unrelated", { updatedAt: 2 });

@@ -13,8 +13,12 @@ import { listConfiguredSessionStoreAgentIds } from "../../config/sessions/target
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { assertionSucceeds } from "../../shared/assertion.js";
+import { readUserProfileAliasRevision } from "../../state/user-profile-events.js";
 import { captureGatewayAuthPolicy, isGatewayAuthPolicyCurrent } from "../auth-policy.js";
-import { readGatewayAccessRevision } from "../gateway-access-revision.js";
+import {
+  onGatewaySessionAccessChanged,
+  readGatewayAccessRevision,
+} from "../gateway-access-revision.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import {
   canResolveOperatorApproval,
@@ -123,6 +127,8 @@ export function createApprovalRequestAuthority(options: GatewayRequestHandlerOpt
   let configPolicy = captureConfigPolicy(config);
   let boundSource: ApprovalSource | undefined;
   const accessRevision = readGatewayAccessRevision();
+  // Once bound to a source session, only access changes that can reach it void the request.
+  let sourceAccess: { aliasRevision: number; revoked: boolean; release: () => void } | undefined;
   let configRevoked = false;
   let closed = false;
   const observeConfig = () => {
@@ -164,11 +170,33 @@ export function createApprovalRequestAuthority(options: GatewayRequestHandlerOpt
     }
     boundSource = source;
     captureConfigPolicy = (current) => captureApprovalSourcePolicy(current, source);
+    let sourcePolicy: ReturnType<typeof captureApprovalSourcePolicy>;
     try {
-      configPolicy = captureConfigPolicy(getConfig());
+      sourcePolicy = captureApprovalSourcePolicy(getConfig(), source);
+      configPolicy = sourcePolicy;
     } catch {
       configRevoked = true;
+      return;
     }
+    const identity = "identity" in sourcePolicy ? sourcePolicy.identity : null;
+    // An access change before binding, or a source without a resolved identity, keeps the
+    // process-wide fence.
+    if (
+      closed ||
+      !source.sessionKey ||
+      !identity ||
+      readGatewayAccessRevision() !== accessRevision
+    ) {
+      return;
+    }
+    const access = { aliasRevision: readUserProfileAliasRevision(), revoked: false, release() {} };
+    access.release = onGatewaySessionAccessChanged(
+      [source.sessionKey, identity.canonicalKey],
+      () => {
+        access.revoked = true;
+      },
+    );
+    sourceAccess = access;
   };
   const assertPolicyCurrent = () => {
     const currentActor = resolveGatewayOperatorRoleActor(client);
@@ -199,7 +227,9 @@ export function createApprovalRequestAuthority(options: GatewayRequestHandlerOpt
       options.context.resolveGatewayContext !== resolveGatewayContext ||
       (resolveGatewayContext?.() ?? options.context) !== gatewayContext ||
       configRevoked ||
-      readGatewayAccessRevision() !== accessRevision
+      (sourceAccess
+        ? sourceAccess.revoked || readUserProfileAliasRevision() !== sourceAccess.aliasRevision
+        : readGatewayAccessRevision() !== accessRevision)
     ) {
       throw new Error("Approval requester authority changed");
     }
@@ -229,6 +259,7 @@ export function createApprovalRequestAuthority(options: GatewayRequestHandlerOpt
     [Symbol.dispose]() {
       closed = true;
       releaseConfig();
+      sourceAccess?.release();
     },
   };
 }

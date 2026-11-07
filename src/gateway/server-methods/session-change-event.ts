@@ -432,7 +432,7 @@ export function emitSessionsChanged(
   }
   // Only a committed producer may certify unchanged access; unknown changes stay conservative.
   if (!catalogOnly && options.accessChanged !== false) {
-    bumpGatewayAccessRevision();
+    bumpGatewayAccessRevision(payload.sessionKey ? [payload.sessionKey] : undefined);
   }
   if (!catalogOnly && options.rowScope !== "runtime") {
     // Inbox subscriptions are independent of session-list subscriptions, including a closed sidebar.
