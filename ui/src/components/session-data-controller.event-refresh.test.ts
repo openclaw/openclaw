@@ -302,12 +302,14 @@ describe("filtered sidebar session event refresh", () => {
     expect(bootstrap.foregroundReady).toBe(false);
   });
 
-  it("keeps an owner-filtered refresh pending when the catalog agent changes", async () => {
+  it("does not let an old agent's owner-filtered refresh settle its replacement", async () => {
     const { controller, context, list, selectMembership, selectAgent } =
       createFilteredSessionController("archived", 4, true);
     controller.connect();
     const release = Promise.withResolvers<void>();
+    const releaseResearch = Promise.withResolvers<void>();
     cleanups.unshift(() => release.resolve());
+    cleanups.unshift(() => releaseResearch.resolve());
     await selectMembership({ ownerId: "profile-ada", involvingMe: false });
     const query = controller.sessionListQuery("main");
     const listRows = list.getMockImplementation()!;
@@ -320,13 +322,30 @@ describe("filtered sidebar session event refresh", () => {
     expect(controller.sessionsLoading).toBe(true);
 
     selectAgent("research");
-
-    expect(controller.sessionListQuery("research")).toEqual(query);
+    const researchQuery = controller.sessionListQuery("research");
+    expect(researchQuery).toEqual({ ...query, agentId: "research" });
+    list.mockImplementationOnce(async (options) => {
+      await releaseResearch.promise;
+      return {
+        ...(await listRows(options)),
+        sessions: [],
+        count: 0,
+        totalCount: 0,
+        nextOffset: null,
+        hasMore: false,
+      };
+    });
+    const researchRefresh = controller.refreshSidebarSessions();
     expect(context.sessions.listSnapshot(query).loading).toBe(true);
     expect(controller.sessionsLoading).toBe(true);
     release.resolve();
     await refreshing;
+    expect(controller.sessionsLoading).toBe(true);
+    releaseResearch.resolve();
+    await researchRefresh;
     expect(controller.sessionsLoading).toBe(false);
+    expect(controller.sessionsAgentId).toBe("research");
+    expect(controller.sessionsResult?.sessions).toHaveLength(0);
   });
 
   it.each(["archived", "all"] as const)(

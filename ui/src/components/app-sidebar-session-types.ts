@@ -408,7 +408,7 @@ function sidebarSessionOwnerFilterStorageKey(gatewayUrl: string, selfUserId: str
   return `${SIDEBAR_SESSION_OWNER_FILTER_STORAGE_PREFIX}${gatewayOriginScope(gatewayUrl)}:${encodeURIComponent(selfUserId)}`;
 }
 
-/** Without a saved choice, guests start on Involving me and everyone else on their own sessions. */
+/** Agent management includes every authorized owner unless a saved filter narrows it. */
 export function loadStoredSidebarSessionOwnerFilter(
   gatewayUrl: string,
   selfUserId: string,
@@ -416,7 +416,7 @@ export function loadStoredSidebarSessionOwnerFilter(
 ): SidebarSessionOwnerFilter {
   const fallback = options.guest
     ? { ownerId: null, involvingMe: true }
-    : { ownerId: selfUserId, involvingMe: false };
+    : { ownerId: null, involvingMe: false };
   try {
     const stored = getSafeLocalStorage()?.getItem(
       sidebarSessionOwnerFilterStorageKey(gatewayUrl, selfUserId),

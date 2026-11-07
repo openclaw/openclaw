@@ -119,6 +119,8 @@ describe("AppSidebar session ownership filtering", () => {
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
+    sidebar.setSessionsEmptyGroupsMode("filtering");
+    await sidebar.updateComplete;
 
     expect(sidebar.querySelectorAll("openclaw-session-owner-chip")).toHaveLength(2);
     await selectOwner(sidebar, "profile-ada");
@@ -183,6 +185,7 @@ describe("AppSidebar session ownership filtering", () => {
       harness.list.mockImplementation(async () => ({ ...result, count: 1, sessions: [match] }));
       const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
       Object.assign(sidebar, { sessionsGrouping: grouping });
+      sidebar.setSessionsEmptyGroupsMode("filtering");
       await sidebar.updateComplete;
       const sectionIds = () =>
         [...sidebar.querySelectorAll<HTMLElement>("[data-session-section]")].map(
