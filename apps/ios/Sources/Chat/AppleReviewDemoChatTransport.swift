@@ -1217,7 +1217,10 @@ private actor LocalFixtureChatStore {
                         type: "toolCall",
                         id: "fixture-exec",
                         name: "exec",
-                        arguments: AnyCodable(["command": "printf ready"])),
+                        arguments: AnyCodable(
+                            ProcessInfo.processInfo.arguments.contains("--openclaw-command-purpose-fixture")
+                                ? ["command": "printf ready", "title": "Check local readiness"]
+                                : ["command": "printf ready"])),
                     OpenClawChatMessageContent(
                         type: "toolCall",
                         id: "fixture-no-result",
