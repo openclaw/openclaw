@@ -10,6 +10,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Telephony
 import android.telephony.SmsMessage
+import android.telephony.TelephonyManager
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.CompletableDeferred
@@ -54,7 +55,13 @@ class SmsCarrierRecoveryNativeTest {
       assertEquals(PackageManager.PERMISSION_DENIED, context.checkSelfPermission(Manifest.permission.READ_PHONE_STATE))
       assertEquals(PackageManager.PERMISSION_GRANTED, context.checkSelfPermission(Manifest.permission.SEND_SMS))
 
-      // Force the real app-process EMS lookup; the telephony service has its own unchanged cache.
+      val telephony = requireNotNull(context.getSystemService(TelephonyManager::class.java))
+      val gidFailure = runCatching { telephony.javaClass.getMethod("getGroupIdLevel1").invoke(telephony) }.exceptionOrNull()?.cause
+      assertTrue(gidFailure is SecurityException && gidFailure.message.orEmpty().contains("getGroupIdLevel1"))
+      // API 35's contextless default manager returns null before IPC. Bind the real manager so
+      // this app-process EMS fixture reaches Binder permission enforcement; service state is untouched.
+      val managerField = TelephonyManager::class.java.getDeclaredField("sInstance").apply { isAccessible = true }
+      val previousManager = managerField.get(null)
       val configClass = Class.forName("android.telephony.SmsMessage\$NoEmsSupportConfig")
       val constructor = configClass.getDeclaredConstructor(Array<String>::class.java).apply { isAccessible = true }
       val config = constructor.newInstance(arrayOf("00101", "prefix").let { it as Any })
@@ -64,6 +71,7 @@ class SmsCarrierRecoveryNativeTest {
       val previousList = listField.get(null)
       val previouslyLoaded = loadedField.getBoolean(null)
       try {
+        managerField.set(null, telephony)
         listField.set(null, entries)
         loadedField.setBoolean(null, true)
         try {
@@ -86,10 +94,11 @@ class SmsCarrierRecoveryNativeTest {
         instrumentation.sendStatus(
           0,
           Bundle().apply {
-            putString("smsProof", "real framework denial; three production sms.send submissions accepted")
+            putString("smsProof", "context-bound framework denial; three production sms.send submissions accepted")
           },
         )
       } finally {
+        managerField.set(null, previousManager)
         listField.set(null, previousList)
         loadedField.setBoolean(null, previouslyLoaded)
       }
