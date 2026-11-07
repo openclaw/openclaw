@@ -84,6 +84,10 @@ import java.util.concurrent.atomic.AtomicLong
 // Bounds one-shot search list fetches like the primary session list.
 internal const val SESSION_LIST_FETCH_LIMIT = 200
 internal const val SESSION_UNREAD_ACK_CAPABILITY = "session-unread-ack-contract"
+private const val CHAT_INPUT_CUSTODY_CAPABILITY = "chat-input-custody-v1"
+
+// packages/gateway-protocol/src/schema/chat-history-constants.ts
+private const val CHAT_INPUT_RECEIPT_MAX_RUN_IDS = 50
 private const val SESSION_SCOPED_CHAT_METADATA_CAPABILITY = "session-scoped-chat-metadata"
 private const val SESSION_SCOPED_MODEL_CATALOG_CAPABILITY = "session-scoped-model-catalog"
 private val sessionClassificationFields = arrayOf("classification", "accountId", "peerKind", "isMain", "isBackground")
@@ -917,6 +921,9 @@ class ChatController internal constructor(
   private val _outboxItems = MutableStateFlow<List<ChatOutboxItem>>(emptyList())
   val outboxItems: StateFlow<List<ChatOutboxItem>> = _outboxItems.asStateFlow()
 
+  private val mutablePendingInputs = MutableStateFlow<ChatPendingInputView?>(null)
+  internal val pendingInputs: StateFlow<ChatPendingInputView?> = mutablePendingInputs.asStateFlow()
+
   // Flush requests are level-triggered: the owner clears one per pass and rechecks after release.
   private val outboxFlushInFlight = AtomicBoolean(false)
   private val outboxFlushRequested = AtomicBoolean(false)
@@ -961,6 +968,7 @@ class ChatController internal constructor(
     synchronized(gatewayScopeApplyLock) {
       historyLoadGeneration.incrementAndGet()
       restoreRunStateOnReconnect = true
+      mutablePendingInputs.value = null
       progressCardNeedsRetry = true
       pendingHealthRefresh = null
       _healthOk.value = false
@@ -3080,6 +3088,7 @@ class ChatController internal constructor(
             (settingsKey.gatewayScope != currentCacheScope() || settingsKey.ownerAgentId != resolveAgentIdForSessionKey(key))
         }
         _messages.value = emptyList()
+        mutablePendingInputs.value = null
         _messagesFromCache.value = false
         clearSessionReactions()
         if (changed) {
@@ -3653,10 +3662,9 @@ class ChatController internal constructor(
     }
   }
 
-  // Queued/sending rows are still ahead in FIFO order, and an orphaned accepted row holds its
-  // session only until history proof confirms or parks it (a bounded window). Parked failed
-  // rows are terminal-manual state and do not strand later turns; explicit Retry re-orders
-  // still-queued successors behind the retried head instead.
+  // Queued/sending rows are still ahead in FIFO order. Orphaned accepted rows hold their
+  // session until exact consumption/cancellation or canonical history proof, with the legacy
+  // two-sighting fallback on older Gateways. Failed rows remain explicit manual recovery.
   private fun outboxRowUnresolved(row: ChatOutboxItem): Boolean =
     when (row.status) {
       ChatOutboxStatus.Queued, ChatOutboxStatus.Sending -> true
@@ -4438,7 +4446,7 @@ class ChatController internal constructor(
             history =
               try {
                 val historyParams =
-                  sessionRequestParams(sessionKey, requestAgentId).toString()
+                  historyRequestParams(requestCacheScope?.gatewayId, sessionKey, requestAgentId).toString()
                 val historyJson =
                   if (transcriptOwner == null) {
                     requestGatewayBound(requestCacheScope?.gatewayId, "chat.history", historyParams)
@@ -4508,7 +4516,8 @@ class ChatController internal constructor(
                 if (mutationReconciliationState == null && branchSnapshot != null && historyBranchState != previousState) {
                   historyBranchState?.let { publishedHistoryBranch = PublishedHistoryBranch(branchSnapshot, generation, it) }
                 }
-                if (reconcileRunState) transferLostAckOwnershipFromHistory(history)
+                applyPendingInputs(history)
+                if (reconcileRunState && gatewayAdvertisesCapability(CHAT_INPUT_CUSTODY_CAPABILITY) != true) transferLostAckOwnershipFromHistory(history)
                 val reportedRun = history.inFlightRun
                 val inFlightRun = reportedRun?.takeUnless { hasTerminalRunTelemetry(it.runId) }
                 val snapshotRunId = inFlightRun?.runId
@@ -4609,7 +4618,7 @@ class ChatController internal constructor(
         // Resuming their queued successors still waits for branch reconciliation and health.
         val outboxChanged =
           requestCacheScope != null &&
-            reconcileDurableSendsAgainstHistory(requestCacheScope.gatewayId, history, requestAgentId)
+            reconcileDurableSendsAgainstHistory(requestCacheScope.gatewayId, history, requestAgentId, ::isCurrent)
         publishOutbox()
         appliedHistoryEntry?.let { acknowledgeUnreadIfNeeded(it.key, it, requireActive = true) }
         if (refreshBranches && branchSnapshot != null) {
@@ -5606,9 +5615,10 @@ class ChatController internal constructor(
               requestGatewayBound(
                 flushScope.gatewayId,
                 "chat.history",
-                sessionRequestParams(sessionKey, branchScope.ownerAgentId).toString(),
+                historyRequestParams(flushScope.gatewayId, sessionKey, branchScope.ownerAgentId).toString(),
               )
             val history = parseHistory(historyJson, sessionKey = sessionKey, previousMessages = emptyList())
+            if (currentCacheScope() != flushScope) continue
             if (mutationReconciliationState == null) {
               savedState = reconcileOutboxHistory(flushScope.gatewayId, branchScope, savedState, history) ?: continue
             }
@@ -5706,9 +5716,10 @@ class ChatController internal constructor(
             requestGatewayBound(
               flushScope.gatewayId,
               "chat.history",
-              sessionRequestParams(branchScope.sessionKey, branchScope.ownerAgentId).toString(),
+              historyRequestParams(flushScope.gatewayId, branchScope.sessionKey, branchScope.ownerAgentId).toString(),
             )
           val history = parseHistory(historyJson, sessionKey = branchScope.sessionKey, previousMessages = emptyList())
+          if (!_healthOk.value || currentCacheScope() != flushScope) continue
           // Record continuity before retiring the only send that can prove an empty root's
           // first append. Otherwise the next refresh can park its queued successors.
           if (reconcileOutboxHistory(flushScope.gatewayId, branchScope, previousState, history) == null) {
@@ -5721,7 +5732,10 @@ class ChatController internal constructor(
           // Keep the rows accepted; the next flush or history apply reconciles them.
           continue
         }
-      changed = reconcileDurableSendsAgainstHistory(flushScope.gatewayId, history, branchScope.ownerAgentId) || changed
+      if (!_healthOk.value || currentCacheScope() != flushScope) break
+      changed = reconcileDurableSendsAgainstHistory(flushScope.gatewayId, history, branchScope.ownerAgentId) {
+        _healthOk.value && currentCacheScope() == flushScope
+      } || changed
     }
     if (changed) {
       publishOutbox()
@@ -5738,15 +5752,18 @@ class ChatController internal constructor(
    * Applies canonical history proof to durable rows: any row whose `id:user` idempotency key is
    * persisted retires (regardless of state; proof always wins so a manual retry of an actually
    * delivered row can never double-send). Orphaned accepted rows absent from an idle history are
-   * parked as delivery-unconfirmed only after two independent sightings, so a transcript write
-   * that briefly lags the ACK is not misread as loss.
+   * parked as delivery-unconfirmed only after two independent sightings on legacy Gateways.
+   * Custody-capable Gateways instead supply exact pending/consumed/cancelled receipts; an absent
+   * receipt cannot prove failure or authorize a new submission identity.
    */
   private suspend fun reconcileDurableSendsAgainstHistory(
     gatewayId: String,
     history: ChatHistory,
     ownerAgentId: String,
+    isCurrent: () -> Boolean = { true },
   ): Boolean {
     val rows = runCatching { commandOutbox.load(gatewayId) }.getOrDefault(emptyList())
+    if (!isCurrent()) return false
     if (rows.isEmpty()) return false
     val inFlightRunId = history.inFlightRun?.runId
     val sessionRows =
@@ -5755,7 +5772,25 @@ class ChatController internal constructor(
           (row.ownerAgentId ?: resolveAgentIdFromMainSessionKey(row.sessionKey)) == ownerAgentId
       }
     var changed = false
-    val confirmed = history.persistedOutboxAttempts(sessionRows)
+    val custodySupported = gatewayAdvertisesCapability(CHAT_INPUT_CUSTODY_CAPABILITY) == true
+    val receipts =
+      if (custodySupported && !history.sessionId.isNullOrBlank()) {
+        // Display pages also carry exact submission identity, including hidden cancellation.
+        val pending =
+          history.pendingInputs?.items.orEmpty().mapNotNull { input ->
+            input.runId?.let { ChatInputReceipt.Pending(it, input.queued, input.state == "cancelled") }
+          }
+        (pending + history.inputReceipts).associateBy { it.runId }
+      } else {
+        emptyMap()
+      }
+    val confirmed =
+      history.persistedOutboxAttempts(sessionRows) +
+        sessionRows
+          .filter { row ->
+            val receipt = receipts[row.id]
+            receipt is ChatInputReceipt.Consumed || (receipt is ChatInputReceipt.Pending && receipt.cancelled)
+          }.associate { it.id to it.attemptVersion }
     if (confirmed.isNotEmpty()) {
       val removed = runCatching { commandOutbox.confirmDeliveredAttempts(confirmed) }.getOrDefault(0)
       confirmed.keys.forEach(unconfirmedSightings::remove)
@@ -5763,6 +5798,24 @@ class ChatController internal constructor(
       changed = removed > 0
     }
     for (row in sessionRows) {
+      if (!isCurrent()) return changed
+      if (row.id in confirmed) continue
+      val receipt = receipts[row.id]
+      if (receipt is ChatInputReceipt.Pending) {
+        unconfirmedSightings.remove(row.id)
+        // A positive exact receipt recovers even a crash-left Failed row without replay.
+        // Preserve branch parking: a receipt cannot authorize another branch.
+        if (row.status == ChatOutboxStatus.Failed && !row.parkedWasAccepted &&
+          chatOutboxDisplayError(row.lastError) == OUTBOX_DELIVERY_UNCONFIRMED_ERROR &&
+          System.currentTimeMillis() - row.createdAtMs < OUTBOX_EXPIRY_MS
+        ) {
+          changed = (updateOutboxStatusOrNull(row, ChatOutboxStatus.Accepted, null) ?: 0) > 0 || changed
+        }
+        continue
+      }
+      // A bounded receipt lookup can miss retained/aged-out input. Absence is neither
+      // consumption nor a failure verdict; never feed it into the legacy idle heuristic.
+      if (custodySupported) continue
       if (row.status != ChatOutboxStatus.Accepted || row.id in confirmed.keys) continue
       if (locallyOwnedOutboxRow(row.id)) continue
       // inFlightRunId must be non-null before the map compare: a missing in-flight run would
@@ -6062,6 +6115,9 @@ class ChatController internal constructor(
             }
           }
         }
+        if (accepted && gatewayAdvertisesCapability(CHAT_INPUT_CUSTODY_CAPABILITY) == true && ownsDirectUi()) {
+          refreshCurrentHistoryBestEffort(purpose = HistoryRefreshPurpose.Transcript)
+        }
         return OutboxSendOutcome.Sent
       }
       if (persisted == null) {
@@ -6305,6 +6361,15 @@ class ChatController internal constructor(
     val swarmKind = swarmKindElement.asStringOrNull()?.trim()
     if (swarmEvent && (swarmKind == "phase" || swarmKind == "log")) return
     val reason = payload["reason"].asStringOrNull()
+    if (gatewayAdvertisesCapability(CHAT_INPUT_CUSTODY_CAPABILITY) == true &&
+      reason in setOf("send", "agent.run.started", "agent.input.settled")
+    ) {
+      val key = payload.nonBlankString("sessionKey") ?: payload.nonBlankString("key")
+      val owner = key?.let(::resolveAgentIdFromMainSessionKey) ?: payload.nonBlankString("agentId")
+      if (key == _sessionKey.value && owner == resolveAgentIdForSessionKey(_sessionKey.value)) {
+        refreshCurrentHistoryBestEffort(purpose = HistoryRefreshPurpose.Transcript)
+      }
+    }
     if (reason == "groups") refreshSessionGroups()
     if (isSessionSettingsMutation(payload)) {
       val session = eventSessionObject(payload)
@@ -7160,6 +7225,9 @@ class ChatController internal constructor(
         it.status == ChatOutboxStatus.Accepted &&
           (it.id == runId || acknowledgedRunIdByRowId[it.id] == runId)
       } ?: return
+    // Reply watchdogs are not input-custody evidence. The existing 48-hour outbox
+    // retention still parks old rows; exact receipts, not reply timing, settle delivery.
+    if (gatewayAdvertisesCapability(CHAT_INPUT_CUSTODY_CAPABILITY) == true) return
     val persisted = updateOutboxStatusOrNull(row, ChatOutboxStatus.Failed, OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
     if (persisted == null) {
       rearmOutboxRecovery()
@@ -7470,6 +7538,110 @@ class ChatController internal constructor(
     scope.launch { refresh() }
   }
 
+  private suspend fun historyRequestParams(
+    gatewayId: String?,
+    sessionKey: String,
+    ownerAgentId: String,
+  ): JsonObject {
+    // The original submission key, not an ACK's execution-run alias, owns custody.
+    // Room caps the entire Gateway outbox at 50, matching the exact-query wire bound.
+    val runIds =
+      if (gatewayId != null && gatewayAdvertisesCapability(CHAT_INPUT_CUSTODY_CAPABILITY) == true) {
+        commandOutbox
+          .load(gatewayId)
+          .filter { it.outboxScope() == ChatOutboxScope(sessionKey, ownerAgentId) && it.needsInputReceipt() }
+          .map { it.id }
+          .distinct()
+          .take(CHAT_INPUT_RECEIPT_MAX_RUN_IDS)
+      } else {
+        emptyList()
+      }
+    return sessionRequestParams(sessionKey, ownerAgentId) {
+      if (runIds.isNotEmpty()) put("inputRunIds", JsonArray(runIds.map(::JsonPrimitive)))
+    }
+  }
+
+  private fun ChatOutboxItem.needsInputReceipt(): Boolean =
+    status == ChatOutboxStatus.Sending || status == ChatOutboxStatus.Accepted ||
+      hadUnacknowledgedSend || parkedWasAccepted || chatOutboxDisplayError(lastError) == OUTBOX_DELIVERY_UNCONFIRMED_ERROR
+
+  private fun applyPendingInputs(history: ChatHistory) {
+    val owner = currentChatComposerRoutingOwner()
+    val sessionId = history.sessionId
+    if (gatewayAdvertisesCapability(CHAT_INPUT_CUSTODY_CAPABILITY) != true || owner == null || sessionId.isNullOrBlank()) {
+      mutablePendingInputs.value = null
+      return
+    }
+    val previous = mutablePendingInputs.value?.takeIf { it.owner == owner && it.sessionId == sessionId }
+    val page = history.pendingInputs ?: previous?.page
+    val settledIds =
+      history.inputReceipts
+        .filterIsInstance<ChatInputReceipt.Consumed>()
+        .mapTo(mutableSetOf()) { it.runId }
+    history.messages.filter { it.role == "user" }.mapNotNullTo(settledIds) { message ->
+      message.idempotencyKey?.takeIf { it.endsWith(":user") }?.removeSuffix(":user")
+    }
+    mutablePendingInputs.value = page?.let { ChatPendingInputView(owner, sessionId, it.copy(items = it.items.filterNot { input -> input.runId in settledIds })) }
+    // Pending display is not a transcript row. Exact receipts retire optimistic copies even
+    // when consumption combined inputs into another event or advanced beyond the history tail.
+    val custodyIds = history.inputReceipts.mapTo(mutableSetOf()) { it.runId }
+    history.pendingInputs?.items?.mapNotNullTo(custodyIds) { it.runId }
+    for ((runId, optimistic) in optimisticMessagesByRunId.toMap()) {
+      val submissionId = optimistic.idempotencyKey?.removeSuffix(":user") ?: continue
+      if (submissionId !in custodyIds) continue
+      removeOptimisticMessage(runId)
+      // Custody and execution are separate: a nonqueued pending input may already
+      // be executing, and transcript-only reads do not re-adopt inFlightRun below.
+      val receipt = history.inputReceipts.firstOrNull { it.runId == submissionId }
+      val pending = history.pendingInputs?.items?.firstOrNull { it.runId == submissionId }
+      val queuedOrCancelled =
+        (receipt is ChatInputReceipt.Pending && (receipt.queued || receipt.cancelled)) ||
+          pending?.let { it.queued || it.state == "cancelled" } == true
+      unresolvedRepliesByRunId.remove(runId)
+      if (queuedOrCancelled && history.inFlightRun?.runId != runId) {
+        clearPendingRun(runId, publishRunState = false)
+      }
+    }
+  }
+
+  private fun parsePendingInputs(element: JsonElement?): ChatPendingInputsPage? {
+    val page = element.asObjectOrNull() ?: return null
+    val items = page["items"].asArrayOrNull() ?: return null
+    val total = page["total"].asLongOrNull()?.takeIf { it in 0..Int.MAX_VALUE.toLong() }?.toInt() ?: return null
+    return ChatPendingInputsPage(
+      items =
+        items
+          .mapNotNull { value ->
+            val input = value.asObjectOrNull() ?: return@mapNotNull null
+            val id = input.nonBlankString("id") ?: return@mapNotNull null
+            val state = input["state"].asStringOrNull()?.takeIf { it in setOf("queued", "cancelled", "interrupted") } ?: return@mapNotNull null
+            val message = input["message"].asObjectOrNull()
+            ChatPendingInput(
+              id = id,
+              runId = input.nonBlankString("runId"),
+              message = message?.takeUnless { it["display"] == JsonPrimitive(false) }?.let { parseMessage(it) }?.copy(id = "pending:$id"),
+              acceptedAtMs = input["acceptedAt"].asLongOrNull() ?: return@mapNotNull null,
+              state = state,
+              queued = input["queued"] == JsonPrimitive(true),
+            )
+          }.distinctBy { it.id },
+      total = total,
+      queuedCount = page["queuedCount"].asLongOrNull()?.takeIf { it in 0..Int.MAX_VALUE.toLong() }?.toInt(),
+      nextBefore = page["nextBefore"].asLongOrNull()?.takeIf { it > 0 },
+    )
+  }
+
+  private fun parseInputReceipts(element: JsonElement?): List<ChatInputReceipt> =
+    element.asArrayOrNull().orEmpty().mapNotNull { value ->
+      val receipt = value.asObjectOrNull() ?: return@mapNotNull null
+      val runId = receipt.nonBlankString("runId") ?: return@mapNotNull null
+      when (receipt["state"].asStringOrNull()) {
+        "pending" -> ChatInputReceipt.Pending(runId, receipt["queued"] == JsonPrimitive(true), receipt["cancelled"] == JsonPrimitive(true))
+        "consumed" -> ChatInputReceipt.Consumed(runId, receipt.nonBlankString("consumedByEventId") ?: return@mapNotNull null)
+        else -> null
+      }
+    }
+
   private fun parseHistory(
     historyJson: String,
     sessionKey: String,
@@ -7496,6 +7668,8 @@ class ChatController internal constructor(
       sessionInfo = sessionInfo,
       inFlightRun = parseInFlightRun(root),
       defaultModelRef = providerQualifiedModelRef(defaults?.get("model").asStringOrNull(), defaults?.get("modelProvider").asStringOrNull()),
+      pendingInputs = parsePendingInputs(root["pendingInputs"]),
+      inputReceipts = parseInputReceipts(root["inputReceipts"]),
     )
   }
 

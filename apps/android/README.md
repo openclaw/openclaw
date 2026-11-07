@@ -81,6 +81,23 @@ visible transcript. Custom transcript formats remain ordinary message text. Cach
 history keeps media references and transcription state; loading an uncached photo
 still requires reconnecting to its Gateway.
 
+## Gateway inputs in Chat
+
+Gateways advertising `chat-input-custody-v1` expose **Gateway inputs** above the
+composer (under **Details** when height is compact). This read-only view shows
+the latest retained input page in server order, including inputs submitted from
+other clients. **Queued on Gateway** means waiting in the live queue;
+**Accepted by Gateway** does not mean consumed or completed. Cancelled inputs
+remain visible unless the Gateway has hidden them. Older pages are not loaded:
+**Showing recent inputs only.** and the Gateway queue count disclose that bound.
+
+Android reconciles its existing durable outbox by the original submission ID.
+Exact consumed or cancelled receipts retire local copies even when a combined
+turn has a different transcript ID. Missing receipts never cause an automatic
+resend; existing local expiry and manual recovery remain unchanged. Receipts and
+idempotency retention are bounded, not an unlimited exactly-once guarantee.
+Older Gateways retain the existing transcript-based delivery recovery.
+
 ## Completed work in Chat
 
 In the app's own conversation, agent main sessions, and dashboard conversations,
