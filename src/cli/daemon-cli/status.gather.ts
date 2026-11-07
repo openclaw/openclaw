@@ -25,7 +25,10 @@ import {
   ALL_GATEWAY_SECRET_INPUT_PATHS,
   readGatewaySecretInputValue,
 } from "../../gateway/secret-input-paths.js";
-import { readGatewayLastShutdownAsync } from "../../infra/gateway-boot-lifecycle.js";
+import {
+  readGatewayLastShutdownAsync,
+  readGatewayRecentCrashesAsync,
+} from "../../infra/gateway-boot-lifecycle.js";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { formatPortDiagnostics } from "../../infra/ports-format.js";
@@ -244,6 +247,17 @@ async function gatherDaemonStatusImpl(
     opts.deep && shouldInspectLocalGateway
       ? await readGatewayLastShutdownAsync(mergedDaemonEnv).catch(() => undefined)
       : undefined;
+  const crashHistory:
+    | {
+        recentCrashes?: Awaited<ReturnType<typeof readGatewayRecentCrashesAsync>>;
+        crashHistoryError?: string;
+      }
+    | undefined = shouldInspectLocalGateway
+    ? await readGatewayRecentCrashesAsync(mergedDaemonEnv).then(
+        (recentCrashes) => ({ recentCrashes }),
+        (error: unknown) => ({ crashHistoryError: String(error) }),
+      )
+    : undefined;
   let duelingScopesWarning: string | null = null;
   if (opts.deep && serviceTargetsProbe && process.platform === "linux") {
     const { findSystemdGatewayInstallation, formatDuelingScopesWarning } =
@@ -551,6 +565,7 @@ async function gatherDaemonStatusImpl(
     },
     gateway: {
       ...gateway,
+      ...crashHistory,
       ...(lastShutdown ? { lastShutdown } : {}),
       ...(duelingScopesWarning ? { duelingScopesWarning } : {}),
       ...(windowsFirewall?.applies ? { windowsFirewall } : {}),

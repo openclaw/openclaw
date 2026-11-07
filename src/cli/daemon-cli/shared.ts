@@ -1,3 +1,4 @@
+import { terminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import {
@@ -10,6 +11,7 @@ import { buildPlatformServiceStartHints } from "../../daemon/runtime-hints.js";
 import type { GatewayServiceInstallationDrift } from "../../daemon/service-layout.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { hasSudoToRootSystemdUserManagerMismatch } from "../../daemon/systemd-user-transport.js";
+import { formatGatewayCrash, type GatewayCrashRecord } from "../../infra/gateway-crash.js";
 import { resolveGatewayServiceMutationError } from "../../infra/gateway-supervision.js";
 import { parseTcpPort } from "../../infra/tcp-port.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -101,6 +103,18 @@ export function formatGatewayServiceInstallationDrift(
   const facts = `CLI ${activeVersion ?? "version unknown"} at ${activeRoot} differs from the Gateway service's ${serviceVersion ?? "version unknown"} at ${serviceRoot}. Run \`${formatCliCommand("openclaw update", env)}\` or use the CLI from ${serviceRoot}.`;
   const guidance = resolveDaemonServiceInstallGuidance(undefined, env, service);
   return guidance ? `${facts} ${guidance}` : facts;
+}
+
+export function formatGatewayCrashHistory(history?: {
+  recentCrashes?: readonly GatewayCrashRecord[];
+  crashHistoryError?: string;
+}): string[] {
+  return history?.crashHistoryError
+    ? [terminalText`Recent Gateway crashes unavailable: ${history.crashHistoryError}`]
+    : (history?.recentCrashes ?? []).map(
+        (crash) =>
+          terminalText`Previous Gateway run ended unexpectedly (${new Date(crash.detectedAtMs).toISOString()}): ${formatGatewayCrash(crash)}`,
+      );
 }
 
 export function createCliStatusTextStyles() {

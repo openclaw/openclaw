@@ -8,14 +8,45 @@ import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js"
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import { resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import {
   buildGatewayCrashLoopBreakerDecision,
   maintenanceStartupReasons,
 } from "./gateway-boot-lifecycle.kernel.js";
+import {
+  publishGatewayRecentCrashes,
+  type GatewayCrashEvidence,
+  type GatewayCrashRecord,
+} from "./gateway-crash.js";
 import { resolveGatewayPlatformSupervisor } from "./gateway-supervision.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { pathMayExistSync } from "./path-existence.js";
 import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
+import { detectGatewayRespawnSupervisorIdentity } from "./supervisor-markers.js";
+
+export async function readGatewayRecentCrashesAsync(
+  env = process.env,
+): Promise<GatewayCrashRecord[]> {
+  const reply = await executeExistingOpenClawStateRead(
+    { env },
+    { type: "gatewayBoot.crashes", input: undefined },
+    { signal: getAsyncWorkSignal(), current: true },
+  );
+  return reply?.crashes ?? [];
+}
+
+export async function enrichGatewayCrashAsync(
+  bootId: string,
+  evidence: GatewayCrashEvidence,
+  env = process.env,
+): Promise<GatewayCrashRecord | undefined> {
+  const context = captureOpenClawStateWorkerContext({ env });
+  const result = await runOpenClawStateWorkerOperation(context, (scope) =>
+    scope.execute({ type: "gatewayBoot.enrichCrash", input: { bootId, evidence } }),
+  );
+  publishGatewayRecentCrashes(result.crashes);
+  return result.crash;
+}
 
 export {
   GATEWAY_CRASH_LOOP_BREAKER_REASON,
@@ -73,6 +104,14 @@ export type GatewayCrashLoopBreakerDecision = ReturnType<
 export type GatewayRestartResumeWindow = { startedAt: number; endedAt: number };
 export type GatewayRestartResumeWindows = Record<string, GatewayRestartResumeWindow[]>;
 
+export type GatewayBootLifecycleStart = {
+  decision: GatewayCrashLoopBreakerDecision;
+  id: string | undefined;
+  restartResumeWindow?: GatewayRestartResumeWindow;
+  restartResumeWindows?: GatewayRestartResumeWindows;
+  previousCrash?: GatewayCrashRecord;
+};
+
 /** Inspection keeps snapshot preparation off the caller's event loop. */
 export async function readGatewayLastShutdownAsync(env = process.env) {
   const reply = await executeExistingOpenClawStateRead(
@@ -94,17 +133,37 @@ export async function readGatewayLastInstallationReplacementAsync(env = process.
 export async function beginGatewayBootLifecycle(
   env: NodeJS.ProcessEnv = process.env,
   nowMs = Date.now(),
-): Promise<{
-  decision: GatewayCrashLoopBreakerDecision;
-  id: string | undefined;
-  restartResumeWindow?: GatewayRestartResumeWindow;
-  restartResumeWindows?: GatewayRestartResumeWindows;
-}> {
+  previousOwner?: { pid: number; heartbeatAt?: number },
+): Promise<GatewayBootLifecycleStart> {
+  // A new startup owns the serving process's diagnostic projection, including failed admission.
+  publishGatewayRecentCrashes([]);
   try {
     const context = captureOpenClawStateWorkerContext({ env });
-    return await runOpenClawStateWorkerOperation(context, (scope) =>
-      scope.execute({ type: "gatewayBoot.begin", input: nowMs }),
+    const supervisor = detectGatewayRespawnSupervisorIdentity();
+    const result = await runOpenClawStateWorkerOperation(context, (scope) =>
+      scope.execute({
+        type: "gatewayBoot.begin",
+        input: {
+          nowMs,
+          previousOwner,
+          metadata: {
+            version: VERSION,
+            commit: resolveRuntimeServiceCommit() ?? undefined,
+            runtime: process.versions.bun
+              ? `Bun ${process.versions.bun}`
+              : `Node ${process.versions.node}`,
+            ...(supervisor ? { supervisor } : {}),
+            ...(supervisor?.kind === "systemd" && env.INVOCATION_ID
+              ? { systemdInvocationId: env.INVOCATION_ID }
+              : {}),
+          },
+        },
+      }),
     );
+    if (result.crashes) {
+      publishGatewayRecentCrashes(result.crashes);
+    }
+    return result;
   } catch (err) {
     gatewayLifecycleLog.warn(`crash-loop breaker state unavailable; fail-open: ${String(err)}`);
     return { decision: buildGatewayCrashLoopBreakerDecision({ uncleanBoots: 0 }), id: undefined };
