@@ -143,6 +143,8 @@ export type QaBusMessage = {
   conversation: QaBusConversation;
   senderId: string;
   senderName?: string;
+  /** Marks a synthetic sender as a bot, such as another agent. */
+  senderIsBot?: boolean;
   text: string;
   /** Runtime-authored failure marker; copy wording is not a QA contract. */
   isError?: boolean;
@@ -194,6 +196,7 @@ export type QaBusInboundMessageInput = {
   conversation: QaBusConversation;
   senderId: string;
   senderName?: string;
+  senderIsBot?: boolean;
   text: string;
   timestamp?: number;
   threadId?: string;

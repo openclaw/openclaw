@@ -64,7 +64,12 @@ it.each(["tool", "harness"] as const)(
     };
     const sendPrompt = () =>
       producer === "tool"
-        ? sendQuestionToolPrompt({ toolName: "ask_user", questionId, questions, send })
+        ? sendQuestionToolPrompt({
+            toolName: "ask_user",
+            questionId,
+            questions,
+            delivery: { send },
+          })
         : deliverAgentHarnessQuestionPrompt(
             { onBlockReply: send },
             questionId,
