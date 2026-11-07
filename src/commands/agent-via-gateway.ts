@@ -67,6 +67,7 @@ import { normalizeMessageChannel } from "../utils/message-channel-normalize.js";
 import { sleep } from "../utils/sleep.js";
 import { resolveAgentGatewayIdentity } from "./agent-gateway-identity.js";
 import { readAgentMessageFile } from "./agent-message-input.js";
+import { logAgentReplyTextOutput } from "./agent-via-gateway-text-output.js";
 
 type AgentGatewayResult = {
   payloads?: Array<{
@@ -810,19 +811,12 @@ async function agentViaGatewayCommand(
     return response;
   }
 
-  for (const payload of payloads) {
-    const { resolveSendableOutboundReplyParts } = await import("openclaw/plugin-sdk/reply-payload");
-    const { formatOutboundPayloadLog } = await import("../infra/outbound/payloads.js");
-    const parts = resolveSendableOutboundReplyParts({
-      text: payload.text,
-      mediaUrls: payload.mediaUrls,
-      mediaUrl: typeof payload.mediaUrl === "string" ? payload.mediaUrl : undefined,
-    });
-    const out = formatOutboundPayloadLog(parts).trimEnd();
-    if (out) {
-      runtime.log(out);
-    }
-  }
+  await logAgentReplyTextOutput({
+    status: response?.status,
+    summary: response?.summary,
+    payloads,
+    runtime,
+  });
 
   return response;
 }

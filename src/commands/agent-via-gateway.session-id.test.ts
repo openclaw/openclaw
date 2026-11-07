@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import process from "node:process";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -42,6 +43,7 @@ beforeEach(() => {
 afterEach(() => {
   resetDatabaseEngineSelectionForTest();
   vi.unstubAllEnvs();
+  process.exitCode = undefined;
 });
 
 it.each(["agents.list", "agent"])(
@@ -113,3 +115,48 @@ it.each(["local", "remote"] as const)(
     });
   },
 );
+
+it("prints the failed run's summary after tool-warning payloads", async () => {
+  loadConfig.mockReturnValue({ agents: { entries: { main: {} } } } as OpenClawConfig);
+  const summary =
+    "You've reached your Codex subscription usage limit. Next reset in 2 hours, Nov 5 at 11:48 PM UTC.";
+  callGateway.mockResolvedValue({
+    runId: "idem-1",
+    status: "failed",
+    summary,
+    result: {
+      payloads: [{ text: "⚠️ Bash failed", isError: true }],
+      meta: { error: new Error(summary) },
+    },
+  });
+
+  await agentCliCommand({ message: "hi" }, runtime);
+
+  expect(process.exitCode).toBe(1);
+  const logged = runtime.log.mock.calls.map((call) => String(call[0]));
+  expect(logged.some((message) => message.includes("⚠️ Bash failed"))).toBe(true);
+  expect(logged.some((message) => message.includes(summary))).toBe(true);
+});
+
+it("does not duplicate the summary when a payload already shows it", async () => {
+  loadConfig.mockReturnValue({ agents: { entries: { main: {} } } } as OpenClawConfig);
+  const summary = "You've reached your Codex subscription usage limit.";
+  callGateway.mockResolvedValue({
+    runId: "idem-1",
+    status: "failed",
+    summary,
+    result: {
+      payloads: [{ text: summary, isError: true }],
+      meta: { error: new Error(summary) },
+    },
+  });
+
+  await agentCliCommand({ message: "hi" }, runtime);
+
+  expect(process.exitCode).toBe(1);
+  expect(
+    runtime.log.mock.calls
+      .map((call) => String(call[0]))
+      .filter((message) => message.includes(summary)),
+  ).toHaveLength(1);
+});

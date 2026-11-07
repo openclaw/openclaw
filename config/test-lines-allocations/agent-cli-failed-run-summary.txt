@@ -1,0 +1,2 @@
+# Failed-run summary surfaces after tool-warning payloads in the CLI text path.
+47
