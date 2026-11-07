@@ -227,9 +227,9 @@ export function dropInactive(
       (key) => now - memberKeySeen(member, key, now) > windows.memberPeerKeySeconds,
     ),
   );
-  // SAFETY: nodes is keyed by IrohEndpointKey; Object.entries widens keys to string.
   const idleNodes = Object.entries(state.nodes)
     .filter(([, node]) => now - node.last_seen > windows.nodeSeconds)
+    // SAFETY: nodes is keyed by IrohEndpointKey; Object.entries widens keys to string.
     .map(([key]) => key as IrohEndpointKey);
   if (idleOwners.length === 0 && idleKeys.length === 0 && idleNodes.length === 0) {
     return null;
