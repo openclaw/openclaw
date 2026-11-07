@@ -16,11 +16,17 @@ import { recordSessionParticipantInWorker } from "../config/sessions/session-sha
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
+import { classifyWorkerRequest } from "../infra/worker-request-diagnostics.js";
 import { readLoggingConfig } from "../logging/config.js";
 import { applyLoggingConfig } from "../logging/logger.js";
-import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import {
+  getActiveSessionWorkAdmissionCount,
+  getSessionWorkAdmissionRelease,
+} from "../sessions/session-lifecycle-admission.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { runOutsideStoreWriterContext } from "../shared/store-writer-queue.js";
+import { agentDatabaseWriteAdmissionState } from "../state/openclaw-agent-write-admission-state.js";
 import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
 import type { StartChatDispatchParams } from "./server-methods/chat-send-agent-dispatch.types.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
@@ -32,6 +38,10 @@ import {
 } from "./server.sessions.create.test-support.js";
 import { agentCommandMock, rpcReq, testState } from "./test-helpers.js";
 
+// Diagnostic only: fixed labels/classified commands, never request payloads or paths.
+let durabilityTrace: ((phase: string, detail?: string, operation?: number) => void) | undefined;
+let durabilityTraceOperation = 0;
+let stopDurabilityTrace: (() => void) | undefined;
 const dispatch = vi.hoisted(() => ({ start: vi.fn<(params: StartChatDispatchParams) => void>() }));
 const turnBoundary = vi.hoisted(() => ({
   committing: false,
@@ -67,16 +77,24 @@ vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
                   if (committing) {
                     turnBoundary.committing = true;
                   }
+                  const traceOperation = ++durabilityTraceOperation;
                   try {
                     if (committing) {
                       turnBoundary.afterPrepare?.();
                     }
+                    durabilityTrace?.(
+                      "worker.begin",
+                      classifyWorkerRequest(command.type),
+                      traceOperation,
+                    );
                     const result = await worker.execute(command, commandOptions);
+                    durabilityTrace?.("worker.end", undefined, traceOperation);
                     if (committing) {
                       turnBoundary.afterCommit?.();
                     }
                     return result;
                   } finally {
+                    durabilityTrace?.("worker.settled", undefined, traceOperation);
                     if (committing) {
                       turnBoundary.committing = false;
                     }
@@ -99,15 +117,116 @@ const { createSessionStoreDir, openClient } = setupSessionCreateTestHarness(asyn
 });
 
 afterEach(() => {
+  stopDurabilityTrace?.();
   turnBoundary.committing = false;
   turnBoundary.afterPrepare = undefined;
   turnBoundary.afterCommit = undefined;
   vi.restoreAllMocks();
 });
 
-test("persists and dispatches concurrent Gateway inputs while participant writes queue", async () => {
+test("persists and dispatches concurrent Gateway inputs while participant writes queue", async ({ signal }) => {
+  let sequence = 0;
+  let events = 0;
+  let heartbeats = 0;
+  let awaited = "setup.store";
+  const startedAt = performance.now();
+  const workers = new Map<number, string>();
+  durabilityTraceOperation = 0;
+  durabilityTrace = (phase, detail, operation) => {
+    try {
+      if (phase === "worker.begin" && operation !== undefined && workers.size < 8) {
+        workers.set(operation, detail ?? "other");
+      } else if (phase === "worker.settled" && operation !== undefined) {
+        workers.delete(operation);
+      }
+      // Keep heartbeats and the timeout snapshot even after the event budget is exhausted.
+      if (phase !== "watchdog" && phase !== "test.abort" && ++events > 256) {
+        return;
+      }
+      const queues = [];
+      for (const queue of agentDatabaseWriteAdmissionState.queues.values()) {
+        const workerOperations = [];
+        for (const label of queue.holder?.worker?.operations ?? []) {
+          workerOperations.push(classifyWorkerRequest(label));
+          if (workerOperations.length === 4) {
+            break;
+          }
+        }
+        queues.push({
+          pending: queue.pending.length,
+          draining: !!queue.drainPromise,
+          holder: !!queue.holder,
+          operation: queue.holder?.operation,
+          started: queue.holder?.startedAt !== undefined,
+          finished: queue.holder?.finishedAt !== undefined,
+          workerOperations,
+        });
+        if (queues.length === 4) {
+          break;
+        }
+      }
+      console.error(
+        "DURABILITY_PHASE " +
+          JSON.stringify({
+            sequence: ++sequence,
+            phase,
+            detail,
+            operation,
+            awaited,
+            elapsedMs: Math.round(performance.now() - startedAt),
+            roots: getActiveGatewayRootWorkCount(),
+            sessions: getActiveSessionWorkAdmissionCount(),
+            dispatches: dispatch.start.mock.calls.length,
+            workers: [...workers].map(([id, command]) => ({ id, command })),
+            queueCount: agentDatabaseWriteAdmissionState.queues.size,
+            queues,
+          }),
+      );
+    } catch {
+      // Observability must never replace a result, refusal or original failure.
+    }
+  };
+  const traceTimer = setInterval(() => {
+    durabilityTrace?.("watchdog");
+    if (++heartbeats >= 36) {
+      clearInterval(traceTimer);
+    }
+  }, 5000);
+  traceTimer.unref();
+  const stopTrace = () => {
+    clearInterval(traceTimer);
+    signal.removeEventListener("abort", onAbort);
+    durabilityTrace = undefined;
+    stopDurabilityTrace = undefined;
+  };
+  const onAbort = () => {
+    durabilityTrace?.("test.abort");
+    stopTrace();
+  };
+  stopDurabilityTrace = stopTrace;
+  signal.addEventListener("abort", onAbort, { once: true });
+  durabilityTrace("setup.store.begin");
   const { storePath } = await createSessionStoreDir();
+  durabilityTrace?.("setup.store.end");
+  awaited = "setup.client";
+  durabilityTrace?.("setup.client.begin");
   const { ws } = await openClient();
+  durabilityTrace?.("setup.client.end");
+  probe.admission(workerAdmission, (request, grant, callback) => {
+    const operation = ++durabilityTraceOperation;
+    const stage = ["open", "prepare", "transaction", "commit"].includes(request.stage)
+      ? request.stage
+      : "other";
+    durabilityTrace?.("admission.callback.begin", stage, operation);
+    try {
+      // Preserve both original objects and the callback's synchronous behavior.
+      callback(request, grant);
+      durabilityTrace?.("admission.callback.return", stage, operation);
+    } catch (error) {
+      durabilityTrace?.("admission.callback.error", stage, operation);
+      throw error;
+    }
+  });
   const inputs = Array.from({ length: 2 }, (_, index) => ({
     agentId: "main",
     key: `agent:main:dashboard:concurrent-initial-${index}`,
@@ -117,7 +236,10 @@ test("persists and dispatches concurrent Gateway inputs while participant writes
   const intervenedInputs = new Set<string>();
   const acquire = sessionInputActors.acquireSessionInputActor;
   vi.spyOn(sessionInputActors, "acquireSessionInputActor").mockImplementation(async (...args) => {
+    const operation = ++durabilityTraceOperation;
+    durabilityTrace?.("acquire.begin", undefined, operation);
     const input = await acquire(...args);
+    durabilityTrace?.("acquire.end", input ? "present" : "absent", operation);
     if (input) {
       const accept = input.actor.acceptInput;
       vi.spyOn(input.actor, "acceptInput").mockImplementationOnce(async (...command) => {
@@ -136,11 +258,26 @@ test("persists and dispatches concurrent Gateway inputs while participant writes
               sessionAgentId: "main",
             },
           );
+        durabilityTrace?.("participant1.begin", undefined, operation);
         await recordParticipant(1);
+        durabilityTrace?.("participant1.end", undefined, operation);
         intervenedInputs.add(input.actor.target.sessionKey);
+        durabilityTrace?.("accept.begin", undefined, operation);
         const pending = accept(...command);
+        void pending.then(
+          () => durabilityTrace?.("accept.end", undefined, operation),
+          () => durabilityTrace?.("accept.error", undefined, operation),
+        );
         // This independent writer must wait behind the complete input admission.
-        competingWrites.push(runOutsideStoreWriterContext(() => recordParticipant(2)));
+        competingWrites.push(runOutsideStoreWriterContext(() => {
+          durabilityTrace?.("participant2.begin", undefined, operation);
+          const pendingWriter = recordParticipant(2);
+          void pendingWriter.then(
+            () => durabilityTrace?.("participant2.end", undefined, operation),
+            () => durabilityTrace?.("participant2.error", undefined, operation),
+          );
+          return pendingWriter;
+        }));
         return pending;
       });
     }
@@ -149,11 +286,14 @@ test("persists and dispatches concurrent Gateway inputs while participant writes
   dispatch.start.mockClear();
   dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
   try {
+    awaited = "rpc";
+    durabilityTrace?.("rpc.begin");
     const created = await Promise.all(
       inputs.map((params) =>
         rpcReq<{ sessionId: string; runStarted: boolean }>(ws, "sessions.create", params),
       ),
     );
+    durabilityTrace?.("rpc.end");
     for (const [index, response] of created.entries()) {
       expect(response.ok, JSON.stringify(response)).toBe(true);
       expect(response.payload?.runStarted, JSON.stringify(response)).toBe(true);
@@ -164,27 +304,38 @@ test("persists and dispatches concurrent Gateway inputs while participant writes
         sessionId: expectDefined(response.payload?.sessionId, "created session ID"),
         storePath,
       };
+      awaited = index === 0 ? "transcript.0" : "transcript.1";
+      durabilityTrace?.("transcript.begin", awaited);
       expect(
         (await loadTranscriptEvents(scope)).filter((event) =>
           JSON.stringify(event).includes(input.message),
         ),
       ).toHaveLength(1);
+      durabilityTrace?.("transcript.end", awaited);
     }
     expect(intervenedInputs).toEqual(new Set(inputs.map((input) => input.key)));
     expect(dispatch.start).toHaveBeenCalledTimes(inputs.length);
   } finally {
+    awaited = "cleanup.writers";
+    durabilityTrace?.("cleanup.writers.begin");
     await Promise.all(competingWrites);
+    durabilityTrace?.("cleanup.writers.end");
     const released = getSessionWorkAdmissionRelease({
       scope: storePath,
       identities: inputs.map((input) => input.key),
     });
     for (const [turn] of dispatch.start.mock.calls) {
+      durabilityTrace?.("cleanup.release.begin");
       turn.replyAdmissionTicket?.release();
       turn.admission.cleanupAdmittedRun();
       clearAgentRunContext(turn.session.clientRunId, turn.admission.lifecycleGeneration);
     }
+    awaited = "cleanup.admission";
+    durabilityTrace?.("cleanup.admission.begin");
     await released;
+    durabilityTrace?.("cleanup.admission.end");
     ws.close();
+    stopTrace();
   }
 });
 
