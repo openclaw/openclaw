@@ -115,7 +115,7 @@ export function createSubagentRegistryPublicApi(config: {
     identity: { runId?: string; childSessionKey?: string; childAgentId?: string },
     state: SwarmStructuredOutputState,
     assertCurrent?: () => void,
-  ): Promise<void> {
+  ): Promise<"completed" | undefined> {
     const runId = identity.runId?.trim();
     const childSessionKey = identity.childSessionKey?.trim();
     const entry =
@@ -128,18 +128,14 @@ export function createSubagentRegistryPublicApi(config: {
             identity.childAgentId,
           )
         : undefined);
-    if (!entry?.collect || entry.collectorCompletion) {
+    if (!entry?.collect) {
       throw new Error("collector run is unavailable");
     }
-    await mutateSubagentRuns(
+    return mutateSubagentRuns(
       [entry.runId],
       (rows) => {
         const current = rows.get(entry.runId);
-        if (
-          !current?.collect ||
-          !isSameSubagentRunOwner(current, entry) ||
-          current.collectorCompletion
-        ) {
+        if (!current?.collect || !isSameSubagentRunOwner(current, entry)) {
           throw new SubagentRegistryMutationRejectedError("collector run is unavailable");
         }
         if (
@@ -151,6 +147,38 @@ export function createSubagentRegistryPublicApi(config: {
           throw new SubagentRegistryMutationRejectedError(
             "collector output changed before publication",
           );
+        }
+        const completion = current.collectorCompletion;
+        if (completion) {
+          if (
+            current.execution.outcome?.status !== "ok" ||
+            completion.status !== "failed" ||
+            completion.schemaError !== "structured_output was not called" ||
+            completion.structured !== undefined ||
+            completion.reason !== undefined ||
+            state.structured === undefined
+          ) {
+            throw new SubagentRegistryMutationRejectedError("collector run is unavailable");
+          }
+          // The existing writer publishes this result only after its durable commit.
+          return {
+            value: "completed" as const,
+            postimages: new Map([
+              [
+                current.runId,
+                {
+                  ...current,
+                  structuredOutput: undefined,
+                  collectorCompletion: {
+                    ...completion,
+                    status: "done" as const,
+                    structured: state.structured,
+                    schemaError: undefined,
+                  },
+                },
+              ],
+            ]),
+          };
         }
         return {
           value: undefined,
