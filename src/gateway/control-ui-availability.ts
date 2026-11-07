@@ -3,7 +3,7 @@ import path from "node:path";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { escapeHtml } from "../shared/html-escape.js";
 import { openClawMascotStyles, renderOpenClawMascot } from "../shared/openclaw-mascot.js";
-import { OPENCLAW_WORDMARK_SVG } from "../shared/openclaw-wordmark.js";
+import { OPENCLAW_WORDMARK_TEXT_SVG } from "../shared/openclaw-wordmark.js";
 import {
   applyControlUiSecurityHeaders,
   buildControlUiCspHeader,
@@ -79,12 +79,12 @@ function railIcon(body: string): string {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
 }
 
-// The sidebar header carries the wordmark; its own gradient id keeps the phone header copy
-// painting where the sidebar is hidden, and the sidebar's aria-hidden covers its label.
-const SIDEBAR_WORDMARK_SVG = OPENCLAW_WORDMARK_SVG.replace(
-  'class="wordmark" role="img" aria-label="OpenClaw"',
+// The page's own mascot stands in the main area, so the headers carry only the text wordmark.
+// The sidebar's aria-hidden covers its copy's label.
+const SIDEBAR_WORDMARK_SVG = OPENCLAW_WORDMARK_TEXT_SVG.replace(
+  'class="wordmark wordmark-text" role="img" aria-label="OpenClaw"',
   'class="side-brand"',
-).replaceAll("openclaw-wordmark-shell", "openclaw-sidebar-shell");
+);
 
 // Decorative copy of the Control UI's disconnected shell, so the app replaces it without a jump.
 const SHELL_SIDEBAR = `<aside class="sidebar" aria-hidden="true" data-window-drag><div class="rail" data-window-drag>
@@ -139,7 +139,7 @@ export function renderControlUiUnavailableDocument(title: string): string {
 .skeleton-rows>span>:last-child{width:68%}.skeleton-rows>:nth-child(2)>:last-child{width:50%}.skeleton-rows>:nth-child(3)>:last-child{width:78%}.skeleton-rows>:nth-child(4)>:last-child{width:58%}
 .content{position:relative;display:flex;flex-direction:column;flex:1;min-width:0}
 .topbar{display:none}
-.wordmark{display:block;width:140px;height:32px;color:var(--text-strong)}
+.wordmark{display:block;width:105px;height:32px;color:var(--text-strong)}
 main{position:relative;flex:1;min-height:100svh}
 /* Every status page shares one anatomy: the mascot stands above a centred title, which holds a fixed height a little above centre. */
 .body{position:absolute;top:38%;left:50%;width:min(460px,calc(100% - 48px));transform:translateX(-50%);text-align:center}
@@ -149,7 +149,7 @@ p{margin:6px 0 0;color:var(--muted);font-size:14px;line-height:21px;text-wrap:pr
 ${MASCOT_STYLES}
 </style></head><body>
 <div class="shell" data-window-drag>${SHELL_SIDEBAR}
-<div class="content" data-window-drag><header class="topbar" data-window-drag>${OPENCLAW_WORDMARK_SVG}</header>
+<div class="content" data-window-drag><header class="topbar" data-window-drag>${OPENCLAW_WORDMARK_TEXT_SVG}</header>
 <main id="openclaw-maintenance" data-window-drag><div class="body" data-window-drag>
 <h1>${MASCOT}${escapeHtml(title)}</h1>
 <p role="status" aria-live="polite">Hang on while the Gateway gets ready.</p>
