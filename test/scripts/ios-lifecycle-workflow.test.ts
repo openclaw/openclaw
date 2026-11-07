@@ -610,7 +610,8 @@ print(json.dumps({"error": error, "commands": commands, "runs": runs, "bootTimeo
     { encoding: "utf8", timeout: 5_000 },
   );
   expect(result.status, result.stderr).toBe(0);
-  return JSON.parse(result.stdout) as {
+  return { root, ...JSON.parse(result.stdout) } as {
+    root: string;
     error: string | null;
     commands: string[][];
     bootTimeouts: number[];
@@ -627,6 +628,56 @@ print(json.dumps({"error": error, "commands": commands, "runs": runs, "bootTimeo
   };
 }
 
+describe.skipIf(process.platform === "win32")("iOS attachment package roots", () => {
+  it("keeps baseline and candidate suites in their own package checkout", () => {
+    const root = tempDirs.make("openclaw-attachment-packages-");
+    const script = readFileSync("scripts/test-ios-chat-attachments.sh", "utf8");
+    const runTest = script.slice(
+      script.indexOf("run_test() {"),
+      script.indexOf("run_revision() {"),
+    );
+    const trace = path.join(root, "arguments.txt");
+    const result = spawnSync(
+      "/bin/bash",
+      [
+        "--noprofile",
+        "--norc",
+        "-c",
+        [
+          "set -euo pipefail",
+          'root="$1/candidate tree"; output="$1/results"; simulator=fixture-phone',
+          'mkdir -p "$output"',
+          "xcodebuild() {",
+          '  printf "%s\\n" "$@" >> "$ATTACHMENT_TRACE"',
+          '  while [[ "$1" != -resultBundlePath ]]; do shift; done',
+          '  mkdir -p "$2"',
+          "}",
+          `xcrun() { printf '{"result":"Passed","failedTests":0,"passedTests":1}\\n'; }`,
+          runTest,
+          "for stage in before after; do",
+          '  tree="$1/baseline tree"',
+          '  if [[ "$stage" == after ]]; then tree="$root"; fi',
+          '  for suite in envelope ui; do run_test "$tree" "$stage" "$suite" ""; done',
+          "done",
+        ].join("\n"),
+        "fixture",
+        root,
+      ],
+      { encoding: "utf8", env: { ...process.env, ATTACHMENT_TRACE: trace } },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const args = readFileSync(trace, "utf8").trim().split("\n");
+    const packages = args.flatMap((arg, index) =>
+      arg === "-clonedSourcePackagesDirPath" ? [args[index + 1]] : [],
+    );
+    expect(packages).toEqual(
+      ["baseline tree", "candidate tree"].flatMap((tree) =>
+        Array(2).fill(path.join(root, tree, "apps/ios/build/SourcePackages")),
+      ),
+    );
+  });
+});
+
 describe("iOS Access process restart proof", () => {
   it.each([
     { mode: "ready", format: 0, prepared: false },
@@ -637,6 +688,11 @@ describe("iOS Access process restart proof", () => {
   ])("preserves two repetitions (%j)", ({ mode, format, prepared }) => {
     const proof = runRestartProof(mode, format, prepared);
     const { commands, runs } = proof;
+    for (const args of commands.filter((command) => command.includes("-project"))) {
+      expect(args[args.indexOf("-clonedSourcePackagesDirPath") + 1]).toBe(
+        path.join(proof.root, "apps/ios/build/SourcePackages"),
+      );
+    }
     expect(proof).toMatchObject({ error: null, bootTimeouts: [120], receiptRetained: false });
     expect(runs).toHaveLength(1);
     const { config, environment } = runs[0]!;

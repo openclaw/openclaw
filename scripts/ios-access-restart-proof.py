@@ -167,7 +167,8 @@ def main(simulator):
     nonce = str(uuid.uuid4())
     destination = f"platform=iOS Simulator,id={simulator}"
     build = ["xcodebuild", "-project", "apps/ios/OpenClaw.xcodeproj", "-scheme", "OpenClaw",
-             "-configuration", "Debug", "-destination", destination]
+             "-configuration", "Debug", "-destination", destination,
+             "-clonedSourcePackagesDirPath", str(Path("apps/ios/build/SourcePackages").resolve())]
     # CI carries this fact only after its build-for-testing succeeds. Standalone proof still builds.
     if os.environ.get("IOS_TEST_BUILD_PREPARED") != "true":
         run(build + ["-parallel-testing-enabled", "NO", "build-for-testing"])

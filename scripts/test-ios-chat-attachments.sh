@@ -55,6 +55,7 @@ run_test() {
   fi
   # Keep Actions log backpressure outside the simulator, retaining complete logs and xcresults.
   xcodebuild -project "$tree/apps/ios/OpenClaw.xcodeproj" -scheme "$scheme" \
+    -clonedSourcePackagesDirPath "$tree/apps/ios/build/SourcePackages" \
     -configuration Debug -destination "platform=iOS Simulator,id=$simulator" \
     -testLanguage en -testRegion US -parallel-testing-enabled NO \
     -resultBundlePath "$result" "${tests[@]}" test > "$log" 2>&1 || status=$?
