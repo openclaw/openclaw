@@ -20,6 +20,8 @@ export type ChatModelPickerOption = {
   contextWindow?: number;
   disabled?: boolean;
   unavailableReason?: ModelRuntimeEntry["unavailableReason"];
+  unavailableUntil?: number;
+  expiryLabel?: string;
   isDefault: boolean;
   label: string;
   provider: string;

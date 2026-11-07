@@ -2,10 +2,12 @@ import { createMemo, Show, useContext } from "solid-js";
 import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
+import { formatDurationHuman } from "../../../lib/format-duration.ts";
 import { formatModelRuntimeLabel } from "../../../lib/model-runtime-label.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import "../../../components/tooltip.ts";
 import { keyboardHintsVisible } from "../../../lib/reactive/keyboard-hints.ts";
+import "../../../components/tooltip.ts";
+import { readVisibleTime } from "../../../lib/reactive/visible-clock.ts";
 import {
   formatModelContextMeta,
   formatModelLabel,
@@ -15,6 +17,25 @@ import {
   type ChatModelPickerTargetOptionProps,
 } from "./chat-model-picker-options.ts";
 import { ChatModelSearchContext, type ChatModelSearchRow } from "./chat-model-picker-search.ts";
+
+function ModelCooldown(props: { until: number }) {
+  const search = useContext(ChatModelSearchContext);
+  const label = createMemo(() => {
+    const remaining =
+      props.until - (search?.open() !== false ? readVisibleTime(30_000) : Date.now());
+    // The Gateway still owns availability after the deadline; only retire the countdown.
+    return remaining > 0
+      ? t("chat.modelControls.cooldown", {
+          time: formatDurationHuman(Math.ceil(remaining / 60_000) * 60_000),
+        })
+      : undefined;
+  });
+  return (
+    <Show when={label()}>
+      {(text) => <span class="chat-controls__model-cooldown">{text()}</span>}
+    </Show>
+  );
+}
 
 function ModelShortcut(props: { rowKey: string }) {
   const search = useContext(ChatModelSearchContext);
@@ -48,10 +69,12 @@ export function ChatModelTargetIcon() {
 
 type ModelPresentationProps = Omit<ChatModelPickerOptionProps, "onSelect" | "index">;
 
-function optionNeedsAuth(entry: ModelPresentationProps["entry"]) {
+function optionBlocksSelection(entry: ModelPresentationProps["entry"]) {
   return (
     entry.disabled &&
-    (entry.unavailableReason === "missing-auth" || entry.unavailableReason === "auth-failed")
+    (entry.unavailableReason === "missing-auth" ||
+      entry.unavailableReason === "auth-failed" ||
+      entry.unavailableReason === "cooldown")
   );
 }
 
@@ -68,10 +91,13 @@ function optionPresentation(options: ModelPresentationProps) {
   const chatOnlyHelp =
     options.entry.supportsTools === false ? t("chat.modelControls.chatOnlyHelp") : "";
   const detail = [routeDetail, chatOnlyHelp].filter(Boolean).join(" ");
-  // Resetting a recorded pin remains possible even when its default model is unavailable.
+  // A missing default may still reset a recorded pin; auth and cooldown blocks stay inert.
   const resetsPin = options.entry.isDefault && options.sessionModelPinned;
-  const needsAuth = optionNeedsAuth(options.entry);
-  const modelMeta = needsAuth ? "" : formatModelContextMeta(options.entry, t);
+  const blocked = optionBlocksSelection(options.entry);
+  const coolingDown = blocked && options.entry.unavailableReason === "cooldown";
+  const needsAuth = blocked && !coolingDown;
+  const cooldownUntil = coolingDown ? options.entry.unavailableUntil : undefined;
+  const modelMeta = blocked ? "" : formatModelContextMeta(options.entry, t);
   const accessibleStatus = needsAuth
     ? t("modelSetup.candidates.signInNeeded")
     : options.entry.unavailableReason === "unsupported-runtime"
@@ -85,6 +111,9 @@ function optionPresentation(options: ModelPresentationProps) {
     detail,
     resetsPin,
     needsAuth,
+    blocked,
+    coolingDown,
+    cooldownUntil,
     modelMeta,
     accessibleStatus,
   };
@@ -118,7 +147,7 @@ export function modelOptionSearchRow(
     hasShortcut: !selected,
     disabled:
       options.disabled ||
-      optionNeedsAuth(options.entry) ||
+      optionBlocksSelection(options.entry) ||
       Boolean(options.entry.disabled && !resetsPin),
   };
 }
@@ -145,13 +174,13 @@ function ModelOptionButton(
         "chat-controls__inline-select-option chat-controls__model-option",
         {
           "chat-controls__inline-select-option--selected":
-            props.presentation.selected && !props.presentation.needsAuth,
+            props.presentation.selected && !props.presentation.blocked,
         },
       ]}
       data-chat-model-option={props.entry.value}
       data-chat-model-key={key()}
       data-chat-model-rank={rank()}
-      data-chat-model-highlighted={highlighted() && !props.presentation.needsAuth ? "" : undefined}
+      data-chat-model-highlighted={highlighted() && !props.presentation.blocked ? "" : undefined}
       style={{ "--chat-model-rank": rank() }}
       data-chat-model-runtime={props.entry.agentRuntime ?? undefined}
       data-chat-model-default={props.entry.isDefault ? "true" : undefined}
@@ -180,10 +209,11 @@ function ModelOptionButton(
       type="button"
       disabled={
         props.disabled ||
-        props.presentation.needsAuth ||
+        props.presentation.blocked ||
         Boolean(props.entry.disabled && !props.presentation.resetsPin)
       }
       data-chat-model-auth-blocked={props.presentation.needsAuth ? "" : undefined}
+      data-chat-model-cooldown={props.presentation.coolingDown ? "" : undefined}
       onClick={(event) => {
         props.onSelect(props.entry, event);
       }}
@@ -204,13 +234,17 @@ function ModelOptionButton(
               <Icon name="info" />
             </span>
           </Show>
-          <Show when={props.presentation.modelMeta}>
-            <span class="chat-controls__model-option-meta">{props.presentation.modelMeta}</span>
+          <Show when={props.presentation.modelMeta || props.presentation.cooldownUntil}>
+            <span class="chat-controls__model-option-meta">
+              <Show when={props.presentation.cooldownUntil} fallback={props.presentation.modelMeta}>
+                {(until) => <ModelCooldown until={until()} />}
+              </Show>
+            </span>
           </Show>
         </span>
       </span>
       <span class="chat-controls__model-option-action">
-        <Show when={!props.presentation.needsAuth}>
+        <Show when={!props.presentation.blocked}>
           <Show when={props.presentation.selected} fallback={<ModelShortcut rowKey={key()} />}>
             <span class="chat-controls__inline-select-check" aria-hidden="true">
               <Icon name="check" />

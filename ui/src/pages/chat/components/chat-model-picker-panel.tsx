@@ -458,6 +458,15 @@ export function ChatModelPickerPanel(panel: {
     const authKind = () => auth()?.kind;
     const showAuth = () => Boolean(auth());
     const authLabel = () => (showAuth() ? auth()?.label : undefined);
+    const authHelp = () => {
+      const expiryLabel = props.lead[0]?.expiryLabel;
+      return [
+        auth()?.detail,
+        expiryLabel ? t("modelProviders.expiresIn", { time: expiryLabel }) : undefined,
+      ]
+        .filter(Boolean)
+        .join("\n");
+    };
     return (
       <section
         class="chat-controls__provider-model-group"
@@ -468,13 +477,16 @@ export function ChatModelPickerPanel(panel: {
           <div class="chat-controls__provider-heading" data-chat-model-provider={props.provider}>
             <span class="chat-controls__provider-label">{providerLabel()}</span>
             {showAuth() ? (
-              <openclaw-tooltip prop:content={auth()?.detail ?? ""}>
-                <span class="chat-controls__auth-meta" data-auth-kind={authKind()}>
-                  <span class="chat-controls__auth-meta-label">
+              <span class="chat-controls__auth-meta" data-auth-kind={authKind()}>
+                <openclaw-tooltip prop:content={authHelp()}>
+                  <span
+                    class="chat-controls__auth-meta-label"
+                    tabindex={authHelp() ? 0 : undefined}
+                  >
                     {authKind() === "api" ? t("modelProviders.status.apiKey") : authLabel()}
                   </span>
-                </span>
-              </openclaw-tooltip>
+                </openclaw-tooltip>
+              </span>
             ) : undefined}
             {panel.params.onProviderSettings ? (
               <button

@@ -156,6 +156,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
     const catalogOwnsChoices = retired || uninitialized || policy?.restricted === true;
     const selectionScopeLabel = MODEL_SELECTION_SCOPE_LABELS.get(modelSelectionTarget ?? "");
     const providerAuth = new Map<string, ModelProviderAuthLabel>();
+    const providerExpiry = new Map<string, string>();
     const headingKey = (id: string) =>
       normalizeChatModelProviderGroupId(
         canonicalModelAuthProviderId(normalizeChatModelProviderId(id)),
@@ -169,6 +170,11 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
     )) {
       const selectedId =
         accountSelection?.kind === "automatic" ? undefined : accountSelection?.authProfileId;
+      const profile = provider.profiles.find((entry) => entry.profileId === selectedId);
+      const expiry = (profile ? profile.expiry : provider.expiry)?.label;
+      if (expiry) {
+        providerExpiry.set(headingKey(provider.provider), expiry);
+      }
       const auth = describeModelProviderAuth(provider, { authProfileId: selectedId });
       if (auth) {
         providerAuth.set(headingKey(provider.provider), auth);
@@ -243,6 +249,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
         recommended: catalogEntry?.recommended,
         disabled: option.disabled,
         unavailableReason: option.disabled ? option.unavailableReason : undefined,
+        unavailableUntil: catalogEntry?.unavailableUntil,
         provider: catalog.provider(
           option.value,
           isDefault
@@ -252,6 +259,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
               : "",
         ),
       };
+      pickerOption.expiryLabel = providerExpiry.get(headingKey(pickerOption.provider));
       if (agentRuntimeId) {
         pickerOption.agentRuntimeId = agentRuntimeId;
       }
@@ -278,6 +286,8 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
           supportsTools: choice.supportsTools,
           disabled: choice.available === false,
           unavailableReason: choice.unavailableReason,
+          unavailableUntil: choice.unavailableUntil,
+          expiryLabel: pickerOption.expiryLabel,
           recommended: pickerOption.recommended,
         });
       }
