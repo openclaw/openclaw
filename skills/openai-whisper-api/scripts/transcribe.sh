@@ -104,11 +104,14 @@ if [[ "$json_output" == "0" && ( "$request_format" == "json" || "$request_format
   target="$tmp"
 fi
 
+# Quote the filename for curl's form parser, including literal quotes and backslashes.
+upload_path="${in//\\/\\\\}"
+upload_path="${upload_path//\"/\\\"}"
 curl_args=(
   -fsS "${api_base}/audio/transcriptions"
   -H "Authorization: Bearer $OPENAI_API_KEY"
   -H "Accept: application/json"
-  -F "file=@${in}"
+  -F "file=@\"${upload_path}\""
   -F "model=${model}"
   -F "response_format=${request_format}"
 )
