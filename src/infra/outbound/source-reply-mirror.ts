@@ -13,6 +13,7 @@ import { normalizeOutboundLocation } from "../../channels/location.js";
 import { resolveReactionMessageId } from "../../channels/plugins/actions/reaction-message-id.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { resolveChannelPluginRegistration } from "../../channels/plugins/registry.js";
+import { resolveLoadedSessionThreadInfo } from "../../channels/plugins/session-thread-info-loaded.js";
 import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import { resolveChannelThreadAddressing } from "../../channels/thread-addressing.js";
 import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
@@ -64,6 +65,7 @@ function resolveDeliveryReceipt(
 function resolveDeliveredThreadPlacement(
   params: SourceReplyTranscriptMirrorParams,
   currentThreadId: string | undefined,
+  sourceConversationThreadId: string | undefined,
 ): SourceReplyThreadPlacement | undefined {
   const receipt = resolveDeliveryReceipt(params);
   if (!receipt) {
@@ -80,7 +82,7 @@ function resolveDeliveredThreadPlacement(
       ? "match"
       : "mismatch";
   }
-  return currentThreadId ? "mismatch" : "match";
+  return sourceConversationThreadId ? "mismatch" : "match";
 }
 
 function resolveSourceReplyThreadPlacement(
@@ -88,12 +90,21 @@ function resolveSourceReplyThreadPlacement(
   threadAddressing: ReturnType<typeof resolveChannelThreadAddressing>,
 ): SourceReplyThreadPlacement {
   const currentThreadId = normalizeOptionalString(params.toolContext?.currentThreadTs);
-  const deliveredPlacement = resolveDeliveredThreadPlacement(params, currentThreadId);
+  // An auto-reply anchor does not narrow a standalone source conversation to a thread.
+  // Explicit thread sessions and bound-thread admission still reject root delivery.
+  const sourceConversationThreadId =
+    normalizeOptionalString(resolveLoadedSessionThreadInfo(params.sessionKey).threadId) ??
+    (params.toolContext?.sameChannelThreadRequired === false ? undefined : currentThreadId);
+  const deliveredPlacement = resolveDeliveredThreadPlacement(
+    params,
+    currentThreadId,
+    sourceConversationThreadId,
+  );
   if (deliveredPlacement) {
     return deliveredPlacement;
   }
   if (params.actionParams.topLevel === true) {
-    return currentThreadId ? "mismatch" : "match";
+    return sourceConversationThreadId ? "mismatch" : "match";
   }
   if (
     threadAddressing === "message" &&
@@ -109,7 +120,7 @@ function resolveSourceReplyThreadPlacement(
     }
     const explicitThreadId = normalizeOptionalString(params.actionParams[key]);
     if (!explicitThreadId) {
-      return currentThreadId ? "mismatch" : "match";
+      return sourceConversationThreadId ? "mismatch" : "match";
     }
     return explicitThreadId === currentThreadId ? "match" : "mismatch";
   }

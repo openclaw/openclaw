@@ -393,6 +393,7 @@ function prepareStream(
     providerOwner: getModelProviderRuntimePluginHandle(attempt.model)?.plugin,
     currentAccountId: attempt.agentAccountId,
     currentThreadId: attempt.currentThreadTs,
+    sameChannelThreadRequired: agentSession.sameChannelThreadRequired,
     agentId: input.hookAgentId,
   });
   const unsubscribeToolInterruption = activeSession.agent.subscribeToolInterruptionStatus(() => {
