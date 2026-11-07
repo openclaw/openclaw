@@ -408,8 +408,8 @@
   --menu-radius: var(--radius-menu);
   --menu-radius-large: 22px;
   --menu-item-radius: var(--radius-menu-item);
-  /* Desktop option rows; avatar rows step to 36, phone rows to 40. */
-  --menu-item-height: 32px;
+  /* Desktop option rows; avatar rows step to 36, touch rows to 40. */
+  --menu-item-height: 28px;
   --menu-padding: 4px;
   --menu-item-gap: 2px;
   --menu-selected: var(--surface-selected);
