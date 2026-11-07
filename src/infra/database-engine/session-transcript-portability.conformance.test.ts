@@ -1,5 +1,7 @@
 import type { SQLInputValue } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "../../config/sessions/session-accessor.sqlite-active-context.js";
 import { withCurrentProjectionSnapshot } from "../../config/sessions/session-accessor.sqlite-active-projection.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
@@ -7,6 +9,7 @@ import {
   findUnindexedActiveTranscriptEntry,
   iterateUnindexedActiveTranscriptNavigation,
 } from "../../config/sessions/session-accessor.sqlite-history-navigation.js";
+import { readSessionTranscriptModelContext } from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import type { CurrentTranscriptProjection } from "../../config/sessions/session-accessor.sqlite-projection-read.js";
 import { canRebasePreparedAssistantInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-parent.js";
 import {
@@ -17,6 +20,7 @@ import {
 import { prepareIncrementalSuffixIdempotencyMutation } from "../../config/sessions/session-accessor.sqlite-transcript-suffix-idempotency.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "../../config/sessions/session-transcript-index.js";
 import { createTranscriptEventInserter } from "../../config/sessions/transcript-payload.js";
+import { appendSessionTranscriptMessageByIdentity } from "../../plugin-sdk/session-transcript-runtime.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { isPostgresSqlConnection } from "../sql-connection.js";
 import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
@@ -330,6 +334,73 @@ for (const engine of ["sqlite", "postgres"] as const) {
           });
           expect(find("missing")).toBeUndefined();
         }));
+
+      it("reads model context with JSON-escaped lone surrogates without rewriting stored rows", async () => {
+        const scope = withEngineStoreAdmission(() => {
+          const database = openOpenClawAgentDatabase({ agentId: "main" });
+          return {
+            agentId: "main",
+            sessionId: "transcript-portability-surrogates",
+            sessionKey: "agent:main:transcript-portability-surrogates",
+            storePath: database.path,
+          };
+        });
+        await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+        const messages = [
+          { role: "user", content: "ascii question", timestamp: 1 },
+          {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call-high", name: "read", arguments: {} }],
+            stopReason: "toolUse",
+            timestamp: 2,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call-high",
+            toolName: "read",
+            content: [{ type: "text", text: "high \ud800 tail" }],
+            details: { private: "\ud800" },
+            isError: false,
+            timestamp: 3,
+          },
+          { role: "user", content: "low \udc00 tail and paired 🦞", timestamp: 4 },
+        ];
+        for (const [index, entry] of messages.entries()) {
+          await appendSessionTranscriptMessageByIdentity({
+            ...scope,
+            eventId: `surrogate-${index}`,
+            message: entry,
+          });
+        }
+        const stored = () =>
+          withEngineStoreAdmission(() =>
+            openOpenClawAgentDatabase({ agentId: "main" })
+              .db.prepare(
+                "SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq",
+              )
+              .all(scope.sessionId)
+              .map((row) => String(row.event_json)),
+          );
+        const before = stored();
+        expect(before.join("\n")).toContain(String.raw`high \ud800 tail`);
+        expect(before.join("\n")).toContain(String.raw`low \udc00 tail`);
+        const modelMessages = (events: readonly unknown[]) =>
+          events.flatMap((event) =>
+            event && typeof event === "object" && "message" in event ? [event.message] : [],
+          );
+        const { details: _details, ...toolResult } = messages[2]!;
+        const expected = [messages[0], messages[1], toolResult, messages[3]];
+
+        const full = withEngineStoreAdmission(() => readSessionTranscriptModelContext(scope));
+        expect(modelMessages(full.events)).toEqual(expected);
+        const bounded = withEngineStoreAdmission(() =>
+          readSessionTranscriptModelContext(scope, undefined, { maxBytes: 100_000, maxEvents: 3 }),
+        );
+        expect(modelMessages(bounded.events)).toEqual(expected.slice(1));
+        const manager = await SessionManager.openModelContextAsync(scope);
+        expect(manager.buildSessionContext().messages).toEqual(expected);
+        expect(stored()).toEqual(before);
+      });
 
       it("advances mutation time beyond both prior mutation and observation with nullable fields", () =>
         withEngineStoreAdmission(() => {
