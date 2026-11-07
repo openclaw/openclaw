@@ -20,7 +20,10 @@ import { redactOtelAttributes } from "./service-attributes.js";
 import { MAX_RETAINED_TRUSTED_SPAN_CONTEXTS } from "./service-constants.js";
 import { contextForTraceContext, normalizedTrustedTraceContext } from "./service-trace-context.js";
 
-export function createDiagnosticsTraceRuntime(tracer: Tracer) {
+export function createDiagnosticsTraceRuntime(
+  tracer: Tracer,
+  runtimeOptions: { captureContent?: boolean } = {},
+) {
   const activeTrustedSpans = new Map<string, ReturnType<typeof tracer.startSpan>>();
   const activeTrustedSpanAliases = new Map<
     string,
@@ -306,6 +309,21 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     }
     if (evt.agentId) {
       spanAttrs["openclaw.agent"] = normalizeDiagnosticValue(evt.agentId);
+    }
+    // Session identity rides the captureContent gate: a collector trusted with raw
+    // prompt and tool content is trusted with the session identifier, so trace
+    // backends can group spans per conversation. The value is the session id —
+    // the per-incarnation identifier, not the session key — so a reset or
+    // recreate groups as a new conversation, matching the LLM's own context
+    // boundary; the raw session key (which can embed channel peer ids) is never
+    // exported. Metric attributes stay low-cardinality and never carry session
+    // identifiers.
+    if (runtimeOptions.captureContent) {
+      const sessionId = evt.sessionId;
+      if (sessionId) {
+        spanAttrs["gen_ai.conversation.id"] = sessionId;
+        spanAttrs["openclaw.session.id"] = sessionId;
+      }
     }
   };
 
