@@ -388,6 +388,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/local-workspace-template.test.ts",
   "src/gateway/worker-environments/node-desktop-carrier.test.ts",
   "src/gateway/worker-environments/node-enrollment.test.ts",
+  "src/gateway/worker-environments/node-worker-prepared-workspace-transport.test.ts",
   "src/gateway/worker-environments/node-worker-tunnel.device-folder.test.ts",
   "src/gateway/worker-environments/node-worker-workspace-publication.test.ts",
   "src/gateway/worker-environments/node-workspace-transfer-credential.test.ts",

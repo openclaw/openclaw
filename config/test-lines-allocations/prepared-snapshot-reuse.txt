@@ -1,4 +1,6 @@
 # Prepared-base, first-binding, native code reuse/launch, stable-wire and CLI transport regressions.
-# Own allowance: 416 existing PR regression lines + 39 strengthened lines; no inherited-debt credit.
+# Own allowance: 416 existing PR lines + 39 strengthened + 174 review-regression lines.
+# Review regressions cover first-bind RPC budget, seed-only refresh, and strict snapshot identity.
+# No inherited-debt credit.
 # Coherent process-script extraction overhead is not additionally allocated.
-455
+629

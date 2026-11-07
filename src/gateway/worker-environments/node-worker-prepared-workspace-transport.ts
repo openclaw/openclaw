@@ -45,8 +45,8 @@ export function createNodeWorkerPreparedWorkspaceTransport(options: {
     if (!node || !transport.isCurrent(node)) {
       throw new Error("Prepared workspace node protocol is unavailable");
     }
-    // Registration and first binding verify completed contents; exact bind replay preserves edits.
-    const timeoutMs = input.action === "register" ? 10 * 60_000 + 5_000 : 30_000;
+    // First bind may cold-hash contents; registration is receipt-only and exact replay preserves edits.
+    const timeoutMs = input.action === "bind" ? 10 * 60_000 + 5_000 : 30_000;
     const result = await transport.invoke({
       node,
       command: NODE_WORKER_WORKSPACE_PREPARE_COMMAND,

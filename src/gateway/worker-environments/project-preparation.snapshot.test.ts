@@ -30,6 +30,90 @@ async function prepare(f: Awaited<ReturnType<typeof fixture>>) {
 }
 
 describe("prepared repository snapshot bases", () => {
+  it("refreshes a seed-only snapshot to the requested commit without running setup", async () => {
+    const f = await fixture('#!/bin/sh\nprintf "setup\n" >> "$HOME/setup-count"\n');
+    const initial = f.operation();
+    try {
+      await initial.project.prepare(f);
+    } finally {
+      initial.close();
+    }
+    await requireGit(f.repository, ["commit", "--allow-empty", "--quiet", "-m", "advance"]);
+    const project = await snapshot(f.repository);
+    const owner = createWorkerProjectPreparation({
+      project: {
+        key: project.key,
+        baseCommit: project.baseCommit,
+        source: {
+          kind: "repository",
+          url: "https://github.com/acme/project.git",
+          repositoryId: "R_fixture",
+          owner: {
+            agent: { agentId: "main", provenance: null },
+            identity: { source: "anonymous" },
+          },
+        },
+      },
+      namespace: "gateway",
+      snapshotStart: true,
+      revalidateRepositorySource: async () => {},
+      prepareRepositoryGitPack: ({ temporaryRoot, signal }) =>
+        prepareWorkerWorkspaceGitPack({
+          root: f.repository,
+          baseCommit: project.baseCommit,
+          temporaryRoot,
+          signal,
+        }),
+      requireCurrent: () => {},
+    });
+    try {
+      const result = await owner.project.prepare({
+        ...f,
+        snapshotBaseCommit: f.project.baseCommit,
+      });
+      expect(result.baseCommit).toBe(project.baseCommit);
+      expect(result.preparedWorkspace).toBeUndefined();
+      const refreshedSeed = path.join(path.dirname(f.seed), result.seedKey);
+      expect(await requireGit(refreshedSeed, ["rev-parse", `${project.baseCommit}^{commit}`])).toBe(
+        project.baseCommit,
+      );
+      await expect(fs.stat(path.join(f.home, "setup-count"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      owner.close();
+    }
+  });
+
+  it("rejects a snapshot that lacks the requested prepared workspace identity", async () => {
+    const f = await fixture();
+    await prepare(f);
+    const recipe = await readWorkerProjectEnvironmentRecipe(f.project);
+    const owner = createWorkerProjectPreparation({
+      project: f.project,
+      namespace: "gateway",
+      preparation: {
+        key: "b".repeat(64),
+        cacheKey: "d".repeat(64),
+        purpose: "session",
+        demandAtMs: 1,
+        setupRecipe: recipe.identity,
+        recipe,
+      },
+      setupAuthorized: true,
+      snapshotStart: true,
+      requireCurrent: () => {},
+    });
+    try {
+      await expect(
+        owner.project.prepare({ ...f, snapshotBaseCommit: f.project.baseCommit }),
+      ).rejects.toThrow("Selected snapshot has no matching completed repository workspace");
+      expect(owner.getPreparedWorkspace()).toBeUndefined();
+    } finally {
+      owner.close();
+    }
+  });
+
   it("starts an admitted moving default branch on its completed snapshot without setup or transfer", async () => {
     const f = await fixture('#!/bin/sh\nprintf "setup\n" >> "$HOME/setup-count"\n');
     const first = await prepare(f);

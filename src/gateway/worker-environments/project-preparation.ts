@@ -291,6 +291,7 @@ export function createWorkerProjectPreparation(params: {
       }
     }
     if (
+      preparationInput &&
       params.snapshotStart &&
       transport.snapshotBaseCommit &&
       (!inspection.ready ||
@@ -401,7 +402,7 @@ export function createWorkerProjectPreparation(params: {
     if (!preparationInput) {
       await transport.recordRecipePreparation?.(result.recipePreparation!);
       requireCurrent();
-      return result;
+      return { ...result, baseCommit: sourceInput.baseCommit };
     }
     // Seed transfer can outlive its caller. Repository code starts only under
     // the current provisioning owner, and never runs in a later session's HOME.
