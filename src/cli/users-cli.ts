@@ -11,7 +11,9 @@ const DEFAULT_USERS_TIMEOUT_MS = 10_000;
 function addUsersGatewayOptions(command: Command) {
   return command
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
+    .option("--port <port>", "Local Gateway port")
     .option("--token <token>", "Gateway token (if required)")
+    .option("--password <password>", "Gateway password (if required)")
     .option("--timeout <ms>", "Timeout in ms", String(DEFAULT_USERS_TIMEOUT_MS))
     .option("--json", "Output JSON", false);
 }
