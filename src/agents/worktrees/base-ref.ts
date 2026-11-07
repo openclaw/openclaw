@@ -428,6 +428,10 @@ async function fetchRemoteDefault(
   if (cached.cleanup === "uncertain") {
     throw new CommandProcessCleanupError();
   }
+  // ls-remote (30s) and fetch (60s) share this deadline. Fetch first waits in the clone's
+  // ref-mutation queue, which its own timeout does not cover; expiry keeps the cached ref.
+  const refreshDeadline = AbortSignal.timeout(90_000);
+  const fetchSignal = AbortSignal.any([refreshDeadline, options.signal ?? refreshDeadline]);
   const advertised = await runGit(repoRoot, ["ls-remote", "--symref", "origin", "HEAD"], {
     ...options,
     timeoutMs: 30_000,
@@ -470,7 +474,7 @@ async function fetchRemoteDefault(
       "origin",
       `+refs/heads/${branch}:${remoteRef}`,
     ],
-    { ...options, timeoutMs: 60_000 },
+    { ...options, signal: fetchSignal, timeoutMs: 60_000 },
   );
   if (fetched.cleanup === "uncertain") {
     throw new CommandProcessCleanupError();
@@ -481,7 +485,11 @@ async function fetchRemoteDefault(
   }
   const fetchSucceeded = fetched.termination === "exit" && fetched.code === 0;
   if (!fetchSucceeded) {
-    warnings.push(commandError("git fetch origin default branch", fetched).message);
+    warnings.push(
+      refreshDeadline.aborted
+        ? `git fetch origin default branch did not finish within 90s, including its wait for other Git ref updates; using the cached default.`
+        : commandError("git fetch origin default branch", fetched).message,
+    );
     branch = cachedBranch ?? branch;
     remoteRef = `refs/remotes/origin/${branch}`;
   }

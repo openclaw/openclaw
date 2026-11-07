@@ -203,6 +203,48 @@ describe("worktree default-base preparation", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
+  it("uses the cached default when the fetch outwaits the refresh deadline in the ref queue", async ({
+    signal,
+  }) => {
+    const cachedHead = await git(repo, "rev-parse", "HEAD");
+    const remoteHead = await createChildCommit();
+    const remote = await createRemote();
+    await git(repo, "fetch", "origin");
+    await git(remote, "update-ref", "refs/heads/main", remoteHead);
+    const deadline = new AbortController();
+    const timeout = AbortSignal.timeout.bind(AbortSignal);
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) =>
+      ms === 90_000 ? deadline.signal : timeout(ms),
+    );
+    const enqueue = gitExec.enqueueGitRefMutation;
+    const queued = createDeferred();
+    vi.spyOn(gitExec, "enqueueGitRefMutation").mockImplementation(async (...args) => {
+      queued.resolve();
+      return await enqueue(...args);
+    });
+    // Another ref writer on this clone (worktree add, hydration, maintenance) holds the queue.
+    const held = createDeferred();
+    const holder = enqueue(repo, path.join(repo, ".git"), () => held.promise);
+    const pending = resolveWorktreeBase(repo);
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(queued.promise, pending, "default fetch did not queue"),
+        signal,
+      );
+      deadline.abort(new DOMException("refresh deadline", "TimeoutError"));
+      await expect(withinTest(pending, signal)).resolves.toMatchObject({
+        commit: cachedHead,
+        recordRef: "origin/main",
+        fetchSucceeded: false,
+        warning: expect.stringContaining("did not finish within 90s"),
+      });
+    } finally {
+      held.resolve();
+      await Promise.allSettled([holder, pending]);
+    }
+    expect(await git(repo, "rev-parse", "origin/main")).toBe(cachedHead);
+  });
+
   it.for([
     ...["aborted", "revoked"].flatMap((mode) =>
       [
