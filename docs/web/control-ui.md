@@ -73,6 +73,18 @@ text replaces the instructions after the read-only heading. End the notice with
 a space and an absolute HTTP or HTTPS URL to add a **Learn more** link. For
 example, `Edit the deployment manifest and redeploy. https://example.org/gateway`.
 
+## Feedback and bug reports
+
+Open **Help** from the sidebar account menu to **Report a bug** or **Suggest a feature**.
+Connection and chat error notices also offer **Report a bug**. These links open the
+matching public GitHub issue form; they do not submit an issue.
+
+Only the issue template and a fixed **Control UI** title are prefilled. OpenClaw does
+not attach error text, diagnostics, logs, conversations, configuration, identifiers,
+credentials, or private URLs, and the links suppress the browser referrer. Review
+anything you add before submitting publicly. Use [official support](https://community.openclaw.ai/)
+for setup help and [private security reporting](https://github.com/openclaw/openclaw/security/policy) for security concerns.
+
 ## Edit a failed message
 
 If a model rejects a message (for example, because it contains too many images),

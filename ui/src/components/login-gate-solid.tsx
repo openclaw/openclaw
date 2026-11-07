@@ -18,8 +18,8 @@ import { retryStaleChunkReloadWhenReachable } from "../app/stale-chunk-reload.ts
 import { currentThemeBranding } from "../app/theme-branding.ts";
 import { registerLoginEnglish } from "../i18n/locales/en-login.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
-import "../lib/toast-host.tsx";
 import { formatGatewayHost } from "../lib/gateway-host.ts";
+import "../lib/toast-host.tsx";
 import { classifyGatewaySecret } from "../lib/gateway-secret-shape.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
@@ -32,6 +32,7 @@ import {
   type LoginFailureStep,
   resolveLoginFailureFeedback,
 } from "./login-gate-feedback.ts";
+import { ReportIssueLink } from "./report-issue-link.tsx";
 import { ConnectCommand } from "./solid/connect-command.tsx";
 import { Icon, type IconName } from "./solid/icon.tsx";
 import { ThemeBrandIcon } from "./theme-brand-icon.tsx";
@@ -127,6 +128,7 @@ function FailureFooter(props: { feedback: LoginFailureFeedback }) {
       >
         {t("common.learnMore")}
       </a>
+      <ReportIssueLink />
     </footer>
   );
 }
