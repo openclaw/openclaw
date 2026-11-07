@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { serialize } from "node:v8";
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   prepareMemoryIndexChunks,
   type MemoryIndexPreparationInput,
@@ -79,3 +79,48 @@ it.each([undefined, { id: "test", maxInputTokens: 4096 }])(
     expect(serialize(prepared).byteLength).toBeLessThan(80 * 1024);
   },
 );
+
+describe("managed dreaming ranges at the indexing boundary", () => {
+  const NOTE = [
+    "# 2026-10-14",
+    "Met with Sam about the launch plan.",
+    "<!-- openclaw:dreaming:light:start -->",
+    "Dream scratch: a lighthouse made of invoices.",
+    "<!-- openclaw:dreaming:light:end -->",
+    "Booked the venue for Friday.",
+  ].join("\n");
+
+  it("excludes fenced dreaming content and keeps original line numbers", () => {
+    const { chunks } = prepareMemoryIndexChunks({
+      entry: { path: "memory/2026-10-14.md", mtimeMs: 1 },
+      source: "memory",
+      content: NOTE,
+      pathClassification: { curatedRoot: false, originClass: "agent" },
+      chunking: { tokens: 400, overlap: 80 },
+      hardMaxInputTokens: 8192,
+    });
+    const allText = chunks.map((chunk) => chunk.text).join("\n");
+    expect(allText).toContain("Met with Sam about the launch plan.");
+    expect(allText).toContain("Booked the venue for Friday.");
+    expect(allText).not.toContain("lighthouse");
+    expect(allText).not.toContain("openclaw:dreaming");
+    const booked = chunks.find((chunk) => chunk.text.includes("Booked the venue"));
+    expect(booked?.endLine).toBe(6);
+  });
+
+  it("produces no chunks for a note that is only a dreaming fence", () => {
+    const { chunks } = prepareMemoryIndexChunks({
+      entry: { path: "memory/2026-10-14.md", mtimeMs: 1 },
+      source: "memory",
+      content: [
+        "<!-- openclaw:dreaming:rem:start -->",
+        "Dream scratch only.",
+        "<!-- openclaw:dreaming:rem:end -->",
+      ].join("\n"),
+      pathClassification: { curatedRoot: false, originClass: "agent" },
+      chunking: { tokens: 400, overlap: 80 },
+      hardMaxInputTokens: 8192,
+    });
+    expect(chunks).toEqual([]);
+  });
+});
