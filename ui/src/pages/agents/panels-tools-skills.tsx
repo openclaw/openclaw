@@ -20,6 +20,7 @@ import {
 } from "../../../../src/agents/tool-policy-shared.js";
 import type { ToolsCatalogResult } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
   SettingsSection,
   SettingsRow,
@@ -253,7 +254,7 @@ export function AgentTools(
         >
           {(entry) =>
             entry[0] ? (
-              <div class="callout info">
+              <InlineAlert tone="info">
                 {t(entry[1])}
                 {entry[2] ? (
                   <>
@@ -261,7 +262,7 @@ export function AgentTools(
                     <code>{entry[2]}</code>
                   </>
                 ) : undefined}
-              </div>
+              </InlineAlert>
             ) : undefined
           }
         </For>

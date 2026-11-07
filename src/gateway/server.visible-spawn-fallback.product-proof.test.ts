@@ -579,7 +579,11 @@ describe("sessions_spawn model fallback through the Gateway", () => {
           ).toEqual([
             expect.objectContaining({
               role: "custom",
-              openclawRunError: { runId: settledRunId, summary: expect.stringMatching(/\S/) },
+              openclawRunError: {
+                runId: settledRunId,
+                summary: expect.stringMatching(/\S/),
+                cause: { provider: "proof-primary", failoverReason: "rate_limit" },
+              },
             }),
           ]);
         }

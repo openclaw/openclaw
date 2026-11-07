@@ -1,6 +1,8 @@
 import { Command } from "commander";
 import { afterEach, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import type { CronRunLogEntry } from "../cron/run-log-types.js";
+import { cronTestJob } from "../cron/service.fixture-builders.test-support.js";
 import type { CronDeliveryPreview, CronJob, CronJobCreate, CronJobPatch } from "../cron/types.js";
 import { ExitError } from "../runtime.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -36,13 +38,14 @@ const defaultGatewayMock = async (method: string, _opts: unknown, params?: unkno
   if (method === "cron.list") {
     return cronPage([]);
   }
+  if (method === "system.info") {
+    return { platform: "linux" };
+  }
   return { ok: true, params };
 };
 callGatewayFromCli.mockImplementation(defaultGatewayMock);
 
-afterEach(() => {
-  vi.useRealTimers();
-});
+afterEach(vi.useRealTimers);
 
 vi.mock("./gateway-rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./gateway-rpc.js")>("./gateway-rpc.js");
@@ -54,15 +57,8 @@ vi.mock("../runtime.js", async (importOriginal) => ({
   defaultRuntime: mocks.defaultRuntime,
 }));
 
-function buildProgram() {
-  const program = new Command().enablePositionalOptions().exitOverride();
-  registerCronCli(program);
-  return program;
-}
-
 function resetGatewayMock() {
-  callGatewayFromCli.mockClear();
-  callGatewayFromCli.mockImplementation(defaultGatewayMock);
+  callGatewayFromCli.mockClear().mockImplementation(defaultGatewayMock);
   for (const mock of Object.values(defaultRuntime)) {
     mock.mockClear();
   }
@@ -86,7 +82,11 @@ async function runCronCommand(args: string[]): Promise<void> {
   await parse(args);
 }
 
-const parse = (args: string[]) => buildProgram().parseAsync(args, { from: "user" });
+function parse(args: string[]) {
+  const program = new Command().enablePositionalOptions().exitOverride();
+  registerCronCli(program);
+  return program.parseAsync(args, { from: "user" });
+}
 
 const CREATE = ["cron", "add", "--name", "job"];
 const ADD = [...CREATE, "--cron", "* * * * *"];
@@ -130,21 +130,7 @@ async function expectCronCommandExit(args: string[]): Promise<void> {
   await expect(runCronCommand(args)).rejects.toMatchObject({ name: "ExitError", code: 1 });
 }
 
-function createCronJob(id: string, name: string): CronJob {
-  const now = Date.now();
-  return {
-    id,
-    name,
-    enabled: true,
-    createdAtMs: now,
-    updatedAtMs: now,
-    schedule: { kind: "at", at: new Date(now + 3_600_000).toISOString() },
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
-    payload: { kind: "agentTurn", message: "hello" },
-    state: {},
-  };
-}
+const createCronJob = (id: string, name: string) => cronTestJob({ id, name });
 
 function mockExistingJob(job: Partial<CronJob>): void {
   resetGatewayMock();
@@ -598,34 +584,72 @@ it("accepts a positional every interval without delivery", async () => {
   });
 });
 
-it("creates a shell command with limits and environment overrides", async () => {
-  const params = await addOptions({
-    "--name": "job",
-    "--every": "10m",
-    "--command": "echo ok",
-    "--command-cwd": "/srv/app",
-    "--command-env": "FOO=bar",
-    "--timeout-seconds": "0",
-    "--no-output-timeout-seconds": "5",
-    "--output-max-bytes": "4096",
-    "--tools": "read write",
-    "--no-deliver": true,
-  });
-  expect(params).toMatchObject({
-    sessionTarget: "isolated",
-    delivery: { mode: "none" },
-    payload: {
+function answerSystemInfo(answer: () => unknown) {
+  callGatewayFromCli.mockImplementation(async (method: string, opts: unknown, params?: unknown) =>
+    method === "system.info" ? answer() : defaultGatewayMock(method, opts, params),
+  );
+}
+
+it.each(["add", "edit"])("%s uses the Gateway shell", async (mode) => {
+  for (const [platform, flag, input, argv] of [
+    ["linux", "--command", "echo ok", ["sh", "-lc", "echo ok"]],
+    ["win32", "--command", "echo ok", ["cmd.exe", "/d", "/s", "/c", "echo ok"]],
+    ["win32", "--command-argv", '["sh","-c","echo ok"]', ["sh", "-c", "echo ok"]],
+  ] as const) {
+    resetGatewayMock();
+    answerSystemInfo(() => ({ platform }));
+    await parse([
+      ...(mode === "add" ? [...CREATE, "--every", "10m"] : EDIT),
+      ...flags({
+        [flag]: input,
+        "--command-cwd": "/srv/app",
+        "--command-env": "FOO=bar",
+        "--timeout-seconds": "0",
+        "--no-output-timeout-seconds": "5",
+        "--output-max-bytes": "4096",
+        "--tools": "read write",
+        "--no-deliver": true,
+      }),
+    ]);
+    const params = rpcParams<{ payload?: unknown; patch?: CronJobPatch }>(
+      `cron.${mode === "add" ? "add" : "update"}`,
+    );
+    expect(params.payload ?? params.patch?.payload).toMatchObject({
       kind: "command",
-      argv: ["sh", "-lc", "echo ok"],
+      argv,
       cwd: "/srv/app",
       env: { FOO: "bar" },
       timeoutSeconds: 0,
       noOutputTimeoutSeconds: 5,
       outputMaxBytes: 4096,
       toolsAllow: ["read", "write"],
-    },
+    });
+    if (flag === "--command-argv") {
+      expect(callGatewayFromCli.mock.calls.some(([method]) => method === "system.info")).toBe(
+        false,
+      );
+    }
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
+  }
+});
+
+it.each([undefined, {}])("requires a Gateway platform (%j)", async (info) => {
+  resetGatewayMock();
+  answerSystemInfo(() => {
+    if (info) {
+      return info;
+    }
+    throw new GatewayClientRequestError({
+      code: "INVALID_REQUEST",
+      message: "unknown method: system.info",
+    });
   });
-  expect(defaultRuntime.error).not.toHaveBeenCalled();
+  await expect(parse([...CREATE, "--every", "10m", "--command", "echo ok"])).rejects.toMatchObject({
+    name: "ExitError",
+    code: 1,
+  });
+  expectRuntimeErrorContaining("--command-argv");
+  expect(rpcParams("cron.add")).toBeUndefined();
 });
 
 it("creates stream schedules from exact argv flags", async () => {
@@ -708,6 +732,7 @@ it.each([
       "--failure-alert-cooldown": "1h",
       "--failure-alert-channel": "telegram",
       "--failure-alert-to": "19098680",
+      "--failure-alert-thread-id": "42",
       "--failure-alert-mode": "webhook",
       "--failure-alert-account-id": "bot-a",
       "--failure-alert-include-skipped": true,
@@ -718,6 +743,7 @@ it.each([
         cooldownMs: 3_600_000,
         channel: "telegram",
         to: "19098680",
+        threadId: "42",
         mode: "webhook",
         accountId: "bot-a",
         includeSkipped: true,

@@ -171,8 +171,11 @@ it.each(["ready", "unavailable"] as const)(
     const bootComposer = document.createElement("textarea");
     bootComposer.id = "openclaw-boot-composer";
     bootComposer.value = "Keep the pending draft";
+    bootComposer.setAttribute("data-focused", "");
     document.documentElement.setAttribute("data-openclaw-boot-chat", "");
     document.body.append(bootComposer);
+    bootComposer.focus();
+    bootComposer.setSelectionRange(5, 8, "backward");
     adoptBootComposer(true);
     onTestFinished(() => {
       retireBootComposer();
@@ -259,6 +262,12 @@ it.each(["ready", "unavailable"] as const)(
       expect(view.pane.querySelector(".lazy-view-state--route")).toBeNull();
       const composer = view.pane.querySelector<HTMLTextAreaElement>(composerSelector);
       expect(composer?.value).toBe("Keep the pending draft");
+      await view.pane.updateComplete;
+      expect([
+        composer?.selectionStart,
+        composer?.selectionEnd,
+        composer?.selectionDirection,
+      ]).toEqual([5, 8, "backward"]);
       expect(view.pane.querySelectorAll("textarea")).toHaveLength(1);
       read.resolve(undefined);
       await prepared;

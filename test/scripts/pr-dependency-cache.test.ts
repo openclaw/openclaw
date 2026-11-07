@@ -152,7 +152,7 @@ function child(f: ReturnType<typeof fixture>, body: string, anchor = f.anchor) {
         "-e",
         `
 import { existsSync, mkdirSync, rmSync, utimesSync } from "node:fs";
-import { claimCreatedAnchor, dependencyCacheRoot, holdDependencyCache, publishDependencyCache, assertDependencyTarget, privateDependencyDonor, retireAnchorDependencies, withDependencyCacheLock, collectUnusedDependencyCaches } from ${JSON.stringify(lifetime)};
+import { claimCreatedAnchor, dependencyCacheRoot, holdDependencyCache, publishDependencyCache, assertDependencyTarget, privateDependencyDonor, retireAnchorDependencies, withDependencyCacheLock, collectUnusedDependencyCaches, recoverDependencyCache } from ${JSON.stringify(lifetime)};
 const anchor = claimCreatedAnchor(process.argv[1], process.ppid);
 const cache = dependencyCacheRoot();
 ${body}
@@ -181,12 +181,258 @@ ${body}
   }
 }
 
+function heldEntry(f: ReturnType<typeof fixture>) {
+  const installation = entry(f.cache, "a".repeat(64));
+  const acquire = `withDependencyCacheLock(cache, (lock) => holdDependencyCache(lock, ${JSON.stringify(installation)}, anchor));`;
+  expect(child(f, acquire).status).toBe(0);
+  return installation;
+}
+
 function sweep(cache: string) {
   const retired = withDependencyCacheLock(cache, (lock) => collectUnusedDependencyCaches(lock));
   for (const path of retired) {
     rmSync(path, { recursive: true });
   }
 }
+
+function recoveryFixture(complete = false) {
+  const f = fixture();
+  const keys = complete ? ["0", "1", "2", "a", "b", "c"] : ["a"];
+  const installations = keys.map((key) => entry(f.cache, key.repeat(64)));
+  const installation = join(f.cache, "a".repeat(64));
+  const historicalAnchors: string[] = [];
+  for (const key of complete ? ["a", "b", "c"] : ["a"]) {
+    const count = key === "b" ? 10 : 1;
+    for (let index = 0; index < count; index++) {
+      const historical = `${f.anchor}.${key}${index}`;
+      mkdirSync(historical, { mode: 0o700 });
+      historicalAnchors.push(historical);
+      const held = child(
+        f,
+        `withDependencyCacheLock(cache, lock => holdDependencyCache(lock, ${JSON.stringify(join(f.cache, key.repeat(64)))}, anchor));`,
+        historical,
+      );
+      expect(held.status, held.stderr).toBe(0);
+    }
+  }
+  for (const path of installations) {
+    writeFileSync(join(path, "keep"), "preserved installation");
+  }
+  // Disappearance is deliberately not retirement: every historical hold stays
+  // unsettled, exactly as after a creator whose drain cannot be established.
+  for (const path of historicalAnchors) {
+    rmSync(path, { recursive: true });
+  }
+  const database = join(f.cache, "lifetime.sqlite");
+  const db = new DatabaseSync(database);
+  const identity = (path: string) => {
+    const stat = lstatSync(path, { bigint: true });
+    return Object.fromEntries(
+      (["dev", "ino", "uid", "mode"] as const).map((key) => [key, String(stat[key])]),
+    );
+  };
+  const snapshot = () => {
+    const read = (sql: string) =>
+      db
+        .prepare(sql)
+        .all()
+        .map((row) => Object.assign({}, row));
+    return {
+      owner: read("SELECT * FROM owner ORDER BY id"),
+      installations: read("SELECT * FROM installations ORDER BY key"),
+      holds: read("SELECT * FROM holds ORDER BY entry_key, anchor_path, anchor_dev, anchor_ino"),
+    };
+  };
+  // Simulate a device renumbering after the native producers published their
+  // identities. The preserved hold has no retirement proof and must stay held.
+  const oldDevice = String(lstatSync(f.cache, { bigint: true }).dev + 1n);
+  db.prepare("UPDATE owner SET cache_dev = ?, db_dev = ?").run(oldDevice, oldDevice);
+  db.prepare("UPDATE installations SET dev = ?").run(oldDevice);
+  db.prepare("UPDATE holds SET anchor_dev = ?").run(oldDevice);
+  const before = snapshot();
+  db.close();
+  const plan = {
+    version: 1,
+    cache: f.cache,
+    reason: "Adopt the independently inspected fixture device identity without releasing holds.",
+    before,
+    physical: {
+      cache: identity(f.cache),
+      database: identity(database),
+      installations: installations.map((path) => ({
+        key: path.split("/").at(-1)!,
+        ...identity(path),
+      })),
+    },
+  };
+  const path = join(f.home, "recovery.json");
+  const bytes = JSON.stringify(plan);
+  writeFileSync(path, bytes, { mode: 0o600 });
+  const seal = createHash("sha256").update(bytes).digest("hex");
+  const recover = () =>
+    child(
+      f,
+      `console.log(JSON.stringify(recoverDependencyCache(${JSON.stringify(path)}, ${JSON.stringify(seal)})));`,
+    );
+  return { ...f, installation, installations, database, plan, path, recover };
+}
+
+describePosix("PR cache identity recovery", () => {
+  it("adopts the sealed device identities, reconciles a lost reply, and retains historical holds", () => {
+    const f = recoveryFixture(true);
+    expect(f.plan.before.holds).toHaveLength(12);
+    expect(f.plan.before.installations.filter((row) => row.settled === 1)).toHaveLength(3);
+    const refused = child(f, "withDependencyCacheLock(cache, () => {});");
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain("ledger owner differs");
+    const recovered = f.recover();
+    expect(recovered.status, recovered.stderr).toBe(0);
+    expect(JSON.parse(recovered.stdout).state).toBe("recovered");
+    const bytes = readFileSync(f.database);
+    const repeated = f.recover();
+    expect(repeated.status, repeated.stderr).toBe(0);
+    expect(JSON.parse(repeated.stdout).state).toBe("already-recovered");
+    expect(readFileSync(f.database)).toEqual(bytes);
+    const db = new DatabaseSync(f.database, { readOnly: true });
+    try {
+      expect(db.prepare("SELECT * FROM holds").all()).toEqual(f.plan.before.holds);
+      expect(db.prepare("SELECT * FROM owner").get()).toEqual({
+        ...f.plan.before.owner[0],
+        cache_dev: f.plan.physical.cache.dev,
+        db_dev: f.plan.physical.database.dev,
+      });
+      expect(db.prepare("SELECT * FROM installations").all()).toEqual(
+        f.plan.before.installations.map((row) => ({ ...row, dev: f.plan.physical.cache.dev })),
+      );
+      const after = [
+        ...db.prepare("SELECT * FROM owner").all(),
+        ...db.prepare("SELECT * FROM installations ORDER BY key").all(),
+      ];
+      const before = [...f.plan.before.owner, ...f.plan.before.installations];
+      expect(
+        after.reduce(
+          (count, row, index) =>
+            count + Object.keys(row).filter((key) => row[key] !== before[index]![key]).length,
+          0,
+        ),
+      ).toBe(8);
+    } finally {
+      db.close();
+    }
+    for (const path of f.installations) {
+      expect(readFileSync(join(path, "keep"), "utf8")).toBe("preserved installation");
+    }
+    const acquired = child(
+      f,
+      `withDependencyCacheLock(cache, lock => holdDependencyCache(lock, ${JSON.stringify(f.installation)}, anchor));`,
+    );
+    expect(acquired.status, acquired.stderr).toBe(0);
+    expect(readPrCacheState(f.installation).anchors).toHaveLength(2);
+    const changed = readFileSync(f.database);
+    const stale = f.recover();
+    expect(stale.status).not.toBe(0);
+    expect(stale.stderr).toContain("preimage differs");
+    expect(readFileSync(f.database)).toEqual(changed);
+    const retired = child(
+      f,
+      "retireAnchorDependencies(anchor, () => rmSync(anchor.path, { recursive: true }));",
+    );
+    expect(retired.status, retired.stderr).toBe(0);
+    expect(existsSync(f.anchor)).toBe(false);
+    for (const key of ["a", "b", "c"]) {
+      expect(readPrCacheState(join(f.cache, key.repeat(64))).settled).toBe(false);
+    }
+    const afterRetirement = new DatabaseSync(f.database, { readOnly: true });
+    try {
+      expect(
+        afterRetirement
+          .prepare("SELECT * FROM holds ORDER BY entry_key, anchor_path, anchor_dev, anchor_ino")
+          .all(),
+      ).toEqual(f.plan.before.holds);
+    } finally {
+      afterRetirement.close();
+    }
+    sweep(f.cache);
+    expect(f.installations.every((path) => existsSync(path))).toBe(true);
+  });
+
+  it("rolls back every device cell when commit fails after the updates", () => {
+    const f = recoveryFixture(true);
+    const before = readFileSync(f.database);
+    const seal = createHash("sha256").update(readFileSync(f.path)).digest("hex");
+    const result = child(
+      f,
+      `
+const { DatabaseSync } = await import("node:sqlite");
+const exec = DatabaseSync.prototype.exec;
+DatabaseSync.prototype.exec = function(sql) {
+  if (sql === "COMMIT") throw new Error("fixture recovery commit failure");
+  return exec.call(this, sql);
+};
+recoverDependencyCache(${JSON.stringify(f.path)}, ${JSON.stringify(seal)});
+`,
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("fixture recovery commit failure");
+    expect(readFileSync(f.database)).toEqual(before);
+    expect(existsSync(join(f.cache, ".metadata-lock"))).toBe(false);
+    const recovered = f.recover();
+    expect(recovered.status, recovered.stderr).toBe(0);
+  });
+
+  it.each([
+    ["plan", "plan seal differs"],
+    ["ledger inode", "physical identities differ"],
+    ["installation inode", "physical identities differ"],
+    ["sequence", "preimage differs"],
+    ["hold", "preimage differs"],
+    ["namespace", "namespace inventory differs"],
+    ["journal", "journal-free ledger"],
+    ["schema", "schema or integrity differs"],
+    ["lock", "metadata is busy"],
+  ])("preserves the refused %s preimage", (fault, reason) => {
+    const f = recoveryFixture();
+    if (fault === "plan") {
+      writeFileSync(f.path, readFileSync(f.path, "utf8") + " ");
+    } else if (fault === "ledger inode" || fault === "installation inode") {
+      const path = fault === "ledger inode" ? f.database : f.installation;
+      renameSync(path, join(f.home, "retained"));
+      if (fault === "ledger inode") {
+        copyFileSync(join(f.home, "retained"), path);
+      } else {
+        mkdirSync(path, { mode: 0o700 });
+      }
+    } else if (fault === "namespace" || fault === "journal") {
+      writeFileSync(
+        join(f.cache, fault === "journal" ? "lifetime.sqlite-journal" : "unknown"),
+        "retain",
+        { mode: 0o600 },
+      );
+    } else if (fault === "lock") {
+      mkdirSync(join(f.cache, ".metadata-lock"), { mode: 0o700 });
+    } else {
+      const db = new DatabaseSync(f.database);
+      try {
+        db.exec(
+          fault === "schema"
+            ? "CREATE TABLE unknown (value TEXT)"
+            : fault === "hold"
+              ? "DELETE FROM holds"
+              : "UPDATE owner SET sequence = sequence + 1",
+        );
+      } finally {
+        db.close();
+      }
+    }
+    const bytes = readFileSync(f.database);
+    const result = f.recover();
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(reason);
+    expect(readFileSync(f.database)).toEqual(bytes);
+    expect(existsSync(f.anchor)).toBe(true);
+    expect(existsSync(f.installation)).toBe(true);
+  });
+});
 
 // Observe real mkdir contention without changing its result. Gates release only
 // after the other process has actually attempted this fixture's metadata lock.
@@ -394,13 +640,7 @@ describePosix("PR cache anchor lifetime", () => {
 
   it("keeps holds while retirement joins a competing metadata transition", () => {
     const f = fixture();
-    const installation = entry(f.cache, "a".repeat(64));
-    expect(
-      child(
-        f,
-        `withDependencyCacheLock(cache, (lock) => holdDependencyCache(lock, ${JSON.stringify(installation)}, anchor));`,
-      ).status,
-    ).toBe(0);
+    const installation = heldEntry(f);
     for (let i = 0; i < 6; i++) {
       entry(f.cache, String(i).repeat(64));
     }
@@ -425,13 +665,7 @@ describePosix("PR cache anchor lifetime", () => {
 
   it("retains holds when metadata reentry refuses after successful anchor removal", () => {
     const f = fixture();
-    const installation = entry(f.cache, "a".repeat(64));
-    expect(
-      child(
-        f,
-        `withDependencyCacheLock(cache, (lock) => holdDependencyCache(lock, ${JSON.stringify(installation)}, anchor));`,
-      ).status,
-    ).toBe(0);
+    const installation = heldEntry(f);
     const result = child(
       f,
       `retireAnchorDependencies(anchor, () => {
@@ -612,13 +846,7 @@ describePosix("PR cache anchor lifetime", () => {
 
   it("settles retirement after another process releases metadata ownership", async ({ signal }) => {
     const f = fixture();
-    const installation = entry(f.cache, "a".repeat(64));
-    expect(
-      child(
-        f,
-        `withDependencyCacheLock(cache, (lock) => holdDependencyCache(lock, ${JSON.stringify(installation)}, anchor));`,
-      ).status,
-    ).toBe(0);
+    const installation = heldEntry(f);
     const retire = metadataWorker(
       f,
       `

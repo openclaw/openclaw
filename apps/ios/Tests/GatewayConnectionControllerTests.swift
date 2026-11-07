@@ -339,6 +339,55 @@ private func pendingHandoffDiagnostic(
         #expect(!controller._test_hasOperatorFleetReconcileTask())
     }
 
+    enum LocalNetworkUserAction: String, CaseIterable {
+        case explicitRequest
+        case manualConnect
+        case discoveredGatewayConnect
+    }
+
+    @Test(arguments: LocalNetworkUserAction.allCases)
+    @MainActor func `deferred discovery starts only from user actions`(action: LocalNetworkUserAction) async {
+        await withUserDefaults(["gateway.discovery.debugLogs": true, "gateway.autoconnect": false]) {
+            let discovery = GatewayDiscoveryModel()
+            defer { discovery.stop() }
+            let appModel = NodeAppModel()
+            defer { appModel.disconnectGateway() }
+            let controller = GatewayConnectionController(
+                appModel: appModel,
+                discovery: discovery,
+                deferDiscoveryUntilLocalNetworkRequest: true,
+                serviceEndpointResolver: { _ in nil },
+                ingress: makeOrdinaryIngress())
+
+            controller.setScenePhase(.active)
+            #expect(!discovery.debugLog.contains { $0.message == "start()" })
+
+            switch action {
+            case .explicitRequest:
+                controller.requestLocalNetworkAccess(reason: "test")
+            case .manualConnect:
+                // The out-of-range port ends the attempt before any network work.
+                await controller.connectManual(host: "gateway.example.test", port: 70000, useTLS: true)
+            case .discoveredGatewayConnect:
+                let gateway = GatewayDiscoveryModel.DiscoveredGateway(
+                    name: "Nearby",
+                    endpoint: .service(name: "Nearby", type: "_openclaw-gw._tcp", domain: "local.", interface: nil),
+                    stableID: "test|\(UUID().uuidString)",
+                    debugID: "nearby",
+                    lanHost: nil,
+                    tailnetDns: nil,
+                    gatewayPort: nil,
+                    tlsEnabled: true,
+                    tlsFingerprintSha256: nil,
+                    cliPath: nil)
+                // The endpoint resolver returns nil, so the attempt ends before any network work.
+                #expect(await controller.connectWithDiagnostics(gateway) != nil)
+            }
+
+            #expect(discovery.debugLog.contains { $0.message == "start()" })
+        }
+    }
+
     @Test @MainActor func `chat owner survives reconnect while session refresh identity changes`() {
         let appModel = NodeAppModel()
         let disconnectedOwner = appModel.chatViewModelOwnerID
@@ -1499,6 +1548,36 @@ private func pendingHandoffDiagnostic(
         if !receivedOperator {
             #expect(problem.technicalDetails == "Gateway credential handoff missing roles: operator.")
             #expect(problem.message.contains("new iPhone setup code"))
+        }
+    }
+
+    @Test @MainActor func `onboarding reset forgets saved chat focus for every paired gateway`() async throws {
+        let registryIsolation = await GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let temporaryState = try TemporaryOpenClawState()
+        defer { temporaryState.restore() }
+        let gatewayIDs = (0..<2).map { "manual|reset-\($0)-\(UUID().uuidString).example.com|443" }
+        defer {
+            for stableID in gatewayIDs {
+                GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: nil)
+            }
+        }
+        for stableID in gatewayIDs {
+            #expect(saveActiveManualGateway(
+                host: "reset.example.com", port: 443, useTLS: true, stableID: stableID))
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(
+                stableID: stableID, sessionKey: "agent:main:reset-proof")
+            #expect(GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: stableID) != nil)
+        }
+        let defaults = try #require(UserDefaults(suiteName: "onboarding-reset-\(UUID().uuidString)"))
+        let appModel = NodeAppModel()
+        await GatewayOnboardingReset.reset(appModel: appModel, instanceId: "", defaults: defaults)
+
+        #expect(GatewaySettingsStore.loadGatewayRegistry().entries.isEmpty)
+        for stableID in gatewayIDs {
+            #expect(GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: stableID) == nil)
+            appModel.prepareForGatewayConnect(stableID: stableID)
+            #expect(appModel.chatSessionKey == appModel.mainSessionKey)
         }
     }
 
@@ -2764,6 +2843,38 @@ private func pendingHandoffDiagnostic(
             #expect(GenericPasswordKeychainStore.loadString(service: service, account: preferredAccount) == nil)
             #expect(GenericPasswordKeychainStore.loadString(service: service, account: lastAccount) == keptID)
         }
+    }
+
+    @Test @MainActor func `forget gateway erases only its saved chat focus`() async {
+        let registryIsolation = await GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let forgottenID = "focus-forgotten-\(UUID().uuidString)"
+        let keptID = "focus-kept-\(UUID().uuidString)"
+        let keptChat = "agent:main:dashboard:kept"
+        defer {
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: forgottenID, sessionKey: nil)
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: keptID, sessionKey: nil)
+        }
+        for stableID in [forgottenID, keptID] {
+            #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+                stableID: stableID, kind: .manual, name: "Focus test", host: "localhost", port: 443,
+                useTLS: true, contextPath: nil, lastConnectedAtMs: nil), activate: false))
+        }
+        GatewaySettingsStore.saveGatewayFocusedChatSessionKey(
+            stableID: forgottenID, sessionKey: "agent:main:dashboard:forgotten")
+        GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: keptID, sessionKey: keptChat)
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+        await controller.forgetGateway(stableID: forgottenID)
+
+        // Re-adding the same stable ID starts without the forgotten conversation.
+        #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: forgottenID, kind: .manual, name: "Focus test", host: "localhost", port: 443,
+            useTLS: true, contextPath: nil, lastConnectedAtMs: nil), activate: false))
+        #expect(GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: forgottenID) == nil)
+        #expect(GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: keptID) == keptChat)
     }
 
     @Test @MainActor func `forget gateway cancels its pending trust handoff`() async {

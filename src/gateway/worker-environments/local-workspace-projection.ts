@@ -102,7 +102,9 @@ async function joinLocalWorkspaceOperation<T>(
   let result: T;
   if (pending) {
     try {
-      result = await racePromiseWithAbortSignal(pending.result, options.signal);
+      result = await timeWorktreePreparationPhase("workspaceWait", () =>
+        racePromiseWithAbortSignal(pending.result, options.signal),
+      );
     } catch (error) {
       assertCurrent();
       // Retry a stopped producer only after settlement, never an uncertain write
@@ -143,7 +145,7 @@ export function checkpointLocalWorkspace(owner: LocalWorkspaceOwner): Promise<vo
     (beginCapture) =>
       withLocalWorkspaceProjection(owner, (state) => {
         beginCapture();
-        return state.synchronize("canonical");
+        return state.synchronize("canonical", { captureRejected: true });
       }),
   );
 }

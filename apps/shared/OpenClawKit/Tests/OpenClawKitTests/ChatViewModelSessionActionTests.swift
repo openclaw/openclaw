@@ -786,6 +786,59 @@ struct ChatViewModelSessionActionTests {
         #expect(viewModel.errorText != nil)
     }
 
+    @Test(arguments: ["agent:worker:ordinary", "agent:worker:main"], [false, true])
+    func `sidebar new chat does not inherit the selected conversation`(key: String, captured: Bool) async throws {
+        let transport = SessionActionTransport(directCreateSupported: !captured)
+        let viewModel = OpenClawChatViewModel(sessionKey: key, transport: transport)
+        if captured {
+            let lease = try await viewModel.newSessionRouteLease()
+            #expect(await viewModel.startNewSession(
+                agentID: "worker", worktree: false, worktreeBaseRef: nil, using: lease))
+        } else {
+            #expect(await viewModel.startNewSession())
+        }
+        #expect(await transport.createdParentKeys() == [nil])
+    }
+
+    @Test(arguments: ["agent:worker:ordinary", "agent:worker:main"])
+    func `slash new retains parent for gateway settings inheritance`(key: String) async {
+        let transport = SessionActionTransport(directCreateSupported: true)
+        let viewModel = OpenClawChatViewModel(sessionKey: key, transport: transport)
+        viewModel.input = "/new"
+        await viewModel.send()?.value
+        // The parent is the request-level contract for Gateway model, auth,
+        // effort, fast-mode, tool, and communication settings inheritance.
+        #expect(await transport.createdParentKeys() == [key])
+    }
+
+    @Test func `sidebar creation with active agent identity omits parent for an unscoped current key`() async throws {
+        let transport = SessionActionTransport()
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: transport,
+            activeAgentId: "worker")
+        let lease = try await viewModel.newSessionRouteLease()
+
+        await viewModel.startNewSession(
+            agentID: "worker",
+            worktree: false,
+            worktreeBaseRef: nil,
+            using: lease)
+
+        #expect(await transport.createdParentKeys() == [nil])
+    }
+
+    @Test(arguments: ["worker", "other"])
+    func `inheriting creation respects authoritative agent ownership`(agentID: String) async {
+        let transport = SessionActionTransport(directCreateSupported: true)
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "agent:worker:ordinary", transport: transport)
+        #expect(await viewModel.performStartNewSession(
+            agentID: agentID, inheritCurrentSession: true, worktree: false))
+        #expect(await transport.createdAgentIDs() == [agentID])
+        #expect(await transport.createdParentKeys() == [agentID == "worker" ? "agent:worker:ordinary" : nil])
+    }
+
     @Test func `ambiguous agent ownership omits the parent session`() async throws {
         let transport = SessionActionTransport()
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)

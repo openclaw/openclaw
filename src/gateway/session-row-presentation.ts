@@ -66,7 +66,10 @@ import type { GatewaySessionRow, SessionsListResult } from "./session-utils.type
 import { authorizeSessionWorkspaceRead } from "./session-workspace-read-policy.js";
 
 type PresentationOptions = Readonly<
-  Omit<records.SnapshotOptions, "now" | "active" | "subagentRuns" | "preparedFacts"> & {
+  Omit<
+    records.SnapshotOptions,
+    "now" | "active" | "subagentRuns" | "preparedFacts" | "preparedRunState"
+  > & {
     includeActivitySummary?: boolean;
     rowMode?: SessionsListParams["rowMode"];
     omitSentinelChildren?: boolean;
@@ -242,7 +245,7 @@ export function prepareProjectedSessionPresentation(
   const canReadLinkedEntry = prepareLinkedSessionEntryFilter(
     projection,
     sharing.entryFilter,
-    sharing.identity?.id,
+    sharing.sessionCap === "invited" ? sharing.identity?.id : undefined,
   );
   const listView = (opts: SessionsListParams, selection = false): SessionListView => {
     const { source: _source, ifRowsRevision: _ifRowsRevision, ...query } = opts;
@@ -395,6 +398,7 @@ export function prepareProjectedSessionPresentation(
     );
     // Writers replace materialized facts; only live run, placement and clock facts need
     // comparison here. These witnesses never grant disclosure to another recipient.
+    const temporal = runState(record.key, record.materialized.source);
     let published = publicationRows?.get(record.materialized);
     if (publicationRows) {
       const liveModel = resolveProjectedAgentRunModel({
@@ -402,7 +406,6 @@ export function prepareProjectedSessionPresentation(
         sessionId: record.entry.sessionId,
         index: rowContext.projectedAgentRuns,
       });
-      const temporal = runState(record.key, record.materialized.source);
       // Overwrite before truncating: clearing length first discards V8's backing storage.
       facts[0] = record.fallbackModel;
       facts[1] = liveModel?.provider;
@@ -496,6 +499,7 @@ export function prepareProjectedSessionPresentation(
       excludedChildKeys,
       childActivity,
       preparedFacts,
+      preparedRunState: temporal,
       backgroundProcessCount,
     });
     row.childOwnerSessionKeys = [...childOwnerSessionKeys];
@@ -574,7 +578,7 @@ export function prepareProjectedSessionPresentation(
     },
     select(
       opts: SessionsListParams,
-      select: (retained?: WeakMap<object, SessionListFilteredEntries>) => SessionEntrySelection,
+      select: (retained?: Map<object, SessionListFilteredEntries>) => SessionEntrySelection,
     ) {
       // Membership, clocks, and transient runs are not owned by metadata partitions.
       const live = opts.activeOnly || opts.activityPulseBoundaries;

@@ -17,10 +17,6 @@ const mocks = vi.hoisted(() => ({
   presence: [] as Array<Pick<PresenceEntry, "user" | "watchedSessions">>,
 }));
 
-vi.mock("../../infra/system-presence.js", () => ({
-  listSystemPresence: () => mocks.presence,
-}));
-
 function profileUser(id: string): NonNullable<PresenceEntry["user"]> {
   return { id, identity: { type: "profile", id } };
 }
@@ -36,6 +32,7 @@ function client(profileId: string, connId: string): GatewayClient {
 function context(broadcast = vi.fn(), cfg: OpenClawConfig = {}): GatewayRequestContext {
   return {
     getRuntimeConfig: () => cfg,
+    getPresenceSnapshot: () => mocks.presence,
     broadcast,
     broadcastToConnIds: vi.fn(),
     logGateway: { warn: vi.fn() },

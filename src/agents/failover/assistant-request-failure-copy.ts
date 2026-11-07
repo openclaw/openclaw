@@ -45,6 +45,8 @@ export const ERROR_DETAILS_HINT =
   "For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
 
 const STORAGE_FAILURE_COPY: Record<GatewayStorageFailure, string> = {
+  "storage-worker-memory":
+    "OpenClaw's storage worker ran out of memory. Ask the Gateway operator to check the logs and address memory or resource pressure before trying again. Restarting this session alone will not fix the underlying problem.",
   unavailable:
     "The database connection was lost. This operation was rolled back; nothing from it was saved. Please retry.",
   SQLITE_BUSY:
@@ -83,6 +85,7 @@ const ASSISTANT_REQUEST_FAILURE_COPY = {
   billing:
     "The AI service reported a billing problem. Check your account's credit balance and usage limits before trying again.",
   server_error: "The AI service is having trouble. Please try again in a moment.",
+  route_unavailable: "The provider cannot serve this model right now. Choose another model.",
   timeout:
     "The request took too long. Check the conversation for any completed work before trying again.",
   tls_certificate: `Couldn't connect securely to the AI service. ${ERROR_DETAILS_HINT}`,
@@ -294,10 +297,9 @@ export function renderRecordedAssistantFailureCopy(
     return `⚠️ ${approvalMessage}`;
   }
   const raw = typeof message.errorMessage === "string" ? message.errorMessage.trim() : "";
-  // Terminal lifecycle errors can already contain our safe copy without the original auth facts.
-  for (const reason of ["auth", "auth_permanent"] as const) {
-    const copy = ASSISTANT_REQUEST_FAILURE_COPY[reason];
-    if (raw === copy || raw === `⚠️ ${copy}`) {
+  // Terminal lifecycle errors can already contain our safe copy without the original failure facts.
+  for (const copy of Object.values(ASSISTANT_REQUEST_FAILURE_COPY)) {
+    if (copy && (raw === copy || raw === `⚠️ ${copy}`)) {
       return `⚠️ ${copy}`;
     }
   }

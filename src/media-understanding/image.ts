@@ -34,7 +34,7 @@ import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createMediaAssistantTextCoercer, MediaAssistantNoTextError } from "./assistant-text.js";
 import { resolveImageRuntime } from "./image-model-runtime.js";
-import type { ImageDescriptionRequest, ImagesDescriptionRequest } from "./types.js";
+import type { ImageDescriptionRequest, ImagesDescriptionRequest } from "./provider-types.js";
 
 const coerceImageAssistantText = createMediaAssistantTextCoercer("Image");
 

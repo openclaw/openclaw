@@ -37,7 +37,7 @@ async function prepareSharedStateForAgentMaintenance(
     "doctor-preparation",
   );
   if (prepared.warnings.length > 0) {
-    throw new Error(prepared.warnings.join("\n"));
+    throw new Error(prepared.warnings.join("\n"), { cause: prepared.failure });
   }
   changes.push(...prepared.changes);
   await openOpenClawStateDatabaseForDoctor({ env: params.env });
@@ -122,7 +122,7 @@ export async function prepareDoctorDatabaseMigrations(
       "version",
     );
     if (migrated.warnings.length > 0) {
-      throw new Error(migrated.warnings.join("\n"));
+      throw new Error(migrated.warnings.join("\n"), { cause: migrated.failure });
     }
     result.changes.push(...migrated.changes);
   }

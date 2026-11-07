@@ -22,6 +22,8 @@ export type ModelProvidersData = {
   authStatus: ModelAuthStatusResult | null;
   /** Operation diagnostics; picker facts are owned by the shared catalog store. */
   providerOutcomes: ModelCatalogProviderOutcome[];
+  pendingProviders: readonly string[];
+  catalogRequestFailed: boolean;
   catalogError: string | null;
   providerUsage: UsageSummary | null;
   providerUsageFailed: boolean;
@@ -34,6 +36,8 @@ type RequestResult<T> = { ok: true; result: T } | { ok: false; error: unknown };
 export const EMPTY_MODEL_PROVIDERS_DATA: ModelProvidersData = {
   authStatus: null,
   providerOutcomes: [],
+  pendingProviders: [],
+  catalogRequestFailed: false,
   catalogError: null,
   providerUsage: null,
   providerUsageFailed: false,
@@ -85,6 +89,8 @@ export async function loadModelProvidersData(
   return {
     authStatus: authStatus.ok ? authStatus.result : null,
     providerOutcomes: catalog.ok ? (catalog.result.providerOutcomes ?? []) : [],
+    pendingProviders: catalog.ok ? (catalog.result.pendingProviders ?? []) : [],
+    catalogRequestFailed: !catalog.ok || (refreshResult !== undefined && !refreshResult.ok),
     catalogError:
       refreshResult && !refreshResult.ok
         ? errorMessage(refreshResult.error)

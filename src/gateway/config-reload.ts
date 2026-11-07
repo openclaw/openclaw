@@ -666,7 +666,9 @@ export function startGatewayConfigReloader(
     run: () => Promise<void>,
     candidate?: GatewayConfigReloadCandidate,
   ) => {
-    const runTransaction = candidate?.application?.runTransaction ?? opts.runTransaction;
+    // Writer continuations identify roots waiting for this receipt, not the reload's
+    // lifecycle owner. Always restore the Gateway context before borrowing those roots.
+    const runTransaction = opts.runTransaction;
     const transaction = () => runWithCandidateWaitingRoots(run, candidate);
     await runOutsideSetupCredentialAccess(() =>
       runTransaction ? runTransaction(transaction) : transaction(),

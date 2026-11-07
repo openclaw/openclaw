@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { ConfigSnapshot } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -135,5 +136,51 @@ describe("DevicesPage policy saves", () => {
       },
     );
     expect(runtimeConfig.state.configFormDirty).toBe(false);
+  });
+
+  it("clears a saved binding after connecting during a shared display read", async () => {
+    const displayRead = createDeferred<ConfigSnapshot>();
+    const original = { tools: { exec: { node: "saved-node" } } };
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return displayRead.promise;
+      }
+      if (method === "config.set") {
+        return { config: { tools: { exec: {} } }, hash: "saved" };
+      }
+      return responseFor(method);
+    });
+    const { client } = clientFor(request);
+    const fixture = gatewayFixture(gatewaySnapshot(null, false));
+    const runtimeConfig = createRuntimeConfigCapability(fixture.source);
+    cleanups.push(() => runtimeConfig.dispose());
+    const page = mountPage(fixture, {}, undefined, runtimeConfig);
+    await waitForSolid(() => expect(page.container.textContent).toContain("Devices"));
+
+    fixture.emitSnapshot(gatewaySnapshot(client, true, ["config.set"], ["operator.admin"]));
+    expect(runtimeConfig.state.configLoading).toBe(true);
+    displayRead.resolve({
+      config: original,
+      raw: JSON.stringify(original),
+      hash: "original",
+      valid: true,
+      issues: [],
+    });
+    const binding = await waitForSolid(() => {
+      const select = expectDefined(
+        page.container.querySelector<HTMLSelectElement>('select[aria-label="Device"]'),
+        "saved binding",
+      );
+      expect(select.value).toBe("saved-node");
+      expect(select.disabled).toBe(false);
+      return select;
+    });
+    binding.value = "";
+    binding.dispatchEvent(new Event("change", { bubbles: true }));
+    await runtimeConfig.flushFormChanges();
+    expect(request).toHaveBeenCalledWith("config.set", {
+      raw: `${JSON.stringify({ tools: { exec: {} } }, null, 2)}\n`,
+      baseHash: "original",
+    });
   });
 });

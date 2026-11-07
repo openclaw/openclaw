@@ -408,7 +408,7 @@ export function buildBuiltinChatCommands(
         }),
         defineCommandArgument("value", "Action arguments", { captureRemaining: true }),
       ],
-      argsMenu: "auto",
+      // ACP actions need free-form arguments; bare /acp must reach its help handler.
     }),
     defineBuiltinCommand(
       "agents",
