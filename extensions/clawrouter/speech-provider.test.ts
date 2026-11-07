@@ -8,9 +8,17 @@ import { synthesizeSpeech, textToSpeechTelephony } from "openclaw/plugin-sdk/tts
 import { describe, expect, it } from "vitest";
 
 const AUDIO = Buffer.from([0x49, 0x44, 0x33, 1, 2, 3]);
-type Request = { url: string; auth?: string; vendorKey?: string; body: Record<string, unknown> };
+type Request = {
+  url: string;
+  auth?: string;
+  vendorKey?: string;
+  body: Record<string, unknown>;
+  ssml?: string;
+  contentType?: string;
+  outputFormat?: string;
+};
 type Catalog = {
-  providerId: "openai" | "gradium";
+  providerId: "openai" | "gradium" | "azure-speech";
   model: string | null;
   observedAt?: string;
   authType?: string;
@@ -69,6 +77,11 @@ async function withFixture(
       await withServer(
         (req, res) => {
           void (async () => {
+            if (catalog.providerId === "azure-speech") {
+              expect(req.headers["ocp-apim-subscription-key"]).toBeUndefined();
+              expect(req.headers["ocp-apim-subscription-region"]).toBeUndefined();
+              expect(req.headers["x-api-key"]).toBeUndefined();
+            }
             if (req.url === "/v1/catalog") {
               catalogRequests.push(req.headers.authorization ?? "");
               const route =
@@ -146,7 +159,14 @@ async function withFixture(
               auth: req.headers.authorization,
               vendorKey:
                 typeof req.headers["x-api-key"] === "string" ? req.headers["x-api-key"] : undefined,
-              body: text ? JSON.parse(text) : {},
+              body: catalog.providerId === "azure-speech" ? {} : text ? JSON.parse(text) : {},
+              ...(catalog.providerId === "azure-speech"
+                ? {
+                    ssml: text,
+                    contentType: req.headers["content-type"],
+                    outputFormat: req.headers["x-microsoft-outputformat"] as string | undefined,
+                  }
+                : {}),
             };
             requests.push(request);
             respond(res, request);
@@ -200,6 +220,8 @@ async function withFixture(
         CLAWROUTER_API_KEY: routerApiKey,
         OPENAI_API_KEY: "fixture-openai-not-router",
         GRADIUM_API_KEY: "fixture-gradium-not-router",
+        AZURE_SPEECH_API_KEY: "fixture-azure-not-router",
+        AZURE_SPEECH_REGION: "westus",
       },
     },
   );
@@ -438,9 +460,10 @@ describe("ClawRouter native speech", () => {
         });
         const provider = speech(cfg);
         const storedCfg = withoutKey(cfg);
-        await expect(provider.synthesize({ ...request(), cfg: storedCfg })).resolves.toMatchObject({
-          audioBuffer: AUDIO,
-        });
+        // This call includes cold auth-owner setup in the end-to-end budget, as TTS does.
+        await expect(
+          provider.synthesize({ ...request(), cfg: storedCfg, timeoutMs: 30_000 }),
+        ).resolves.toMatchObject({ audioBuffer: AUDIO });
         await expect(
           provider.synthesize(
             request({ profileId: "clawrouter:speech", apiKey: "fixture-inline-must-not-win" }),
@@ -754,6 +777,179 @@ describe("ClawRouter native Gradium speech", () => {
         expect((await fixture.tts({ cfg })).success).toBe(false);
         expect(fixture.requests).toHaveLength(0);
       }, respondGradium);
+    },
+  );
+});
+
+function selectAzure(fixture: Fixture) {
+  Object.assign(fixture.catalog, {
+    providerId: "azure-speech",
+    model: null,
+    path: "/cognitiveservices/v1",
+    requestFormat: "azure_speech.ssml",
+    responseFormat: "audio.binary",
+    routeKind: "native",
+  });
+  return {
+    ...fixture.cfg,
+    agents: { defaults: {} },
+    tts: {
+      provider: "clawrouter",
+      providers: { clawrouter: { upstreamProvider: "azure-speech" } },
+    },
+  } satisfies OpenClawConfig;
+}
+// PR466 offline 24 kHz mono 48 kbit/s silence; transport bytes, not live vendor output.
+const AZURE_MP3 = Buffer.from(
+  "//NkxAAAAANIAAAAAExBTUVVVVVMQU1FNC4wVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//NkxHwAAANIAAAAAFVVVVVVVVVMQU1FNC4wVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//NkxHwAAANIAAAAAFVVVVVVVVVMQU1FNC4wVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//NkxHwAAANIAAAAAFVVVVVVVVVMQU1FNC4wVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//NkxHwAAANIAAAAAFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV",
+  "base64",
+);
+const AZURE_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+function respondAzure(res: ServerResponse) {
+  res.setHeader("content-type", "audio/mpeg");
+  res.end(AZURE_MP3);
+}
+
+describe("ClawRouter native Azure SSML speech", () => {
+  it("runs actual TTS with raw escaped SSML, native headers and only the proxy credential", async () => {
+    await withFixture(async (fixture) => {
+      const cfg = selectAzure(fixture);
+      cfg.models!.providers!.clawrouter!.headers = {
+        "Ocp-Apim-Subscription-Key": "synthetic-vendor-not-router",
+        "Ocp-Apim-Subscription-Region": "westus",
+        "x-api-key": "synthetic-other-vendor",
+      };
+      const result = await fixture.tts({
+        cfg,
+        text: 'Synthetic café & 中文 😀 <voice name="other">',
+      });
+      expect(result).toMatchObject({
+        success: true,
+        audioBuffer: AZURE_MP3,
+        outputFormat: AZURE_FORMAT,
+        voiceCompatible: false,
+      });
+      expect(fixture.catalogRequests).toEqual(["Bearer fixture-router"]);
+      expect(fixture.requests).toEqual([
+        {
+          url: "/v1/native/azure-speech/cognitiveservices/v1",
+          auth: "Bearer fixture-router",
+          vendorKey: undefined,
+          body: {},
+          contentType: "application/ssml+xml",
+          outputFormat: AZURE_FORMAT,
+          ssml: '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US"><voice name="en-US-JennyNeural">Synthetic café &amp; 中文 😀 &lt;voice name="other"&gt;</voice></speak>',
+        },
+      ]);
+    }, respondAzure);
+  });
+
+  it.each([
+    { observedAt: "2000-01-01T00:00:00Z" },
+    { authType: "access" },
+    { eligible: false },
+    { providerId: "openai" as const },
+    { model: "unqualified" },
+    { requestFormat: "unknown.speech" },
+    { route: "https://foreign.example/speech" },
+    { path: "/foreign/speech" },
+    { routeKind: "manifest" as const },
+  ])("denies stale, foreign or unsupported Azure offers (%j)", async (patch) => {
+    await withFixture(async (fixture) => {
+      const cfg = selectAzure(fixture);
+      Object.assign(fixture.catalog, patch);
+      expect((await fixture.tts({ cfg })).success).toBe(false);
+      expect(fixture.requests).toHaveLength(0);
+    }, respondAzure);
+  });
+
+  it.each([
+    { model: "azure-speech/fake-model" },
+    { region: "westus" },
+    { endpoint: "https://speech.example" },
+    { outputFormat: "ogg-24khz-16bit-mono-opus" },
+    { responseFormat: "raw-8khz-8bit-mono-mulaw" },
+    { speed: 1.2 },
+    { instructions: "whisper" },
+  ])("rejects unsupported Azure settings before dispatch (%j)", async (override) => {
+    await withFixture(async (fixture) => {
+      const cfg = selectAzure(fixture);
+      Object.assign(cfg.tts.providers.clawrouter, override);
+      expect((await fixture.tts({ cfg })).success).toBe(false);
+      expect(fixture.requests).toHaveLength(0);
+    }, respondAzure);
+  });
+
+  it("rejects unsupported targets and request overrides without using vendor fallback", async () => {
+    await withFixture(async (fixture) => {
+      const cfg = selectAzure(fixture);
+      const request = { ...fixture.request(cfg.tts.providers.clawrouter), cfg };
+      for (const target of ["voice-note", "telephony"] as const) {
+        await expect(speech(cfg).synthesize({ ...request, target })).rejects.toThrow(
+          "not qualified",
+        );
+      }
+      await expect(
+        speech(cfg).synthesize({ ...request, providerOverrides: { region: "westus" } }),
+      ).rejects.toThrow("region and endpoint");
+      expect((await fixture.tts({ cfg: withoutKey(cfg) })).success).toBe(false);
+      expect(fixture.catalogRequests).toHaveLength(0);
+      expect(fixture.requests).toHaveLength(0);
+    }, respondAzure);
+  });
+
+  it.each(["\ud800", "\udc00", "\u0000"])(
+    "rejects invalid XML text before transmission (%j)",
+    async (text) => {
+      await withFixture(async (fixture) => {
+        const cfg = selectAzure(fixture);
+        // Check the registered provider before the host's Markdown normalizer can repair NUL.
+        await expect(
+          speech(cfg).synthesize({ ...fixture.request(cfg.tts.providers.clawrouter), cfg, text }),
+        ).rejects.toThrow("valid XML text");
+        expect(fixture.requests).toHaveLength(0);
+      }, respondAzure);
+    },
+  );
+
+  it("bounds the serialized SSML envelope, including voice attributes", async () => {
+    await withFixture(async (fixture) => {
+      const cfg = selectAzure(fixture);
+      Object.assign(cfg.tts.providers.clawrouter, { voice: "中".repeat(22000) });
+      expect((await fixture.tts({ cfg })).success).toBe(false);
+      expect(fixture.requests).toHaveLength(0);
+    }, respondAzure);
+  });
+
+  it.each(["mime", "range", "encoding", "partial", "empty", "oversized", "truncated"] as const)(
+    "rejects unqualified %s Azure delivery without retry",
+    async (failure) => {
+      await withFixture(
+        async (fixture) => {
+          expect((await fixture.tts({ cfg: selectAzure(fixture) })).success).toBe(false);
+          expect(fixture.requests).toHaveLength(1);
+        },
+        (res) => {
+          res.setHeader("content-type", failure === "mime" ? "audio/ogg" : "audio/mpeg");
+          if (failure === "partial") {
+            res.statusCode = 206;
+          }
+          if (failure === "range") {
+            res.setHeader("content-range", "bytes 0-15/100");
+          }
+          if (failure === "encoding") {
+            res.setHeader("content-encoding", "gzip");
+          }
+          if (failure === "oversized") {
+            res.setHeader("content-length", 16 * 1024 * 1024 + 1);
+          }
+          if (failure === "truncated") {
+            res.setHeader("content-length", AZURE_MP3.length + 1);
+            res.setHeader("connection", "close");
+          }
+          res.end(failure === "empty" ? undefined : AZURE_MP3);
+        },
+      );
     },
   );
 });

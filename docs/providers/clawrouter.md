@@ -492,6 +492,44 @@ cover catalog lookup, generation, and result downloads. Prompt, image-count, and
 explicit size bounds come from that model’s current catalog generation limits;
 unknown limits do not authorize generation.
 
+## Native Azure Speech
+
+ClawRouter TTS and Talk can consume a qualified, model-less `azure_speech.ssml`
+offer with `audio.binary` output at native `POST /cognitiveservices/v1`.
+This requires an active Worker implementation and an eligible offer in the
+selected proxy key's current catalog. Client support does not activate Azure Speech.
+
+Set `upstreamProvider: "azure-speech"` under `tts.providers.clawrouter` or
+`talk.providers.clawrouter`. Keep the router base URL and proxy credential in
+`models.providers.clawrouter`. The default voice is `en-US-JennyNeural` and the
+default `lang` is `en-US`; `voice`/`voiceId` and Talk voice overrides select the
+native voice. Do not set a `model`/`modelId` or an agent `voiceModel` for this
+model-less route.
+
+The consumer uses the same single-voice SSML serializer as the direct Azure
+provider. Text is escaped, never interpreted as caller-supplied SSML, and sent
+unchanged as `application/ssml+xml`, without a JSON envelope. The only qualified
+proxy output is `audio-24khz-48kbitrate-mono-mp3`, requested through
+`X-Microsoft-OutputFormat` and returned as `audio/mpeg`. Voice notes, telephony,
+speed/instruction overrides, and other output formats are rejected before dispatch.
+Manifest transports are not qualified for this raw-body consumer.
+
+Each synthesis refreshes the credential-scoped catalog. Stale, foreign, revoked,
+or unknown-format offers fail closed. The Worker owns the original Azure
+region/resource credential binding; caller `region` and `endpoint` overrides are
+rejected. Missing proxy credentials never fall back to `AZURE_SPEECH_API_KEY`,
+`AZURE_SPEECH_REGION`, or another provider. Vendor credential headers are removed
+from catalog and synthesis requests. An explicit `profileId` remains bound to a
+ClawRouter profile.
+
+The existing client limit is 1–4096 text characters, with a 64 KiB serialized
+SSML ceiling. Only complete, nonempty HTTP 200 MP3 is accepted, within the caller's
+deadline and the smaller of its audio cap and 16 MiB. Redirects, ranges, encoded
+responses, and mismatched MIME types fail without replay. A complete audio response
+does not establish full-text delivery or free generation; the Worker owns admission,
+usage, and settlement. Direct Azure provider credentials and output formats remain
+unchanged.
+
 ## Native Gradium speech
 
 ClawRouter speech can consume a qualified, model-less Gradium offer for

@@ -5,6 +5,7 @@ import type {
   SpeechSynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
 import {
+  buildSingleVoiceSsml,
   createSpeechDirectiveParser,
   resolveSpeechProviderApiKey,
 } from "openclaw/plugin-sdk/speech-provider";
@@ -57,14 +58,6 @@ function azureSpeechUrl(params: {
   return `${baseUrl}${params.path}`;
 }
 
-function escapeXmlText(text: string): string {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
-function escapeXmlAttr(value: string): string {
-  return escapeXmlText(value).replace(/"/g, "&quot;").replace(/'/g, "&apos;");
-}
-
 function readAzureVoiceTagStrings(value: unknown): string[] | undefined {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => trimToUndefined(entry) !== undefined)
@@ -106,11 +99,7 @@ async function azureSpeechTTS(req: SpeechSynthesisRequest, outputFormatOverride?
         "X-Microsoft-OutputFormat": outputFormat,
         "User-Agent": "OpenClaw",
       },
-      body:
-        `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" ` +
-        `xml:lang="${escapeXmlAttr(lang)}">` +
-        `<voice name="${escapeXmlAttr(voice)}">${escapeXmlText(text)}</voice>` +
-        `</speak>`,
+      body: buildSingleVoiceSsml({ text, voice, lang }),
     },
     timeoutMs,
     policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(url),

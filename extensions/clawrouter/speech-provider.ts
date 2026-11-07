@@ -5,6 +5,7 @@ import type { SpeechProviderPlugin, SpeechSynthesisRequest } from "openclaw/plug
 import {
   buildGradiumSpeechRequestBody,
   buildOpenAiSpeechRequestBody,
+  buildSingleVoiceSsml,
   createSpeechDirectiveParser,
   DEFAULT_GRADIUM_VOICE_ID,
   OPENAI_TTS_MODELS,
@@ -19,6 +20,7 @@ import { normalizeClawRouterApiBaseUrl } from "./base-url.js";
 const MODEL = "openai/tts-1";
 const VOICES = OPENAI_TTS_VOICES;
 const GRADIUM_FORMATS = new Set(["wav", "opus"]);
+const AZURE_MP3 = "audio-24khz-48kbitrate-mono-mp3";
 const FORMATS = new Set(["mp3", "opus", "aac", "flac", "wav", "pcm"]);
 
 function readVoice(raw: Record<string, unknown>) {
@@ -29,13 +31,31 @@ function readVoice(raw: Record<string, unknown>) {
 
 function readConfig(raw: Record<string, unknown>, path: string) {
   const upstreamProvider = normalizeOptionalString(raw.upstreamProvider) ?? "openai";
-  if (upstreamProvider !== "openai" && upstreamProvider !== "gradium") {
+  if (!["openai", "gradium", "azure-speech"].includes(upstreamProvider)) {
     throw new Error("Unsupported ClawRouter speech upstreamProvider");
   }
-  const responseFormat = normalizeOptionalString(raw.responseFormat)?.toLowerCase();
+  const azure = upstreamProvider === "azure-speech";
+  if (azure && [raw.region, raw.endpoint].some((value) => value !== undefined)) {
+    throw new Error(
+      "ClawRouter owns the Azure Speech region and endpoint; configure the proxy binding",
+    );
+  }
+  if (
+    azure &&
+    [raw.outputFormat, raw.responseFormat].some(
+      (value) => value !== undefined && value !== AZURE_MP3,
+    )
+  ) {
+    throw new Error("ClawRouter Azure speech requires audio-24khz-48kbitrate-mono-mp3");
+  }
+  const responseFormat = normalizeOptionalString(
+    azure ? (raw.outputFormat ?? raw.responseFormat) : raw.responseFormat,
+  )?.toLowerCase();
   if (
     responseFormat &&
-    !(upstreamProvider === "gradium" ? GRADIUM_FORMATS : FORMATS).has(responseFormat)
+    (azure
+      ? responseFormat !== AZURE_MP3
+      : !(upstreamProvider === "gradium" ? GRADIUM_FORMATS : FORMATS).has(responseFormat))
   ) {
     throw new Error("Invalid ClawRouter speech responseFormat");
   }
@@ -45,8 +65,15 @@ function readConfig(raw: Record<string, unknown>, path: string) {
     baseUrl: normalizeOptionalString(raw.baseUrl),
     model:
       normalizeOptionalString(raw.model ?? raw.modelId) ??
-      (upstreamProvider === "gradium" ? undefined : MODEL),
-    voice: readVoice(raw) ?? (upstreamProvider === "gradium" ? DEFAULT_GRADIUM_VOICE_ID : "alloy"),
+      (upstreamProvider === "openai" ? MODEL : undefined),
+    voice:
+      readVoice(raw) ??
+      (azure
+        ? "en-US-JennyNeural"
+        : upstreamProvider === "gradium"
+          ? DEFAULT_GRADIUM_VOICE_ID
+          : "alloy"),
+    lang: normalizeOptionalString(raw.lang ?? raw.languageCode) ?? "en-US",
     speed: raw.speed,
     instructions: normalizeOptionalString(raw.instructions),
     responseFormat,
@@ -158,21 +185,38 @@ export function buildClawRouterSpeechProvider(
       speed: overrides.speed ?? base.speed,
     };
     const gradium = config.upstreamProvider === "gradium";
-    if (gradium && telephony) {
-      throw new Error("ClawRouter Gradium telephony output is not qualified");
+    const azure = config.upstreamProvider === "azure-speech";
+    const modelLess = gradium || azure;
+    if (modelLess && (telephony || req.target === "telephony")) {
+      throw new Error(
+        `ClawRouter ${azure ? "Azure" : "Gradium"} telephony output is not qualified`,
+      );
+    }
+    if (azure && req.target === "voice-note") {
+      throw new Error("ClawRouter Azure voice-note output is not qualified");
+    }
+    if (azure) {
+      // Run override validation too: region and output format cannot change the selected binding.
+      readConfig(
+        { ...req.providerConfig, ...overrides, upstreamProvider: "azure-speech" },
+        "tts.providers.clawrouter",
+      );
+      if (overrides.instructions !== undefined) {
+        throw new Error("ClawRouter Azure speech does not support instructions overrides");
+      }
     }
     const upstream = config.model?.startsWith("openai/")
       ? config.model.slice("openai/".length)
       : "";
-    if (gradium && (config.model || config.speed !== undefined || config.instructions)) {
+    if (modelLess && (config.model || config.speed !== undefined || config.instructions)) {
       throw new Error(
-        "ClawRouter Gradium speech is model-less and does not support model, speed, or instructions overrides",
+        "ClawRouter native speech is model-less and does not support model, speed, or instructions overrides",
       );
     }
-    if (!gradium && !OPENAI_TTS_MODELS.some((model) => model === upstream)) {
+    if (!modelLess && !OPENAI_TTS_MODELS.some((model) => model === upstream)) {
       throw new Error("ClawRouter speech requires a qualified OpenAI speech model");
     }
-    if (!gradium && !VOICES.some((voice) => voice === config.voice)) {
+    if (!modelLess && !VOICES.some((voice) => voice === config.voice)) {
       throw new Error("Invalid ClawRouter OpenAI speech voice");
     }
     if (
@@ -187,6 +231,20 @@ export function buildClawRouterSpeechProvider(
     if (!req.text.trim() || Array.from(req.text).length > 4096) {
       throw new Error("ClawRouter speech requires 1-4096 characters");
     }
+    const ssml = azure
+      ? buildSingleVoiceSsml({
+          text: req.text,
+          voice: config.voice,
+          lang: normalizeOptionalString(overrides.lang ?? overrides.languageCode) ?? config.lang,
+        })
+      : undefined;
+    if (
+      ssml !== undefined &&
+      (Buffer.byteLength(ssml, "utf8") > 65536 ||
+        /[^\t\n\r\u0020-\ud7ff\ue000-\ufffd\u{10000}-\u{10ffff}]/u.test(ssml))
+    ) {
+      throw new Error("ClawRouter Azure speech requires valid XML text within 64 KiB");
+    }
     const { mergeSsrFPolicies } = await import("openclaw/plugin-sdk/ssrf-runtime");
     const { resolveGeneratedMediaMaxBytes } =
       await import("openclaw/plugin-sdk/media-generation-runtime");
@@ -195,65 +253,89 @@ export function buildClawRouterSpeechProvider(
       model: config.model,
     });
     const { fetchClawRouterCapabilityOffers } = await import("./capability-offers.js");
-    if (gradium) {
+    if (modelLess) {
       http.headers.delete("x-api-key");
+    }
+    if (azure) {
+      http.headers.delete("Ocp-Apim-Subscription-Key");
+      http.headers.delete("Ocp-Apim-Subscription-Region");
     }
     const offers = await fetchClawRouterCapabilityOffers({
       context: http,
       timeoutMs: remaining,
-      requireFreshProxyCatalog: gradium,
+      requireFreshProxyCatalog: modelLess,
     });
-    const offer = gradium
+    const offer = azure
       ? offers.find(
           (candidate) =>
-            candidate.providerId === "gradium" &&
+            candidate.providerId === "azure-speech" &&
             candidate.endpoint === "speech" &&
-            candidate.path === "/api/post/speech/tts" &&
+            candidate.path === "/cognitiveservices/v1" &&
             candidate.model === undefined &&
             candidate.methods.includes("POST") &&
-            candidate.requestFormat === "gradium.speech" &&
+            candidate.requestFormat === "azure_speech.ssml" &&
             candidate.responseFormat === "audio.binary" &&
-            (candidate.routeKind === "manifest" ||
-              (candidate.routeKind === "native" &&
-                candidate.url ===
-                  http.baseUrl.replace(/\/v1\/?$/u, "") +
-                    "/v1/native/gradium/api/post/speech/tts")),
+            candidate.routeKind === "native",
         )
-      : offers.find(
-          (candidate) =>
-            candidate.providerId === "openai" &&
-            candidate.model !== undefined &&
-            candidate.model.id === config.model &&
-            candidate.model.upstream === upstream &&
-            Array.isArray(candidate.model.capabilities) &&
-            candidate.model.capabilities.includes("audio.speech") &&
-            candidate.methods.includes("POST") &&
-            candidate.requestFormat === "openai.audio_speech" &&
-            candidate.responseFormat === "audio.binary",
-        );
+      : gradium
+        ? offers.find(
+            (candidate) =>
+              candidate.providerId === "gradium" &&
+              candidate.endpoint === "speech" &&
+              candidate.path === "/api/post/speech/tts" &&
+              candidate.model === undefined &&
+              candidate.methods.includes("POST") &&
+              candidate.requestFormat === "gradium.speech" &&
+              candidate.responseFormat === "audio.binary" &&
+              (candidate.routeKind === "manifest" ||
+                (candidate.routeKind === "native" &&
+                  candidate.url ===
+                    http.baseUrl.replace(/\/v1\/?$/u, "") +
+                      "/v1/native/gradium/api/post/speech/tts")),
+          )
+        : offers.find(
+            (candidate) =>
+              candidate.providerId === "openai" &&
+              candidate.model !== undefined &&
+              candidate.model.id === config.model &&
+              candidate.model.upstream === upstream &&
+              Array.isArray(candidate.model.capabilities) &&
+              candidate.model.capabilities.includes("audio.speech") &&
+              candidate.methods.includes("POST") &&
+              candidate.requestFormat === "openai.audio_speech" &&
+              candidate.responseFormat === "audio.binary",
+          );
     if (!offer) {
       throw new Error("Selected ClawRouter speech model has no eligible supported offer");
     }
     const headers = new Headers(http.headers);
-    headers.set("Content-Type", "application/json");
+    headers.set("Content-Type", azure ? "application/ssml+xml" : "application/json");
+    if (azure) {
+      headers.set("X-Microsoft-OutputFormat", AZURE_MP3);
+    }
     headers.set("Accept", "audio/*, application/octet-stream");
-    const responseFormat = telephony
-      ? "pcm"
-      : (config.responseFormat ?? (req.target === "voice-note" ? "opus" : gradium ? "wav" : "mp3"));
-    const body = gradium
-      ? buildGradiumSpeechRequestBody({
-          text: req.text,
-          voiceId: config.voice,
-          outputFormat: responseFormat === "opus" ? "opus" : "wav",
-        })
-      : buildOpenAiSpeechRequestBody({
-          model: offer.routeKind === "unified" ? config.model! : upstream,
-          text: req.text,
-          voice: config.voice,
-          responseFormat,
-          speed: typeof config.speed === "number" ? config.speed : undefined,
-          instructions: upstream.startsWith("gpt-4o-mini-tts") ? config.instructions : undefined,
-        });
+    const responseFormat = azure
+      ? AZURE_MP3
+      : telephony
+        ? "pcm"
+        : (config.responseFormat ??
+          (req.target === "voice-note" ? "opus" : gradium ? "wav" : "mp3"));
+    const body =
+      ssml ??
+      (gradium
+        ? buildGradiumSpeechRequestBody({
+            text: req.text,
+            voiceId: config.voice,
+            outputFormat: responseFormat === "opus" ? "opus" : "wav",
+          })
+        : buildOpenAiSpeechRequestBody({
+            model: offer.routeKind === "unified" ? config.model! : upstream,
+            text: req.text,
+            voice: config.voice,
+            responseFormat,
+            speed: typeof config.speed === "number" ? config.speed : undefined,
+            instructions: upstream.startsWith("gpt-4o-mini-tts") ? config.instructions : undefined,
+          }));
     const { response, release } = await context.fetchWithSsrFGuard({
       url: offer.url,
       maxRedirects: 0,
@@ -261,7 +343,10 @@ export function buildClawRouterSpeechProvider(
       init: {
         method: "POST",
         headers,
-        body: JSON.stringify(offer.routeKind === "manifest" ? { body } : body),
+        body:
+          typeof body === "string"
+            ? body
+            : JSON.stringify(offer.routeKind === "manifest" ? { body } : body),
       },
       policy: mergeSsrFPolicies(
         http.ssrfPolicy,
@@ -274,7 +359,7 @@ export function buildClawRouterSpeechProvider(
       await assertOkOrThrowProviderError(response, "ClawRouter speech error", {
         requestHeaders: headers,
       });
-      if (gradium) {
+      if (modelLess) {
         const mime = response.headers.get("content-type")?.trim().toLowerCase();
         const encoding = response.headers.get("content-encoding")?.trim().toLowerCase();
         if (
@@ -282,11 +367,11 @@ export function buildClawRouterSpeechProvider(
           response.redirected ||
           response.headers.has("content-range") ||
           (encoding !== undefined && encoding !== "identity") ||
-          mime !== (responseFormat === "wav" ? "audio/wav" : "audio/ogg")
+          mime !== (azure ? "audio/mpeg" : responseFormat === "wav" ? "audio/wav" : "audio/ogg")
         ) {
           void response.body?.cancel().catch(() => undefined);
           throw new Error(
-            "ClawRouter Gradium speech response does not match the requested audio format",
+            "ClawRouter native speech response does not match the requested audio format",
           );
         }
       }
@@ -296,7 +381,7 @@ export function buildClawRouterSpeechProvider(
         "audio",
         {
           maxBytes: Math.min(
-            gradium ? 16 * 1024 * 1024 : Infinity,
+            modelLess ? 16 * 1024 * 1024 : Infinity,
             resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
           ),
           timeoutMs: remaining,
@@ -306,7 +391,7 @@ export function buildClawRouterSpeechProvider(
       return {
         audioBuffer,
         outputFormat: responseFormat,
-        fileExtension: "." + responseFormat,
+        fileExtension: azure ? ".mp3" : "." + responseFormat,
         voiceCompatible: responseFormat === "opus",
       };
     } finally {
@@ -359,7 +444,7 @@ export function buildClawRouterSpeechProvider(
       const config = providerConfig
         ? readConfig(providerConfig, "tts.providers.clawrouter")
         : ttsConfig(asOptionalRecord(cfg?.tts) ?? {});
-      return config.upstreamProvider === "gradium"
+      return config.upstreamProvider !== "openai"
         ? []
         : VOICES.map((voice) => ({ id: voice, name: voice }));
     },
