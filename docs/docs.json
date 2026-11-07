@@ -1812,6 +1812,7 @@
                   },
                   "plugins/copilot",
                   "plugins/muse",
+                  "plugins/phone-harness",
                   {
                     "group": "Meetings and calls",
                     "pages": [
