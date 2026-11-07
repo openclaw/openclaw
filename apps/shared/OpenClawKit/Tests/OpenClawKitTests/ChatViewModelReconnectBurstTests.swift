@@ -30,9 +30,9 @@ private final class ReconnectBurstTransport: @unchecked Sendable, OpenClawChatTr
         }
     }
 
-    func releaseHistory() {
+    func releaseHistory(keepingHeld: Bool = false) {
         let held = self.lock.withLock {
-            self.holdsHistory = false
+            self.holdsHistory = keepingHeld
             defer { self.heldHistory = [] }
             return self.heldHistory
         }
@@ -63,6 +63,7 @@ private final class ReconnectBurstTransport: @unchecked Sendable, OpenClawChatTr
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
         self.record("history")
+        self.record("history.\(self.requests.count(where: { $0 == "history" }))")
         await withCheckedContinuation { continuation in
             let hold = self.lock.withLock {
                 if self.holdsHistory { self.heldHistory.append(continuation) }
@@ -96,7 +97,8 @@ private final class ReconnectBurstTransport: @unchecked Sendable, OpenClawChatTr
             steps: nil)
     }
 
-    func listModels(agentID _: String?) async throws -> [OpenClawChatModelChoice] {
+    func listModels(agentID: String?) async throws -> [OpenClawChatModelChoice] {
+        self.record("models.agent:" + (agentID ?? "nil"))
         self.record("models")
         return []
     }
@@ -178,7 +180,6 @@ struct ChatViewModelReconnectBurstTests {
         await transport.waitFor("source")
 
         let requests = transport.requests
-        print("RECONNECT_BURST requests=", requests.joined(separator: ","))
         let catalogs = ["models", "composer", "swarm", "questions", "source"]
         let historyDone = requests.lastIndex(of: "history.done") ?? requests.endIndex
         for catalog in catalogs {
@@ -213,4 +214,48 @@ struct ChatViewModelReconnectBurstTests {
         #expect(transport.requests.firstIndex(of: "progress")
             .map { $0 > (transport.requests.firstIndex(of: "history.done") ?? .max) } == true)
     }
+
+    @Test @MainActor func `retired agent recovery does not request its catalogs`() async {
+        let transport = ReconnectBurstTransport()
+        let vm = OpenClawChatViewModel(sessionKey: "global", transport: transport, activeAgentId: "research")
+        defer { vm.detachTransport() }
+        #expect(await vm.refreshHistoryAfterRun().applied)
+        transport.reset(holdingHistory: true)
+        let recovery = vm.handleTransportEvent(.reconnected)
+        await transport.waitFor("history")
+
+        vm.syncDeliveryIdentity(activeAgentId: "writing", sessionRoutingContract: nil)
+        transport.releaseHistory()
+        await recovery?.value
+        await vm.bootstrapTask?.value
+
+        #expect(!transport.requests.contains("models.agent:research"))
+        #expect(transport.requests.contains("models.agent:writing"))
+        #expect(!vm.modelCatalogInvalidated)
+    }
+
+    @Test @MainActor func `reconnect catalogs wait for overlapping bootstrap history`() async {
+        let transport = ReconnectBurstTransport()
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        defer { vm.detachTransport() }
+        #expect(await vm.refreshHistoryAfterRun().applied)
+        transport.reset(holdingHistory: true)
+        let recovery = vm.handleTransportEvent(.reconnected)
+        await transport.waitFor("history.1")
+
+        // The iOS presentation owner also refreshes on operator reconnect.
+        vm.load()
+        await transport.waitFor("questions")
+        transport.releaseHistory(keepingHeld: true)
+        await transport.waitFor("history.2")
+        transport.releaseHistory()
+        await vm.bootstrapTask?.value
+        await recovery?.value
+        let requests = transport.requests
+        let historyDone = requests.lastIndex(of: "history.done") ?? requests.endIndex
+        for catalog in ["models", "composer"] {
+            #expect((requests.firstIndex(of: catalog) ?? -1) > historyDone)
+        }
+    }
+
 }

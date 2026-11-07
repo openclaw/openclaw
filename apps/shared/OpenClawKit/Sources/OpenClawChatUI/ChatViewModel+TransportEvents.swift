@@ -113,8 +113,11 @@ extension OpenClawChatViewModel {
         session: SessionSnapshot,
         history: RunHistoryRefreshResult) async
     {
+        // iOS may also own a bootstrap history read on the replacement route.
+        await self.bootstrapTask?.value
         guard self.pendingTransportRecoveryID == recoveryID, !self.isTransportDetached else { return }
         self.pendingTransportRecoveryID = nil
+        guard self.isCurrentSession(session) else { return }
         // Applied history schedules the progress card itself. A failed read must still
         // refetch it, since this pass also stands in for health recovery's fetch.
         if !history.applied { self.scheduleProgressCardFetch(for: session) }
