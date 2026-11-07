@@ -137,6 +137,13 @@ it("renders and updates the workspace rail inside the Files panel", async () => 
   expect(query(".chat-workspace-rail")).toBe(rail);
   expect(rail.querySelector<HTMLInputElement>('input[type="search"]')?.value).toBe("notes");
   element(rail, 'button[aria-label="notes.txt"]').click();
+  // Distinguish a lost retained-row click from the lazy content reader not being ready.
+  const workspace = getSessionWorkspace(state);
+  expect(workspace.activeId).toBe("file:notes.txt");
+  expect(workspace.previews.at(-1)?.content.kind).toBe("loading");
+  expect(workspace.previews.at(-1)?.readResult).toBeInstanceOf(Promise);
+  await vi.dynamicImportSettled();
+  expect(workspace.error).toBeNull();
   await vi.waitFor(() =>
     expect(sessions.getFile).toHaveBeenCalledExactlyOnceWith(state.sessionKey, "notes.txt", {
       agentId: "main",
