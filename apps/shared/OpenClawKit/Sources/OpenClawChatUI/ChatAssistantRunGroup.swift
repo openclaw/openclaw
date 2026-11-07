@@ -139,28 +139,6 @@ struct ChatAssistantRunGroup: Identifiable {
     }
 }
 
-extension ChatAssistantRunGroup {
-    /// Groups at the live edge that the transcript lays out eagerly, below the lazy history.
-    ///
-    /// LazyVStack sizes unrealized rows by estimate. A send, an arriving reply or a finished
-    /// stream changes the newest rows, the estimate swings by thousands of points, and the
-    /// bottom anchor pins the offset to the estimated end. The viewport then lies past every
-    /// realized row and the transcript draws blank until a scroll re-measures it (#191478).
-    /// Measuring the rows the reader follows keeps the live edge off the estimate; history
-    /// above still uses estimates, but only changes at the seam when a new turn starts.
-    static let liveTailCount = 4
-
-    static func splitLiveTail(
-        _ groups: [Self],
-        tailCount: Int = liveTailCount) -> (history: ArraySlice<Self>, tail: ArraySlice<Self>)
-    {
-        var cut = max(groups.count - max(tailCount, 1), 0)
-        // An overlapping run can stream above later queued inputs; it is still the live edge.
-        if let live = groups.firstIndex(where: \.includesLive) { cut = min(cut, live) }
-        return (groups[..<cut], groups[cut...])
-    }
-}
-
 extension ChatTranscriptRow {
     fileprivate var assistantRunID: String? {
         switch self {

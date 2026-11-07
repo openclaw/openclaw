@@ -130,7 +130,9 @@ struct ChatMarkdownRenderer: View {
                     #if os(iOS)
                         .chatReaderBlockAnchor(
                             self.readerAnchor,
-                            key: self.readerAnchor == nil ? nil : Self.readerBlockKey(entry.element, index: entry.offset))
+                            key: self.readerAnchor == nil ? nil : Self.readerBlockKey(
+                                entry.element,
+                                index: entry.offset))
                     #endif
             }
 
