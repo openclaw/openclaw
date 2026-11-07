@@ -680,6 +680,12 @@ describe("publish model catalog v2", () => {
     ]);
   });
 
+  it("recommends DeepSeek's served canonical Flash id from the repository seed (#194819)", () => {
+    const seed = JSON.parse(fs.readFileSync("scripts/lib/recommended-models.json", "utf8"));
+    const rows = [{ id: "deepseek-flash" }, { id: "deepseek-v4-pro" }];
+    expect(projectRecommendedModels(seed, rows)).toEqual(["deepseek-flash", "deepseek-v4-pro"]);
+  });
+
   it("projects only served rows", () => {
     expect(
       projectRecommendedModels(
