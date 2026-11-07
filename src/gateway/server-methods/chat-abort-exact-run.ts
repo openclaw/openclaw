@@ -68,8 +68,8 @@ export async function stopReservedClientRun(params: {
       sessionId: identity.sessionId,
     },
     afterParent: params.afterParent,
-    // Announced once the owner found the source abortable and authority held, before its
-    // cancellation commits; a source it can no longer abort is never reported stopped.
+    // Announced only once the owner decided to commit, before its effects: a source it can no
+    // longer abort is never reported stopped.
     onInputCancelPrepared: (input) => {
       if (input === reserved) {
         notifySessionRunStopped({
@@ -162,6 +162,17 @@ export async function stopExactClientRun(params: {
       hookContext: { ...params.hookContext, sessionKey, sessionId },
       afterParent: params.afterParent,
       continueChildStop: () => result.aborted,
+      // Announced only once the cancellation owner decided to commit, before its effects, so
+      // consumers act before the run's own completion and a refused Stop announces nothing.
+      onInputCancelPrepared: (input) => {
+        if (input === active.input && params.stoppedSession) {
+          notifySessionRunStopped({
+            source: "client-run",
+            sessions: [params.stoppedSession],
+            runIds: [runId],
+          });
+        }
+      },
       onCancelled: (target) => {
         if (target === active.input) {
           markAborted();
@@ -175,18 +186,7 @@ export async function stopExactClientRun(params: {
           cancel,
           assertCurrent,
           stopReason: "rpc",
-          onAbortPrepared: () => {
-            // Announce before the run commits cancellation, so consumers act before its own
-            // completion arrives. The notification never fails Stop.
-            if (params.stoppedSession) {
-              notifySessionRunStopped({
-                source: "client-run",
-                sessions: [params.stoppedSession],
-                runIds: [runId],
-              });
-            }
-            return params.onAbortPrepared?.();
-          },
+          onAbortPrepared: params.onAbortPrepared,
           onAbortCommitted: markAborted,
         }).aborted,
       stopChildren: async (applyParentStop) => {

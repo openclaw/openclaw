@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -262,6 +263,39 @@ describe("chat.abort authorization", () => {
     expect(consumeWhilePreparing).toHaveBeenCalledOnce();
     expect(reserved.input.phase).toBe("consumed");
     expect(runStopped).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "announces a running run's Stop before it commits", frozen: false },
+    { name: "announces nothing when the claimed run can no longer abort", frozen: true },
+  ])("$name", async ({ frozen }) => {
+    const runStopped = observeRunStopped();
+    const run = createActiveRun("main", {
+      runId: "running-run",
+      owner: { connId: "conn-owner", deviceId: "dev-owner" },
+    });
+    const operation = expectDefined(run.input.claim?.operation, "admitted turn");
+    const prepare = abortedPartial.prepareChatAbortSessionSnapshot;
+    // The turn reaches its finishing phase while the Stop awaits its session snapshot.
+    using finishWhilePreparing = vi
+      .spyOn(abortedPartial, "prepareChatAbortSessionSnapshot")
+      .mockImplementationOnce(async (...args) => {
+        if (frozen) {
+          operation.freezeAbort();
+        }
+        return await prepare(...args);
+      });
+    const noticesAtAbort: number[] = [];
+    run.input.abortSignal.addEventListener("abort", () =>
+      noticesAtAbort.push(runStopped.mock.calls.length),
+    );
+    const context = createChatAbortContext({ sources: [["running-run", run]] });
+    const respond = await abortAsOwner({ context, runId: "running-run" });
+    expect(finishWhilePreparing).toHaveBeenCalledOnce();
+    expectResult(respond, frozen ? [] : ["running-run"], !frozen);
+    expect(run.input.abortSignal.aborted).toBe(!frozen);
+    expect(noticesAtAbort).toEqual(frozen ? [] : [1]);
+    expect(runStopped).toHaveBeenCalledTimes(frozen ? 0 : 1);
   });
 
   it("does not let a local run owner cancel worker inference", async () => {
