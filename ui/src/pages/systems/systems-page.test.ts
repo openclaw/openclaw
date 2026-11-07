@@ -64,10 +64,11 @@ function harness(
   inventory: () => Promise<EnvironmentSummary[]> = async () => [host, worker, offline],
   nodes: () => NodeListNode[] = () => [{ nodeId: "offline", connected: false, paired: true }],
   backups: () => Promise<BackupStatusResult> = async () => emptyBackups(),
+  resources: () => SystemInfoResult | Promise<SystemInfoResult> = () => systemInfo,
 ) {
   const handlers: Record<string, () => unknown> = {
     "environments.list": async () => ({ environments: await inventory() }),
-    "system.info": () => systemInfo,
+    "system.info": resources,
     "node.list": () => ({ nodes: nodes() }),
     "backup.status": backups,
     "storage.locations.probe": () => ({ state: "ok", freeBytes: 1024 ** 3 }),
@@ -175,6 +176,38 @@ describe("Systems workspace", () => {
     attachedSessionIds: [],
     tunnelStatus: "stopped",
   };
+  it.each(process.env.OPENCLAW_PAGE_PERF === "1" ? [0, 1, 2, 3, 4] : [0])(
+    "first content does not wait for host telemetry %#",
+    async () => {
+      let resourceReady = false;
+      const resource = new Promise<SystemInfoResult>((resolve) => {
+        setTimeout(() => {
+          resourceReady = true;
+          resolve(systemInfo);
+        }, 250);
+      });
+      const { controller, request } = harness(undefined, undefined, undefined, () => resource);
+      const start = performance.now();
+      const mounted = await mount(controller);
+      const elapsedMs = performance.now() - start;
+      console.log(
+        "PAGE_FIRST_CONTENT",
+        JSON.stringify({ page: "systems", elapsedMs, delayedMetadataMs: 250 }),
+      );
+      try {
+        expect(mounted.page.querySelector('option[value="gateway"]')).not.toBeNull();
+        expect.soft(resourceReady).toBe(false);
+        expect(calls(request, "system.info")).toHaveLength(1);
+      } finally {
+        await resource;
+        await waitForSolid(() =>
+          expect(controller.state.inventory?.gatewaySystemInfo).toEqual(systemInfo),
+        );
+        mounted.unmount();
+      }
+    },
+  );
+
   it.each([
     [worker, "Device"],
     [{ ...worker, worker: { ...cloudWorker, providerId: "device" } }, "Device"],

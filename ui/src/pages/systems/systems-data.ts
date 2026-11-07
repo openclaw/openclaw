@@ -27,29 +27,33 @@ export type SystemsInventoryRow = {
 /** The route owns refresh scheduling and publication of this snapshot. */
 export async function loadSystemsInventory(
   gateway: ApplicationGateway,
-  options: { signal?: AbortSignal; fresh?: boolean },
+  options: {
+    signal?: AbortSignal;
+    fresh?: boolean;
+    onInventory?: (environments: EnvironmentSummary[]) => void;
+  },
 ) {
   const client = gateway.snapshot.client;
   if (!client) {
     return undefined;
   }
   const requestOptions = { signal: options.signal };
-  const [inventory, nodes, systemInfo] = await Promise.allSettled([
-    client.request<EnvironmentsListResult>(
-      "environments.list",
-      { includeDesktopSetup: true },
-      requestOptions,
-    ),
+  const inventoryRead = client.request<EnvironmentsListResult>(
+    "environments.list",
+    { includeDesktopSetup: true },
+    requestOptions,
+  );
+  const resources = Promise.allSettled([
     client.request<{ nodes: NodeListNode[] }>("node.list", {}, requestOptions),
     readSystemInfo(gateway, options.signal, { fresh: options.fresh }),
   ]);
+  const inventory = await inventoryRead;
+  options.onInventory?.(inventory.environments);
+  const [nodes, systemInfo] = await resources;
   // Never rebuild inventory from auxiliary node reads: that would resurrect cloud-owned
   // pairings deliberately suppressed by environments.list and hide inventory failures.
-  if (inventory.status === "rejected") {
-    throw inventory.reason;
-  }
   return {
-    environments: inventory.value.environments,
+    environments: inventory.environments,
     nodes: nodes.status === "fulfilled" ? nodes.value.nodes : [],
     gatewaySystemInfo: systemInfo.status === "fulfilled" ? systemInfo.value.value : null,
     gatewaySampledAtMs: systemInfo.status === "fulfilled" ? systemInfo.value.at : null,

@@ -311,37 +311,64 @@ export function createSystems(context: ApplicationContext) {
     state.query = "";
   }
 
+  function publishInventory(inventory: SystemsInventory) {
+    const initial = state.inventory === null;
+    state.inventory = inventory;
+    projectRows();
+    // Only initial entry picks a default. Later updates preserve explicit or missing selection.
+    if (initial && state.selectedId === null) {
+      const currentSession = context.gateway.snapshot.sessionKey;
+      state.selectedId =
+        state.rows.find((row) =>
+          row.sessions.some((relation) => relation.session.key === currentSession),
+        )?.environment.id ??
+        state.rows.find((row) => row.environment.id === "gateway")?.environment.id ??
+        state.rows[0]?.environment.id ??
+        null;
+    }
+  }
+
   const inventoryRequest = createPageRequest<
     "automatic" | "manual",
     { inventory: SystemsInventory | undefined; intent: "automatic" | "manual" }
   >(notify, {
-    task: async (intent, { signal }) => ({
-      inventory: await loadSystemsInventory(context.gateway, {
-        signal,
-        fresh: intent === "manual",
-      }),
-      intent,
-    }),
+    task: async (intent, { signal }) => {
+      const scope = lifecycle.capture();
+      return {
+        inventory: await loadSystemsInventory(context.gateway, {
+          signal,
+          fresh: intent === "manual",
+          onInventory: (environments) => {
+            if (
+              state.inventory ||
+              signal.aborted ||
+              !scope ||
+              !lifecycle.isCurrent(scope) ||
+              !current() ||
+              !hasOperatorReadAccess(context.gateway.snapshot.hello?.auth ?? null)
+            ) {
+              return;
+            }
+            publishInventory({
+              environments,
+              nodes: [],
+              gatewaySystemInfo: null,
+              gatewaySampledAtMs: null,
+              errors: {},
+            });
+            notify();
+          },
+        }),
+        intent,
+      };
+    },
     onComplete: ({ inventory, intent }) => {
       if (!inventory) {
         refreshQueued = refreshQueued === "manual" ? "manual" : intent;
         return;
       }
-      const initial = state.inventory === null;
-      state.inventory = inventory;
-      projectRows();
+      publishInventory(inventory);
       recordTelemetry(true);
-      // Only initial entry picks a default. Later updates preserve explicit or missing selection.
-      if (initial && state.selectedId === null) {
-        const currentSession = context.gateway.snapshot.sessionKey;
-        state.selectedId =
-          state.rows.find((row) =>
-            row.sessions.some((relation) => relation.session.key === currentSession),
-          )?.environment.id ??
-          state.rows.find((row) => row.environment.id === "gateway")?.environment.id ??
-          state.rows[0]?.environment.id ??
-          null;
-      }
     },
     onError: () => {},
   });
