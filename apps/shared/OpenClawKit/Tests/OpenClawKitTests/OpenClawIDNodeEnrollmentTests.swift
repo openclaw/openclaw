@@ -287,6 +287,58 @@ struct OpenClawIDNodeEnrollmentTests {
         }
     }
 
+    @Test func retainsBindingRetirementAndMembershipOrderIndependentlyAcrossRefusedEvidence() async throws {
+        let (fixture, json) = try fixture()
+        let root = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 42, count: 32))
+        let rootPublic = "ed25519:" + OpenClawIDNodeIdentity.hex(root.publicKey.rawRepresentation)
+        let fingerprint = OpenClawIDNodeIdentity.hex(SHA256.hash(data: root.publicKey.rawRepresentation))
+        let originalLink = try OpenClawIDNodeEnrollmentLink(fixture.node_invite.link)
+        let joinLink = fixture.node_invite.link.replacingOccurrences(
+            of: String(originalLink.rootFingerprint.dropFirst(3)), with: fingerprint)
+        let gateway = try Curve25519.Signing.PrivateKey(rawRepresentation:
+            OpenClawIDNodeIdentity.unhex(try #require(json["gateway_seed_hex"]).text()))
+        let identity = try OpenClawIDNodeIdentity(seed: OpenClawIDNodeIdentity.unhex(fixture.node_key.seed_hex))
+        let manifest = try description()
+        let store = TrustStore()
+        func signed(_ envelope: OpenClawIDCanonicalJSON, updates: [String: OpenClawIDCanonicalJSON],
+                    key: Curve25519.Signing.PrivateKey) throws -> OpenClawIDCanonicalJSON {
+            var fields = try envelope.fields(["v", "type", "body", "signer", "alg", "sig"])
+            guard case .object(var body) = fields["body"]! else { throw OpenClawIDNodeEnrollmentError.malformed }
+            body.merge(updates) { _, new in new }
+            fields["body"] = .object(body)
+            fields["signer"] = .string("ed25519:" + OpenClawIDNodeIdentity.hex(key.publicKey.rawRepresentation))
+            let type = try fields["type"]!.text()
+            fields["sig"] = .string(OpenClawIDNodeIdentity.base64URL(try key.signature(
+                for: Data("openclaw/\(type)/v1\0".utf8) + OpenClawIDCanonicalJSON.object(body).encoded)))
+            return .object(fields)
+        }
+        // The third attempt must not resurrect binding 4; the fourth must not roll membership back.
+        let evidence: [(Int64, Int64, Int64)] = [(4, 9, 5), (4, 10, 4), (4, 10, 4), (5, 9, 5)]
+        for (index, values) in evidence.enumerated() {
+            let (bindingSequence, sequence, snapshotBinding) = values
+            var response = try #require(json["response"]).fields(["descriptor", "snapshot"])
+            var descriptor = try response["descriptor"]!.fields([
+                "v", "claw_id", "transport", "relay_url", "root_pub", "binding", "published_at",
+            ])
+            descriptor["root_pub"] = .string(rootPublic)
+            descriptor["binding"] = try signed(descriptor["binding"]!,
+                updates: ["binding_seq": .integer(bindingSequence)], key: root)
+            response["descriptor"] = .object(descriptor)
+            response["snapshot"] = try signed(response["snapshot"]!,
+                updates: ["seq": .integer(sequence), "binding_seq": .integer(snapshotBinding)], key: gateway)
+            let http = ScriptedHTTP(responses: [.init(status: 202, body: Data()),
+                .init(status: 200, body: OpenClawIDCanonicalJSON.object(response).encoded)])
+            let client = OpenClawIDNodeEnrollmentClient(http: http, trustStore: store, now: { fixture.now })
+            await #expect(throws: OpenClawIDNodeEnrollmentError.rollback) {
+                try await client.enroll(joinLink: joinLink, discoveryOrigin: "https://discovery.example",
+                    identity: identity, description: manifest, onVerificationCode: { _ in })
+            }
+            #expect(await store.observed?.snapshotSequence == (index == 0 ? 9 : 10))
+            #expect(await store.observed?.snapshotBindingSequence == 5)
+            #expect(await store.saved == nil)
+        }
+    }
+
     @Test func observationsMergeBySnapshotOrderAndDialCommitChecksCurrentRow() throws {
         let (fixture, _) = try fixture()
         let link = try OpenClawIDNodeEnrollmentLink(fixture.node_invite.link)
@@ -298,8 +350,8 @@ struct OpenClawIDNodeEnrollmentTests {
         // Late observers cannot overwrite a newer row or reduce its separately verified binding pin.
         #expect(try OpenClawIDNodeTrust.mergeObservation(state(1, 3, 200, 1), with: current) == current)
         let newer = try OpenClawIDNodeTrust.mergeObservation(state(1, 4, 101, 2), with: current)
-        #expect(newer == state(2, 4, 101, 2))
-        #expect(try OpenClawIDNodeTrust.mergeObservation(state(1, 5, 90, 2), with: current) == state(2, 5, 90, 2))
+        #expect(newer == state(2, 4, 101, 3))
+        #expect(try OpenClawIDNodeTrust.mergeObservation(state(1, 5, 90, 2), with: current) == state(2, 5, 90, 3))
         #expect(throws: OpenClawIDNodeEnrollmentError.rollback) {
             try OpenClawIDNodeTrust.validateCommit(state(2, 4, 100, 2), replacing: current)
         }
