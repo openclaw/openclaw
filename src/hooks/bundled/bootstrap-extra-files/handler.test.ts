@@ -1,12 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace, writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import {
   type AgentBootstrapHookContext,
   createInternalHookEvent as createHookEvent,
 } from "../../internal-hooks.js";
 import handler from "./handler.js";
+
+const log = vi.hoisted(() => ({ warn: vi.fn(), debug: vi.fn() }));
+vi.mock("../../../logging/subsystem.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../logging/subsystem.js")>()),
+  createSubsystemLogger: () => log,
+}));
 
 async function bootstrap({
   extraName,
@@ -50,6 +56,10 @@ async function bootstrap({
 }
 
 describe("bootstrap-extra-files hook", () => {
+  beforeEach(() => {
+    log.warn.mockClear();
+  });
+
   it("appends extra bootstrap files from configured patterns", async () => {
     const { context, tempDir } = await bootstrap({ extraName: "AGENTS.md" });
     const injected = context.bootstrapFiles.filter((f) => f.name === "AGENTS.md");
@@ -77,5 +87,37 @@ describe("bootstrap-extra-files hook", () => {
       sessionKey: "agent:main:subagent:abc",
     });
     expect(context.bootstrapFiles.map((f) => f.name).toSorted()).toEqual(["AGENTS.md", "SOUL.md"]);
+  });
+
+  it("warns once when a configured path is skipped for an unsupported basename", async () => {
+    const { context } = await bootstrap({ extraName: "NOTES.md" });
+    await handler(createHookEvent("agent", "bootstrap", "agent:main:main", context));
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    const [message, meta] = log.warn.mock.calls[0] ?? [];
+    expect(message).toContain("Use a supported bootstrap filename inside the workspace");
+    expect(meta).toMatchObject({
+      skipped: 1,
+      files: [
+        {
+          reason: "invalid-bootstrap-filename",
+          detail: "unsupported bootstrap basename: NOTES.md",
+        },
+      ],
+    });
+  });
+
+  it("stays quiet when a configured file does not exist", async () => {
+    const { context } = await bootstrap({ extraName: "AGENTS.md", packageName: "core" });
+    context.cfg = {
+      hooks: {
+        internal: {
+          entries: {
+            "bootstrap-extra-files": { enabled: true, paths: ["packages/none/AGENTS.md"] },
+          },
+        },
+      },
+    };
+    await handler(createHookEvent("agent", "bootstrap", "agent:main:main", context));
+    expect(log.warn).not.toHaveBeenCalled();
   });
 });
