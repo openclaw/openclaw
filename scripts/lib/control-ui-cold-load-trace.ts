@@ -4,6 +4,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
+import {
+  scriptExecutionMask,
+  type ScriptCoverageFunctions,
+} from "./control-ui-script-coverage.mts";
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 
@@ -15,24 +19,6 @@ export function controlUiScriptAssetUrl(value: string, assets: URL): URL | null 
     /\.m?js$/u.test(url.pathname)
     ? url
     : null;
-}
-
-export type ScriptCoverageFunctions = readonly {
-  ranges: readonly { startOffset: number; endOffset: number; count: number }[];
-}[];
-
-/** V8 offsets are UTF-16; nested block counts override their containing function. */
-export function scriptExecutionMask(length: number, functions: ScriptCoverageFunctions) {
-  const executed = new Uint8Array(length);
-  const ranges = functions
-    .flatMap((fn) => fn.ranges)
-    .toSorted(
-      (left, right) => right.endOffset - right.startOffset - (left.endOffset - left.startOffset),
-    );
-  for (const range of ranges) {
-    executed.fill(range.count > 0 ? 1 : 0, range.startOffset, range.endOffset);
-  }
-  return executed;
 }
 
 export function summarizeScriptCoverage(entry: {

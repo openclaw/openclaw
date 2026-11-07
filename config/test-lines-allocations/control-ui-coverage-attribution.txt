@@ -1,4 +1,4 @@
 # Offline source-map attribution contract: nested block overrides, UTF-16 offsets,
 # emitted UTF-8 byte conservation, fetched-only assets, and mismatched-build rejection.
 # Extends the existing module-attribution owner test; no browser or timing proof.
-106
+107

@@ -2,7 +2,10 @@ import fs from "node:fs";
 import { SourceMap } from "node:module";
 import path from "node:path";
 import { gzip } from "pako";
-import { scriptExecutionMask, type ScriptCoverageFunctions } from "./control-ui-cold-load-trace.ts";
+import {
+  scriptExecutionMask,
+  type ScriptCoverageFunctions,
+} from "./control-ui-script-coverage.mts";
 
 type BootAsset = { file: string; type: string; servedGzipBytes: number };
 type BootGraphs = Record<string, { assets: readonly BootAsset[] }>;
