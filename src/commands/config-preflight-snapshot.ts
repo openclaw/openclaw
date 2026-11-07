@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { createConfigIO } from "../config/io.factory.js";
@@ -11,6 +10,7 @@ import {
 } from "../config/io.js";
 import type { PreparedConfigRecovery } from "../config/io.types.js";
 import { resolveConfigPath } from "../config/paths.js";
+import { isExistingLegacySessionStore } from "../config/sessions/legacy-store-source.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDatabaseEngineSelection } from "../infra/database-engine/config.js";
@@ -434,9 +434,7 @@ async function assertStartupStateReady(params: {
     "admission.session-readiness",
     async () => {
       // Clean profiles do not need the legacy source inspector and its schema graph.
-      if (
-        !targets.some(({ storePath }) => !storePath.endsWith(".sqlite") && fs.existsSync(storePath))
-      ) {
+      if (!targets.some(({ storePath }) => isExistingLegacySessionStore(storePath))) {
         return;
       }
       const { assertSessionStoreMigrationComplete } = await measureDoctorConfigPreflightStep(
