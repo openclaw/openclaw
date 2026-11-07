@@ -107,7 +107,10 @@ describe("custodian onboarding name", () => {
         identity: { type: "profile", id: "profile-1" },
       },
     });
-    harness.context.gateway.loadSelfProfile = vi.fn().mockResolvedValue(profile(null));
+    harness.context.gateway.loadSelfProfile = vi
+      .fn()
+      .mockResolvedValueOnce(profile(null))
+      .mockResolvedValueOnce(profile("Later name"));
     const { page } = await mountPage(harness.context);
     await fill(page, "#custodian-onboarding-display-name", "First name");
     button(page, ".custodian__name-actions button[type='submit']").click();
@@ -134,17 +137,26 @@ describe("custodian onboarding name", () => {
     expect(harness.context.gateway.updateSelfUser).not.toHaveBeenCalled();
   });
 
-  it("preserves a newer same-profile clear when the onboarding save settles", async () => {
+  it.each([
+    ["owner", undefined],
+    ["profile-1", "Person profile-"],
+    ["profile-1", "verified-login"],
+  ] as const)("preserves a newer clear for %s with display %s", async (profileId, clearedName) => {
+    const currentProfile = (displayName: string | null) => ({
+      ...profile(displayName),
+      id: profileId,
+    });
     const pendingWrite = createDeferred<{ profile: UserProfile }>();
     const request = pageRequest(() => pendingWrite.promise);
     const harness = createContext(request);
     harness.setGatewaySnapshot({
       selfUser: {
-        id: "profile-1",
-        identity: { type: "profile", id: "profile-1" },
+        id: profileId,
+        identity: { type: "profile", id: profileId },
+        name: clearedName,
       },
     });
-    harness.context.gateway.loadSelfProfile = vi.fn().mockResolvedValue(profile(null));
+    harness.context.gateway.loadSelfProfile = vi.fn().mockResolvedValue(currentProfile(null));
     const { page } = await mountPage(harness.context);
     await fill(page, "#custodian-onboarding-display-name", "First name");
     button(page, ".custodian__name-actions button[type='submit']").click();
@@ -154,8 +166,8 @@ describe("custodian onboarding name", () => {
 
     harness.setGatewaySnapshot({
       selfUser: {
-        id: "profile-1",
-        identity: { type: "profile", id: "profile-1" },
+        id: profileId,
+        identity: { type: "profile", id: profileId },
         name: "First name",
       },
     });
@@ -163,19 +175,20 @@ describe("custodian onboarding name", () => {
     expect(harness.context.gateway.snapshot.selfUser?.name).toBe("First name");
     harness.setGatewaySnapshot({
       selfUser: {
-        id: "profile-1",
-        identity: { type: "profile", id: "profile-1" },
+        id: profileId,
+        identity: { type: "profile", id: profileId },
+        name: clearedName,
       },
     });
     await page.updateComplete;
 
-    pendingWrite.resolve({ profile: profile("First name") });
+    pendingWrite.resolve({ profile: currentProfile("First name") });
     await waitForFast(() =>
       expect(page.querySelector(".custodian__name-form")?.getAttribute("aria-busy")).toBe("false"),
     );
 
-    expect(harness.context.gateway.snapshot.selfUser).toMatchObject({ id: "profile-1" });
-    expect(harness.context.gateway.snapshot.selfUser?.name).toBeUndefined();
+    expect(harness.context.gateway.snapshot.selfUser).toMatchObject({ id: profileId });
+    expect(harness.context.gateway.snapshot.selfUser?.name).toBe(clearedName);
     expect(page.querySelector<HTMLInputElement>("#custodian-onboarding-display-name")?.value).toBe(
       "",
     );
@@ -254,33 +267,56 @@ describe("custodian onboarding name", () => {
     },
   );
 
-  it("ignores a name-save result when its Gateway connection has been replaced", async () => {
-    const pendingWrite = createDeferred<{ profile: UserProfile }>();
-    const request = pageRequest(async () => pendingWrite.promise);
-    const harness = createContext(request);
-    const loadSelfProfile = vi
-      .fn()
-      .mockResolvedValueOnce(profile(null))
-      .mockResolvedValueOnce(null);
-    harness.context.gateway.loadSelfProfile = loadSelfProfile;
-    const { page } = await mountPage(harness.context);
-    await element<HTMLInputElement>(page, "#custodian-onboarding-display-name");
-    await fill(page, "#custodian-onboarding-display-name", "Ada");
-    button(page, ".custodian__name-actions button[type='submit']").click();
-    await waitForFast(() =>
-      expect(request.mock.calls.some(([method]) => method === "users.setDisplayName")).toBe(true),
-    );
+  it.each(["write", "refresh"] as const)(
+    "ignores a pending %s when its Gateway connection is replaced",
+    async (phase) => {
+      const pendingWrite = createDeferred<{ profile: UserProfile }>();
+      const pendingRefresh = createDeferred<UserProfile>();
+      const request = pageRequest(async () => pendingWrite.promise);
+      const harness = createContext(request);
+      harness.setGatewaySnapshot({
+        selfUser: { id: "profile-1", identity: { type: "profile", id: "profile-1" } },
+      });
+      const loadSelfProfile = vi.fn().mockResolvedValueOnce(profile(null));
+      if (phase === "refresh") {
+        loadSelfProfile.mockReturnValueOnce(pendingRefresh.promise);
+      }
+      loadSelfProfile.mockResolvedValueOnce(null);
+      harness.context.gateway.loadSelfProfile = loadSelfProfile;
+      const { page } = await mountPage(harness.context);
+      await element<HTMLInputElement>(page, "#custodian-onboarding-display-name");
+      await fill(page, "#custodian-onboarding-display-name", "Ada");
+      button(page, ".custodian__name-actions button[type='submit']").click();
+      await waitForFast(() =>
+        expect(request.mock.calls.some(([method]) => method === "users.setDisplayName")).toBe(true),
+      );
 
-    const replacementClient = { request: vi.fn(async () => ({ turns: [] })) };
-    harness.setGatewaySnapshot({
-      client: replacementClient as unknown as GatewayBrowserClient,
-    });
-    await waitForFast(() => expect(loadSelfProfile).toHaveBeenCalledTimes(2));
-    pendingWrite.resolve({ profile: profile("Ada") });
-    await pendingWrite.promise;
-    await page.updateComplete;
+      if (phase === "refresh") {
+        harness.setGatewaySnapshot({
+          selfUser: {
+            id: "profile-1",
+            identity: { type: "profile", id: "profile-1" },
+            name: "Later name",
+          },
+        });
+        pendingWrite.resolve({ profile: profile("Ada") });
+        await waitForFast(() => expect(loadSelfProfile).toHaveBeenCalledTimes(2));
+      }
 
-    expect(harness.context.gateway.updateSelfUser).not.toHaveBeenCalled();
-    expect(page.querySelector(".custodian__name-prompt")).toBeNull();
-  });
+      const replacementClient = { request: vi.fn(async () => ({ turns: [] })) };
+      harness.setGatewaySnapshot({
+        client: replacementClient as unknown as GatewayBrowserClient,
+      });
+      await waitForFast(() =>
+        expect(loadSelfProfile).toHaveBeenCalledTimes(phase === "refresh" ? 3 : 2),
+      );
+      pendingRefresh.resolve(profile("Later name"));
+      pendingWrite.resolve({ profile: profile("Ada") });
+      await pendingWrite.promise;
+      await page.updateComplete;
+
+      expect(harness.context.gateway.updateSelfUser).not.toHaveBeenCalled();
+      expect(page.querySelector(".custodian__name-prompt")).toBeNull();
+    },
+  );
 });

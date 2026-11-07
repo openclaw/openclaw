@@ -278,12 +278,12 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
       const hasNewerDisplayObservation =
         currentSelfUser?.id === profile.id &&
         onboardingDisplayObservationRevision !== displayObservationRevisionAtSaveStart;
-      const savedProfile = hasNewerDisplayObservation
-        ? { ...result.profile, displayName: currentSelfUser.name ?? null }
-        : result.profile;
-      setOnboardingNameProfile(savedProfile);
-      setOnboardingNameDraft(savedProfile.displayName ?? "");
-      if (!hasNewerDisplayObservation) {
+      if (hasNewerDisplayObservation) {
+        // Presence names include display fallbacks; reload the editable profile name.
+        await loadOnboardingProfile(owner);
+      } else {
+        setOnboardingNameProfile(result.profile);
+        setOnboardingNameDraft(result.profile.displayName ?? "");
         context.gateway.updateSelfUser?.({ name: result.profile.displayName ?? undefined });
       }
     } catch (error) {
@@ -291,7 +291,7 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
         setOnboardingNameError(formatUiError(error, t("custodian.onboardingName.saveFailed")));
       }
     } finally {
-      if (isCurrentRequest()) {
+      if (isCurrentOnboardingOwner(owner)) {
         onboardingSavePending = false;
         setOnboardingNameBusy(false);
       }

@@ -58,10 +58,6 @@ suite.define(() => {
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
           true,
         );
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(suite.artifactDir, "profile-name-desktop.png"),
-        });
 
         await page.setViewportSize({ width: 390, height: 844 });
         expect(await nameInput.isVisible()).toBe(true);
@@ -69,10 +65,6 @@ suite.define(() => {
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
           true,
         );
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(suite.artifactDir, "profile-name-mobile.png"),
-        });
 
         await skipButton.click();
         await page.locator(".custodian__name-prompt").waitFor({ state: "detached" });
@@ -84,19 +76,11 @@ suite.define(() => {
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
           true,
         );
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(suite.artifactDir, "profile-name-skipped-mobile.png"),
-        });
 
         await page.setViewportSize({ width: 1280, height: 900 });
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
           true,
         );
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(suite.artifactDir, "profile-name-skipped-desktop.png"),
-        });
       },
     );
   });

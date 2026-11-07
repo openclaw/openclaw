@@ -15,7 +15,6 @@ import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-s
 import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
-import { COMMUNITY_INVITE_KEY } from "../components/community-invite-state.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -228,22 +227,15 @@ suite.define(() => {
         );
         const adminClient = admin;
 
-        const proofDir = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" ? suite.artifactDir : null;
         await suite.withPage(
           {
             locale: "en-US",
             serviceWorkers: "block",
             viewport: { height: 800, width: 1280 },
-            ...(proofDir
-              ? { recordVideo: { dir: proofDir, size: { height: 800, width: 1280 } } }
-              : {}),
           },
           async ({ page }) => {
             const text = (selector: string) =>
               expect.poll(() => page.locator(selector).textContent());
-            await page.context().addInitScript((inviteKey) => {
-              localStorage.setItem(inviteKey, JSON.stringify({ dismissedAtMs: 1770000000000 }));
-            }, COMMUNITY_INVITE_KEY);
             const url = new URL("settings/profile", suite.server.baseUrl);
             url.hash = new URLSearchParams({ gatewayUrl: gatewayUrl.href }).toString();
             const response = await page.goto(url.href);
@@ -271,12 +263,6 @@ suite.define(() => {
             await text(".profile-hero").not.toContain("Clipper");
             const draft = page.locator(".identity-name-control input");
             await draft.fill("Local draft");
-            if (proofDir) {
-              await page.screenshot({
-                animations: "disabled",
-                path: path.join(proofDir, "01-real-gateway-authenticated-profile.png"),
-              });
-            }
             const editor = await page.context().newPage();
             await editor.goto(new URL("settings/profile", suite.server.baseUrl).href);
             const nameInput = editor.locator(".identity-name-control input");
@@ -307,12 +293,6 @@ suite.define(() => {
             await nameInput.press("Enter");
             await text(".profile-hero__name").toBe(`Person ${guest.id.slice(0, 8)}`);
             await expect.poll(() => draft.inputValue()).toBe("Local draft");
-            if (proofDir) {
-              await page.screenshot({
-                animations: "disabled",
-                path: path.join(proofDir, "02-real-gateway-cleared-profile.png"),
-              });
-            }
 
             await editor.close();
             const auth = () =>
@@ -407,14 +387,8 @@ suite.define(() => {
             locale: "en-US",
             serviceWorkers: "block",
             viewport: { height: 800, width: 1280 },
-            ...(proofDir
-              ? { recordVideo: { dir: proofDir, size: { height: 800, width: 1280 } } }
-              : {}),
           },
           async ({ page: editor }) => {
-            await editor.context().addInitScript((inviteKey) => {
-              localStorage.setItem(inviteKey, JSON.stringify({ dismissedAtMs: 1770000000000 }));
-            }, COMMUNITY_INVITE_KEY);
             const memberGatewayUrl = new URL("member", gatewayUrl);
             const initialProfileUrl = new URL("settings/profile", suite.server.baseUrl);
             initialProfileUrl.hash = new URLSearchParams({
@@ -448,22 +422,10 @@ suite.define(() => {
             await expect
               .poll(() => editor.locator("#custodian-onboarding-display-name").inputValue())
               .toBe("");
-            if (proofDir) {
-              await editor.screenshot({
-                animations: "disabled",
-                path: path.join(proofDir, "03-real-gateway-onboarding-name-prompt.png"),
-              });
-            }
 
             await editor.getByRole("button", { name: "Maybe later", exact: true }).click();
             await expect.poll(() => onboardingPrompt.count()).toBe(0);
             await expect.poll(() => editor.locator(".custodian-surface").isVisible()).toBe(true);
-            if (proofDir) {
-              await editor.screenshot({
-                animations: "disabled",
-                path: path.join(proofDir, "04-real-gateway-onboarding-skipped.png"),
-              });
-            }
 
             await editor.goto(profileUrl.href);
             await expect
@@ -487,12 +449,6 @@ suite.define(() => {
             await expect
               .poll(() => editor.locator(".identity-name-control input").inputValue())
               .toBe(onboardingName);
-            if (proofDir) {
-              await editor.screenshot({
-                animations: "disabled",
-                path: path.join(proofDir, "05-real-gateway-profile-name-persisted.png"),
-              });
-            }
 
             const selfProfileRead = observeGatewayMethodResponse(editor, "users.self");
             try {
@@ -505,12 +461,6 @@ suite.define(() => {
                 .toBe("false");
               await expect.poll(() => editor.locator(".custodian__name-prompt").count()).toBe(0);
               await expect.poll(() => editor.locator(".custodian-surface").isVisible()).toBe(true);
-              if (proofDir) {
-                await editor.screenshot({
-                  animations: "disabled",
-                  path: path.join(proofDir, "06-real-gateway-onboarding-existing-name.png"),
-                });
-              }
             } finally {
               selfProfileRead.stop();
             }
