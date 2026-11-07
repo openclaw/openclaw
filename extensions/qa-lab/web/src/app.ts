@@ -3,6 +3,7 @@ import type { QaBusStateSnapshot } from "openclaw/plugin-sdk/qa-channel-protocol
 import { defaultQaModelForMode, isQaFastModeEnabled } from "../../model-selection.js";
 import { deleteCaptureData } from "./capture-actions.js";
 import { normalizeCaptureSavedView, normalizeCaptureSavedViews } from "./capture-saved-view.js";
+import { loadQaEvidence, readInitialEvidencePath } from "./evidence-actions.js";
 import { getJson, postJson, QaLabHttpError } from "./http.js";
 import { conversationSelectionKey, findConversationBySelectionKey } from "./ui-conversation-key.js";
 import { captureEventKey } from "./ui-render-capture-events.js";
@@ -10,7 +11,6 @@ import { redactSensitiveText } from "./ui-render-capture-redaction.js";
 import { captureRenderState, restoreRenderState } from "./ui-render-state.js";
 import {
   type Bootstrap,
-  type EvidenceEnvelope,
   type OutcomesEnvelope,
   type ReportEnvelope,
   type RunnerResolvedPlan,
@@ -162,10 +162,7 @@ function createCaptureFilters() {
 
 export async function createQaLabApp(root: HTMLDivElement) {
   const initialUrl = new URL(window.location.href);
-  const initialEvidencePath =
-    initialUrl.searchParams.get("evidencePath")?.trim() ||
-    initialUrl.searchParams.get("path")?.trim() ||
-    "";
+  const initialEvidencePath = readInitialEvidencePath(initialUrl);
   const state: UiState = {
     ...createCaptureFilters(),
     theme: detectTheme(),
@@ -533,37 +530,6 @@ export async function createQaLabApp(root: HTMLDivElement) {
     );
   }
 
-  async function loadEvidence(pathOverride?: string) {
-    const evidencePath = (pathOverride ?? state.evidencePathDraft).trim();
-    if (!evidencePath) {
-      state.evidenceError = "Evidence path is required.";
-      render();
-      return;
-    }
-    state.evidenceLoading = true;
-    state.evidenceError = null;
-    render();
-    try {
-      const payload = await getJson<EvidenceEnvelope>(
-        `/api/evidence?path=${encodeURIComponent(evidencePath)}`,
-      );
-      state.evidence = payload.evidence;
-      state.evidencePathDraft = payload.evidence?.evidencePath ?? evidencePath;
-      state.selectedEvidenceEntryKey = payload.evidence?.entries[0]?.key ?? null;
-      const url = new URL(window.location.href);
-      url.pathname = "/evidence";
-      url.searchParams.set("path", state.evidencePathDraft);
-      window.history.replaceState(null, "", `${url.pathname}${url.search}`);
-    } catch (error) {
-      state.evidence = null;
-      state.selectedEvidenceEntryKey = null;
-      state.evidenceError = formatErrorMessage(error);
-    } finally {
-      state.evidenceLoading = false;
-      render();
-    }
-  }
-
   async function sendKickoff() {
     state.error = null;
     await runBusyAction(async () => {
@@ -760,14 +726,14 @@ export async function createQaLabApp(root: HTMLDivElement) {
     bindAction("kickoff", () => void sendKickoff());
     bindAction("send", () => void sendInbound());
     bindAction("download-report", downloadReport);
-    bindAction("load-evidence", () => void loadEvidence());
+    bindAction("load-evidence", () => void loadQaEvidence(state, render));
     bindAction("open-run-evidence", () => {
       const evidencePath = state.bootstrap?.runner.artifacts?.evidencePath;
       if (!evidencePath) {
         return;
       }
       state.activeTab = "evidence";
-      void loadEvidence(evidencePath);
+      void loadQaEvidence(state, render, evidencePath);
     });
 
     bindAction("select-all-scenarios", () => {
@@ -867,7 +833,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
     root.querySelector<HTMLInputElement>("#evidence-path")?.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
         e.preventDefault();
-        void loadEvidence();
+        void loadQaEvidence(state, render);
       }
     });
     bindValue("#evidence-status-filter", "change", (value) => {
@@ -1422,7 +1388,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
   render();
   await refresh();
   if (initialEvidencePath) {
-    await loadEvidence(initialEvidencePath);
+    await loadQaEvidence(state, render, initialEvidencePath);
   }
   void pollUiVersion();
   setInterval(() => void refresh(), 1_000);

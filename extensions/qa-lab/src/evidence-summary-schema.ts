@@ -17,6 +17,7 @@ const QA_EVIDENCE_SUMMARY_SCHEMA_VERSION = 2;
 
 const qaEvidenceStatusSchema = z.enum(["pass", "fail", "blocked", "skipped"]);
 const nonEmptyStringSchema = z.string().trim().min(1);
+const evidencePathSchema = z.string().refine((value) => value.trim().length > 0);
 const nullableStringSchema = nonEmptyStringSchema.nullable();
 const qaEvidenceProfileIdSchema = nonEmptyStringSchema;
 
@@ -187,14 +188,14 @@ const qaEvidenceTestSchema = z.strictObject({
   title: nonEmptyStringSchema,
   source: z
     .strictObject({
-      path: nonEmptyStringSchema,
+      path: evidencePathSchema,
     })
     .optional(),
 });
 
 const qaEvidenceRefSchema = z.strictObject({
   kind: nonEmptyStringSchema,
-  path: nonEmptyStringSchema,
+  path: evidencePathSchema,
 });
 
 const qaEvidenceScorecardCountSchema = z.strictObject({
@@ -235,7 +236,7 @@ const qaEvidenceScorecardSchema = z.strictObject({
 
 const qaEvidenceArtifactSchema = z.strictObject({
   kind: nonEmptyStringSchema,
-  path: nonEmptyStringSchema,
+  path: evidencePathSchema,
   source: nonEmptyStringSchema,
 });
 

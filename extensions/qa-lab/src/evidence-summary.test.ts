@@ -221,6 +221,40 @@ describe("evidence summary", () => {
     });
   });
 
+  it("preserves literal evidence paths while rejecting blank paths", () => {
+    const evidence = suiteEvidence({
+      artifactPaths: [{ kind: " report ", path: " capture.log " }],
+      scenarioDefinitions: [
+        {
+          id: "dm-chat-baseline",
+          title: "DM baseline conversation",
+          sourcePath: " fixture.test.ts ",
+          docsRefs: [" docs/readme.md "],
+          codeRefs: [" code/probe.ts "],
+        },
+      ],
+    });
+    const entry = expectDefined(evidence.entries[0], "evidence entry");
+    expect(entry).toMatchObject({
+      test: { source: { path: " fixture.test.ts " } },
+      refs: [
+        { kind: "docs", path: " docs/readme.md " },
+        { kind: "code", path: " code/probe.ts " },
+      ],
+      execution: { artifacts: [{ kind: "report", path: " capture.log ", source: "qa-suite" }] },
+    });
+    for (const field of [
+      expectDefined(entry.test.source, "test source"),
+      ...entry.refs!,
+      ...entry.execution!.artifacts,
+    ]) {
+      const original = field.path;
+      field.path = " \t ";
+      expect(() => validateQaEvidenceSummaryJson(evidence)).toThrow();
+      field.path = original;
+    }
+  });
+
   it("records complete structured RTT provenance and gives it canonical timing precedence", () => {
     const rttMeasurement = {
       finalMatchedReplyRttMs: 1750,

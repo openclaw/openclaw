@@ -126,8 +126,8 @@ async function resolveQaEvidenceFile(params: {
   repoRoot: string;
 }): Promise<string> {
   const repoRoot = params.repoRoot;
-  const raw = params.inputPath.trim();
-  if (!raw) {
+  const raw = params.inputPath;
+  if (!raw.trim()) {
     throw new QaEvidenceGalleryError("Evidence path is required.", 400);
   }
   const candidate = path.resolve(repoRoot, raw);
@@ -290,8 +290,8 @@ async function resolveArtifactFileWithinRoots(params: {
   evidenceDir: string;
   repoRoot: string;
 }): Promise<string | null> {
-  const raw = params.artifactPath.trim();
-  if (!raw) {
+  const raw = params.artifactPath;
+  if (!raw.trim()) {
     return null;
   }
   const tokenPath = repoRootTokenArtifactPath(raw);
