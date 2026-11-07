@@ -29,6 +29,7 @@ import {
   isHookDecision,
 } from "./hook-decision-types.js";
 import { HOOK_REPLACED, HookDispatchSelection } from "./hook-dispatch-replacement.js";
+import { isHookContextEligible, resolveHookDispatchScopeContext } from "./hook-eligibility.js";
 import {
   cloneHookIsolationValue,
   clonePromptHookEvent,
@@ -589,7 +590,8 @@ export function createHookRunner(
     policy: ModifyingHookPolicy<K> = {},
     matcherToolName?: string,
   ): Promise<HookResult<K> | undefined> {
-    const hooks = getHooksForName(registry, hookName, undefined, matcherToolName);
+    const scopeCtx = resolveHookDispatchScopeContext(hookName, ctx);
+    const hooks = getHooksForName(registry, hookName, scopeCtx, matcherToolName);
     const selectedHooks = policy.includeRegistration
       ? hooks.filter(policy.includeRegistration)
       : hooks;
@@ -611,7 +613,7 @@ export function createHookRunner(
     let result: HookResult<K> | undefined;
 
     const selection = new HookDispatchSelection(selectedHooks, () => {
-      const current = getHooksForName(registry, hookName, undefined, matcherToolName);
+      const current = getHooksForName(registry, hookName, scopeCtx, matcherToolName);
       return policy.includeRegistration ? current.filter(policy.includeRegistration) : current;
     });
     for (const hook of selectedHooks) {
