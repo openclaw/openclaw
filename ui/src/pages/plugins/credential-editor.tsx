@@ -33,13 +33,13 @@ import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { REDACTED_SENTINEL } from "../../lib/config-form-utils.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
-import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import {
   clearCompositionEnd,
   isComposingKeyboardEvent,
   recordCompositionEnd,
 } from "../../lib/ime.ts";
+import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
+import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import "./credential-editor.css";
 import "./custom-elements.ts";
 import { t } from "../../lib/reactive/i18n.ts";
