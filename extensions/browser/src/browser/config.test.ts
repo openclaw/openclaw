@@ -331,6 +331,19 @@ describe("browser config", () => {
     );
   });
 
+  it("preserves authentication, path, and query in a top-level HTTP CDP URL", () => {
+    const cdpUrl = new URL("http://example.com:9222/prefix?token=test-token");
+    cdpUrl.username = "cdp-user";
+    cdpUrl.password = "cdp-pass";
+
+    expect(resolveRequiredProfile({ cdpUrl: cdpUrl.toString() }, "openclaw")).toMatchObject({
+      cdpPort: 9222,
+      cdpUrl: cdpUrl.toString(),
+      cdpHost: "example.com",
+      cdpIsLoopback: false,
+    });
+  });
+
   it("uses profile cdpUrl when provided", () => {
     expect(
       resolveRequiredProfile(withProfile("remote", { cdpUrl: "http://10.0.0.42:9222" }), "remote"),
