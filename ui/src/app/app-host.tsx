@@ -404,10 +404,7 @@ export class ShellOwner
       return;
     }
     try {
-      await runtimeConfig.ensureLoaded();
-      if (this.context?.runtimeConfig === runtimeConfig) {
-        await runtimeConfig.ensureSchemaLoaded();
-      }
+      await Promise.all([runtimeConfig.ensureLoaded(), runtimeConfig.ensureSchemaLoaded()]);
     } catch {
       // Runtime config state owns the visible load error; search stays usable.
     }

@@ -92,6 +92,7 @@ import {
   type EngineRouteTransition,
 } from "./lib/control-ui-engine-page-scenarios.ts";
 import { createEnginePluginMemoryScenarios } from "./lib/control-ui-engine-plugin-memory-scenarios.ts";
+import { createEngineSettingsSearchScenarios } from "./lib/control-ui-engine-settings-search.ts";
 import { createEngineStreamingScenarios } from "./lib/control-ui-engine-streaming-scenarios.ts";
 import { createEngineStyleScenarios } from "./lib/control-ui-engine-style-scenarios.ts";
 import {
@@ -548,6 +549,7 @@ try {
     ...createEnginePluginMemoryScenarios(),
     ...createEngineStreamingScenarios(),
     ...createEnginePageScenarios(0, pageOrigin, servers[0]!.server.baseUrl),
+    ...createEngineSettingsSearchScenarios(servers[0]!.server.baseUrl),
     ...createEngineRemountScenarios(),
     ...createEngineRouteTransitionScenarios(async (_page, _transition, run) => {
       await run();
@@ -797,6 +799,10 @@ try {
               createEngineCompletedRunScenarios(slot.server.baseUrl).find(
                 ({ id }) => id === item.id,
               ) ??
+              createEngineSettingsSearchScenarios(
+                slot.server.baseUrl,
+                networkProfile.gatewayLatencyMs,
+              ).find(({ id }) => id === item.id) ??
               (item.id.startsWith("page-")
                 ? createEnginePageScenarios(
                     networkProfile.gatewayLatencyMs,
