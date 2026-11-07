@@ -4,6 +4,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { resolveCronJobSessionRefAgentId } from "../../cron/agent-id.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -359,10 +360,19 @@ export function registerCronAddCommand(cron: Command) {
               (resolvedPayload.kind === "agentTurn" || resolvedPayload.kind === "script") &&
               !agentId
             ) {
+              // The gateway binds the job to the agent its own session reference names, so the
+              // warning must not promise the configured default agent in that case.
+              const sessionRefAgentId = resolveCronJobSessionRefAgentId({
+                sessionTarget,
+                sessionKey,
+              });
               defaultRuntime.error(
                 theme.warn(
-                  "No --agent specified; the job will run with the configured default agent. " +
-                    "Specify --agent to choose a specific agent, or set agents.defaults.systemAgent.agentId.",
+                  sessionRefAgentId
+                    ? `No --agent specified; the job will run with agent ${sessionRefAgentId}, named by its session. ` +
+                        "Specify --agent to choose a specific agent."
+                    : "No --agent specified; the job will run with the configured default agent. " +
+                        "Specify --agent to choose a specific agent, or set agents.defaults.systemAgent.agentId.",
                 ),
               );
             }

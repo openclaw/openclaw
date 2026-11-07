@@ -1,5 +1,9 @@
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { assert, afterEach, beforeEach, expect, it } from "vitest";
+import { assert, afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
+import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
+import type { CronJobCreate } from "../cron/types.js";
 import {
   addAgentTurnJob,
   createCronConfig,
@@ -8,6 +12,7 @@ import {
   runCronIsolatedAgentTurnMock,
   runCronSessionTurnMock,
 } from "./server-cron.test-support.js";
+import { cronHandlers } from "./server-methods/cron.js";
 
 let state: ReturnType<typeof loadCronService>;
 let cfg: ReturnType<typeof createCronConfig>;
@@ -18,6 +23,7 @@ beforeEach(({ task }) => {
   state = loadCronService(cfg);
 });
 afterEach(async () => {
+  vi.unstubAllEnvs();
   assert(typeof state.cron.stopAndDrain === "function", "Gateway cron drain is unavailable");
   await state.cron.stopAndDrain();
 });
@@ -82,3 +88,68 @@ it.each(["current", "isolated"] as const)(
     expect(options).toMatchObject({ trigger: "cron", sessionKey: `cron:${job.id}` });
   },
 );
+
+/** Creates a job through the shipped `cron.add` admission handler instead of the service. */
+async function addJobThroughGateway(job: CronJobCreate) {
+  const respond = vi.fn();
+  await expectDefined(
+    cronHandlers["cron.add"],
+    "cron.add",
+  )({
+    req: { type: "req", id: "operator-create", method: "cron.add", params: job },
+    params: job,
+    respond,
+    context: {
+      cron: state.cron,
+      cronStorePath: state.storePath,
+      logGateway: createInfoWarnErrorLogger(),
+      getRuntimeConfig: () => cfg,
+    } as never,
+    client: null,
+    isWebchatConnect: () => false,
+  } as never);
+  const [ok, payload, error] = expectDefined(respond.mock.calls[0], "cron.add response");
+  assert(ok, `cron.add was refused: ${(error as { message?: string } | undefined)?.message}`);
+  const view = payload as { id?: string; job?: { id: string } };
+  const createdId = expectDefined((view.job ?? view).id, "created job id");
+  return expectDefined(state.cron.getJob(createdId), "stored job");
+}
+
+it("runs an operator-created job under the agent its session target names", async () => {
+  // Admission captures inference for the execution agent, so that agent needs a routable
+  // credential in the state directory the fixture cron store lives in.
+  const stateDir = path.dirname(
+    expectDefined((cfg.cron as { store?: string } | undefined)?.store, "fixture cron store"),
+  );
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  await persistAuthProfileBatch({
+    stateDir,
+    profiles: [
+      {
+        profileId: "openai:session-target-fixture",
+        credential: { type: "api_key", provider: "openai", key: "synthetic-session-target-key" },
+      },
+    ],
+  });
+  // The reported shape: no --agent, but a session that belongs to another agent.
+  const job = await addJobThroughGateway({
+    name: "operator-cross-agent",
+    enabled: true,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "session:agent:ops:scheduled-report",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "agentTurn", message: "hello" },
+    delivery: { mode: "none" },
+  });
+  expect(job.agentId).toBe("ops");
+
+  await state.cron.run(job.id, "force");
+
+  expect(state.cron.getJob(job.id)?.state).toMatchObject({ lastRunStatus: "ok" });
+  expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
+  const [options] = expectDefined(runCronSessionTurnMock.mock.calls[0], "session turn");
+  expect(options).toMatchObject({
+    agentId: "ops",
+    sessionKey: "agent:ops:scheduled-report",
+  });
+});

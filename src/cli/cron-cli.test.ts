@@ -507,6 +507,23 @@ it("keeps the default-agent warning off JSON stdout and preserves an empty tool 
   });
 });
 
+it("names the session's agent in the missing --agent warning", async () => {
+  const params = await namedAdd(
+    "--message",
+    "hello",
+    "--session",
+    "session:agent:worker:dashboard:2b6f1c9a",
+    "--no-deliver",
+  );
+  expect(params).toMatchObject({
+    sessionTarget: "session:agent:worker:dashboard:2b6f1c9a",
+    payload: { kind: "agentTurn", message: "hello" },
+  });
+  expect(params.agentId ?? null).toBeNull();
+  expectRuntimeErrorContaining("No --agent specified");
+  expectRuntimeErrorContaining("agent worker, named by its session");
+});
+
 it("creates a one-shot webhook system event with an explicit keep policy", async () => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
