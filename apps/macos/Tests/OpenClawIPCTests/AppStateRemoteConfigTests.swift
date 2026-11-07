@@ -1459,6 +1459,36 @@ extension AppStateRemoteConfigTests {
         }
     }
 
+    @Test
+    func `startup with a remote URL and no mode persists remote mode`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            #expect(OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "remote": [
+                        "transport": "direct",
+                        "url": "wss://remote.example:18789",
+                        "token": "remote-token",
+                    ],
+                ],
+            ]))
+            let state = AppState(preview: true)
+            #expect(state.connectionMode == .remote)
+            #expect(state._testDirtyGatewayConfigFields == ["gateway.mode"])
+
+            state._testEnableGatewayConfigSync()
+            await state._testAwaitGatewayConfigSync()
+
+            #expect(state._testDirtyGatewayConfigFields.isEmpty)
+            #expect(state.gatewayConfigIsCurrentForRouting)
+            let gateway = OpenClawConfigFile.loadDict()["gateway"] as? [String: Any]
+            #expect(gateway?["mode"] as? String == "remote")
+            let remote = gateway?["remote"] as? [String: Any]
+            #expect(remote?["url"] as? String == "wss://remote.example:18789")
+            #expect(remote?["token"] as? String == "remote-token")
+        }
+    }
     /// "Set up later" is kept in the app's defaults (#187841): the file's `gateway.mode` belongs to
     /// whichever Gateway runs from it, so the selection must not write, and the re-read after the
     /// sync must not snap the app back to the file's mode.
