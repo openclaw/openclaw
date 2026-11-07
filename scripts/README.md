@@ -877,6 +877,8 @@ Its default measures a cold document. Add `--warm-reload` to load the same docum
 to composer and transcript readiness first, then measure its reload in the same
 browser context. Warm-up requests and CPU are excluded. This mode cannot be
 combined with `--service-worker`.
+Use `--viewport mobile` for a 390×844 touch viewport; the default desktop viewport
+is 1440×1100. The summary records the viewport alongside each comparison.
 
 Compare the emitted files of two adjacent builds with
 `node scripts/compare-control-ui-update-cache.ts --base-dir <build-A>
