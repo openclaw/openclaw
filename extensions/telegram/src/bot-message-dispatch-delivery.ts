@@ -451,6 +451,24 @@ export async function observeFinalDelivery(
   }
 }
 
+// Each final answer records how it settled, including a final edited into the
+// preview, which sends no new message. Routine delivery success stays out of
+// default logs, so this is a verbose diagnostic.
+function logFinalDeliveryOutcome(turn: Turn, result: LaneDeliveryResult): void {
+  const { receipt, messageIds, suppression } = result.deliveryResult;
+  const ids = receipt?.platformMessageIds ?? messageIds ?? [];
+  logVerbose(
+    [
+      `telegram final delivery outcome=${result.kind}`,
+      `chat=${turn.context.chatId}`,
+      ids.length > 0 && `message=${ids.join(",")}`,
+      suppression && `reason=${suppression.reason}`,
+    ]
+      .filter(Boolean)
+      .join(" "),
+  );
+}
+
 export async function deliverFinalAnswerText(
   turn: Turn,
   answerPayload: ReplyPayload,
@@ -476,6 +494,7 @@ export async function deliverFinalAnswerText(
       visibleReplySent: false,
       suppression: { reason: "channel_transform" },
     };
+    logFinalDeliveryOutcome(turn, { kind: "skipped", deliveryResult });
     await observeFinalDelivery(turn, deliveryResult);
     return { kind: "skipped", deliveryResult };
   }
@@ -528,6 +547,7 @@ export async function deliverFinalAnswerText(
       bindPendingFinalDelivery,
     });
   }
+  logFinalDeliveryOutcome(turn, result);
   if (result.kind === "preview-finalized-partial" && !result.confirmedFinalContent) {
     turn.previewLifecycle.observeFailure(result.deliveryResult);
   } else {
