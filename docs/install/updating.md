@@ -45,6 +45,12 @@ backup.
 
 ## Update implementation contract
 
+Recovery cleanup refusal diagnostics distinguish file-stat checks from generation
+checks and report whether the serving owner permitted destination mutations. These
+labels identify the failed verification stage, not the writer or root cause. Cleanup
+still retains the affected originals and requests a fresh preview; all destination
+identity, content, and live-authority checks remain unchanged.
+
 The candidate macOS app's narrow credential Doctor also completes pending local
 service-runtime intent migration before native startup selects a Gateway. This
 prevents an absent migration receipt from preserving the old seed after credential

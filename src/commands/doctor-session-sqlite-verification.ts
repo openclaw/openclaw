@@ -85,7 +85,9 @@ export function createRecoveryDestinationVerifier(
             ).some((key) => file?.[key] !== expected.files[index]?.[key]),
           ))
       ) {
-        throw new Error("Recovery destination database changed; preview cleanup again.");
+        throw new Error(
+          `Recovery destination database changed (stage=file-stat, ownedMutation=${Boolean(options.allowOwnedMutation)}); preview cleanup again.`,
+        );
       }
       // Ignore SHM reader bookkeeping, but freshly fingerprint WAL/journal contents even
       // on coarse filesystem clocks. Raw descriptor closes stay outside the serving process.
@@ -107,7 +109,9 @@ export function createRecoveryDestinationVerifier(
               generation[key]?.sha256 !== expected.generation[key]?.sha256),
         )
       ) {
-        throw new Error("Recovery destination database changed; preview cleanup again.");
+        throw new Error(
+          `Recovery destination database changed (stage=generation, ownedMutation=${Boolean(options.allowOwnedMutation)}); preview cleanup again.`,
+        );
       }
       const identity = target.databaseIdentity;
       if (identity && identity.dev !== String(files[0]!.dev)) {

@@ -443,7 +443,7 @@ it("stops owned retirement when its recovery destination file is replaced", asyn
       }
     });
     expect(replaced).toBe(true);
-    expect(result?.advisory?.message).toContain("Recovery destination database changed");
+    expect(result?.advisory?.message).toContain("stage=file-stat, ownedMutation=true");
     for (const [file, contents] of originals) {
       const move = readSessionSqliteMigrationManifest(
         fixture.manifestPath,
