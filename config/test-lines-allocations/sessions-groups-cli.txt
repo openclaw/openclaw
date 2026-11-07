@@ -1,0 +1,2 @@
+# Session group catalog CLI: listing and failure coverage.
+86

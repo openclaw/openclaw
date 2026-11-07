@@ -512,4 +512,48 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         );
       });
     });
+
+  addSessionsGatewayOptions(sessionsCmd.command("groups"))
+    .description("List the ordered session group catalog")
+    .addHelpText(
+      "after",
+      () =>
+        `
+${theme.heading("Examples:")}
+${formatHelpExamples([
+  ["openclaw sessions groups", "List the session groups in their sidebar order."],
+  ["openclaw sessions groups --json", "Raw sessions.groups.list response."],
+])}
+
+${theme.muted(
+  "Backed by the sessions.groups.list gateway RPC; group mutation stays in the Control UI.",
+)}`,
+    )
+    .action(async (opts, command) => {
+      // The Gateway owns the catalog; parent list selectors cannot apply.
+      const parentOpts = command.parent?.opts() as SessionsListCliOptions | undefined; // SAFETY: the sessions parent registers the list options rejected below.
+      rejectUnsupportedSessionsParentOptions(
+        "groups",
+        parentOpts,
+        ["store", "allAgents", "active", "limit", "verbose"],
+        "the gateway owns the ordered group catalog",
+      );
+      const timeoutMs = parseStrictPositiveInteger(opts.timeout);
+      if (opts.timeout !== undefined && timeoutMs === undefined) {
+        throwExpectedCliError("--timeout must be a positive integer (milliseconds).");
+      }
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { sessionsGroupsCommand } = await import("../../commands/sessions-groups.js");
+        await sessionsGroupsCommand(
+          {
+            timeout: timeoutMs !== undefined ? String(timeoutMs) : undefined,
+            url: opts.url as string | undefined, // SAFETY: Commander parses transport options as strings.
+            token: opts.token as string | undefined, // SAFETY: Commander parses transport options as strings.
+            password: opts.password as string | undefined, // SAFETY: Commander parses transport options as strings.
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
 }

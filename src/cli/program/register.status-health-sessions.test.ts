@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   cleanup: vi.fn(),
   tail: vi.fn(),
   compact: vi.fn(),
+  groups: vi.fn(),
   lifecycle: vi.fn(),
   exportTrajectory: vi.fn(),
   ownerLoaded: vi.fn(),
@@ -38,6 +39,11 @@ vi.mock("../../commands/sessions-tail.js", () => {
 vi.mock("../../commands/sessions-compact.js", () => {
   mocks.ownerLoaded();
   return { sessionsCompactCommand: mocks.compact };
+});
+// mock-isolation: Capture lazy loading without reading the group catalog.
+vi.mock("../../commands/sessions-groups.js", () => {
+  mocks.ownerLoaded();
+  return { sessionsGroupsCommand: mocks.groups };
 });
 vi.mock("../../commands/sessions-lifecycle.js", async (importOriginal) => {
   mocks.ownerLoaded();
@@ -104,6 +110,11 @@ it.each([
     "--max-lines must be a positive integer.",
   ],
   [`sessions compact ${key} --timeout 0 --json`, mocks.compact, timeoutError],
+  [
+    `sessions --store /tmp/other.sqlite groups`,
+    mocks.groups,
+    "`sessions groups` does not support the parent `sessions` option --store; the gateway owns the ordered group catalog.",
+  ],
 ] as const)("rejects %s before loading the session owner", async (args, owner, message) => {
   const execution = run(args);
   await expect(execution).rejects.toBeInstanceOf(ExpectedCliError);
@@ -174,6 +185,11 @@ it.each([
   if (owner === mocks.list) {
     expect(mocks.setVerbose).toHaveBeenCalledWith(true);
   }
+});
+
+it("dispatches sessions groups with transport options", async () => {
+  await run("sessions --json groups");
+  expectOptions(mocks.groups, { json: true });
 });
 
 it("compact inherits parent agent and JSON options (#91378)", async () => {
