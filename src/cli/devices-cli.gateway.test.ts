@@ -3,13 +3,22 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { prepareStartupClientCredentials } from "../commands/startup-client-credentials.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import type { GatewayClientOptions } from "../gateway/client.js";
 import { authorizeOperatorScopesForMethod } from "../gateway/method-scopes.js";
+import { NodeRegistry } from "../gateway/node-registry.js";
 import { deviceHandlers } from "../gateway/server-methods/devices.js";
 import type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
+import {
+  loadDeviceAuthToken,
+  loadOriginDeviceToken,
+  storeDeviceAuthToken,
+  storeOriginDeviceToken,
+} from "../infra/device-auth-store.js";
+import { loadOrCreateDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import {
   revokeDeviceToken,
@@ -159,7 +168,11 @@ async function installTransport(callerDeviceId?: string) {
           isDeviceTokenAuth: Boolean(callerDeviceId),
           connect: { scopes, device: callerDeviceId ? { id: callerDeviceId } : undefined },
         },
-        context: { logGateway: { info: vi.fn(), warn }, broadcast: vi.fn() },
+        context: {
+          nodeRegistry: new NodeRegistry(),
+          logGateway: { info: vi.fn(), warn },
+          broadcast: vi.fn(),
+        },
       } as unknown as GatewayRequestHandlerOptions);
       expect(respond).toHaveBeenCalledOnce();
       const [ok, result, error] = expectDefined(respond.mock.calls[0], "expected Gateway response");
@@ -347,5 +360,78 @@ it.each(["live", "offline", "uncertain"] as const)(
       expect(await getPairedDevice("bootstrap-device")).toBeNull();
       expect(transport.runtime.writeJson).not.toHaveBeenCalled();
     }
+  },
+);
+
+it.each(["remove", "clear"] as const)(
+  "%s forgets the removed primary CLI operator token without touching other credentials",
+  async (operation) => {
+    await withOpenClawTestState({ label: "devices-remove-cache" }, async ({ env }) => {
+      await prepareStartupClientCredentials({ env });
+      const identity = await loadOrCreateDeviceIdentityAsync({ env });
+      const lookup = { env, deviceId: identity.deviceId, role: "operator" };
+      await storeDeviceAuthToken({ ...lookup, token: "rejected-local-token" });
+      await storeDeviceAuthToken({ ...lookup, role: "node", token: "retained-node-token" });
+      const origin = { ...lookup, gatewayScope: "wss://another.example" };
+      await storeOriginDeviceToken({ ...origin, token: "retained-origin-token" });
+      await pairOperator(identity.deviceId, admin);
+      await installTransport();
+      await run(
+        ...(operation === "remove" ? ["remove", identity.deviceId] : ["clear", "--yes"]),
+        "--json",
+      );
+      expect(await getPairedDevice(identity.deviceId)).toBeNull();
+      expect(await loadDeviceAuthToken(lookup)).toBeNull();
+      expect(await loadDeviceAuthToken({ ...lookup, role: "node" })).toMatchObject({
+        token: "retained-node-token",
+      });
+      expect(await loadOriginDeviceToken(origin)).toMatchObject({ token: "retained-origin-token" });
+    });
+  },
+);
+
+it.each(["other device", "explicit Gateway", "rejected removal", "replacement token"] as const)(
+  "preserves local operator credentials for %s",
+  async (scenario) => {
+    await withOpenClawTestState({ label: "devices-remove-boundary" }, async ({ env }) => {
+      await prepareStartupClientCredentials({ env });
+      const identity = await loadOrCreateDeviceIdentityAsync({ env });
+      const lookup = { env, deviceId: identity.deviceId, role: "operator" };
+      await storeDeviceAuthToken({ ...lookup, token: "captured-token" });
+      const target = scenario === "other device" ? "another-device" : identity.deviceId;
+      await pairOperator(target, admin);
+      await installTransport();
+      const dispatch = expectDefined(
+        transport.request.getMockImplementation(),
+        "installed transport",
+      );
+      transport.request.mockImplementation(async (...args) => {
+        if (args[1] === "device.pair.remove") {
+          if (scenario === "rejected removal") {
+            throw new Error("synthetic removal denied");
+          }
+          if (scenario === "replacement token") {
+            await storeDeviceAuthToken({ ...lookup, token: "replacement-token" });
+          }
+        }
+        return await dispatch(...args);
+      });
+      const removal = run(
+        "remove",
+        target,
+        "--json",
+        ...(scenario === "explicit Gateway"
+          ? ["--url", "ws://127.0.0.1:18789", "--token", "synthetic-gateway-token"]
+          : []),
+      );
+      if (scenario === "rejected removal") {
+        await expect(removal).rejects.toThrow("synthetic removal denied");
+      } else {
+        await removal;
+      }
+      expect(await loadDeviceAuthToken(lookup)).toMatchObject({
+        token: scenario === "replacement token" ? "replacement-token" : "captured-token",
+      });
+    });
   },
 );
