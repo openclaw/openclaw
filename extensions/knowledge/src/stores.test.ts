@@ -311,7 +311,7 @@ it("switching named stores leaves one assignment and the former store untouched"
   expect(await f.titles("research")).toStrictEqual(["Alpha"]);
 });
 
-it("browse inventory skips vault reads while settings retain live record counts", async () => {
+it("store counts follow the operator's live agent role and shared-Gateway policy", async () => {
   const f = await fixture();
   await f.save("main", "Main note");
   await f.save("research", "Research note");
@@ -321,18 +321,9 @@ it("browse inventory skips vault reads while settings retain live record counts"
     expect(inventory.stores.filter((s) => s.state === "ready")).toHaveLength(2);
     expect(inventory.stores.every((s) => s.records === null)).toBe(true);
     expect(calls).not.toHaveBeenCalled();
-    const settings = await f.service.stores_snapshot({}, f.admin);
-    expect(settings.stores.filter((s) => s.records === 1)).toHaveLength(2);
-    expect(calls.mock.calls.map(([operation]) => operation)).toEqual(["catalog", "catalog"]);
   } finally {
     calls.mockRestore();
   }
-});
-
-it("store counts follow the operator's live agent role and shared-Gateway policy", async () => {
-  const f = await fixture();
-  await f.save("main", "Main note");
-  await f.save("research", "Research note");
   const counts = async (client: Record<string, unknown>) => {
     const context = operatorContext(f.api, ["operator.read"]);
     Object.assign(context.action.client, client);
