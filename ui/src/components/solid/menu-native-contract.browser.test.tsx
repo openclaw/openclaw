@@ -269,6 +269,13 @@ it("updates leaf presentation without replacing the row or its presentation slot
   expect(icon.isConnected).toBe(false);
   expect(row.querySelector(".oc-menu-item__details")).toBe(detailsSlot);
   expect(detailsSlot.contains(details)).toBe(true);
+  update(() =>
+    setItems([{ id: "edit", label: "Null content", content: null, icon: nextIcon, details }]),
+  );
+  expect(item("Null content")).toBe(row);
+  expect(row.querySelector(".oc-menu-item__label")).toBe(label);
+  expect(label.textContent).toBe("Null content");
+  expect(label.classList.contains("oc-menu-item__label--text")).toBe(false);
   update(() => setItems([{ id: "edit", label: "Plain", icon: nextIcon, details: nextDetails }]));
   expect(item("Plain")).toBe(row);
   expect(row.querySelector(".oc-menu-item__label")).toBe(label);
@@ -290,6 +297,7 @@ it("retains submenu content and identity across label updates", async () => {
       {
         id: "assign",
         label: "Assign to",
+        content: "Submenu body",
         icon,
         details,
         children: () => [{ id: "ada", label: "Ada Rivera" }],
@@ -302,8 +310,10 @@ it("retains submenu content and identity across label updates", async () => {
   await openMenu();
   expect(surface("people-assign").querySelector('[role="menuitem"]')).toBeNull();
   const assignment = trigger("people-assign");
+  expect(assignment.querySelector(".oc-menu-item__label")?.textContent).toBe("Assign to");
   await openMenu("people-assign");
   const child = surface("people-assign");
+  expect(child.textContent).toContain("Submenu body");
   const ada = item("Ada Rivera", "people-assign");
   update(() =>
     setProps((draft) => {

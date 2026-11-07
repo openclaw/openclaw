@@ -168,7 +168,7 @@ function itemRole(type: MenuItem["type"]): "menuitem" | "menuitemcheckbox" | "me
   return type ? `menuitem${type}` : "menuitem";
 }
 
-function MenuItemPresentation(props: { item: MenuItem; labelOnly?: boolean }) {
+function MenuItemPresentation(props: { item: MenuItem; content?: JSX.Element }) {
   return (
     <>
       <Show when={props.item.icon}>
@@ -178,12 +178,12 @@ function MenuItemPresentation(props: { item: MenuItem; labelOnly?: boolean }) {
         class={[
           "oc-menu-item__label",
           {
-            "oc-menu-item__label--text": props.labelOnly || props.item.content === undefined,
+            "oc-menu-item__label--text": props.content === undefined,
           },
           props.item.labelClass,
         ]}
       >
-        {props.labelOnly ? props.item.label : (props.item.content ?? props.item.label)}
+        {props.content ?? props.item.label}
       </span>
       <Show when={props.item.details}>
         <span class="oc-menu-item__details">{props.item.details}</span>
@@ -569,7 +569,7 @@ export function Menu(props: BranchProps): JSX.Element {
                           </Show>
                         </span>
                       </Show>
-                      <MenuItemPresentation item={item()} />
+                      <MenuItemPresentation item={item()} content={item().content} />
                     </Item>
                   );
                 };
@@ -593,7 +593,7 @@ export function Menu(props: BranchProps): JSX.Element {
                         items={childEntries()}
                         controls={props.controls}
                         placement={childPlacement()}
-                        trigger={item().trigger ?? <MenuItemPresentation item={item()} labelOnly />}
+                        trigger={item().trigger ?? <MenuItemPresentation item={item()} />}
                         parent={overlay}
                         root={menuRoot}
                         parentBinding={binding}
