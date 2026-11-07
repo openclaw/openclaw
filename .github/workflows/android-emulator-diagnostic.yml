@@ -1,6 +1,6 @@
 name: Android Emulator Diagnostic
 
-run-name: Android ${{ inputs.operation == 'lint-profile' && 'release lint profile' || inputs.operation == 'screenshots' && 'screenshots' || 'emulator' }} diagnostic (${{ inputs.target_sha }})
+run-name: Android ${{ inputs.operation == 'codecache-benchmark' && 'release code-cache benchmark' || inputs.operation == 'lint-profile' && 'release lint profile' || inputs.operation == 'screenshots' && 'screenshots' || 'emulator' }} diagnostic (${{ inputs.target_sha }})
 
 on:
   workflow_dispatch:
@@ -14,6 +14,7 @@ on:
           - boot
           - screenshots
           - lint-profile
+          - codecache-benchmark
       target_sha:
         description: Exact lowercase 40-character commit SHA to diagnose
         required: true
@@ -24,7 +25,7 @@ permissions:
 
 jobs:
   validate-target:
-    if: inputs.operation != 'lint-profile'
+    if: inputs.operation != 'lint-profile' && inputs.operation != 'codecache-benchmark'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -775,5 +776,74 @@ jobs:
         with:
           name: android-release-lint-profile-${{ github.run_id }}
           path: .build/android-lint-profile/**
+          if-no-files-found: error
+          retention-days: 7
+
+  codecache-benchmark:
+    if: inputs.operation == 'codecache-benchmark'
+    permissions:
+      contents: read
+    name: Benchmark Android release JIT code cache without publishing
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 45
+    concurrency:
+      group: android-release-codecache-benchmark
+      cancel-in-progress: false
+    steps:
+      - name: Verify frozen source selection
+        shell: bash
+        env:
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: test "$TARGET_SHA" = 58137b4db220764ca722ba8e8992abddd07d6eaa
+
+      - name: Checkout committed benchmark tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+          install-bun: "true"
+          install-deps: "false"
+          node-version: "24.22.1"
+
+      - name: Setup production Android toolchain and dependency cache
+        id: android-toolchain
+        uses: ./.github/actions/setup-android-toolchain
+        with:
+          cache-mode: off
+          gradle-cache-mode: restore
+          install-screenshot-emulators: "false"
+
+      - name: Checkout frozen release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 58137b4db220764ca722ba8e8992abddd07d6eaa
+          path: candidate
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install mobile release dependencies
+        working-directory: candidate
+        run: node scripts/install-mobile-release-dependencies.mjs
+
+      - name: Compare five interleaved signed release pairs without publishing
+        env:
+          JAVA_HOME: ${{ steps.android-toolchain.outputs.gradle-java-home }}
+        run: >-
+          node scripts/bench-android-release-codecache.mjs
+          --source candidate
+          --output .build/android-codecache
+
+      - name: Retain task, signature, timing and resource proof
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-release-codecache-${{ github.run_id }}
+          path: .build/android-codecache/**
           if-no-files-found: error
           retention-days: 7

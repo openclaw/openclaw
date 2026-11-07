@@ -561,7 +561,7 @@ describe("mobile release CI tools", () => {
     expect(Object.keys(workflow.on)).toEqual(["workflow_dispatch"]);
     expect(workflow.on.workflow_dispatch.inputs.operation).toMatchObject({
       default: "boot",
-      options: ["boot", "screenshots", "lint-profile"],
+      options: ["boot", "screenshots", "lint-profile", "codecache-benchmark"],
     });
     expect(workflow.permissions).toEqual({ contents: "read" });
     for (const activeJob of [validationJob, job]) {
