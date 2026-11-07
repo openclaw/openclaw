@@ -126,6 +126,10 @@ export function createSessionObserverCompletion(params: {
     try {
       const execute = async () => {
         const prepared = await ensurePrepared(state);
+        // Isolated completion owns a fresh timeout for every fallback candidate.
+        // Keeping the preparation deadline armed here would cancel the whole
+        // chain as soon as its primary used one full candidate budget.
+        clearTimeout(timeout);
         let lastRejectedText = "";
         for (let attempt = 0; attempt < 2; attempt += 1) {
           if (!params.isCurrent(state) || controller.signal.aborted) {
