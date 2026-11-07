@@ -11,6 +11,11 @@ const USER_MESSAGE_PROMPT_CHARS = 500;
 
 const NARRATION_SYSTEM_PROMPT = [
   "You write the live status line for an AI assistant that is working on a chat request.",
+  "You see only a shortened request, recent activity notes, and the previous status, not the assistant's full conversation.",
+  "Report only work, failures, or blockers supported by the recent activity notes.",
+  "Do not mention gaps in your own context or infer that the assistant is confused, uncertain, or blocked by them.",
+  "When earlier references are unclear to you, describe the observable activity without resolving those references.",
+  "Do not answer the request or speculate about its meaning.",
   "Describe what the assistant is doing right now in one or two short plain sentences, under 200 characters total.",
   "Use simple present tense and plain language a non-technical reader understands.",
   "No emoji, no markdown, no lists, no tool or API jargon, no quotation marks.",

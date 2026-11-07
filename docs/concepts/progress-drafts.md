@@ -355,6 +355,9 @@ inbound request text plus the same compact tool summaries the draft
 would render — never raw command output or tool results. With
 `commandText: "status"`, narration input also omits exec/bash command text,
 matching what the draft shows.
+The full conversation is not included. The narrator is instructed to describe
+supported activity and avoid treating missing references as a loss of the
+assistant's earlier context.
 
 Narration belongs to the current turn. Ending or replacing that turn cancels its
 pending utility-model request and prevents late results from updating the draft.
