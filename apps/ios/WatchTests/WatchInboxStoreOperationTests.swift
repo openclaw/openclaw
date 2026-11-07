@@ -328,6 +328,34 @@ struct WatchInboxStoreOperationTests {
         }
     }
 
+    @Test func `resolved approvals block only their exact Unicode ID`() throws {
+        try Self.withStore { store, _ in
+            let gatewayStableID = "watch-test-gateway"
+            let composedID = "approval-\u{00E9}"
+            let decomposedID = "approval-e\u{0301}"
+            store.consume(execApprovalResolved: WatchExecApprovalResolvedMessage(
+                approvalId: composedID,
+                gatewayStableID: gatewayStableID,
+                decision: .allowOnce))
+
+            let approvals = [composedID, decomposedID].map { approvalID in
+                WatchExecApprovalItem(
+                    id: approvalID,
+                    gatewayStableID: gatewayStableID,
+                    commandText: "echo \(approvalID)",
+                    allowedDecisions: [.allowOnce])
+            }
+            #expect(store.consume(
+                execApprovalSnapshot: WatchExecApprovalSnapshotMessage(
+                    approvals: approvals,
+                    gatewayStableID: gatewayStableID,
+                    sentAtMs: 100,
+                    snapshotId: "after-resolution"),
+                transport: "test"))
+            #expect(store.sortedExecApprovals.map { Array($0.approvalID.utf8) } == [Array(decomposedID.utf8)])
+        }
+    }
+
     @Test func `received approval snapshots keep approval and gateway IDs exactly as sent`() async throws {
         let suiteName = "WatchInboxStoreOperationTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
