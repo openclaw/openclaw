@@ -522,7 +522,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
     public let errorMessage: String?
     public internal(set) var details: AnyCodable?
     #if os(macOS)
-    private var runFailureNotice: AnyCodable? = nil
+    private var runFailureNotice: AnyCodable?
 
     var desktopFailureSummary: String? {
         guard self.role == "custom",
