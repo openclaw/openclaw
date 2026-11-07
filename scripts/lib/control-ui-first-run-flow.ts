@@ -306,6 +306,30 @@ export async function runControlUiFirstRunFlow(
         documentReplaced: (await page.evaluate(() => performance.timeOrigin)) !== initialDocument,
       };
     }
+    const assistantPanel = "openclaw-assistant-panel .assistant-panel";
+    const composerCoveredByAssistant = await page.locator(composer).evaluate((element) => {
+      const panel = document.querySelector("openclaw-assistant-panel .assistant-panel");
+      const rect = element.getBoundingClientRect();
+      const target = document.elementFromPoint(
+        rect.left + rect.width / 2,
+        rect.top + rect.height / 2,
+      );
+      return panel !== null && target !== null && panel.contains(target);
+    });
+    if (composerCoveredByAssistant) {
+      await measure(
+        "mobile-assistant-close",
+        async () => {
+          await page
+            .locator(assistantPanel)
+            .getByRole("button", { name: "Close assistant sidebar", exact: true })
+            .click();
+          await page.locator(assistantPanel).waitFor({ state: "hidden" });
+          await wait(`${composer}:not([disabled])`);
+        },
+        `body:not(:has(${assistantPanel}:not([hidden]))) ${composer}:not([disabled])`,
+      );
+    }
     // Onboarding may seed a hatch draft; measure composing from an empty field.
     await page.locator(composer).fill("");
     await measure(

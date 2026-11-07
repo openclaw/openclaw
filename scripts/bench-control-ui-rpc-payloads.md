@@ -18,7 +18,8 @@ NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs \
 
 Repeat with `--viewport mobile` (390 × 844) and `--profile remote`. The first-run
 remote profile adds 50 ms in each direction (100 ms RTT) without the ordinary
-census's 10 Mbps throughput cap. Run Chromium separately with `--cpu-throttle 4`;
+census's 10 Mbps throughput cap or nonlocal client identity. The operator remains
+on localhost, where custom-provider setup is supported. Run Chromium separately with `--cpu-throttle 4`;
 throttling is not supported by the other engines. Firefox emulates viewport and
 touch, without the unsupported `isMobile` flag.
 
@@ -46,6 +47,8 @@ message. `onboardingRestart` records this wall-time gap and document replacement
 it does not claim CPU or CLS coverage across documents. This avoids mistaking the
 early composer for a stable connection, while keeping that premature readiness
 and restart delay visible in the report.
+On a mobile layout, it also measures closing the full-screen assistant through
+its visible close button when that panel covers the chat composer.
 
 Each step records browser-local control readiness, first trusted input to
 readiness, automation wall time, host load, available engine counters, long

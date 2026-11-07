@@ -736,7 +736,9 @@ try {
             ? { hasTouch: true, ...(engine !== "firefox" ? { isMobile: true } : {}) }
             : {}),
           serviceWorkers: "block",
-          ...(values.profile === "remote"
+          // First-run's RTT profile is still a localhost operator. A remote
+          // identity correctly cannot open the local custom-provider wizard.
+          ...(values.profile === "remote" && !values["first-run"]
             ? { extraHTTPHeaders: { "x-forwarded-for": "198.51.100.10" } }
             : {}),
         });
