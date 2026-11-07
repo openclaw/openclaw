@@ -415,7 +415,8 @@ export function createCrabboxWorkerProvider(
           wallpaperBase64,
           prepareBeforeEnrollment: Boolean(project),
         });
-        if (project?.preparation && (await warmImages.lookupLease(leaseId))?.phase === "enrolled") {
+        const lease = project?.preparation ? await warmImages.lookupLease(leaseId) : undefined;
+        if (project?.preparation && lease?.phase === "enrolled") {
           // An enrolled replay may have lost its response before core registration.
           // Verify the preserved completion only; setup and capture remain closed.
           try {
@@ -423,7 +424,7 @@ export function createCrabboxWorkerProvider(
               ...context,
               id: leaseId,
               project,
-              inspectPrepared: true,
+              inspectPrepared: { baseCommit: lease.baseCommit },
               signal: preparationSignal,
               timeoutMs: () => remainingProvisionTimeout(setupDeadline, CRABBOX_SETUP_TIMEOUT_MS),
             });
@@ -464,6 +465,12 @@ export function createCrabboxWorkerProvider(
               ...context,
               id: leaseId,
               project,
+              snapshotBaseCommit:
+                allocationChoice.kind === "checkpoint" ? allocationChoice.baseCommit : undefined,
+              initialSnapshotCheckpointId:
+                allocationChoice.kind === "checkpoint" && !priorAllocation
+                  ? allocationChoice.checkpointId
+                  : undefined,
               signal: preparationSignal,
               timeoutMs: () => remainingProvisionTimeout(setupDeadline, CRABBOX_SETUP_TIMEOUT_MS),
               recordRecipePreparation: (metadata) =>
@@ -477,7 +484,7 @@ export function createCrabboxWorkerProvider(
             assertCurrent();
             await warmImages.markPrepared(
               leaseId,
-              project.baseCommit,
+              preparedProject?.baseCommit ?? project.baseCommit,
               () => {
                 preparationSignal?.throwIfAborted();
                 assertCurrent();
@@ -536,7 +543,7 @@ export function createCrabboxWorkerProvider(
         try {
           // A fork of an image captured for this exact runtime already holds it. Enrollment still
           // verifies the runtime, and the node fetches a missing worker bundle from the Gateway.
-          const forkHasRuntime =
+          runtimePrepared ||=
             allocationChoice.kind === "checkpoint" &&
             isDeepStrictEqual(
               await warmImages.checkpointRuntimeIdentity(allocationChoice.checkpointId),
@@ -546,7 +553,6 @@ export function createCrabboxWorkerProvider(
             options?.prepareNodeRuntime &&
             !runtimePrepared &&
             priorAllocation?.phase !== "enrolled" &&
-            !forkHasRuntime &&
             (!project || allocationChoice.kind === "checkpoint")
           ) {
             await (await prepareRuntime()).run();
@@ -623,7 +629,12 @@ export function createCrabboxWorkerProvider(
         return {
           ...allocation,
           ...(resourceReceipt ? { resourceReceipt } : {}),
-          node: { deviceId },
+          node: {
+            deviceId,
+            ...(allocationChoice.kind === "checkpoint" && !priorAllocation && runtimePrepared
+              ? { preparedRuntime: nodeRuntimeIdentity }
+              : {}),
+          },
           ...(desktop ? { desktop: desktop.endpoint } : {}),
         };
       } finally {

@@ -169,6 +169,32 @@ describe("repository project admission", () => {
     clearRuntimeConfigSnapshot();
   });
 
+  it.each([
+    undefined,
+    "HEAD",
+    "main",
+    "refs/heads/main",
+    "topic",
+    "refs/tags/main",
+    "pinned",
+    "replay",
+  ])("reuses a snapshot base only for fresh default-branch requests: %s", async (ref) => {
+    const admitted = await prepareRepositoryWorkerProjectSource({
+      ...initial,
+      repository: {
+        ...initial.repository,
+        ...(ref === "pinned" ? { baseCommit: commit } : ref === "replay" ? {} : { ref }),
+      },
+    });
+    const result =
+      ref === "replay"
+        ? await prepareRepositoryWorkerProjectSource({ ...admission, expected: admitted.project })
+        : admitted;
+    expect(result.snapshotStart === true).toBe(
+      [undefined, "HEAD", "main", "refs/heads/main"].includes(ref),
+    );
+  });
+
   it("admits the declarative recipe before an executable fallback from immutable blobs", async () => {
     const blob = "e".repeat(40);
     rootEntries.push({ path: ".devcontainer.json", type: "blob", mode: "100644", sha: blob });
@@ -359,11 +385,17 @@ describe("repository project admission", () => {
     },
   );
 
+  it("revalidates a pinned repository with one atomic observation", async () => {
+    const admitted = await prepareRepositoryWorkerProjectSource(initial);
+    fetchImpl.mockClear();
+    await admitted.revalidate();
+    expect(requestPaths()).toEqual(["/graphql"]);
+  });
+
   it.each(["repository", "visibility", "access"] as const)(
-    "rejects %s changes after the immutable-node read",
+    "rejects %s changes in the atomic repository observation",
     async (change) => {
       const admitted = await prepareRepositoryWorkerProjectSource(initial);
-      const response = { data: { node: repositoryNode() } };
       fetchImpl.mockClear().mockImplementationOnce(async () => {
         if (change === "repository") {
           repositoryId = "R_recreated_project";
@@ -374,10 +406,12 @@ describe("repository project admission", () => {
         if (change === "access") {
           unavailable = true;
         }
-        return new Response(JSON.stringify(response));
+        return unavailable
+          ? new Response("{}", { status: 404 })
+          : Response.json({ data: { node: repositoryNode() } });
       });
       await expect(admitted.revalidate()).rejects.toThrow();
-      expect(requestPaths()).toEqual(["/graphql", "/repos/acme/project"]);
+      expect(requestPaths()).toEqual(["/graphql"]);
     },
   );
 
@@ -551,22 +585,29 @@ describe("repository project admission", () => {
       expected: JSON.parse(storedProject),
     });
     expect(reopened.project).toEqual(admitted.project);
+    mocks.prepareGitHubReadIdentity.mockClear();
+    fetchImpl.mockClear();
+    const admittedToken = token;
     token = "rotated-synthetic-token";
     const signal = new AbortController().signal;
     await expect(reopened.prepareGitPack!({ temporaryRoot: "/synthetic", signal })).resolves.toBe(
       "/synthetic/source.pack",
     );
+    expect({
+      identityPreparations: mocks.prepareGitHubReadIdentity.mock.calls.length,
+      metadataRequests: requestPaths(),
+    }).toEqual({ identityPreparations: 0, metadataRequests: [] });
     expect(mocks.prepareGitPack).toHaveBeenCalledExactlyOnceWith({
       url: repositoryUrl,
       baseCommit: commit,
-      token,
+      token: admittedToken,
       temporaryRoot: "/synthetic",
       signal,
       assertCurrent: expect.any(Function),
     });
   });
 
-  it.each(["caller", "account", "visibility", "during fetch"] as const)(
+  it.each(["caller", "account", "agent", "during fetch"] as const)(
     "rejects private pack preparation after %s authority changes",
     async (change) => {
       privateRepository = true;
@@ -581,8 +622,8 @@ describe("repository project admission", () => {
       if (change === "account") {
         selected = false;
       }
-      if (change === "visibility") {
-        privateRepository = false;
+      if (change === "agent") {
+        mocks.matchesAgentLifecycleBinding.mockReturnValue(false);
       }
       if (change === "during fetch") {
         mocks.prepareGitPack.mockImplementationOnce(async () => {

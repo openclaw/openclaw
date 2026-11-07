@@ -1,7 +1,10 @@
 import { WORKER_BUNDLE_PREWARM_VERSION } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { NODE_WORKER_BUNDLE_INSTALL_COMMAND } from "../../infra/node-commands.js";
-import { NODE_WORKER_BUNDLE_PREFETCH_VERSION } from "../../infra/node-runner-inventory.js";
+import {
+  NODE_WORKER_BUNDLE_PREFETCH_VERSION,
+  NODE_WORKER_INITIAL_SNAPSHOT_VERSION,
+} from "../../infra/node-runner-inventory.js";
 import { notifyListeners } from "../../shared/listeners.js";
 import {
   parseNodeWorkerBundleInstallResult,
@@ -36,7 +39,14 @@ export type GatewayNodeWorkerBundleInstall = (
     onProgress?: () => void;
   } & (
     | { reason: "prefetch"; environmentId?: never; prewarm?: never }
-    | { reason: "provision" | "refresh"; environmentId: string; prewarm: boolean }
+    | {
+        reason: "provision";
+        environmentId: string;
+        prewarm: boolean;
+        initialSnapshot?: string;
+        initialNode?: NodeWorkerSupervisorNodeProof;
+      }
+    | { reason: "refresh"; environmentId: string; prewarm: boolean }
   ),
 ) => Promise<NodeWorkerBundleInstallResult>;
 
@@ -179,6 +189,14 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
           gatewayNamespace: options.gatewayNamespace,
           artifact,
           ...(bundlePrewarm ? { bundlePrewarm } : {}),
+          ...(params.reason === "provision" &&
+          params.initialSnapshot &&
+          params.initialNode &&
+          params.initialNode.connId === node.connId &&
+          transport.isCurrent(params.initialNode) &&
+          node.workerHost.initialSnapshot === NODE_WORKER_INITIAL_SNAPSHOT_VERSION
+            ? { initialSnapshot: params.initialSnapshot }
+            : {}),
           ...(params.reason === "prefetch" ? { prefetch: 1 } : {}),
           isAuthorized,
           signal: params.signal,

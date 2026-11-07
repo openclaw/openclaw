@@ -441,6 +441,12 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["node", "identity"], exact: true, policy: PASSIVE_STARTUP_POLICY },
   { commandPath: ["node", "status"], exact: true, policy: PASSIVE_STARTUP_POLICY },
   {
+    commandPath: ["node", "prepare-worker-bundle"],
+    exact: true,
+    // Package composition must not create profile or enrollment state.
+    policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true },
+  },
+  {
     commandPath: ["node", "worker"],
     exact: true,
     policy: {

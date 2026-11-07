@@ -36,7 +36,11 @@ const descriptor: ComputerUseCapabilityDescriptor = {
   features: { recording: false, agentCursor: false, multiDisplay: false },
 };
 
-async function startComputer(ephemeral = true, prepare?: () => Promise<void>) {
+async function startComputer(
+  ephemeral = true,
+  prepare?: () => Promise<void>,
+  sharedPrepare = false,
+) {
   let providerGeneration = descriptor.provider.generation;
   const snapshot = vi.fn(async (_params: unknown, _signal?: AbortSignal) =>
     JSON.stringify({ format: "png", base64: "c2NyZWVu", displayFrameId: "frame-1" }),
@@ -46,6 +50,8 @@ async function startComputer(ephemeral = true, prepare?: () => Promise<void>) {
   );
   const close = vi.fn(async (_reason: string) => {});
   const stopWatching = vi.fn<() => Promise<void>>(async () => {});
+  const watchComputer = vi.fn(() => stopWatching);
+  const watchStatus = vi.fn(() => async () => {});
   const openExecution = vi.fn(async (_context: unknown) => ({ snapshot, act, close }));
   const registry = createEmptyPluginRegistry();
   registry.plugins.push(createPluginRecord({ id: "fixture", enabled: true, status: "loaded" }));
@@ -64,9 +70,22 @@ async function startComputer(ephemeral = true, prepare?: () => Promise<void>) {
         provider: { ...descriptor.provider, generation: providerGeneration },
       }),
       openExecution,
-      watchAvailability: () => stopWatching,
+      watchAvailability: watchComputer,
     },
   );
+  const disconnect = vi.fn(async () => {});
+  registry.nodeHostCommands.push({
+    pluginId: "fixture",
+    source: "test",
+    command: {
+      command: "fixture.status",
+      handle: async () => "{}",
+      hasActiveWork: () => false,
+      onDisconnect: disconnect,
+      watchAvailability: watchStatus,
+      ...(sharedPrepare ? { prepare: registry.nodeHostCommands[0]!.command.prepare } : {}),
+    },
+  });
   setActivePluginRegistry(registry);
   const prepared = await prepareNodeHostRuntime({
     config: { nodeHost: { skills: { enabled: false } } },
@@ -103,6 +122,9 @@ async function startComputer(ephemeral = true, prepare?: () => Promise<void>) {
     act,
     close,
     stopWatching,
+    watchComputer,
+    watchStatus,
+    disconnect,
     openExecution,
     setProviderGeneration(value: string) {
       providerGeneration = value;
@@ -138,31 +160,195 @@ async function withComputer(
 }
 
 describe("private worker computer runtime", () => {
-  it("awaits the registered provider preparation before publishing the first manifest", async () => {
-    const gate = createDeferredCore();
+  it.each([
+    { ephemeral: true, shared: false, fail: false },
+    { ephemeral: false, shared: false, fail: false },
+    { ephemeral: true, shared: true, fail: false },
+    { ephemeral: true, shared: false, fail: true },
+  ])(
+    "joins preparation before use (ephemeral=$ephemeral, shared=$shared, fail=$fail)",
+    async ({ ephemeral, shared, fail }) => {
+      const overlap = ephemeral && !shared;
+      const failure = new Error("private computer preparation failed");
+      const gate = createDeferredCore();
+      const entered = createDeferredCore();
+      const prepare = vi.fn(() => {
+        entered.resolve();
+        return gate.promise;
+      });
+      let prepared = false;
+      const starting = startComputer(ephemeral, prepare, shared).then((host) => {
+        prepared = true;
+        return host;
+      });
+      try {
+        await entered.promise;
+        await setImmediate();
+        expect(prepare).toHaveBeenCalledOnce();
+        expect(prepared).toBe(overlap);
+        if (!overlap) {
+          gate.resolve();
+        }
+        const host = await starting;
+        expect(host.prepared.manifest.commands).toContain("fixture.status");
+        expect(host.watchStatus).toHaveBeenCalledOnce();
+        expect(host.watchComputer).toHaveBeenCalledTimes(overlap ? 0 : 1);
+        if (overlap) {
+          expect(await host.runtime.tryPauseForUpdate()).toBe(false);
+        }
+        let invoked = false;
+        const invoking = host
+          .invoke(
+            ephemeral ? computerOperation("snapshot") : { executionId },
+            ephemeral ? NODE_WORKER_DESKTOP_COMPUTER_COMMAND : "screen.snapshot",
+          )
+          .then((result) => {
+            invoked = true;
+            return result;
+          });
+        if (overlap) {
+          await setImmediate();
+          expect(invoked).toBe(false);
+          expect(host.openExecution).not.toHaveBeenCalled();
+        }
+        if (fail) {
+          gate.reject(failure);
+        } else {
+          gate.resolve();
+        }
+        expect(await invoking).toMatchObject(
+          fail
+            ? { ok: false, error: { message: expect.stringContaining(failure.message) } }
+            : { ok: true },
+        );
+        if (fail) {
+          expect(await host.runtime.tryPauseForUpdate()).toBe(true);
+          host.runtime.resumeAfterUpdate();
+          expect(await host.invoke({ operation: "capabilities" })).toMatchObject({
+            ok: false,
+            error: { message: expect.stringContaining(failure.message) },
+          });
+        }
+        await host.runtime.cancelAll();
+        expect(prepare).toHaveBeenCalledOnce();
+      } finally {
+        gate.resolve();
+        const closing = (await starting).runtime.close();
+        if (fail) {
+          await expect(closing).rejects.toBe(failure);
+        } else {
+          await closing;
+        }
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "drains preparation before close, preserving its failure (fail=%s)",
+    async (fail) => {
+      const gate = createDeferredCore();
+      const failure = new Error("private preparation did not finish");
+      const host = await startComputer(true, () => gate.promise);
+      let closed = false;
+      const closing = host.runtime.close().then(
+        () => {
+          closed = true;
+        },
+        (error: unknown) => {
+          closed = true;
+          return error;
+        },
+      );
+      try {
+        await setImmediate();
+        expect(closed).toBe(false);
+        expect(host.disconnect).not.toHaveBeenCalled();
+        expect(host.stopWatching).not.toHaveBeenCalled();
+        if (fail) {
+          gate.reject(failure);
+        } else {
+          gate.resolve();
+        }
+        expect(await closing).toBe(fail ? failure : undefined);
+        expect(host.disconnect).toHaveBeenCalledOnce();
+        expect(host.stopWatching).toHaveBeenCalledOnce();
+        if (fail) {
+          await expect(host.runtime.close()).rejects.toBe(failure);
+        }
+        expect(host.disconnect).toHaveBeenCalledOnce();
+        expect(host.stopWatching).toHaveBeenCalledOnce();
+      } finally {
+        gate.resolve();
+        await closing;
+      }
+    },
+  );
+
+  it("retires prepared computer resources when mandatory startup fails", async () => {
     const entered = createDeferredCore();
-    const prepare = vi.fn(() => {
-      entered.resolve();
-      return gate.promise;
+    const gate = createDeferredCore();
+    const failure = new Error("mandatory startup failed");
+    const dispose = vi.fn(async () => {});
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(createPluginRecord({ id: "fixture", enabled: true, status: "loaded" }));
+    registerComputerUseProvider(
+      {
+        registerNodeHostCommand: (command) =>
+          registry.nodeHostCommands.push({ pluginId: "fixture", source: "test", command }),
+      },
+      {
+        id: "fixture",
+        label: "Fixture",
+        capabilities: () => descriptor,
+        isAvailable: () => true,
+        prepare: () => {
+          entered.resolve();
+          return gate.promise;
+        },
+        watchAvailability: () => dispose,
+        openExecution: async () => {
+          throw new Error("No computer execution expected");
+        },
+      },
+    );
+    registry.nodeHostCommands.push({
+      pluginId: "fixture",
+      source: "test",
+      command: {
+        command: "fixture.required",
+        prepare: async () => {
+          throw failure;
+        },
+        handle: async () => "{}",
+      },
     });
-    let prepared = false;
-    const starting = startComputer(true, prepare).then((host) => {
-      prepared = true;
-      return host;
+    setActivePluginRegistry(registry);
+    let finished = false;
+    const starting = prepareNodeHostRuntime({
+      config: { nodeHost: { skills: { enabled: false } } },
+      env: { PATH: "/usr/bin" },
+      ephemeral: true,
     });
+    const observed = starting.then(
+      () => {
+        finished = true;
+      },
+      (error: unknown) => {
+        finished = true;
+        return error;
+      },
+    );
     try {
       await entered.promise;
-      expect(prepare).toHaveBeenCalledOnce();
-      expect(prepared).toBe(false);
+      await setImmediate();
+      expect(finished).toBe(false);
+      expect(dispose).not.toHaveBeenCalled();
       gate.resolve();
-      const host = await starting;
-      expect(await host.invoke({ operation: "capabilities" })).toMatchObject({ ok: true });
-      await host.runtime.cancelAll();
-      await host.invoke({ operation: "capabilities" });
-      expect(prepare).toHaveBeenCalledOnce();
+      expect(await observed).toBe(failure);
+      expect(dispose).toHaveBeenCalledOnce();
     } finally {
       gate.resolve();
-      await (await starting).runtime.close();
+      await observed;
     }
   });
 

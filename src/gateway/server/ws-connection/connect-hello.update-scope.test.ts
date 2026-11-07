@@ -732,6 +732,10 @@ describe("sendGatewayHello update detail scope", () => {
     });
     expect(helloPayload(context)?.features.capabilities).toContain("node-permission-errors");
     expect(helloPayload(context)?.features.capabilities).toContain("agent-session-id-create-v1");
+    expect(helloPayload(context)?.features.capabilities).toContain(
+      "node-worker-prepared-workspace-base-v1",
+      "node-worker-initial-snapshot-v1",
+    );
   });
 
   it.each([

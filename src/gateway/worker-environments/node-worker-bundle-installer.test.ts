@@ -158,6 +158,38 @@ describe("Gateway node worker bundle installer", () => {
     },
   );
 
+  it.each(["current", "reconnected", "old node", "missing origin"] as const)(
+    "sends fresh runtime hints only on the captured first connection (%s)",
+    async (state) => {
+      const initial = createNodeWorkerBundleTestNode({
+        workerHost: state === "old node" ? {} : { initialSnapshot: 1 },
+      });
+      const current =
+        state === "reconnected"
+          ? createNodeWorkerBundleTestNode({ ...initial, connId: "replacement-connection" })
+          : initial;
+      const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async () => ({
+        ok: true,
+        payload: receipt,
+      }));
+      const { ensure } = installerFixture(invoke, [current]);
+      const request = {
+        ...installRequest(current),
+        initialSnapshot: "fresh-checkpoint",
+        ...(state === "missing origin" ? {} : { initialNode: initial }),
+      };
+      await expect(ensure(request)).resolves.toEqual(receipt);
+      if (state === "current") {
+        expect(invoke.mock.calls[0]?.[0].params).toHaveProperty(
+          "initialSnapshot",
+          "fresh-checkpoint",
+        );
+      } else {
+        expect(invoke.mock.calls[0]?.[0].params).not.toHaveProperty("initialSnapshot");
+      }
+    },
+  );
+
   it("publishes install phases and throttles byte notices and logs with its clock", async () => {
     const h = observedInstaller();
     const call = await h.start();

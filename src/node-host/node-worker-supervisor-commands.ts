@@ -6,6 +6,7 @@ import type {
   SessionsProcessesStopResult,
 } from "../../packages/gateway-protocol/src/schema/session-processes.js";
 import { WORKER_PUBLIC_INGRESS_PATH } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import {
   boundedWorkerError,
@@ -202,6 +203,8 @@ function resolveWorkerConnectionEndpoint(params: {
 /** Dispatches the non-advertised worker control contract before public node commands. */
 export async function invokeNodeWorkerSupervisorCommand(params: {
   command: string;
+  serverCapabilities?: ReadonlySet<string>;
+  preparation?: Promise<void>;
   paramsJSON?: string | null;
   supervisor?: NodeWorkerSupervisorControl;
   localMcp?: NodeWorkerMcpSession;
@@ -219,26 +222,51 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
     string,
     () => Promise<NodeWorkerSupervisorCommandPayload | undefined> | undefined
   > = {
-    [NODE_WORKER_WORKSPACE_PREPARE_COMMAND]: () =>
-      workspace?.prepare(parseNodeWorkerPreparedWorkspaceInput(paramsJSON), signal),
-    [NODE_WORKER_BUNDLE_INSTALL_COMMAND]: () => {
+    [NODE_WORKER_WORKSPACE_PREPARE_COMMAND]: async () => {
+      const prepared = await workspace?.prepare(
+        parseNodeWorkerPreparedWorkspaceInput(paramsJSON),
+        signal,
+      );
+      if (
+        !prepared ||
+        params.serverCapabilities?.has(GATEWAY_SERVER_CAPS.NODE_WORKER_PREPARED_WORKSPACE_BASE)
+      ) {
+        return prepared;
+      }
+      // v2026.11.1 Gateways reject extra result fields. Keep the actual base in
+      // the runtime owner, and project the shipped wire shape until negotiated.
+      const { baseCommit: _baseCommit, ...legacy } = prepared;
+      return legacy;
+    },
+    [NODE_WORKER_BUNDLE_INSTALL_COMMAND]: async () => {
       if (!bundleInstaller) {
         return undefined;
       }
       if (!params.gatewayUrl) {
         throw new Error("node worker gateway connection unavailable");
       }
-      return bundleInstaller.ensure({
-        input: parseNodeWorkerBundleInstallInput(paramsJSON),
-        gatewayUrl: params.gatewayUrl,
-        ...(params.gatewayTlsFingerprint
-          ? { gatewayTlsFingerprint: params.gatewayTlsFingerprint }
-          : {}),
-        ...(params.gatewayCloudflareAccess
-          ? { gatewayCloudflareAccess: params.gatewayCloudflareAccess }
-          : {}),
-        signal,
-      });
+      const [installed, preparation] = await Promise.allSettled([
+        bundleInstaller.ensure({
+          input: parseNodeWorkerBundleInstallInput(paramsJSON),
+          gatewayUrl: params.gatewayUrl,
+          ...(params.gatewayTlsFingerprint
+            ? { gatewayTlsFingerprint: params.gatewayTlsFingerprint }
+            : {}),
+          ...(params.gatewayCloudflareAccess
+            ? { gatewayCloudflareAccess: params.gatewayCloudflareAccess }
+            : {}),
+          signal,
+        }),
+        params.preparation,
+      ]);
+      if (installed.status === "rejected") {
+        throw installed.reason;
+      }
+      if (preparation.status === "rejected") {
+        throw preparation.reason;
+      }
+      signal?.throwIfAborted();
+      return installed.value;
     },
     [NODE_WORKER_WORKSPACE_EXEC_COMMAND]: () =>
       workspace?.exec(

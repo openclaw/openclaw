@@ -13,6 +13,7 @@ import type { CrabboxWarmImagePolicy } from "./crabbox-worker-warm-image-policy.
 import type { WarmAllocationRecord, WarmStartStatus } from "./crabbox-worker-warm-image-records.js";
 import {
   isCrabboxCaptureRefusalRetained,
+  sameCrabboxWarmImageGeneration,
   withCrabboxWarmImageGeneration,
   type openCrabboxWarmImageStore,
 } from "./crabbox-worker-warm-image-store.js";
@@ -67,7 +68,9 @@ export function createCrabboxWarmImageAllocation({
   policy: CrabboxWarmImagePolicy;
   assertCurrent: (context: CheckpointContext) => void;
 }) {
-  return async (context: AllocationContext): Promise<WarmAllocationRecord["choice"]> => {
+  return async (
+    context: AllocationContext,
+  ): Promise<WarmAllocationRecord["choice"] & { baseCommit?: string }> => {
     assertCurrent(context);
     let startStatus: WarmStartStatus = {
       mode: "cold",
@@ -143,7 +146,10 @@ export function createCrabboxWarmImageAllocation({
                 : Math.max(image.lastDemandAtMs ?? 0, owner.demandAtMs),
           }));
         });
-        return owner.choice;
+        const image = [record?.image, record?.previous].find((candidate) =>
+          sameCrabboxWarmImageGeneration(candidate, owner.imageGeneration),
+        );
+        return { ...owner.choice, ...(image?.baseCommit ? { baseCommit: image.baseCommit } : {}) };
       }
     }
     if (!context.profile.warmImage) {

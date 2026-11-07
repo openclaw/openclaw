@@ -6,6 +6,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { NodeWorkerSupervisorTransport } from "../gateway/node-registry-private.js";
 import { createNodeWorkerLaunchAdapter } from "../gateway/worker-environments/node-launch-adapter.js";
 import { createNodeWorkerBundleTestNode } from "../gateway/worker-environments/node-worker-bundle.test-support.js";
+import * as openclawRoot from "../infra/openclaw-root.js";
 import * as secretRegistry from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -590,6 +591,40 @@ describe("node worker supervisor", () => {
       await cancellation;
     }
   });
+
+  it.each(["prepared", "foreign"])(
+    "admits only the exact prepared package alias (%s)",
+    async (kind) => {
+      await using f = fixture();
+      const input = launchInput(f.workspaceDir, "package-alias");
+      const packageRoot = path.join(f.root, "package");
+      fs.mkdirSync(packageRoot);
+      vi.spyOn(openclawRoot, "resolveOpenClawPackageRootSync").mockReturnValue(packageRoot);
+      const original = path.join(
+        f.bundleRoot,
+        input.gatewayNamespace,
+        "bundles",
+        input.expectedBundleHash,
+      );
+      const target =
+        kind === "prepared"
+          ? path.join(packageRoot, "worker-artifacts", "expanded", input.expectedBundleHash)
+          : path.join(f.root, "foreign-bundle");
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.renameSync(original, target);
+      fs.symlinkSync(target, original, process.platform === "win32" ? "junction" : "dir");
+      const result = await f.launch(input);
+      if (kind === "prepared") {
+        expect(result.state).toBe("running");
+        expect(await f.terminal(input.launchId)).toMatchObject({ state: "completed" });
+      } else {
+        expect(result).toMatchObject({
+          state: "failed",
+          errorText: expect.stringContaining("prepared package build"),
+        });
+      }
+    },
+  );
 
   it("fails closed when the bundle entry resolves outside its namespaced bundle", async () => {
     await using f = fixture();

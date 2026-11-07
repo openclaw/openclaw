@@ -17,6 +17,7 @@ import {
   NODE_WORKER_STATUS_WAIT_VERSION,
   NODE_WORKER_PORTAL_STREAM_VERSION,
   NODE_WORKER_PREPARED_WORKSPACE_VERSION,
+  NODE_WORKER_INITIAL_SNAPSHOT_VERSION,
   NODE_WORKER_NATIVE_INFERENCE_VERSION,
   NODE_WORKER_PROMPT_CONTEXT_VERSION,
   NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION,
@@ -327,6 +328,10 @@ export function startNodeHostConnection({
                 : {}),
               ...(prepared.preparedWorkspacesEnabled
                 ? { preparedWorkspace: NODE_WORKER_PREPARED_WORKSPACE_VERSION }
+                : {}),
+              ...(prepared.preparedWorkspacesEnabled &&
+              gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_INITIAL_SNAPSHOT)
+                ? { initialSnapshot: NODE_WORKER_INITIAL_SNAPSHOT_VERSION }
                 : {}),
               bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION,
               ...(!prepared.preparedWorkspacesEnabled &&
