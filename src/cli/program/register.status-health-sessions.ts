@@ -512,4 +512,64 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         );
       });
     });
+  addSessionsGatewayOptions(sessionsCmd.command("files <sessionKey> [path]"))
+    .description("List or read files in a session workspace")
+    .option("--search <query>", "Filter the file list by name")
+    .option("--get", "Read one file's content instead of listing", false)
+    .option("--output <path>", "Write the fetched content to a file (with --get)")
+    .addHelpText(
+      "after",
+      () =>
+        `
+${theme.heading("Examples:")}
+${formatHelpExamples([
+  ['openclaw sessions files "agent:main:main"', "List the session workspace files."],
+  ['openclaw sessions files "agent:main:main" --search package.json', "Filter the list by name."],
+  ['openclaw sessions files "agent:main:main" src/index.ts --get', "Print one file's content."],
+  [
+    'openclaw sessions files "agent:main:main" data.csv --get --output data.csv',
+    "Save one file locally.",
+  ],
+])}
+
+${theme.muted(
+  "Backed by the sessions.files gateway RPCs; reads are scoped to the session workspace.",
+)}`,
+    )
+    .action(async (sessionKey: string, path: string | undefined, opts, command) => {
+      // The Gateway resolves the workspace from the key and --agent; list selectors cannot apply.
+      const parentOpts = command.parent?.opts() as SessionsListCliOptions | undefined; // SAFETY: the sessions parent registers the list options rejected below.
+      rejectUnsupportedSessionsParentOptions(
+        "files",
+        parentOpts,
+        ["store", "allAgents", "active", "limit", "verbose"],
+        "the gateway resolves the workspace from the session key and --agent",
+      );
+      if (opts.output !== undefined && !opts.get) {
+        throwExpectedCliError("--output requires --get.");
+      }
+      const timeoutMs = parseStrictPositiveInteger(opts.timeout);
+      if (opts.timeout !== undefined && timeoutMs === undefined) {
+        throwExpectedCliError("--timeout must be a positive integer (milliseconds).");
+      }
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { sessionsFilesCommand } = await import("../../commands/sessions-files.js");
+        await sessionsFilesCommand(
+          {
+            sessionKey,
+            path,
+            search: opts.search as string | undefined, // SAFETY: Commander parses --search as a string.
+            agent: (opts.agent as string | undefined) ?? parentOpts?.agent, // SAFETY: Commander parses --agent as a string.
+            get: Boolean(opts.get),
+            output: opts.output as string | undefined, // SAFETY: Commander parses --output as a string.
+            timeout: timeoutMs !== undefined ? String(timeoutMs) : undefined,
+            url: opts.url as string | undefined, // SAFETY: Commander parses transport options as strings.
+            token: opts.token as string | undefined, // SAFETY: Commander parses transport options as strings.
+            password: opts.password as string | undefined, // SAFETY: Commander parses transport options as strings.
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
 }
