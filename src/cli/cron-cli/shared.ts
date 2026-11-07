@@ -103,7 +103,7 @@ export function parseCronNoOutputTimeoutOption(opts: Record<string, unknown>): n
     (typeof opts.outputTimeoutSeconds === "string" || typeof opts.outputTimeoutSeconds === "number"
       ? opts.outputTimeoutSeconds
       : undefined);
-  return parseCronIntegerOption(raw, "--no-output-timeout-seconds");
+  return parseCronIntegerOption(raw, "--no-output-timeout-seconds", "non-negative");
 }
 
 function parseCronArgv(value: unknown, flag: string): string[] | undefined {

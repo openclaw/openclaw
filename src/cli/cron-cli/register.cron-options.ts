@@ -80,7 +80,10 @@ export function registerCronMutationOptions(command: Command, mode: "add" | "edi
       "--timeout-seconds <n>",
       "Timeout seconds for agent or command jobs (non-negative integer; 0 disables scheduler timeout)",
     )
-    .option("--no-output-timeout-seconds <n>", "No-output timeout seconds for command jobs")
+    .option(
+      "--no-output-timeout-seconds <n>",
+      "No-output timeout seconds for command jobs (non-negative integer; 0 = effectively unbounded)",
+    )
     .option("--output-max-bytes <n>", "Maximum captured stdout/stderr bytes for command jobs")
     .option(
       "--light-context",

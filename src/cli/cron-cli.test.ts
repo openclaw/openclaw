@@ -652,6 +652,45 @@ it.each([undefined, {}])("requires a Gateway platform (%j)", async (info) => {
   expect(rpcParams("cron.add")).toBeUndefined();
 });
 
+it.each(["add", "edit"] as const)("preserves command no-output limits on %s", async (mode) => {
+  for (const idle of [undefined, 0, 5]) {
+    const args = [
+      "--command",
+      "echo ok",
+      "--timeout-seconds",
+      "60",
+      ...(idle === undefined ? [] : ["--no-output-timeout-seconds", String(idle)]),
+    ];
+    const payload =
+      mode === "add" ? (await namedAdd(...args)).payload : (await edit(...args)).payload;
+    // RPC JSON omits undefined fields; Commander defaults must not become stored limits.
+    // oxlint-disable-next-line unicorn/prefer-structured-clone
+    expect(JSON.parse(JSON.stringify(payload))).toEqual({
+      kind: "command",
+      argv: ["sh", "-lc", "echo ok"],
+      timeoutSeconds: 60,
+      ...(idle === undefined ? {} : { noOutputTimeoutSeconds: idle }),
+    });
+  }
+});
+
+it.each(["add", "edit"] as const)(
+  "rejects invalid command no-output limits on %s",
+  async (mode) => {
+    for (const value of ["-1", "abc", "1.5"]) {
+      await expectCronCommandExit([
+        ...(mode === "add" ? ADD : EDIT),
+        "--command",
+        "echo ok",
+        "--no-output-timeout-seconds",
+        value,
+      ]);
+      expectRuntimeErrorContaining("Invalid --no-output-timeout-seconds");
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    }
+  },
+);
+
 it("creates stream schedules from exact argv flags", async () => {
   expect(
     await addOptions({
