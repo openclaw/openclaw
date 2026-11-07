@@ -15,7 +15,9 @@ node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
 
 Use `--cpu-throttle 4 --engines chromium` for the throttled matrix. WebKit and
 Firefox do not expose equivalent CPU throttling. Use
-`--network-profiles rtt-100ms` to delay HTTP requests and incoming Gateway frames;
+`--network-profiles rtt-100ms` to delay HTTP requests. Rapid scenarios retain
+their immediate synthetic Gateway replies; they do not inject the boot/page
+scenarios' Gateway frame delay. This isolates slow lazy chunks from RPC latency;
 keep these results separate from localhost. The scenario IDs in `manifest.json`
 can be passed individually to `--steps` for a focused comparison.
 
@@ -24,6 +26,13 @@ intervals, long transcripts, direct-destination controls, native model and sessi
 search arrows, cold/warm Devices-to-Automations navigation, back/forward, early
 menu/drawer closure, typing during session arrival, earliest available typing on
 reload, and draft/scroll restoration after a burst.
+
+Two additional diagnostics are selected only by their explicit IDs:
+`rapid-cached-admission-direct` and `rapid-cached-admission-leave`. They persist
+a real session snapshot, hold its first IndexedDB open, then release it while
+the original pane is current or after navigating away. The production 100 ms
+admission deadline is unchanged; missing that pending window fails setup. The
+leave case records hidden-pane admission as work so the baseline can expose it.
 
 Session clicks use native pointer input at current hit-tested coordinates. Bringing
 a row into view and reopening the mobile drawer are included in the workload.
@@ -42,7 +51,9 @@ The final-input metric ends after two consecutive animation-frame observations
 of the correct destination and content. It is application readiness, not paint.
 Observation continues for 250 ms (one second for route replacement) to catch late
 requests and stale content. Total CPU and longest tasks include that tail. The
-harness cannot attribute CPU to individual abandoned owners. ResourceTiming
+harness reports the largest Long Tasks API entry; zero means no reported task
+over its 50 ms threshold, not zero task time. The harness cannot attribute CPU
+to individual abandoned owners. ResourceTiming
 counts completed chunks, not requests still in flight. Missing WebKit/Firefox
 CPU or Long Tasks support remains unavailable rather than zero.
 

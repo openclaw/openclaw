@@ -4,6 +4,7 @@ import { pathForRoute } from "../../ui/src/app-route-paths.ts";
 import type { MockGatewayWindow } from "../../ui/src/test-helpers/control-ui-e2e-contract.ts";
 import { controlUiSessionPath } from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../../ui/src/test-helpers/control-ui-navigation.ts";
+import { persistColdLoadWarmState } from "./control-ui-bench-warm-state.ts";
 import type { EngineScenario } from "./control-ui-engine-boot-scenarios.ts";
 import { createEnginePageScenarios } from "./control-ui-engine-page-scenarios.ts";
 import { frames, navigation, prepareChat } from "./control-ui-interaction-navigation.ts";
@@ -317,9 +318,13 @@ async function runSequence(
   options: Parameters<typeof observeRapidNavigation>[0],
   action: (index: number) => Promise<void>,
   programmatic = false,
+  beforeInput?: () => Promise<void>,
 ): Promise<InteractionEvidence> {
   const observation = await page.evaluateHandle(observeRapidNavigation, options);
   try {
+    if (beforeInput) {
+      await beforeInput();
+    }
     for (let index = 0; index < options.count; index++) {
       const wait = await observation.evaluate((probe, i) => probe.arm(i), index);
       if (wait > 0) {
@@ -344,6 +349,240 @@ async function runSequence(
     await observation.evaluate((probe) => probe.dispose());
     await observation.dispose();
   }
+}
+
+type RapidSnapshotGate = {
+  pending: boolean;
+  sessionKey: string;
+  heldAtMs: number;
+  paneObservedAtMs: number;
+  pendingPane?: HTMLElement;
+  release(): void;
+};
+
+declare global {
+  interface Window {
+    openclawRapidSnapshotGate?: RapidSnapshotGate;
+  }
+}
+
+/** Hold only the first prewarm open; other database consumers retain their normal lifecycle. */
+function installHeldSnapshotOpen(input: { sessionKey: string }) {
+  const factory = window.indexedDB;
+  const descriptor = Object.getOwnPropertyDescriptor(factory, "open");
+  const open = factory.open.bind(factory);
+  let requestToRelease: IDBOpenDBRequest | undefined;
+  let intercepted = false;
+  let held = true;
+  const restore = () => {
+    if (descriptor) {
+      Object.defineProperty(factory, "open", descriptor);
+    } else {
+      Reflect.deleteProperty(factory, "open");
+    }
+  };
+  const gate: RapidSnapshotGate = {
+    pending: false,
+    sessionKey: input.sessionKey,
+    heldAtMs: 0,
+    paneObservedAtMs: 0,
+    release() {
+      if (!held) {
+        return;
+      }
+      held = false;
+      gate.pending = false;
+      restore();
+      const request = requestToRelease;
+      requestToRelease = undefined;
+      if (request) {
+        queueMicrotask(() => request.dispatchEvent(new Event("success")));
+      }
+    },
+  };
+  factory.open = (name, version) => {
+    const request = open(name, version);
+    if (name === "openclaw-chat-snapshots" && !intercepted && held) {
+      intercepted = true;
+      request.addEventListener(
+        "success",
+        (event) => {
+          if (!held) {
+            return;
+          }
+          event.stopImmediatePropagation();
+          requestToRelease = request;
+          gate.pending = true;
+          gate.heldAtMs = performance.now();
+        },
+        { once: true },
+      );
+    }
+    return request;
+  };
+  window.openclawRapidSnapshotGate = gate;
+  window.addEventListener("pagehide", () => gate.release(), { once: true });
+}
+
+function cachedAdmissionScenario(leave: boolean): EngineScenario {
+  return {
+    id: leave ? "rapid-cached-admission-leave" : "rapid-cached-admission-direct",
+    route: controlUiSessionPath(sessionKey(0)),
+    navigation: "reload",
+    explicitOnly: true,
+    ...sessionFixture(),
+    expected: leave
+      ? "Leaving a cached session before its snapshot opens preserves the new destination and counts hidden admission."
+      : "Releasing the held snapshot admits the current session from its real persisted cache.",
+    prepare: async (page) => {
+      await page
+        .locator(pane)
+        .getByText("Rapid session 0 message 399.", { exact: false })
+        .waitFor();
+      await navigation(page, "sessions");
+      await page
+        .locator('aside.sidebar[data-snapshot-saved="true"]')
+        .waitFor({ state: "attached" });
+      const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
+        sessionKey: sessionKey(0),
+        sidebarView: "sessions",
+      };
+      const saved = await page.evaluate(persistColdLoadWarmState, warmInput);
+      // Disk projection keeps the final 80 messages; its tail marker remains message 399.
+      assert.equal(saved.messages, 80);
+      await page.addInitScript(installHeldSnapshotOpen, { sessionKey: sessionKey(0) });
+    },
+    run: async (page) => {
+      await page.reload({ waitUntil: "commit" });
+      let holdEvidence: InteractionEvidence = {};
+      try {
+        const evidence = await runSequence(
+          page,
+          {
+            count: 1,
+            intervalMs: 0,
+            event: "pointerdown",
+            inputSelector: "body",
+            outcome: {
+              selector: pane,
+              sessionKey: sessionKey(leave ? 1 : 0),
+              marker: `Rapid session ${leave ? 1 : 0} message 399.`,
+            },
+          },
+          async () => {
+            holdEvidence = await page.evaluate(
+              async ({ navigateAway, destination }) => {
+                const gate = window.openclawRapidSnapshotGate;
+                const old = gate?.pendingPane;
+                if (
+                  !gate?.pending ||
+                  !old?.isConnected ||
+                  old.querySelector("[data-cached-session]")
+                ) {
+                  throw new Error(
+                    "Cached admission probe setup: the pending pane passed its unchanged 100 ms admission deadline",
+                  );
+                }
+                if (navigateAway) {
+                  window.openclawControlUi!.navigate("chat", { pathname: destination });
+                  await new Promise<void>((resolve) => {
+                    requestAnimationFrame(() => resolve());
+                  });
+                  if (
+                    !gate.pending ||
+                    old.getAttribute("aria-hidden") !== "true" ||
+                    old.querySelector("[data-cached-session]")
+                  ) {
+                    throw new Error(
+                      "Cached admission probe setup: the original pane was not hidden while its read remained pending",
+                    );
+                  }
+                }
+                const facts = {
+                  realOwnerCachedAdmissionProbe: true,
+                  snapshotAdmissionDeadlineMs: 100,
+                  snapshotReadPendingBeforeRelease: gate.pending,
+                  snapshotOpenHeldMs: performance.now() - gate.heldAtMs,
+                  pendingPaneBeforeReleaseMs: performance.now() - gate.paneObservedAtMs,
+                  oldPaneHiddenBeforeRelease: old.getAttribute("aria-hidden") === "true",
+                };
+                gate.release();
+                return facts;
+              },
+              { navigateAway: leave, destination: controlUiSessionPath(sessionKey(1)) },
+            );
+          },
+          true,
+          () =>
+            page.evaluate(
+              () =>
+                new Promise<void>((resolve, reject) => {
+                  let frame = 0;
+                  const timeout = setTimeout(() => {
+                    cancelAnimationFrame(frame);
+                    reject(
+                      new Error(
+                        "Cached admission probe setup: no pending snapshot pane within 5 seconds",
+                      ),
+                    );
+                  }, 5_000);
+                  const sample = () => {
+                    const gate = window.openclawRapidSnapshotGate;
+                    const pendingPane = document.querySelector<HTMLElement>(
+                      ".chat-pane-cache__pane--active",
+                    );
+                    if (gate?.pending && pendingPane && window.openclawControlUi) {
+                      clearTimeout(timeout);
+                      if (
+                        Reflect.get(pendingPane, "sessionKey") !== gate.sessionKey ||
+                        !pendingPane.querySelector(".lazy-view-state--loading") ||
+                        pendingPane.querySelector("[data-cached-session]")
+                      ) {
+                        reject(
+                          new Error(
+                            "Cached admission probe setup: snapshot admission completed before interruption",
+                          ),
+                        );
+                        return;
+                      }
+                      gate.pendingPane = pendingPane;
+                      gate.paneObservedAtMs = performance.now();
+                      resolve();
+                    } else {
+                      frame = requestAnimationFrame(sample);
+                    }
+                  };
+                  sample();
+                }),
+            ),
+        );
+        const admission = await page.evaluate(() => {
+          const old = window.openclawRapidSnapshotGate?.pendingPane;
+          const mounted = old?.querySelector("[data-cached-session]");
+          return {
+            oldPaneRetained: old?.isConnected === true,
+            oldPaneHidden: old?.getAttribute("aria-hidden") === "true",
+            oldPaneAdmitted: mounted !== null && mounted !== undefined,
+            oldPaneAdmittedFromCache: mounted?.getAttribute("data-cached-session") === "true",
+          };
+        });
+        if (leave) {
+          assert(
+            !admission.oldPaneRetained || admission.oldPaneHidden,
+            "Superseded pane became visible after release",
+          );
+        } else {
+          assert(
+            admission.oldPaneAdmittedFromCache,
+            "Cached admission control did not admit a persisted snapshot",
+          );
+        }
+        return { ...evidence, ...holdEvidence, ...admission };
+      } finally {
+        await page.evaluate(() => window.openclawRapidSnapshotGate?.release());
+      }
+    },
+  };
 }
 
 function sessionFixture(): Pick<EngineScenario, "fixtureOverrides"> {
@@ -567,6 +806,8 @@ export function createEngineRapidNavigationScenarios(): EngineScenario[] {
     };
   };
   return [
+    cachedAdmissionScenario(false),
+    cachedAdmissionScenario(true),
     ...([5, 20] as const).flatMap((count) => {
       const scenarios = [sessionScenario(count, 0, true)];
       for (const interval of [50, 150, 400]) {
