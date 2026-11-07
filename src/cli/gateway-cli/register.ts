@@ -1,6 +1,7 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { terminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { HealthSummary } from "../../commands/health.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
@@ -182,7 +183,7 @@ async function writeSupportExportFromCli(opts: {
   });
   await printGatewayResult(opts.json, result, (rich) => [
     colorize(rich, theme.heading, "Diagnostics export"),
-    `${colorize(rich, theme.muted, "Path:")} ${result.path}`,
+    colorize(rich, theme.muted, "Path:") + terminalText` ${result.path}`,
     `${colorize(rich, theme.muted, "Size:")} ${formatStabilityBytes(result.bytes)}`,
     `${colorize(rich, theme.muted, "Files:")} ${result.manifest.contents.length}`,
     `${colorize(rich, theme.muted, "Privacy:")} payload-free stability, sanitized logs/status/health/config`,
