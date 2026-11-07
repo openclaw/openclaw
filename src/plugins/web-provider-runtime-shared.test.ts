@@ -10,12 +10,16 @@ import type { WebProviderRuntimeResolution } from "./web-provider-runtime-shared
 const mocks = vi.hoisted(() => ({
   isPluginRegistryLoadInFlight: vi.fn(() => false),
   loadOpenClawPlugins: vi.fn(),
+  loadOpenClawPluginsAsync: vi.fn(),
   resolveCompatibleRuntimePluginRegistry: vi.fn(),
   getLoadedRuntimePluginRegistry: vi.fn(),
   resolvePluginRegistryLoadCacheKey: vi.fn((options: unknown) => JSON.stringify(options)),
   resolveRuntimePluginRegistry: vi.fn(),
   getActivePluginRegistry: vi.fn<() => Record<string, unknown> | null>(() => null),
   getActivePluginRegistryWorkspaceDir: vi.fn(() => undefined),
+  getPluginRegistrationContext: vi.fn<typeof import("./runtime.js").getPluginRegistrationContext>(
+    () => undefined,
+  ),
   buildPluginRuntimeLoadOptions: vi.fn((_values: unknown, overrides?: Record<string, unknown>) => ({
     ...overrides,
   })),
@@ -27,9 +31,11 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
+// mock-isolation: Exercise resolver selection without loading plugin modules or shared caches.
 vi.mock("./loader.js", () => ({
   isPluginRegistryLoadInFlight: mocks.isPluginRegistryLoadInFlight,
   loadOpenClawPlugins: mocks.loadOpenClawPlugins,
+  loadOpenClawPluginsAsync: mocks.loadOpenClawPluginsAsync,
   resolveCompatibleRuntimePluginRegistry: mocks.resolveCompatibleRuntimePluginRegistry,
   resolvePluginRegistryLoadCacheKey: mocks.resolvePluginRegistryLoadCacheKey,
   resolveRuntimePluginRegistry: mocks.resolveRuntimePluginRegistry,
@@ -40,9 +46,11 @@ vi.mock("./active-runtime-registry.js", async (importOriginal) => ({
   getLoadedRuntimePluginRegistry: mocks.getLoadedRuntimePluginRegistry,
 }));
 
+// mock-isolation: Keep the process-wide active registry and registration context outside this fixture.
 vi.mock("./runtime.js", () => ({
   getActivePluginRegistry: mocks.getActivePluginRegistry,
   getActivePluginRegistryWorkspaceDir: mocks.getActivePluginRegistryWorkspaceDir,
+  getPluginRegistrationContext: mocks.getPluginRegistrationContext,
 }));
 
 vi.mock("./runtime/load-context.js", async (importOriginal) => ({
@@ -52,6 +60,7 @@ vi.mock("./runtime/load-context.js", async (importOriginal) => ({
 }));
 
 let resolvePluginWebProviders: typeof import("./web-provider-runtime-shared.js").resolvePluginWebProviders;
+let resolvePluginWebProvidersAsync: typeof import("./web-provider-runtime-shared.js").resolvePluginWebProvidersAsync;
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
@@ -77,13 +86,17 @@ function resolution(
 
 describe("web-provider-runtime-shared", () => {
   beforeAll(async () => {
-    ({ resolvePluginWebProviders } = await import("./web-provider-runtime-shared.js"));
+    ({ resolvePluginWebProviders, resolvePluginWebProvidersAsync } =
+      await import("./web-provider-runtime-shared.js"));
   });
 
   beforeEach(() => {
     mocks.isPluginRegistryLoadInFlight.mockReset();
     mocks.isPluginRegistryLoadInFlight.mockReturnValue(false);
     mocks.loadOpenClawPlugins.mockReset();
+    mocks.loadOpenClawPluginsAsync.mockReset();
+    mocks.getPluginRegistrationContext.mockReset();
+    mocks.getPluginRegistrationContext.mockReturnValue(undefined);
     mocks.resolveCompatibleRuntimePluginRegistry.mockReset();
     mocks.getLoadedRuntimePluginRegistry.mockReset();
     mocks.getLoadedRuntimePluginRegistry.mockReturnValue(undefined);
@@ -314,6 +327,30 @@ describe("web-provider-runtime-shared", () => {
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
     expect(mapRegistryProviders).toHaveBeenCalledTimes(2);
   });
+
+  it.each(["sync", "async"] as const)(
+    "does not join its own registry load during %s provider discovery in register()",
+    async (mode) => {
+      mocks.isPluginRegistryLoadInFlight.mockReturnValue(true);
+      mocks.getPluginRegistrationContext.mockReturnValue({
+        registry: createEmptyPluginRegistry(),
+        pluginId: "external-provider",
+      });
+      const resolve = mode === "async" ? resolvePluginWebProvidersAsync : resolvePluginWebProviders;
+
+      expect(
+        await resolve(
+          { config: {} },
+          resolution({
+            resolveCandidatePluginIds: () => undefined,
+            mapRegistryProviders: () => ["provider"],
+          }),
+        ),
+      ).toEqual([]);
+      expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+      expect(mocks.loadOpenClawPluginsAsync).not.toHaveBeenCalled();
+    },
+  );
 
   it("retains an empty request-owned web provider selection without registering plugins again", () => {
     const registry = createEmptyPluginRegistry();
