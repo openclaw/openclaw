@@ -23,8 +23,11 @@ wait: measurement ends after the last action. Every loaded action must start and
 finish before that ceiling while background work remains active. After the first
 live output is verified, trusted typing admits the first half of the foreground
 calls. The browser-side scroll loop admits the remainder. One producer retains
-the six-second total offering rate, pausing at the first half if typing finishes
-later; it resumes without a catch-up burst. This prevents driver delivery delays
+the six-second total offering rate, pausing between waves if necessary. Every
+start, update and result has a nominal deadline; delayed delivery drains that
+finite schedule in chronological order without restarting tool lifetimes. The
+second wave's clock never depends on how many first-wave events were delivered.
+This prevents driver delivery delays
 from consuming the entire turn before an action starts. Extending the background
 window does not reduce that foreground rate. The longer example keeps background work
 active through navigation on slower baselines. A phase starting after the load

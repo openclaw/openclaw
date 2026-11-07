@@ -584,7 +584,6 @@ function installEventLoadProbe() {
       }));
       const ticksPerSession = Math.floor(options.duration / 500);
       targetBackgroundReceipts = keys.length * ticksPerSession;
-      const runningTools: Array<{ tool: number; at: number; stage: number }> = [];
       const emitTool = (tool: number, data: Record<string, unknown>) =>
         gateway.emit("agent", {
           ...toolSnapshot(options.foreground),
@@ -711,21 +710,46 @@ function installEventLoadProbe() {
           gateway.getSessionRow(options.foreground),
         );
       };
-      // Action-relative admission prevents driver delays from consuming the
-      // entire finite turn before typing or scrolling actually starts.
-      let toolLimit = Math.min(1, options.toolCount);
-      let nextToolAt = performance.now();
+      // Delivery may be late, but a socket backlog preserves the producer's
+      // original ordering and lifetimes instead of restarting overdue tools.
+      const toolEvents: Array<{ tool: number; stage: number; at: number }> = [];
+      let toolEventIndex = 0;
       const toolInterval =
         Math.min(options.duration / 2, 6_000) / Math.max(1, options.toolCount - 1);
+      const firstWaveTools = Math.ceil(options.toolCount / 2);
+      let firstWaveLastStart = 0;
+      const scheduleTool = (tool: number, at: number, stages = 4) => {
+        for (let stage = 0; stage < stages; stage++) {
+          toolEvents.push({ tool, stage, at: at + stage * 40 });
+        }
+      };
+      const sortToolEvents = () => {
+        toolEvents.splice(0, toolEventIndex);
+        toolEventIndex = 0;
+        toolEvents.sort((left, right) => left.at - right.at);
+      };
+      if (options.toolCount) {
+        // Hold the first tool's proven live output until native typing begins.
+        scheduleTool(1, performance.now(), 3);
+      }
       admitTypingTools = () => {
-        toolLimit = Math.min(options.toolCount, Math.max(1, Math.ceil(options.toolCount / 2)));
-        nextToolAt = performance.now();
+        if (!options.toolCount) {
+          return;
+        }
+        const at = performance.now();
+        toolEvents.push({ tool: 1, stage: 3, at });
+        for (let tool = 2; tool <= firstWaveTools; tool++) {
+          scheduleTool(tool, at + (tool - 2) * toolInterval);
+        }
+        firstWaveLastStart = at + Math.max(0, firstWaveTools - 2) * toolInterval;
+        sortToolEvents();
       };
       admitScrollTools = () => {
-        if (tools >= toolLimit) {
-          nextToolAt = performance.now();
+        const at = Math.max(performance.now(), firstWaveLastStart + toolInterval);
+        for (let tool = firstWaveTools + 1; tool <= options.toolCount; tool++) {
+          scheduleTool(tool, at + (tool - firstWaveTools - 1) * toolInterval);
         }
-        toolLimit = options.toolCount;
+        sortToolEvents();
       };
       timer = setInterval(() => {
         const producerStarted = performance.now();
@@ -746,39 +770,24 @@ function installEventLoadProbe() {
           emitRow(schedule.key, false, schedule.tick % 4 === 0, schedule.tick);
           schedule.next += 500;
         }
-        // Prove the first live row before introducing later durable calls that
-        // would legitimately replace the activity disclosure being exercised.
-        while (tools < toolLimit && now >= nextToolAt) {
-          const tool = ++tools;
-          nextToolAt += toolInterval;
-          emitTool(tool, { phase: "start", args: { command: `verify-event-load-${tool}` } });
-          commitForegroundToolMessage(tool, false);
-          runningTools.push({ tool, at: now, stage: 0 });
-        }
-        for (const tool of runningTools) {
-          while (tool.stage < 3 && now - tool.at >= (tool.stage + 1) * 40) {
-            if (tool.tool === 1 && tool.stage === 2 && !typingStartedAt) {
-              break;
-            }
-            tool.stage++;
-            if (tool.stage < 3) {
-              emitTool(tool.tool, {
-                phase: "update",
-                partialResult: `Tool ${tool.tool}: live output ${tool.stage}\n`,
-              });
-            } else {
-              emitTool(tool.tool, {
-                phase: "result",
-                result: { text: `Tool ${tool.tool} complete.` },
-              });
-              completedTools++;
-              commitForegroundToolMessage(tool.tool, true);
-            }
-          }
-        }
-        for (let index = runningTools.length - 1; index >= 0; index--) {
-          if (runningTools[index]!.stage === 3) {
-            runningTools.splice(index, 1);
+        while (toolEventIndex < toolEvents.length && toolEvents[toolEventIndex]!.at <= now) {
+          const { tool, stage } = toolEvents[toolEventIndex++]!;
+          if (stage === 0) {
+            tools++;
+            emitTool(tool, { phase: "start", args: { command: `verify-event-load-${tool}` } });
+            commitForegroundToolMessage(tool, false);
+          } else if (stage < 3) {
+            emitTool(tool, {
+              phase: "update",
+              partialResult: `Tool ${tool}: live output ${stage}\n`,
+            });
+          } else {
+            emitTool(tool, {
+              phase: "result",
+              result: { text: `Tool ${tool} complete.` },
+            });
+            completedTools++;
+            commitForegroundToolMessage(tool, true);
           }
         }
         if (options.toolCount && completedTools === options.toolCount && !foregroundCompletedAt) {
