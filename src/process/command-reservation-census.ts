@@ -49,7 +49,7 @@ function readLinuxProcessBirths(): ProcessBirth[] {
 }
 
 /** Parses `ps -o pid=,ppid=,uid=,stat=,lstart=`; ps prints high uids such as nobody as signed. */
-export function parseDarwinProcessBirths(stdout: string): ProcessBirth[] {
+function parseDarwinProcessBirths(stdout: string): ProcessBirth[] {
   const uid = process.getuid?.();
   return stdout.split("\n").flatMap((line) => {
     const row = /^\s*(\d+)\s+(\d+)\s+(-?\d+)\s+(\S+)\s+(.+?)\s*$/.exec(line);

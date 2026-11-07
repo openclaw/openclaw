@@ -218,18 +218,14 @@ describe("effort selection", () => {
     ultra.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
     expect(onFastModeSelect).toHaveBeenLastCalledWith("on", "effort-preview");
     await speedFixture(speedState("ultrafast", ["priority", "ultrafast"], false));
-    expect(speed("ultrafast").disabled).toBe(true);
-    expect(speed("on")).toBeNull();
+    expect(host!.querySelector(".chat-controls__speed-panel")).toBeNull();
     const standardOnly = await speedFixture(speedState("ultrafast", ["default"], false));
-    expect(speed("off").getAttribute("aria-checked")).toBe("true");
-    for (const option of host!.querySelectorAll<HTMLButtonElement>("[data-chat-speed-option]")) {
-      expect(option.disabled).toBe(true);
-      option.click();
-    }
+    expect(host!.querySelector(".chat-controls__speed-panel")).toBeNull();
     expect(standardOnly.onFastModeSelect).not.toHaveBeenCalled();
     expect(standardOnly.input.disabled).toBe(false);
     expect(host!.querySelector(".chat-controls__effort-zap")).toBeNull();
     await speedFixture(speedState(true, undefined, false, true));
+    expect(host!.querySelector(".chat-controls__speed-panel")).toBeNull();
     expect(summary().getAttribute("data-chat-fast-mode")).toBe("false");
     expect(host!.querySelector(".chat-controls__effort-zap")).toBeNull();
     expect(host!.querySelector(".chat-controls__effort-fast-badge")).toBeNull();
