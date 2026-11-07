@@ -1,17 +1,27 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   callMeetingBrowserProxyOnNode,
+  evaluateMeetingBrowser,
   leaveMeetingWithBrowser,
   readMeetingTranscriptWithBrowser,
   recoverMeetingBrowserTab,
   resolveLocalMeetingBrowserRequest,
   resolveMeetingBrowserNode,
+  runMeetingParticipationWithBrowser,
   MeetingPlatformAdapter,
   type MeetingBrowserRequestCaller,
+  type MeetingParticipationAction,
+  type MeetingParticipationEffectResult,
 } from "openclaw/plugin-sdk/meeting-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveTranscriptsConfig } from "openclaw/plugin-sdk/transcripts";
 import type { GoogleMeetConfig, GoogleMeetMode } from "../config.js";
+import {
+  GOOGLE_MEET_CHAT_PARTICIPATION_ADAPTER,
+  meetChatReadScript,
+  parseMeetChatReadResult,
+  type GoogleMeetChatMessage,
+} from "./google-meet-chat-scripts.js";
 import { GOOGLE_MEET_PLATFORM_ADAPTER } from "./google-meet-platform-adapter.js";
 import {
   GOOGLE_MEET_BROWSER_NODE_ADAPTER,
@@ -129,6 +139,49 @@ export async function readChromeMeetTranscript(
     meetingSessionId: params.meetingSessionId,
     tab: params.tab,
     timeoutMs: Math.min(Math.max(1_000, params.config.chrome.joinTimeoutMs), 10_000),
+  });
+}
+
+/** Returns undefined when the tab no longer shows this meeting; an empty list when the chat panel is closed. */
+export async function readChromeMeetChat(
+  params: ChromeBrowserRouteParams & {
+    meetingUrl: string;
+    tab: GoogleMeetBrowserTab;
+  },
+): Promise<GoogleMeetChatMessage[] | undefined> {
+  const { callBrowser } = await resolveChromeBrowserRoute(params);
+  const result = await evaluateMeetingBrowser({
+    callBrowser,
+    deadline:
+      performance.now() + Math.min(Math.max(1_000, params.config.chrome.joinTimeoutMs), 10_000),
+    targetId: params.tab.targetId,
+    script: () => meetChatReadScript(params.meetingUrl),
+  });
+  return parseMeetChatReadResult(result);
+}
+
+export async function participateInChromeMeet(
+  params: ChromeBrowserRouteParams & {
+    action: MeetingParticipationAction;
+    assertCurrent: () => void;
+    meetingSessionId: string;
+    meetingUrl: string;
+    requestId: string;
+    tab: GoogleMeetBrowserTab;
+  },
+): Promise<MeetingParticipationEffectResult> {
+  const { callBrowser } = await resolveChromeBrowserRoute(params);
+  return runMeetingParticipationWithBrowser({
+    action: params.action,
+    adapter: GOOGLE_MEET_CHAT_PARTICIPATION_ADAPTER,
+    assertCurrent: params.assertCurrent,
+    callBrowser,
+    isSameMeetingUrl: GOOGLE_MEET_PLATFORM_ADAPTER.urls.isSameMeeting,
+    meetingSessionId: params.meetingSessionId,
+    meetingUrl: params.meetingUrl,
+    requestId: params.requestId,
+    targetId: params.tab.targetId,
+    timeoutMs: Math.min(Math.max(5_000, params.config.chrome.joinTimeoutMs), 20_000),
   });
 }
 

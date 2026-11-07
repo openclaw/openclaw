@@ -119,6 +119,17 @@ list means no native action is available. A platform must provide the native
 implementation before the runtime advertises its capability. Twilio does not
 support browser participation actions.
 
+Google Meet browser sessions (`chrome` and `chrome-node`) advertise the `chat`
+action. The runtime reads the Meet side-panel chat on the same cadence as
+durable transcript capture, so each participant chat message becomes a
+`kind: "chat"` source with its sender name; the bot's own messages are marked as
+own echoes and never become actionable sources. A `chat` action takes
+`{ type: "chat", text }` with text up to 4,000 characters (Meet's own limit).
+The runtime opens the chat panel if needed, submits the message, and reports
+`succeeded` with the observed Meet message id, `uncertain` when the message was
+submitted but not observed, or a correctable `rejected` when the composer was
+unavailable and nothing was sent.
+
 Pass the advertised action object in `participationAction` and reuse the same
 `requestId` when checking an unclear response. Reusing that ID never repeats the
 effect. An `uncertain` result means the effect may have occurred; do not generate
