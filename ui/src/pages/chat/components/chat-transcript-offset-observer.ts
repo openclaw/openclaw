@@ -97,9 +97,12 @@ export function scrollTranscriptToEnd(
   cancelScroll: (preserveEnd?: boolean) => void,
   measureSkippedRows: () => void,
   endAnchor: TranscriptEndAnchor,
-  prepareEnd: (ready: () => void, isCurrent: () => boolean) => void,
+  prepareEnd: (ready: () => void, isCurrent: () => boolean, native: boolean) => void,
 ): void {
-  // Retargeting automatic follow must not insert an instant stop.
+  if (source === "auto" && endAnchor.capture(instance.scrollElement)) {
+    return;
+  }
+  // Retargeting retains native motion and its issued destination during preparation.
   if (source !== "auto" || state.scrollCommand?.target !== "end") {
     cancelScroll();
   } else if (state.scrollCommand.behavior === "smooth" && behavior !== "smooth") {
@@ -110,6 +113,7 @@ export function scrollTranscriptToEnd(
   const command = (state.scrollCommand = {
     behavior,
     target: "end",
+    offset: state.scrollCommand?.target === "end" ? state.scrollCommand.offset : undefined,
   });
   const scroll = () => {
     instance.scrollToEnd({ behavior });
@@ -126,10 +130,9 @@ export function scrollTranscriptToEnd(
       endAnchor.capture(element);
     }
   };
-  if (source !== "auto" && behavior === "smooth") {
-    // Measure the bounded destination before native motion. A late estimate
-    // contraction otherwise clamps the journey backward.
-    prepareEnd(scroll, () => state.scrollCommand === command);
+  if (source === "auto" || behavior === "smooth") {
+    // Automatic following joins native measurements; manual motion prepares synchronously.
+    prepareEnd(scroll, () => state.scrollCommand === command, source === "auto");
   } else {
     scroll();
   }
@@ -269,6 +272,15 @@ export function observeTranscriptOffset(
       );
       const actualOffset = element?.scrollTop;
       owner.state.maintenanceScrollOffset = actualOffset === target ? actualOffset : null;
+    }
+    // Preparation has issued no motion; only a resize receipt can own a native offset change.
+    if (
+      delta !== 0 &&
+      owner.state.scrollCommand?.target === "end" &&
+      owner.state.scrollCommand.offset === undefined &&
+      !isTranscriptMaintenanceScroll(owner.state, element)
+    ) {
+      owner.cancelScroll();
     }
     const programmatic = owner.isProgrammaticScroll();
     // The follow threshold releases pane policy before a command's last pixels settle.
@@ -498,16 +510,7 @@ export function observeTranscriptOffset(
       owner.state.scrollCommand?.target === "end" &&
       Math.abs((maxTranscriptScrollOffset(element) ?? 0) - element.scrollTop) <= (scrolling ? 0 : 1)
     ) {
-      if (owner.state.scrollCommand.behavior === "smooth") {
-        owner.cancelScroll(true);
-      } else {
-        owner.state.scrollCommand = null;
-        // Arrival can precede the queued reconciliation frame. Retire its
-        // index target too, without cancelling the reader’s end-follow intent.
-        // The notification can lag a newer native write; hold the current viewport.
-        instance.scrollToOffset(element.scrollTop, { behavior: "instant" });
-        owner.endAnchor.capture(element);
-      }
+      owner.cancelScroll(true);
     }
   });
   return () => {

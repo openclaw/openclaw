@@ -66,7 +66,6 @@
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
-  scrollbar-width: thin;
 }
 
 .chat-footer__context:not(
@@ -94,14 +93,9 @@
   flex-shrink: 0;
 }
 
-.chat-footer
-  .chat-footer__context
-  :is(
-    .session-progress-card__body,
-    .chat-queue__scroll,
-    .agent-chat__goal-detail-objective,
-    .chat-error__diagnostic
-  ) {
+.chat-footer .chat-footer__context .session-progress-card__body,
+.chat-footer .chat-footer__context .chat-queue__scroll,
+.chat-footer .chat-footer__context .agent-chat__goal-detail-objective {
   overscroll-behavior: auto;
 }
 
@@ -148,11 +142,7 @@
 .agent-chat__input,
 .agent-chat__disabled-banner.callout,
 .agent-chat__composer-notices
-  :is(
-    .chat-composer-neighbor-card,
-    .agent-chat__composer-errors--standalone,
-    .agent-chat__talk-status.callout
-  ) {
+  :is(.chat-composer-neighbor-card, .agent-chat__composer-alert, .agent-chat__talk-status.callout) {
   border-radius: var(--chat-composer-radius);
   corner-shape: var(--chat-composer-corner-shape);
 }
@@ -424,11 +414,7 @@
 }
 
 .agent-chat__composer-combobox > textarea {
-  --scrollbar-thumb: color-mix(in srgb, var(--muted) 20%, transparent);
-  --scrollbar-thumb-hover: color-mix(in srgb, var(--muted) 28%, transparent);
-
   field-sizing: content;
-  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
 @supports selector(::-webkit-scrollbar) {
@@ -443,8 +429,6 @@
     /* Short drafts use padding: reserving a native gutter makes every edit relayout slower. */
     padding-inline-end: var(--chat-composer-editor-inset-inline);
     scrollbar-gutter: auto;
-    scrollbar-width: auto;
-    scrollbar-color: auto;
   }
 
   .agent-chat__composer-combobox > textarea:where([data-composer-scrollable]) {
@@ -459,14 +443,6 @@
       0px,
       calc(var(--chat-composer-radius) - var(--chat-composer-editor-inset-block))
     );
-  }
-
-  .agent-chat__composer-combobox > textarea::-webkit-scrollbar-thumb {
-    background-color: var(--scrollbar-thumb);
-  }
-
-  .agent-chat__composer-combobox > textarea::-webkit-scrollbar-thumb:hover {
-    background-color: var(--scrollbar-thumb-hover);
   }
 }
 

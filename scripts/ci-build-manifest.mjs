@@ -3,6 +3,7 @@ import path, { matchesGlob } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveTestGitCommits } from "../.github/actions/git-owner/test-prerequisites.mjs";
 import { isTestFileTarget } from "./lib/changed-path-facts.mjs";
+import { blacksmithRunnerLabel } from "./lib/ci-blacksmith-capacity.mjs";
 import {
   formatIosSimulatorSelectionSummary,
   resolveIosSimulatorTestSelection,
@@ -143,7 +144,12 @@ const createPluginContractTestShards =
           task: "contracts-plugins",
         },
       ];
-const createMatrix = (include) => ({ include });
+const createMatrix = (include) => ({
+  include: include.map((row) => {
+    const label = row.runner_label ?? blacksmithRunnerLabel(row.runner);
+    return label ? { ...row, runner_label: label } : row;
+  }),
+});
 // Share setup without combining the target planner's process envelopes.
 const createContractMatrix = (shards, task) =>
   createMatrix(
@@ -937,6 +943,7 @@ if (runCheckPlan && proposedCheckScope?.types) {
         path.posix.normalize(file) === file &&
         !file.includes("\\") &&
         (isTestLineAllocationPath(file) ||
+          (budgetOnlyFallback && facts.surface === "docs") ||
           (["source", "package", "ui", "extension"].includes(facts.surface) &&
             (budgetOnlyFallback || (facts.isTestOnly && facts.isChangedLaneTest))))
       );
@@ -1410,6 +1417,10 @@ const nodeTestShards = targetNodeTestShards
       git_commits: resolveTestGitCommits(shard),
       requires_dist: shard.requiresDist,
       runner: shard.runner,
+      runner_label: blacksmithRunnerLabel(
+        shard.runner,
+        Math.max(0, ...(shard.groups ?? []).map((group) => group.minTotalMemoryBytes ?? 0)),
+      ),
       timeout_minutes:
         !shard.requiresDist && testRuntimeMode === "dual-all"
           ? 2 * (shard.timeoutMinutes ?? 60)

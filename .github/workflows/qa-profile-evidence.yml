@@ -307,8 +307,8 @@ jobs:
     needs: validate_selected_ref
     runs-on: &linux_runner_medium >-
       ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
-      toJSON(inputs.runner_group), toJSON('blacksmith-8vcpu-ubuntu-2404'))) ||
-      ('blacksmith-8vcpu-ubuntu-2404') }}
+      toJSON(inputs.runner_group), toJSON('blacksmith-2vcpu-ubuntu-2404'))) ||
+      ('blacksmith-2vcpu-ubuntu-2404') }}
     # Selected-revision code requires the protected QA environment before runner allocation.
     environment: qa-live-shared
     outputs:

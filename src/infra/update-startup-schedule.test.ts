@@ -1,23 +1,37 @@
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
-import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  createGatewaySchedulerClock,
-  createTestGatewayScheduler,
-} from "../test-utils/gateway-scheduler-clock.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
-import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
-import { createGatewayUpdateLifecycle } from "./update-check-lifecycle.js";
-import { checkUpdateStatus, resolveNpmChannelTag } from "./update-check.js";
-import * as autoRun from "./update-startup-auto-run.js";
-import { createGatewayUpdateCheck } from "./update-startup-scheduler.js";
+  closeUpdateFixtureDatabases,
+  resetUpdateFixtureModules,
+} from "./update-fixture.test-support.js";
 import { idleActiveWorkInspectors } from "./update-startup-suite.test-support.js";
-import { runGatewayUpdateCheck, resetUpdateAvailableStateForTest } from "./update-startup.js";
-import { getUpdateSchedule } from "./update-status-state.js";
+
+let { sessionChanges } = await import("../sessions/session-row-changes.js");
+let { createGatewaySchedulerClock, createTestGatewayScheduler } =
+  await import("../test-utils/gateway-scheduler-clock.js");
+let { createOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
+let { resolveOpenClawPackageRoot } = await import("./openclaw-root.js");
+let { createGatewayUpdateLifecycle } = await import("./update-check-lifecycle.js");
+let { checkUpdateStatus, resolveNpmChannelTag } = await import("./update-check.js");
+let autoRun = await import("./update-startup-auto-run.js");
+let { createGatewayUpdateCheck } = await import("./update-startup-scheduler.js");
+let { runGatewayUpdateCheck } = await import("./update-startup.js");
+let { getUpdateSchedule } = await import("./update-status-state.js");
+
+async function importUpdateFixtureModules() {
+  ({ sessionChanges } = await import("../sessions/session-row-changes.js"));
+  ({ createGatewaySchedulerClock, createTestGatewayScheduler } =
+    await import("../test-utils/gateway-scheduler-clock.js"));
+  ({ createOpenClawTestState } = await import("../test-utils/openclaw-test-state.js"));
+  ({ resolveOpenClawPackageRoot } = await import("./openclaw-root.js"));
+  ({ createGatewayUpdateLifecycle } = await import("./update-check-lifecycle.js"));
+  ({ checkUpdateStatus, resolveNpmChannelTag } = await import("./update-check.js"));
+  autoRun = await import("./update-startup-auto-run.js");
+  ({ createGatewayUpdateCheck } = await import("./update-startup-scheduler.js"));
+  ({ runGatewayUpdateCheck } = await import("./update-startup.js"));
+  ({ getUpdateSchedule } = await import("./update-status-state.js"));
+}
 
 const { checkTelemetryUpdateMock, versionMock } = await vi.hoisted(
   () => import("./update-startup.test-support.js"),
@@ -28,6 +42,8 @@ let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 let lifecycle: ReturnType<typeof createGatewayUpdateLifecycle>;
 let check: ReturnType<typeof createGatewayUpdateCheck> | undefined;
 beforeEach(async () => {
+  await resetUpdateFixtureModules();
+  await importUpdateFixtureModules();
   state = await createOpenClawTestState({
     layout: "state-only",
     prefix: "update-schedule-",
@@ -43,7 +59,6 @@ beforeEach(async () => {
   clock = createGatewaySchedulerClock(Date.parse("2026-01-17T10:00:00Z"));
   vi.spyOn(Date, "now").mockImplementation(clock.clock.now);
   scheduler = createTestGatewayScheduler(clock.clock);
-  resetUpdateAvailableStateForTest(scheduler);
   lifecycle = createGatewayUpdateLifecycle(scheduler);
   vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
   vi.mocked(checkUpdateStatus).mockResolvedValue({
@@ -58,12 +73,12 @@ afterEach(async () => {
   await check?.stop();
   check = undefined;
   await lifecycle.stop();
-  resetUpdateAvailableStateForTest(scheduler);
   await scheduler.stop();
+  await closeUpdateFixtureDatabases();
   vi.restoreAllMocks();
   await state.cleanup();
 });
-afterAll(closeStateDatabaseForTest);
+afterAll(closeUpdateFixtureDatabases);
 
 function checkAutomatically(cfg: OpenClawConfig) {
   return runGatewayUpdateCheck({
@@ -94,7 +109,8 @@ function createTestUpdateCheck(params: {
 }
 
 it("starts daily campaigns only in their scheduled minute, including after restart", async () => {
-  const run = mockAutoUpdate();
+  const run = vi.fn<typeof autoRun.runAutoUpdateCommand>(async () => ({ status: "handoff" }));
+  mockAutoUpdate(run);
   const cfg = {
     update: { channel: "beta" as const, auto: { enabled: true, schedule: "30 10 * * *" } },
   };
@@ -105,7 +121,13 @@ it("starts daily campaigns only in their scheduled minute, including after resta
   expect(getUpdateSchedule()?.campaign?.state).toBe("countdown");
   await clock.advanceBy(60_000);
   expect(run).toHaveBeenCalledOnce();
-  resetUpdateAvailableStateForTest(scheduler);
+  await lifecycle.stop();
+  await scheduler.stop();
+  await resetUpdateFixtureModules();
+  await importUpdateFixtureModules();
+  scheduler = createTestGatewayScheduler(clock.clock);
+  lifecycle = createGatewayUpdateLifecycle(scheduler);
+  mockAutoUpdate(run);
   clock.setTime(Date.parse("2026-01-17T12:00:00Z"));
   await checkAutomatically(cfg);
   expect(getUpdateSchedule()?.campaign).toBeUndefined();

@@ -36,6 +36,7 @@ import {
   type LocalWorkspaceManifestRecord,
 } from "./local-workspace-manifest-tree.js";
 import type {
+  LocalWorkspaceCheckpointReceipt,
   LocalWorkspaceManifestMutation,
   LocalWorkspaceManifestScan,
   LocalWorkspaceManifestValue,
@@ -230,9 +231,15 @@ export async function executeLocalWorkspaceManifestRead(
     const retained = buildCacheInputPaths(parseLocalWorkspaceSourcePaths(row.source_paths_json));
     // A pending receipt can name an intact result after both live sides have
     // moved beyond the baseline. Its saved delta can reconstruct the merge base.
-    const checkpoint = row.checkpoint_json
-      ? (JSON.parse(row.checkpoint_json) as LocalWorkspaceManifestCheckpoint) // SAFETY: Owner-written checkpoint.
+    const receipt = row.checkpoint_json
+      ? (JSON.parse(row.checkpoint_json) as LocalWorkspaceCheckpointReceipt) // SAFETY: Owner-written checkpoint.
       : undefined;
+    const checkpoint =
+      receipt?.kind === "rejected"
+        ? receipt.checkpoint
+          ? (JSON.parse(receipt.checkpoint) as LocalWorkspaceManifestCheckpoint) // SAFETY: Preserved owner-written checkpoint.
+          : undefined
+        : receipt;
     const documents = checkpoint
       ? [
           parseWorkerWorkspaceManifest(
