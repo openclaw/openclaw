@@ -41,10 +41,16 @@ final class ShareViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        self.preferredContentSize = CGSize(width: UIScreen.main.bounds.width, height: 420)
         self.composeView.onSend = { [weak self] in self?.handleSendTap() }
         self.composeView.onCancel = { [weak self] in
             self?.extensionContext?.completeRequest(returningItems: nil)
+        }
+    }
+
+    override func viewIsAppearing(_ animated: Bool) {
+        super.viewIsAppearing(animated)
+        if let screen = self.view.window?.windowScene?.screen {
+            self.preferredContentSize = CGSize(width: screen.bounds.width, height: 420)
         }
     }
 

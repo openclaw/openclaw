@@ -68,6 +68,7 @@ it("rejects incomplete target inspection output even when Git exits zero", async
 it.each([
   { state: "unverified", expected: "did not verify repository corruption" },
   { state: "corrupt", expected: "verified repository corruption" },
+  { state: "legacy-git", expected: "verified repository corruption" },
   { state: "promisor", expected: "promised objects in this partial clone" },
 ])(
   "classifies transfer failures using installed repository evidence ($state)",
@@ -81,16 +82,22 @@ it.each([
           "This is probably due to repo corruption.",
       );
     const installedRunCommand: CommandRunner = async (argv) =>
-      argv.includes("--get-regexp")
-        ? commandResult(
-            state === "promisor" ? 0 : 1,
-            state === "promisor" ? "remote.origin.promisor true\n" : "",
-          )
-        : commandResult(
-            state === "corrupt" ? 1 : 0,
-            "",
-            state === "corrupt" ? "missing blob 0123456789abcdef" : "",
-          );
+      state === "legacy-git" && argv.includes("--no-lazy-fetch")
+        ? commandResult(129, "", "unknown option: --no-lazy-fetch")
+        : argv.includes("version")
+          ? commandResult(0, "git version 2.45.0")
+          : argv.includes("--get-regexp")
+            ? commandResult(
+                state === "promisor" ? 0 : 1,
+                state === "promisor" ? "remote.origin.promisor true\n" : "",
+              )
+            : commandResult(
+                state === "corrupt" || state === "legacy-git" ? 1 : 0,
+                "",
+                state === "corrupt" || state === "legacy-git"
+                  ? "missing blob 0123456789abcdef"
+                  : "",
+              );
 
     const transfer = await prepareGitCandidateTransfer({
       candidateSha: "candidate",

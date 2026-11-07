@@ -28,6 +28,11 @@ import {
   resolveRequestClientIpFromHeaders,
   isTrustedProxyAddress,
 } from "./net.js";
+import {
+  openclawIdTunnelUser,
+  resolveOpenClawIdTunnelPrincipal,
+  type OpenClawIdTunnelPrincipal,
+} from "./openclaw-id/tunnel-principal.js";
 import { checkBrowserOrigin, type BrowserOriginPolicy } from "./origin-check.js";
 import { withSerializedRateLimitAttempt } from "./rate-limit-attempt-serialization.js";
 export { resolveGatewayAuth, type ResolvedGatewayAuth } from "./auth-resolve.js";
@@ -48,6 +53,8 @@ export type GatewayAuthResult = {
   user?: string;
   /** Full verified Tailscale identity; present only after header + WhoIs agreement. */
   tailscaleIdentity?: VerifiedTailscaleIngressIdentity;
+  /** Admitted OpenClaw ID tunnel device behind a `trusted-proxy` result; never from headers. */
+  openclawId?: OpenClawIdTunnelPrincipal;
   reason?: string;
   rateLimited?: boolean;
   /** Milliseconds the client should wait before retrying (when rate-limited). */
@@ -402,6 +409,7 @@ async function authorizeGatewayConnect(
       ? prepareGatewayIngressAttribution({
           req: params.req,
           trustedProxies: params.trustedProxies,
+          trustedProxy: auth.trustedProxy,
           allowRealIpFallback: params.allowRealIpFallback,
           tailscaleWhois: params.tailscaleWhois,
         })
@@ -446,6 +454,11 @@ async function authorizeGatewayConnectCore(
   } = resolveGatewayAuthRequestContext(params);
   const allowTailscaleHeaderAuth = shouldAllowTailscaleHeaderAuth(authSurface);
   const explicitSharedSecretAuth = hasExplicitSharedSecretAuth(connectAuth);
+
+  // Explicit tunnel attribution uses its own peer admission, never ambient Serve auth.
+  if (ingressAttribution?.kind === "openclaw-id-tunnel") {
+    return await authorizeOpenClawIdTunnel(ingressAttribution.peerKey);
+  }
 
   if (
     authSurface === "http-control-ui-read" &&
@@ -569,6 +582,24 @@ async function authorizeGatewayConnectCore(
 
   await limiter?.recordFailureAndDelay(subject, rateLimitScope);
   return { ok: false, reason: "unauthorized" };
+}
+
+/**
+ * Authenticates a request relayed by the OpenClaw ID tunnel from its
+ * handshake-authenticated device key. The tunnel is the ingress that vouches
+ * for the device, so an admitted key is a `trusted-proxy` principal in every
+ * auth mode: owner devices act as the Gateway owner and members carry their
+ * account as the user. A key the membership authority no longer admits is
+ * refused outright, including while the service publishes no resolver. A tunnel
+ * request never falls back to the Gateway's other authentication methods.
+ */
+async function authorizeOpenClawIdTunnel(peerKey: string): Promise<GatewayAuthResult> {
+  const principal = await resolveOpenClawIdTunnelPrincipal(peerKey);
+  if (!principal) {
+    return { ok: false, reason: "openclaw_id_not_admitted" };
+  }
+  const user = openclawIdTunnelUser(principal);
+  return { ok: true, method: "trusted-proxy", ...(user ? { user } : {}), openclawId: principal };
 }
 
 /** Authorize an HTTP gateway request with Tailscale forwarded-header auth disabled. */

@@ -33,6 +33,7 @@ import { captureGatewayDeviceRevocation } from "../../device-revocation.js";
 import { errorShapeFromError } from "../../error-shape.js";
 import { createExpectedProfileBinding } from "../../expected-profile.js";
 import { hasCurrentRemoteControlUiIngress } from "../../ingress-attribution.js";
+import { isOpenClawIdTunnelPrincipalCurrent } from "../../openclaw-id/tunnel-principal.js";
 import {
   GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE,
   hasCurrentGatewayOperatorAccess,
@@ -162,6 +163,16 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     );
     const remoteIngress = client.remoteControlUiIngress;
     const hasCurrentIngress = () => {
+      const principal = client.internal?.openclawIdPrincipal;
+      if (principal && !isOpenClawIdTunnelPrincipalCurrent(principal)) {
+        invalidateGatewayPolicyClient(client, {
+          reason: "openclaw-id-authority-changed",
+          code: 4001,
+          message: "OpenClaw ID membership changed",
+          close: () => close(4001, "OpenClaw ID membership changed"),
+        });
+        return false;
+      }
       if (hasCurrentRemoteControlUiIngress(remoteIngress)) {
         return true;
       }

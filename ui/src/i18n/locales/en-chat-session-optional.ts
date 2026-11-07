@@ -43,7 +43,6 @@ const catalog = {
       everyHours: "Every {count} hours",
       everyDuration: registerChatSessionEnglish.catalog.chat.sessionAutomation.everyDuration,
       onceAt: registerChatSessionEnglish.catalog.chat.sessionAutomation.onceAt,
-      today: registerChatSessionEnglish.catalog.chat.sessionAutomation.today,
       tomorrow: registerChatSessionEnglish.catalog.chat.sessionAutomation.tomorrow,
       hourMinutes: "At minutes {minutes} of every hour",
       clockFields: "Hours: {hours}; minutes: {minutes}; seconds: {seconds}",

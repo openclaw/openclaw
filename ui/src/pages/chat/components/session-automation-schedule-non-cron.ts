@@ -10,21 +10,22 @@ registerEnglishCatalog(registerChatSessionEnglish);
 const localDay = (date: Date) =>
   Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / 86_400_000;
 
-/** Compact local wording for a one-shot row; "Today" is evaluated when the row renders. */
+/** Compact local wording for a one-shot row; today is just the time, evaluated at render. */
 function oneShotSchedule(atMs: number): string {
   const at = new Date(atMs);
   const now = new Date();
   const days = localDay(at) - localDay(now);
+  if (days === 0) {
+    return formatTimeMs(atMs);
+  }
   const day =
-    days === 0
-      ? t("chat.sessionAutomation.today")
-      : days === 1
-        ? t("chat.sessionAutomation.tomorrow")
-        : formatDateMs(atMs, {
-            month: "short",
-            day: "numeric",
-            ...(at.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
-          });
+    days === 1
+      ? t("chat.sessionAutomation.tomorrow")
+      : formatDateMs(atMs, {
+          month: "short",
+          day: "numeric",
+          ...(at.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
+        });
   return t("chat.sessionAutomation.onceAt", { day, time: formatTimeMs(atMs) });
 }
 

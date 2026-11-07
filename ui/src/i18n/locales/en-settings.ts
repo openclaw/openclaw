@@ -1236,6 +1236,7 @@ const enSettings = {
       save: "Save provider",
       saved: "Added {provider}",
       verified: "Added {provider}. Access verified.",
+      ready: "Added {provider}. {model} is ready to chat.",
     },
     defaults: {
       title: "Defaults for all agents",
@@ -1348,6 +1349,29 @@ const enSettings = {
       automaticUpdates: "Automatic updates",
       automaticUpdatesDescription:
         "Schedule available updates automatically. Dev auto-updates apply to git checkouts.",
+      schedule: "Update schedule",
+      scheduleDescription:
+        "Times use the Gateway host's timezone, not this browser's. This controls when an update starts; rollout delays, idle checks, and the countdown still apply.",
+      schedulePreset: {
+        hourly: "Hourly (default)",
+        daily: "Daily",
+        weekly: "Weekly",
+        custom: "Custom cron",
+      },
+      scheduleTime: "Time of day",
+      scheduleDay: "Day of the week",
+      scheduleWeekday: {
+        "0": "Sunday",
+        "1": "Monday",
+        "2": "Tuesday",
+        "3": "Wednesday",
+        "4": "Thursday",
+        "5": "Friday",
+        "6": "Saturday",
+      },
+      scheduleCron: "Cron expression",
+      scheduleCronHint:
+        "For example, 30 3 * * 1-5 starts updates at 03:30 on weekdays. Missed times are skipped. Update Gateway and Hold 1 h remain explicit overrides.",
       devPackageAutomaticHint:
         "Automatic dev updates require a source (git) install. This install is a package install — use stable or beta for automatic updates.",
       extendedStableAutomaticHint:

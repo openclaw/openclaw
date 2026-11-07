@@ -124,7 +124,7 @@ async function proveRuntimeCache(native: boolean) {
     "--testNamePattern",
     "--no-maglev",
   ];
-  const flags = ["--no-maglev", "--no-concurrent-sparkplug"];
+  const flags = ["--no-maglev", "--no-concurrent-sparkplug", "--js-base-64"];
   const expectedCommand = native
     ? testRuntime.resolveNativeBunTestCommand(files, undefined, env)
     : testRuntime.resolveVitestTestCommand([...flags, ...operands], env);

@@ -187,6 +187,7 @@ describe("test-projects args", () => {
         "node",
         ...(maglev === "0" ? ["--no-maglev"] : []),
         "--no-concurrent-sparkplug",
+        "--js-base-64",
         resolveVitestCliEntry(),
         ...(watch ? [] : ["run"]),
         "--config",
