@@ -374,7 +374,7 @@ export function createEngineActionScenarios(): readonly EngineScenario[] {
             if (direction === "close") {
               await page.locator(".sidebar-shell").evaluate((panel) => {
                 if (
-                  panel.checkVisibility({ visibilityProperty: true }) ||
+                  panel.checkVisibility({ visibilityProperty: true, checkOpacity: true }) ||
                   panel.contains(document.activeElement)
                 ) {
                   throw new Error("Collapsed sidebar content must be hidden and release focus");
