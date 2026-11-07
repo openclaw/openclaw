@@ -328,3 +328,57 @@ it.each([false, true])(
     ).toBeUndefined();
   },
 );
+
+it("keeps refreshed independent credentials when only the source device was renumbered", () => {
+  const root = directories.make("independent-renumbered-");
+  const env = { ...process.env, HOME: root, USERPROFILE: root, OPENCLAW_STATE_DIR: root };
+  const pathname = path.join(root, "state", "openclaw.sqlite");
+  fs.mkdirSync(path.dirname(pathname), { recursive: true });
+  {
+    using source = openNodeSqliteDatabase(pathname);
+    source.exec(identity + auth);
+    source
+      .prepare("INSERT INTO device_auth_tokens VALUES (?,?,?,?,?)")
+      .run("device", "operator", "original", "[]", 10);
+  }
+  const snapshot = readIndependentClientCredentialSource(pathname);
+  const renumbered = { ...snapshot.file, dev: String(BigInt(snapshot.file.dev) + 1n) };
+  const recordedSource = {
+    kind: "independent" as const,
+    engine: "native-v0" as const,
+    identity: `${renumbered.dev}:${renumbered.ino}`,
+    generation: "0",
+    sha256: snapshot.sha256,
+    destinationVersion: 1,
+  };
+  {
+    using local = openClientCredentialCustody(env, { createIfMissing: true, migration: true })!;
+    runSqliteImmediateTransactionSync(local.database, () => {
+      local.database
+        .prepare("INSERT INTO device_auth_tokens VALUES (?,?,?,?,?)")
+        .run("device", "operator", "refreshed", "[]", 11);
+      writeClientCredentialReceipt(
+        local.database,
+        { format: 1, source: recordedSource, sharedFile: renumbered, legacyImports: {} },
+        "complete",
+      );
+    });
+  }
+  const read = (readOnly: boolean) =>
+    runClientCredentialOperation(
+      env,
+      { kind: "token.read", key: { device_id: "device", role: "operator" } },
+      { readOnly },
+    );
+  const receipt = () => {
+    using local = openClientCredentialCustody(env, { migration: true })!;
+    return readClientCredentialReceipt(local.database)?.receipt;
+  };
+  expect(read(true)).toMatchObject({ kind: "token", token: { token: "refreshed" } });
+  expect(receipt()).toMatchObject({ source: recordedSource, sharedFile: renumbered });
+  expect(read(false)).toMatchObject({ kind: "token", token: { token: "refreshed" } });
+  expect(receipt()).toMatchObject({
+    source: { ...recordedSource, identity: snapshot.identity },
+    sharedFile: snapshot.file,
+  });
+});

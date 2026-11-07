@@ -8,6 +8,8 @@ import { readIndependentClientCredentialSource } from "./client-credential-nativ
 import {
   CLIENT_CREDENTIAL_LEGACY_KEYS,
   emptyClientCredentialReceipt,
+  isSameClientCredentialFile,
+  isSameIndependentClientCredentialIdentity,
   parseClientCredentialReceipt,
   readClientCredentialFileIdentity,
   serializeClientCredentialReceipt,
@@ -225,10 +227,8 @@ function prepareClientCredentialReceipt(
     const previous = stored.receipt.sharedFile!;
     const source = readIndependentClientCredentialSource(previous.path);
     if (
-      source.identity !== stored.receipt.source.identity ||
-      source.file.path !== previous.path ||
-      source.file.dev !== previous.dev ||
-      source.file.ino !== previous.ino ||
+      !isSameIndependentClientCredentialIdentity(stored.receipt.source.identity, source.file) ||
+      !isSameClientCredentialFile(previous, source.file) ||
       source.sha256 !== stored.receipt.source.sha256
     ) {
       if (readOnly) {
@@ -257,18 +257,25 @@ function prepareClientCredentialReceipt(
       };
       stored.receipt.sharedFile = source.file;
       writeClientCredentialReceipt(database, stored.receipt, "complete");
+    } else if (!readOnly && source.file.dev !== previous.dev) {
+      // The same unchanged source was renumbered; keep its derived rows and record the new device.
+      stored.receipt.source.identity = source.identity;
+      stored.receipt.sharedFile = source.file;
+      writeClientCredentialReceipt(database, stored.receipt, "complete");
     }
   } else {
     const previous = stored.receipt.sharedFile;
     if (
       previous === null
         ? sharedFile !== null
-        : sharedFile === null ||
-          previous.path !== sharedFile.path ||
-          previous.dev !== sharedFile.dev ||
-          previous.ino !== sharedFile.ino
+        : sharedFile === null || !isSameClientCredentialFile(previous, sharedFile)
     ) {
       throw notReady();
+    }
+    if (!readOnly && previous && sharedFile && previous.dev !== sharedFile.dev) {
+      // A renumbered device still names the same file; refresh the binding instead of failing.
+      stored.receipt.sharedFile = sharedFile;
+      writeClientCredentialReceipt(database, stored.receipt, "complete");
     }
   }
   return stored;
