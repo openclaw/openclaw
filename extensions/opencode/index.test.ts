@@ -161,9 +161,15 @@ describe("opencode provider plugin", () => {
     });
   });
 
-  it("classifies client-restricted free models without cooling down valid credentials", async () => {
+  it("classifies model-specific refusals without cooling down valid credentials", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     for (const error of [
+      { status: 403, errorMessage: "Upstream request failed: Model access is disabled" },
+      {
+        status: 403,
+        errorMessage:
+          '403 {"error":{"message":"Upstream request failed: Model access is disabled","type":"api_error"}}',
+      },
       { status: 403, errorType: "FreeTierError", errorMessage: "Request refused" },
       { status: 403, code: "FreeTierError", errorMessage: "Request refused" },
       {
@@ -178,15 +184,25 @@ describe("opencode provider plugin", () => {
     ]) {
       expect(provider.classifyFailoverReason?.(error)).toBe("model_not_found");
     }
-    expect(
-      provider.classifyFailoverReason?.({ status: 403, errorMessage: "Invalid API key" }),
-    ).toBeUndefined();
-    expect(
-      provider.classifyFailoverReason?.({
-        status: 402,
-        errorMessage: "Insufficient account funds",
-      }),
-    ).toBeUndefined();
+    for (const error of [
+      { status: 401, errorMessage: "Upstream request failed: Model access is disabled" },
+      { status: 403, errorMessage: "Invalid API key" },
+      { status: 403, errorMessage: "Account disabled" },
+      { status: 403, errorMessage: "Insufficient account funds" },
+      { status: 402, errorMessage: "Insufficient account funds" },
+      { status: 403, errorMessage: "Model access is disabled" },
+      {
+        status: 403,
+        errorMessage: "Upstream request failed: Model access is disabled for this account",
+      },
+      {
+        status: 403,
+        errorMessage: "<html>Upstream request failed: Model access is disabled</html>",
+      },
+      { status: 400, errorMessage: "Upstream request failed: Model access is disabled" },
+    ]) {
+      expect(provider.classifyFailoverReason?.(error)).toBeUndefined();
+    }
   });
 
   it("registers image media understanding through the OpenCode plugin", async () => {
