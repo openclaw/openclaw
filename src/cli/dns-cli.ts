@@ -102,17 +102,27 @@ function isPermissionFailure(error: unknown): boolean {
 }
 
 /**
+ * A captured macOS access-policy entry: its position in the original ACL and
+ * its re-appliable form (numeric prefix and inherited marker stripped).
+ */
+type MacOsAclEntry = { position: number; entry: string };
+
+/**
  * Read the macOS access policy entries of a file.
  *
  * macOS carries per-file ACLs beside the mode, and a replacement inode does
  * not inherit them. The entries are printed as "0: user:name deny read"; they
- * are re-applied with chmod +a before the staged file replaces the original.
+ * are re-applied at their recorded positions with chmod +a# before the staged
+ * file replaces the original — chmod +a would canonicalize the order and
+ * silently change who the policy admits. The inherited marker is dropped from
+ * the re-appliable form (the marker records where the entry came from, not
+ * what it grants), while its position and effect are preserved.
  * The system ls is used explicitly: a user-installed GNU ls rejects the macOS
  * ACL flags, and a capture failure has to abort the publication instead of
  * silently dropping the operator's policy.
  */
-function readMacOsAclEntries(filePath: string): string[] {
-  if (process.platform !== "darwin") {
+function readMacOsAclEntries(filePath: string): MacOsAclEntry[] {
+  if (os.platform() !== "darwin") {
     return [];
   }
   const listed = spawnSync("/bin/ls", ["-lde", filePath], { encoding: "utf-8" });
@@ -126,7 +136,15 @@ function readMacOsAclEntries(filePath: string): string[] {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => /^\d+:\s/.test(line))
-    .map((line) => line.replace(/^\d+:\s*/, ""));
+    .map((line) => {
+      const position = Number.parseInt(line, 10);
+      const entry = line
+        .replace(/^\d+:\s*/, "")
+        .replace(/\binherited\b/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+      return { position, entry };
+    });
 }
 
 /**
@@ -157,12 +175,20 @@ function readInheritedMacOsAclEntries(dirPath: string): string[] {
     .filter((entry) => entry.length > 0);
 }
 
-/** Restore the captured access policy on the staged file before it is published. */
-function applyMacOsAclEntries(filePath: string, entries: string[], privileged: boolean): void {
-  for (const entry of entries) {
+/** Restore the captured access policy on the staged file at its original positions. */
+function applyMacOsAclEntries(
+  filePath: string,
+  entries: MacOsAclEntry[],
+  privileged: boolean,
+): void {
+  for (const { position, entry } of entries) {
     const applied = privileged
-      ? spawnSync("sudo", ["chmod", "+a", entry, filePath], { encoding: "utf-8" })
-      : spawnSync("chmod", ["+a", entry, filePath], { encoding: "utf-8" });
+      ? spawnSync("sudo", ["/bin/chmod", "+a#", String(position), entry, filePath], {
+          encoding: "utf-8",
+        })
+      : spawnSync("/bin/chmod", ["+a#", String(position), entry, filePath], {
+          encoding: "utf-8",
+        });
     if (applied.status !== 0) {
       const reason = typeof applied.stderr === "string" ? applied.stderr.trim() : "";
       throw new Error(
@@ -328,7 +354,7 @@ export function privilegedInspectionScript(): string {
     '  process.stderr.write((parent.stderr || "ls -lde failed") + "\\n");',
     "    process.exit(1);",
     "  }",
-    '  inheritedParent = String(parent.stdout || "").split("\\n").map((line) => line.trim()).filter((line) => /^\\d+:\\s/.test(line) && line.includes("file_inherit")).map((line) => line.replace(/^\\d+:\\s*/, "").replace(/\\bfile_inherit\\b/g, "").replace(/\\bdirectory_inherit\\b/g, "").replace(/\\blimit_inherit\\b/g, "").replace(/\\bonly_inherit\\b/g, "").replace(/\\s+/g, " ").trim()).filter((entry) => entry.length > 0);',
+    '  inheritedParent = String(parent.stdout || "").split("\\n").map((line) => line.trim()).filter((line) => /^\\d+:\\s/.test(line) && line.includes("file_inherit")).map((line) => ({ position: Number.parseInt(line, 10), entry: line.replace(/^\\d+:\\s*/, "").replace(/\\bfile_inherit\\b/g, "").replace(/\\bdirectory_inherit\\b/g, "").replace(/\\blimit_inherit\\b/g, "").replace(/\\bonly_inherit\\b/g, "").replace(/\\binherited\\b/g, "").replace(/\\s+/g, "").trim() })).filter((item) => item.entry.length > 0);',
     "}",
     // A destination that does not exist yet is a privileged first creation:
     // there is no policy to capture, and ls would fail on the missing path.
@@ -339,7 +365,7 @@ export function privilegedInspectionScript(): string {
     '  process.stderr.write((listed.stderr || "ls -lde failed") + "\\n");',
     "    process.exit(1);",
     "  }",
-    '  acl = String(listed.stdout || "").split("\\n").map((line) => line.trim()).filter((line) => /^\\d+:\\s/.test(line)).map((line) => line.replace(/^\\d+:\\s*/, ""));',
+    '  acl = String(listed.stdout || "").split("\\n").map((line) => line.trim()).filter((line) => /^\\d+:\\s/.test(line)).map((line) => ({ position: Number.parseInt(line, 10), entry: line.replace(/^\\d+:\\s*/, "").replace(/\\binherited\\b/g, "").replace(/\\s+/g, "").trim() })).filter((item) => item.entry.length > 0);',
     "}",
     "process.stdout.write(JSON.stringify({ target: cur, existing, acl, inheritedParent }));",
   ].join("");

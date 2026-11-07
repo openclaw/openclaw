@@ -209,8 +209,20 @@ describe("dns-cli probe bounds", () => {
         }
         return spawnOk();
       }
-      if (cmd === "chmod") {
-        return actualSpawnSync(cmd, args, { encoding: "utf-8" });
+      if (cmd === "chmod" || cmd === "/bin/chmod") {
+        // The ACL forms (+a#/-N) delegate to the real chmod so the policy
+        // survives; numeric modes apply directly.
+        if (args[0] !== undefined && ["+a#", "+a", "-N"].includes(String(args[0]))) {
+          return actualSpawnSync("chmod", args, { encoding: "utf-8" });
+        }
+        if (cmd === "/bin/chmod") {
+          return actualSpawnSync("chmod", args, { encoding: "utf-8" });
+        }
+        const [mode, target] = args;
+        if (typeof mode === "string" && typeof target === "string") {
+          fs.chmodSync(target, Number.parseInt(mode, 8));
+        }
+        return spawnOk();
       }
       if (cmd === "ls" || cmd === "/bin/ls") {
         if (realPlatform !== "darwin") {
@@ -243,13 +255,14 @@ describe("dns-cli probe bounds", () => {
       }
       if (cmd === "sudo" && args[0] === "chmod") {
         const [mode, target] = args.slice(1);
-        // The access-policy restore uses the ACL form of chmod; it has to run
-        // for real so the policy survives the publication.
-        if (mode === "+a") {
+        // The access-policy restore uses the ACL forms of chmod (+a# for the
+        // positional restore, -N for the inherited-grant strip); both have to
+        // run for real so the policy survives the publication. The -N strip
+        // is macOS-only behavior: hosts without macOS ACL semantics have
+        // nothing inherited to strip.
+        if (mode === "+a#" || mode === "+a") {
           return actualSpawnSync("chmod", args.slice(1), { encoding: "utf-8" });
         }
-        // The inherited-grant strip runs the real chmod on macOS; off macOS
-        // there is nothing inherited to strip.
         if (mode === "-N") {
           if (realPlatform !== "darwin") {
             return spawnOk();
@@ -260,6 +273,9 @@ describe("dns-cli probe bounds", () => {
           fs.chmodSync(target, Number.parseInt(mode, 8));
         }
         return spawnOk();
+      }
+      if ((cmd === "chmod" || cmd === "/bin/chmod") && args[0] === "+a#") {
+        return actualSpawnSync("chmod", args, { encoding: "utf-8" });
       }
       if (cmd === "sudo" && args[0] === "mv") {
         const [source, destination] = args.slice(1).filter((arg) => !arg.startsWith("-"));
