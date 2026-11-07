@@ -106,6 +106,53 @@ class TestPackageSkillSecurity(TestCase):
                 self.assertIn(f"{name}/script.py", names)
                 self.assertNotIn(f"{name}/loot" + ("/secret.txt" if directory else ""), names)
 
+    def test_unreadable_directory_does_not_publish_incomplete_archive(self):
+        skill_dir = self.create_skill()
+        assets = skill_dir / "assets"
+        assets.mkdir()
+        (assets / "template.txt").write_text("required template\n")
+        out_dir = self.temp_dir / "out"
+        archive = package_skill(skill_dir, out_dir)
+        self.assertIsNotNone(archive)
+        original = archive.read_bytes()
+
+        assets.chmod(0)
+        try:
+            try:
+                list(assets.iterdir())
+            except PermissionError:
+                pass
+            else:
+                self.skipTest("directory permissions are not enforced for this user/platform")
+
+            for destination in (out_dir, self.temp_dir / "fresh"):
+                with self.subTest(destination=destination.name):
+                    self.assertIsNone(package_skill(skill_dir, destination))
+                    self.assertEqual(archive.read_bytes(), original)
+                    self.assertFalse((self.temp_dir / "fresh" / "test-skill.skill").exists())
+        finally:
+            assets.chmod(0o700)
+
+        self.assertIsNotNone(package_skill(skill_dir, out_dir))
+        with zipfile.ZipFile(archive) as packaged:
+            self.assertIn("test-skill/assets/template.txt", packaged.namelist())
+
+    def test_unreadable_excluded_directory_is_skipped(self):
+        skill_dir = self.create_skill()
+        excluded = skill_dir / "node_modules"
+        excluded.mkdir()
+        (excluded / "dependency.js").write_text("excluded\n")
+        excluded.chmod(0)
+        try:
+            archive = package_skill(skill_dir, self.temp_dir / "out")
+            self.assertIsNotNone(archive)
+            with zipfile.ZipFile(archive) as packaged:
+                self.assertEqual(
+                    set(packaged.namelist()), {"test-skill/SKILL.md", "test-skill/script.py"}
+                )
+        finally:
+            excluded.chmod(0o700)
+
     def test_rejects_resolved_path_outside_skill_root(self):
         skill_dir = self.create_skill("escape-skill")
         out_dir = self.temp_dir / "out"

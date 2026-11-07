@@ -10,6 +10,7 @@ Example:
     python utils/package_skill.py skills/public/my-skill ./dist
 """
 
+import os
 import shutil
 import sys
 import tempfile
@@ -25,6 +26,10 @@ def _is_within(path: Path, root: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _raise_walk_error(error):
+    raise error
 
 
 def package_skill(skill_path, output_dir=None):
@@ -87,16 +92,25 @@ def package_skill(skill_path, output_dir=None):
             staging_root = Path(staging_dir)
             staged_archive = staging_root / skill_filename.name
             with zipfile.ZipFile(staged_archive, "w", zipfile.ZIP_DEFLATED) as zipf:
+                # Fail on unreadable directories instead of silently omitting their contents.
+                paths = []
+                for directory, directories, filenames in os.walk(
+                    skill_path, onerror=_raise_walk_error, followlinks=False
+                ):
+                    directories[:] = [
+                        name
+                        for name in directories
+                        if name not in EXCLUDED_DIRS and Path(directory, name) != staging_root
+                    ]
+                    paths.extend(Path(directory, name) for name in directories + filenames)
+
                 # Walk in a deterministic order. Sort by the archive-relative POSIX
                 # entry name (not Path object order, which is filesystem/OS-flavour
                 # dependent) so written .skill entries are byte-stable everywhere.
                 for file_path in sorted(
-                    skill_path.rglob("*"),
+                    paths,
                     key=lambda path: path.relative_to(skill_path).as_posix(),
                 ):
-                    if _is_within(file_path, staging_root):
-                        continue
-
                     # Security: never follow or package symlinks.
                     if file_path.is_symlink():
                         print(f"[WARN] Skipping symlink: {file_path}")
