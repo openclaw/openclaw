@@ -1,6 +1,6 @@
 name: Android Emulator Diagnostic
 
-run-name: Android ${{ inputs.operation == 'jvm-profile' && 'release JVM profile' || inputs.operation == 'screenshots' && 'screenshots' || 'emulator' }} diagnostic (${{ inputs.target_sha }})
+run-name: Android ${{ inputs.operation == 'gradle-gc-benchmark' && 'release GC benchmark' || inputs.operation == 'screenshots' && 'screenshots' || 'emulator' }} diagnostic (${{ inputs.target_sha }})
 
 on:
   workflow_dispatch:
@@ -13,7 +13,7 @@ on:
         options:
           - boot
           - screenshots
-          - jvm-profile
+          - gradle-gc-benchmark
       target_sha:
         description: Exact lowercase 40-character commit SHA to diagnose
         required: true
@@ -24,7 +24,7 @@ permissions:
 
 jobs:
   validate-target:
-    if: inputs.operation != 'jvm-profile'
+    if: inputs.operation != 'gradle-gc-benchmark'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -709,15 +709,15 @@ jobs:
           path: ${{ runner.temp }}/android-emulator-diagnostic
           retention-days: 7
 
-  jvm-profile:
-    if: inputs.operation == 'jvm-profile'
+  gradle-gc-benchmark:
+    if: inputs.operation == 'gradle-gc-benchmark'
     permissions:
       contents: read
-    name: Profile Android release JVMs without publishing
+    name: Benchmark Android release GC without publishing
     runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 25
+    timeout-minutes: 50
     concurrency:
-      group: android-release-jvm-profile
+      group: android-release-gradle-gc-benchmark
       cancel-in-progress: false
     steps:
       - name: Verify frozen source selection
@@ -726,7 +726,7 @@ jobs:
           TARGET_SHA: ${{ inputs.target_sha }}
         run: test "$TARGET_SHA" = d1be6e243ccd850329d93567cb3ffd71e0ff837d
 
-      - name: Checkout committed profiling tooling
+      - name: Checkout committed benchmark tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
@@ -761,19 +761,18 @@ jobs:
         working-directory: candidate
         run: node scripts/install-mobile-release-dependencies.mjs
 
-      - name: Record one signed release build without publishing
+      - name: Build five serial interleaved pairs without publishing
         env:
           JAVA_HOME: ${{ steps.android-toolchain.outputs.gradle-java-home }}
         run: >-
-          node scripts/bench-android-bundle-order.mjs
-          --source candidate --first wear --jfr
-          --output .build/android-jvm-profile
+          node scripts/bench-android-gradle-gc.mjs
+          --source candidate --output .build/android-gradle-gc
 
-      - name: Retain audited recordings and diagnostic proof
+      - name: Retain benchmark proof
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: android-release-jvm-profile-${{ github.run_id }}
-          path: .build/android-jvm-profile/**
+          name: android-release-gradle-gc-${{ github.run_id }}
+          path: .build/android-gradle-gc/**
           if-no-files-found: error
           retention-days: 7
