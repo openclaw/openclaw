@@ -31,6 +31,13 @@ the admission fact keep the explicit busy response.
 If a command encounters offline database maintenance, it reports the reason
 without `OPENCLAW_DEBUG`. Wait for maintenance to finish, then retry the command.
 
+Contending plugin lifecycle operations wait in admission order. A background
+operation cannot repeatedly reacquire the lease ahead of an already waiting
+update. The active operation keeps ownership until it finishes or its lease
+expires; waiting does not interrupt npm installation or settlement. Wait messages
+identify the recorded purpose, PID, and host when available, with the lease token
+as a fallback for older holders.
+
 `plugins enable` and `plugins disable` accept case-insensitive plugin IDs, including
 when the Gateway is stopped. Reported IDs retain their manifest spelling; plugin
 policy keys in config use the required lowercase form.
