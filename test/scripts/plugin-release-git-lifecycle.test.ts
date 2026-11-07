@@ -72,6 +72,7 @@ const modes: Record<
       step: "Validate ref is on a trusted publish branch",
     },
     env: {
+      CANDIDATE_QUALIFICATION_ADMITTED: "",
       RELEASE_CANDIDATE_BRANCH: "",
       NPM_DIST_TAG: "default",
       PREFLIGHT_ONLY: "false",
