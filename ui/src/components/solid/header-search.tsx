@@ -199,22 +199,6 @@ export function HeaderSearch(props: HeaderSearchProps) {
       },
       true,
     );
-    // Retained fields do not remount when their host overlay opens again.
-    const releaseShow = listen(
-      ownerDocument,
-      "overlay-after-show",
-      (event) => {
-        if (
-          props.inputProps?.autofocus &&
-          props.open &&
-          event.target instanceof HTMLElement &&
-          event.target.contains(root)
-        ) {
-          input?.focus({ preventScroll: true });
-        }
-      },
-      true,
-    );
     const releaseClose = listen(
       ownerDocument,
       "overlay-after-hide",
@@ -227,7 +211,6 @@ export function HeaderSearch(props: HeaderSearchProps) {
     );
     return () => {
       releaseTyping();
-      releaseShow();
       releaseClose();
     };
   });
