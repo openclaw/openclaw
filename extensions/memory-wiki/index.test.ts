@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { Worker } from "node:worker_threads";
 import type { OpenBlobStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
@@ -45,15 +46,16 @@ async function serviceFixture(initialize = false) {
     await vault.write(".openclaw-wiki/log.jsonl", "");
   }
   const registration = createPluginApi();
+  const scheduler = createTestPluginServiceScheduler();
   registration.api.pluginConfig = { vault: { path: vault.rootDir } };
   // Some tests intercept the store before registering the plugin.
   const register = async () => {
     plugin.register(registration.api);
     const service = registration.registerService.mock.calls[0]?.[0];
-    await service?.start?.();
+    await service?.start?.({ scheduler });
     return service;
   };
-  return { ...vault, ...registration, register };
+  return { ...vault, ...registration, register, scheduler };
 }
 
 describe("memory-wiki plugin", () => {
@@ -249,7 +251,7 @@ describe("memory-wiki plugin", () => {
   );
 
   it("clears active owners before a fallible lifecycle identity refresh", async () => {
-    const { config, register } = await serviceFixture(true);
+    const { config, register, scheduler } = await serviceFixture(true);
     const service = await register();
 
     const snapshot = emptyCompiledSnapshot();
@@ -257,7 +259,7 @@ describe("memory-wiki plugin", () => {
     await expect(loadMemoryWikiCompiledCache(config)).resolves.toEqual(snapshot);
 
     vi.spyOn(fs, "open").mockRejectedValueOnce(new Error("transient restore read failure"));
-    await expect(service?.start?.()).rejects.toThrow("transient restore read failure");
+    await expect(service?.start?.({ scheduler })).rejects.toThrow("transient restore read failure");
     await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
   });
 });
