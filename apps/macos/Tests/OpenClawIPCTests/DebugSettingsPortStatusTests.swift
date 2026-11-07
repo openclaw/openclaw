@@ -75,28 +75,6 @@ struct DebugSettingsPortStatusTests {
             Self.scrollTo(check, in: hosting, window: window)
             let elements = try await AppKitTestSupport.accessibilityElements(in: hosting)
             #expect(elements.contains { Self.text(of: $0) == "Sent kill to \(pid)." })
-            if let capturePath = ProcessInfo.processInfo.environment["OPENCLAW_TEST_DEBUG_PORT_CAPTURE_DIR"] {
-                hosting.layoutSubtreeIfNeeded()
-                window.displayIfNeeded()
-                let frame = try #require(window.contentView?.superview ?? window.contentView)
-                let buttonFrame = try #require(check.accessibilityFrame?())
-                let button = frame.convert(window.convertFromScreen(buttonFrame), from: nil)
-                // Capture Ports directly, excluding unrelated Debug fields above it.
-                let bounds = frame.bounds
-                let top = frame.isFlipped
-                    ? max(bounds.minY, button.minY - 48)
-                    : min(bounds.maxY, button.maxY + 48)
-                let captureBounds = frame.isFlipped
-                    ? NSRect(x: bounds.minX, y: top, width: bounds.width, height: bounds.maxY - top)
-                    : NSRect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: top - bounds.minY)
-                try #require(!captureBounds.isEmpty)
-                let bitmap = try #require(frame.bitmapImageRepForCachingDisplay(in: captureBounds))
-                frame.cacheDisplay(in: captureBounds, to: bitmap)
-                let png = try #require(bitmap.representation(using: .png, properties: [:]))
-                let directory = URL(fileURLWithPath: capturePath, isDirectory: true)
-                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                try png.write(to: directory.appendingPathComponent("debug-kill-confirmation.png"))
-            }
         }
     }
 
