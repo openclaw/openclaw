@@ -603,6 +603,7 @@ export const usersHandlers: GatewayRequestHandlers = {
         params.profileId,
         params.displayName,
         { assertCurrent },
+        params.onlyIfUnset,
       );
       assertCurrent();
       refreshConnectedProfile(context, profile.id);

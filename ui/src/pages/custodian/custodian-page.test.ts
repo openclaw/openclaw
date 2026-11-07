@@ -11,7 +11,7 @@ import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-cont
 import { channelSnapshotEntryIsActive, createChannelCapability } from "../../lib/channels/index.ts";
 import * as uuid from "../../lib/uuid.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { createContext, mountPage } from "./custodian-page.test-harness.ts";
+import { button, createContext, element, fill, mountPage } from "./custodian-page.test-harness.ts";
 
 type Reply = SystemAgentChatResult;
 function chatReply(reply: string, patch: Partial<Reply> = {}): Reply {
@@ -30,29 +30,10 @@ function channelSnapshot(patch: Partial<ChannelsStatusSnapshot> = {}): ChannelsS
   };
 }
 
-type Page = Awaited<ReturnType<typeof mountPage>>["page"];
-function button(page: HTMLElement, selector: string) {
-  return page.querySelector<HTMLButtonElement>(selector)!;
-}
-async function element<T extends HTMLElement>(page: HTMLElement, selector: string): Promise<T> {
-  return waitForFast(() => {
-    const found = page.querySelector<T>(selector);
-    expect(found).not.toBeNull();
-    return found!;
-  });
-}
 async function mount(request: Parameters<typeof createContext>[0]) {
   const harness = createContext(request);
   return { ...harness, ...(await mountPage(harness.context)) };
 }
-async function fill(page: Page, selector: string, value: string) {
-  const field = await element<HTMLInputElement | HTMLTextAreaElement>(page, selector);
-  field.value = value;
-  field.dispatchEvent(new InputEvent("input", { bubbles: true }));
-  await page.updateComplete;
-  return field;
-}
-
 describe("custodian page", () => {
   beforeEach(() => {
     // Start each page with a fresh session identity.
