@@ -21,20 +21,21 @@ struct ChatMarkdownTableCompactWidthTests {
     """
 
     #if os(macOS)
-    @Test func `reported table wraps at compact width instead of clipping its last column`() throws {
+    @Test func `reported table wraps at compact width after resizing`() throws {
         _ = NSApplication.shared
-        let compactInkHeight = try Self.renderedInkHeight(
+        let heights = try Self.renderedInkHeights(
             of: Self.reply(Self.reportedTableMarkdown),
-            width: 390)
-        let wideInkHeight = try Self.renderedInkHeight(
-            of: Self.reply(Self.reportedTableMarkdown),
-            width: 1200)
+            widths: [390, 1200, 390])
+        let compactInkHeight = heights[0]
+        let wideInkHeight = heights[1]
         #expect(compactInkHeight > 0)
         #expect(wideInkHeight > 0)
         // Every column keeps one line at 1200 pt. At 390 pt the same table only stays inside the
         // card when cells wrap, so the compact rendering must be taller; equal heights mean the
         // columns stayed on one line and the last one ran off the edge.
         #expect(compactInkHeight > wideInkHeight + 2)
+        // Keep the same view alive: a stale wide column width must not survive narrowing.
+        #expect(abs(heights[2] - compactInkHeight) <= 2)
     }
 
     @Test func `table cells render at the reply prose size instead of the footnote size`() throws {
@@ -96,13 +97,19 @@ struct ChatMarkdownTableCompactWidthTests {
     }
 
     private static func renderedInkHeight(of view: some View, width: CGFloat) throws -> CGFloat {
+        try self.renderedInkHeights(of: view, widths: [width])[0]
+    }
+
+    private static func renderedInkHeights(of view: some View, widths: [CGFloat]) throws -> [CGFloat] {
         let canvasHeight: CGFloat = 700
-        let root = view
-            .frame(width: width, alignment: .topLeading)
-            .background(Color.white)
-        let host = NSHostingView(rootView: root)
+        func content(width: CGFloat) -> some View {
+            view
+                .frame(width: width, alignment: .topLeading)
+                .background(Color.white)
+        }
+        let host = NSHostingView(rootView: content(width: widths[0]))
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: width, height: canvasHeight),
+            contentRect: NSRect(x: 0, y: 0, width: widths[0], height: canvasHeight),
             styleMask: [.borderless],
             backing: .buffered,
             defer: false)
@@ -112,33 +119,37 @@ struct ChatMarkdownTableCompactWidthTests {
             window.contentView = nil
             window.close()
         }
-        host.frame = NSRect(x: 0, y: 0, width: width, height: canvasHeight)
-        host.layoutSubtreeIfNeeded()
-        host.displayIfNeeded()
-        let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-        host.cacheDisplay(in: host.bounds, to: bitmap)
-        return Self.inkHeight(bitmap)
+        return try widths.map { width in
+            host.rootView = content(width: width)
+            window.setContentSize(NSSize(width: width, height: canvasHeight))
+            host.frame = NSRect(x: 0, y: 0, width: width, height: canvasHeight)
+            host.layoutSubtreeIfNeeded()
+            host.displayIfNeeded()
+            let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            return Self.inkHeight(bitmap)
+        }
     }
 
     /// Height of the drawn band, measured from the first to the last row carrying non-white ink.
     private static func inkHeight(_ bitmap: NSBitmapImageRep) -> CGFloat {
         var firstInkedRow: Int?
         var lastInkedRow: Int?
-        for row in 0..<bitmap.pixelsHigh {
-            if Self.rowHasInk(bitmap, row: row) {
-                if firstInkedRow == nil { firstInkedRow = row }
-                lastInkedRow = row
-            }
+        for row in 0..<bitmap.pixelsHigh where Self.rowHasInk(bitmap, row: row) {
+            if firstInkedRow == nil { firstInkedRow = row }
+            lastInkedRow = row
         }
         guard let first = firstInkedRow, let last = lastInkedRow else { return 0 }
         return CGFloat(last - first + 1)
     }
 
     private static func rowHasInk(_ bitmap: NSBitmapImageRep, row: Int) -> Bool {
+        // Unpainted hosting-view pixels are transparent black, not text.
         // Sampling every fourth pixel keeps the scan cheap while still hitting text strokes.
         var column = 0
         while column < bitmap.pixelsWide {
             if let color = bitmap.colorAt(x: column, y: row)?.usingColorSpace(.sRGB),
+               color.alphaComponent > 0,
                min(color.redComponent, color.greenComponent, color.blueComponent) < 0.99
             {
                 return true

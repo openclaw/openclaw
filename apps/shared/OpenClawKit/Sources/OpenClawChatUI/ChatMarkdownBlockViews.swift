@@ -167,7 +167,8 @@ struct ChatMarkdownTableView: View {
         // scrolls, and then with its indicator visible as the cue that columns continue off-screen.
         self.tableLayout
             .padding(Self.cardPadding)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // Accept the parent proposal even while cells still carry the previous wider layout.
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(OpenClawChatTheme.subtleCard)
