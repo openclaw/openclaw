@@ -475,6 +475,41 @@ it("coalesces cold sidebar selection across row slices only for the same princip
     });
   }));
 
+it("resolves archived-only profile references before filtering active sessions", () =>
+  withListReader("archive-profile-reader", async ({ context, client }) => {
+    const visible = ensureProfileForEmail("archive-profile-visible@example.test").id;
+    const hidden = ensureProfileForEmail("archive-profile-hidden@example.test").id;
+    for (const [key, creator, archivedAt, visibility] of [
+      ["active", client.authenticatedUserProfile!.profileId, undefined, "shared"],
+      ["archived", visible, 0, "shared"],
+      ["hidden", hidden, 0, "draft"],
+    ] as const) {
+      writeListEntry(`agent:main:${key}`, {
+        sessionId: key,
+        updatedAt: 1,
+        createdActor: profileActor(creator),
+        archivedAt,
+        visibility,
+      });
+    }
+    using _ = retainList(context);
+    expect((await readList(context, client, {})).sessions.map(({ key }) => key)).toEqual([
+      "agent:main:active",
+    ]);
+    // Omit includePeople: involvingProfileId alone must retain full-roster resolution.
+    for (const archived of [false, true, "all"] as const) {
+      for (const profileId of [visible, hidden]) {
+        for (const involvingProfileId of [profileId, profileId.replaceAll("-", "").slice(0, 12)]) {
+          const result = await readList(context, client, { archived, involvingProfileId });
+          expect(result.involvingProfileId).toBe(profileId === visible ? visible : undefined);
+          const keys = profileId === visible && archived !== false ? ["agent:main:archived"] : [];
+          expect(result.sessions.map(({ key }) => key)).toEqual(keys);
+          expect(result.totalCount).toBe(keys.length);
+        }
+      }
+    }
+  }));
+
 it("visits only the requested archive population and preserves viewer isolation across moves", () =>
   withListReader("archive-alice", async ({ context, client: alice }) => {
     const bob = roleClient("view", "archive-bob");
