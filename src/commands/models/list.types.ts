@@ -8,6 +8,7 @@ export type ModelRow = {
   contextTokens?: number;
   local: boolean | null;
   available: boolean | null;
+  manualSelectionAllowed?: boolean;
   tags: string[];
 };
 
