@@ -17,6 +17,7 @@ it("keeps updated imports cache-stable without reusing changed immutable assets"
       extraCss?: boolean;
       cssCodeSplit?: boolean;
       runtimeEdition?: number;
+      base?: string;
     } = {},
   ) {
     const files = {
@@ -35,7 +36,7 @@ it("keeps updated imports cache-stable without reusing changed immutable assets"
     );
     const result = await build({
       root,
-      base: "./",
+      base: options.base ?? "./",
       configFile: false,
       publicDir: false,
       logLevel: "silent",
@@ -113,6 +114,13 @@ it("keeps updated imports cache-stable without reusing changed immutable assets"
   const expanded = await fixture({ extraCss: true });
   const extraction = await fixture({ cssCodeSplit: false });
   const runtime = await fixture({ runtimeEdition: 2 });
+  const rooted = await fixture({ base: "/control/" });
+  // Deep-linked documents must resolve the same aliases as imports inside /assets/.
+  for (const [alias, target] of Object.entries(rooted.imports)) {
+    expect(alias).toMatch(/^\/control\/assets\//u);
+    expect(target).toMatch(/^\/control\/assets\//u);
+    expect(new URL(alias, "https://example.test/control/settings/agents").pathname).toBe(alias);
+  }
 
   for (const changed of [leaf, css]) {
     expect(changed.entry.fileName).toBe(original.entry.fileName);

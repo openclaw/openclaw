@@ -88,6 +88,7 @@ function replaceReferences(code: string, pairs: Iterable<readonly [string, strin
 }
 
 export function controlUiUpdateCachePlugins(): Plugin[] {
+  let base = "./";
   let configIdentity = "";
   let shape: string | undefined;
   let renderMapped: Map<string, string> | undefined;
@@ -98,6 +99,7 @@ export function controlUiUpdateCachePlugins(): Plugin[] {
       apply: "build",
       enforce: "pre",
       configResolved(config) {
+        base = config.base;
         const sources = [...new Set([...config.configFileDependencies, ...sourceInputs])]
           .map((file) => [
             moduleKey(file),
@@ -281,7 +283,7 @@ export function controlUiUpdateCachePlugins(): Plugin[] {
             return;
           }
           const imports = Object.fromEntries(
-            [...mapped].map(([real, stable]) => [`./${stable}`, `./${real}`]),
+            [...mapped].map(([real, stable]) => [`${base}${stable}`, `${base}${real}`]),
           );
           html.source = String(html.source).replace(
             /<head\b[^>]*>/iu,
