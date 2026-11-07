@@ -1,0 +1,5 @@
+107
+# Shared llama.cpp model-load abort isolation: per-caller races, retained shared
+# entry until settlement, and a third caller joining the still-pending verify.
+# Exactly the 107 net test lines this change adds to managed-server.test.ts
+# (111 added / 4 removed); the base tree has no spare ceiling headroom.
