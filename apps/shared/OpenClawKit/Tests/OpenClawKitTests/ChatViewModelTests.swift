@@ -3,6 +3,10 @@ import Observation
 import OpenClawKit
 import OpenClawProtocol
 import Testing
+import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 @testable import OpenClawChatUI
 
 private func chatTextMessage(
@@ -15342,5 +15346,32 @@ struct ChatHistoryMutationTests {
         await model.bootstrapTask?.value
         #expect(await !(oldRead.value).applied)
         #expect(model.messages.isEmpty)
+    }
+}
+
+struct ChatObscuredStreamPacingTests {
+    @Test @MainActor func `pacing preserves pending output across interval changes`() throws {
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: TestChatTransport(historyResponses: []))
+        defer { vm.detachTransport() }
+        vm.streamPacing.interval = 0.5
+        vm.updateStreamingAssistantText("First")
+        #expect(vm.liveAssistantDisplayText == "First")
+        vm.updateStreamingAssistantText("First covered update")
+        let coveredID = try #require(vm.streamPacing.scheduledID)
+        #expect(vm.liveAssistantDisplayText == "First")
+        vm.streamPacing.interval = 0.15
+        vm.updateStreamingAssistantText("Latest revealed update")
+        #expect(vm.streamPacing.scheduledID == coveredID)
+        vm.flushStreamingAssistantDisplay(scheduledID: coveredID)
+        #expect(vm.liveAssistantDisplayText == "Latest revealed update")
+        #expect(vm.streamPacing.pending == nil)
+        #expect(vm.streamPacing.scheduledID == nil)
+        vm.updateStreamingAssistantText("Pending before clearing")
+        let retiredID = try #require(vm.streamPacing.scheduledID)
+        vm.updateStreamingAssistantText(nil)
+        #expect(vm.liveAssistantDisplayText == nil)
+        vm.updateStreamingAssistantText("New first output")
+        vm.flushStreamingAssistantDisplay(scheduledID: retiredID)
+        #expect(vm.liveAssistantDisplayText == "New first output")
     }
 }
