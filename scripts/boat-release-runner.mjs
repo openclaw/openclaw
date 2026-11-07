@@ -125,7 +125,11 @@ if (command === "provision") {
     throw new Error("Set the release organization runner group before provisioning.");
   }
   const help = run(crabbox, ["actions", "register", "--help"]);
-  if (help.error || help.status !== 0 || !`${help.stdout}\n${help.stderr}`.includes("--receipt")) {
+  if (
+    help.error ||
+    help.status !== 0 ||
+    !/^\s*--?receipt(?:[=\s]|$)/mu.test(`${help.stdout}\n${help.stderr}`)
+  ) {
     throw new Error(
       "Install a Crabbox release with portable Actions cleanup receipts before provisioning.",
     );

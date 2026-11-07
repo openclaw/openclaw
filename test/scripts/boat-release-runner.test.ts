@@ -25,7 +25,7 @@ const value = (name) => args[args.indexOf(name) + 1];
 const statePath = path.join(root, "state.json");
 const state = fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath)) : {};
 fs.appendFileSync(path.join(root, "calls"), JSON.stringify(args) + "\\n");
-if (args.includes("--help")) { console.log("--receipt"); process.exit(0); }
+if (args.includes("--help")) { console.log("  -receipt string"); process.exit(0); }
 if (args[0] === "warmup") {
   fs.writeFileSync(statePath, JSON.stringify({leaseID: value("--lease-id"), createdAt: new Date().toISOString()}));
   process.exit(process.env.FIXTURE_MODE === "warmup-failed" ? 1 : 0);
