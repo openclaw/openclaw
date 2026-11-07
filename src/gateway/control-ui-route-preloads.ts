@@ -28,7 +28,9 @@ export function controlUiPreloadLinks(html: string): string[] {
       continue;
     }
     if (/\brel="modulepreload"|\btype="module"/.test(tag)) {
-      if (!hasImportMap) links.push(`<${href}>; rel=modulepreload; crossorigin`);
+      if (!hasImportMap) {
+        links.push(`<${href}>; rel=modulepreload; crossorigin`);
+      }
     } else if (/\brel="stylesheet"|\bas="style"/.test(tag)) {
       links.push(`<${href}>; rel=preload; as=style; crossorigin`);
     }
