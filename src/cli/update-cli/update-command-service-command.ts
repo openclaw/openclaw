@@ -9,6 +9,7 @@ import type { GatewayServiceRestartResult } from "../../daemon/service-types.js"
 import { GATEWAY_UPDATE_EXECUTOR_CONTRACT } from "../../daemon/service-update-authority.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
+import { startUpdatePhase, withUpdatePhase } from "../../infra/update-phase-diagnostics.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
@@ -58,18 +59,52 @@ function formatCommandFailure(stdout: string, stderr: string): string {
   return detail ? detail.split("\n").slice(-3).join("\n") : "command returned a non-zero exit code";
 }
 
-async function runSettledGatewayCommand(argv: string[], options: CommandOptions) {
-  const result = await runCommandWithTimeout(argv, {
-    ...options,
-    // The complete owned env must not regain selectors removed during capture.
-    baseEnv: {},
-    killProcessTree: true,
-    requireProcessTreeExtinction: true,
+async function runSettledGatewayCommand(
+  argv: string[],
+  options: CommandOptions,
+  action?: "install" | "restart",
+) {
+  const end = startUpdatePhase("native-child-settlement", {
+    action,
+    remainingMs: options.timeoutMs,
   });
-  if (result.cleanup === "forced" || result.cleanup === "uncertain") {
-    throw new CommandProcessCleanupError();
+  try {
+    const result = await runCommandWithTimeout(argv, {
+      ...options,
+      ...(options.beforeInput
+        ? {
+            beforeInput: (pid: number, childArgv?: readonly string[]) => {
+              const bound = startUpdatePhase("native-child-binding", { action, childPid: pid });
+              try {
+                options.beforeInput?.(pid, childArgv);
+                bound();
+              } catch (error) {
+                bound({ outcome: "error" });
+                throw error;
+              }
+            },
+          }
+        : {}),
+      // The complete owned env must not regain selectors removed during capture.
+      baseEnv: {},
+      killProcessTree: true,
+      requireProcessTreeExtinction: true,
+    });
+    end({
+      code: result.code,
+      termination: result.termination,
+      cleanup: result.cleanup,
+      stdoutBytes: Buffer.byteLength(result.stdout),
+      stderrBytes: Buffer.byteLength(result.stderr),
+    });
+    if (result.cleanup === "forced" || result.cleanup === "uncertain") {
+      throw new CommandProcessCleanupError();
+    }
+    return result;
+  } catch (error) {
+    end({ outcome: "error" });
+    throw error;
   }
-  return result;
 }
 
 /** Failure reports carry closed status and field names, never the child's output. */
@@ -113,6 +148,7 @@ export async function isUpdatedInstallGatewayExecutorSupported(params: {
   onDefinitionBackupCapability?: (supported: boolean) => void;
   onUnsupported?: (condition: string) => void;
   requireOriginalDefinitionBinding?: boolean;
+  diagnosticAction?: "install" | "restart";
 }): Promise<boolean> {
   params.signal?.throwIfAborted();
   params.executor.assertCurrent();
@@ -134,15 +170,19 @@ export async function isUpdatedInstallGatewayExecutorSupported(params: {
     params.executor,
     params.root,
     (_grant, bindChild) =>
-      runSettledGatewayCommand(argv, {
-        input: "",
-        beforeInput: bindChild,
-        cwd: params.root,
-        env: { ...params.env, OPENCLAW_NO_RESPAWN: "1" },
-        timeoutMs: params.timeoutMs,
-        ...(params.signal ? { signal: params.signal } : {}),
-        maxOutputBytes: 64 * 1024,
-      }),
+      runSettledGatewayCommand(
+        argv,
+        {
+          input: "",
+          beforeInput: bindChild,
+          cwd: params.root,
+          env: { ...params.env, OPENCLAW_NO_RESPAWN: "1" },
+          timeoutMs: params.timeoutMs,
+          ...(params.signal ? { signal: params.signal } : {}),
+          maxOutputBytes: 64 * 1024,
+        },
+        params.diagnosticAction,
+      ),
   );
   params.signal?.throwIfAborted();
   params.executor.assertCurrent();
@@ -239,24 +279,31 @@ export async function runUpdatedInstallGatewayCommand(
     let definitionBackupSupported = false;
     let unsupported = "missing install root";
     const checkStartedAtMs = Date.now();
+    const root = params.result.root;
     if (
-      !params.result.root ||
-      !(await isUpdatedInstallGatewayExecutorSupported({
-        root: params.result.root,
-        env: commandEnv,
-        executor,
-        timeoutMs: installTimeoutMs,
-        nodeRunner,
-        signal: params.signal,
-        onDefinitionBackupCapability: (supported) => {
-          definitionBackupSupported = supported;
-        },
-        onUnsupported: (condition) => {
-          unsupported = condition;
-        },
-        requireOriginalDefinitionBinding:
-          installing && Boolean(params.originalManagedServiceRuntime),
-      }))
+      !root ||
+      !(await withUpdatePhase(
+        "managed-service-executor-check",
+        () =>
+          isUpdatedInstallGatewayExecutorSupported({
+            root,
+            diagnosticAction: action,
+            env: commandEnv,
+            executor,
+            timeoutMs: installTimeoutMs,
+            nodeRunner,
+            signal: params.signal,
+            onDefinitionBackupCapability: (supported) => {
+              definitionBackupSupported = supported;
+            },
+            onUnsupported: (condition) => {
+              unsupported = condition;
+            },
+            requireOriginalDefinitionBinding:
+              installing && Boolean(params.originalManagedServiceRuntime),
+          }),
+        { action, remainingMs: run?.deadline?.remainingMs() ?? installTimeoutMs },
+      ))
     ) {
       if (installing && params.originalManagedServiceRuntime) {
         throw new Error(
@@ -271,7 +318,7 @@ export async function runUpdatedInstallGatewayCommand(
     params.onTimedStep?.({
       name: "managed-service-executor-check",
       command: "openclaw gateway install --update-executor check --json",
-      cwd: params.result.root,
+      cwd: root,
       durationMs: Math.max(0, Date.now() - checkStartedAtMs),
       exitCode: 0,
     });
@@ -300,29 +347,35 @@ export async function runUpdatedInstallGatewayCommand(
     });
     const argv = [invocation.command, ...invocation.args];
     params.onGatewayStartAttempted?.(action);
-    return await runSettledGatewayCommand(argv, {
-      ...(grant
-        ? {
-            input: JSON.stringify({
-              executor: grant,
-              action,
-              ...(installing && params.originalManagedServiceRuntime
-                ? {
-                    originalDefinition: params.originalManagedServiceRuntime.definition.fingerprint,
-                    originalRuntimePin:
-                      params.originalManagedServiceRuntime.definition.runtimePin?.revision,
-                  }
-                : {}),
-              targetRoot: resolveUpdateInstallRoot(params.result.root!),
-            }),
-            beforeInput: bindChild,
-          }
-        : {}),
-      cwd: params.result.root,
-      env: commandEnv,
-      timeoutMs: run?.deadline?.remainingMs() ?? (installing ? installTimeoutMs : params.timeoutMs),
-      ...(params.signal ? { signal: params.signal } : {}),
-    });
+    return await runSettledGatewayCommand(
+      argv,
+      {
+        ...(grant
+          ? {
+              input: JSON.stringify({
+                executor: grant,
+                action,
+                ...(installing && params.originalManagedServiceRuntime
+                  ? {
+                      originalDefinition:
+                        params.originalManagedServiceRuntime.definition.fingerprint,
+                      originalRuntimePin:
+                        params.originalManagedServiceRuntime.definition.runtimePin?.revision,
+                    }
+                  : {}),
+                targetRoot: resolveUpdateInstallRoot(params.result.root!),
+              }),
+              beforeInput: bindChild,
+            }
+          : {}),
+        cwd: params.result.root,
+        env: commandEnv,
+        timeoutMs:
+          run?.deadline?.remainingMs() ?? (installing ? installTimeoutMs : params.timeoutMs),
+        ...(params.signal ? { signal: params.signal } : {}),
+      },
+      action,
+    );
   };
   const childStartedAtMs = Date.now();
   const res = executor

@@ -7,6 +7,7 @@ import {
   hasUnjoinedWork,
   inspectManagedProcessGroup,
   runManagedCommand,
+  type ManagedCommandTimeoutObservation,
 } from "../../scripts/lib/managed-child-process.mts";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
 import { formatCommandOutput } from "../process/command-error.js";
@@ -164,6 +165,9 @@ function captureCommandOutput(
 
 export type CommandRecord = {
   args: string[];
+  startedAtMs: number;
+  budgetMs: number;
+  timeoutObservation?: ManagedCommandTimeoutObservation & { capturedAtMs: number };
   launcherPid: number | null;
   beforeCleanup: ReturnType<typeof inspectManagedProcessGroup> | undefined;
   code: number | null;
@@ -189,6 +193,9 @@ export async function run(
 ) {
   const { expectedStderr = [], observeService } = options;
   const started = performance.now();
+  const startedAtMs = Date.now();
+  const budgetMs = options.commandBudget === "published-update" ? 360_000 : 180_000;
+  let timeoutObservation: CommandRecord["timeoutObservation"];
   let child: ChildProcess | undefined;
   const output = { stdout: "", stderr: "" };
   let truncated = false;
@@ -205,8 +212,12 @@ export async function run(
       cwd,
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
-      timeoutMs: options.commandBudget === "published-update" ? 360_000 : 180_000,
+      timeoutMs: budgetMs,
       signal,
+      onTimeout(observation) {
+        // Scalar snapshot only: cancellation must not wait for a process census or file IO.
+        timeoutObservation = { ...observation, capturedAtMs: Date.now() };
+      },
       onReady(launched) {
         child = launched;
         for (const stream of ["stdout", "stderr"] as const) {
@@ -266,6 +277,9 @@ export async function run(
     : undefined;
   records.push({
     args,
+    startedAtMs,
+    budgetMs,
+    ...(timeoutObservation ? { timeoutObservation } : {}),
     launcherPid: child?.pid ?? null,
     code,
     signal: exitSignal,

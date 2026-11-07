@@ -122,7 +122,11 @@ export async function inspectInstalledUpdateFailure(params: {
   observations: Record<string, unknown>;
 }) {
   const { task, commands, signal, observations } = params;
-  observations.updateFailure = await readInstalledUpdateProgress(task);
+  observations.updateFailure = {
+    ...(await readInstalledUpdateProgress(task)),
+    observation: "post-termination",
+    capturedAtMs: Date.now(),
+  };
   if (signal.aborted || commands.some((command) => !command.joined)) {
     return;
   }
@@ -197,10 +201,11 @@ export async function runInstalledPublishedUpdate(params: {
   const stopObservation = new AbortController();
   const completed = new Set<string>();
   let observedRunId: string | undefined;
+  let lastPhase: string | undefined;
   const settlementProcesses: ReturnType<typeof captureSettlementProcesses>[] = [];
   function captureSettlementProcesses(
     progress: Pick<UpdateRunRecord, "runId" | "phase" | "status">,
-    reason: "terminal" | "elapsed-300s" | "follow-up",
+    reason: "terminal" | "elapsed-300s" | "restarting" | "final-pre-timeout",
   ) {
     const sample = {
       runId: progress.runId,
@@ -214,6 +219,7 @@ export async function runInstalledPublishedUpdate(params: {
       const capture = readRelatedProcessDiagnostics([task.profile, packageRoot(task.installRoot)]);
       return {
         ...sample,
+        captureEndedAtMs: Date.now(),
         ok: capture.ok,
         truncated: capture.truncated,
         ...(capture.error ? { unavailable: safeText(capture.error) } : {}),
@@ -229,7 +235,11 @@ export async function runInstalledPublishedUpdate(params: {
         })),
       };
     } catch {
-      return { ...sample, unavailable: "Process observation could not be read" };
+      return {
+        ...sample,
+        captureEndedAtMs: Date.now(),
+        unavailable: "Process observation could not be read",
+      };
     }
   }
   let observationFailure: Error | undefined;
@@ -254,15 +264,20 @@ export async function runInstalledPublishedUpdate(params: {
       if (progress.runId !== observedRunId) {
         continue;
       }
+      const phase = `${progress.phase}:${progress.status}`;
+      // Keep the second census for native restart or the last ordinary poll before the deadline.
       const snapshotReason =
-        settlementProcesses.length > 0
-          ? "follow-up"
-          : progress.phase === "finished" && progress.status !== "running"
-            ? "terminal"
-            : Date.now() - startedAt >= 300_000
-              ? "elapsed-300s"
-              : undefined;
-      if (snapshotReason && settlementProcesses.length < 2) {
+        progress.phase === "finished" && progress.status !== "running" && phase !== lastPhase
+          ? "terminal"
+          : progress.phase === "restarting" && phase !== lastPhase
+            ? "restarting"
+            : Date.now() - startedAt >= 345_000
+              ? "final-pre-timeout"
+              : settlementProcesses.length === 0 && Date.now() - startedAt >= 300_000
+                ? "elapsed-300s"
+                : undefined;
+      const capturedProcesses = snapshotReason && settlementProcesses.length < 2;
+      if (capturedProcesses) {
         settlementProcesses.push(captureSettlementProcesses(progress, snapshotReason));
         // Diagnostics wait for an ordinary proof write; they are not durable update progress.
         observations.updateSettlementProcesses = settlementProcesses;
@@ -278,9 +293,12 @@ export async function runInstalledPublishedUpdate(params: {
         completed.add(identity);
         return true;
       });
-      if (newSteps.length > 0) {
-        observations.updateProgress = progress;
-        await recordProgress("published-update:completed-step");
+      if (newSteps.length > 0 || phase !== lastPhase || capturedProcesses) {
+        lastPhase = phase;
+        observations.updateProgress = { ...progress, observedAtMs: Date.now() };
+        await recordProgress(
+          newSteps.length > 0 ? "published-update:completed-step" : "published-update:phase",
+        );
       }
     }
   })().catch((error: unknown) => {

@@ -5,6 +5,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { DOMParser } from "linkedom";
 import { ignoreMissingPath } from "../infra/errno.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
+import { withUpdatePhase } from "../infra/update-phase-diagnostics.js";
 import { WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS } from "../infra/windows-powershell-spawn.js";
 import { resolveGatewayServiceDescription } from "./constants.js";
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
@@ -515,21 +516,23 @@ export async function installScheduledTask(
   }
   // The caller's recovery hook waits for task recovery to stop the replacement and settle
   // its processes; as with the shared wrapper, a failing hook never skips native recovery.
-  return withGatewayServiceInstallationRecovery(install, async () => {
-    if (!recovery || !restoreTask) {
-      return false;
-    }
-    let hookFailure: { error: unknown } | undefined;
-    const restored = await restoreTask.restore(recovery, activationAttempted, async () => {
-      await args.beforeRecovery?.().catch((error: unknown) => {
-        hookFailure = { error };
+  return withGatewayServiceInstallationRecovery(install, () =>
+    withUpdatePhase("scheduled-task-install-recovery", async () => {
+      if (!recovery || !restoreTask) {
+        return false;
+      }
+      let hookFailure: { error: unknown } | undefined;
+      const restored = await restoreTask.restore(recovery, activationAttempted, async () => {
+        await args.beforeRecovery?.().catch((error: unknown) => {
+          hookFailure = { error };
+        });
       });
-    });
-    if (hookFailure) {
-      throw hookFailure.error;
-    }
-    return restored;
-  }).catch((error: unknown) => {
+      if (hookFailure) {
+        throw hookFailure.error;
+      }
+      return restored;
+    }),
+  ).catch((error: unknown) => {
     if (
       (error instanceof GatewayServiceAuthorityError && error.outcome === "recovery-pending") ||
       error instanceof AggregateError

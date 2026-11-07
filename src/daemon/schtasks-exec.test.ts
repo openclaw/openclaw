@@ -4,15 +4,39 @@ import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers
 import { execScheduledTaskEnabledChange, execSchtasks } from "./schtasks-exec.js";
 import { isRegisteredScheduledTask } from "./schtasks-runtime.js";
 
-const runCommandWithTimeout = vi.hoisted(() => vi.fn());
+const { runCommandWithTimeout, diagnosticLog } = vi.hoisted(() => ({
+  runCommandWithTimeout: vi.fn(),
+  diagnosticLog: vi.fn(),
+}));
 
 // mock-isolation: Exercise real daemon result handling without spawning native commands.
 vi.mock("../process/exec.js", () => ({ runCommandWithTimeout }));
+// mock-isolation: Observe diagnostic messages while exercising the real timing owner.
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "update/diagnostics"
+        ? {
+            ...logger,
+            debug: (message: string) => diagnosticLog("debug", message),
+            warn: (message: string) => diagnosticLog("warn", message),
+          }
+        : logger;
+    },
+  };
+});
 
 beforeEach(() => {
   runCommandWithTimeout.mockReset();
+  diagnosticLog.mockClear();
 });
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.useRealTimers();
+});
 
 it.each([
   ["-2147024891\r\n", "exit", -2147024891],
@@ -59,4 +83,39 @@ it("propagates registration cleanup uncertainty rather than allowing lifecycle f
   const cleanup = new CommandProcessCleanupError();
   runCommandWithTimeout.mockRejectedValue(cleanup);
   await expect(isRegisteredScheduledTask({})).rejects.toBe(cleanup);
+});
+
+it("warns about an in-flight task stop before native settlement without private arguments", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+  let complete!: (result: ReturnType<typeof createCommandResult>) => void;
+  runCommandWithTimeout.mockReturnValue(
+    new Promise((resolve) => {
+      complete = resolve;
+    }),
+  );
+  const operation = execSchtasks(["/End", "/TN", "synthetic-private-task-token"]);
+  expect(diagnosticLog.mock.calls).toHaveLength(1);
+  const begun = JSON.parse((diagnosticLog.mock.calls[0]?.[1] ?? "").slice("update-phase ".length));
+  expect(begun).toMatchObject({ phase: "schtasks-end", event: "start", elapsedMs: 0 });
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(diagnosticLog.mock.calls[1]?.[0]).toBe("warn");
+  expect(
+    JSON.parse((diagnosticLog.mock.calls[1]?.[1] ?? "").slice("update-phase ".length)),
+  ).toMatchObject({
+    phase: "schtasks-end",
+    event: "slow",
+    elapsedMs: 30_000,
+  });
+  complete(createCommandResult({ code: 124, termination: "timeout" }));
+  await expect(operation).resolves.toMatchObject({ code: 124 });
+  const ended = JSON.parse((diagnosticLog.mock.calls[2]?.[1] ?? "").slice("update-phase ".length));
+  expect(ended).toMatchObject({
+    phase: "schtasks-end",
+    event: "end",
+    code: 124,
+    termination: "timeout",
+  });
+  expect(ended.elapsedMs).toBe(30_000);
+  expect(JSON.stringify(diagnosticLog.mock.calls)).not.toContain("synthetic-private-task-token");
 });
