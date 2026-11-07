@@ -16,6 +16,7 @@ import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { sleep } from "../utils/sleep.js";
 import type { GatewayClient } from "./client.js";
+import { findCliAnnounceReplyIndexes } from "./gateway-cli-backend.announce-order.test-support.js";
 import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
@@ -360,12 +361,10 @@ export async function verifyCliBackendAnnounceOrdering({
         ? [extractTextFromChatContent(record.content, { joinWith: "" }) ?? ""]
         : [];
     });
-    const observedParentReplyIndex = assistantReplies.findIndex((reply) =>
-      reply.includes(announceParentToken),
-    );
-    const observedCompletionReplyIndex = assistantReplies.findIndex((reply) =>
-      reply.includes(announceChildToken),
-    );
+    const {
+      parentReplyIndex: observedParentReplyIndex,
+      completionReplyIndex: observedCompletionReplyIndex,
+    } = findCliAnnounceReplyIndexes(assistantReplies, announceParentToken, announceChildToken);
     return observedParentReplyIndex >= 0 && observedCompletionReplyIndex >= 0
       ? {
           parentReplyIndex: observedParentReplyIndex,
