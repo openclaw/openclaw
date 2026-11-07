@@ -1813,6 +1813,7 @@ async function measureVisit(page: Page, id: RouteId, definition: PageDefinition)
         let readyFrames = 0;
         let completeFrames = 0;
         let readyMs: number | undefined;
+        let previousAnchorTop: number | undefined;
         const probe = () => {
           const snapshot = window.openclawControlUi?.snapshot();
           const route = snapshot?.route;
@@ -1868,8 +1869,22 @@ async function measureVisit(page: Page, id: RouteId, definition: PageDefinition)
           if (readyFrames >= 2) {
             readyMs ??= performance.now() - started;
           }
+          // General redirects to the Language anchor. Controls can be ready
+          // before its smooth scroll finishes; retain that separate completion cost.
+          const anchorTop =
+            routeId === "config"
+              ? document.getElementById("settings-language")?.getBoundingClientRect().top
+              : undefined;
+          const anchorSettled =
+            routeId !== "config" ||
+            (anchorTop !== undefined &&
+              anchorTop >= -1 &&
+              anchorTop < window.innerHeight &&
+              anchorTop === previousAnchorTop);
+          previousAnchorTop = anchorTop;
           const contentReady =
             pageReady &&
+            anchorSettled &&
             (!completion ||
               completion.every(({ selector: contentSelector, minimum, maximum }) => {
                 const count = document.querySelectorAll(contentSelector).length;
