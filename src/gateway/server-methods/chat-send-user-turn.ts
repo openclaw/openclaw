@@ -351,7 +351,6 @@ export function prepareChatSendUserTurn(params: {
   userTurn.setInputPromise(
     persistedMediaForTranscriptPromise.then(async (result) => {
       inlineImageOmitted = result.omission === "inline-image-save-failed";
-      const media = result.entries.map((entry) => entry.fact);
       const slots = result.entries.flatMap((entry, factIndex) =>
         entry.imageKind ? [{ kind: entry.imageKind, factIndex }] : [],
       );
@@ -372,6 +371,14 @@ export function prepareChatSendUserTurn(params: {
         transcriptEchoForAgent = transcriptEcho;
         machineTranscriptForAgent = formatAudioTranscriptForAgent(ctx.Transcript);
       }
+      // Preflight replaces runtime facts; retain successful transcription on the
+      // matching durable original without copying runtime paths or array indexes.
+      const transcribedUrls = new Set(
+        (ctx.media ?? []).flatMap((fact) => (fact.transcribed && fact.url ? [fact.url] : [])),
+      );
+      const media = result.entries.map(({ fact }) =>
+        fact.url && transcribedUrls.has(fact.url) ? { ...fact, transcribed: true } : fact,
+      );
       return {
         ...userTurn.baseInput,
         ...(transcriptEcho

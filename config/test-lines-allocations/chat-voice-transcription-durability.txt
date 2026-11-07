@@ -1,0 +1,2 @@
+# Preserve completed voice-note state through canonical SQLite history and recovery selection.
+38
