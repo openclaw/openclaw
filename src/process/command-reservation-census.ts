@@ -1,6 +1,6 @@
+import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
-import { listProcesses } from "@openclaw/proc-safe/inspect";
 import { isPidDefinitelyDead } from "../shared/pid-alive.js";
 
 // A reservation spawns within the same tick (agent tools: after a short admission await).
@@ -48,19 +48,39 @@ function readLinuxProcessBirths(): ProcessBirth[] {
   return births;
 }
 
+/** The sealed update helper has no native addon; ps is the Darwin census it can always run. */
 function readDarwinProcessBirths(): ProcessBirth[] {
-  return listProcesses({ timeoutMs: 5_000 }).flatMap((row) =>
-    row.owner === "different"
-      ? []
-      : [
-          {
-            pid: row.pid,
-            ppid: row.parentPid,
-            bornAtMs: row.identity ? row.identity.startTimeMicros / 1_000 : undefined,
-            zombie: row.state === "zombie",
-          },
-        ],
-  );
+  const census = spawnSync("/bin/ps", ["-A", "-o", "pid=,ppid=,uid=,stat=,lstart="], {
+    encoding: "utf8",
+    env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
+    timeout: 5_000,
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  if (census.error || census.status !== 0) {
+    throw new Error("Darwin process census is unavailable");
+  }
+  const uid = process.getuid?.();
+  return census.stdout.split("\n").flatMap((line) => {
+    const row = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.+?)\s*$/.exec(line);
+    if (!row) {
+      if (line.trim()) {
+        throw new Error("Darwin process census is unreadable");
+      }
+      return [];
+    }
+    if (Number(row[3]) !== uid || Number(row[1]) === census.pid) {
+      return [];
+    }
+    const bornAtMs = Date.parse(`${row[5]} UTC`);
+    return [
+      {
+        pid: Number(row[1]),
+        ppid: Number(row[2]),
+        bornAtMs: Number.isNaN(bornAtMs) ? undefined : bornAtMs,
+        zombie: row[4]!.startsWith("Z"),
+      },
+    ];
+  });
 }
 
 /**

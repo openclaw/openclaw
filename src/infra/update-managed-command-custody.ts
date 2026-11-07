@@ -30,6 +30,14 @@ export type ManagedCommandProcessAuthority = {
   databaseIdentity: ManagedUpdateLeaseDatabaseIdentity;
 };
 
+/** A process born at reservation time remains; an unrelated short-lived one clears itself. */
+export class CommandReservationCandidatesError extends Error {
+  constructor(key: string) {
+    super(`A process started with native command reservation ${key} is still running`);
+    this.name = "CommandReservationCandidatesError";
+  }
+}
+
 function commandBirthIdentity(identity: CommandProcessIdentity): string | undefined {
   return identity.startedAt === null
     ? undefined
@@ -222,11 +230,11 @@ export async function createManagedCommandProcessCustody(options: {
             `Native command custody for PID ${lease.executor.pid} belongs to another Doctor`,
           );
         }
-        // A dead Doctor's reservation closes once no process carries its marker.
-        if (
-          managedCommandCustody(lease) === "reserved" &&
-          !managedCommandUnsettled(lease, store.processState)
-        ) {
+        // A dead Doctor's reservation closes once no process born with it remains.
+        if (managedCommandCustody(lease) === "reserved" && store.processState(lease.helper) === "dead") {
+          if (managedCommandUnsettled(lease, store.processState)) {
+            throw new CommandReservationCandidatesError(lease.key);
+          }
           leases.push(lease);
           continue;
         }

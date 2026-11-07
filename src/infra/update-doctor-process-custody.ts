@@ -15,6 +15,7 @@ import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV } from "./update-doctor-result.js";
 import {
+  CommandReservationCandidatesError,
   createManagedCommandProcessCustody,
   type ManagedCommandProcessAuthority,
 } from "./update-managed-command-custody.js";
@@ -312,8 +313,10 @@ export async function createUpdateDoctorProcessCustody(
               prepared = nativeCustody?.prepareSettlement(pid, identities);
               break;
             } catch (error) {
-              // An unrelated short-lived process born near a reservation clears itself.
-              if (pending === 0 || attempt >= RESERVATION_SETTLEMENT_ATTEMPTS) {
+              if (
+                !(error instanceof CommandReservationCandidatesError) ||
+                attempt >= RESERVATION_SETTLEMENT_ATTEMPTS
+              ) {
                 throw error;
               }
               await sleep(1_000);
