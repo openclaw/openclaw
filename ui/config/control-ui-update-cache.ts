@@ -19,7 +19,7 @@ type ChunkGraph = Record<string, Chunk | { type: "asset" }>;
 const mappedRoots = new Set(["control-ui-connection", "control-ui-boot-shared"]);
 const sourceInputs = [
   fileURLToPath(import.meta.url),
-  fileURLToPath(new URL("./control-ui-boot-modules.json", import.meta.url)),
+  path.join(path.dirname(fileURLToPath(import.meta.url)), "control-ui-boot-modules.json"),
 ];
 
 function moduleKey(id: string): string {
@@ -209,6 +209,9 @@ export function controlUiUpdateCachePlugins(): Plugin[] {
         order: "post",
         handler(_options, bundle) {
           const mapped = jsMapping(bundle);
+          if (!mapped.size) {
+            return;
+          }
           const runtimes = Object.values(bundle).filter(
             (chunk) => chunk.type === "chunk" && chunk.name === "rolldown-runtime",
           );
