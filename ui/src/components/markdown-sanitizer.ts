@@ -24,6 +24,7 @@ const allowedTags = [
   "li",
   "ol",
   "openclaw-person-reference",
+  "openclaw-markdown-math",
   "p",
   "pre",
   "s",
@@ -56,6 +57,7 @@ const allowedAttrs = [
   "src",
   "alt",
   "data-code",
+  "data-display",
   "data-code-encoding",
   "data-code-highlight",
   "data-file-kind",
@@ -78,6 +80,10 @@ const sanitizeOptions = {
   ALLOWED_TAGS: allowedTags,
   ALLOWED_ATTR: allowedAttrs,
   ADD_DATA_URI_TAGS: ["img"],
+  CUSTOM_ELEMENT_HANDLING: {
+    tagNameCheck: /^openclaw-markdown-math$/u,
+    attributeNameCheck: /^(?:class|data-display)$/u,
+  },
 };
 const progressSanitizeOptions = {
   ...sanitizeOptions,

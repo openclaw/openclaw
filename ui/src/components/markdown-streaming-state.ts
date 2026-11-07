@@ -18,6 +18,8 @@ export type StreamingMarkdownCursor = {
   lastLiteralOffset: number;
   lineMode: "fence" | "plain" | null;
   openFence: FenceMarker | null;
+  openMath: "$$" | "\\[" | null;
+  mathScanEnd: number;
 };
 
 type StreamingMarkdownState = {
@@ -28,7 +30,13 @@ type StreamingMarkdownState = {
     rawTail: boolean;
     result: StreamingMarkdownSplit;
   };
-  rendered?: { options: string; markdown: string; html: string; hasHtml: boolean };
+  rendered?: {
+    options: string;
+    markdown: string;
+    html: string;
+    hasHtml: boolean;
+    mathExpressions: number;
+  };
 };
 const streamingCache = new Map<string, StreamingMarkdownState>();
 
