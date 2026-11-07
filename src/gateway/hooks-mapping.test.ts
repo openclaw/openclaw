@@ -137,6 +137,23 @@ describe("hooks mapping", () => {
     }
   });
 
+  it("resolves header templates case-insensitively", async () => {
+    const mappings = resolveHookMappings({
+      mappings: [
+        {
+          match: { path: "github" },
+          action: "wake",
+          textTemplate: "{{headers.X-GitHub-Event}} {{headers.x-github-delivery}}",
+        },
+      ],
+    });
+    const result = await applySingleHookMapping(mappings, {
+      ...mappingContext("github"),
+      headers: { "x-github-event": "push", "x-github-delivery": "d-1" },
+    });
+    expectWakeText(result, "push d-1");
+  });
+
   it.each(["wake", "agent"] as const)(
     "rejects %s session key templates that render empty",
     async (action) => {
