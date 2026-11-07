@@ -1,8 +1,6 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
-import { createServer } from "node:http";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { afterAll, afterEach, assert, expect, it, vi } from "vitest";
-import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 import { createSpeechDirectivePolicy } from "../test-support/speech-directive-policy.test-support.js";
 import { buildHeyGenSpeechProvider } from "./speech-provider.js";
 
@@ -27,13 +25,8 @@ function respond(handler: (url: string, init?: RequestInit) => Response) {
 const provider = buildHeyGenSpeechProvider();
 const request = { text: "hi", cfg: {}, providerConfig: { apiKey: "key" }, timeoutMs: 1_000 };
 
-async function streamSpeech(providerConfig: Record<string, unknown>, extra = {}) {
-  const result = await provider.streamSynthesize?.({
-    ...request,
-    providerConfig: { ...request.providerConfig, ...providerConfig },
-    target: "audio-file",
-    ...extra,
-  });
+async function streamSpeech(extra = {}) {
+  const result = await provider.streamSynthesize?.({ ...request, target: "audio-file", ...extra });
   assert(result);
   return result;
 }
@@ -131,32 +124,12 @@ it.each([
   });
 });
 
-it("keeps a long HTTP take alive while audio arrives", async () => {
-  const { fetchWithSsrFGuard } = await vi.importActual<
-    typeof import("openclaw/plugin-sdk/ssrf-runtime")
-  >("openclaw/plugin-sdk/ssrf-runtime");
-  fetchMock.mockImplementation((params: Parameters<typeof fetchWithSsrFGuard>[0]) =>
-    fetchWithSsrFGuard({ ...params, policy: { allowPrivateNetwork: true } }),
-  );
-  const server = createServer((_request, response) => {
-    response.writeHead(200, { "content-type": "audio/mpeg" });
-    let sent = 0;
-    const timer = setInterval(() => {
-      response.write(Buffer.from([++sent]));
-      if (sent === 4) {
-        clearInterval(timer);
-        response.end();
-      }
-    }, 200);
-  });
-  const port = await listenOnLoopback(server);
-  try {
-    const result = await streamSpeech({ baseUrl: `http://127.0.0.1:${port}` }, { timeoutMs: 500 });
-    expect(await readAudio(result.audioStream)).toEqual(Buffer.from([1, 2, 3, 4]));
-  } finally {
-    server.closeAllConnections();
-    server.close();
-  }
+it("restarts the request timeout on each audio chunk", async () => {
+  const refreshTimeout = vi.fn();
+  const response = new Response(Buffer.from([1]), { headers: { "content-type": "audio/mpeg" } });
+  fetchMock.mockResolvedValue({ response, release: async () => {}, refreshTimeout });
+  await readAudio((await streamSpeech()).audioStream);
+  expect(refreshTimeout).toHaveBeenCalledOnce();
 });
 
 it("transcodes voice notes to Opus", async () => {
@@ -176,10 +149,9 @@ it("transcodes voice notes to Opus", async () => {
 
 it("errors the stream past the configured media limit", async () => {
   respond(() => new Response(Buffer.from([1, 2]), { headers: { "content-type": "audio/mpeg" } }));
-  const result = await streamSpeech(
-    {},
-    { cfg: { agents: { defaults: { mediaMaxMb: 1 / (1024 * 1024) } } } },
-  );
+  const result = await streamSpeech({
+    cfg: { agents: { defaults: { mediaMaxMb: 1 / (1024 * 1024) } } },
+  });
   await expect(readAudio(result.audioStream)).rejects.toThrow("exceeds 1 bytes");
 });
 
@@ -189,7 +161,7 @@ it("releases the request when playback stops", async () => {
     headers: { "content-type": "audio/mpeg" },
   });
   fetchMock.mockResolvedValue({ response, release });
-  const result = await streamSpeech({});
+  const result = await streamSpeech();
   await result.release?.();
   expect(release).toHaveBeenCalledOnce();
 });
@@ -197,7 +169,7 @@ it("releases the request when playback stops", async () => {
 it("releases the request when HeyGen refuses a stream", async () => {
   const release = vi.fn(async () => {});
   fetchMock.mockResolvedValue({ response: new Response("no", { status: 503 }), release });
-  await expect(streamSpeech({})).rejects.toThrow("503");
+  await expect(streamSpeech()).rejects.toThrow("503");
   expect(release).toHaveBeenCalledOnce();
 });
 

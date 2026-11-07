@@ -13,7 +13,6 @@ export const HEYGEN_PCM_OUTPUT = { encoding: "pcm", sample_rate_hertz: 24_000 } 
 const HEYGEN_ERROR_LABEL = "HeyGen TTS API error";
 const HEYGEN_VOICE_PAGE_SIZE = 100;
 const HEYGEN_MAX_OWN_VOICE_PAGES = 20;
-const HEYGEN_VOICES_MAX_BYTES = 2 * 1024 * 1024;
 
 type HeyGenTtsRequest = {
   text: string;
@@ -24,11 +23,6 @@ type HeyGenTtsRequest = {
   language?: string;
   timeoutMs: number;
   maxBytes: number;
-};
-
-type HeyGenAudioStream = {
-  audioStream: ReadableStream<Uint8Array>;
-  release: () => Promise<void>;
 };
 
 type HeyGenOutputFormat = typeof HEYGEN_MP3_OUTPUT | typeof HEYGEN_PCM_OUTPUT;
@@ -86,7 +80,7 @@ export async function heygenTts(
   }
 }
 
-export async function heygenTtsStream(params: HeyGenTtsRequest): Promise<HeyGenAudioStream> {
+export async function heygenTtsStream(params: HeyGenTtsRequest) {
   const { createBoundedProviderBinaryStream } =
     await import("openclaw/plugin-sdk/provider-binary-stream");
   const { assertOkOrThrowProviderError, assertProviderBinaryResponseContent } =
@@ -169,7 +163,6 @@ export async function listHeyGenVoices(params: {
     try {
       await assertOkOrThrowProviderError(response, "HeyGen voices API error", { requestHeaders });
       return await readProviderJsonResponse<HeyGenVoicePage>(response, "HeyGen voices", {
-        maxBytes: HEYGEN_VOICES_MAX_BYTES,
         requestHeaders,
       });
     } finally {

@@ -64,12 +64,6 @@ OpenClaw lists your workspace voices first, then a page of public voices. When t
 
 The provider does not create voices. To create an instant clone, call `POST /v3/models/audio/voices` with `mode: "instant"`, then set the returned `data.voice_id` as `speakerVoiceId`. The [plugin README](https://github.com/openclaw/openclaw/tree/main/extensions/heygen-speech) has an example.
 
-## Streaming
-
-Streamed playback, such as Discord voice, streams MP3 over HTTP and plays it as it arrives.
-
-A professional voice clone needs `model: "heygen-voice-1"`.
-
 ## Output
 
 | Target         | Format | Sample rate |
@@ -78,7 +72,7 @@ A professional voice clone needs `model: "heygen-voice-1"`.
 | Voice note     | `opus` | 48 kHz      |
 | Telephony      | `pcm`  | 24 kHz      |
 
-Voice notes are transcoded from MP3 with `ffmpeg`.
+Voice notes are transcoded from MP3 with `ffmpeg`. Streamed playback, such as Discord voice, streams MP3 over HTTP and plays it as it arrives.
 
 ## Related
 

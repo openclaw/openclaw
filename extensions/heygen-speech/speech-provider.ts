@@ -123,7 +123,7 @@ export function buildHeyGenSpeechProvider(): SpeechProviderPlugin {
     resolveTalkOverrides: ({ params }) =>
       filterStringRecord({
         voiceId: trimToUndefined(params.voiceId),
-        model: trimToUndefined(params.modelId ?? params.model),
+        model: trimToUndefined(params.modelId),
       }),
     listVoices: async (req) => {
       const config = readProviderConfig(req.providerConfig ?? {});
