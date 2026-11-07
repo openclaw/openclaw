@@ -2158,6 +2158,63 @@ export function createEnginePageScenarios(
         return evidence;
       },
     };
+    if (id === "skills") {
+      const inputVisit: EngineScenario = {
+        ...common,
+        initScript:
+          common.initScript ??
+          createColdLoadProbeInitScript({
+            ownerProbes: false,
+            sidebarCounters: false,
+            latencyMs: gatewayLatencyMs,
+            frameGapMs: 0,
+            events: [],
+          }),
+        id: "page-skills-input-visit",
+        expected: "First visit to Skills accepts a search without waiting for installed inventory.",
+        prepare: boot,
+        run: async (page) => {
+          const selector = '.skill-discovery input[type="search"]:enabled';
+          const timing = await measureVisit(page, id, {
+            ...definition,
+            ready: selector,
+            rows: undefined,
+            completion: undefined,
+          });
+          const search = page.locator(selector);
+          await search.fill("catalog input probe");
+          assert.equal(await search.inputValue(), "catalog input probe");
+          const input = await page.evaluate(() => {
+            const reads: { pendingMethods: string[] } = Reflect.get(window, "__coldLoad").read();
+            return {
+              acceptedAtMs: performance.now(),
+              query: document.querySelector<HTMLInputElement>(
+                '.skill-discovery input[type="search"]',
+              )?.value,
+              inventoryPending: reads.pendingMethods.includes("skills.status"),
+              visiblyBusy:
+                document
+                  .querySelector(".skill-discovery .plugin-catalog-grid")
+                  ?.getAttribute("aria-busy") === "true",
+            };
+          });
+          assert.equal(input.query, "catalog input probe");
+          if (input.inventoryPending) {
+            assert.equal(input.visiblyBusy, true);
+          }
+          return {
+            visitStartedAtMs: timing.startedAtMs,
+            visitReadyMs: timing.readyMs,
+            visitReadyAtMs: timing.readyAtMs,
+            inputAcceptedMs: input.acceptedAtMs - timing.startedAtMs,
+            inventoryPendingAtInput: input.inventoryPending,
+            inventoryBusyAtInput: input.visiblyBusy,
+            searchAccepted: true,
+          };
+        },
+      };
+      return [visit, revisit, action, leave, inputVisit].concat(noChanges);
+    }
     if (id === "search") {
       const firstAdvancedOpen: EngineScenario = {
         ...common,
