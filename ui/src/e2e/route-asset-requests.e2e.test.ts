@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
-import { expect, it } from "vitest";
+import { expect, inject, it } from "vitest";
+import { startControlUiBenchGatewayServer } from "../../../scripts/lib/control-ui-bench-gateway-server.ts";
 import { createEnginePageScenarios } from "../../../scripts/lib/control-ui-engine-page-scenarios.ts";
 import { frames } from "../../../scripts/lib/control-ui-interaction-navigation.ts";
 import {
@@ -24,13 +25,32 @@ import {
   holdModuleResponse,
 } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "First-visit route asset requests" });
+const requestLatencyMs = 100;
+const suite = createControlUiE2eSuite({
+  name: "First-visit route asset requests",
+  startServer: async () => {
+    const root = inject("controlUiE2eBuildRoot");
+    if (!root) {
+      throw new Error("Route request proof requires the shared production UI build");
+    }
+    return startControlUiBenchGatewayServer(root, 0, requestLatencyMs);
+  },
+});
 // First visits must not regain the removed request wave or eager Markdown reader.
-const criticalRequestLimits = { skills: 29, "skill-settings": 29, talk: 40 };
-type Route = keyof typeof criticalRequestLimits;
+const readyWindowRequestLimits = {
+  skills: 29,
+  "skill-settings": 29,
+  talk: 40,
+  custodian: 24,
+  mcp: 65,
+  security: 52,
+};
+type Route = keyof typeof readyWindowRequestLimits;
 
 async function visit(page: Page, route: Route) {
-  const scenario = createEnginePageScenarios().find(({ id }) => id === `page-${route}-visit`);
+  const scenario = createEnginePageScenarios(requestLatencyMs).find(
+    ({ id }) => id === `page-${route}-visit`,
+  );
   if (!scenario) {
     throw new Error(`Missing first-visit scenario for ${route}`);
   }
@@ -61,6 +81,9 @@ async function visit(page: Page, route: Route) {
       },
     },
   );
+  if (scenario.initScript) {
+    await page.addInitScript({ content: scenario.initScript });
+  }
   await page.addInitScript(installInteractionNavigationPreloadObserver);
   await installControlUiPageObserver(page);
   await page.goto(new URL(scenario.route, suite.server.baseUrl).href);
@@ -89,8 +112,8 @@ async function visit(page: Page, route: Route) {
 }
 
 suite.define(() => {
-  it.each(["skills", "skill-settings", "talk"] as const)(
-    "bounds %s critical asset requests from a settled New Session",
+  it.each(["skills", "skill-settings", "talk", "custodian", "mcp", "security"] as const)(
+    "bounds %s ready-window asset requests at 100 ms from a settled New Session",
     (route) =>
       suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
         const reader = controlUiE2eBuiltModuleRequest(
@@ -104,11 +127,12 @@ suite.define(() => {
         });
 
         const observation = await visit(page, route);
-        const critical = observation.assets.filter((asset) => asset.completedByReady);
-        expect(critical.length).toBeGreaterThan(0);
-        expect(critical.length, critical.map((asset) => asset.name).join("\n")).toBeLessThanOrEqual(
-          criticalRequestLimits[route],
-        );
+        const readyAssets = observation.assets.filter((asset) => asset.completedByReady);
+        expect(readyAssets.length).toBeGreaterThan(0);
+        expect(
+          readyAssets.length,
+          readyAssets.map((asset) => asset.name).join("\n"),
+        ).toBeLessThanOrEqual(readyWindowRequestLimits[route]);
 
         if (route === "skills") {
           expect(readerRequests).toBe(0);

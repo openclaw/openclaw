@@ -13,6 +13,7 @@ import { formatUiExternalText } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { createScrollPosition } from "../../lib/reactive/scroll-state.ts";
+import "../../styles/chat/layout.css";
 import { ChatDivider } from "../chat/components/chat-divider.tsx";
 import { MessageGroup } from "../chat/components/chat-message-group-view.tsx";
 import type { CustodianActions } from "./custodian-actions.ts";

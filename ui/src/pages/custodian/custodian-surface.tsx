@@ -22,7 +22,6 @@ import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-brid
 import "../../styles/chat/startup-layout.css";
 import "../../styles/chat/grouped.css";
 import "../../styles/option-card.css";
-import "../../styles/chat/layout.css";
 import "../../styles/chat/message-layout.css";
 import "../../styles/chat/composer.css";
 import "../../styles/chat/composer-surface.css";
