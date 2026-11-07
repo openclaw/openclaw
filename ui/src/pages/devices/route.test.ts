@@ -9,9 +9,14 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import { page } from "./route.ts";
 
-it("returns inventory while shared configuration is still pending", async () => {
+it("refreshes known configuration without holding inventory on the fresh read", async () => {
   const policy = Promise.withResolvers<never>();
+  let configReads = 0;
   const client = createTestGatewayClient(async (method) => {
+    if (method === "config.get") {
+      configReads += 1;
+      return configReads === 1 ? { hash: "initial", config: {} } : policy.promise;
+    }
     if (method === "node.list") {
       return { nodes: [{ nodeId: "available-node" }] };
     }
@@ -28,7 +33,7 @@ it("returns inventory while shared configuration is still pending", async () => 
   );
   const runtimeConfig = createRuntimeConfigCapability(harness.gateway);
   onTestFinished(() => runtimeConfig.dispose());
-  vi.spyOn(runtimeConfig, "refresh").mockReturnValue(policy.promise);
+  await runtimeConfig.ensureLoaded();
   const context = { gateway: harness.gateway, runtimeConfig } as ApplicationContext;
   let inventory: unknown;
   void Promise.resolve(
@@ -44,6 +49,7 @@ it("returns inventory while shared configuration is still pending", async () => 
       devices: { nodes: [{ nodeId: "available-node" }], devicesList: { paired: [] } },
     }),
   );
+  expect(configReads).toBe(2);
 });
 
 it("loads Devices from the connection current after the route module yield", async () => {
@@ -73,7 +79,7 @@ it("loads Devices from the connection current after the route module yield", asy
   );
   const runtimeConfig = createRuntimeConfigCapability(harness.gateway);
   onTestFinished(() => runtimeConfig.dispose());
-  vi.spyOn(runtimeConfig, "refresh").mockResolvedValue(undefined);
+  const refresh = vi.spyOn(runtimeConfig, "refresh").mockResolvedValue(undefined);
   const context = {
     gateway: harness.gateway,
     runtimeConfig,
@@ -91,6 +97,7 @@ it("loads Devices from the connection current after the route module yield", asy
 
   expect(oldRequest).not.toHaveBeenCalled();
   expect(currentRequest).toHaveBeenCalledWith("node.list", {});
+  expect(refresh).toHaveBeenCalledOnce();
   expect(data).toMatchObject({
     gateway: harness.gateway,
     gatewaySnapshot: harness.gateway.snapshot,

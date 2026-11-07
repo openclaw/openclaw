@@ -29,6 +29,7 @@ export const page = defineSolidPage<"devices", ApplicationContext, DevicesRouteD
           canAdmin && loadExecApprovals(devices),
         ]),
       ]);
+      void context.runtimeConfig.refresh({ background: true }).catch(() => undefined);
       return { gateway, gatewaySnapshot, devices };
     },
   },

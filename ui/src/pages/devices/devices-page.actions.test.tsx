@@ -60,29 +60,6 @@ async function startSave(container: ParentNode) {
 describe("DevicesPage policy saves", () => {
   setupDevicesPageFixtures();
 
-  it("refreshes known configuration without holding inventory on the fresh read", async () => {
-    const refresh = createDeferred<unknown>();
-    let configReads = 0;
-    const { client } = clientFor(
-      vi.fn(async (method: string) =>
-        method === "config.get" && ++configReads > 1 ? refresh.promise : responseFor(method),
-      ),
-    );
-    const fixture = gatewayFixture(gatewaySnapshot(client, true, [], ["operator.admin"]));
-    const runtimeConfig = createRuntimeConfigCapability(fixture.source);
-    cleanups.push(() => runtimeConfig.dispose());
-    await runtimeConfig.ensureLoaded();
-    const page = mountPage(
-      fixture,
-      { nodes: [{ nodeId: "available", displayName: "Available node" }] },
-      undefined,
-      runtimeConfig,
-    );
-    await waitForSolid(() => expect(configReads).toBe(2));
-    expect(page.container.textContent).toContain("Available node");
-    refresh.resolve(responseFor("config.get"));
-  });
-
   it.each(["accepted", "rejected"])(
     "retains the policy control and draft while an exec save is %s",
     async (outcome) => {
