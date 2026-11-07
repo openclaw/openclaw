@@ -13,8 +13,11 @@ Enable the plugin before using the command:
 
 ```bash
 openclaw plugins enable workboard
-openclaw gateway restart
 ```
+
+Enablement applies to a running Gateway automatically. If the Gateway is
+offline, start it before using the command. See
+[Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Usage
 
