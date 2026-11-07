@@ -17,11 +17,17 @@ import type {
 import type { TelegramBuiltinCommandResult } from "./bot-native-command-builtins.js";
 import type { TelegramCommandExecutorParams } from "./bot-native-command-dispatch.js";
 import {
+  beginTelegramNativeCommandHandoff,
+  endTelegramNativeCommandHandoff,
+  shouldRunTelegramNativeCommandAfterHandoff,
+} from "./bot-native-command-handoff.js";
+import {
   buildCappedTelegramMenuCommands,
   buildPluginTelegramMenuCommands,
   syncTelegramMenuCommands,
   type TelegramMenuCommand,
 } from "./bot-native-command-menu.js";
+import { detachSkippedTelegramSpooledReplayDeferredParticipant } from "./bot-processing-outcome.js";
 import type { TelegramUpdateKeyContext } from "./bot-updates.js";
 import {
   normalizeTelegramCommandName,
@@ -233,23 +239,50 @@ export const registerTelegramNativeCommands = async ({
   }
 
   for (const pluginCommand of pluginCatalog.selectedCommands) {
-    bot.command(pluginCommand.command, async (ctx: TelegramNativeCommandContext) => {
+    bot.command(pluginCommand.command, async (ctx: TelegramNativeCommandContext, next) => {
       if (shouldSkipUpdate(ctx) || !ctx.message) {
         return;
       }
+      const msg = ctx.message;
+      const rawText = ctx.match?.trim() ?? "";
+      const candidate = pluginCommand.spec;
+      // A bot author stays native: the pipeline's bot-loop guard could drop an admitted command.
+      if (
+        candidate.runtimeCapabilities?.length &&
+        (candidate.acceptsArgs || !rawText) &&
+        !msg.from?.is_bot
+      ) {
+        // Only the message pipeline's command turn has runtime capabilities; it decides first.
+        const handoff = beginTelegramNativeCommandHandoff(ctx.update, {
+          commandName: pluginCommand.command,
+          candidate,
+          args: rawText,
+          chatId: msg.chat.id,
+          messageId: msg.message_id,
+        });
+        try {
+          await next();
+        } finally {
+          endTelegramNativeCommandHandoff(ctx.update);
+        }
+        if (!(await shouldRunTelegramNativeCommandAfterHandoff(handoff))) {
+          return;
+        }
+        // A declined offer settled the replay participant; native execution owns the update, as on main.
+        await detachSkippedTelegramSpooledReplayDeferredParticipant();
+      }
       const { executeTelegramPluginCommand } = await loadTelegramPluginCommandExecutor();
-      const message = ctx.message;
       await executeTelegramPluginCommand({
         ...executorParams,
         botUser: ctx.me,
-        msg: message,
-        rawText: ctx.match?.trim() ?? "",
+        msg,
+        rawText,
         commandName: pluginCommand.command,
-        candidate: pluginCommand.spec,
+        candidate,
         continueAgentTurn: (turn) =>
           continuePluginCommandTurn({
             ...turn,
-            ctx: { message, update: ctx.update, me: ctx.me, getFile: ctx.getFile.bind(ctx) },
+            ctx: { message: msg, update: ctx.update, me: ctx.me, getFile: ctx.getFile.bind(ctx) },
           }),
       });
     });

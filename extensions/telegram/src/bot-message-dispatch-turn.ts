@@ -166,7 +166,13 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             ...(context.pluginCommandDispatch
               ? { [PLUGIN_COMMAND_DISPATCH]: context.pluginCommandDispatch }
               : context.ctxPayload.CommandSource === "native"
-                ? { [PLUGIN_COMMAND_DISPATCH]: { kind: "non-plugin" as const } }
+                ? {
+                    [PLUGIN_COMMAND_DISPATCH]: context.nativeCommandHandoff
+                      ? context.nativeCommandHandoff.candidate.prepareDispatch(
+                          context.nativeCommandHandoff.args,
+                        )
+                      : { kind: "non-plugin" as const },
+                  }
                 : {}),
             groupThreadReplyFormatter: formatTelegramGroupThreadReply,
             skillFilter: context.skillFilter,
