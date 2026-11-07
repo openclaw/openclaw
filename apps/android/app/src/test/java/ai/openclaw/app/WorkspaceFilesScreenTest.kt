@@ -1,8 +1,6 @@
 package ai.openclaw.app
 
 import ai.openclaw.app.gateway.GatewayEndpoint
-import ai.openclaw.app.gateway.GatewaySession
-import ai.openclaw.app.node.ConnectionManager
 import ai.openclaw.app.ui.WorkspaceFilesScreen
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import android.content.Context
@@ -15,15 +13,13 @@ import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performScrollToNode
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.job
-import kotlinx.coroutines.joinAll
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -45,7 +41,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
-import org.robolectric.util.ReflectionHelpers
 import java.net.InetAddress
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicReference
@@ -61,7 +56,6 @@ class WorkspaceFilesScreenTest {
   private val finalPage = AtomicReference<Pair<WebSocket, String>>()
   private val models = ViewModelStore()
   private lateinit var runtime: NodeRuntime
-  private lateinit var session: GatewaySession
   private var showScreen by mutableStateOf(true)
   private var animationScale = 1f
   private var contentInstalled = false
@@ -70,30 +64,14 @@ class WorkspaceFilesScreenTest {
   fun setUp() {
     animationScale = Settings.Global.getFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
     Settings.Global.putFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
-    val prefs = SecurePrefs(app, app.getSharedPreferences("workspace-files-screen-test", Context.MODE_PRIVATE))
-    prefs.setOnboardingCompleted(true)
-    runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
-    bindNodeRuntimeTestFixture(app, runtime)
-    session = ReflectionHelpers.getField(runtime, "operatorSession")
-    drainWithMainLooper {
-      val jobs =
-        ReflectionHelpers
-          .getField<CoroutineScope>(runtime, "scope")
-          .coroutineContext.job.children
-          .toList()
-      jobs.forEach { it.cancel() }
-      jobs.joinAll()
-      session.disconnectAndJoin()
-      ReflectionHelpers.getField<GatewaySession>(runtime, "nodeSession").disconnectAndJoin()
-    }
-    server.enqueue(MockResponse().withWebSocketUpgrade(listener()))
+    repeat(2) { server.enqueue(MockResponse().withWebSocketUpgrade(listener())) }
     server.start(InetAddress.getByName("127.0.0.1"), 0)
     val endpoint = GatewayEndpoint.manual("127.0.0.1", server.port)
-    ReflectionHelpers.setField(runtime, "connectedEndpoint", endpoint)
-    val manager = ReflectionHelpers.getField<ConnectionManager>(runtime, "connectionManager")
-    runtime.selectChatAgent("main")
-    session.connect(endpoint, "synthetic-files-proof", null, null, manager.buildOperatorConnectOptions())
-    compose.waitUntil(15_000) { runtime.isConnected.value }
+    val prefs = SecurePrefs(app, app.getSharedPreferences("workspace-files-screen-test", Context.MODE_PRIVATE))
+    prefs.setManualTls(false)
+    prefs.saveGatewayCredentials(endpoint.stableId, token = "synthetic-files-proof")
+    runtime = NodeRuntime(app, prefs)
+    bindNodeRuntimeTestFixture(app, runtime)
     val model = MainViewModel(app, prefs, SavedStateHandle())
     models.put("files", model)
     model.setForeground(true)
@@ -103,7 +81,11 @@ class WorkspaceFilesScreenTest {
       }
     }
     contentInstalled = true
-    compose.waitUntil(15_000) { requests.size == 1 }
+    compose.runOnIdle { model.connect(endpoint) }
+    compose.waitUntil(15_000) {
+      compose.onAllNodesWithText("file-000.txt").fetchSemanticsNodes().isNotEmpty()
+    }
+    assertEquals(1, requests.size)
     awaitReady()
     compose.onNodeWithText("file-000.txt").assertIsDisplayed()
   }
@@ -199,7 +181,12 @@ class WorkspaceFilesScreenTest {
         val payload =
           when (method) {
             "connect" -> {
-              """{"server":{"host":"files-proof"},"auth":{"role":"operator","scopes":["operator.read"]},"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}"""
+              val role =
+                frame["params"]!!
+                  .jsonObject
+                  .getValue("role")
+                  .jsonPrimitive.content
+              """{"type":"hello-ok","protocol":3,"server":{"host":"files-proof","version":"proof"},"features":{"methods":["agents.list","agents.workspace.list"],"events":[]},"auth":{"role":"$role","scopes":["operator.read"]},"snapshot":{"sessionDefaults":{"mainSessionKey":"agent:main:main"}}}"""
             }
 
             "agents.list" -> {
