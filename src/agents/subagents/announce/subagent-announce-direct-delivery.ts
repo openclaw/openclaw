@@ -521,7 +521,7 @@ async function sendSubagentAnnounceDirectlyBound(
       if (params.signal?.aborted) {
         return { delivered: false, path: "none" };
       }
-      if (isRequesterSettleWatchdogFailure(err)) {
+      if (sourceToolId === "subagent_settle" && isRequesterSettleWatchdogFailure(err)) {
         return { delivered: false, path: "none", reason: "requester_stalled" };
       }
       const directCompletionFallbackKind = hasFailedTrustedSubagentCompletion

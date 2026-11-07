@@ -54,24 +54,14 @@ export async function settleRequesterStallFallback(
           signal: params.signal,
         }
       : undefined;
-  if (recoveryState.attemptCount >= REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS) {
-    await params.complete(recoveryState, {
-      delivered: false,
-      path: "none",
-      disposition: "permanent_failure",
-      error:
-        "Requester-stall recovery exhausted; child results retained without another parent turn.",
-    });
-    return false;
-  }
   const fallbackState = {
     ...recoveryState,
     requesterStallFallback: directDelivery ? ("external" as const) : ("transcript" as const),
     status: "dispatching" as const,
-    attemptCount: recoveryState.attemptCount + 1,
+    // An admitted stall gets its own bounded budget; parent attempts cannot exhaust it.
+    attemptCount: recoveryState.requesterStallFallback ? recoveryState.attemptCount + 1 : 1,
     nextAttemptAt: undefined,
   };
-  // The same budget covers the parent attempt and delivery-only recovery.
   await params.transition(fallbackState);
   let fallback: SubagentAnnounceDeliveryResult;
   try {

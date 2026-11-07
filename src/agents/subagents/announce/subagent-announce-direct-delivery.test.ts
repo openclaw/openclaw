@@ -406,26 +406,38 @@ it.each([
     input: Object.assign(new Error("send incomplete"), { sentBeforeError: true }),
     expected: { delivered: false, disposition: "ambiguous" },
   },
-])("reports the direct outcome for $name without replay", async ({ input, expected }) => {
-  const fixture = setup();
-  const onDeliveryError = vi.fn();
-  fixture.params.onDeliveryError = onDeliveryError;
-  const delivery = fixture.startDelivery();
-  await fixture.dispatchEntered.promise;
-  if (input instanceof Error) {
-    fixture.dispatchDone.reject(input);
-  } else {
-    fixture.dispatchDone.resolve(input);
-  }
-  const result = await delivery;
-  const { disposition, ...fields } = expected;
-  expect(result).toMatchObject(fields);
-  expect(result.disposition).toBe(disposition);
-  if (input instanceof Error) {
-    expect(onDeliveryError).toHaveBeenCalledWith(input);
-    expect(result.error).toBe(input.message);
-  } else {
-    expect(onDeliveryError).not.toHaveBeenCalled();
-  }
-  expectNoReplay(fixture);
-});
+  {
+    // Only requester settlement owns stall recovery; an announce keeps its own retry.
+    name: "announce watchdog stall",
+    sourceTool: "subagent_announce",
+    input: Object.assign(new Error("Reply operation stalled"), {
+      code: "OPENCLAW_SESSION_WATCHDOG",
+    }),
+    expected: { delivered: false, path: "direct", disposition: "retryable" },
+  },
+])(
+  "reports the direct outcome for $name without replay",
+  async ({ input, expected, sourceTool }) => {
+    const fixture = setup(sourceTool);
+    const onDeliveryError = vi.fn();
+    fixture.params.onDeliveryError = onDeliveryError;
+    const delivery = fixture.startDelivery();
+    await fixture.dispatchEntered.promise;
+    if (input instanceof Error) {
+      fixture.dispatchDone.reject(input);
+    } else {
+      fixture.dispatchDone.resolve(input);
+    }
+    const result = await delivery;
+    const { disposition, ...fields } = expected;
+    expect(result).toMatchObject(fields);
+    expect(result.disposition).toBe(disposition);
+    if (input instanceof Error) {
+      expect(onDeliveryError).toHaveBeenCalledWith(input);
+      expect(result.error).toBe(input.message);
+    } else {
+      expect(onDeliveryError).not.toHaveBeenCalled();
+    }
+    expectNoReplay(fixture);
+  },
+);

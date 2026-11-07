@@ -194,9 +194,11 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     { mixed: true, yielded: false },
     { mixed: false, yielded: true },
     { mixed: true, yielded: true },
+    // A stall on the last parent attempt still earns a delivery-only fallback.
+    { mixed: false, yielded: false, attemptCount: 2 },
   ])(
-    "uses only a generic notice for private findings (mixed=$mixed, yielded=$yielded)",
-    async ({ mixed, yielded }) => {
+    "uses only a generic notice for private findings (mixed=$mixed, yielded=$yielded, attempts=$attemptCount)",
+    async ({ mixed, yielded, attemptCount = 0 }) => {
       const fallback = vi.mocked(deliverRequesterStallFallback).mockReset();
       fallback.mockResolvedValue({ delivered: true, path: "direct" });
       setChildren([
@@ -210,6 +212,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
           completion: completion("private child findings"),
           requesterSettleWake: {
             ...expectDefined(wakeState(), "wake state"),
+            attemptCount,
             // A yielded deliverable admits the parent's own final, not its private input.
             ...(yielded && { afterRequesterYield: true, yieldedFinalDeliverable: true as const }),
           },

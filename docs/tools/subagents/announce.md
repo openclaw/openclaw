@@ -94,7 +94,9 @@ close the turn. Mirrors remain best-effort bookkeeping after a successful send.
 Completion failures retain the concrete delivery error in the run's delivery state.
 If a requester turn stalls after accepting a completed child, OpenClaw retains the
 child result and attempts a bounded, delivery-only fallback with a visible stall
-notice and the retained result. It does not rerun the child or replay the requester
+notice and the retained result. A direct-message origin receives the notice in
+that chat; threads, groups, and channels receive it in the requester's session
+history. A stall on the last parent attempt still gets this fallback. It does not rerun the child or replay the requester
 turn. Intentional Stop, changed ownership, and uncertain sends are not reopened
 by this recovery path. When the batch includes a private result, including after
 `sessions_yield`, the notice omits the retained findings. An external send retries

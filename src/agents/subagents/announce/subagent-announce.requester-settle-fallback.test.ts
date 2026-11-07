@@ -38,47 +38,45 @@ beforeEach(() => {
 
 describe("requester stall fallback", () => {
   it.each([
-    { external: false, findings: params.findings },
-    { external: true, findings: params.findings },
-    { external: false, findings: undefined },
-    { external: true, findings: undefined },
+    { route: "transcript", findings: params.findings },
+    { route: "dm", findings: params.findings },
+    { route: "group", findings: params.findings },
+    { route: "transcript", findings: undefined },
+    { route: "dm", findings: undefined },
+    // A thread/group origin has no direct route; the notice lands in requester history.
+    { route: "group", findings: undefined },
   ])(
-    "delivers a truthful visible notice (external=$external, findings=$findings)",
-    async ({ external, findings }) => {
+    "delivers a truthful visible notice (route=$route, findings=$findings)",
+    async ({ route, findings }) => {
+      if (route === "group") {
+        direct.mockResolvedValue(undefined);
+      }
       const result = await deliverRequesterStallFallback({
         ...params,
         findings,
-        ...(external ? { directDelivery } : {}),
+        ...(route === "transcript" ? {} : { directDelivery }),
       });
       expect(result.delivered).toBe(true);
-      const options = expectDefined((external ? direct : append).mock.calls[0], "fallback call")[0];
-      const text = external ? options.preparedNotice : options.text;
+      const sent = route === "dm";
+      const options = expectDefined((sent ? direct : append).mock.calls[0], "fallback call")[0];
+      const text = sent ? options.preparedNotice : options.text;
       expect(text).toContain("follow-up turn stalled");
       expect(text).toContain(findings ?? "retained privately");
       if (findings === undefined) {
         expect(text).not.toContain(params.findings);
       }
-      expect(external ? append : direct).not.toHaveBeenCalled();
+      if (route !== "group") {
+        expect(sent ? append : direct).not.toHaveBeenCalled();
+      }
     },
   );
 
-  it.each(["ambiguous", undefined])(
-    "does not silently append after external nondelivery (%s)",
-    async (disposition) => {
-      const receipt = disposition ? { delivered: false, path: "direct", disposition } : undefined;
-      direct.mockResolvedValue(receipt);
-      const result = await deliverRequesterStallFallback({ ...params, directDelivery });
-      expect(result).toMatchObject({
-        delivered: false,
-        disposition: disposition ?? "permanent_failure",
-      });
-      expect(result.reason).toBeUndefined();
-      if (disposition === "ambiguous") {
-        expect(result).toBe(receipt);
-      }
-      expect(append).not.toHaveBeenCalled();
-    },
-  );
+  it("does not append after an ambiguous external send", async () => {
+    const receipt = { delivered: false, path: "direct", disposition: "ambiguous" } as const;
+    direct.mockResolvedValue(receipt);
+    expect(await deliverRequesterStallFallback({ ...params, directDelivery })).toBe(receipt);
+    expect(append).not.toHaveBeenCalled();
+  });
 
   it("recognizes the watchdog through the production Gateway error envelope", () => {
     const cause = Object.assign(new Error("Reply operation stalled"), {

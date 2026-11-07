@@ -57,13 +57,7 @@ export async function deliverRequesterStallFallback(params: {
         ? { ...result, reason: "visible_reply_missing" }
         : result;
     }
-    return {
-      delivered: false,
-      path: "none",
-      disposition: "permanent_failure",
-      error:
-        "The requester turn stalled; child results were retained, but the original delivery target is unavailable.",
-    };
+    // No direct route (thread, group, channel) sent nothing; keep the notice visible in history.
   }
   try {
     const result = await appendAssistantMessageToSessionTranscript({
