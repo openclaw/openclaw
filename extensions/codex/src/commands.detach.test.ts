@@ -13,7 +13,7 @@ import {
 } from "./app-server/client-runtime.js";
 import type { CodexAppServerThreadBinding } from "./app-server/session-binding.js";
 import {
-  createConversationInspection,
+  prepareConversationInspections,
   testCodexAppServerBindingStore,
 } from "./app-server/session-binding.test-helpers.js";
 import * as detachSharedClientRuntime from "./app-server/shared-client.js";
@@ -473,9 +473,9 @@ describe("codex detach command", () => {
       .spyOn(detachSharedClientRuntime, "getLeasedSharedCodexAppServerClient")
       .mockResolvedValue(f.harness.client);
     const resolvePublic = vi
-      .spyOn(conversationBindingInspection, "inspectConversationBinding")
-      .mockImplementation((conversation) =>
-        createConversationInspection(conversation, f.conversation.bindingId),
+      .spyOn(conversationBindingInspection, "prepareConversationBindingInspections")
+      .mockImplementation((conversations) =>
+        prepareConversationInspections(conversations, () => f.conversation.bindingId),
       );
     cleanup.push(() => {
       resolvePublic.mockRestore();
