@@ -390,6 +390,8 @@ export type LearnContribution = {
   toolNames: readonly string[];
   /** Tools that must all be allowed for this contribution to learn; default: any of toolNames. */
   requiredToolNames?: readonly string[];
+  /** This contribution can learn in a sandboxed turn using its own authorized tools. Defaults to false. */
+  sandboxCompatible?: boolean;
   /**
    * Builds this contribution's /learn guidance from the allowed tools and the media that
    * learn on this turn, including this one. It must be deterministic: it is prompt text.
