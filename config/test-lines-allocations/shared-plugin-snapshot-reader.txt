@@ -1,0 +1,2 @@
+# Shared snapshot regressions: authenticated reads, resolution/cache and symlink parity, verified children, delayed raw reads, adoption and joined scrubs.
+2937

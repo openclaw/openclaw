@@ -6,19 +6,21 @@ import { closeDefaultRetainedNativeWorkerSource } from "../infra/worker-native-l
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { selectInstallMutationWriteOptions } from "./install-config-mutation.js";
 import { persistPluginInstall } from "./install-persistence.js";
+import { hashJson } from "./installed-plugin-index-hash.js";
 import { readCurrentInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { updatePluginSnapshotCandidates } from "./installed-plugin-snapshot-candidates.js";
 import { withPluginLifecycleLeaseAsync } from "./plugin-lifecycle-lease.js";
+import { collectPluginSourceSnapshots } from "./plugin-source-snapshot-artifact.js";
 import {
-  PLUGIN_SOURCE_SNAPSHOT_PREFIX,
-  resolvePluginSourceCapturesDirectory,
-} from "./plugin-source-capture-path.js";
+  PluginSourceSnapshotDescriptorSchema,
+  type PluginSourceSnapshotDescriptor,
+} from "./plugin-source-snapshot.types.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 afterEach(() => closeDefaultRetainedNativeWorkerSource());
 
 it.each(["canonical", "reordered"] as const)(
-  "persists install digests without publishing snapshots on same-version reinstall (%s)",
+  "persists unexecuted managed source and publishes a same-version reinstall snapshot (%s)",
   async (recordOrder) => {
     await withOpenClawTestState(
       { label: "snapshot-real-install", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
@@ -36,6 +38,7 @@ it.each(["canonical", "reordered"] as const)(
         const marker = state.path("executed");
         const source = `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'executed'); exports.value = 42;\n`;
         fs.writeFileSync(entry, source);
+        const retiredSnapshots: PluginSourceSnapshotDescriptor[] = [];
         const install = async () => {
           const prepared = await readConfigFileSnapshotForWrite();
           await persistPluginInstall({
@@ -66,26 +69,21 @@ it.each(["canonical", "reordered"] as const)(
           });
           const index = await readCurrentInstalledPluginIndex({ env: state.env });
           const record = index?.installRecords[pluginId];
-          expect(
+          const descriptor = PluginSourceSnapshotDescriptorSchema.parse(
             index?.plugins.find((plugin) => plugin.pluginId === pluginId)?.sourceSnapshot,
-          ).toBeUndefined();
-          const digests = record?.sourceSnapshotDigests?.[pluginId];
+          );
+          retiredSnapshots.push(descriptor);
           expect(record?.version).toBe("1.0.0");
           expect(record?.integrity).toBe(
             recordOrder === "reordered" ? "sha512-synthetic" : undefined,
           );
-          expect(digests).toEqual({
-            contentDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
-            dependencyClosureDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+          expect(descriptor.formatVersion).toBe(2);
+          expect(descriptor.packageIntegrity).toBe(record?.integrity);
+          expect(descriptor.installRecordHash).toBe(hashJson(record));
+          expect(record?.sourceSnapshotDigests?.[pluginId]).toEqual({
+            contentDigest: descriptor.contentDigest,
+            dependencyClosureDigest: descriptor.dependencyClosureDigest,
           });
-          const captureRoot = resolvePluginSourceCapturesDirectory(state.stateDir);
-          expect(
-            fs.existsSync(captureRoot)
-              ? fs
-                  .readdirSync(captureRoot)
-                  .filter((name) => name.startsWith(PLUGIN_SOURCE_SNAPSHOT_PREFIX))
-              : [],
-          ).toEqual([]);
           expect(fs.existsSync(marker)).toBe(false);
           expect(
             await withPluginLifecycleLeaseAsync({ env: state.env }, (lease) =>
@@ -96,11 +94,27 @@ it.each(["canonical", "reordered"] as const)(
               }),
             ),
           ).toEqual([]);
-          return digests;
+          return descriptor;
         };
-        const first = await install();
-        const second = await install();
-        expect(second).toEqual(first);
+        try {
+          const first = await install();
+          const parent = path.dirname(entry);
+          const before = fs.statSync(parent);
+          fs.writeFileSync(entry, source.replace("42", "84"));
+          fs.utimesSync(parent, before.atime, before.mtime);
+          const second = await install();
+          expect(second.generation).not.toBe(first.generation);
+          expect(second.contentDigest).not.toBe(first.contentDigest);
+          expect(second.installedRevision).toBeGreaterThan(first.installedRevision);
+        } finally {
+          await closeDefaultRetainedNativeWorkerSource();
+          await collectPluginSourceSnapshots({
+            stateDir: state.stateDir,
+            retiredSnapshots,
+            retainedPaths: new Set(),
+            assertCurrent() {},
+          });
+        }
       },
     );
   },

@@ -1,0 +1,2 @@
+# Snapshot regressions: compiler/stack metadata, module identity, CJS/JSON/runtime-flag and alias compatibility, publication/cancellation, escaped-owner release, native isolation, and Windows case resolution.
+1291

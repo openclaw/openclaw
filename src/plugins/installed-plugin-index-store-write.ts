@@ -363,6 +363,8 @@ export async function updateInstalledPluginSourceSnapshots(
           input: { identity, changes },
         }),
       params.assertCurrent,
+      undefined,
+      "records",
     );
   return params.lease
     ? update(params.lease)
@@ -538,6 +540,7 @@ async function runInstalledPluginIndexWrite<T>(
   ) => Promise<T>,
   assertCurrent?: () => void,
   onAcknowledged?: (result: T) => void,
+  cacheInvalidation: "inventory" | "records" = "inventory",
 ): Promise<T> {
   const context = captureOpenClawStateWorkerContext(
     resolveInstalledPluginIndexStateDatabaseOptions(options),
@@ -573,7 +576,11 @@ async function runInstalledPluginIndexWrite<T>(
     onAcknowledged?.(result);
   } finally {
     // A refused late caller or mismatched rollback still leaves an acknowledged database result.
-    clearPersistedInstalledPluginIndexCaches();
+    if (cacheInvalidation === "records") {
+      clearLoadInstalledPluginIndexInstallRecordsCache();
+    } else {
+      clearPersistedInstalledPluginIndexCaches();
+    }
   }
   assertAuthority();
   return result;

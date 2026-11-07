@@ -307,7 +307,9 @@ export function applyPluginSourceSnapshotChanges(
       throw new Error(`Source snapshot changed before invalidating plugin ${removal.pluginId}`);
     }
     delete record.sourceSnapshot;
-    record.sourceSnapshotWarning = removal.warning;
+    if (removal.warning) {
+      record.sourceSnapshotWarning = removal.warning;
+    }
   }
   for (const publication of changes.sourceSnapshots ?? []) {
     const descriptor = PluginSourceSnapshotDescriptorSchema.parse({

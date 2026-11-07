@@ -204,6 +204,37 @@ describe("installed source snapshot metadata", () => {
     );
   });
 
+  it("retires an obsolete snapshot format without recording a corruption warning", async () => {
+    const f = fixture();
+    await refresh(f.params);
+    const published = await updateInstalledPluginSourceSnapshots({
+      env: f.env,
+      sourceSnapshots: [f.publication],
+    });
+    const retired = await updateInstalledPluginSourceSnapshots({
+      env: f.env,
+      sourceSnapshotRemovals: [
+        {
+          pluginId: "demo",
+          installOwner: "package-owner",
+          rootDir: f.publication.rootDir,
+          installRecordHash: f.descriptor.installRecordHash,
+          expectedSnapshot: published?.index.plugins[0]?.sourceSnapshot,
+        },
+      ],
+    });
+    expect(retired).not.toBeNull();
+    const persisted = await f.read();
+    expect(persisted?.plugins[0]).not.toHaveProperty("sourceSnapshot");
+    expect(persisted?.plugins[0]).not.toHaveProperty("sourceSnapshotWarning");
+    expect(persisted?.diagnostics).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "plugin-source-snapshot-invalid" })]),
+    );
+    expect(persisted?.retiredSourceSnapshots).toContainEqual(
+      published?.index.plugins[0]?.sourceSnapshot,
+    );
+  });
+
   it("leaves legacy installs without content digests on the capture path", async () => {
     const f = fixture();
     const { sourceSnapshotDigests: _digests, ...legacyRecord } =

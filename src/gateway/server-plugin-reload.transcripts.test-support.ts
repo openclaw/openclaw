@@ -77,6 +77,7 @@ export async function startTranscriptReloadFixtureSidecars(
     activationSourceConfig: config,
     pluginManifestRecords: [],
     pluginRegistry: registryOwner.registry,
+    sourceSnapshotScrubs: registryOwner.sourceSnapshotScrubs,
     defaultWorkspaceDir: workspaceDir,
     deps: {},
     startChannels: idle,

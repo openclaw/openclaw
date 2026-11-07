@@ -114,6 +114,8 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     pluginGenerationPreparation: runtimeProcessEntrypoint(
       "plugins/plugin-generation-preparation.worker",
     ),
+    pluginSnapshotChild: runtimeProcessEntrypoint("plugins/plugin-snapshot-child.entry"),
+    pluginSnapshotChildPreload: runtimeProcessEntrypoint("plugins/plugin-snapshot-child.worker"),
     agentDatabaseExecution: runtimeProcessEntrypoint("state/openclaw-agent-execution.worker"),
     // dist/worker is the sealed portable-deploy graph and is excluded from npm.
     // Local workspace subprocesses must remain directly launchable after installation.

@@ -1,5 +1,7 @@
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { hashJson } from "./installed-plugin-index-hash.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import { isManagedPluginSnapshotSource } from "./plugin-source-snapshot-options.js";
 
 type InstallOwner = { installOwner?: string; ambiguous?: true };
 
@@ -51,4 +53,24 @@ export function resolveImmutableInstallIdentity(
     install.integrity,
     install.installedAt ?? "",
   ]);
+}
+
+/** Reusable code identity and snapshot eligibility share the same installation owner. */
+export function resolvePluginCandidateInstallFacts(
+  candidate: { origin: PluginOrigin },
+  installRecords: Readonly<Record<string, PluginInstallRecord>>,
+) {
+  const installOwner = resolvePluginCandidateInstallOwner(candidate);
+  const record = installOwner ? installRecords[installOwner] : undefined;
+  return {
+    immutableInstallIdentity: resolveImmutableInstallIdentity(
+      candidate.origin,
+      installOwner,
+      installRecords,
+    ),
+    managedSourceSnapshot:
+      installOwner && record && isManagedPluginSnapshotSource(record)
+        ? { installOwner, installRecordHash: hashJson(record) }
+        : undefined,
+  };
 }

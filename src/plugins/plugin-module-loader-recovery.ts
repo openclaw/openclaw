@@ -42,6 +42,7 @@ export type PluginInstanceModuleLoaderParams = {
   preparedArtifact?: {
     artifact: PluginGenerationArtifact;
     attachModuleSource: (resolve: (filename: string) => string) => void;
+    onInvalidSnapshot?: (error: unknown) => Promise<void>;
   };
 };
 

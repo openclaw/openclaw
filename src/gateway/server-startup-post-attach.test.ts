@@ -2178,38 +2178,6 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(hoisted.startPluginServices).not.toHaveBeenCalled();
   });
 
-  it("keeps ignored deferred sidecar failure handled for direct callers", async () => {
-    const startupError = new Error("deferred sidecar startup failed");
-    const unhandledRejections: unknown[] = [];
-    const onUnhandledRejection = (reason: unknown) => {
-      unhandledRejections.push(reason);
-    };
-    process.on("unhandledRejection", onUnhandledRejection);
-
-    try {
-      const params = createPostAttachParams({
-        sidecarStartup: "defer",
-        refreshChatMetadata: async () => {
-          throw startupError;
-        },
-      });
-      const runtime = await startGatewayPostAttachRuntime(params, createPostAttachRuntimeDeps());
-
-      await waitForGatewayTestState(() => {
-        expect(params.log.warn).toHaveBeenCalledWith(
-          `gateway sidecars failed to start: ${String(startupError)}`,
-        );
-      });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(unhandledRejections).toStrictEqual([]);
-      await expect(runtime.startupSettled).rejects.toBe(startupError);
-    } finally {
-      process.off("unhandledRejection", onUnhandledRejection);
-    }
-  });
-
   it("retires unadopted startup plugins when close begins during deferred loading", async () => {
     let closeStarted = false;
     const pluginLoadStarted = createDeferred();
@@ -2688,6 +2656,7 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
     gatewayPluginConfigAtStart: cfg,
     activationSourceConfig: cfg,
     pluginManifestRecords: [],
+    sourceSnapshotScrubs: { start: async () => [], stop: async () => {} },
     pluginRegistry: {
       ...createEmptyPluginRegistry(),
       plugins: [

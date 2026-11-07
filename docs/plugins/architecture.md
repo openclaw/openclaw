@@ -187,7 +187,56 @@ Plugin reload reconciles config watcher events after asynchronous metadata prepa
 
 Ordinary plugin source captures use independent files, including copies reached through aliases. On filesystems with copy-on-write support, these captures can share storage without sharing file identity, reducing data writes for large plugins. File containment and receipt validation run during capture; later source edits take effect on the next reload rather than invalidating the existing snapshot.
 
-Managed installs record content and dependency-closure digests from unexecuted source capture. Eager snapshot publication is suspended while startup continues to prepare fresh runtime captures. Existing source snapshots remain owned by the installed index, bound to the install revision, content and dependency-closure digests, platform and ABI, capture format, and resolution options. Native admission, callbacks, and live instances remain independently owned. Install, update, uninstall, and rollback publication still retire displaced snapshots; active readers keep their generation until release.
+Managed installs publish snapshots and record content and dependency-closure digests from unexecuted source capture. Existing source snapshots remain owned by the installed index, bound to the install revision, content and dependency-closure digests, platform and ABI, capture format, and resolution options. Native admission, callbacks, and live instances remain independently owned. Install, update, uninstall, and rollback publication still retire displaced snapshots; active readers keep their generation until release.
+
+The shared-tree snapshot reader's version-2 format binds a read-only real tree to a sealed manifest containing file digests and
+package/configuration resolution facts. Admission verifies the manifest through a
+pinned guarded open and checks the tree root and owner without scanning every child.
+Each instance has its own module identity and evaluates verified module bytes. Native
+addons keep private, separately admitted companion namespaces. Real `__dirname`,
+`import.meta.url`, assets and helper paths remain available.
+Native admission copies and verifies the owning package and its companion closure
+for each instance, and checks them again before each native load. Addons whose
+companion owner is the plugin root are explicitly exempt from constant-work
+startup: they keep the existing whole-plugin copy and pre-dlopen checks, including
+arbitrary package-relative companions and private mutable native state. Their work
+remains proportional to the complete plugin. The shared-tree speedup applies to
+pure-JavaScript plugins and the JavaScript part of a mixed installation; it does
+not narrow the native companion contract or defer native verification to the scrub.
+
+The reader's full-tree scrub runs once per start in bounded steps on the existing
+preparation worker pool after startup settles. It checks bytes, membership, type, owner, mode, link count
+and exact identities. Unused-file tampering, raw asset reads, and child processes or preloads launched
+outside the verified loader are detected later by this scrub. This includes direct
+`spawn(process.execPath, [snapshotModule])` and Worker `SHARE_ENV` with
+`NODE_OPTIONS` preloads that execute before the verifier. Those consumers may run
+changed bytes before detection; they retain their existing APIs without a new plugin
+restriction. Everything loaded through the verified loader is verified before
+evaluation, including deferred module loads. A validation failure
+retires that exact snapshot, records a path-bearing diagnostic, and leaves the current
+process running. The warning and installed-plugin diagnostics identify the failed
+artifact. The next start uses fresh capture, and replacement publication requires a
+capture that matches the install record. An obsolete format retires quietly. The
+scrub runs off-thread at low priority and shutdown cancels and joins it before
+releasing its source generation. Raw changes after a completed pass are detected by
+the next startup scrub; a later verified module load still checks its bytes first.
+
+**Breaking change:** managed snapshot generations reject
+modules outside their install-time dependency closure, including dynamic `require`
+and re-anchored `createRequire`. `ERR_PLUGIN_SNAPSHOT_DEPENDENCY` names the module;
+declare the dependency and reinstall/update, or use a local development source.
+Local/dev sources keep their existing behavior. Existing installations qualify for
+lazy publication only when their persisted content and closure digests match a fresh
+capture; otherwise they keep fresh capture until reinstall/update. The first
+publication run finishes with its already prepared generation. Failure of optional
+publication keeps a valid fresh capture, while loss of install authority fails closed.
+
+Lazy capture and publication begin only after registration and startup work settle,
+at low priority when the existing preparation worker pool is idle. They do not delay
+the first runtime-ready result. Shutdown cancels queued work and joins any in-flight
+atomic worker operation before releasing its source custody; cancellation does not
+preempt an operation already running. Digests, dependency closure, and current
+installation authority still verify before publication.
 
 Staging paths cannot be acquired, even with complete receipts. After an interrupted publication, cleanup reclaims staged source only after its writer's custody token is released; completed snapshots remain protected by the installed index and their readers. Before leaving staging, the installed-index SQLite owner journals the completed candidate, including on the first install. The index commit atomically takes ownership from that journal. If the installer exits before commit, lifecycle cleanup can reclaim the unreferenced candidate after writer custody releases.
 

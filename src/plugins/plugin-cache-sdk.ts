@@ -1,5 +1,23 @@
 type PluginSdkAliasMap = Record<string, string>;
 
+/** Host selection and private SDK authority, captured before launching descendants. */
+export type PluginLoaderAliasContext = {
+  readonly packageRoot: string | null;
+  readonly orderedKinds: readonly ("dist" | "src")[];
+  readonly includePrivateQa: boolean;
+  readonly trustedPrivateOwners: readonly string[];
+  readonly bundledPlugin: boolean;
+};
+
+export function capturePluginLoaderAliasContext(captured: PluginLoaderAliasContext) {
+  const context = Object.freeze({
+    ...captured,
+    orderedKinds: Object.freeze([...captured.orderedKinds]),
+    trustedPrivateOwners: Object.freeze([...captured.trustedPrivateOwners]),
+  });
+  return { context, cacheKey: JSON.stringify(context) };
+}
+
 export type PluginSdkPackageJson = {
   name?: string;
   exports?: Record<string, unknown>;
@@ -24,6 +42,7 @@ export type PluginRuntimeModuleResolution = {
 };
 
 type PreparedPluginAliases = {
+  context: PluginLoaderAliasContext;
   packageRoot: string | null;
   cacheKey: string;
   sdkRoots: string[];
