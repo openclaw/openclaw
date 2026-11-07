@@ -372,4 +372,33 @@ export function registerSessionInitializationAdmissionTests({
     expect(admitted.databaseClaim.isCurrent()).toBe(true);
     expect(separateHeaderPhase).not.toHaveBeenCalled();
   });
+
+  it("advances the admitted reader when a mixed-case thread forks from its parent", async () => {
+    const parentSessionKey = "agent:main:rocketchat:channel:general";
+    const threadSessionKey = "agent:main:rocketchat:channel:general:thread:8p7pGpezBfxCxMg7p";
+    const scope = await makeScope("mixed-case-thread-fork", threadSessionKey);
+    await seed({ ...scope, sessionKey: parentSessionKey }, "parent-fork-source", "parent-rev-1");
+    await using admitted = await admit(scope, "pre-fork-placeholder", false);
+    const initialized = await runWithReplyOperationLifecycleAdmission(admitted.operation, () =>
+      initSessionState({
+        cfg: { session: { store: scope.storePath } },
+        ctx: {
+          ...telegramTurn(threadSessionKey, "First thread turn", "thread-user"),
+          ChatType: "channel",
+          ParentSessionKey: parentSessionKey,
+          Provider: "rocketchat",
+          Surface: "rocketchat",
+        },
+        replyOperation: admitted.operation,
+      }),
+    );
+    expect(initialized.sessionKey).toBe(
+      "agent:main:rocketchat:channel:general:thread:8p7pgpezbfxcxmg7p",
+    );
+    expect(initialized.sessionEntry.sessionId).not.toBe("pre-fork-placeholder");
+    const reader = getReplyOperationSessionReader(admitted.operation);
+    assert(reader, "Admitted reader must exist");
+    const read = await reader.readEntry(() => {});
+    expect(read.entry?.sessionId).toBe(initialized.sessionId);
+  });
 }

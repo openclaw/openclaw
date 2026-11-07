@@ -1,5 +1,6 @@
 import type { SessionActor } from "../config/sessions/session-actor-contract.js";
 import type { SessionAdmissionTransition } from "../config/sessions/session-admission-transition.types.js";
+import { agentSessionKeysMatchByRequestKey } from "../routing/session-key.js";
 import type { ReplyOperation } from "./session-controller.contracts.js";
 import { acknowledgeSessionEffectTransition } from "./session-controller.owner-context.js";
 import { lifecycleAdmissionByOperation } from "./session-controller.storage.js";
@@ -33,8 +34,12 @@ export function acknowledgeReplySessionTransition(
 ) {
   if (target) {
     acknowledgeSessionEffectTransition(target, transition);
+    // A case-preserving thread id and the folded store key are one session.
+    // An exact compare skips this handoff, so the admitted reader still expects
+    // the pre-fork incarnation and the next read reports that it changed.
+    const sameSession = agentSessionKeysMatchByRequestKey(operation?.key, target.sessionKey);
     if (
-      operation?.key !== target.sessionKey ||
+      !sameSession ||
       (transition.previous?.sessionId === transition.current.sessionId &&
         transition.previous?.lifecycleRevision === transition.current.lifecycleRevision)
     ) {

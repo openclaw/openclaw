@@ -111,6 +111,21 @@ it("moves the native continuation itself, preserving custody and target backlog"
   releaseSessionControllerClaim(claim);
 });
 
+it("keeps a folded thread key on the source captured from its mixed-case spelling", async () => {
+  const mixed = "agent:main:rocketchat:channel:general:thread:8p7pGpezBfxCxMg7p";
+  const folded = "agent:main:rocketchat:channel:general:thread:8p7pgpezbfxcxmg7p";
+  const source = await prepare(mixed, undefined, "/test/thread-case.sqlite");
+  retargetReplySourceForExecution({
+    ctx: { SessionKey: mixed },
+    options: source.options,
+    sessionKey: folded,
+    storePath: "/test/thread-case.sqlite",
+    agentId: "main",
+  });
+  expect(source.input?.mailbox.owner.aliases.has(folded)).toBe(true);
+  retireUnadoptedReplySource(source.input);
+});
+
 it("does not invent a mailbox for a sessionless source", async () => {
   const prepared = await prepareReplySourceInput({}, {}, undefined);
   expect(prepared.input).toBeUndefined();
