@@ -1,0 +1,3 @@
+# PR #164607: unique Profile channel-link, authority, lifecycle, and persistence regressions.
+# CI41853870973 counted +1209 lines; removing two obsolete assertions leaves +1207.
+1207
