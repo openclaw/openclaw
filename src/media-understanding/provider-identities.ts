@@ -6,7 +6,7 @@ import {
   loadManifestMetadataSnapshot,
 } from "../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
-import type { MediaUnderstandingProvider } from "./types.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
 
 function mediaModelProviderIdentity(
   declaredId: string,
