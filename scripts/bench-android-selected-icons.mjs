@@ -439,10 +439,12 @@ try {
       current.actionable = [...log.matchAll(/^\d+ actionable tasks:.*$/gm)].at(-1)?.[0];
       assert.match(current.actionable ?? "", /^\d+ actionable tasks: \d+ executed/);
       for (const task of [
-        ":app:bundlePlayRelease",
+        ":app:packagePlayReleaseBundle",
+        ":app:signPlayReleaseBundle",
         ":app:compilePlayReleaseKotlin",
         ":app:minifyPlayReleaseWithR8",
-        ":wear:bundleRelease",
+        ":wear:packageReleaseBundle",
+        ":wear:signReleaseBundle",
         ":wear:compileReleaseKotlin",
         ":wear:minifyReleaseWithR8",
       ]) {
