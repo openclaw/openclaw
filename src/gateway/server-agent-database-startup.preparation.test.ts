@@ -16,12 +16,14 @@ import {
 } from "../state/agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { activateGatewayAgentDatabaseStartup } from "./server-agent-database-startup.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   migrate: vi.fn(),
   maintain: vi.fn(),
+  scheduleFacts: vi.fn(),
   journal: vi.fn(),
   opened: vi.fn(),
   refreshSecrets: vi.fn(),
@@ -82,6 +84,7 @@ vi.mock("./server-startup-session-migration.js", () => ({
     return [];
   },
   runGatewaySessionStartupMaintenance: mocks.maintain,
+  scheduleGatewaySessionFactsBackfill: mocks.scheduleFacts,
 }));
 // mock-isolation: Native restart discovery/admission is covered by the real integrity suite.
 vi.mock("./session-restart-resume.js", () => ({
@@ -237,12 +240,14 @@ function createFleet(
           }),
         );
         const context = createContext([], () => cfg);
+        const scheduler = createTestGatewayScheduler();
         context.agentDatabaseStartup = admission.observation;
         activateGatewayAgentDatabaseStartup({
           admission,
           context,
           preparationReady,
           waitForPostReadyWork: () => postReadyWork,
+          scheduler,
           getConfig: () => cfg,
           getPluginRegistry: vi.fn(),
           getPluginMetadataSnapshot: () => undefined,
@@ -255,6 +260,7 @@ function createFleet(
           inspections.forEach((_, index) => inspect(index));
           gates.forEach((gate) => gate.resolve());
           await owner.stop();
+          await scheduler.stop();
         }
       }),
   };
@@ -321,6 +327,7 @@ it("admits agents before transcript repair and joins repair on shutdown", async 
       expectAdmission(fleet, "large");
       expect(admission.waitForAgentPreparation("large", fleet)).toBeUndefined();
       expect(mocks.maintain).not.toHaveBeenCalled();
+      expect(mocks.scheduleFacts).not.toHaveBeenCalled();
       postReady.resolve();
       await withinTest(entered.promise, signal);
       fleet.inspect(1);
@@ -335,6 +342,7 @@ it("admits agents before transcript repair and joins repair on shutdown", async 
       expect(stopped).toBe(false);
       release.resolve();
       await stopping;
+      expect(mocks.scheduleFacts).not.toHaveBeenCalled();
       expect(mocks.warn).not.toHaveBeenCalled();
     },
     Promise.resolve(),

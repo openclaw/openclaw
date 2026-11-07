@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the synthetic schema-40 fixture for transcript-active-facts.ts.
+"""Build synthetic agent fixtures for transcript-active-facts.ts.
 
 Requires Python 3.14+ (compression.zstd) and SQLite with STRICT/FTS5 support.
 Example from the repository root, using a schema exported from the pinned base:
@@ -13,6 +13,9 @@ file-bytes grows the real allocation high-water with temporary rows, then drops
 those rows; it never truncates a file to a larger size or creates sparse padding.
 Only synthetic-0 is finalized for hydration. Other sessions provide storage and
 index cardinality. Fixture preparation is excluded from measured operations.
+Hybrid mode uses full payloads on the four long paths and compact cardinality
+rows elsewhere. Use --schema-version 41 with the current canonical schema for
+backfill proof; the default remains the predecessor schema 40.
 """
 
 import argparse
@@ -55,8 +58,8 @@ def file_facts(db, filename):
     }
 
 
-def session_sizes(total):
-    longs = [34153, 20000, 50000, 40000] if total >= 150_000 else [min(total, 34153)]
+def session_sizes(total, longest=50000):
+    longs = [34153, 20000, longest, 40000] if total >= 150_000 else [min(total, 34153)]
     remaining = total - sum(longs)
     short_count = max(1, round(remaining / 245)) if remaining else 0
     short = [remaining // short_count] * short_count if short_count else []
@@ -134,7 +137,7 @@ def fragment(db, total, filename, started):
     emit({"phase": "fragmented", "elapsed_s": time.monotonic() - started, **file_facts(db, filename)})
 
 
-def append_rows(db, sizes, sessions, pool, filename, started):
+def append_rows(db, sizes, sessions, pool, filename, started, compact_pool=None):
     rows = 0
     # Round robin long tails compete for the scattered free pages.
     for first in range(0, len(sizes), 64):
@@ -152,7 +155,8 @@ def append_rows(db, sizes, sessions, pool, filename, started):
                 raw_seq = seq + 1 if index == 0 else seq
                 db.execute(
                     "INSERT INTO transcript_events VALUES(?,?,NULL,1,?,?,?,?,?,?,?,?,?,?)",
-                    (session_id, raw_seq, *pool[kind, quantile]),
+                    (session_id, raw_seq,
+                     *(compact_pool if compact_pool is not None and index >= 4 else pool)[kind, quantile]),
                 )
                 db.execute(
                     "INSERT INTO transcript_event_identities "
@@ -254,11 +258,15 @@ def main():
     parser.add_argument("--schema", required=True, type=Path)
     parser.add_argument("--name", required=True)
     parser.add_argument("--rows", required=True, type=int)
-    parser.add_argument("--mode", choices=("compact", "full"), required=True)
+    parser.add_argument("--mode", choices=("compact", "full", "hybrid"), required=True)
+    parser.add_argument("--schema-version", type=int, choices=(40, 41), default=40)
+    parser.add_argument("--longest-session-rows", type=int, default=50000)
     parser.add_argument("--file-bytes", type=int, default=0)
     args = parser.parse_args()
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", args.name) or args.rows < 1 or args.file_bytes < 0:
         parser.error("name must be lowercase letters/digits/hyphens; rows must be positive; file-bytes nonnegative")
+    if not 1 <= args.longest_session_rows <= 50000:
+        parser.error("longest-session-rows must be between 1 and 50000")
     schema = args.schema.read_text()
     args.output.mkdir(parents=True, exist_ok=True)
     filename = args.output / (args.name + ".sqlite")
@@ -273,11 +281,13 @@ def main():
             "PRAGMA synchronous=NORMAL; PRAGMA cache_size=-16384; PRAGMA foreign_keys=ON;"
         )
         db.executescript(schema)
-        if db.execute("SELECT 1 FROM sqlite_schema WHERE name='session_transcript_active_event_facts'").fetchone():
-            raise ValueError("fixture requires the pinned predecessor schema without active facts")
-        db.execute("INSERT INTO schema_meta VALUES ('primary','agent',40,'main','synthetic',1,1)")
-        db.execute("PRAGMA user_version=40")
-        longs, sizes = session_sizes(args.rows)
+        has_facts = db.execute("SELECT 1 FROM sqlite_schema WHERE name='session_transcript_active_event_facts'").fetchone() is not None
+        if has_facts != (args.schema_version == 41):
+            raise ValueError("schema-version must match the supplied active-facts table shape")
+        db.execute("INSERT INTO schema_meta VALUES ('primary','agent',?,'main','synthetic',1,1)",
+                   (args.schema_version,))
+        db.execute(f"PRAGMA user_version={args.schema_version}")
+        longs, sizes = session_sizes(args.rows, args.longest_session_rows)
         sessions = seed_sessions(db, sizes)
         header = {"type": "session", "version": 3, "id": SESSION_ID,
                   "timestamp": "2026-11-05T00:00:00.000Z", "cwd": "/synthetic"}
@@ -287,17 +297,18 @@ def main():
                    "(session_id,event_id,seq,event_type,parent_id,created_at) VALUES(?,?,0,'session',NULL,1)",
                    (SESSION_ID, SESSION_ID))
         db.commit()
-        if args.mode == "full":
+        if args.mode != "compact":
             fragment(db, args.rows, filename, started)
-        rows = append_rows(db, sizes, sessions, pool, filename, started)
-        if args.mode == "full":
+        rows = append_rows(db, sizes, sessions, pool, filename, started,
+                           payload_pool("compact") if args.mode == "hybrid" else None)
+        if args.mode != "compact":
             db.execute("DROP TABLE synthetic_fragmentation_ballast")
             db.commit()
         db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         highwater = grow_highwater(db, filename, args.file_bytes) if args.file_bytes else None
         finalization = finalize_measured_session(db, sizes)
         report = {
-            "name": args.name, "mode": args.mode, "rows": rows,
+            "name": args.name, "mode": args.mode, "schema_version": args.schema_version, "rows": rows,
             "sessions": len(sizes), "long_sessions": longs,
             "elapsed_s": time.monotonic() - started,
             "historical_custom_markers": sum(

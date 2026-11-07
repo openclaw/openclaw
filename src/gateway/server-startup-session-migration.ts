@@ -4,6 +4,8 @@ import {
   type SessionStartupMigrationLogger,
 } from "../config/sessions/startup-migration-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getActiveAgentRunContextCount } from "../infra/agent-run-registry.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -13,12 +15,70 @@ import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db-co
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateReadContext } from "../state/openclaw-state-worker-context.js";
+import { isGatewayBackgroundMaintenanceBusy, scheduleGatewayIdleTask } from "./server-idle-task.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 
 export type PreparedStartupSessionDatabase = {
   database: OpenClawAgentDatabaseOptions & { path: string };
   assertCurrent: () => void;
 };
+
+/** Each admitted database yields its writer and root work admission between batches. */
+export function scheduleGatewaySessionFactsBackfill(params: {
+  databases: readonly PreparedStartupSessionDatabase[];
+  scheduler: GatewayScheduler;
+  signal: AbortSignal;
+  log: SessionStartupMigrationLogger;
+}): void {
+  for (const { database, assertCurrent } of params.databases) {
+    let complete = false;
+    let pauses = 0;
+    let lastPauseReport = 0;
+    let runBatch: ((signal: AbortSignal) => Promise<boolean>) | undefined;
+    scheduleGatewayIdleTask({
+      id: `maintenance:transcript-facts:${database.path}`,
+      scheduler: params.scheduler,
+      delayMs: 250,
+      repeatDelayMs: 250,
+      retryDelayMs: 1_000,
+      isClosing: () => complete || params.signal.aborted,
+      isBusy: () => {
+        const busy = isGatewayBackgroundMaintenanceBusy() || getActiveAgentRunContextCount() > 0;
+        if (busy) {
+          pauses++;
+          const now = Date.now();
+          if (now - lastPauseReport >= 60_000) {
+            params.log.info(
+              `session: transcript facts backfill waiting for foreground work (${pauses} pauses)`,
+            );
+            lastPauseReport = now;
+          }
+        }
+        return busy;
+      },
+      log: params.log,
+      errorMessage: "Transcript facts backfill failed",
+      run: async (signal) => {
+        signal.throwIfAborted();
+        params.signal.throwIfAborted();
+        assertCurrent();
+        if (!runBatch) {
+          const { createSessionTranscriptFactsBackfill } =
+            await import("../config/sessions/session-transcript-facts-backfill.js");
+          runBatch = createSessionTranscriptFactsBackfill({
+            database,
+            assertCurrent,
+            log: params.log,
+          });
+        }
+        complete = await runBatch(AbortSignal.any([signal, params.signal]));
+        if (complete) {
+          runBatch = undefined;
+        }
+      },
+    });
+  }
+}
 
 /** Normalize legacy outcomes before readiness; retain admitted stores for later transcript repair. */
 export async function prepareGatewayStartupSessions(params: {

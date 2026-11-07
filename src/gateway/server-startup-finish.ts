@@ -183,6 +183,7 @@ export async function finishGatewayStartup(params: {
         context: gatewayRequestContext,
         preparationReady: databasePreparationReady.promise,
         waitForPostReadyWork: params.waitForPostReadyWork,
+        scheduler: runtime.scheduler,
         getConfig: getRuntimeConfig,
         getPluginRegistry: () => pluginRuntime.registry,
         getPluginMetadataSnapshot,

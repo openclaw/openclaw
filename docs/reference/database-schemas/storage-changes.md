@@ -3226,11 +3226,27 @@ distinguish this version phase from any separate maintenance or update backup.
 PostgreSQL keeps its existing exact-predecessor backup owner; this declaration
 does not narrow that engine's backup scope.
 
-Old rows retain their fallback cost until an ordinary write or rebuild covers
-them. A recent 512-event window can become covered after 512 ordinary, well-formed
-appends. Malformed rows retain their fallback, and old dependency candidates can
-remain uncovered indefinitely. A background backfill is a separate storage and
-lifecycle decision.
+After readiness and restart recovery, the Gateway's idle maintenance scheduler
+backfills historical SQLite facts in its existing agent database worker. It
+prioritizes the largest active paths, then recent activity, and finishes each
+session before advancing. Each batch yields the writer; foreground work and live
+runs defer the next batch. Drain cancels pending work and permits only an already
+admitted bounded transaction to settle. This work never runs during database
+open, migration, or readiness.
+
+Each transaction reads the current active rows and derives facts with the same
+helpers as ordinary writers. Cold, rebuilding, and malformed rows retain their
+fallback. Progress comes from the companion primary key: restart scans bounded
+active identity ranges but does not reread covered payloads. No progress table,
+schema change, or new setting is introduced. Progress logs report filled and
+skipped rows, visited sessions, payload bytes, maximum batch duration, and lock
+contention. A completed pass can leave skipped rows or rows invalidated behind
+its cursor unknown; ordinary writers or the next restart can cover them.
+
+PostgreSQL keeps ordinary writer population and the existing fallback. Its
+background pass reports that it is unsupported: SQLite's immediate transaction
+excludes concurrent payload changes, whereas PostgreSQL would require a separately
+validated source-row locking protocol.
 
 Older binaries refuse agent41 stores: their writers cannot keep these facts
 current, so an additive-table reader exception is unsafe. With writers stopped,
