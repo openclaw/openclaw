@@ -10,8 +10,10 @@ import { logVerbose } from "../../globals.js";
 import { toPluginConversationBinding } from "../../plugins/conversation-binding.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
-import { resolveCommandTurnContext } from "../command-turn-context.js";
-import { isExplicitCommandTurnContext } from "../command-turn-detection.js";
+import {
+  isExplicitCommandTurnContext,
+  resolveExplicitCommandTurnContext,
+} from "../command-turn-detection.js";
 import { isActiveRunSafeCommandTurn } from "../commands-registry.js";
 import { waitForReplyDispatcherSettlement } from "../dispatch-dispatcher.js";
 import type { ReplyPayload } from "../reply-payload.js";
@@ -309,7 +311,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
   const activeRunSafeCommandTurn =
     explicitCommandTurnCtx &&
     isActiveRunSafeCommandTurn({
-      commandTurn: resolveCommandTurnContext(ctx),
+      commandTurn: resolveExplicitCommandTurnContext(ctx, cfg),
       cfg,
       provider: ctx.Provider ?? ctx.Surface,
     });
