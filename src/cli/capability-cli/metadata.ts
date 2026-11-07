@@ -283,7 +283,7 @@ export const CAPABILITY_METADATA: {
     id: "embedding.create",
     description: "Create embeddings through embedding providers.",
     transports: ["local"],
-    flags: ["--text", "--provider", "--model", "--agent", "--json"],
+    flags: ["--text", "--input-type", "--provider", "--model", "--agent", "--json"],
     resultShape: "vectors with provider/model attribution",
   },
   {

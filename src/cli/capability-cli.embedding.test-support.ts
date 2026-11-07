@@ -1,5 +1,7 @@
+import { Command } from "commander";
 import { expect, it, type Mock } from "vitest";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { registerCapabilityCli } from "./capability-cli.js";
 import { runCapability } from "./capability-cli.test-harness.js";
 
 export async function interruptCapability(
@@ -47,24 +49,55 @@ export function registerEmbeddingCapabilityCliTests({
     runCapability("embedding", "create", "--text", "hello", ...args);
 
   it.each([
-    { provider: "openai", model: "text-embedding-3-large", explicit: false },
-    { provider: "deepinfra", model: "Qwen/Qwen3-Embedding-8B", explicit: true },
+    { provider: "openai", model: "text-embedding-3-large", explicit: false, inputType: undefined },
+    {
+      provider: "deepinfra",
+      model: "Qwen/Qwen3-Embedding-8B",
+      explicit: true,
+      inputType: "document",
+    },
+    { provider: "voyage", model: "voyage-4-large", explicit: true, inputType: "query" },
   ])(
-    "creates embeddings with $provider selection and preserves the model id",
-    async ({ provider, model, explicit }) => {
+    "creates embeddings with $provider selection and $inputType input",
+    async ({ provider, model, explicit, inputType }) => {
+      embedBatch.mockResolvedValueOnce([
+        [0.1, 0.2],
+        [0.3, 0.4],
+      ]);
       await create(
         "--text",
         "world",
         "--model",
         `${provider}/${model}`,
         ...(explicit ? ["--provider", provider] : []),
+        ...(inputType ? ["--input-type", inputType] : []),
         "--json",
       );
       expect(providerCall()).toMatchObject({ provider, model, fallback: "none" });
+      expect(embedBatch).toHaveBeenCalledExactlyOnceWith(["hello", "world"], {
+        inputType: inputType ?? "document",
+      });
       expect(jsonOutput()).toMatchObject({
-        outputs: ["hello", "world"].map((text) => ({ text, embedding: [0.1, 0.2] })),
+        outputs: [
+          { text: "hello", embedding: [0.1, 0.2] },
+          { text: "world", embedding: [0.3, 0.4] },
+        ],
       });
       expect(closeProvider).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["semantic", ""])(
+    "rejects invalid embedding input type %j before dispatch",
+    async (inputType) => {
+      const argv = ["infer", "embedding", "create", "--text", "hello", "--input-type", inputType];
+      const program = new Command().exitOverride().configureOutput({ writeErr: () => {} });
+      await registerCapabilityCli(program, ["node", "openclaw", ...argv]);
+      await expect(program.parseAsync(argv, { from: "user" })).rejects.toMatchObject({
+        code: "commander.invalidArgument",
+      });
+      expect(providerCall()).toBeUndefined();
+      expect(embedBatch).not.toHaveBeenCalled();
     },
   );
 

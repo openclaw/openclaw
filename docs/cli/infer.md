@@ -314,12 +314,17 @@ Vector creation and embedding-provider inspection.
 ```bash
 openclaw infer embedding create --text "friendly lobster" --json
 openclaw infer embedding create --text "customer support ticket: delayed shipment" --model openai/text-embedding-3-large --json
+openclaw infer embedding create --text "Where is my shipment?" --model voyage/voyage-4-large --input-type query --json
 openclaw infer embedding providers --agent <id> --json
 ```
 
 `--model` takes `<provider/model>`. When you also pass `--provider`, it must match
 that prefix; model ids that contain a slash keep the provider prefix, for example
 `--model deepinfra/Qwen/Qwen3-Embedding-8B`.
+
+`--input-type` accepts `document` (the default) or `query`. Use `query` for
+retrieval queries with providers that distinguish query and document embeddings.
+The selected type applies to every repeated `--text` input.
 
 Without `--json`, `embedding create` shows the provider and model, followed by
 each input, its dimension count, and a preview of the first eight vector values.

@@ -1,10 +1,19 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { collectOption } from "../program/helpers.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText, providerSummaryText } from "./output.js";
 import { registerLocalProvidersCommand, runCapabilityCommand } from "./providers-command.js";
+
+type EmbeddingCreateOptions = {
+  text: string[];
+  inputType: "document" | "query";
+  provider?: string;
+  model?: string;
+  agent?: string;
+  json: boolean;
+};
 
 export function registerEmbeddingCapabilityCommands(capability: Command): void {
   const embeddingCommand = capability
@@ -16,6 +25,11 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
     .command("create")
     .description("Create embeddings")
     .requiredOption("--text <text>", "Input text", collectOption)
+    .addOption(
+      new Option("--input-type <type>", "Embedding input type")
+        .choices(["document", "query"])
+        .default("document"),
+    )
     .option("--provider <id>", "Provider id")
     .option("--model <provider/model>", "Model override")
     .option(
@@ -23,20 +37,20 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
       "Agent whose saved provider auth is used (default: agents.defaults.systemAgent.agentId, then the sole agent)",
     )
     .option("--json", "Output JSON", false)
-    .action((opts, command) =>
+    .action((opts: EmbeddingCreateOptions, command: Command) =>
       runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
         const {
           requireProviderModelOverride,
           resolveLocalCapabilityAgent,
           resolveCapabilityAgentOption,
         } = await import("./shared.js");
-        const texts = opts.text as string[];
+        const texts = opts.text;
         const agent = resolveCapabilityAgentOption(command, opts.agent);
         const { getMemoryEmbeddingCommandSecretTargetIds } =
           await import("../command-secret-targets.js");
         const { createEmbeddingProvider } =
           await import("../../plugin-sdk/memory-core-bundled-runtime.js");
-        const modelRef = requireProviderModelOverride(opts.model as string | undefined);
+        const modelRef = requireProviderModelOverride(opts.model);
         const { cfg, agentDir } = await resolveLocalCapabilityAgent({
           commandName: "infer embedding create",
           targetIds: getMemoryEmbeddingCommandSecretTargetIds(),
@@ -67,7 +81,7 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
         const signal = getAsyncWorkSignal();
         let embeddings: number[][];
         try {
-          embeddings = await provider.embedBatch(texts, { inputType: "document", signal });
+          embeddings = await provider.embedBatch(texts, { inputType: opts.inputType, signal });
         } catch (err) {
           // Cleanup failure must not replace the embedding error.
           await Promise.resolve()
