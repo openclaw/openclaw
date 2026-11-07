@@ -1,0 +1,2 @@
+# Pins the manual-selection permission row projection for blocked and allowed models.
+21

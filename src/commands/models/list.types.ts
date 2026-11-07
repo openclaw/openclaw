@@ -8,6 +8,8 @@ export type ModelRow = {
   contextTokens?: number;
   local: boolean | null;
   available: boolean | null;
+  /** Scoped manual-choice permission; present when the view includes policy visibility. */
+  manualSelectionAllowed: boolean | null;
   tags: string[];
 };
 
