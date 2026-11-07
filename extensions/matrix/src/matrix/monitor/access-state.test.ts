@@ -1,4 +1,5 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it } from "vitest";
 import { setMatrixRuntime } from "../../runtime.js";
 import {
@@ -8,6 +9,11 @@ import {
 
 beforeEach(() => setMatrixRuntime(createPluginRuntimeMock()));
 const alice = "@alice:example.org";
+const adminsCfg = {
+  accessGroups: {
+    admins: { type: "message.senders", members: { matrix: [alice] } },
+  },
+} satisfies Pick<OpenClawConfig, "accessGroups">;
 type AccessInput = Partial<Parameters<typeof resolveMatrixMonitorAccessState>[0]>;
 
 function resolveAccess(overrides: AccessInput) {
@@ -92,5 +98,68 @@ describe("resolveMatrixMonitorAccessState", () => {
 
     expect(state.messageIngress.senderAccess.decision).toBe("pairing");
     await expectBlockedCommand(state);
+  });
+
+  it.each([
+    {
+      name: "an access-group member",
+      senderId: alice,
+      allowFrom: ["accessGroup:admins"],
+      expected: "allow",
+    },
+    {
+      name: "a stranger",
+      senderId: "@mallory:example.org",
+      allowFrom: ["accessGroup:admins"],
+      expected: "block",
+    },
+    {
+      name: "a missing group",
+      senderId: alice,
+      allowFrom: ["accessGroup:missing"],
+      expected: "block",
+    },
+  ])("resolves $name in direct messages", async ({ senderId, allowFrom, expected }) => {
+    const state = await resolveAccess({
+      cfg: adminsCfg,
+      allowFrom,
+      dmPolicy: "allowlist",
+      senderId,
+      isRoom: false,
+    });
+
+    expect(state.messageIngress.ingress.decision).toBe(expected);
+    if (expected === "block") {
+      await expectBlockedCommand(state);
+    }
+  });
+
+  it("resolves an access-group member in room allowlists", async () => {
+    const state = await resolveAccess({
+      cfg: adminsCfg,
+      groupAllowFrom: ["accessGroup:admins"],
+      groupPolicy: "allowlist",
+      senderId: alice,
+      isRoom: true,
+    });
+
+    expect(state.messageIngress.ingress.decision).toBe("allow");
+  });
+
+  it("authorizes room commands for an access-group member", async () => {
+    const state = await resolveAccess({
+      cfg: adminsCfg,
+      groupAllowFrom: ["accessGroup:admins"],
+      groupPolicy: "allowlist",
+      senderId: alice,
+      isRoom: true,
+    });
+
+    await expect(
+      resolveMatrixMonitorCommandAccess(state, {
+        allowTextCommands: true,
+        hasControlCommand: true,
+      }),
+    ).resolves.toMatchObject({ authorized: true });
   });
 });

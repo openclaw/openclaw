@@ -10,7 +10,7 @@ import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMatrixReplyToEventId } from "../relations.js";
 import { resolveMatrixAckReactionConfig } from "./ack-config.js";
-import { resolveMatrixAllowListMatch } from "./allowlist.js";
+import { resolveMatrixContextSenderAllowed } from "./allowlist.js";
 import type { createMatrixEventContextResolver } from "./event-context.js";
 import { resolveMatrixSharedDmContextNotice } from "./handler-helpers.js";
 import type { MatrixIngressContent } from "./handler-ingress-content.js";
@@ -87,34 +87,30 @@ export async function resolveMatrixInboundContext(config: {
 
   const replyToEventId = resolveMatrixReplyToEventId(event.content as RoomMessageEventContent);
   const threadTarget = thread.threadId;
-  const isRoomContextSenderAllowed = (contextSenderId?: string): boolean => {
-    if (!isRoom || !contextSenderId) {
-      return true;
-    }
-    if (effectiveRoomUsers.length > 0) {
-      return resolveMatrixAllowListMatch({
-        allowList: effectiveRoomUsers,
-        userId: contextSenderId,
-      }).allowed;
-    }
-    if (groupPolicy === "allowlist" && effectiveGroupAllowFrom.length > 0) {
-      return resolveMatrixAllowListMatch({
-        allowList: effectiveGroupAllowFrom,
-        userId: contextSenderId,
-      }).allowed;
-    }
-    return true;
-  };
-  const shouldIncludeRoomContextSender = (contextSenderId?: string): boolean =>
+  const roomContextAllowList = isRoom
+    ? effectiveRoomUsers.length > 0
+      ? effectiveRoomUsers
+      : groupPolicy === "allowlist" && effectiveGroupAllowFrom.length > 0
+        ? effectiveGroupAllowFrom
+        : []
+    : [];
+  const isRoomContextSenderAllowed = async (contextSenderId?: string): Promise<boolean> =>
+    resolveMatrixContextSenderAllowed({
+      cfg,
+      allowList: roomContextAllowList,
+      accountId,
+      senderId: contextSenderId,
+    });
+  const shouldIncludeRoomContextSender = async (contextSenderId?: string): Promise<boolean> =>
     evaluateSupplementalContextVisibility({
       mode: contextVisibilityMode,
       kind: "thread",
-      senderAllowed: isRoomContextSenderAllowed(contextSenderId),
+      senderAllowed: await isRoomContextSenderAllowed(contextSenderId),
     }).include;
   let threadContext =
     ingress.threadContext ??
     (threadRootId ? await resolveThreadContext({ roomId, eventId: threadRootId }) : undefined);
-  if (threadContext?.senderId && !shouldIncludeRoomContextSender(threadContext.senderId)) {
+  if (threadContext?.senderId && !(await shouldIncludeRoomContextSender(threadContext.senderId))) {
     logVerboseMessage(`matrix: drop thread root context (mode=${contextVisibilityMode})`);
     threadContext = undefined;
   }
@@ -131,7 +127,7 @@ export async function resolveMatrixInboundContext(config: {
       : undefined;
   }
   const replySenderAllowed =
-    !replyContext?.senderId || isRoomContextSenderAllowed(replyContext.senderId);
+    !replyContext?.senderId || (await isRoomContextSenderAllowed(replyContext.senderId));
   const roomInfo = isRoom ? await getRoomInfo(roomId, { currentName: true }) : undefined;
   const roomName = roomInfo?.name;
   const envelopeFrom = isDirectMessage ? senderName : (roomName ?? roomId);

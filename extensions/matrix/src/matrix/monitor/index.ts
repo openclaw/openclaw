@@ -58,6 +58,7 @@ import { resolveMatrixRoomConfig } from "./rooms.js";
 import { runMatrixStartupMaintenance } from "./startup.js";
 import { createMatrixMonitorStatusController } from "./status.js";
 import { createMatrixMonitorTaskRunner, getMatrixMonitorTaskSignal } from "./task-runner.js";
+import { createMatrixVerificationLiveAuthorizationResolver } from "./verification-live-authorization.js";
 
 type MonitorMatrixOpts = {
   runtime?: RuntimeEnv;
@@ -523,6 +524,13 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       getHealthySyncSinceMs: () => healthySyncSinceMs,
       formatNativeDependencyHint: core.system.formatNativeDependencyHint,
       runDetachedTask: monitorTaskRunner.runDetachedTask,
+      resolveLiveVerificationAuthorization: createMatrixVerificationLiveAuthorizationResolver({
+        // SAFETY: config.current() returns the validated runtime config for this process.
+        getConfig: () => core.config.current() as CoreConfig,
+        accountId: effectiveAccountId,
+        allowFromResolvedEntries,
+        runtime,
+      }),
     });
 
     ingress = createMatrixIngressMonitor({
