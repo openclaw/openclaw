@@ -87,3 +87,153 @@ it.each<ReplyPayload[]>([
 ])("refuses recovery that would lose payload semantics: %j", (...payloads) => {
   expectRecovery(payloads);
 });
+
+it("recovers rich-text-only presentation as plain text instead of losing the reply", () => {
+  expect(
+    recoverText([
+      {
+        text: "## Clienti \u2014 Rossi\n| Cliente | Saldo |\n| Rossi | 1.00 \u20ac |",
+        presentation: { blocks: [{ type: "text", text: "styled" }] },
+      },
+    ]),
+  ).toContain("Clienti");
+  expect(
+    recoverText([
+      {
+        text: "Pick one",
+        presentation: { blocks: [{ type: "text", text: "styled" }] },
+        interactive: { blocks: [{ type: "buttons", buttons: [] }] },
+      },
+    ]),
+  ).toBeUndefined();
+  expect(
+    recoverText([
+      {
+        text: "Chart",
+        mediaUrl: "/tmp/a.png",
+        presentation: { blocks: [{ type: "text", text: "styled" }] },
+      },
+    ]),
+  ).toBeUndefined();
+  expect(
+    recoverText([{ text: "   ", presentation: { blocks: [{ type: "text", text: "styled" }] } }]),
+  ).toBeUndefined();
+});
+
+it("refuses presentation buttons/selects without the deprecated interactive field", () => {
+  expect(
+    recoverText([
+      {
+        text: "Pick one",
+        presentation: { blocks: [{ type: "buttons", buttons: [{ label: "A" }] }] },
+      },
+    ]),
+  ).toBeUndefined();
+  expect(
+    recoverText([
+      {
+        text: "Choose",
+        presentation: {
+          blocks: [{ type: "select", placeholder: "Choose", options: [{ label: "A" }] }],
+        },
+      },
+    ]),
+  ).toBeUndefined();
+});
+
+it("mirrors chart/table substance into recovery without an authored fallback", () => {
+  expect(
+    recoverText([
+      {
+        text: "Quarterly results",
+        presentation: {
+          blocks: [
+            {
+              type: "table",
+              caption: "Sales",
+              headers: ["Region", "Total"],
+              rows: [["North", 10]],
+            },
+          ],
+        },
+      },
+    ]),
+  ).toBe("Quarterly results\n\nSales (table)\n- Region: North; Total: 10");
+  expect(
+    recoverText([
+      {
+        text: "Shares",
+        presentation: {
+          blocks: [
+            {
+              type: "chart",
+              chartType: "pie",
+              title: "Split",
+              segments: [{ label: "A", value: 1 }],
+            },
+          ],
+        },
+      },
+    ]),
+  ).toBe("Shares\n\nSplit (pie chart)\n- A: 1");
+});
+
+it("preserves presentation titles, text, and context during recovery", () => {
+  expect(
+    recoverText([
+      {
+        text: "Summary",
+        presentation: {
+          title: "Report",
+          blocks: [
+            { type: "text", text: "Actual answer" },
+            { type: "context", text: "Context note" },
+          ],
+        },
+      },
+    ]),
+  ).toBe("Summary\n\nReport\n\nActual answer\n\nContext note");
+});
+
+it("does not duplicate presentation content already present in text", () => {
+  expect(
+    recoverText([{ text: "Answer", presentation: { blocks: [{ type: "text", text: "Answer" }] } }]),
+  ).toBe("Answer");
+  expect(
+    recoverText([
+      { text: "Intro\n\nAnswer", presentation: { blocks: [{ type: "text", text: "Answer" }] } },
+    ]),
+  ).toBe("Intro\n\nAnswer");
+});
+
+it("keeps presentation MEDIA directive lines transport-only", () => {
+  expect(
+    recoverText([
+      {
+        text: "Example",
+        presentation: { blocks: [{ type: "text", text: "MEDIA:/tmp/example.png" }] },
+      },
+    ]),
+  ).toBeUndefined();
+});
+
+it("trusts text as complete with an authored fallback presentation", () => {
+  expect(
+    recoverText([
+      {
+        text: "North: 10",
+        presentationTextMode: "fallback",
+        presentation: {
+          blocks: [
+            {
+              type: "table",
+              caption: "Sales",
+              headers: ["Region", "Total"],
+              rows: [["North", 10]],
+            },
+          ],
+        },
+      },
+    ]),
+  ).toBe("North: 10");
+});
