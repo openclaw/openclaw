@@ -82,7 +82,8 @@ suite.define(() => {
 
       // Focus alone must open the tooltip, not just move the focus ring.
       await expectBrowser(page.locator("openclaw-tooltip[open]")).toHaveCount(1);
-      await expectBrowser(page.getByRole("tooltip")).toContainText("Status: Live");
+      const tooltip = page.getByRole("tooltip", { name: "Status: Live" });
+      await expectBrowser(tooltip).toContainText("Status: Live");
 
       await expectBrowser(statusTrigger).toHaveAccessibleDescription("Status: Live");
 
