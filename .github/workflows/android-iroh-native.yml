@@ -1,0 +1,103 @@
+name: Android OpenClaw ID native packaging
+
+on:
+  push:
+    branches: [main, openclaw-517/node-android]
+    paths: &android_iroh_paths
+      - ".github/workflows/android-iroh-native.yml"
+      - "apps/android/**"
+      - "crates/openclaw-iroh-ffi/**"
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths: *android_iroh_paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-iroh-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  RUSTUP_TOOLCHAIN: "1.99.0"
+
+jobs:
+  packaging:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          install-deps: "false"
+
+      - name: Setup Android toolchain
+        id: android
+        uses: ./.github/actions/setup-android-toolchain
+        with:
+          install-native-deps: "true"
+
+      - name: Verify default build does not package iroh
+        working-directory: apps/android
+        env:
+          JAVA_HOME: ${{ steps.android.outputs.gradle-java-home }}
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon :app:assemblePlayDebug
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+          apks = list(Path('app/build/outputs/apk/play/debug').glob('*.apk'))
+          assert len(apks) == 1, apks
+          with ZipFile(apks[0]) as apk:
+              assert not any(name.endswith('/libopenclaw_iroh_ffi.so') for name in apk.namelist())
+          PY
+
+      - name: Provision opt-in NDK and Rust
+        run: |
+          set -euo pipefail
+          sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --install 'ndk;28.2.13676358'
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/28.2.13676358" >> "$GITHUB_ENV"
+          # Versioned upstream binary, verified before execution; never pipe a remote script to sh.
+          curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 10 --max-time 300 \
+            https://static.rust-lang.org/rustup/archive/1.28.2/x86_64-unknown-linux-gnu/rustup-init \
+            -o "$RUNNER_TEMP/rustup-init"
+          printf '%s  %s\n' 20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c "$RUNNER_TEMP/rustup-init" | sha256sum --check -
+          chmod +x "$RUNNER_TEMP/rustup-init"
+          "$RUNNER_TEMP/rustup-init" -y --profile minimal --default-toolchain none --no-modify-path
+          export PATH="$HOME/.cargo/bin:$PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal \
+            --target aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
+          cargo install cargo-ndk --version 3.5.4 --locked
+
+      - name: Build and test opt-in Android variants
+        working-directory: apps/android
+        env:
+          JAVA_HOME: ${{ steps.android.outputs.gradle-java-home }}
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon -PopenclawIrohNative=true \
+            :app:assemblePlayDebug :app:assembleThirdPartyDebug \
+            :app:testPlayDebugUnitTest :app:testThirdPartyDebugUnitTest
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+          expected = {f'lib/{abi}/libopenclaw_iroh_ffi.so' for abi in ('arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64')}
+          for flavor in ('play', 'thirdParty'):
+              apks = list(Path(f'app/build/outputs/apk/{flavor}/debug').glob('*.apk'))
+              assert len(apks) == 1, apks
+              with ZipFile(apks[0]) as apk:
+                  actual = {name for name in apk.namelist() if name.endswith('/libopenclaw_iroh_ffi.so')}
+                  assert actual == expected, (flavor, actual)
+                  assert all(apk.getinfo(name).file_size > 0 for name in expected)
+          PY

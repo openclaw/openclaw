@@ -270,6 +270,40 @@ class GatewayConfigResolverTest {
   }
 
   @Test
+  fun nodeInvitationsRouteOnlyFromExplicitRawInputWithoutBecomingGatewaySetup() {
+    val link = "openclaw-node://join#synthetic-invitation"
+    val result = resolveScannedSetupCodeResult("  $link\n")
+
+    assertEquals(link, result.nodeJoinLink)
+    assertNull(result.setupCode)
+    assertNull(result.error)
+    assertNull(parseGatewayEndpoint(link))
+    assertNull(resolveGatewayConnectConfig(true, link, "", "", false, "", "", ""))
+    assertEquals("GatewayScannedSetupCodeResult([redacted])", result.toString())
+  }
+
+  @Test
+  fun nodeInvitationRoutingDefersStrictValidationToRuntime() {
+    // Routing is not authority: even malformed links must reach runtime validation, not direct setup.
+    val link = "openclaw-node://wrong-host?invalid=1#synthetic-secret"
+    assertEquals(link, resolveScannedSetupCodeResult(link).nodeJoinLink)
+    for (input in listOf("OPENCLAW-NODE://join", "openclaw-node-other://join", "https://openclaw-node://join", "openclaw-node:join", "{\"setupCode\":\"$link\"}")) {
+      assertNull(input, resolveScannedSetupCodeResult(input).nodeJoinLink)
+    }
+  }
+
+  @Test
+  fun galleryAndCameraPayloadSelectionIncludesNodeInvitationsWithoutChangingDirectCodes() {
+    val link = "openclaw-node://join#synthetic-invitation"
+    val direct = setupCode("wss://gateway.example:18789")
+
+    assertEquals(link, resolveScannedSetupCodeResult(sequenceOf(null, "unrelated", link, direct))?.nodeJoinLink)
+    val directFirst = resolveScannedSetupCodeResult(sequenceOf("unrelated", direct, link))
+    assertEquals(direct, directFirst?.setupCode)
+    assertNull(directFirst?.nodeJoinLink)
+  }
+
+  @Test
   fun resolveScannedSetupCodeResultAcceptsRawSetupCode() {
     assertScannedSetupCodeAccepted(setupCode("wss://gateway.example:18789"))
   }

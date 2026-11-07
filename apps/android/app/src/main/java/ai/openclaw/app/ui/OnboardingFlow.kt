@@ -377,7 +377,10 @@ fun OnboardingFlow(
     val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
     val startAtGatewaySetup by viewModel.startOnboardingAtGatewaySetup.collectAsState()
     var step by rememberSaveable { mutableStateOf(OnboardingStep.Welcome) }
-    var setupCode by rememberSaveable { mutableStateOf("") }
+    // Setup entry can contain an invitation secret; never serialize it into Activity state.
+    var setupCode by remember { mutableStateOf("") }
+    var nodeJoinLink by remember { mutableStateOf<String?>(null) }
+    val enrollmentState by viewModel.openClawIdEnrollment.collectAsState()
     var manualHost by rememberSaveable { mutableStateOf("") }
     var manualPort by rememberSaveable { mutableStateOf("18789") }
     var manualTls by rememberSaveable { mutableStateOf(false) }
@@ -610,11 +613,24 @@ fun OnboardingFlow(
       inlineQrScannerActive = false
     }
 
+    fun stageNodeEnrollment(link: String) {
+      if (nodeJoinLink != null || enrollmentState.waiting || enrollmentState.admitted || enrollmentState.error != null) return
+      setupCode = ""
+      setupErrorCode = OnboardingErrorCode.None
+      setupScanErrorCode = OnboardingErrorCode.None
+      inlineQrScannerActive = false
+      nodeJoinLink = link
+    }
+
     fun pairFromSetupCode(
       code: String,
       inputSource: OnboardingGatewayInputSource,
     ) {
       val trimmed = code.trim()
+      resolveScannedSetupCodeResult(trimmed).nodeJoinLink?.let { link ->
+        stageNodeEnrollment(link)
+        return
+      }
       if (trimmed.isEmpty()) {
         setupErrorCode = OnboardingErrorCode.SetupCodeMissing
         return
@@ -650,6 +666,10 @@ fun OnboardingFlow(
       scanned: GatewayScannedSetupCodeResult,
       inputSource: OnboardingGatewayInputSource,
     ) {
+      scanned.nodeJoinLink?.let { link ->
+        stageNodeEnrollment(link)
+        return
+      }
       if (scanned.setupCode == null) {
         val errorCode =
           when (scanned.error) {
@@ -755,6 +775,30 @@ fun OnboardingFlow(
       )
     }
 
+    // Resume only public runtime status after recreation, never a saved invitation.
+    if (nodeJoinLink != null || enrollmentState.waiting || enrollmentState.admitted || enrollmentState.error != null) {
+      OpenClawIdEnrollmentDialog(
+        nodeJoinLink = nodeJoinLink,
+        state = enrollmentState,
+        onConfirm = { link, origin ->
+          viewModel.beginOpenClawIdEnrollment(link, origin)
+          nodeJoinLink = null
+        },
+        onDismiss = {
+          viewModel.cancelOpenClawIdEnrollment()
+          nodeJoinLink = null
+          setupCode = ""
+        },
+        onComplete = {
+          viewModel.cancelOpenClawIdEnrollment()
+          nodeJoinLink = null
+          setupCode = ""
+          // Node admission does not satisfy the operator/chat onboarding gates.
+          step = OnboardingStep.Gateway
+        },
+      )
+    }
+
     pendingTrust?.let { prompt ->
       GatewayTrustDialog(
         prompt = prompt,
@@ -805,7 +849,7 @@ fun OnboardingFlow(
       OnboardingStep.SetupCode -> {
         SetupCodeInstructionsScreen(
           modifier = modifier,
-          scannerActive = inlineQrScannerActive,
+          scannerActive = inlineQrScannerActive && nodeJoinLink == null && !enrollmentState.waiting && !enrollmentState.admitted && enrollmentState.error == null,
           cameraPermissionGranted = cameraPermissionGranted,
           scanner = setupBarcodeScanner,
           onBack = ::goBack,
@@ -1592,7 +1636,8 @@ private fun analyzeSetupQrFrame(
   scanner
     .process(inputImage)
     .addOnSuccessListener { barcodes ->
-      val rawValue = resolveScannedSetupCodeResult(barcodes.asSequence().map { it.rawValue })?.setupCode
+      val scanned = resolveScannedSetupCodeResult(barcodes.asSequence().map { it.rawValue })
+      val rawValue = scanned?.nodeJoinLink ?: scanned?.setupCode
       if (rawValue != null && scanActive.get() && handledScan.compareAndSet(false, true)) {
         onCodeScanned(rawValue)
       }

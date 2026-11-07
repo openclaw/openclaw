@@ -235,6 +235,49 @@ cd apps/android
 
 ## Build / Run
 
+### OpenClaw ID native transport
+
+Native packaging is **off by default**. Existing Android lanes compile the checked-in
+Kotlin bindings and Android helper in the dedicated `:openclaw-iroh` library
+without requiring Rust or the NDK. Only that library allows compiler warnings:
+UniFFI 0.31.2 generates unused expressions under Kotlin 2.4.21, and generated
+sources must not be edited. The app retains its warnings-as-errors gate. OpenClaw ID
+node connections fail closed with “native transport not packaged” in these builds;
+ordinary Gateway connections are unaffected.
+
+On a provisioned host, opt in explicitly:
+
+```bash
+cd apps/android
+./gradlew -PopenclawIrohNative=true :app:assemblePlayDebug
+```
+
+This registers `buildOpenClawIroh` and its generated JNI sources for all variants.
+It builds `crates/openclaw-iroh-ffi` from its checked-in source and lockfile through
+`scripts/build-android.sh`, requiring all four native libraries. Provision Rust
+1.99.0, cargo-ndk 3.5.4, NDK 28.2.13676358, Python 3, Bash, and the four Rust Android
+targets in [`PACKAGING.md`](../../crates/openclaw-iroh-ffi/PACKAGING.md). Set
+`ANDROID_NDK_HOME` to that NDK directory. Gradle does not install prerequisites.
+JNA 5.19.1 and coroutines 1.11.0 remain the app's existing dependencies.
+
+The dedicated `android-iroh-native.yml` workflow owns opt-in provisioning and APK
+proof; shared Android setup and existing workflows are unchanged. The producer is
+attached only to JNI packaging, not `preBuild`. JVM-only tests compile the Kotlin
+sources without cross-compiling Android libraries. Native loading, release
+shrinking, APK ZIP alignment, and runtime behavior on a 16 KiB device still need
+a provisioned Android validation lane.
+
+**Distribution license audit remains open.** The bundled `iroh` notice includes
+its additional Tailscale BSD notice, but is not a complete Rust dependency notice
+inventory. Before distributing this transport, complete the four-target locked
+transitive audit (including default portmapper dependencies), bundle all required
+license/copyright notices, and provide the MPL-2.0 source-availability notices for
+UniFFI and attohttpc. Cargo SPDX metadata alone does not satisfy these obligations;
+some locked crate archives omit their declared license texts. See the crate's
+[license release gates](../../crates/openclaw-iroh-ffi/PACKAGING.md#licenses-and-release-gates).
+
+### App build prerequisites
+
 Install the repository's Node.js and pnpm dependencies before building. Gradle
 builds the shared Mermaid renderer automatically and packages its local assets
 with the app; no CDN or Gateway renderer is needed.
@@ -531,6 +574,28 @@ This app is native Kotlin + Jetpack Compose.
 - For Compose UI edits: use Android Studio **Live Edit** on a debug build (works on physical devices; project `minSdk=31` already meets API requirement).
 - For many non-structural code/resource changes: use Android Studio **Apply Changes**.
 - For structural/native/manifest/Gradle changes: do full reinstall (`pnpm android:run`).
+
+## Experimental OpenClaw ID node enrollment
+
+Explicitly paste or scan an `openclaw-node://join` invitation in Gateway setup
+or Add Gateway. Supply the separate **Discovery HTTPS origin** from the owner;
+the app does not infer it from the invitation hostname or relay. Confirm the
+node-only request, then compare the six-digit verification code and declared
+commands/capabilities with the owner's approval screen.
+
+This target connects **only the node session**. It never grants Android chat,
+operator access, embedded Control UI credentials, or a direct WebSocket fallback.
+The existing direct and Cloudflare connection paths remain separate. The node key
+and trust high-water marks use the existing Keystore-backed credential store;
+Forget removes that target's node key. A removed or unadmitted node stops retrying
+and requires a new invitation from the owner.
+
+Native transport packaging is required. The process Application installs the
+native Android context lazily before the first node bind. Native loading failures
+stop the connection rather than dialing the logical hostname directly.
+JNI loading, native keep-alive, ABI packaging,
+Keystore behavior, foreground-service recovery, and the invitation UI require
+Android build/device qualification; pure JVM tests do not establish those claims.
 
 ## Connect / Pair
 

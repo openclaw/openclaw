@@ -17,6 +17,9 @@ enum class GatewayRegistryEntryKind {
 
   @SerialName("discovered")
   DISCOVERED,
+
+  @SerialName("openclaw-id-node")
+  OPENCLAW_ID_NODE,
 }
 
 @Serializable
