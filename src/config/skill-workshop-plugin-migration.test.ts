@@ -25,27 +25,28 @@ describe("materializeSkillWorkshopPlugin", () => {
   it("drops policy written while Workshop was built in, so Workshop keeps running", () => {
     const { config, changes } = materializeSkillWorkshopPlugin(builtInEraConfig());
 
-    // The allowlist is never rewritten; Doctor's health check reports it instead.
+    // The allowlist never governed built-in Workshop, so it gains the plugin.
     expect(config.plugins).toEqual({
-      allow: ["diffs"],
+      allow: ["diffs", "skill-workshop"],
       deny: [],
       entries: { diffs: { enabled: true } },
     });
     expect(config.meta?.migrations?.skillWorkshopPlugin).toBe(true);
-    expect(changes).toHaveLength(2);
+    expect(changes).toHaveLength(3);
   });
 
-  it("keeps policy a write adds to an unmarked config", () => {
-    const previous: OpenClawConfig = { plugins: { allow: [] } };
-    const next: OpenClawConfig = {
-      plugins: { deny: ["skill-workshop"], entries: { "skill-workshop": { enabled: false } } },
-    };
-
-    const { config, changes } = materializeSkillWorkshopPlugin(next, previous);
-
-    expect(config.plugins).toEqual(next.plugins);
-    expect(config.meta?.migrations?.skillWorkshopPlugin).toBe(true);
-    expect(changes).toEqual([]);
+  it("leaves allowlists that already admit Workshop, are empty, or are new", () => {
+    for (const allow of [["skill-workshop", "diffs"], []]) {
+      const { config, changes } = materializeSkillWorkshopPlugin({ plugins: { allow } });
+      expect(config.plugins?.allow).toEqual(allow);
+      expect(changes).toEqual([]);
+    }
+    // An allowlist written after the plugin returned is the user's current policy.
+    const { config } = materializeSkillWorkshopPlugin(
+      { plugins: { allow: ["diffs"] } },
+      { plugins: {} },
+    );
+    expect(config.plugins?.allow).toEqual(["diffs"]);
   });
 
   it.each([

@@ -10,6 +10,10 @@ import type {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../../cron/types.js";
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
+import type {
+  ShortTermDreamingStats,
+  ShortTermDreamingStatsEntry,
+} from "../../memory-host-sdk/dreaming-report-types.js";
 import {
   MANAGED_MEMORY_DREAMING_CRON_NAME,
   MANAGED_MEMORY_DREAMING_CRON_TAG,
@@ -18,8 +22,6 @@ import {
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingWorkspaces,
   resolveMemoryRemDreamingConfig,
-  type ShortTermDreamingStats,
-  type ShortTermDreamingStatsEntry,
 } from "../../memory-host-sdk/dreaming.js";
 import { readMemorySearchManagerStatus } from "../../memory-host-sdk/host/types.js";
 import * as memoryCoreRuntime from "../../plugin-sdk/memory-core-bundled-runtime.js";

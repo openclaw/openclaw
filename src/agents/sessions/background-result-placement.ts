@@ -5,32 +5,42 @@ import {
   readBackgroundResultPlacement,
 } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import { sameSessionTranscriptStorePath } from "../../config/sessions/transcript-store-identity.js";
-import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import {
+  onInternalSessionTranscriptUpdate,
+  type InternalSessionTranscriptUpdate,
+} from "../../sessions/transcript-events.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { SessionEntry } from "./session-manager-types.js";
 import { runSessionManagerWrite } from "./session-manager-write-admission.js";
 import type { SessionManager } from "./session-manager.js";
+
+// Separate closure scope: a missed disposal must never retain the manager or its history.
+function subscribeAcceptedResults(
+  target: InternalSessionTranscriptUpdate["target"],
+  accepted: Set<string>,
+) {
+  const { agentId, sessionId, storePath } = target ?? {};
+  return onInternalSessionTranscriptUpdate((update) => {
+    if (!update.messageId || !isPendingBackgroundResultMessage(update.message)) {
+      return;
+    }
+    if (
+      update.target &&
+      update.target.agentId === agentId &&
+      update.target.sessionId === sessionId &&
+      sameSessionTranscriptStorePath(update.target.storePath, storePath)
+    ) {
+      accepted.add(update.messageId);
+    }
+  });
+}
 
 /** The request boundary consumes only recorded result placements, never a reloaded user turn. */
 export function createBackgroundResultPlacement(manager: SessionManager) {
   let inspectedId: string | null = null;
   const pending = new Map<string, AgentMessage>();
   const accepted = new Set<string>();
-  const dispose = onInternalSessionTranscriptUpdate((update) => {
-    if (!update.messageId || !isPendingBackgroundResultMessage(update.message)) {
-      return;
-    }
-    const target = manager.getSessionTarget();
-    if (
-      target &&
-      update.target &&
-      update.target.agentId === target.agentId &&
-      update.target.sessionId === target.sessionId &&
-      sameSessionTranscriptStorePath(update.target.storePath, target.storePath)
-    ) {
-      accepted.add(update.messageId);
-    }
-  });
+  const dispose = subscribeAcceptedResults(manager.getSessionTarget(), accepted);
   const beforeRequest = async (signal?: AbortSignal): Promise<AgentMessage[] | undefined> => {
     signal?.throwIfAborted();
     return runSessionManagerWrite(manager, async () => {

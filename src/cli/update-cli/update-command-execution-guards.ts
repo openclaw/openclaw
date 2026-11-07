@@ -21,6 +21,7 @@ import type { UpdateCommandOptions } from "./shared.js";
 import type { UpdateCommandExecutionGuards } from "./update-command-execution.types.js";
 import { captureUpdateCommandExecutorAuthority } from "./update-command-executor.js";
 import {
+  isMutableUpdateRecovering,
   recordMutableUpdateSignalPhase,
   retainMutableUpdateSignalWrite,
 } from "./update-command-mutable-signals.js";
@@ -143,7 +144,11 @@ export function createUpdateCommandExecutionGuards(
     UpdateCommandExecutionGuards["captureWriteOptions"]
   > => {
     const assertAccepting = () => {
-      if (owner?.kind !== "package-compensation" && run?.interrupted) {
+      if (
+        owner?.kind !== "package-compensation" &&
+        run?.interrupted &&
+        !isMutableUpdateRecovering(run)
+      ) {
         throw new UpdateRequesterRevokedError();
       }
     };

@@ -65,7 +65,7 @@ suite.define(() => {
           .poll(() => page.locator(".cron-detail-title").textContent())
           .toContain(selected.name);
         await expect.poll(() => selectedRun.isEnabled()).toBe(false);
-        expect(await page.locator(".cron-error-banner").count()).toBe(0);
+        expect(await page.locator(".callout.danger").count()).toBe(0);
       }
       if (reason === "error") {
         await gateway.rejectDeferred("cron.run", { code: "UNAVAILABLE", message });
@@ -85,7 +85,7 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole(role).filter({ hasText: message }).allTextContents())
         .toEqual([selection === "same" ? message : alpha.name + ": " + message]);
-      expect(await page.locator(".cron-error-banner").count()).toBe(reason === "error" ? 1 : 0);
+      expect(await page.locator(".callout.danger").count()).toBe(reason === "error" ? 1 : 0);
       expect(await gateway.getRequests("cron.run")).toHaveLength(1);
     });
   });
@@ -114,11 +114,11 @@ suite.define(() => {
     });
   });
 
-  it("announces a queued Start now on the agent Automations panel as status", async () => {
+  it("announces a queued Run now on the agent Automations panel as status", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const alpha = { ...job("feedback-alpha", "Alpha synthetic automation"), agentId: "main" };
       const gateway = await installMockGateway(page, {
-        // The agent panel gates its automation reads and Start now on the advertised methods.
+        // The agent panel gates its automation reads and Run now on the advertised methods.
         featureMethods: [...defaultControlUiFeatureMethods, "cron.list", "cron.run"],
         methodResponses: {
           "agents.list": createAgentRoster({ main: "Main agent" }, "main", "agent"),
@@ -129,7 +129,7 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}settings/agents/main/cron`);
       const row = page.locator(".settings-row").filter({ hasText: alpha.name });
-      await row.getByRole("button", { name: "Start now" }).click();
+      await row.getByRole("button", { name: "Run now" }).click();
       await gateway.waitForRequest("cron.run");
       await expect
         .poll(() => page.getByRole("status").filter({ hasText: "Run queued" }).allTextContents())

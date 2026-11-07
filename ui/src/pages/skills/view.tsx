@@ -4,6 +4,7 @@ import type { SkillStatusEntry } from "../../api/types.ts";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
@@ -18,10 +19,11 @@ import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { clampText } from "../../lib/format.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { groupSkills, type SkillGroup } from "../../lib/skills-grouping.ts";
+import { createProgressiveList } from "../../lib/reactive/progressive-list.ts";
 import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
 import "../../styles/sidebar-markdown.css";
+import { groupSkills, type SkillGroup } from "../../lib/skills-grouping.ts";
 import {
   computeSkillMissing,
   computeSkillReasons,
@@ -129,9 +131,9 @@ export function Skills(props: SkillsProps) {
                 fallback={(error) => (
                   <Loading>
                     <Show when={!isPending(read)}>
-                      <div class="callout danger" role="alert">
+                      <InlineAlert tone="danger" role="alert">
                         {formatUiError(error())}
-                      </div>
+                      </InlineAlert>
                     </Show>
                   </Loading>
                 )}
@@ -143,9 +145,7 @@ export function Skills(props: SkillsProps) {
                   when={acceptedFiltered().length > 0}
                   fallback={<SettingsEmpty message={emptyMessage()} />}
                 >
-                  <For each={groups()} keyed={(group) => group.id}>
-                    {(group) => <SkillGroupView group={group()} view={props} />}
-                  </For>
+                  <SkillsInventory groups={groups()} view={props} />
                 </Show>
               </Show>
             </>
@@ -163,9 +163,48 @@ export function Skills(props: SkillsProps) {
   );
 }
 
-function SkillGroupView(props: { group: SkillGroup; view: SkillsProps }) {
+function SkillsInventory(props: { groups: SkillGroup[]; view: SkillsProps }) {
+  const skills = createMemo(() => props.groups.flatMap((group) => group.skills));
+  const visible = createProgressiveList(skills, { initial: 1, batch: 500 });
+  const groups = createMemo(() => {
+    let remaining = visible.items().length;
+    // Reveal one grouped prefix so adding earlier rows never moves a later heading.
+    return props.groups.flatMap((group) => {
+      const count = Math.min(remaining, group.skills.length);
+      remaining -= count;
+      return count > 0
+        ? [
+            {
+              group,
+              skills: count === group.skills.length ? group.skills : group.skills.slice(0, count),
+            },
+          ]
+        : [];
+    });
+  });
   return (
-    <details class="settings-section skills-group" open>
+    <For each={groups()} keyed={(entry) => entry.group.id}>
+      {(entry) => (
+        <SkillGroupView
+          group={entry().group}
+          skills={entry().skills}
+          busy={visible.pending()}
+          view={props.view}
+        />
+      )}
+    </For>
+  );
+}
+
+function SkillGroupView(props: {
+  group: SkillGroup;
+  skills: SkillStatusEntry[];
+  busy: boolean;
+  view: SkillsProps;
+}) {
+  const skills = createMemo(() => props.skills);
+  return (
+    <details class="settings-section skills-group" aria-busy={props.busy ? "true" : "false"} open>
       <summary class="settings-section__header skills-group__summary">
         <h2 class="settings-section__heading">
           {props.group.label} <span class="settings-count">{props.group.skills.length}</span>
@@ -175,7 +214,7 @@ function SkillGroupView(props: { group: SkillGroup; view: SkillsProps }) {
         </span>
       </summary>
       <div class="settings-group">
-        <For each={props.group.skills} keyed={(skill) => skill.skillKey}>
+        <For each={skills()} keyed={(skill) => skill.skillKey}>
           {(skill) => <SkillRow skill={skill()} view={props.view} />}
         </For>
       </div>
@@ -395,10 +434,10 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
           </Show>
         </div>
         <Show when={missing().length > 0}>
-          <div class="callout warn">
+          <InlineAlert tone="warning">
             <div class="skill-detail__warning-title">{t("skillsPage.missingRequirements")}</div>
             <div>{missing().join(", ")}</div>
-          </div>
+          </InlineAlert>
         </Show>
         <Show when={reasons().length > 0}>
           <div class="skill-detail__note">
@@ -446,12 +485,9 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
         </div>
         <Show when={message()}>
           {(value) => (
-            <div
-              class={["callout", value().kind === "error" ? "danger" : "success"]}
-              role={value().kind === "error" ? "alert" : "status"}
-            >
+            <InlineAlert tone={value().kind === "error" ? "danger" : "success"}>
               {formatUiExternalText(value().message)}
-            </div>
+            </InlineAlert>
           )}
         </Show>
         <Show when={props.skill.primaryEnv}>
@@ -525,10 +561,10 @@ function InstalledClawHubOverview(props: {
         <Show
           when={current().status !== "invalid"}
           fallback={
-            <div class="callout danger">
+            <InlineAlert tone="danger">
               <div class="skill-detail__warning-title">{t("skillsPage.invalidLink")}</div>
               <div>{formatUiExternalText(invalidReason() ?? "")}</div>
-            </div>
+            </InlineAlert>
           }
         >
           <div class="oc-dialog__rows">
@@ -641,9 +677,9 @@ function InstalledSkillCard(props: { skill: SkillStatusEntry; view: SkillsProps 
       >
         <Errored
           fallback={(error) => (
-            <div class="callout danger" role="alert">
+            <InlineAlert tone="danger" role="alert">
               {formatUiError(error())}
-            </div>
+            </InlineAlert>
           )}
         >
           <CardContent />

@@ -25,7 +25,9 @@ import type { CronJobsEnabledFilter, CronJob } from "../../api/types.ts";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { CronJobsPagination } from "../../components/cron-jobs-pagination.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
+import { IconButton, ROW_GLYPH_STROKE } from "../../components/solid/icon-button.tsx";
 import { Icon, sessionIcon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { isCronJobActiveFailure, isCronJobRunning } from "../../lib/cron-status.ts";
@@ -91,18 +93,22 @@ export function ListView(props: CronProps) {
       <SettingsPage wide>
         <Errored
           fallback={(error, reset) => (
-            <div class="cron-error-banner" role="alert">
+            <InlineAlert
+              tone="danger"
+              action={
+                <button
+                  class="btn btn--sm"
+                  onClick={() => {
+                    void props.onRefresh();
+                    reset();
+                  }}
+                >
+                  {t("common.retry")}
+                </button>
+              }
+            >
               {formatUiError(error())}
-              <button
-                class="btn btn--sm"
-                onClick={() => {
-                  void props.onRefresh();
-                  reset();
-                }}
-              >
-                {t("common.retry")}
-              </button>
-            </div>
+            </InlineAlert>
           )}
         >
           <Reveal order="natural">
@@ -160,10 +166,13 @@ function SchedulerStatus(props: CronProps) {
   return (
     <>
       {status() && !status()?.enabled ? (
-        <div class="cron-error-banner" data-test-id="cron-scheduler-banner">
-          <strong>{t("cron.list.schedulerOff")}</strong>
+        <InlineAlert
+          tone="warning"
+          data-test-id="cron-scheduler-banner"
+          title={t("cron.list.schedulerOff")}
+        >
           {t("cron.runNotStarted.stopped")}
-        </div>
+        </InlineAlert>
       ) : undefined}
     </>
   );
@@ -618,7 +627,12 @@ function JobRow(
           class="cron-table__next"
           label={t("cron.jobs.nextRun")}
           value={
-            <span class={{ "cron-table__running": isCronJobRunning(props.job) }}>
+            <span
+              class={{
+                "cron-table__running": isCronJobRunning(props.job),
+                "cron-table__waiting": Boolean(props.job.state?.admissionDeferred),
+              }}
+            >
               {describeJobNextRun(props.job)}
             </span>
           }
@@ -631,17 +645,16 @@ function JobRow(
       </span>
       {props.canManage ? (
         <span class="cron-table__actions" onClick={(e: Event) => e.stopPropagation()}>
-          <button
-            type="button"
-            class="btn btn--sm btn--ghost cron-row-run"
+          <IconButton
+            size={28}
+            glyph="row"
+            class="cron-row-run"
             data-test-id={`cron-row-run-${props.job.id}`}
-            title={t("cron.actions.runNowJob", { name: displayName() })}
-            aria-label={t("cron.actions.runNowJob", { name: displayName() })}
+            label={t("cron.actions.runNowJob", { name: displayName() })}
+            icon={sessionIcon("play", 12, ROW_GLYPH_STROKE)}
             disabled={props.busy || !props.connected}
             onClick={() => props.onRun(props.job, "force")}
-          >
-            {sessionIcon("play", 12, 1.5)}
-          </button>
+          />
           <EnabledSwitch {...props} job={props.job} compact />
           <JobMenu
             {...props}

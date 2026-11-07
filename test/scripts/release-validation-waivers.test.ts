@@ -1,11 +1,23 @@
+import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   classifyReleaseSnapshot,
+  releaseChildSpec,
   terminalPolicyPass,
 } from "../../scripts/full-release-validation-policy.mjs";
 import { readChild } from "../../scripts/full-release-validation-state.mjs";
 import { RELEASE_VALIDATION_WAIVERS } from "../../scripts/lib/release-validation-waivers.mjs";
-import { child, githubRun } from "./full-release-validation-state.test-support.js";
+import { withRuntimePreload } from "../helpers/runtime-preload.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  child,
+  collectorEnv,
+  canonicalCandidateRequest,
+  executionPlan,
+  githubRun,
+  runCollector,
+} from "./full-release-validation-state.test-support.js";
 
 const VERSION = "2026.10.19";
 const ROLE = "releaseChecksIndependent";
@@ -19,6 +31,7 @@ const LIVE_FAILURE_LOG =
   "2026-10-19T00:00:00Z ##[error]live_repo_e2e_release_checks ended with failure\n" +
   "2026-10-19T00:00:00Z ##[error]Process completed with exit code 1.\n";
 const originalWaivers = [...RELEASE_VALIDATION_WAIVERS];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type Job = {
   id: number;
@@ -200,25 +213,169 @@ describe("checked-in release-tooling waivers", () => {
     },
   ])("does not excuse $name", async ({ log, aggregate: summary, error }) => {
     grant();
-    const observed = await observe([job(LIVE_JOB, 1), summary], { logs: { "2": log } });
+    const jobs = [job(LIVE_JOB, 1), summary, job("Unwaived QA lane", 3)];
+    const observed = await observe(jobs, { logs: { "2": log } });
+    expect(observed).toMatchObject({
+      status: "completed",
+      conclusion: "failure",
+      observedRunAttempts: [1],
+      compositeJobsSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
+    expect(observed.jobs).toHaveLength(jobs.length);
+    expect(observed.jobs).toEqual(
+      expect.arrayContaining(jobs.map(({ name }) => expect.objectContaining({ name }))),
+    );
     expect(observed.errors).toEqual([
-      expect.objectContaining({ message: expect.stringContaining(error) }),
+      expect.objectContaining({
+        kind: "aggregate_validation",
+        message: expect.stringContaining(error),
+      }),
     ]);
-    expect(classifyReleaseSnapshot({ children: [observed], targetVersion: VERSION }).state).toBe(
-      "orchestration_error",
+    expect(classifyReleaseSnapshot({ children: [observed], targetVersion: VERSION })).toMatchObject(
+      {
+        state: "orchestration_error",
+        activeRunIds: [],
+        blockers: expect.arrayContaining([expect.objectContaining({ job: "Unwaived QA lane" })]),
+      },
     );
   });
 
-  it("grants the Kova leaf only for the operator-named version", () => {
-    const failed = (key: string) =>
-      child(key, {
-        conclusion: "failure",
-        jobs: [job("Kova mock provider performance", 1)],
-        status: "completed",
+  it.each(["aggregate", "log", "provenance"] as const)(
+    "drains active siblings only for an aggregate verdict, not a %s read failure",
+    (failure) => {
+      grant();
+      const root = tempDirs.make("frv-waiver-drain-");
+      const output = join(root, "drain.json");
+      const planPath = join(root, "plan.json");
+      const callsPath = join(root, "calls");
+      const gh = join(root, "gh");
+      const preload = join(root, "waiver.mjs");
+      const sealed = executionPlan(
+        {
+          childPhaseVersion: 3,
+          children: {
+            normalCi: { result: "success", runAttempt: 1, runId: "101" },
+            releaseChecksIndependent: { result: "success", runAttempt: 1, runId: "303" },
+          },
+        },
+        {
+          attemptEvidenceVersion: 3,
+          candidateRequest: canonicalCandidateRequest(),
+          targetVersion: VERSION,
+        },
+      );
+      const runs = Object.fromEntries(
+        sealed.children
+          .filter((entry) => entry.runId)
+          .map((entry) => [
+            entry.runId,
+            githubRun(child(entry.key, entry), {
+              id: Number(entry.runId),
+              path: `.github/workflows/${releaseChildSpec(entry.key).workflow}`,
+              conclusion: entry.runId === "303" ? "failure" : "success",
+              ...(failure === "provenance" && entry.runId === "303"
+                ? { head_sha: "c".repeat(40) }
+                : {}),
+            }),
+          ]),
+      );
+      writeFileSync(planPath, JSON.stringify(sealed));
+      writeFileSync(callsPath, "");
+      writeFileSync(
+        preload,
+        `import { RELEASE_VALIDATION_WAIVERS } from ${JSON.stringify(new URL("../../scripts/lib/release-validation-waivers.mjs", import.meta.url).href)};\nRELEASE_VALIDATION_WAIVERS.push(${JSON.stringify(RELEASE_VALIDATION_WAIVERS.at(-1))});\n`,
+      );
+      writeFileSync(
+        gh,
+        `#!${process.execPath}
+import { appendFileSync, readFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(process.env.FRV_GH_CALLS, JSON.stringify(args) + "\\n");
+const endpoint = args.find((arg) => arg.startsWith("repos/"));
+const observations = readFileSync(process.env.FRV_GH_CALLS, "utf8").trim().split("\\n").map(JSON.parse);
+const completed = observations.filter((args) => args.includes("repos/openclaw/openclaw/actions/runs/101")).length > 1;
+const runs = ${JSON.stringify(runs)};
+if (endpoint === "repos/openclaw/openclaw/actions/jobs/2/logs") {
+  if (${JSON.stringify(failure)} === "log") { console.error("HTTP 403 fixture aggregate log denied"); process.exit(1); }
+  console.log(${JSON.stringify(`${LIVE_FAILURE_LOG}::error::Unwaived QA lane failed\n`)});
+} else if (endpoint?.includes("/attempts/1/jobs?")) {
+  const jobs = endpoint.includes("/303/")
+    ? ${JSON.stringify([job(LIVE_JOB, 1), aggregate(), job("Unwaived QA lane", 3)])}
+    : [{ name: "test", status: completed ? "completed" : "in_progress", conclusion: completed ? "success" : null }];
+  for (const job of jobs) console.log(JSON.stringify(job));
+} else if (endpoint?.endsWith("/runs/101")) {
+  console.log(JSON.stringify({ ...runs["101"], status: completed ? "completed" : "in_progress", conclusion: completed ? "success" : null }));
+} else if (endpoint?.endsWith("/runs/303")) {
+  console.log(JSON.stringify(runs["303"]));
+} else { console.error("Unexpected fixture request: " + args.join(" ")); process.exit(1); }
+`,
+      );
+      chmodSync(gh, 0o755);
+      const result = runCollector("drain", {
+        ...withRuntimePreload(collectorEnv({}), preload),
+        FAIL_FAST: "false",
+        FRV_GH_CALLS: callsPath,
+        FULL_RELEASE_EXECUTION_PLAN_PATH: planPath,
+        FULL_RELEASE_POLL_INTERVAL_MS: "1",
+        FULL_RELEASE_STATE_PATH: output,
+        PATH: `${root}:${process.env.PATH}`,
+        RERUN_GROUP: "all",
       });
-    expect(terminalPolicyPass(failed("productPerformance"), "2026.11.1")).toBe(true);
-    expect(terminalPolicyPass(failed("productPerformance"), "2026.11.2")).toBe(false);
-  });
+      expect(result.status, result.stderr).toBe(2);
+      const artifact = JSON.parse(readFileSync(output, "utf8"));
+      expect(artifact.state).toBe("orchestration_error");
+      const calls: string[][] = readFileSync(callsPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(
+        calls.filter((args) => args.includes("repos/openclaw/openclaw/actions/runs/101")),
+      ).toHaveLength(failure === "aggregate" ? 2 : 1);
+      expect(calls.every((args) => args[0] === "api")).toBe(true);
+      if (failure === "aggregate") {
+        expect(artifact.activeRunIds).toEqual([]);
+        expect(artifact.children.releaseChecksIndependent.timing.jobs).toHaveLength(3);
+        expect(artifact.children.releaseChecksIndependent.status).toBe("completed");
+        expect(artifact.errors).toContainEqual(
+          expect.objectContaining({ kind: "aggregate_validation" }),
+        );
+        expect(artifact.blockers).toContainEqual(
+          expect.objectContaining({ job: "Unwaived QA lane" }),
+        );
+      } else {
+        expect(artifact.activeRunIds).toContain("101");
+        expect(artifact.errors).toContainEqual(
+          expect.objectContaining({
+            kind: failure === "log" ? "api_error" : "provenance_mismatch",
+          }),
+        );
+      }
+    },
+  );
+
+  it.each<[string, string, string, boolean, boolean]>([
+    ["2026.11.1", "productPerformance", "failure", false, true],
+    ["2026.11.2", "productPerformance", "failure", false, true],
+    ["2026.11.3", "productPerformance", "failure", false, false],
+    ["2026.11.2", "releaseChecksCandidate", "failure", false, false],
+    ["2026.11.2", "productPerformance", "cancelled", false, false],
+    ["2026.11.2", "productPerformance", "timed_out", false, false],
+    ["2026.11.2", "productPerformance", "failure", true, false],
+  ])(
+    "Kova waiver: %s / %s / %s / extra failure %s / expected pass %s",
+    (version, role, conclusion, extraFailure, expectedPass) => {
+      const observed = child(role, {
+        conclusion,
+        status: "completed",
+        jobs: [
+          job("Kova mock provider performance", 1, { conclusion }),
+          ...(extraFailure ? [job("Correctness integrity", 2)] : []),
+        ],
+      });
+      expect(terminalPolicyPass(observed, version)).toBe(expectedPass);
+      expect(observed.jobs[0]).toMatchObject({ conclusion });
+    },
+  );
 
   it("does not accept a waived leaf without its required aggregate", async () => {
     grant();

@@ -5,6 +5,25 @@ const MIN_OPEN_DISTANCE_PX = 44;
 const OPEN_RATIO = 0.15;
 const LOCK_DISTANCE_PX = 7;
 const DIRECTION_RATIO = 1.25;
+// Controls that use horizontal drags themselves. Links and buttons are absent
+// on purpose: a drag past the tap slop never activates them.
+const HORIZONTAL_DRAG_CONTROLS =
+  "input, textarea, select, [role='slider'], [contenteditable]:not([contenteditable='false'])";
+
+// A rightward swipe reveals content to a scroller's left. A table or code
+// block resting at that edge cannot use the swipe, so it opens the drawer.
+function scrollsWithRightwardSwipe(target: Element): boolean {
+  if (!(target instanceof HTMLElement) || target.scrollWidth <= target.clientWidth + 1) {
+    return false;
+  }
+  const style = getComputedStyle(target);
+  if (style.overflowX !== "auto" && style.overflowX !== "scroll") {
+    return false;
+  }
+  // RTL scrollers rest at scrollLeft 0 and scroll left through negative offsets.
+  const leftEdge = style.direction === "rtl" ? target.clientWidth - target.scrollWidth : 0;
+  return target.scrollLeft > leftEdge + 1;
+}
 
 type Swipe = {
   identifier: number;
@@ -81,19 +100,13 @@ export class NavDrawerSwipeOwner {
     if (!content) {
       return;
     }
-    const blocked = path.slice(0, path.indexOf(content)).some((target) => {
-      if (!(target instanceof Element)) {
-        return false;
-      }
-      if (
-        target.matches(
-          "a, button, input, textarea, select, pre, [role='slider'], [contenteditable]:not([contenteditable='false'])",
-        )
-      ) {
-        return true;
-      }
-      return target instanceof HTMLElement && target.scrollWidth > target.clientWidth + 1;
-    });
+    const blocked = path
+      .slice(0, path.indexOf(content))
+      .some(
+        (target) =>
+          target instanceof Element &&
+          (target.matches(HORIZONTAL_DRAG_CONTROLS) || scrollsWithRightwardSwipe(target)),
+      );
     const touch = event.touches[0];
     if (blocked || !touch) {
       return;

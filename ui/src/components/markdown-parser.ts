@@ -49,6 +49,7 @@ const BARE_URL_CLASS = "markdown-bare-url";
 // Code-span URLs use the same generated labels as autolinks.
 const CODE_SPAN_LINK_MARKUP = "code-span-url";
 const CODE_SPAN_URL_BREAK_RE = /[\s\p{Cc}]/u;
+const FILE_REFERENCE_MARKER_RE = /[/\\:]/;
 
 // Label shortening needs every file target before applying any label.
 type MarkdownFileLinkDecoration = {
@@ -379,7 +380,11 @@ export function createMarkdownParser(): MarkdownItParser {
         }
         if (token.type === "link_open") {
           const href = String(token.attrGet("href") ?? "");
-          if (href && !token.attrGet("data-session-href")) {
+          if (
+            href &&
+            !token.attrGet("data-session-href") &&
+            !token.attrGet("data-template-package")
+          ) {
             let decodedHref = href;
             try {
               decodedHref = decodeURIComponent(href);
@@ -434,7 +439,8 @@ export function createMarkdownParser(): MarkdownItParser {
           }
           continue;
         }
-        if (token.type !== "text") {
+        // Prose references need a path separator or a bare filename's :line suffix.
+        if (token.type !== "text" || !FILE_REFERENCE_MARKER_RE.test(token.content)) {
           continue;
         }
 

@@ -355,15 +355,9 @@ export class DiscordAudioWorker {
     if (this.stopped) {
       return;
     }
-    for (const [id, capture] of this.captures) {
-      if (capture.userId !== userId) {
-        continue;
-      }
-      if (speaking) {
-        clearTimeout(capture.timer);
-        capture.timer = undefined;
-      } else {
-        this.finalizeLater(id, capture);
+    for (const capture of this.captures.values()) {
+      if (capture.userId === userId) {
+        this.finalizeLater(capture, speaking);
       }
     }
     this.post({ type: "speaking", userId, speaking });
@@ -379,13 +373,13 @@ export class DiscordAudioWorker {
     }
   }
 
-  private finalizeLater(id: number, capture: Capture): void {
+  private finalizeLater(capture: Capture, speaking: boolean): void {
     clearTimeout(capture.timer);
-    capture.timer = setTimeout(() => {
-      if (this.captures.get(id) === capture) {
-        this.stopCapture(capture);
-      }
-    }, this.options.captureSilenceGraceMs);
+    // Preserve the SDK's silence window, including with very short configured grace.
+    capture.timer = setTimeout(
+      () => this.stopCapture(capture),
+      this.options.captureSilenceGraceMs + (speaking ? this.sdk.SpeakingMap.DELAY : 0),
+    );
   }
 
   private async capture(
@@ -403,6 +397,8 @@ export class DiscordAudioWorker {
     });
     const capture: Capture = { userId, stream, pendingPackets: 0, pendingBytes: 0, closed: false };
     this.captures.set(id, capture);
+    // Packet inactivity also closes speakers whose speaking-end event never arrives.
+    this.finalizeLater(capture, true);
     const input = new PassThrough({ objectMode: true });
     const recordingClock = new BigInt64Array(recordingEpoch);
     const receipts = new WeakMap<Buffer, { receivedAt: number; recordingEpoch: bigint }>();
@@ -413,6 +409,7 @@ export class DiscordAudioWorker {
       if (failed) {
         return;
       }
+      this.stopCapture(capture);
       const analysis = analyzeVoiceReceiveError(error);
       if (analysis.isAbortLike && !analysis.countsAsDecryptFailure) {
         if (!abortReported) {
@@ -449,6 +446,7 @@ export class DiscordAudioWorker {
       if (failed || capture.closed || !packet.length) {
         return;
       }
+      capture.timer?.refresh();
       if (
         capture.pendingPackets >= MAX_CAPTURE_PACKETS ||
         capture.pendingBytes + packet.length > MAX_CAPTURE_BYTES
@@ -480,9 +478,6 @@ export class DiscordAudioWorker {
     stream.on("end", end);
     stream.once("close", finalized);
     stream.on("error", onError);
-    if (!connection.receiver.speaking.users.has(userId)) {
-      this.finalizeLater(id, capture);
-    }
     try {
       await decodeOpusStreamChunks(input, {
         onChunk: async (pcm, packet) => {
