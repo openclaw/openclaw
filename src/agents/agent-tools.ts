@@ -664,14 +664,16 @@ function* assembleOpenClawCodingTools(
       capabilityProfile,
       tools: finalizedTools,
       sessionEventSourcePolicy: options?.sessionEventSourcePolicy ?? {
-        toolsAllow: [
+        // Filled in place: the attempt appends final bundled MCP/LSP names to the
+        // caller's (emptied) array after construction (#183589).
+        toolsAllow: Object.assign(options?.sessionEventToolsAllowRef ?? [], [
           ...finalizedTools.filter(turnAuthorized).map((tool) => tool.name),
           // Provider-hosted search has no function tool; keep this turn's decision for it.
           ...(!finalizedTools.some((tool) => tool.name === "web_search") &&
           isConversationToolAllowed(capabilityProfile, "web_search")
             ? ["web_search"]
             : []),
-        ],
+        ]),
       },
     }),
   );
