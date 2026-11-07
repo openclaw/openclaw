@@ -1,5 +1,5 @@
-// Reads the claw's Discovery mailbox (store-and-forward). Only three kinds are
-// accepted: invite redemptions (which become pending, never admitted), and
+// Reads the claw's Discovery mailbox (store-and-forward). Accepted kinds are
+// member and node invite redemptions (which become pending, never admitted), and
 // root-signed statements and revocations. The authority verifies each one; a
 // device-signed approval that arrives this way is refused (spec section 7).
 import {
@@ -8,7 +8,8 @@ import {
   type AuthorityEvent,
   type MailboxMessage,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
-import type { AuthorityAccepted, AuthorityRefusal, RedemptionSender } from "./authority.js";
+import type { AuthorityAccepted, AuthorityRefusal } from "./authority-result.js";
+import type { RedemptionSender } from "./authority.js";
 import type { DiscoveryClient } from "./discovery-client.js";
 
 const BACKOFF_INITIAL_MS = 5_000;
@@ -21,6 +22,7 @@ export type MailboxSink = {
     redemption: unknown,
     sender: RedemptionSender,
   ) => Promise<AuthorityAccepted | AuthorityRefusal>;
+  redeemNode: (redemption: unknown) => Promise<AuthorityAccepted | AuthorityRefusal>;
   saveCursor: (cursor: string) => Promise<void>;
 };
 
@@ -34,7 +36,7 @@ type ReaderLogger = { info: (message: string) => void; warn: (message: string) =
  */
 export async function applyMailboxMessage(
   message: MailboxMessage,
-  sink: Pick<MailboxSink, "submit" | "redeem">,
+  sink: Pick<MailboxSink, "submit" | "redeem" | "redeemNode">,
   settle: (result: AuthorityAccepted | AuthorityRefusal) => Promise<void> = async () => {},
   signal?: AbortSignal,
 ): Promise<Array<AuthorityAccepted | AuthorityRefusal>> {
@@ -68,6 +70,8 @@ export async function applyMailboxMessage(
         location_hint: message.location_hint,
       }),
     );
+  } else if (payload.kind === "node_redemption") {
+    await record(await sink.redeemNode(payload.redemption));
   } else if (payload.kind === "revocation") {
     await record(await sink.submit(payload.revocation));
   } else if (payload.kind === "root_statement") {

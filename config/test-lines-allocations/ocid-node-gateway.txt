@@ -1,0 +1,2 @@
+839
+# Node-only tunnel authority, owner-signed admission and pending UX, one-time bounded pairing, manual-removal suppression, removal/reset recovery, authenticated activity, and worker transport credential isolation.
