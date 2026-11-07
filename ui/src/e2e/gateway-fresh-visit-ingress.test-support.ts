@@ -1,13 +1,13 @@
 import { once } from "node:events";
 import { Agent, createServer, request, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
-import { renderControlUiUnavailableDocument } from "../../../src/gateway/control-ui-availability.ts";
 import {
   applyControlUiSecurityHeaders,
   buildControlUiCspHeader,
   computeInlineScriptHashes,
 } from "../../../src/gateway/control-ui-csp.ts";
 import { classifyControlUiRequest } from "../../../src/gateway/control-ui-routing.ts";
+import { renderControlUiUnavailableDocument } from "../../../src/gateway/control-ui-unavailable-document.ts";
 import { createNodeProxyAgent } from "../../../src/infra/net/node-proxy-agent.ts";
 import { registerManagedProxyGatewayLoopbackBypass } from "../../../src/infra/net/proxy/proxy-lifecycle.ts";
 
