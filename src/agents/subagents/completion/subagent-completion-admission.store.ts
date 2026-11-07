@@ -395,7 +395,7 @@ export async function blockSubagentCompletionDelivery(
   } = params;
   if (params.storeReplaced) {
     const current = currentCompletionOwner(subagentRuns, params.subagent);
-    subagentRuns.retireCompletionAuthority(current);
+    subagentRuns.retireCompletion(current);
   }
   const result = await mutateCompletion(
     [params.subagent],
@@ -414,7 +414,6 @@ export async function blockSubagentCompletionDelivery(
         if (
           applied === true &&
           (params.suspendedReason ||
-            params.operatorAuthorityUnavailable ||
             params.storeReplaced ||
             params.disposition === "permanent_failure")
         ) {

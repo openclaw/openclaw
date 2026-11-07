@@ -128,7 +128,7 @@ it("retires pending notifications without traversing settled history", async () 
     runs: subagentRuns,
     resumedRuns: new Set(),
   });
-  expect(subagentRuns.isCompletionAuthorityRetired(subagent)).toBe(true);
+  expect(subagentRuns.isCompletionRetired(subagent)).toBe(true);
   await retirement;
   expect(traversal).not.toHaveBeenCalled();
   expect(loadSubagentRegistryFromSqlite().get(subagent.runId)?.delivery).toMatchObject(
@@ -146,7 +146,7 @@ it("leaves yielded tasks with their owner until a final result needs store retir
     publishSystemEventStoreResolver(() => "replacement-store");
     await settleRootWork(true);
   }
-  expect(subagentRuns.isCompletionAuthorityRetired(subagent)).toBe(false);
+  expect(subagentRuns.isCompletionRetired(subagent)).toBe(false);
   expect(loadSubagentRegistryFromSqlite().get(subagent.runId)).toMatchObject({
     pauseReason: "sessions_yield",
     delivery: { status: "pending" },
@@ -165,7 +165,7 @@ it("leaves yielded tasks with their owner until a final result needs store retir
   publishCommittedRecords(completed);
   publishSystemEventStoreResolver(() => "replacement-store");
   publishSystemEventStoreResolver(() => "original-store");
-  expect(subagentRuns.isCompletionAuthorityRetired(completed)).toBe(true);
+  expect(subagentRuns.isCompletionRetired(completed)).toBe(true);
   await settleRootWork(true);
   expect(loadSubagentRegistryFromSqlite().get(subagent.runId)).toMatchObject({
     completion: { resultText: "retained final result" },
@@ -381,23 +381,14 @@ it.each(["same", "failed", "pending acknowledgment"] as const)(
       try {
         publishSystemEventStoreResolver(() => "replacement-store");
         publishSystemEventStoreResolver(() => "original-store");
-        expect(subagentRuns.isCompletionAuthorityRetired(subagent)).toBe(true);
+        expect(subagentRuns.isCompletionRetired(subagent)).toBe(true);
         settling = settleRootWork(true);
         await Promise.race([entered.promise, settling]);
         expect(observed).toBe(true);
-        expect(() => subagentRuns.runWithCompletionAuthority(subagent, () => "send")).toThrow(
-          /store was retired/,
-        );
-        expect(() =>
-          subagentRuns.runWithCompletionBatchAuthority([subagent], () => "send"),
-        ).toThrow(/store was retired/);
         const successor = { ...structuredClone(subagent), runId: "replacement-completion" };
-        subagentRuns.transferCompletionAuthority(subagent, successor);
-        expect(() => subagentRuns.runWithCompletionAuthority(successor, () => "send")).toThrow(
-          /store was retired/,
-        );
-        expect(subagentRuns.isCompletionAuthorityRetired(subagent)).toBe(true);
-        expect(subagentRuns.isCompletionAuthorityRetired(successor)).toBe(true);
+        subagentRuns.transferCompletionOwner(subagent, successor);
+        expect(subagentRuns.isCompletionRetired(subagent)).toBe(true);
+        expect(subagentRuns.isCompletionRetired(successor)).toBe(true);
       } finally {
         release.resolve();
         await settling;
@@ -408,7 +399,7 @@ it.each(["same", "failed", "pending acknowledgment"] as const)(
         status: "suspended",
         disposition: "intentional_non_delivery",
       });
-      expect(subagentRuns.isCompletionAuthorityRetired(subagent)).toBe(true);
+      expect(subagentRuns.isCompletionRetired(subagent)).toBe(true);
     } else {
       publishSystemEventStoreResolver(() =>
         change === "same" ? "original-store" : "replacement-store",

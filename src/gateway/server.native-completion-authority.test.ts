@@ -190,6 +190,9 @@ describe("native completion final-effect authority", () => {
     async (revokedSource, { signal }) => {
       const context = getContext();
       const pair = await createRegisteredCompletionPair(context);
+      // This fixture supplies ordinary operator inputs; keep those test-owned sources
+      // active until their explicit revocation instead of relying on completion custody.
+      const releaseSources = pair.runs.map((run) => run.source.authority.retain?.());
       const gates = [createGate(), createGate()] as const;
       const sources: unknown[] = [];
       const attempts: string[] = [];
@@ -283,6 +286,9 @@ describe("native completion final-effect authority", () => {
       } finally {
         release();
         await pair.dispose();
+        for (const releaseSource of releaseSources) {
+          releaseSource?.();
+        }
         await settleRequests(true);
         signal.removeEventListener("abort", release);
       }

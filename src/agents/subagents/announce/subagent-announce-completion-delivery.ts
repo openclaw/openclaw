@@ -124,18 +124,14 @@ export async function runAnnounceAgentCall(params: {
           operatorRoleActor: { kind: "system" },
           delegatedToolPolicyHandoff: params.delegatedToolPolicyHandoff,
           signal: executionSignal,
-          ...(isSourceSessionAdmissionAllowed
-            ? {
-                sessionMutationCommitGuard: () => {
-                  if (!isSourceSessionAdmissionAllowed()) {
-                    const error = new SourceOwnerChangedError();
-                    materializeErrorStack(error);
-                    sourceLifecycle.abort(error);
-                    throw error;
-                  }
-                },
-              }
-            : {}),
+          sessionMutationCommitGuard: () => {
+            if (!params.isExecutionAllowed() || isSourceSessionAdmissionAllowed?.() === false) {
+              const error = new SourceOwnerChangedError();
+              materializeErrorStack(error);
+              sourceLifecycle.abort(error);
+              throw error;
+            }
+          },
           // Accepted queue waits belong to session admission; execution belongs to
           // the requester runtime budget, not the announcement handoff deadline.
           onAccepted: (payload) => {

@@ -1,6 +1,19 @@
 import type { SessionDeliveryState } from "../../../config/sessions/types.js";
 import type { CallGatewayOptions } from "../../../gateway/call.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
+import type { deliverAgentCommandResult } from "../../command/delivery.js";
+import type { EmbeddedAgentRunResult } from "../../embedded-agent-runner/types.js";
+
+type GatewayDeliveryStatus = NonNullable<
+  Awaited<ReturnType<typeof deliverAgentCommandResult>>["deliveryStatus"]
+>;
+
+export type GatewayResponse = {
+  status?: string;
+  runId?: string;
+  messages?: Array<Record<string, unknown>>;
+  result?: Partial<EmbeddedAgentRunResult> & { deliveryStatus?: Partial<GatewayDeliveryStatus> };
+};
 
 export type LifecycleData = {
   phase?: string;

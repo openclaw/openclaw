@@ -105,11 +105,7 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
     fixture.announce.mockImplementation(async (params) => {
       const retained =
         getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
-      expect(retained).toMatchObject({
-        source: source.authority.source,
-        scopes: ["operator.write"],
-      });
-      retained?.assertCurrent();
+      expect(retained).toBeUndefined();
       if (ownerState === "replaced Gateway") {
         announcementEntered.resolve();
         await continueAnnouncement.promise;
@@ -181,17 +177,9 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
         ...rejectedRun,
         requesterSessionKey: "agent:main:main",
       });
-      if (ownerState !== "revoked") {
-        expect(fixture.announce).toHaveBeenCalledOnce();
-        if (ownerState !== "replaced Gateway") {
-          expect(loadSubagentRegistryFromSqlite().get(runId)?.delivery?.status).toBe("delivered");
-        }
-      } else {
-        expect(fixture.announce).not.toHaveBeenCalled();
-        const entry = expectDefined(subagentRuns.get(runId), "failed registration");
-        expect(() => subagentRuns.runWithCompletionAuthority(entry, () => "stale")).toThrow(
-          /authority/,
-        );
+      expect(fixture.announce).toHaveBeenCalledTimes(1);
+      if (ownerState !== "replaced Gateway") {
+        expect(subagentRuns.get(runId)?.delivery?.status).toBe("delivered");
       }
       if (ownerState === "replaced child") {
         expect(loadSubagentRegistryFromSqlite().get(runId)?.execution.suppressSessionEffects).toBe(

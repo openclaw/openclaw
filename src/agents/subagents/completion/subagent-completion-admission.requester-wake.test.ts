@@ -226,37 +226,6 @@ describe("persisted subagent requester wakes", () => {
     },
   );
 
-  it("settles lost operator authority without discarding child results or queuing a notice", async () => {
-    const input = armRequesterWake(records());
-    input.subagent.cleanupCompletedAt = undefined;
-    persistOwner(input);
-    const before = structuredClone(input.subagent);
-
-    await settleOne(input, {
-      delivered: false,
-      path: "none",
-      disposition: "permanent_failure",
-      reason: "operator_authority_unavailable",
-      error: "The original operator no longer has access",
-    });
-
-    db.value = await reopenOwners();
-    const restored = subagentRuns.get(input.subagent.runId)!;
-    expect(restored.execution).toEqual(before.execution);
-    expect(restored.completion).toEqual(before.completion);
-    expect(restored).toMatchObject({
-      delivery: {
-        status: "failed",
-        disposition: "permanent_failure",
-        lastError: "The original operator no longer has access",
-      },
-      suppressCompletionDelivery: true,
-    });
-    expect(restored.requesterSettleWake).toBeUndefined();
-    expect(restored.delivery?.queueId).toBeUndefined();
-    expect(systemEvents(db.value)).toEqual([]);
-  });
-
   it("settles a rejected dispatch transition after rollback without another wake", async () => {
     const input = armRequesterWake(records());
     persistOwner(input);
@@ -669,7 +638,7 @@ describe("persisted subagent requester wakes", () => {
     },
   );
 
-  it.each(["delivered", "store replaced", "operator authority lost"] as const)(
+  it.each(["delivered", "store replaced"] as const)(
     "settles a pause notice across reopen (%s)",
     async (settlement) => {
       const storeReplaced = settlement === "store replaced";
@@ -700,12 +669,6 @@ describe("persisted subagent requester wakes", () => {
         path: "direct",
         ...(storeReplaced
           ? { storeReplaced: true, disposition: "intentional_non_delivery" as const }
-          : {}),
-        ...(settlement === "operator authority lost"
-          ? {
-              disposition: "permanent_failure" as const,
-              reason: "operator_authority_unavailable" as const,
-            }
           : {}),
       });
       db.value = await reopenOwners();

@@ -233,7 +233,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       // A paused row is terminal by construction; adoption is exactly the case the
       // ended-source gate exists to keep out of unrelated replacement callers.
       allowEndedSource: true,
-      refreshCompletionAuthority: true,
+      rearmCompletion: true,
       // The original requester is idle behind its own yield, so its wake credential
       // is the only path back to it once this follow-up settles.
       preserveRequesterSettleWake: true,
@@ -312,8 +312,8 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     allowEndedSource?: boolean;
     /** Ordinary next turns retain the completed execution's independent delivery. */
     preserveCompletedRun?: boolean;
-    /** An explicitly admitted paused follow-up owns fresh completion authority. */
-    refreshCompletionAuthority?: true;
+    /** An explicitly admitted paused follow-up rearms its recorded completion obligation. */
+    rearmCompletion?: true;
     /** Current admitted child identity for a new task, never a historical task rebind. */
     sessionEntry?: SubagentRunRecord["childSessionIdentity"];
     preserveFrozenResultFallback?: boolean;
@@ -355,12 +355,10 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       return false;
     }
     const preserveCompletedRun = replaceParams.preserveCompletedRun === true;
-    const refreshCompletionAuthority =
-      preserveCompletedRun || replaceParams.refreshCompletionAuthority === true;
-    const authority = refreshCompletionAuthority
+    const rearmCompletion = preserveCompletedRun || replaceParams.rearmCompletion === true;
+    const authority = rearmCompletion
       ? await captureOperatorToolGatewayContinuationContext()
       : undefined;
-    let custodyTransferred = false;
     const runIds = new Set([
       previousRunId,
       nextRunId,
@@ -581,11 +579,11 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
               this.captureAdmissionRejection(next, replaceParams.admissionSessionEffects),
             );
             if (!preserveCompletedRun) {
-              subagentRuns.transferCompletionAuthority(value.source, next);
+              subagentRuns.transferCompletionOwner(value.source, next);
             }
-            if (refreshCompletionAuthority && authority) {
-              // The newly admitted caller replaces predecessor custody, including
-              // a retired legacy source; persisted rows alone never grant it.
+            if (rearmCompletion) {
+              // A newly admitted follow-up owns its completion obligation, not the
+              // predecessor operator's invocation.
               const sameRequesterTask =
                 !preserveCompletedRun &&
                 (next.taskRunId ?? next.runId) === (value.source.taskRunId ?? value.source.runId) &&
@@ -593,22 +591,20 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
                 next.requesterAgentId === value.source.requesterAgentId &&
                 next.requesterStorePath === value.source.requesterStorePath &&
                 next.requesterTurnRunId === value.source.requesterTurnRunId;
-              // Transfer keeps accounting metadata for this task, never its predecessor's permission.
+              // Transfer keeps requester accounting only for the same recorded task.
               const requesterRunInstance = sameRequesterTask
                 ? subagentRuns.getRequesterRunInstance(next)
                 : undefined;
-              subagentRuns.bindCompletionAuthority(
+              subagentRuns.bindCompletionOwner(
                 next,
-                authority,
                 requesterRunInstance?.runId === next.requesterTurnRunId
                   ? requesterRunInstance
                   : undefined,
               );
-              custodyTransferred = true;
             }
             subagentRuns.commitOwnership(next);
             if (replaceParams.successor) {
-              subagentRuns.releaseCompletionAuthority(replaceParams.successor);
+              subagentRuns.releaseRequesterRunInstance(replaceParams.successor);
             }
             if (!preserveCompletedRun && previousRunId !== nextRunId) {
               // Remapped cohorts must not queue behind their replaced input.
@@ -629,9 +625,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       }
       throw error;
     } finally {
-      if (!custodyTransferred) {
-        authority?.release();
-      }
+      authority?.release();
     }
     if (!replacement) {
       return false;

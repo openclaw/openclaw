@@ -91,6 +91,47 @@ describe("typed in-process agent authorization", () => {
     waitForTurn.mockReset();
   });
 
+  it("keeps input fences admission-only while Gateway lifecycle guards execution", async () => {
+    const client = createOperatorClient({ profileName: "owner", scopes: ["operator.write"] });
+    const context = createContext();
+    let inputCurrent = true;
+    let gatewayCurrent = true;
+    startTurn.mockImplementationOnce(async (request) => {
+      request.assertAdmissionCurrent?.();
+      request.io.emitAcceptance([
+        true,
+        { status: "accepted", runId: "host-execution-source" },
+        undefined,
+      ]);
+      inputCurrent = false;
+      expect(() => request.assertAdmissionCurrent?.()).toThrow("input admission closed");
+      expect(request.executionSource).toBeTypeOf("function");
+      expect(() => request.executionSource()).not.toThrow();
+      gatewayCurrent = false;
+      expect(() => request.executionSource()).toThrow("current gateway instance binding");
+      gatewayCurrent = true;
+    });
+    await withPluginRuntimeGatewayRequestScope(
+      { client, context, isWebchatConnect: () => false },
+      () =>
+        dispatchGatewayMethodInProcess(
+          "agent",
+          { message: "owned execution", idempotencyKey: "host-execution-source" },
+          {
+            disableSyntheticClient: true,
+            requireScopedClient: true,
+            resolveGatewayContext: () => (gatewayCurrent ? context : undefined),
+            sessionMutationCommitGuard: () => {
+              if (!inputCurrent) {
+                throw new Error("input admission closed");
+              }
+            },
+          },
+        ),
+    );
+    expect(startTurn).toHaveBeenCalledOnce();
+  });
+
   it("releases session fact observers after a typed child launch", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:subagent:heap-child";
