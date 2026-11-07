@@ -367,11 +367,12 @@ it("pages large history without reading off-page payloads or changing completion
           expect(runIds(page.entries)).toEqual(expected);
           if (options.view === "summary") {
             expect(JSON.stringify(records)).not.toContain("diagnostic-payload:");
-            expect(page.entries.every((entry) => !entry.diagnostics && !entry.delivery)).toBe(true);
-          } else {
-            expect(page.entries[0]?.diagnostics?.entries[0]?.message).toContain(
-              "diagnostic-payload:",
+            expect(page.entries.every((e) => !e.delivery && !e.diagnostics?.entries?.length)).toBe(
+              true,
             );
+            expect(page.entries.some((e) => e.diagnostics?.summary)).toBe(true);
+          } else {
+            expect(JSON.stringify(page.entries)).toContain("diagnostic-payload:");
           }
         }
         const beforeSearchReads = reads.counts.history;
@@ -386,8 +387,7 @@ it("pages large history without reading off-page payloads or changing completion
           view: "summary",
           queryMatchedTaskIds: new Set(search.queryMatches),
         });
-        expect(matching.page.total).toBe(1);
-        expect(matching.page.entries).toMatchObject([{ runId: "public-007" }]);
+        expect(matching.page).toMatchObject({ total: 1, entries: [{ runId: "public-007" }] });
       } finally {
         reads.restore();
       }

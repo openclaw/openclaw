@@ -353,6 +353,7 @@ const enCron = {
       tokens: "{count} Tokens",
       inputOutputTokens: "{input} in / {output} out",
       noSummary: "No summary.",
+      diagnosticNote: "Diagnostics: {note}",
       deliverySuppression: "Delivery suppression: {reason}",
       runAt: "Started at",
       transcript: "Conversation",
