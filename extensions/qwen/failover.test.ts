@@ -20,7 +20,12 @@ describe("Qwen quota error semantics", () => {
       }
       cases.push(
         [{ status: 429, code, errorMessage: "Free allocated quota exceeded." }, "billing"],
-        [{ status: 429, code, errorMessage: "Unknown quota condition" }, undefined],
+        // Bailian reuses insufficient_quota for TPS/TPM throttles (#148236):
+        // unmarked quota messages cool down instead of disabling the profile.
+        [{ status: 429, code, errorMessage: "Unknown quota condition" }, "rate_limit"],
+        [{ status: 429, code, errorMessage: "Throttling.AllocationQuota" }, "rate_limit"],
+        [{ status: 429, code, errorMessage: "PrepaidBillOverdue: quota frozen" }, "billing"],
+        [{ status: 429, code, errorMessage: "insufficient_balance, top up required" }, "billing"],
       );
     }
     for (const code of ["PrepaidBillOverdue", "PostpaidBillOverdue"]) {
