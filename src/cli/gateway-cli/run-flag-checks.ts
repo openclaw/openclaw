@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { GatewayAuthMode, GatewayTailscaleMode } from "../../config/config.js";
 import { parseTcpPort } from "../../infra/tcp-port.js";
 import { formatInvalidPortOption } from "../error-format.js";
-import { toOptionString } from "./run-option-values.js";
+import { parseEnumOption, toOptionString } from "./run-option-values.js";
 import type { GatewayRunOpts } from "./run-options.js";
 
 export const GATEWAY_AUTH_MODES: readonly GatewayAuthMode[] = [
@@ -24,13 +24,6 @@ export type GatewayRunFlagOpts = Pick<
   GatewayRunOpts,
   "auth" | "bind" | "compact" | "port" | "tailscale" | "wsLog"
 >;
-
-export function parseEnumOption<T extends string>(
-  raw: string | undefined,
-  allowed: readonly T[],
-): T | null {
-  return raw ? (allowed.find((value) => value === raw) ?? null) : null;
-}
 
 /** Returns the first invalid-flag error, checking only CLI values (config is not loaded yet). */
 export function findGatewayRunFlagError(opts: GatewayRunFlagOpts): string | undefined {
