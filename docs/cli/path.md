@@ -522,7 +522,7 @@ openclaw path find 'oc://config.jsonc/plugins/{github,slack}/enabled'
 Write a leaf. Pair with `--dry-run` to preview the bytes that would be
 written without touching the file. Add `--diff` for a unified diff preview.
 Exits `0` on a successful write, `1` if the substrate refuses (for example, a
-sentinel guard hit), `2` on parse errors.
+sentinel guard hit), `2` on parse errors or a file read/write I/O error.
 
 ```bash
 openclaw path set 'oc://gateway.jsonc/version' '2.0' --dry-run
@@ -566,11 +566,11 @@ openclaw path emit ./gateway.jsonc --json
 
 ## Exit codes
 
-| Code | Meaning                                                                                             |
-| ---- | --------------------------------------------------------------------------------------------------- |
-| `0`  | Success. (`resolve` / `find`: at least one match. `set`: write succeeded.)                          |
-| `1`  | No match, invalid `validate` input, missing required arguments, or `set` rejected by the substrate. |
-| `2`  | Path or file parse error, refused pattern, or invalid mutation options.                             |
+| Code | Meaning                                                                                                                                                   |
+| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0`  | Success. (`resolve` / `find`: at least one match. `set`: write succeeded.)                                                                                |
+| `1`  | No match, invalid `validate` input, missing required arguments, or `set` rejected by the substrate.                                                       |
+| `2`  | Path or file parse error, refused pattern, invalid mutation options, or a file read/write I/O error (`OC_PATH_FILE_UNREADABLE` / `OC_PATH_WRITE_FAILED`). |
 
 ## Output mode
 
@@ -578,9 +578,9 @@ openclaw path emit ./gateway.jsonc --json
 stdout is piped or redirected. `--json` and `--human` override the
 auto-detection.
 
-Path/file parse errors and refused patterns in JSON mode write one error object to stdout, with `ok: false`
-and an `error` containing `type: "cli_error"`, the domain `code`, and `message`.
-Human-mode diagnostics remain on stderr. Refusals still return a nonzero exit code.
+Path/file parse errors, refused patterns, and file read/write I/O failures in JSON mode write one error
+object to stdout, with `ok: false` and an `error` containing `type: "cli_error"`, the domain `code`, and
+`message`. Human-mode diagnostics remain on stderr. Refusals still return a nonzero exit code.
 
 ## Notes
 
