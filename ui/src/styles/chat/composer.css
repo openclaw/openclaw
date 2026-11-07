@@ -92,7 +92,7 @@
   inset: -1px;
   padding: 1px;
   border-radius: inherit;
-  corner-shape: superellipse(1.5);
+  corner-shape: inherit;
   /* Comet, not a ring: a long fading tail behind a bright head, dark again
      right in front of it, so the light reads as travelling, not as a ring. */
   background: conic-gradient(
