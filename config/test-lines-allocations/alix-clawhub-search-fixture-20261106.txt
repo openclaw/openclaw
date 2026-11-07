@@ -1,0 +1,2 @@
+# Keep permanent HTTP 503 error coverage within its existing E2E deadline.
+2
