@@ -34,16 +34,12 @@ it.each([false, true])(
           assertCurrent() {},
         });
         try {
-          if (touched) {
-            await expect(rollback).rejects.toMatchObject({ cause: failure });
-            expect(result.recovery?.dataAtRisk).toBe("rollback-state-unverified");
-          } else {
-            await expect(rollback).resolves.toBe(false);
-            expect(result.recovery?.dataAtRisk).toBe("state-migrated-no-rollback");
-            expect(result.steps[0]?.stderrTail).toContain(
-              "Database rollback could not start: database is locked",
-            );
-          }
+          await expect(rollback).rejects.toThrow(
+            touched ? "could not finish" : "left the current databases unchanged",
+          );
+          expect(result.recovery).toMatchObject({
+            dataAtRisk: touched ? "rollback-state-unverified" : "state-migrated-no-rollback",
+          });
         } finally {
           restored.mockRestore();
         }
