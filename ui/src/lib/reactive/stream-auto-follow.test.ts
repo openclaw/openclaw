@@ -6,7 +6,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("preserves reader position until a new stream resets following, then cancels on disposal", () => {
+it("preserves reader position from captured scrolls until reset, then cancels on disposal", () => {
   vi.useFakeTimers();
   const container = document.createElement("div");
   Object.defineProperties(container, {
@@ -25,7 +25,7 @@ it("preserves reader position until a new stream resets following, then cancels 
     return stop;
   });
   try {
-    container.addEventListener("scroll", follow.handleScroll);
+    document.addEventListener("scroll", follow.handleScroll, true);
     container.dispatchEvent(new Event("scroll"));
     follow.schedule();
     vi.advanceTimersByTime(20);
@@ -48,7 +48,7 @@ it("preserves reader position until a new stream resets following, then cancels 
     expect(container.scrollTop).toBe(0);
   } finally {
     dispose();
-    container.removeEventListener("scroll", follow.handleScroll);
+    document.removeEventListener("scroll", follow.handleScroll, true);
     container.remove();
   }
 });
@@ -84,6 +84,7 @@ it("keeps admitted virtual following through an anchor scroll and rechecks the t
     // The virtualizer retains an old row while the new tail is being rendered.
     container.scrollTop = 400;
     container.dispatchEvent(new Event("scroll"));
+    follow.schedule();
     vi.advanceTimersByTime(20);
     expect(scrollToEnd).toHaveBeenCalledOnce();
     expect(container.scrollTop).toBe(400);

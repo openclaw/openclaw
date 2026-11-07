@@ -10,10 +10,19 @@ import type {
 import type { UserProfile } from "../../packages/gateway-protocol/src/schema/users.ts";
 import type { loadVoiceWakeConfig } from "../../src/infra/voicewake.ts";
 import type { ModelAuthStatusResult } from "../../ui/src/api/types.ts";
-import { APP_ROUTE_IDS, pathForRoute, type RouteId } from "../../ui/src/app-route-paths.ts";
+import {
+  APP_ROUTE_IDS,
+  pathForRoute,
+  pathForTerminalSession,
+  type RouteId,
+} from "../../ui/src/app-route-paths.ts";
 import type { ColdLoadRpcRecord } from "../../ui/src/test-helpers/control-ui-cold-load-probe-init.ts";
 import { createColdLoadProbeInitScript } from "../../ui/src/test-helpers/control-ui-cold-load-probes.ts";
-import { waitForControlUiRoute } from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import type { MockGatewayWindow } from "../../ui/src/test-helpers/control-ui-e2e-contract.ts";
+import {
+  controlUiSessionPath,
+  waitForControlUiRoute,
+} from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import {
   meetingEntry,
   meetingPage,
@@ -22,7 +31,11 @@ import {
 import { parityBaseScenario, parityWorkboardScenario } from "../control-ui-parity/fixtures.ts";
 import { dataActivityScenarios } from "./control-ui-data-activity-scenarios.ts";
 import { dataCatalogScenarios } from "./control-ui-data-catalog-scenarios.ts";
-import type { EngineScenario } from "./control-ui-engine-boot-scenarios.ts";
+import {
+  engineProbeInitScript,
+  waitForEngineTranscript,
+  type EngineScenario,
+} from "./control-ui-engine-boot-scenarios.ts";
 import { frames } from "./control-ui-interaction-navigation.ts";
 import { interactionScenarios } from "./control-ui-interaction-scenarios.ts";
 import type {
@@ -34,8 +47,13 @@ type PageAction = {
   label: string;
   run: InteractionScenario["run"];
 };
+type NoChangeAction = PageAction & {
+  kind: "push" | "refresh" | "poll" | "presence-push" | "model-push";
+  prepare?: InteractionScenario["prepare"];
+};
 type PageDefinition = {
   ready: string;
+  pathname?: string;
   rows?: { selector: string; minimum: number; totalSelector?: string };
   /** Keep the measurement open through incremental mounting, after first visibility. */
   completion?: { selector: string; minimum: number; maximum?: number }[];
@@ -88,6 +106,96 @@ export const enginePageFixtureCounts = {
   advancedControls: 437,
 };
 const quantity = enginePageFixtureCounts;
+
+type TerminalOutputSnapshot = {
+  drawnAtMs: number;
+  visibleAtMs: number;
+  width: number;
+  height: number;
+};
+declare global {
+  interface Window {
+    openclawEngineTerminalSelectionAtMs: number;
+    openclawEngineTerminalOutput: {
+      reset: () => void;
+      read: () => TerminalOutputSnapshot | null;
+    };
+  }
+}
+
+/** Observe emitted bundles without replacing the terminal runtime or adding a product hook. */
+function installTerminalOutputProbe() {
+  const marker = "OpenClaw mock terminal";
+  const entries = new Map<
+    HTMLCanvasElement,
+    { tail: string; drawnAtMs: number; visibleAtMs: number }
+  >();
+  // The wrapper below forwards each call with its original canvas receiver.
+  // oxlint-disable-next-line typescript/unbound-method
+  const fillText = CanvasRenderingContext2D.prototype.fillText;
+  CanvasRenderingContext2D.prototype.fillText = function (...args) {
+    fillText.apply(this, args);
+    const canvas = this.canvas;
+    if (!(canvas instanceof HTMLCanvasElement) || !canvas.closest(".tp-host")) {
+      return;
+    }
+    let entry = entries.get(canvas);
+    if (!entry) {
+      entry = { tail: "", drawnAtMs: 0, visibleAtMs: 0 };
+      entries.set(canvas, entry);
+    }
+    if (entry.drawnAtMs) {
+      return;
+    }
+    entry.tail = (entry.tail + args[0]).slice(-marker.length);
+    if (entry.tail !== marker) {
+      return;
+    }
+    entry.drawnAtMs = performance.now();
+    const observed = entry;
+    let visibleFrames = 0;
+    const sample = () => {
+      if (entries.get(canvas) !== observed || !canvas.isConnected) {
+        return;
+      }
+      const visible =
+        canvas.checkVisibility() &&
+        canvas.width > 0 &&
+        canvas.height > 0 &&
+        canvas.closest(".tp-viewport")?.getAttribute("aria-hidden") !== "true";
+      visibleFrames = visible ? visibleFrames + 1 : 0;
+      if (visibleFrames === 2) {
+        observed.visibleAtMs = performance.now();
+      } else {
+        requestAnimationFrame(sample);
+      }
+    };
+    requestAnimationFrame(sample);
+  };
+  window.openclawEngineTerminalOutput = {
+    reset: () => entries.clear(),
+    read: () => {
+      for (const [canvas, entry] of entries) {
+        if (entry.visibleAtMs && canvas.isConnected && canvas.checkVisibility()) {
+          return {
+            drawnAtMs: entry.drawnAtMs,
+            visibleAtMs: entry.visibleAtMs,
+            width: canvas.width,
+            height: canvas.height,
+          };
+        }
+      }
+      return null;
+    },
+  };
+}
+
+async function waitForTerminalOutput(page: Page) {
+  await page.waitForFunction(() => window.openclawEngineTerminalOutput.read() !== null);
+  const output = await page.evaluate(() => window.openclawEngineTerminalOutput.read());
+  assert(output, "Expected the mock banner drawn in a visible terminal canvas");
+  return output;
+}
 const excluded: Partial<Record<RouteId, string>> = {
   chat: "Chat transcript is owned by the active transcript lane.",
   dashboard: "Board and Board tabs are owned by the active Board lane.",
@@ -199,20 +307,6 @@ function disclosure(selector: string): PageAction {
     },
   };
 }
-function refresh(selector: string, method: string): PageAction {
-  return {
-    label: `Refresh ${method}`,
-    run: async (page, gateway) => {
-      const before = (await gateway.getRequests(method)).length;
-      await page.locator(selector).first().click();
-      await gateway.waitForRequest(method, { after: before });
-      await frames(page);
-      await page.locator(`${selector}:enabled`).first().waitFor({ state: "visible" });
-      assert.equal(await page.locator('.agents-toolbar [role="alert"]').count(), 0);
-      return { refreshRequests: (await gateway.getRequests(method)).length - before };
-    },
-  };
-}
 const configPage = (): PageDefinition => ({
   ready: "openclaw-config-page .settings-page",
   action: {
@@ -297,18 +391,47 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     },
   },
   agents: {
-    ready: "openclaw-agents-page .agents-refresh-btn:enabled",
-    action: refresh(".agents-refresh-btn", "agents.list"),
+    ready: "openclaw-agents-page .agent-identity-editor",
+    completion: [{ selector: "openclaw-agents-page .agents-refresh-btn:enabled", minimum: 1 }],
+    action: {
+      label: "Refresh the agent roster, opening the phone action menu when needed",
+      run: async (page, gateway) => {
+        const before = (await gateway.getRequests("agents.list")).length;
+        const button = page.locator(".agents-refresh-btn").filter({ visible: true }).first();
+        if (await button.count()) {
+          await button.click();
+        } else {
+          await page.locator(".agents-page-menu__trigger").click();
+          await page
+            .locator('[role="menu"]:popover-open')
+            .getByRole("menuitem", { name: "Refresh", exact: true })
+            .click();
+        }
+        await gateway.waitForRequest("agents.list", { after: before });
+        await frames(page);
+        await page.locator("openclaw-agents-page .agents-refresh-btn:enabled").waitFor({
+          state: "attached",
+        });
+        assert.equal(await page.locator('.agents-toolbar [role="alert"]').count(), 0);
+        return { refreshRequests: (await gateway.getRequests("agents.list")).length - before };
+      },
+    },
   },
   approvals: {
-    ready: ".approval-history-table tbody tr",
-    rows: { selector: ".approval-history-table tbody tr", minimum: 100 },
+    ready: ".approval-history-table tbody tr, .approval-log > .approval-log__row",
+    rows: {
+      selector: ".approval-history-table tbody tr, .approval-log > .approval-log__row",
+      minimum: 100,
+    },
     action: {
       label: "Load the next 100 approval-history records",
       run: async (page) => {
         await page.locator('openclaw-approvals-page button:text-is("Load more")').click();
         await page.waitForFunction(
-          () => document.querySelectorAll(".approval-history-table tbody tr").length === 200,
+          () =>
+            document.querySelectorAll(
+              ".approval-history-table tbody tr, .approval-log > .approval-log__row",
+            ).length === 200,
         );
         await frames(page);
         return { historyRows: 200 };
@@ -352,7 +475,10 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
           'openclaw-cloud-workers-page input[aria-label="Crabbox backend"]',
         );
         assert.equal(await editor.filter({ visible: true }).count(), 0);
-        await page.locator(".cloud-environments__advanced > summary").click();
+        await page
+          .locator("openclaw-cloud-workers-page summary")
+          .filter({ hasText: "Advanced" })
+          .click();
         await page.waitForFunction(
           () =>
             document.querySelectorAll('openclaw-cloud-workers-page button[aria-label^="Edit"]')
@@ -452,32 +578,20 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   devices: {
     ready: "openclaw-devices-page .device-entry",
     action: {
-      label: "Open the first device action menu and focus its enabled Copy item",
+      label: "Expand the first paired device and reveal its identity and actions",
       run: async (page) => {
-        const trigger = page.locator("openclaw-devices-page .device-entry__menu-trigger").first();
-        assert.equal(await trigger.getAttribute("aria-expanded"), "false");
-        const menuId = await trigger.getAttribute("aria-controls");
-        assert(menuId, "The device action trigger must identify its own menu");
-        const menu = page.locator(`[role="menu"][id=${JSON.stringify(menuId)}]`);
-        await trigger.click();
-        await menu.waitFor({ state: "visible" });
-        await page.waitForFunction((id) => {
-          const surface = document.getElementById(id);
-          return (
-            surface?.matches(":popover-open") &&
-            surface.querySelector('[role="menuitem"][data-value="copy"]') === document.activeElement
-          );
-        }, menuId);
-        assert.equal(await trigger.getAttribute("aria-expanded"), "true");
-        assert.equal(await menu.locator('[role="menuitem"][data-value="copy"]').isEnabled(), true);
-        assert.equal(
-          await menu.locator('[role="menuitem"][data-value="remove"]').isEnabled(),
-          true,
-        );
-        const menuItems = await menu.locator('[role="menuitem"]').count();
-        assert.equal(menuItems, 2);
+        const row = page.locator("openclaw-devices-page details.device-entry").first();
+        assert.equal(await row.getAttribute("open"), null);
+        await row.locator(":scope > summary").click();
+        await row.locator(".device-entry__body").waitFor({ state: "visible" });
+        assert.equal(await row.getAttribute("open"), "");
+        const deviceId = await row.getAttribute("data-device-id");
+        assert(deviceId);
+        assert((await row.locator(".device-fact__id").textContent())?.includes(deviceId));
+        assert.equal(await row.locator(".device-fact__id button").isEnabled(), true);
+        assert.equal(await row.locator(".device-entry__remove").isEnabled(), true);
         await frames(page);
-        return { firstMenuOpened: true, copyFocused: true, menuItems };
+        return { deviceExpanded: true, copyEnabled: true, removeEnabled: true };
       },
     },
   },
@@ -642,10 +756,7 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
             document.querySelector('.portals-rail__item[aria-current="true"] .portals-rail__title')
               ?.textContent === "Census portal 1",
         );
-        await page
-          .locator(".portals-preview__notice")
-          .getByText("This portal requires an operator with write access.", { exact: true })
-          .waitFor();
+        await page.getByText("Write access required", { exact: true }).waitFor();
         assert.equal(await page.locator("openclaw-portals-page iframe").count(), 0);
         await frames(page);
         return {
@@ -691,7 +802,7 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   search: {
     ready: 'openclaw-search-page input[aria-label="Search query"]',
     action: {
-      label: "Run a mock search and present its result",
+      label: "Run a search health check and present its success",
       run: async (page, gateway) => {
         const before = (await gateway.getRequests("webSearch.test")).length;
         const input = page.locator('openclaw-search-page input[aria-label="Search query"]');
@@ -699,21 +810,28 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
         await input.press("Enter");
         await gateway.waitForRequest("webSearch.test", { after: before });
         await page
-          .locator("openclaw-search-page .settings-row__title")
-          .getByText("Synthetic census search result", { exact: true })
+          .locator("openclaw-search-page .search-test-status")
+          .getByText("Search succeeded", { exact: true })
           .waitFor();
         await frames(page);
-        return { searchResults: 1 };
+        return { searchTests: 1 };
       },
     },
   },
   secrets: {
-    ready: "openclaw-secrets-page .secrets-store__table tbody tr",
-    rows: { selector: "openclaw-secrets-page .secrets-store__table tbody tr", minimum: 200 },
+    ready:
+      "openclaw-secrets-page .secrets-store__table tbody tr, openclaw-secrets-page .secrets-store__list .secrets-store__row",
+    rows: {
+      selector:
+        "openclaw-secrets-page .secrets-store__table tbody tr, openclaw-secrets-page .secrets-store__list .secrets-store__row",
+      minimum: 200,
+    },
     action: {
       label: "Open the first secret's row menu and edit its metadata",
       run: async (page) => {
-        const row = page.locator(".secrets-store__table tbody tr").first();
+        const row = page
+          .locator(".secrets-store__table tbody tr, .secrets-store__list .secrets-store__row")
+          .first();
         const name = (await row.locator(".secrets-store__name").textContent())?.trim();
         await row.locator(".secrets-store__menu-trigger").click();
         await page
@@ -787,9 +905,13 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     },
   },
   systems: {
-    ready: '.systems-workspace button[aria-label="Machine details"]:enabled',
+    ready:
+      '.systems-workspace button:is([aria-label="Machine details"], [aria-label="Device details"]):enabled',
     rows: { selector: ".systems-mobile-picker option:not(:disabled)", minimum: 61 },
-    action: click('.systems-workspace button[aria-label="Machine details"]', ".systems-details"),
+    action: click(
+      '.systems-workspace button:is([aria-label="Machine details"], [aria-label="Device details"])',
+      ".systems-details",
+    ),
   },
   terminal: {
     ready:
@@ -878,7 +1000,7 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     ...configPage(),
     completion: [
       { selector: "openclaw-config-page .settings-row", minimum: quantity.advancedRows },
-      { selector: 'openclaw-config-page .settings-page[aria-busy="true"]', minimum: 0, maximum: 0 },
+      { selector: 'openclaw-config-page [aria-busy="true"]', minimum: 0, maximum: 0 },
       {
         selector:
           "openclaw-config-page input, openclaw-config-page select, openclaw-config-page textarea, openclaw-config-page button",
@@ -908,21 +1030,28 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     },
   },
   memory: {
-    ready: ".memory-overview__hero-copy h2",
+    ready: ":is(.memory-overview__hero-copy, .memory-overview__status-copy) h2",
     action: {
       label: "Refresh the memory engine status",
       run: async (page, gateway) => {
         const before = (await gateway.getRequests("doctor.memory.status")).length;
-        await page.locator(".memory-overview__hero-actions button").click();
+        await page
+          .locator(":is(.memory-overview__hero-actions, .memory-overview__status-action) button")
+          .click();
         await gateway.waitForRequest("doctor.memory.status", {
           after: before,
           match: { agentId: "main" },
         });
         await page
-          .locator(".memory-overview__hero-copy h2")
+          .locator(":is(.memory-overview__hero-copy, .memory-overview__status-copy) h2")
           .getByText("Memory is awake", { exact: true })
           .waitFor();
-        assert.equal(await page.locator(".memory-overview__hero-error").count(), 0);
+        assert.equal(
+          await page
+            .locator(".memory-overview__hero-error, .memory-overview__status-error")
+            .count(),
+          0,
+        );
         await frames(page);
         return { statusRefreshed: true };
       },
@@ -959,7 +1088,10 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   },
   infrastructure: configPage(),
   updates: configPage(),
-  "ai-agents": configPage(),
+  "ai-agents": {
+    ...configPage(),
+    completion: [{ selector: 'openclaw-config-page [aria-busy="true"]', minimum: 0, maximum: 0 }],
+  },
   sessions: {
     ready: ".sessions-table .session-data-row",
     source: requiredScenario(interactionScenarios, "sessions-search"),
@@ -983,6 +1115,150 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   },
 };
 
+async function settleNoChangeAction(page: Page) {
+  await page.waitForFunction(() => {
+    const reads: { pendingMethods: string[]; queued: number } = Reflect.get(
+      window,
+      "__coldLoad",
+    ).read();
+    return reads.queued === 0 && reads.pendingMethods.length === 0;
+  });
+  await frames(page);
+}
+
+function unchangedPush(
+  event: string,
+  payload: unknown,
+  method: string,
+  kind: NoChangeAction["kind"] = "push",
+): NoChangeAction {
+  return {
+    kind,
+    label: `Deliver ${event}; ${method} returns its unchanged fixture payload`,
+    run: async (page, gateway) => {
+      const before = (await gateway.getRequests(method)).length;
+      const rosterBefore =
+        event === "config.changed" ? (await gateway.getRequests("agents.list")).length : null;
+      await page.evaluate(
+        ({ event: eventName, payload: eventPayload }) => {
+          window.openclawEngineMarkGatewayInput?.();
+          (window as MockGatewayWindow).openclawControlUiE2eGateway!.emit(eventName, eventPayload);
+        },
+        { event, payload },
+      );
+      await gateway.waitForRequest(method, { after: before });
+      // Config delivery also owns a 100ms roster debounce; include its resulting publication.
+      if (rosterBefore !== null) {
+        await gateway.waitForRequest("agents.list", { after: rosterBefore });
+      }
+      await settleNoChangeAction(page);
+      return {
+        unchangedPayload: true,
+        refreshRequests: (await gateway.getRequests(method)).length - before,
+      };
+    },
+  };
+}
+
+const unchangedPresence = Array.from({ length: 30 }, (_, index) => ({
+  instanceId: `census-node-${index}`,
+  deviceId: `census-node-${index}`,
+  host: `Census node ${index}`,
+  platform: "linux",
+  mode: "node",
+  ts: time,
+}));
+
+/** Diagnostic-only actions: fresh transport values, unchanged domain contents. */
+function noChangeActions(id: RouteId): NoChangeAction[] {
+  const configPush = unchangedPush("config.changed", {}, "config.get");
+  const actions: NoChangeAction[] = [configPush];
+  if (id === "approvals") {
+    actions[0] = unchangedPush(
+      "exec.approval.resolved",
+      { id: "census-approval-0", decision: "deny" },
+      "approval.history",
+    );
+  } else if (id === "portals") {
+    actions[0] = unchangedPush("portal.changed", {}, "portal.list");
+  } else if (id === "apps") {
+    actions[0] = unchangedPush("config.changed", {}, "mcp.app.discover");
+  } else if (id === "profile") {
+    actions[0] = unchangedPush("sessions.changed", { reason: "profile-identity" }, "users.self");
+  }
+  if (id === "devices" || id === "activity" || id === "agents" || id === "systems") {
+    actions.push({
+      kind: "presence-push",
+      label: "Deliver the identical 30-node presence snapshot twice; measure the second delivery",
+      prepare: async (page, gateway) => {
+        await gateway.emitGatewayEvent("presence", { presence: unchangedPresence });
+        await settleNoChangeAction(page);
+      },
+      run: async (page, gateway) => {
+        await gateway.emitGatewayEvent("presence", { presence: unchangedPresence });
+        await settleNoChangeAction(page);
+        return { unchangedPresenceRows: unchangedPresence.length };
+      },
+    });
+  }
+  if (id === "devices") {
+    actions.push(
+      unchangedPush("node.hostStats", { nodeId: "census-node-0" }, "node.list", "refresh"),
+    );
+  }
+  if (id === "model-providers" || id === "profile") {
+    actions.push(
+      unchangedPush(
+        "chat.metadata.changed",
+        { authChanged: true, modelCatalogChanged: true },
+        id === "profile" ? "users.listModelAccounts" : "models.list",
+        "model-push",
+      ),
+    );
+  }
+  if (id === "agents" || id === "memory") {
+    const action = definitions[id]?.action;
+    assert(action);
+    actions.push({ ...action, kind: "refresh" });
+  }
+  if (id === "debug") {
+    actions.push({
+      kind: "refresh",
+      label: "Refresh diagnostics with identical status, health, models, heartbeat and lane data",
+      run: async (page, gateway) => {
+        const before = (await gateway.getRequests("status")).length;
+        await page.locator("openclaw-debug-page .debug-refresh:enabled").click();
+        await gateway.waitForRequest("status", { after: before });
+        await settleNoChangeAction(page);
+        return { unchangedDiagnostics: true };
+      },
+    });
+    actions.push({
+      kind: "poll",
+      label: "Wait for the real three-second diagnostics poll to return unchanged lane data",
+      run: async (page, gateway) => {
+        const before = (await gateway.getRequests("diagnostics.lanes")).length;
+        await gateway.waitForRequest("diagnostics.lanes", { after: before });
+        await settleNoChangeAction(page);
+        return { unchangedDiagnostics: true, intervalMs: 3000 };
+      },
+    });
+  }
+  if (id === "connection") {
+    actions.push({
+      kind: "poll",
+      label: "Wait for the real ten-second system-info poll to return its unchanged host snapshot",
+      run: async (page, gateway) => {
+        const before = (await gateway.getRequests("system.info")).length;
+        await gateway.waitForRequest("system.info", { after: before });
+        await settleNoChangeAction(page);
+        return { unchangedHostSnapshot: true, intervalMs: 10000 };
+      },
+    });
+  }
+  return actions;
+}
+
 export const enginePageCoverage: readonly PageCoverage[] = APP_ROUTE_IDS.map((id) => {
   const definition = definitions[id];
   return {
@@ -999,7 +1275,7 @@ export const enginePageCoverage: readonly PageCoverage[] = APP_ROUTE_IDS.map((id
 function createPageFixture(
   definition: PageDefinition,
   id: RouteId,
-): EngineScenario["fixtureOverrides"] {
+): NonNullable<EngineScenario["fixtureOverrides"]> {
   return (sandbox, base) => {
     const catalog = catalogSource.fixtureOverrides?.(sandbox, base);
     const domain = definition.source?.fixtureOverrides?.(sandbox, base);
@@ -1527,7 +1803,12 @@ export async function collectEnginePageStructure(page: Page): Promise<Interactio
 async function measureVisit(page: Page, id: RouteId, definition: PageDefinition) {
   return page.evaluate(
     ({ id: routeId, pathname, search: routeSearch, landed, selector, rows, completion }) =>
-      new Promise<{ readyMs: number; contentReadyMs: number }>((resolve, reject) => {
+      new Promise<{
+        startedAtMs: number;
+        readyMs: number;
+        readyAtMs: number;
+        contentReadyMs: number;
+      }>((resolve, reject) => {
         const started = performance.now();
         let readyFrames = 0;
         let completeFrames = 0;
@@ -1596,7 +1877,12 @@ async function measureVisit(page: Page, id: RouteId, definition: PageDefinition)
               }));
           completeFrames = contentReady ? completeFrames + 1 : 0;
           if (readyMs !== undefined && completeFrames >= 2) {
-            resolve({ readyMs, contentReadyMs: performance.now() - started });
+            resolve({
+              startedAtMs: started,
+              readyMs,
+              readyAtMs: started + readyMs,
+              contentReadyMs: performance.now() - started,
+            });
           } else if (performance.now() - started > 60_000) {
             reject(new Error(`Page readiness timed out: ${routeId} (${selector})`));
           } else {
@@ -1608,7 +1894,7 @@ async function measureVisit(page: Page, id: RouteId, definition: PageDefinition)
       }),
     {
       id,
-      pathname: pathForRoute(id),
+      pathname: definition.pathname ?? pathForRoute(id),
       search: definition.search ?? "",
       landed: definition.landed ?? id,
       selector: definition.ready,
@@ -1618,9 +1904,50 @@ async function measureVisit(page: Page, id: RouteId, definition: PageDefinition)
   );
 }
 
+/** Recorded in the new document, so driver navigation and polling do not define readiness. */
+function installColdPageReadiness(options: { routeId: RouteId; selector: string }) {
+  const timing = { startedAtMs: 0, readyMs: 0, readyAtMs: 0, contentReadyMs: 0 };
+  Reflect.set(window, "__engineColdPageReadiness", timing);
+  let readyFrames = 0;
+  const probe = () => {
+    const snapshot = window.openclawControlUi?.snapshot();
+    const route = snapshot?.route;
+    const visible = [...document.querySelectorAll(options.selector)].some((target) =>
+      target.checkVisibility(),
+    );
+    const pageReady =
+      snapshot?.routeReady &&
+      route?.status === "success" &&
+      route.matches[0]?.routeId === options.routeId &&
+      route.pendingMatches.length === 0 &&
+      visible;
+    readyFrames = pageReady ? readyFrames + 1 : 0;
+    if (readyFrames >= 2) {
+      // Performance time zero is this document's navigation start.
+      timing.readyAtMs = performance.now();
+      timing.readyMs = timing.readyAtMs;
+      timing.contentReadyMs = timing.readyAtMs;
+    } else {
+      requestAnimationFrame(probe);
+    }
+  };
+  requestAnimationFrame(probe);
+}
+
 /** One fresh context per phase preserves first-visit lazy imports and isolates local drafts. */
-export function createEnginePageScenarios(): readonly EngineScenario[] {
-  const boot = (page: Page) => waitForControlUiRoute(page, { routeId: "new-session" });
+export function createEnginePageScenarios(
+  gatewayLatencyMs = 0,
+  pageOrigin: "new-session" | "chat" = "new-session",
+  baseUrl?: string,
+): readonly EngineScenario[] {
+  const originSessionKey = "agent:main:interaction-a";
+  const boot = async (page: Page) => {
+    if (pageOrigin === "chat") {
+      await waitForEngineTranscript(page);
+    } else {
+      await waitForControlUiRoute(page, { routeId: "new-session" });
+    }
+  };
   return enginePageCoverage.flatMap((coverage) => {
     if (coverage.status === "excluded" || coverage.status === "unavailable") {
       return [];
@@ -1628,21 +1955,37 @@ export function createEnginePageScenarios(): readonly EngineScenario[] {
     const definition = definitions[coverage.id];
     assert(definition, `Missing census definition for ${coverage.id}`);
     const id = coverage.id;
+    const pageFixture = createPageFixture(definition, id);
     const common = {
       explicitOnly: true,
-      route: "/new",
-      fixtureOverrides: createPageFixture(definition, id),
-      ...(id === "cloud-workers"
-        ? {
-            initScript: createColdLoadProbeInitScript({
-              ownerProbes: false,
-              sidebarCounters: false,
-              latencyMs: 0,
-              frameGapMs: 0,
-              events: [],
-            }),
-          }
-        : {}),
+      route: pageOrigin === "chat" ? controlUiSessionPath(originSessionKey) : "/new",
+      fixtureOverrides: ((sandbox, base) => {
+        const fixture = pageFixture(sandbox, base);
+        if (pageOrigin === "new-session") {
+          return fixture;
+        }
+        // Keep the boot transcript when a route replaces the fixture's other sessions.
+        return {
+          ...fixture,
+          sessionTranscripts: {
+            ...fixture.sessionTranscripts,
+            [originSessionKey]: base.sessionTranscripts![originSessionKey]!,
+          },
+        };
+      }) satisfies NonNullable<EngineScenario["fixtureOverrides"]>,
+      ...(pageOrigin === "chat"
+        ? { initScript: engineProbeInitScript(false, gatewayLatencyMs) }
+        : gatewayLatencyMs || id === "cloud-workers"
+          ? {
+              initScript: createColdLoadProbeInitScript({
+                ownerProbes: false,
+                sidebarCounters: false,
+                latencyMs: gatewayLatencyMs,
+                frameGapMs: 0,
+                events: [],
+              }),
+            }
+          : {}),
       ...(id === "workboard" || id === "plugin" ? { fixture: { workboardResources: true } } : {}),
       ...(definition.source?.createRequestHandlers
         ? { createRequestHandlers: definition.source.createRequestHandlers }
@@ -1653,15 +1996,86 @@ export function createEnginePageScenarios(): readonly EngineScenario[] {
       await navigate(page, id, definition.search);
       await ready(page, id, definition);
     };
+    const noChanges: EngineScenario[] = definition.landed
+      ? []
+      : noChangeActions(id).map((action) =>
+          Object.assign({}, common, {
+            id: `page-${id}-${action.kind}`,
+            expected: action.label,
+            initScript: createColdLoadProbeInitScript({
+              ownerProbes: false,
+              sidebarCounters: false,
+              latencyMs: 0,
+              frameGapMs: 0,
+              events: [],
+            }),
+            // Successful, deterministic diagnostics keep the poll census on the data path.
+            // The existing visit/action fixtures keep their original responses.
+            fixtureOverrides: (sandbox, base) => {
+              const fixture = common.fixtureOverrides?.(sandbox, base) ?? {};
+              return id === "debug" || id === "connection"
+                ? {
+                    ...fixture,
+                    featureMethods: [
+                      ...new Set([
+                        ...(fixture.featureMethods ?? []),
+                        "diagnostics.lanes",
+                        "system.info",
+                      ]),
+                    ],
+                    methodResponses: {
+                      ...fixture.methodResponses,
+                      "last-heartbeat": { ts: time, status: "ok" },
+                      "diagnostics.lanes": {
+                        lanes: Array.from({ length: 30 }, (_, index) => ({
+                          lane: `census-lane-${index}`,
+                          activeCount: 0,
+                          queuedCount: 0,
+                          maxConcurrent: 4,
+                        })),
+                        dynamic: null,
+                      },
+                    },
+                  }
+                : fixture;
+            },
+            prepare: async (page, gateway) => {
+              await enter(page);
+              await settleNoChangeAction(page);
+              await action.prepare?.(page, gateway);
+            },
+            run: async (page, gateway) => {
+              const evidence = await action.run(page, gateway);
+              await ready(page, id, definition);
+              return evidence;
+            },
+          } satisfies Partial<EngineScenario>),
+        );
     const visit: EngineScenario = {
       ...common,
       id: `page-${id}-visit`,
-      expected: `First visit after boot to ${coverage.path}; ${definition.ready} is visible, the route is settled, and all configured content counts are complete.`,
+      expected: `First visit after ${pageOrigin} boot to ${coverage.path}; ${definition.ready} is visible, the route is settled, and all configured content counts are complete.`,
       prepare: boot,
       run: async (page) => {
         const timing = await measureVisit(page, id, definition);
         await ready(page, id, definition);
-        return { visitReadyMs: timing.readyMs, contentReadyMs: timing.contentReadyMs };
+        return {
+          visitStartedAtMs: timing.startedAtMs,
+          visitReadyMs: timing.readyMs,
+          visitReadyAtMs: timing.readyAtMs,
+          contentReadyMs: timing.contentReadyMs,
+        };
+      },
+    };
+    const revisit: EngineScenario = {
+      ...visit,
+      id: `page-${id}-revisit`,
+      expected: `Warm return to ${coverage.path} after its first visit.`,
+      prepare: async (page) => {
+        await enter(page);
+        const destination = id === "about" ? "connection" : "about";
+        await navigate(page, destination);
+        await ready(page, destination, definitions[destination]!);
       },
     };
     const leave: EngineScenario = {
@@ -1678,7 +2092,7 @@ export function createEnginePageScenarios(): readonly EngineScenario[] {
       },
     };
     if (!definition.action) {
-      return [visit, leave];
+      return [visit, revisit, leave].concat(noChanges);
     }
     const action: EngineScenario = {
       ...common,
@@ -1726,9 +2140,228 @@ export function createEnginePageScenarios(): readonly EngineScenario[] {
           };
         },
       };
-      return [visit, action, leave, firstAdvancedOpen];
+      return [visit, revisit, action, leave, firstAdvancedOpen].concat(noChanges);
     }
     if (id === "terminal") {
+      const outputCommon = {
+        ...common,
+        setup: async (page: Page) => {
+          await page.addInitScript(installTerminalOutputProbe);
+        },
+      };
+      const firstCreateDefinition: PageDefinition = {
+        ...definition,
+        ready: "openclaw-terminal-page .tp-session-menu .tp-session.is-current",
+      };
+      const setupSelectionTiming = async (page: Page) => {
+        await outputCommon.setup(page);
+        await page.addInitScript((selector) => {
+          window.openclawEngineTerminalSelectionAtMs = 0;
+          document.addEventListener(
+            "click",
+            (event) => {
+              if (
+                event.isTrusted &&
+                event.target instanceof Element &&
+                event.target.closest(selector)
+              ) {
+                window.openclawEngineTerminalSelectionAtMs = performance.now();
+              }
+            },
+            { capture: true, passive: true },
+          );
+        }, firstCreateDefinition.ready);
+      };
+      const outputEvidence = async (page: Page, target: PageDefinition) => {
+        await page.evaluate(() => window.openclawEngineTerminalOutput.reset());
+        const timing = await measureVisit(page, "terminal", target);
+        // Generic Terminal opens its first shell behind the Sessions picker.
+        // Select that shell; the + action would create a second one instead.
+        if (!target.pathname) {
+          await page.locator(firstCreateDefinition.ready).click();
+        }
+        const output = await waitForTerminalOutput(page);
+        assert(output.visibleAtMs >= timing.startedAtMs);
+        const pickerSelectedAtMs = target.pathname
+          ? null
+          : await page.evaluate(() => window.openclawEngineTerminalSelectionAtMs);
+        if (pickerSelectedAtMs !== null) {
+          assert(
+            pickerSelectedAtMs >= timing.startedAtMs && pickerSelectedAtMs <= output.visibleAtMs,
+          );
+        }
+        await page.locator("openclaw-terminal-page .tp-composer input").waitFor();
+        const readyAtMs = Math.max(timing.readyAtMs, output.visibleAtMs);
+        return {
+          visitStartedAtMs: timing.startedAtMs,
+          routeControlsReadyMs: timing.readyMs,
+          visitReadyMs: readyAtMs - timing.startedAtMs,
+          visitReadyAtMs: readyAtMs,
+          firstOutputDrawMs: output.drawnAtMs - timing.startedAtMs,
+          firstOutputVisibleMs: output.visibleAtMs - timing.startedAtMs,
+          ...(pickerSelectedAtMs === null
+            ? {}
+            : { pickerSelectionToOutputMs: output.visibleAtMs - pickerSelectedAtMs }),
+          canvasWidth: output.width,
+          canvasHeight: output.height,
+          syntheticTerminal: true,
+        };
+      };
+      const firstCreate: EngineScenario = {
+        ...outputCommon,
+        id: "page-terminal-first-create-visit",
+        setup: setupSelectionTiming,
+        expected:
+          "From a settled origin, the first Terminal visit creates exactly one shell and reveals its rendered synthetic banner.",
+        prepare: boot,
+        run: async (page, gateway) => {
+          assert.equal((await gateway.getRequests("terminal.open")).length, 0);
+          const evidence = await outputEvidence(page, firstCreateDefinition);
+          assert.equal((await gateway.getRequests("terminal.open")).length, 1);
+          assert.equal((await gateway.getRequests("terminal.attach")).length, 0);
+          return { ...evidence, openedSessions: 1, attachedSessions: 0 };
+        },
+      };
+      const attachedSession = {
+        sessionId: "engine-detached-terminal",
+        agentId: "main",
+        shell: "/bin/zsh",
+        cwd: "/workspace/openclaw",
+        confined: false,
+      };
+      const firstAttach: EngineScenario = {
+        ...outputCommon,
+        id: "page-terminal-first-attach-visit",
+        expected:
+          "From a settled origin, the first Terminal visit attaches one existing synthetic shell and renders its replay, without creating a new shell.",
+        fixtureOverrides: (sandbox, base) => {
+          const fixture = common.fixtureOverrides(sandbox, base);
+          const buffer = "OpenClaw mock terminal\r\nRestored synthetic shell output.\r\n$ ";
+          return {
+            ...fixture,
+            methodResponses: {
+              ...fixture.methodResponses,
+              "terminal.list": {
+                sessions: [{ ...attachedSession, attached: false, createdAtMs: time }],
+              },
+              "terminal.attach": { ...attachedSession, buffer, seq: buffer.length },
+            },
+          };
+        },
+        prepare: boot,
+        run: async (page, gateway) => {
+          const evidence = await outputEvidence(page, {
+            ...definition,
+            pathname: pathForTerminalSession(attachedSession.sessionId),
+            ready: "openclaw-terminal-page .tp-composer input",
+          });
+          assert.equal((await gateway.getRequests("terminal.open")).length, 0);
+          const attaches = await gateway.getRequests("terminal.attach");
+          assert.equal(attaches.length, 1);
+          assert.deepEqual(attaches[0]!.params, { sessionId: attachedSession.sessionId });
+          return { ...evidence, openedSessions: 0, attachedSessions: 1 };
+        },
+      };
+      const outputRevisit: EngineScenario = {
+        ...outputCommon,
+        id: "page-terminal-first-output-revisit",
+        setup: setupSelectionTiming,
+        expected:
+          "Return from settled About to the first shell's rendered replay without opening another shell.",
+        prepare: async (page, gateway) => {
+          await boot(page);
+          await firstCreate.run(page, gateway);
+          await navigate(page, "about");
+          await ready(page, "about", definitions.about!);
+          // The runner settles native route preloads, network idle and fonts after prepare.
+        },
+        run: async (page, gateway) => {
+          const openedBefore = (await gateway.getRequests("terminal.open")).length;
+          const attachedBefore = (await gateway.getRequests("terminal.attach")).length;
+          const evidence = await outputEvidence(page, firstCreateDefinition);
+          assert.equal((await gateway.getRequests("terminal.open")).length, openedBefore);
+          assert.equal((await gateway.getRequests("terminal.attach")).length, attachedBefore + 1);
+          return { ...evidence, openedSessions: 0, attachedSessions: 1 };
+        },
+      };
+      const coldVisits: EngineScenario[] = baseUrl
+        ? [
+            { source: firstCreate, attach: false, target: firstCreateDefinition },
+            {
+              source: firstAttach,
+              attach: true,
+              target: {
+                ...definition,
+                pathname: pathForTerminalSession(attachedSession.sessionId),
+                ready: "openclaw-terminal-page .tp-composer input",
+              },
+            },
+          ].map(({ source, attach, target }): EngineScenario =>
+            Object.assign({}, source, {
+              id: attach ? "page-terminal-cold-attach-visit" : "page-terminal-cold-visit",
+              route: target.pathname ?? pathForRoute("terminal"),
+              navigation: "measured",
+              setup: async (page) => {
+                if (attach) {
+                  await page.addInitScript(installTerminalOutputProbe);
+                }
+              },
+              expected: attach
+                ? "A fresh document attaches one existing synthetic shell and renders its replay in a visible canvas."
+                : "A fresh document opens Terminal directly and settles its first-shell Sessions picker for two consecutive frames.",
+              initScript: `${createColdLoadProbeInitScript({
+                ownerProbes: false,
+                sidebarCounters: false,
+                latencyMs: gatewayLatencyMs,
+                frameGapMs: 0,
+                events: [],
+              })}
+;if (window === window.top && location.protocol !== "about:") {
+  (() => { const __name = (fn) => fn;
+    (${installColdPageReadiness.toString()})(${JSON.stringify({ routeId: id, selector: target.ready })});
+  })();
+}`,
+              prepare: async () => {},
+              run: async (page, gateway) => {
+                await page.goto(
+                  new URL(target.pathname ?? pathForRoute("terminal"), baseUrl).href,
+                  {
+                    waitUntil: "domcontentloaded",
+                  },
+                );
+                await page.waitForFunction(
+                  () => Reflect.get(window, "__engineColdPageReadiness")?.readyAtMs > 0,
+                );
+                const timing: { readyAtMs: number } = await page.evaluate(() =>
+                  Reflect.get(window, "__engineColdPageReadiness"),
+                );
+                const output = attach ? await waitForTerminalOutput(page) : null;
+                const readyAtMs = Math.max(timing.readyAtMs, output?.visibleAtMs ?? 0);
+                assert.equal((await gateway.getRequests("terminal.open")).length, attach ? 0 : 1);
+                const attaches = await gateway.getRequests("terminal.attach");
+                assert.equal(attaches.length, attach ? 1 : 0);
+                if (attach) {
+                  assert.deepEqual(attaches[0]!.params, { sessionId: attachedSession.sessionId });
+                }
+                return {
+                  visitStartedAtMs: 0,
+                  routeControlsReadyMs: timing.readyAtMs,
+                  visitReadyMs: readyAtMs,
+                  visitReadyAtMs: readyAtMs,
+                  ...(output
+                    ? {
+                        firstOutputDrawMs: output.drawnAtMs,
+                        firstOutputVisibleMs: output.visibleAtMs,
+                      }
+                    : {}),
+                  openedSessions: attach ? 0 : 1,
+                  attachedSessions: attach ? 1 : 0,
+                  syntheticTerminal: true,
+                };
+              },
+            } satisfies Partial<EngineScenario>),
+          )
+        : [];
       const composerInput: EngineScenario = {
         ...common,
         id: "page-terminal-composer-input",
@@ -1765,8 +2398,18 @@ export function createEnginePageScenarios(): readonly EngineScenario[] {
           return { typedCharacters: command.length, inputSent: true };
         },
       };
-      return [visit, action, leave, composerInput];
+      return [
+        visit,
+        revisit,
+        action,
+        leave,
+        composerInput,
+        firstCreate,
+        firstAttach,
+        outputRevisit,
+        ...coldVisits,
+      ].concat(noChanges);
     }
-    return [visit, action, leave];
+    return [visit, revisit, action, leave].concat(noChanges);
   });
 }

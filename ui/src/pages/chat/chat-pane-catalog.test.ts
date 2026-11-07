@@ -9,6 +9,11 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { i18n } from "../../i18n/index.ts";
+import {
+  captureI18nStateForTesting,
+  createI18nManagerForTesting,
+} from "../../i18n/lib/translate.test-support.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { buildCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
@@ -84,6 +89,47 @@ function expectNoContinuation({ pane, state }: ReturnType<typeof createCatalogCo
 }
 
 describe("chat pane catalog", () => {
+  it("localizes the source handoff gate and clears it after handoff", async () => {
+    onTestFinished(captureI18nStateForTesting());
+    const localized = "原始发布者必须在原始会话中运行移交命令，才能在此继续。";
+    const manager = createI18nManagerForTesting(async () => ({
+      chat: { catalog: { sourceHandoffRequired: localized } },
+    }));
+    await manager.setLocale("zh-CN");
+    const translate = vi.spyOn(i18n, "t").mockImplementation(manager.t.bind(manager));
+    onTestFinished(() => translate.mockRestore());
+    const { pane, state } = createRefreshChatPane(createGatewayBrowserClientFixture());
+    Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
+    pane.sessionKey = state.sessionKey = buildCatalogSessionKey(catalogKey, "main");
+    pane.history.catalogSession = {
+      ...catalogSession,
+      canContinue: false,
+      continuationUnavailableReasonCode: "source-handoff-required",
+      continuationUnavailableReason: "Untranslated source explanation.",
+    };
+
+    pane.render();
+    expect(pane.chatProps?.disabledReason).toBe(localized);
+
+    pane.history.catalogSession.canContinue = true;
+    pane.render();
+    expect(pane.chatProps?.disabledReason).toBeNull();
+  });
+
+  it("preserves provider explanations without a known localization code", () => {
+    const { pane, state } = createRefreshChatPane(createGatewayBrowserClientFixture());
+    Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
+    pane.sessionKey = state.sessionKey = buildCatalogSessionKey(catalogKey, "main");
+    pane.history.catalogSession = {
+      ...catalogSession,
+      canContinue: false,
+      continuationUnavailableReason: "Release this source before continuing.",
+    };
+
+    pane.render();
+    expect(pane.chatProps?.disabledReason).toBe("Release this source before continuing.");
+  });
+
   it("does not dispatch a continuation after its owner changes during action loading", async () => {
     const held = Promise.withResolvers<void>();
     const started = Promise.withResolvers<void>();

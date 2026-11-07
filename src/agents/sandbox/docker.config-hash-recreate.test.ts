@@ -130,7 +130,7 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
       });
       registryMocks.readRegistryEntry.mockResolvedValue(published);
       const second = await createSandboxBackend(params);
-      expect(calls("info")).toHaveLength(backendId === "podman" ? 2 : 0);
+      expect(calls("info")).toHaveLength(backendId === "podman" ? 1 : 0);
       expect(second.runtimeId).toBe(first.runtimeId);
       expect(registryMocks.updateRegistry).toHaveBeenCalledTimes(2);
       expect(calls("create")).toHaveLength(1);

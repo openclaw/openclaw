@@ -10,7 +10,7 @@ import type { SettingsSidebarFallbackProps } from "../components/settings-sideba
 import { resolveGatewayStatus } from "../lib/gateway-status.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
-import { settingsBackTarget } from "../lib/settings-navigation.ts";
+import { settingsParentTarget } from "../lib/settings-navigation.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.tsx";
 import { isTemplatesAvailable } from "../pages/templates/availability.ts";
@@ -129,6 +129,15 @@ export function readShellView(host: ShellViewHost) {
           context.basePath,
         )
       : null;
+  const workboardLayout =
+    activeRoute === "workboard" ||
+    (activePluginRef !== null &&
+      (gatewaySnapshot.hello?.controlUiTabs ?? []).some(
+        (tab) =>
+          tab.pluginId === activePluginRef.pluginId &&
+          tab.id === activePluginRef.id &&
+          tab.placement === "route:workboard",
+      ));
   // Onboarding renders without any navigation chrome, so the settings takeover
   // must not reserve its sidebar column (the grid would stay off-center).
   const nativeEmbed = isNativeEmbedHost();
@@ -163,7 +172,7 @@ export function readShellView(host: ShellViewHost) {
     });
   const backTarget =
     floatingHeader && settingsTakeover
-      ? settingsBackTarget(activeRoute, host.routeState.location, context.basePath)
+      ? settingsParentTarget(activeRoute, host.routeState.location, context.basePath)
       : null;
   const floatingBack = backTarget
     ? () => {
@@ -339,6 +348,7 @@ export function readShellView(host: ShellViewHost) {
     homePanelAvailable,
     custodianPanelAvailable,
     activeRoute,
+    workboardLayout,
     sessionRoute,
     workbenchRoute:
       !host.routeState.routeFailed &&

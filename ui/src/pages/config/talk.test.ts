@@ -417,7 +417,7 @@ describe("Talk device and voice wake settings", () => {
     )!;
     expect(section).toBeDefined();
     const rows = settingRows(section);
-    expect(rows.map(rowTitle)).toEqual(["Voice Wake"]);
+    expect(rows.map(rowTitle)).toEqual(["Voice wake"]);
     const next = !rows[0]!.querySelector<HTMLInputElement>(".settings-toggle__input")!.checked;
     rows[0]!.click();
     expect(nativeDeviceSettings.set).toHaveBeenCalledExactlyOnceWith(
@@ -458,32 +458,32 @@ describe("Talk device and voice wake settings", () => {
     expect(triggerAlert(page)).toBeNull();
   });
 
-  it("keeps the Gateway's reason when trigger words fail to load", async () => {
+  it("redacts the Gateway's reason when trigger words fail to load", async () => {
     const voiceWakeRequest = vi.fn(async () => {
       throw new GatewayRequestError({
         code: "INVALID_REQUEST",
-        message: "missing scope: operator.read",
+        message: "Access denied. Authorization: Basic dXNlcjpzdXBlcnNlY3JldHBhc3N3b3Jk",
       });
     });
     const { page } = createTalkMutationHarness({ voiceWakeRequest });
     await waitForSolid(() =>
       expect(triggerAlert(page)?.textContent).toBe(
-        `Could not load trigger words: missing scope: operator.read${t("common.retry")}`,
+        `Couldn’t load trigger words. Try again. Access denied. Authorization: [redacted]${t("common.retry")}`,
       ),
     );
   });
 
-  it("keeps the Gateway's reason when trigger words fail to save", async () => {
+  it("redacts the Gateway's reason when trigger words fail to save", async () => {
     const { page, input } = await voiceWakeFixture(() => {
       throw new GatewayRequestError({
         code: "INVALID_REQUEST",
-        message: "missing scope: operator.write",
+        message: "Access denied. Authorization: Basic dXNlcjpzdXBlcnNlY3JldHBhc3N3b3Jk",
       });
     });
     editTrigger(input, "hello");
     await tick(400);
     expect(triggerAlert(page)?.textContent).toBe(
-      `Could not save trigger words: missing scope: operator.write${t("common.retry")}`,
+      `Couldn’t save trigger words. Try again. Access denied. Authorization: [redacted]${t("common.retry")}`,
     );
   });
 
@@ -702,11 +702,11 @@ describe("Talk device and voice wake settings", () => {
     const row = (title: string) => rows.find((element) => rowTitle(element) === title)!;
     const expectWakeDisabled = (disabled: boolean) =>
       expect(
-        row("Voice Wake").querySelector(".settings-toggle__input")?.hasAttribute("disabled"),
+        row("Voice wake").querySelector(".settings-toggle__input")?.hasAttribute("disabled"),
       ).toBe(disabled);
     expect(page.textContent).toContain("This Mac");
     expectWakeDisabled(true);
-    expect(row("Voice Wake").textContent).toContain("macOS 26");
+    expect(row("Voice wake").textContent).toContain("macOS 26");
     row("Hold Right Option to talk").click();
     expect(nativeDeviceSettings.set).toHaveBeenCalledWith(
       "voice.pushToTalkEnabled",
@@ -742,7 +742,7 @@ describe("Talk device and voice wake settings", () => {
     snapshot.voice.wakeEnabled = true;
     publishSnapshot();
     await waitForSolid(() => expectWakeDisabled(false));
-    row("Voice Wake").click();
+    row("Voice wake").click();
     expect(nativeDeviceSettings.set).toHaveBeenCalledWith(
       "voice.wakeEnabled",
       false,

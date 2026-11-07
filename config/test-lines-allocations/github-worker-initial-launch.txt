@@ -1,0 +1,5 @@
+# Regression allocation: evidence verification
+# Shipped Gateway/public RPC -> actual paired-node launch/profile effects, revocation, successor, cleanup.
+# Counted lines: 482 e2e + 14 independent QA credential-selection regression.
+# Shared wire/preload helpers are outside the ratchet patterns.
+496

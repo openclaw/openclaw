@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
@@ -8,6 +9,7 @@ import {
   runOpenClawAgentWriteTransaction as writeTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   loadTranscriptEventsSync as loadEvents,
@@ -24,6 +26,7 @@ import {
   appendTranscriptMessageSnapshotSync as appendMessage,
 } from "./session-accessor.sqlite-transcript-write.kernel.js";
 import { replaceTranscriptEventsSync as replaceEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { applySessionTurn } from "./session-turn.worker.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-ancestry-");
 afterEach(() => vi.restoreAllMocks());
@@ -187,6 +190,68 @@ const parentless = {
   id: "parentless",
   message: { role: "user", content: "late" },
 };
+it.each(["root", null])(
+  "appends a turn at explicit parent %s without scanning unrelated navigation",
+  async (parentId) => {
+    const { database, scope, parent, transaction } = await createTranscript([
+      ...linear,
+      invalidLeaf,
+    ]);
+    const context: AgentWorkerOperationContext = {
+      options: { agentId: scope.agentId, path: database.path },
+      open: () => database,
+      admit() {},
+      writeTransaction: (_label, _owner, run) => transaction(run),
+    };
+    const turn = (content = "answer") =>
+      applySessionTurn(
+        {
+          agentId: scope.agentId,
+          sessionKey: scope.sessionKey,
+          options: {
+            expectedSessionId: scope.sessionId,
+            sessionFile: scope.sessionKey,
+            messages: [
+              {
+                eventId: "answer",
+                parentId,
+                message: { role: "assistant", content, idempotencyKey: "answer-key" },
+              },
+            ],
+          },
+        },
+        context,
+        (_database, candidate) => candidate.result,
+      );
+    const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    const navigationReads = () =>
+      reads.queries.filter((query) =>
+        /from "transcript_events" where "session_id" = \? order by "seq" asc/i.test(query),
+      );
+    try {
+      expect(parent("root")).toBe("tail");
+      expect(navigationReads()).toHaveLength(1);
+      reads.queries.length = 0;
+      expect(turn().appendedMessages).toMatchObject([
+        { appended: true, messageId: "answer", effectiveParentId: parentId },
+      ]);
+      expect(navigationReads()).toHaveLength(0);
+      expect(turn().appendedMessages).toMatchObject([
+        { appended: false, messageId: "answer", effectiveParentId: parentId },
+      ]);
+      expect(() => turn("conflicting answer")).toThrow("conflicts with the admitted message");
+    } finally {
+      reads.restore();
+    }
+    expect(loadEvents(scope).at(-1)).toMatchObject({
+      type: "message",
+      id: "answer",
+      parentId,
+      message: { content: "answer" },
+    });
+  },
+);
+
 it.each([
   ["linear ancestor", linear, "root", "tail"],
   ["dangling ancestor", [message("tail", "missing")], "missing", "tail"],
