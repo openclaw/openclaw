@@ -236,7 +236,9 @@ suite.define(() => {
         const style = getComputedStyle(content);
         return [
           frame.width,
-          content.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
+          content.clientWidth -
+            Number.parseFloat(style.paddingLeft) -
+            Number.parseFloat(style.paddingRight),
         ];
       });
       expect(frameWidth).toBeCloseTo(contentWidth, 0);
