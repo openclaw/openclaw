@@ -1408,10 +1408,10 @@ on an unchanged route.
 Drops classified as `unattributed` use `debug`; attributed drops remain warnings.
 `providerPrefix` compares final encoded request segments against the last request
 with usable cache-read usage: system instructions, tools, history messages, and
-other request parameters. It names the first differing segment or `prefix-match`
-when the previous prefix is unchanged. A match does not prove provider cache
-availability or retention. Unsupported transports and missing baselines report
-`unavailable`.
+other request parameters except output caps. It names the first differing
+segment or `prefix-match` when the previous prefix is unchanged. A match does
+not prove provider cache availability or retention. Unsupported transports and
+missing baselines report `unavailable`.
 
 Prompt content is retained only as hashes, within the existing 512-entry
 diagnostic tracker.
