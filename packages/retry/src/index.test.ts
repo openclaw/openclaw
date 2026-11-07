@@ -363,6 +363,34 @@ it("preserves terminal Error identity", async () => {
   await expect(retry.retryAsync(operation, { attempts: 1 })).rejects.toBe(terminal);
 });
 
+it("normalizes parsed prototype fields without losing Error identity or diagnostics", () => {
+  const value: unknown = JSON.parse(
+    '{"__proto__":{"tag":"remote"},"message":"unavailable","code":"E_UPSTREAM","status":503}',
+  );
+  const detail = Symbol("detail");
+  Object.defineProperty(value, detail, { value: "symbol detail", enumerable: true });
+
+  const error = retry.toRetryError(value);
+
+  expect(error instanceof Error).toBe(true);
+  expect(Object.getPrototypeOf(error)).toBe(Error.prototype);
+  expect(error).toMatchObject({ message: "unavailable", code: "E_UPSTREAM", status: 503 });
+  expect(error.cause).toBe(value);
+  expect(Reflect.get(error, detail)).toBe("symbol detail");
+});
+
+it("propagates an enumerable prototype getter failure during retry normalization", () => {
+  const failure = new Error("cannot read prototype detail");
+  const value = Object.defineProperty({}, "__proto__", {
+    enumerable: true,
+    get() {
+      throw failure;
+    },
+  });
+
+  expect(() => retry.toRetryError(value)).toThrow(failure);
+});
+
 const longDelayMs = 2 * TIMER_MAX + 123;
 it.each<[retry.RetryOptions | number, number | undefined, number]>([
   [{ ...retryOptions, retryAfterMs: () => longDelayMs }, undefined, longDelayMs],
