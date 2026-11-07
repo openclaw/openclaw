@@ -31,7 +31,10 @@ import {
 } from "../account-config.js";
 import { resolveMatrixConfigFieldPath } from "../config-paths.js";
 import type { MatrixStoredCredentials } from "../credentials-state.js";
-import { resolveMatrixLocalTimeoutMs } from "../sdk/client-support.js";
+import {
+  isMatrixAccessTokenInvalidatedError,
+  resolveMatrixLocalTimeoutMs,
+} from "../sdk/client-support.js";
 import { fetchMatrixWhoamiIdentity, retryMatrixAuthRequest } from "./auth-request.js";
 import { resolveGlobalMatrixEnvConfig, resolveScopedMatrixEnvConfig } from "./env-auth.js";
 import { repairCurrentTokenStorageMetaDeviceId } from "./storage.js";
@@ -65,6 +68,30 @@ function credentialsMatchBackfillAuthLineage(params: {
 }
 
 type MatrixLoginResponse = { access_token?: string; user_id?: string; device_id?: string };
+
+// Cached tokens confirmed by whoami in this process; avoids a round-trip on every auth resolve.
+const verifiedCachedMatrixTokens = new Set<string>();
+
+async function isCachedMatrixTokenInvalidated(params: {
+  accountId: string;
+  homeserver: string;
+  accessToken: string;
+  ssrfPolicy?: MatrixResolvedConfig["ssrfPolicy"];
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+}): Promise<boolean> {
+  const key = `${params.accountId}\u0000${params.homeserver}\u0000${params.accessToken}`;
+  if (verifiedCachedMatrixTokens.has(key)) {
+    return false;
+  }
+  try {
+    await fetchMatrixWhoamiIdentity(params);
+  } catch (err) {
+    // Only a definitive token rejection drops the cache; transient failures keep it.
+    return isMatrixAccessTokenInvalidatedError(err);
+  }
+  verifiedCachedMatrixTokens.add(key);
+  return false;
+}
 
 const MATRIX_AUTH_SECRET_FIELDS = ["accessToken", "password"] as const;
 type MatrixAuthSecretField = (typeof MATRIX_AUTH_SECRET_FIELDS)[number];
@@ -474,7 +501,7 @@ export async function resolveMatrixAuth(params?: {
   }
 
   if (cachedCredentials) {
-    return buildResolvedMatrixAuth(resolved, {
+    const cachedAuth = buildResolvedMatrixAuth(resolved, {
       accountId,
       homeserver: cachedCredentials.homeserver,
       userId: cachedCredentials.userId,
@@ -482,6 +509,25 @@ export async function resolveMatrixAuth(params?: {
       password: tokenAuthPassword,
       deviceId: cachedCredentials.deviceId || resolved.deviceId,
     });
+    // Without a password there is nothing to fall back to, so keep the cached token as-is.
+    const canPasswordLogin =
+      Boolean(resolved.password) || hasConfiguredMatrixSecret(authInputs.password?.value, cfg);
+    if (
+      !canPasswordLogin ||
+      !(await isCachedMatrixTokenInvalidated({
+        accountId,
+        homeserver: cachedAuth.homeserver,
+        accessToken: cachedAuth.accessToken,
+        ssrfPolicy: cachedAuth.ssrfPolicy,
+        dispatcherPolicy: cachedAuth.dispatcherPolicy,
+      }))
+    ) {
+      return cachedAuth;
+    }
+    // The homeserver revoked the cached token (device deleted or logged out). Drop it so the
+    // password login below creates a fresh device instead of retrying the dead token forever.
+    const { clearMatrixCredentials } = await loadMatrixCredentialsWriteRuntime();
+    await clearMatrixCredentials(env, accountId);
   }
 
   if (!resolved.userId) {
