@@ -7,6 +7,7 @@ struct RootSidebar: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.displayScale) private var displayScale
     @Bindable var model: RootSidebarModel
+    @State private var scrollAnchor = RootSidebarScrollAnchor()
     @State private var searchText = ""
     @State private var collapsedGroups = SessionGroupStore.loadCollapsed()
     @State private var collapsedParents: Set<String> = []
@@ -48,6 +49,7 @@ struct RootSidebar: View {
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 10)
+                .modifier(RootSidebarAnchoredContent(anchor: self.scrollAnchor))
             }
             self.footer
         }
@@ -665,6 +667,7 @@ struct RootSidebar: View {
             }
         }
         .padding(.leading, CGFloat(row.depth) * 12)
+        .modifier(RootSidebarAnchoredRow(id: row.id, anchor: self.scrollAnchor))
     }
 
     private func sessionButton(
