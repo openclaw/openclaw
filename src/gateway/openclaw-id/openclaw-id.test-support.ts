@@ -27,7 +27,7 @@ import type { StoredClaw } from "./claw-store.js";
 import type { OpenClawIdMemberProfiles } from "./member-profiles.js";
 import { createOpenClawIdService, type OpenClawIdEffects } from "./service.js";
 
-const TEST_K_SRV = formatIrohEndpointKey(randomBytes(32)) as IrohEndpointKey;
+export const TEST_K_SRV = formatIrohEndpointKey(randomBytes(32)) as IrohEndpointKey;
 export const nowSeconds = () => Math.floor(Date.now() / 1000);
 
 /** A claw record store kept in memory. */
@@ -162,6 +162,7 @@ export function serviceFor(
   const service = createOpenClawIdService({
     getConfig: () => config,
     getStateDir: () => "/nonexistent/openclaw-id-test",
+    getGatewayServer: () => undefined,
     log,
     createAuthority: async () => authority,
   });

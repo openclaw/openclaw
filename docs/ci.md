@@ -8,6 +8,12 @@ read_when:
   - You are changing ClawSweeper dispatch or GitHub activity forwarding
 ---
 
+Blacksmith Linux x64 jobs now request their measured physical size. The planner
+retains its historical profiles and timing keys: 4/8/16/32 profiles select
+2/2/4/8-vCPU runners at admission, raised when a group requires more memory.
+Windows, ARM, hosted routing, coverage, and concurrency remain unchanged.
+See [runner allocation evidence](/ci/routing-costs#blacksmith-physical-allocation).
+
 CI continues during Full Release Validation; the legacy release-priority variable
 does not pause workflow admission. See [deferred CI recovery](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery)
 for runs already deferred by older workflow revisions.
@@ -34,6 +40,12 @@ the following declaration phase; a complete Windows installer job previously too
 78 minutes. The remaining job budget covers dependency installation, Rust
 compilation, desktop tests, and installer packaging. The override stays on each
 source-build step; release-workflow budgets and package-integrity checks are unchanged.
+
+Precise PR plans can run the complete source-boundary gate first in an existing
+short, serial 8-class tooling job. Both configs retain separate test processes;
+a 90-second boundary reservation must fit the existing 150-second test budget.
+Other runners, preparation modes, parallel jobs, and full validation keep their
+standalone boundary ownership.
 
 Broad PRs retain their compact selected-owner Node plan when time-based splitting
 would exceed the 130-row matrix cap. See [Node test lanes](/ci/scope-and-routing/node-test-lanes).
@@ -280,6 +292,21 @@ bundle time from 621 to 217 seconds. This trades paid compute for shorter releas
 runs; qualification and ordinary screenshot CI retain hosted Ubuntu. See
 [runner evidence and cost](/ci/runners#android-release-runner).
 
+Both Android release destinations restore the shared Gradle user-home cache
+read-only, reusing dependency downloads, compiled scripts, transforms and wrapper
+distributions from main CI. A cache miss or transfer failure keeps the cold build
+path. Release jobs do not save the archive or enable Gradle task-output caching.
+Toolchain setup runs before mobile dependency installation so cache-key hashing
+does not traverse the installed dependency tree.
+The shared toolchain action's `gradle-cache-mode` override leaves Android SDK
+caching off for these jobs; other callers inherit their existing `cache-mode`.
+
+Android's Gradle daemon uses Parallel GC with the existing 3 GiB heap. A controlled
+phone/Wear release comparison with warm dependencies and fresh build outputs
+reduced median bundle time from 158.78 to 149.10 seconds (6.09%), with lower Java
+CPU time and peak memory. Task selection, lint, R8, signing, and upload behavior
+stay unchanged.
+
 Android Release E2E adds one hosted Ubuntu KVM job to exact-source, full-scope
 manual validation when Android is selected, matching the iOS qualification
 selection. The final CI gate requires its success. Manual Android Store Release
@@ -300,6 +327,12 @@ dependencies are downloaded during setup; no Google account, companion APK, or
 paired-device image is provisioned.
 
 Eligible core-source and core-test PRs use targeted type checks when every selected compiler input exists in the checkout. Deleted Markdown files and UI stylesheets do not prevent narrowing for accompanying code changes. GitHub and hybrid profiles distribute the selected consumers across their existing core stripes; the Blacksmith profile checks them in the central row. Ambiguous ownership and deleted compiler inputs keep the full type-check coverage.
+
+Numeric test-budget records retain full guard coverage without widening an
+otherwise scoped source/test compiler and lint selection.
+
+Selected singleton compiler rows share setup in pairs within the existing
+two-compiler limit. Full stripes and rows carrying root partitions stay unchanged.
 
 Scoped PR plans inspect the four root-test partitions separately and select every
 partition that consumes a changed input, including type-only imports. A change
@@ -418,6 +451,9 @@ Changed-owner Node rows use existing file/group timing evidence with a
 150-test-second admission target and the existing 130-row PR cap. Complete files,
 standard configs, and worker policies remain intact; predicted test seconds
 are separate from measured CI wall time.
+Compatible selected serial jobs share setup after singleton worker limits are
+fixed. Combined jobs retain the shortest contributing timeout and the existing
+test-work budget; complete and scheduled plans keep their original layout.
 Known indivisible-file costs remain a floor when selected subsets are priced;
 older complete-group measurements cannot cap those costs. Process-heavy worktree
 and updater suites carry explicit case-cost weights so they do not share a row

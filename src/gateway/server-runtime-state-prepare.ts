@@ -514,6 +514,7 @@ export async function prepareGatewayKernelState(params: {
   const openclawIdService = createOpenClawIdService({
     getConfig: () => getRuntimeConfig().gateway?.openclawId,
     getStateDir: () => resolveStateDir(),
+    getGatewayServer: () => transportBridge.current()?.httpServer,
     log: log.child("openclaw-id"),
   });
   void openclawIdService.loadTokenBindings();
@@ -550,6 +551,7 @@ export async function prepareGatewayKernelState(params: {
       runtimeStateRef.current?.hookClientIpConfig ?? initialHookClientIpConfig,
     pluginRegistry: pluginRuntime.registry,
     getPluginRouteRegistry: () => pluginRuntime.registry,
+    isRequestRuntimeReady: () => startupState.dispatchReady,
     isStartupPluginRuntimeReady: () => startupState.sidecarsReady,
     getGatewayRequestContext: resolvePluginGatewayContext,
     deps,

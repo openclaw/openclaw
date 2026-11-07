@@ -71,6 +71,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/deepseek-search.real-gateway.e2e.test.ts",
   "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
   "ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts",
+  "ui/src/e2e/gateway-fresh-visit.real-gateway.e2e.test.ts",
   "ui/src/e2e/initial-connect-splash.e2e.test.ts",
   "ui/src/e2e/locale-offline-retry.e2e.test.ts",
   "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
@@ -86,6 +87,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/model-setup-provider-errors.real-gateway.e2e.test.ts",
   "ui/src/e2e/mount-recovery.e2e.test.ts",
   "ui/src/e2e/native-notifications-loading.e2e.test.ts",
+  "ui/src/e2e/pinned-snooze.e2e.test.ts",
   "ui/src/e2e/plugin-inline-view.real-gateway.e2e.test.ts",
   "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
   "ui/src/e2e/presentation-primitives.e2e.test.ts",
@@ -126,7 +128,9 @@ const uiE2eStandaloneTestFiles = [
   "ui/src/e2e/boot-module-boundaries.e2e.test.ts",
   "ui/src/e2e/control-ui-build-publication.e2e.test.ts",
   "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts",
+  "ui/src/e2e/gateway-fresh-visit.http.e2e.test.ts",
   "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
+  "ui/src/lib/openclaw-id/onepassword-save.retention.e2e.test.ts",
 ].map((file) => resolveUiTypeScriptPath(file));
 
 // Real Gateways never overlap the parallel phase when the CI skip is absent.

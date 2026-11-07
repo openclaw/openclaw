@@ -3,6 +3,7 @@ import { ConnectCommand } from "../../components/solid/connect-command.tsx";
 import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/modal-dialog.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { formatTimeMs } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ConnectMachineRequest, ConnectMachineSetupState } from "./connect-machine-dialog.ts";
@@ -50,10 +51,10 @@ export function ConnectMachineDialog(props: ReturnType<ConnectMachineSetupState[
               </p>
             ) : undefined}
             {props.error ? (
-              <div class="callout danger" role="alert">
+              <InlineAlert tone="danger" role="alert">
                 <p>{t("newSession.connectMachineFailed")}</p>
                 <p>{props.error}</p>
-              </div>
+              </InlineAlert>
             ) : undefined}
             <Show when={props.setup}>
               {(setup) => (

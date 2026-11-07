@@ -851,7 +851,7 @@ it("describes one-shot automations by local day and time instead of a full numer
   await current.ready("Renewal");
   const state = (id: string) =>
     current.element.querySelector<HTMLAnchorElement>(`a[href$="job=${id}"]`)!.textContent;
-  expect(state("today")).toContain("Today at 11:00 AM");
+  expect(state("today")).toBe("Verify main CI11:00 AM");
   expect(state("tomorrow")).toContain("Tomorrow at 9:00 AM");
   expect(state("later")).toContain(`Mar 3, ${year + 1} at 9:00 AM`);
   expect(current.element.textContent).not.toMatch(/At \d/);

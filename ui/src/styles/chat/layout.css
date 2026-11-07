@@ -965,14 +965,9 @@ openclaw-pending-session-create {
   justify-content: space-between;
   gap: 8px;
 }
-.context-usage__header {
-  min-height: 20px;
-}
-.context-usage__context-value {
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 650;
-  white-space: nowrap;
+/* The panel's own gutter already insets the heading. */
+.oc-menu-heading.context-usage__header {
+  padding-inline: 0;
 }
 .context-usage__open {
   display: flex;
@@ -1653,12 +1648,6 @@ openclaw-chat-video-player {
   gap: 2px;
 }
 
-.session-suggestion__action {
-  width: 28px;
-  height: 28px;
-}
-
-.session-suggestion__action svg,
 .task-suggestion__header-action svg,
 .chat-pr__icon svg,
 .chat-pr__warning svg,
@@ -2179,7 +2168,6 @@ button.chat-pr__diff {
 }
 
 .chat-pr__checks-pill:focus-visible,
-.chat-ci__automation-checkbox:focus-visible,
 .chat-ci__automation-retry:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -2297,13 +2285,6 @@ button.chat-pr__diff {
   opacity: 0.6;
 }
 
-.chat-ci__automation-checkbox {
-  width: 15px;
-  height: 15px;
-  margin: 0;
-  cursor: var(--cursor-action);
-}
-
 .chat-ci__automation-label,
 .chat-ci__name {
   min-width: 0;
@@ -2388,7 +2369,6 @@ openclaw-chat-ci-details {
   max-height: min(420px, 52dvh);
   overflow: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
 }
 
 .chat-ci__job {
@@ -2708,7 +2688,7 @@ openclaw-chat-ci-details {
 .agent-chat__composer-notices
   :is(
     .chat-composer-neighbor-card,
-    .agent-chat__composer-errors,
+    .agent-chat__composer-alert,
     .agent-chat__talk-status.callout,
     .agent-chat__composer-status
   ) {
@@ -3025,7 +3005,7 @@ openclaw-chat-ci-details {
     width: var(--chat-composer-send-size);
     min-width: var(--chat-composer-send-size);
     height: var(--chat-composer-send-size);
-    background: var(--primary);
+    background: var(--chat-send-bg);
     color: var(--chat-send-foreground);
   }
 
@@ -3123,7 +3103,6 @@ openclaw-chat-ci-details {
   padding: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
   border: none;
   border-radius: 0;
   outline: none;
@@ -3187,7 +3166,6 @@ openclaw-chat-ci-details {
 
 .chat-annotation-editor .chat-annotation-editor__delete {
   margin-right: auto;
-  padding: 4px;
 }
 
 .chat-provider-review-dialog__content {
