@@ -67,6 +67,7 @@ import {
   connectTestGatewayClient,
   ensurePairedTestGatewayClientIdentity,
 } from "./gateway-cli-backend.live-helpers.js";
+import { waitForSettledCodexCatalog } from "./gateway-codex-harness.catalog.live-helpers.js";
 import { requireSuccessfulNativeCommandCompactionEvidence } from "./gateway-codex-harness.command-evidence.live-helpers.js";
 import {
   buildCodexHarnessAppServerArgs,
@@ -2237,10 +2238,15 @@ describeLive("gateway live (Codex harness)", () => {
           return client;
         };
         client = await connect();
-        const catalog = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
-          catalogId: "codex",
-          agentId: "dev",
-        });
+        const catalog = await waitForSettledCodexCatalog(
+          (timeoutMs) =>
+            client!.request<SessionsCatalogListResult>(
+              "sessions.catalog.list",
+              { catalogId: "codex", agentId: "dev" },
+              { timeoutMs },
+            ),
+          CODEX_HARNESS_REQUEST_TIMEOUT_MS,
+        );
         const sources = catalog.catalogs.flatMap((entry) =>
           entry.hosts.flatMap((host) => host.sessions.map((session) => ({ host, session }))),
         );
