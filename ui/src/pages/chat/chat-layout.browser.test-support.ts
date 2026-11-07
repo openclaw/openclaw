@@ -111,9 +111,12 @@ export function readUiCss(): string {
 export async function waitForLayoutSettled(page: Page, selector: string): Promise<void> {
   // Container queries/content-visibility need a quiet window, not just matching frames.
   await page.evaluate(async (targetSelector) => {
+    // Visual parity pins performance.now() to sample animations; the document
+    // timeline still advances with each rendered frame.
+    const now = () => Number(document.timeline.currentTime);
     let previousGeometry: string | undefined;
     let stableFrames = 0;
-    let stableSince = performance.now();
+    let stableSince = now();
     for (let frame = 0; frame < 60; frame += 1) {
       await new Promise<void>((resolve) => {
         requestAnimationFrame(() => resolve());
@@ -132,9 +135,9 @@ export async function waitForLayoutSettled(page: Page, selector: string): Promis
         stableFrames += 1;
       } else {
         stableFrames = 1;
-        stableSince = performance.now();
+        stableSince = now();
       }
-      if (stableFrames >= 4 && performance.now() - stableSince >= 50) {
+      if (stableFrames >= 4 && now() - stableSince >= 50) {
         return;
       }
       previousGeometry = geometry;

@@ -242,6 +242,8 @@ suite.define(() => {
                   height: profile.height,
                 });
               },
+              // Requests still loading after capture are irrelevant; drop their proxy quietly.
+              ({ page }) => page.unrouteAll({ behavior: "ignoreErrors" }),
             );
           } catch (error) {
             capture.failures.push({

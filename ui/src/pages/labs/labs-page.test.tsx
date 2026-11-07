@@ -154,6 +154,13 @@ afterEach(() => {
 });
 
 describe("LabsPage", () => {
+  it("paints its route subtitle in English without another page registering it", async () => {
+    const { page } = await mountPage({});
+    expect(page.querySelector(".page-subtitle")?.textContent).toContain(
+      "Labs contains experimental capabilities",
+    );
+  });
+
   it("defaults predictions off with Utility and saves each model without enabling the lab", async () => {
     const { page, runtimeConfig } = await mountPage({});
     const toggle = labToggle(page, "Composer predictions");

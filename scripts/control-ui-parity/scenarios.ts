@@ -14,6 +14,7 @@ import {
   sessionKey,
   parityBaseScenario,
   parityWorkboardScenario,
+  parityTemplatesScenario,
   parityPluginPath,
   parityHovercardScenario,
   parityTabOverflowScenario,
@@ -62,6 +63,23 @@ export type Scene = {
   serviceWorkers?: "allow" | "block";
 };
 const configPages = new Set<string>(CONFIG_PAGE_IDS);
+// Compact layouts drill menus into sheets and keep sessions in the navigation drawer.
+const isCompact = (page: Page) => page.viewportSize()!.width <= 560;
+async function openSessionRow(page: Page) {
+  if (isCompact(page)) {
+    await page.locator(".mobile-header__navigation").click();
+  }
+  const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
+  await row.waitFor({ state: "visible" });
+  return row;
+}
+// The resting mobile composer reveals its controls only while editing.
+async function openComposerControl(page: Page, selector: string) {
+  if (isCompact(page)) {
+    await page.getByRole("textbox", { name: "Chat composer", exact: true }).click();
+  }
+  await page.locator(selector).click();
+}
 function routeScene(route: RouteId): Scene {
   const destination =
     route === "settings"
@@ -95,10 +113,13 @@ function routeScene(route: RouteId): Scene {
     ready:
       route === "workboard" || route === "plugin"
         ? ".workboard"
-        : destination === "activity" || destination === "logs"
-          ? `openclaw-${host}-page .content-header`
-          : `openclaw-${host}-page`,
+        : route === "templates"
+          ? "openclaw-templates-explore [data-templates-entry]"
+          : destination === "activity" || destination === "logs"
+            ? `openclaw-${host}-page .content-header`
+            : `openclaw-${host}-page`,
     ...(route === "workboard" || route === "plugin" ? { scenario: parityWorkboardScenario } : {}),
+    ...(route === "templates" ? { scenario: parityTemplatesScenario } : {}),
     ...(route === "cron"
       ? {
           prepare: async (page: Page) => {
@@ -236,7 +257,8 @@ const modelSettingsPage: Scene = {
   ready: "openclaw-model-providers-page",
   scenario: modelSettingsScenario,
   prepare: async (page) => {
-    await page.locator('[data-profile-id="openai:parity"]').waitFor();
+    // Provider rows start closed; the account-usage scene opens one.
+    await page.locator('[data-provider-id="openai"] .provider-row__summary').waitFor();
   },
 };
 const modelSetupPage: Scene = {
@@ -294,7 +316,7 @@ export const scenes: Scene[] = [
         }
         if (state === "pat") {
           await connections.getByRole("button", { name: "Use a PAT instead", exact: true }).click();
-          await connections.getByRole("textbox", { name: "Author Name", exact: true }).waitFor();
+          await connections.getByRole("textbox", { name: "Author name", exact: true }).waitFor();
         }
       },
     }),
@@ -306,10 +328,13 @@ export const scenes: Scene[] = [
     label: "Models: account and quota",
     scrollTo: '[data-profile-id="openai:parity"]',
     prepare: async (page) => {
+      await page.locator('[data-provider-id="openai"] .provider-row__summary').click();
+      // Account plan and provider limits load from separate sources.
       await page
-        .locator(".model-providers__account-usage")
+        .locator('[data-profile-id="openai:parity"] .model-providers__account-plan')
         .getByText("Pro", { exact: true })
         .waitFor();
+      await page.locator('[data-provider-id="openai"] .provider-row__limits-pane').waitFor();
     },
   },
   ...(["providers", "methods", "step"] as const).map((stage): Scene =>
@@ -440,7 +465,7 @@ export const scenes: Scene[] = [
     ...chat,
     id: "chat-empty",
     label: "Chat: empty transcript",
-    ready: ".agent-chat__welcome",
+    ready: ".agent-chat__empty",
     scenario: { historyMessages: [] },
   },
   {
@@ -499,8 +524,7 @@ export const scenes: Scene[] = [
     id: "sidebar-session-menu",
     label: "Sidebar session menu: actions and owner controls",
     prepare: async (page) => {
-      const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
-      await row.waitFor({ state: "visible" });
+      const row = await openSessionRow(page);
       await row.click({ button: "right" });
       await page.locator("openclaw-session-menu").getByRole("menu").waitFor();
     },
@@ -510,8 +534,7 @@ export const scenes: Scene[] = [
     id: "sidebar-session-hovercard",
     label: "Sidebar session hovercard: title and attribution",
     prepare: async (page) => {
-      const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
-      await row.waitFor({ state: "visible" });
+      const row = await openSessionRow(page);
       await row.hover();
       await page.locator(".session-progress-hovercard").waitFor({ state: "visible" });
     },
@@ -532,10 +555,10 @@ export const scenes: Scene[] = [
     prepare: async (page) => {
       await page.locator(".chat-header-session-menu__trigger").focus();
       await page.keyboard.press("Enter");
-      // Compact menus drill into a sheet; wide menus retain nested popovers.
-      if (page.viewportSize()!.width <= 560) {
+      // Compact menus drill into sheet pages of buttons; wide menus retain nested popovers.
+      if (isCompact(page)) {
         await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
-        await page.getByRole("menuitem", { name: "Icon & color", exact: true }).click();
+        await page.getByRole("button", { name: "Icon & color", exact: true }).click();
       } else {
         await page.getByRole("menuitem", { name: "Advanced", exact: true }).hover();
         await page.getByRole("menuitem", { name: "Icon & color", exact: true }).hover();
@@ -551,12 +574,13 @@ export const scenes: Scene[] = [
     prepare: async (page) => {
       await page.locator(".chat-header-session-menu__trigger").click();
       const groups = page.getByRole("menuitem", { name: "Move to group", exact: true });
-      if (page.viewportSize()!.width <= 560) {
+      if (isCompact(page)) {
         await groups.click();
+        await page.getByRole("button", { name: "New group", exact: true }).click();
       } else {
         await groups.hover();
+        await page.getByRole("menuitem", { name: "New group", exact: true }).click();
       }
-      await page.getByRole("menuitem", { name: "New group", exact: true }).click();
       await page.locator("openclaw-modal-dialog input").waitFor();
     },
   },
@@ -565,7 +589,7 @@ export const scenes: Scene[] = [
     id: "model-long-list",
     label: "Model picker: selected row and long scrolling list",
     prepare: async (page) => {
-      await page.locator('[data-chat-model-select="true"]').click();
+      await openComposerControl(page, '[data-chat-model-select="true"]');
       const picker = page.locator(".chat-controls__model-picker");
       await picker.waitFor();
       const more = picker.locator("[data-chat-model-more-toggle]");
@@ -590,7 +614,7 @@ export const scenes: Scene[] = [
     id: "permission-selected",
     label: "Permission picker: selected and unselected rows",
     prepare: async (page) => {
-      await page.locator('[data-chat-permission-select="true"]').click();
+      await openComposerControl(page, '[data-chat-permission-select="true"]');
       await page.locator('[data-chat-permission-option="guarded"]').waitFor();
     },
   },
