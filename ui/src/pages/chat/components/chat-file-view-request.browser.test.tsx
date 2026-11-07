@@ -9,7 +9,7 @@ import {
 import { createTestChatPane } from "../chat-pane.test-support.ts";
 import { createChatProps } from "../chat-view.test-helpers.ts";
 import { ChatDetailSlot } from "./chat-detail-slot-view.tsx";
-import { setFileDraft } from "./chat-file-drafts.ts";
+import { readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
 import type {
   FileSidebarContent,
   FileSidebarNavigation,
@@ -94,13 +94,18 @@ describe.runIf(browserMode)("file view request delivery", () => {
       view.onFileInteraction.mock.calls.filter(([, interaction]) => interaction === "edit");
     expect(edits()).toEqual([[content, "edit"]]);
     await userEvent.fill(editor, "Unsaved report draft");
+    const draftAdmittedBeforeNavigation =
+      readFileDraft(content)?.content === "Unsaved report draft";
     for (const mode of ["reading", "edit"] as const) {
       view.navigate({ view: { file: content, view: mode } });
       // Request delivery uses commit microtasks; observe after their native frame boundary.
       await new Promise(requestAnimationFrame);
       expect(edits()).toHaveLength(mode === "edit" ? 2 : 1);
       expect(editable()).toBe(editor);
-      expect(editor.textContent).toBe("Unsaved report draft");
+      expect(
+        editor.textContent,
+        `draftAdmittedBeforeNavigation=${draftAdmittedBeforeNavigation}`,
+      ).toBe("Unsaved report draft");
       expect(view.getByRole("button", { name: "Save" })).toHaveProperty("disabled", false);
     }
     expect(content.edit?.save).not.toHaveBeenCalled();
