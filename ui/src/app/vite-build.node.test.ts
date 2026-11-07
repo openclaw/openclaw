@@ -710,7 +710,8 @@ it.each([
   }
   const cacheId = /data-openclaw-control-ui-build-id="([^"]+)"/u.exec(html)?.[1];
   expect(cacheId?.startsWith(`${buildInfo.buildId}-`)).toBe(true);
-  expect(cacheId?.slice(buildInfo.buildId.length + 1)).toMatch(/^[a-f0-9]{64}$/u);
+  const publicAssetVersion = cacheId?.slice(buildInfo.buildId.length + 1);
+  expect(publicAssetVersion).toMatch(/^[a-f0-9]{64}$/u);
   const fonts = await fs.readdir(path.join(outDir, "fonts"));
   for (const fontCss of fonts.filter((name) => name.endsWith(".css"))) {
     const source = await fs.readFile(path.join(outDir, "fonts", fontCss), "utf8");
@@ -719,9 +720,9 @@ it.each([
     for (const [, reference] of references) {
       const fontUrl = new URL(
         reference!,
-        `https://control.example/ui/fonts/${fontCss}?v=${cacheId}`,
+        `https://control.example/ui/fonts/${fontCss}?v=${publicAssetVersion}`,
       );
-      expect(fontUrl.searchParams.get("v")).toBe(cacheId);
+      expect(fontUrl.searchParams.get("v")).toBe(publicAssetVersion);
       expect(fontUrl.pathname).toMatch(/^\/ui\/fonts\/[^/]+\.woff2$/u);
       await expect(
         fs.stat(path.join(outDir, fontUrl.pathname.slice("/ui/".length))),
@@ -734,7 +735,7 @@ it.each([
   expect(webManifest.start_url).toBe("./");
   for (const icon of webManifest.icons) {
     const iconUrl = new URL(icon.src, "https://control.example/ui/manifest.webmanifest");
-    expect(iconUrl.searchParams.get("v")).toBe(cacheId);
+    expect(iconUrl.searchParams.get("v")).toBe(publicAssetVersion);
     await expect(
       fs.stat(path.join(outDir, iconUrl.pathname.slice("/ui/".length))),
     ).resolves.toBeDefined();

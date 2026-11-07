@@ -227,6 +227,7 @@ suite.define(() => {
                 .renderBlockingStatus,
             })),
         }));
+        expect(report.buildId).toMatch(/-[a-f0-9]{64}$/u);
         const colors = await page.evaluate(resolveRenderedColors, {
           actual: report.background,
           expected: mode === "dark" ? dark : light,
@@ -235,7 +236,11 @@ suite.define(() => {
         expect(report).toMatchObject({
           resolvedTheme: mode === "dark" ? resolved : `${resolved}-light`,
           palette: [
-            { pathname: `/themes/${theme}.css`, version: report.buildId, blocking: "blocking" },
+            {
+              pathname: `/themes/${theme}.css`,
+              version: report.buildId?.slice(-64),
+              blocking: "blocking",
+            },
           ],
         });
       }
@@ -474,12 +479,14 @@ suite.define(() => {
       .waitFor({ state: "visible", timeout: 30_000 });
 
     const buildId = await attribute(page, "data-openclaw-control-ui-build-id");
+    expect(buildId).toMatch(/-[a-f0-9]{64}$/u);
+    const publicAssetVersion = buildId?.slice(-64);
     await expect
       .poll(() => fontRequests.some((url) => url.pathname.endsWith("/space-grotesk.css")))
       .toBe(true);
     const fontUrl = fontRequests.find((url) => url.pathname.endsWith("/space-grotesk.css"));
     expect(fontUrl?.pathname).toBe(`${basePath}/fonts/space-grotesk.css`);
-    expect(fontUrl?.searchParams.get("v")).toBe(buildId);
+    expect(fontUrl?.searchParams.get("v")).toBe(publicAssetVersion);
     await expect.poll(() => page.locator("#openclaw-typeface-space-grotesk").count()).toBe(0);
     const paletteHref = await page.evaluate(
       () =>
@@ -487,7 +494,7 @@ suite.define(() => {
     );
     const paletteUrl = new URL(paletteHref ?? "", suite.server.baseUrl);
     expect(paletteUrl.pathname).toBe(`${basePath}/themes/absolutely.css`);
-    expect(paletteUrl.searchParams.get("v")).toBe(buildId);
+    expect(paletteUrl.searchParams.get("v")).toBe(publicAssetVersion);
     expect(await cssToken(page, "--bg-content")).toBe("#1b1b1a");
   });
 });
