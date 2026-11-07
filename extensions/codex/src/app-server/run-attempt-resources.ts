@@ -202,21 +202,22 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     }
   };
   const releaseSharedClientLeaseAndRetireOneShotClient = async () => {
-    if (connection.callerOwnedAttemptClient) {
-      // Close the authorized node lease first; losing its socket first is a real disconnect.
-      await releaseSandboxExecEnvironment();
-      const ownedClient = state.releaseSharedClientLease ? state.client : undefined;
+    if (!connection.callerOwnedAttemptClient) {
       releaseSharedClientLeaseOnce();
-      if (ownedClient) {
-        const result = await ownedClient.closeAndWait(CODEX_ONE_SHOT_CLIENT_CLOSE_OPTIONS);
-        if (params.oneShotCliRun && result.cleanup === "uncertain") {
-          throw new Error("Codex isolated client cleanup could not be confirmed");
-        }
-      }
-      return;
+      return retireSharedCodexClientForOneShotCleanup();
     }
-    releaseSharedClientLeaseOnce();
-    await retireSharedCodexClientForOneShotCleanup();
+    // Close the authorized node lease first; losing its socket first is a real disconnect.
+    await releaseSandboxExecEnvironment();
+    const ownedClient = state.releaseSharedClientLease ? state.client : undefined;
+    try {
+      // Releasing the lease calls close(), so start the intended shutdown policy first.
+      const result = await ownedClient?.closeAndWait(CODEX_ONE_SHOT_CLIENT_CLOSE_OPTIONS);
+      if (params.oneShotCliRun && result?.cleanup === "uncertain") {
+        throw new Error("Codex isolated client cleanup could not be confirmed");
+      }
+    } finally {
+      releaseSharedClientLeaseOnce();
+    }
   };
   const runCleanupStep = (step: string, operation: () => Promise<void> | void | undefined) =>
     runCodexCleanupStep(params, step, async () => await operation());
