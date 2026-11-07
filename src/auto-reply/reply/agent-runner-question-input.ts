@@ -140,6 +140,19 @@ export async function runReplyQuestionInput(
         if (state) {
           state.admission = { status: "skipped", reason: "question-response-rejected" };
         }
+        // The rejection is a terminal decision for this inbound turn: publish its
+        // custody like refuseCollaborativeSteering does, so finish(consumed) finds
+        // custody completed instead of abandoning the source. Abandonment would
+        // reopen ingress for replay (requeueing the rejected text into the next
+        // message) and channels whose onAbandoned aborts the turn would drop the
+        // correction notice as reply_operation_aborted.
+        try {
+          await admitFollowupRunLifecycle(followupRun);
+        } catch (admissionError) {
+          logVerbose(`question input adoption failed after rejection: ${String(admissionError)}`);
+        } finally {
+          completeFollowupRunLifecycle(followupRun, "consumed");
+        }
         return {
           handled: true,
           payload: markReplyPayloadForSourceSuppressionDelivery({
