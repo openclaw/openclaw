@@ -22,6 +22,7 @@ import { createContext } from "./server-plugin-in-process-dispatch.test-support.
 const mocks = vi.hoisted(() => ({
   migrate: vi.fn(),
   maintain: vi.fn(),
+  scheduleFacts: vi.fn(),
   journal: vi.fn(),
   opened: vi.fn(),
   refreshSecrets: vi.fn(),
@@ -243,6 +244,7 @@ function createFleet(
           context,
           preparationReady,
           waitForPostReadyWork: () => postReadyWork,
+          scheduleSessionFactsBackfill: mocks.scheduleFacts,
           getConfig: () => cfg,
           getPluginRegistry: vi.fn(),
           getPluginMetadataSnapshot: () => undefined,
@@ -321,6 +323,7 @@ it("admits agents before transcript repair and joins repair on shutdown", async 
       expectAdmission(fleet, "large");
       expect(admission.waitForAgentPreparation("large", fleet)).toBeUndefined();
       expect(mocks.maintain).not.toHaveBeenCalled();
+      expect(mocks.scheduleFacts).not.toHaveBeenCalled();
       postReady.resolve();
       await withinTest(entered.promise, signal);
       fleet.inspect(1);
@@ -335,6 +338,7 @@ it("admits agents before transcript repair and joins repair on shutdown", async 
       expect(stopped).toBe(false);
       release.resolve();
       await stopping;
+      expect(mocks.scheduleFacts).not.toHaveBeenCalled();
       expect(mocks.warn).not.toHaveBeenCalled();
     },
     Promise.resolve(),

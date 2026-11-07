@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
@@ -102,16 +103,67 @@ async function withPublication(
     agentId: "main",
     env: { OPENCLAW_STATE_DIR: "/synthetic/captured" },
   },
+  observeWriteExecution?: (elapsedMs: number) => void,
 ) {
   const db = new DatabaseSync(":memory:");
   boundary.current.mockReturnValue({ db });
-  const worker = await openOpenClawAgentSqliteWorkerStore(options, db, workerModule);
+  const worker = await openOpenClawAgentSqliteWorkerStore(options, db, {
+    ...workerModule,
+    observeWriteExecution,
+  });
   try {
     await run(worker);
   } finally {
     await worker.close();
   }
 }
+
+it.each(["success", "failure"] as const)(
+  "reports admitted execution time without replacing publication %s when the observer throws",
+  async (outcome) => {
+    const ready = createDeferredCore();
+    boundary.ready = ready.promise;
+    let now = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+    const original = new Error("Publication failed");
+    const committed = { revision: 42 };
+    const observe = vi.fn(() => {
+      throw new Error("Timing observer failed");
+    });
+    boundary.execute.mockImplementation(async ({ type }) => {
+      if (type === "database.domain.execute") {
+        now += 100;
+        if (outcome === "failure") {
+          throw original;
+        }
+      }
+    });
+    try {
+      await withPublication(
+        async (worker) => {
+          const work = worker.run(async (scope) => {
+            await scope.execute({ type: "append", input: { value: "published" } });
+            return committed;
+          }, allow);
+          now += 1_000;
+          ready.resolve();
+          if (outcome === "failure") {
+            await expect(work).rejects.toBe(original);
+          } else {
+            await expect(work).resolves.toBe(committed);
+          }
+          expect(observe).toHaveBeenCalledExactlyOnceWith(100);
+        },
+        undefined,
+        observe,
+      );
+    } finally {
+      ready.resolve();
+      clock.mockRestore();
+    }
+  },
+);
+
 it.each([
   ["domain close", true, false],
   ["retired executor", false, false],

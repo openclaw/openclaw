@@ -22,6 +22,11 @@
 SQLITE_EXTENSION_INIT1
 #include <stdint.h>
 #include <string.h>
+#ifdef __APPLE__
+#include <libproc.h>
+#include <sys/resource.h>
+#include <unistd.h>
+#endif
 
 typedef struct {
   uint64_t reads, read_bytes, writes, write_bytes, page_reads, small_reads;
@@ -281,6 +286,14 @@ static void read_counters(sqlite3_context *context, int argc, sqlite3_value **ar
       (unsigned long long)value.page_reads, (unsigned long long)value.small_reads,
       (unsigned long long)value.writes, (unsigned long long)value.write_bytes);
   }
+#ifdef __APPLE__
+  struct rusage_info_v4 usage;
+  if (!proc_pid_rusage(getpid(), RUSAGE_INFO_V4, (rusage_info_t *)&usage)) {
+    sqlite3_str_appendf(out, ",\"physical\":{\"read_bytes\":%llu,\"write_bytes\":%llu}",
+      (unsigned long long)usage.ri_diskio_bytesread,
+      (unsigned long long)usage.ri_diskio_byteswritten);
+  }
+#endif
   sqlite3_str_appendall(out, "}");
   sqlite3_result_text(context, sqlite3_str_finish(out), -1, sqlite3_free);
 }
