@@ -223,6 +223,29 @@ describe("handleModelsCommand", () => {
     expect(data.byProvider.get("claude-cli")).toEqual(new Set(["claude-sonnet-4-5"]));
   });
 
+  it("reports each model's configured runtime regardless of the session runtime pin", async () => {
+    setCredentials(["anthropic", "claude-cli"]);
+    const data = await buildPreparedModelsProviderData(
+      configWithDefaults({
+        models: {
+          "anthropic/claude-opus-4-5": { agentRuntime: { id: "openclaw" } },
+          "anthropic/claude-sonnet-4-5": { agentRuntime: { id: "claude-cli" } },
+        },
+      }),
+      "main",
+      {
+        sessionEntry: {
+          providerOverride: "anthropic",
+          model: "claude-sonnet-4-5",
+          agentRuntimeOverride: "openclaw",
+        },
+      },
+    );
+    expect(data.runtimeChoicesByModel?.get("anthropic/claude-sonnet-4-5")?.length).toBe(2);
+    expect(data.modelRuntimeIds?.get("anthropic/claude-sonnet-4-5")).toBe("claude-cli");
+    expect(data.modelRuntimeIds?.get("anthropic/claude-opus-4-5")).toBe("openclaw");
+  });
+
   it("labels the default route after clearing the session runtime pin", async () => {
     setCredentials(["anthropic", "claude-cli"]);
     const data = await buildPreparedModelsProviderData(
