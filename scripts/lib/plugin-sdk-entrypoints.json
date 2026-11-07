@@ -95,6 +95,7 @@
   "media-mime",
   "media-ffmpeg",
   "embedding-providers",
+  "embedding-native-runtime",
   "embedding-provider-runtime-contract",
   "embedding-provider-adapter",
   "media-generation-runtime",
