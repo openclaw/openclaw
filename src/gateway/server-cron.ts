@@ -344,7 +344,7 @@ export function buildGatewayCronService(params: {
     storePath,
     cronEnabled,
     cronConfig: params.cfg.cron,
-    describeJobLoadWarning: (job) => describeCronInferenceMigration(getRuntimeConfig(), job),
+    describeJobReadinessWarning: (job) => describeCronInferenceMigration(getRuntimeConfig(), job),
     hostExecutionDisabled,
     listConfiguredChannels: () => listConfiguredMessageChannels(getRuntimeConfig()),
     admitScheduledOccurrence: ({ job }) => admitGatewayCronOccurrence(job, resolveCronAgent),
