@@ -620,6 +620,49 @@ export function registerCliMcpPreparationTests({
     });
   });
 
+  it("admits a prepared-only scheduled run before resolving its shared turn audience", async () => {
+    // Cron hands over only a prepared admission. Its scheduled memory parent is keyed
+    // by the admitted run instance, so the audience resolves only after admission.
+    await withChildAudience(true, async ({ audience: memoryAudience }) => {
+      const sessionKey = AUDIENCE_CHILD_KEY;
+      const admission = prepareSystemAgentRunAdmission({}, "run-scheduled", "main", "cron");
+      const release = vi.fn();
+      const resolveAudience = vi.fn(
+        async (run: { admittedRunContext?: { operationalRunInstance: unknown } }) =>
+          run.admittedRunContext?.operationalRunInstance === admission.operationalRunInstance
+            ? { memoryAudience, release }
+            : { release },
+      );
+      const { mint } = mockCliMcpPreparation({ resolveCliMcpMemoryAudience: resolveAudience });
+      const runBeforePromptBuild = vi.fn(async (_event: unknown, _ctx: unknown) => undefined);
+      vi.mocked(getGlobalHookRunner).mockReturnValue({
+        hasHooks: (hookName: string) => hookName === "before_prompt_build",
+        runBeforePromptBuild,
+      } as never);
+      try {
+        const context = await getFixture().prepare({
+          runId: "run-scheduled",
+          preparedRunAdmission: admission,
+          sessionKey,
+          sessionEntry: { sessionId: "session-test", updatedAt: 1 },
+          config: createConfig(),
+        });
+
+        expect(resolveAudience).toHaveBeenCalledOnce();
+        const hookCtx = runBeforePromptBuild.mock.calls[0]?.[1] as {
+          memoryAudience?: MemoryAudience;
+        };
+        expect(hookCtx.memoryAudience).toBe(memoryAudience);
+        expect(context.memoryAudience).toBe(memoryAudience);
+        expect(mint).toHaveBeenCalledWith(expect.objectContaining({ memoryAudience }));
+        await context.preparedBackend.cleanup?.();
+        expect(release).toHaveBeenCalledOnce();
+      } finally {
+        admission.close();
+      }
+    });
+  });
+
   it("releases the turn audience once when CLI preparation fails after resolving it", async () => {
     const release = vi.fn();
     const resolveAudience = vi.fn(async () => ({ release }));
