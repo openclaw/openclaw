@@ -101,12 +101,25 @@ export function findTextCheckpoint(
     const inFence = Boolean(state.fenceChar);
     advanceProtectionScanState(state, line);
     // References, image descriptions, and setext headings can need earlier paragraph context.
-    if (
-      state.paragraphAmbiguous ||
-      state.structuralUnknown ||
-      (!inFence && !state.fenceChar && /\[|^ {0,3}=+[ \t]*\r?\n$/.test(line))
-    ) {
-      const ownership = resolveOwnership(text);
+    const bracketLine = !inFence && !state.fenceChar && /\[|^ {0,3}=+[ \t]*\r?\n$/.test(line);
+    const needsParagraphContext =
+      state.paragraphAmbiguous || state.structuralUnknown || bracketLine;
+    let ownership: ReturnType<typeof resolveOwnership> | undefined;
+    if (needsParagraphContext) {
+      ownership = resolveOwnership(text);
+    }
+    // A completed `[TOOL_CALL]`/`[TOOL_RESULT]` tag cannot grow a new label on this line. Only
+    // such tag lines (with no other open bracket or link) may settle immediately; anything else
+    // still needs the whole paragraph context (open labels, definitions, inline code, etc.).
+    const completedLegacyToolTag =
+      bracketLine &&
+      line.includes("[") &&
+      !state.paragraphAmbiguous &&
+      !state.structuralUnknown &&
+      !/[[(]/.test(line.replace(/\[\s*\/?\s*TOOL_(?:CALL|RESULT)\s*\]/gi, "")) &&
+      !ownership?.continuation &&
+      ownership?.definitions.length === 0;
+    if (needsParagraphContext && !completedLegacyToolTag && ownership) {
       if (ownership.continuation) {
         return { ...ownership.continuation, definitions: ownership.definitions };
       }
