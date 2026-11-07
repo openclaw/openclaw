@@ -159,12 +159,10 @@ describe("effort selection", () => {
     onTestFinished(installTitleTooltips(document));
     const focusComposer = (event: MouseEvent | PointerEvent) =>
       focusComposerFromChrome(event, true, textarea);
-    composer.addEventListener("pointerdown", focusComposer);
-    composer.addEventListener("click", focusComposer);
-    onTestFinished(() => {
-      composer.removeEventListener("pointerdown", focusComposer);
-      composer.removeEventListener("click", focusComposer);
-    });
+    const lifetime = new AbortController();
+    composer.addEventListener("pointerdown", focusComposer, { signal: lifetime.signal });
+    composer.addEventListener("click", focusComposer, { signal: lifetime.signal });
+    onTestFinished(() => lifetime.abort());
     textarea.focus();
     await page.elementLocator(trigger).click();
     await expect.poll(() => surface.matches(":popover-open")).toBe(true);
@@ -175,10 +173,9 @@ describe("effort selection", () => {
     await userEvent.keyboard("{Escape}");
     await expect.poll(() => details.open).toBe(false);
     await userEvent.keyboard("{Enter}");
-    await expect.poll(() => surface.matches(":popover-open")).toBe(true);
-    await expect
-      .poll(() => host!.querySelector<HTMLInputElement>("input[type=range]")?.checkVisibility())
-      .toBe(true);
+    // A visible slider proves the reopen and waits out the lazy panel chunk before Tab.
+    const range = () => host!.querySelector<HTMLInputElement>("input[type=range]");
+    await expect.poll(() => range()?.checkVisibility()).toBe(true);
     // macOS WebKit uses Option-Tab to traverse controls inside the open picker.
     await userEvent.keyboard(
       navigator.platform.includes("Mac") &&
@@ -187,7 +184,7 @@ describe("effort selection", () => {
         ? "{Alt>}{Tab}{/Alt}"
         : "{Tab}",
     );
-    await expect.poll(() => document.activeElement).toBe(host!.querySelector("input[type=range]"));
+    await expect.poll(() => document.activeElement).toBe(range());
     await userEvent.keyboard("{Escape}");
     await expect.poll(() => details.open).toBe(false);
     await expect.poll(() => surface.matches(":popover-open")).toBe(false);
