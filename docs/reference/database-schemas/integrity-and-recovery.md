@@ -565,11 +565,14 @@ lease, and cancellation detaches only that caller while the shared operation and
 remaining leases keep their original owner and cleanup authority.
 
 Shared-state reads capture their source and lifecycle authority before queuing.
-Read-only state inspections in one Doctor process share a retained private image
-while the source's main file and WAL are unchanged, instead of copying the database
-for each schema, lease, or single-row read. A commit, a replaced file, or a rollback
-journal retires it, and Doctor retires it before finishing. A failed removal of a
-retired image logs a warning and stays with the exit retry and the Gateway sweep.
+Read-only state inspections in one `doctor` or `update` process share a retained
+private image while the source's main file and WAL are unchanged, instead of copying
+the database for each schema, lease, or single-row read. Inside these processes a
+one-shot child seeds the image, so no retained child outlives the read that needed
+it. A commit, a replaced file, or a rollback journal retires the image, and the
+process retires it before finishing. A failed removal of a retired image logs a
+warning and stays with the exit retry and the Gateway sweep. The Gateway itself never
+holds one.
 
 An explicitly inherited snapshot keeps its original bytes. A fresh
 artifact-preserving copy checks the admitted physical file key at each main-file
