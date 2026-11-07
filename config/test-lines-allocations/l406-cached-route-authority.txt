@@ -1,2 +1,2 @@
-# Router confirmation plus live-metadata browser proof before moved-route admission.
-54
+# Router confirmation, confirmed cached-row handoffs, and live-metadata browser proof.
+58

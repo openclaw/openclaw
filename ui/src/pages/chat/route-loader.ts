@@ -615,7 +615,9 @@ export async function loadChatRoute(
     // RPC resolution owns the connection acquired after a cold route waited for hello.
     isResolutionSourceCurrent: resolution.isCurrent,
     row: resolution.session,
-    cachedRoster: Boolean(localRow && context.sessions.state.resultCached),
+    cachedRoster: Boolean(
+      localRow && !cached?.fromCurrentNavigation && context.sessions.state.resultCached,
+    ),
     shortId: target.shortId,
   });
   return resolved
