@@ -54,6 +54,9 @@ export const loadCodexSettledFinalizerTestFixture = () =>
 export const loadCodexAbortTranscriptTestFixture = () =>
   import("./src/app-server/transcript-abort.test-support.js");
 
+export const loadCodexNativeSubagentMonitorTestFixture = () =>
+  import("./src/app-server/native-subagent-monitor.test-support.js");
+
 type CodexHarnessPromptSnapshot = {
   developerInstructions: string;
   parentLocalInstructions: string | null;
