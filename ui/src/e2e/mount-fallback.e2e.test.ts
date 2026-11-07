@@ -88,9 +88,9 @@ async function exhaustMountRecovery(page: Page): Promise<void> {
     expect(await counter(page, loadCountKey)).toBe(String(recovery + 1));
   }
   await page.clock.runFor(12_001);
-  await page.getByRole("heading", { name: "Control UI did not start" }).waitFor();
+  await page.getByRole("heading", { name: "Control UI didn’t start" }).waitFor();
   expect(await page.locator("#openclaw-mount-fallback-summary").textContent()).toContain(
-    "Automatic retries didn’t fix this",
+    "The app didn’t load in this tab",
   );
   await page.clock.runFor(60_000);
   expect(await counter(page, loadCountKey)).toBe("4");
@@ -118,8 +118,7 @@ registeredElementSuite.define(() => {
 
       await exhaustMountRecovery(page);
 
-      expect(await page.getByRole("button", { name: "Reload page" }).isVisible()).toBe(true);
-      expect(await page.getByRole("button", { name: "Keep waiting" }).isVisible()).toBe(true);
+      expect(await page.getByRole("button", { name: "Reload" }).isVisible()).toBe(true);
       if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
         await page.screenshot({
           path: registeredElementSuite.artifactDir + "/bootstrap-manual-reload-desktop.png",
@@ -154,7 +153,6 @@ registeredElementSuite.define(() => {
             ".mount-fallback__panel",
             ".mount-fallback__panel h1",
             "#openclaw-mount-retry",
-            "#openclaw-mount-wait",
           ].map((selector) => press(fallback.querySelector(selector)!));
           const secondary = press(fallback, 2);
           press(fallback, 0, true);
@@ -166,7 +164,7 @@ registeredElementSuite.define(() => {
       expect(drag).toEqual({
         withoutBridge: false,
         background: true,
-        panel: [false, false, false, false],
+        panel: [false, false, false],
         secondary: false,
         messages: [{ type: "window-drag" }],
       });
@@ -174,7 +172,7 @@ registeredElementSuite.define(() => {
       syntheticModuleRenders = true;
       await Promise.all([
         page.waitForNavigation({ waitUntil: "domcontentloaded" }),
-        page.getByRole("button", { name: "Reload page" }).click(),
+        page.getByRole("button", { name: "Reload" }).click(),
       ]);
       await page.getByText("Application rendered", { exact: true }).waitFor();
       await page.clock.runFor(12_001);
