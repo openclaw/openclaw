@@ -1,14 +1,14 @@
 import type { JSX } from "@solidjs/web";
 import { Show, createMemo } from "solid-js";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
-import {
-  providerDisplayLabel,
-  providerIdFromModelRef,
-} from "../../components/provider-icon-data.ts";
+import { providerIdFromModelRef } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import {
+  ModelProviderIcon,
+  useProviderDisplayLabel,
+} from "../../lib/reactive/provider-presentation.tsx";
 import { activationTargetId, type ModelSetupActivationState } from "./state.ts";
 import type { ModelSetupViewProps } from "./view-types.ts";
 
@@ -124,6 +124,7 @@ const VERIFICATION_BUTTON_LABELS = {
 export function ConfiguredModel(
   props: ModelSetupViewProps & { result: SystemAgentSetupDetectResult },
 ): JSX.Element {
+  const providerDisplayLabel = useProviderDisplayLabel();
   const configuredRef = createMemo(() => props.result.configuredModel!);
   const canContinue = () =>
     props.firstRun && props.result.setupComplete && props.activation.phase !== "success";
@@ -163,7 +164,7 @@ export function ConfiguredModel(
       <div class="model-setup__row">
         <div class="model-setup__provider-copy">
           <Show when={providerId()} keyed>
-            {(id) => <ProviderBrandIcon provider={id} class="model-setup__icon" />}
+            {(id) => <ModelProviderIcon provider={id} class="model-setup__icon" />}
           </Show>
           <div class="model-setup__current-copy">
             <strong>{providerLabel()}</strong>

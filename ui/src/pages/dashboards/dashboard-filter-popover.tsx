@@ -1,29 +1,21 @@
 import { For, Show, onSettled } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
+import { nextRadio } from "../../components/solid/radio.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import type { DashboardGalleryFilters, DashboardGalleryHandlers } from "./gallery-filters.ts";
 
-const ARROW_STEPS: Record<string, number> = {
-  ArrowDown: 1,
-  ArrowRight: 1,
-  ArrowUp: -1,
-  ArrowLeft: -1,
-};
-
 // Arrow keys check the next option, the same as tapping it, and move focus with it.
 function moveCheckedOption(event: KeyboardEvent & { currentTarget: HTMLDivElement }) {
-  const step = ARROW_STEPS[event.key];
   const options = [...event.currentTarget.children].filter(
     (option): option is HTMLElement => option instanceof HTMLElement,
   );
-  const current = options.findIndex((option) => option === event.target);
-  if (step === undefined || current < 0) {
+  const next = nextRadio(event, options);
+  if (!next) {
     return;
   }
   event.preventDefault();
-  const next = options[(current + step + options.length) % options.length]!;
   next.click();
   next.focus();
 }

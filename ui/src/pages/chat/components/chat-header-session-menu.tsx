@@ -6,6 +6,7 @@ import type { BoardWidgetPageMenu } from "../../../components/board/board-widget
 import type { SessionMenuData } from "../../../components/session-menu-actions.ts";
 import type { CompactSessionMenuView } from "../../../components/session-menu-compact.ts";
 import { EMPTY_SESSION_MENU_DATA } from "../../../components/session-menu-data.ts";
+import { iconButtonClass } from "../../../components/solid/icon-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import {
@@ -242,7 +243,7 @@ function ChatHeaderSessionMenuShell(
       panelClass="chat-header-session-menu__panel"
       placement="bottom-end"
       label={label()}
-      triggerClass="btn btn--ghost btn--icon chat-icon-btn chat-header-session-menu__trigger"
+      triggerClass={[iconButtonClass(), "chat-header-session-menu__trigger"]}
       trigger={<Icon name="moreHorizontal" />}
       items={items}
       onSelect={(item, event) => handlers?.select(item, event)}

@@ -385,6 +385,7 @@
       /* Static placeholders do not animate or hold compositor layers during boot. */
       :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route) .skeleton::after {
         content: none;
+        animation: none;
       }
 
       :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route) .skeleton-line {
@@ -571,7 +572,7 @@
       @media (max-width: 900px) {
         :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
           .loading-skeleton:has(#openclaw-boot-composer:focus, .loading-skeleton__content) {
-          padding-bottom: 6px;
+          padding-bottom: 10px;
         }
       }
 

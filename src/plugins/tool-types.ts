@@ -129,7 +129,11 @@ type OpenClawPluginToolContextBase = {
   memoryFlush?: { flushId: string };
   /** Rejects a retained audience after any captured session incarnation changes. */
   assertMemoryAudienceCurrent?: () => void;
-  /** Live host-bound authority. Recheck inside the final synchronous effect/write guard. */
+  /**
+   * Live host-bound authority. Recheck inside the final synchronous effect/write guard.
+   * Resolves the invoking call from the async context it runs in; callbacks from event sources
+   * shared across calls must run it through `AsyncLocalStorage.snapshot()` taken at call start.
+   */
   assertInvocationCurrent?: () => void;
   /**
    * Host-bound client-input policy. Pure synchronous guard for final storage admission;

@@ -266,7 +266,9 @@ pre-commit run zizmor --all-files
 
 ## Surface ratchets
 
-Release branches skip line limits and line-count ratchets, except explicit pruning.
+Release branches keep line limits non-blocking and skip line-count ratchets, except explicit pruning.
+Oxlint emits line-limit warnings rather than disabling the rules, so existing
+size suppressions remain valid while unused non-size suppressions still fail.
 Size, length, count, and measured performance limits are errors locally and
 warnings in GitHub Actions. `scripts/lib/check-limits.mts` owns this decision
 using GitHub's `GITHUB_ACTIONS=true` signal. `CI=1` alone does not soften checks:

@@ -11,7 +11,9 @@ import type {
   PersonalSessionGroupScopeChoices,
 } from "../lib/sessions/personal-groups.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
+import { Checkbox } from "./solid/checkbox.tsx";
 import { Icon } from "./solid/icon.tsx";
+import { Radio } from "./solid/radio.tsx";
 import { Picker } from "./solid/select-picker.tsx";
 import { renderSessionOwnerAvatar } from "./solid/session-presentation.tsx";
 
@@ -80,8 +82,7 @@ function SessionChoice(props: {
 }) {
   return (
     <label class="personal-section-dialog__option">
-      <input
-        type="checkbox"
+      <Checkbox
         checked={props.checked}
         onChange={(event) => props.onToggle(event.currentTarget.checked)}
       />
@@ -287,14 +288,13 @@ export function PersonalSessionGroupDialogView(props: {
                 <div class="personal-section-dialog__list personal-section-dialog__scopes">
                   <For each={scopeOptions(props.options.scopes)}>
                     {(option) => (
-                      <label class="personal-section-dialog__option">
-                        <input
-                          type="radio"
-                          name="personal-section-scope"
-                          value={option[0]}
-                          checked={kind() === option[0]}
-                          onChange={() => setKind(option[0])}
-                        />
+                      <Radio
+                        class="personal-section-dialog__option"
+                        name="personal-section-scope"
+                        value={option[0]}
+                        checked={kind() === option[0]}
+                        onChange={() => setKind(option[0])}
+                      >
                         <span class="personal-section-dialog__label">{t(option[1])}</span>
                         <Show
                           when={option[0] === "project" && kind() === "project"}
@@ -316,7 +316,7 @@ export function PersonalSessionGroupDialogView(props: {
                             />
                           </span>
                         </Show>
-                      </label>
+                      </Radio>
                     )}
                   </For>
                 </div>

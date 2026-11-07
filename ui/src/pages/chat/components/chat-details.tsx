@@ -10,7 +10,6 @@ import {
 } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuHandle } from "../../../components/solid/menu.tsx";
-import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
@@ -20,8 +19,10 @@ import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import type { MobileDetailsBindings } from "../chat-details-mobile-host-content.tsx";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
-import type { ChatDetailsProps } from "./chat-details-types.ts";
+import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
+import { ChatDetailsLoading } from "./chat-details-loading.tsx";
 import "../../../styles/chat/details.css";
+import type { ChatDetailsProps } from "./chat-details-types.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -524,7 +525,8 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     {
       lazy: true,
       equals: (before, after) =>
-        before.length === after.length && before.every((el, i) => el === after[i]),
+        before.length === after.length &&
+        before.every((element, index) => element === after[index]),
     },
   );
   createResizeObserver(resizeTargets, reposition);
@@ -569,19 +571,41 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       surface.remove();
     };
   });
-  function SessionContent(content: { children: Element }) {
+  function SessionContent(content: { children: Element; onLoading?: (loading: boolean) => void }) {
     return (
       <Show when={sessionOpened()}>
         <ChatLazyBoundary
-          fallback={
-            !cachedReady() && (
-              <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
-            )
-          }
+          fallback={!cachedReady() && <ChatDetailsLoading onChange={content.onLoading} />}
         >
           {content.children}
         </ChatLazyBoundary>
       </Show>
+    );
+  }
+  function DesktopContent() {
+    const [scrollport, setScrollport] = createSignal<HTMLDivElement>();
+    return (
+      <ChatDetailsDesktopBody presented={isPresented() && opened()} onScrollPortRef={setScrollport}>
+        {(handoff) => (
+          <SessionContent onLoading={handoff.onLoading}>
+            <ChatDetailsDesktopComposition
+              scrollport={scrollport()}
+              onReady={handoff.onReady}
+              props={props.chat}
+              presented={isPresented() && opened()}
+              dismissed={intent() === "closed"}
+              progressMenuRef={(menu) => {
+                progressMenu = menu;
+              }}
+              onHideProgress={() => {
+                if (!docked()) {
+                  close(true);
+                }
+              }}
+            />
+          </SessionContent>
+        )}
+      </ChatDetailsDesktopBody>
     );
   }
   return (
@@ -697,21 +721,9 @@ export function ChatDetails(props: ChatDetailsViewProps) {
                   </Show>
                 }
               >
-                <SessionContent>
-                  <ChatDetailsDesktopComposition
-                    props={props.chat}
-                    presented={isPresented() && opened()}
-                    dismissed={intent() === "closed"}
-                    progressMenuRef={(menu) => {
-                      progressMenu = menu;
-                    }}
-                    onHideProgress={() => {
-                      if (!docked()) {
-                        close(true);
-                      }
-                    }}
-                  />
-                </SessionContent>
+                <Show when={sessionOpened()}>
+                  <DesktopContent />
+                </Show>
               </Show>
             )}
           </Show>

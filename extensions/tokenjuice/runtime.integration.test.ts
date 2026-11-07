@@ -7,6 +7,7 @@ import { clearRuleCache, loadRules } from "tokenjuice";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { createTokenjuiceAgentToolResultMiddleware } from "./tool-result-middleware.js";
 
 beforeAll(() => {
   vi.stubEnv("TOKENJUICE_STATS", "0");
@@ -18,15 +19,11 @@ afterAll(() => {
 });
 
 it("bounds compiled rules across worktree churn without clearing every result", async () => {
-  const captured = capturePluginRegistration({
-    id: "tokenjuice",
-    contracts: manifest.contracts,
-    register: plugin.register,
-  });
-  const middleware = captured.agentToolResultMiddlewares[0]!.handler;
-  const event = (worktree: number): AgentToolResultMiddlewareEvent => ({
+  const middleware = createTokenjuiceAgentToolResultMiddleware();
+  const event = (worktree: number, context = 0): AgentToolResultMiddlewareEvent => ({
     toolCallId: `rule-cache-${worktree}`,
     toolName: "exec",
+    cwd: `/synthetic-tokenjuice/session-${context}`,
     args: { command: "git status", workdir: `/synthetic-tokenjuice/worktree-${worktree}` },
     result: {
       content: [
@@ -35,14 +32,14 @@ it("bounds compiled rules across worktree churn without clearing every result", 
           text: "On branch main\n\nChanges not staged for commit:\n\tmodified:   src/a.ts\n",
         },
       ],
-      details: { status: "completed", exitCode: 0 },
+      details: { status: "completed", exitCode: 0, cwd: `/synthetic/${context}` },
     },
   });
   const first = await middleware(event(0), { runtime: "openclaw" });
   const options = { cwd: "/synthetic-tokenjuice/worktree-0" };
   const rules = await loadRules(options);
   for (let turn = 0; turn < 256; turn++) {
-    await middleware(event(turn % 2), { runtime: "openclaw" });
+    await middleware(event(turn % 2, turn), { runtime: "openclaw" });
   }
   expect(await loadRules(options)).toBe(rules);
   for (let worktree = 1; worktree < 128; worktree++) {

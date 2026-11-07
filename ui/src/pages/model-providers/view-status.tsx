@@ -1,4 +1,5 @@
 import type { ModelAuthStatusProfile } from "../../api/types.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { providerUsageAttention } from "../../components/solid/provider-usage.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
@@ -164,13 +165,17 @@ export function renderMutationMessage(message: ModelProviderRowMessage | undefin
   }
   return (
     <>
-      <div class={["callout", message.kind]} role={message.kind === "error" ? "alert" : "status"}>
+      <InlineAlert
+        tone={
+          message.kind === "error" ? "danger" : message.kind === "warning" ? "warning" : "success"
+        }
+      >
         {message.text}
-      </div>
+      </InlineAlert>
       {message.warning ? (
-        <div class="callout warning" role="status">
+        <InlineAlert tone="warning" role="status">
           {message.warning}
-        </div>
+        </InlineAlert>
       ) : undefined}
     </>
   );

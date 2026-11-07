@@ -4,6 +4,7 @@ import { createMemo, Errored, Loading, Show } from "solid-js";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/modal-dialog.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -121,16 +122,13 @@ export function ClawHubDetailDialog(props: { view: SkillsProps; installLocked: b
                 <>
                   <Show when={installResult()}>
                     {(result) => (
-                      <div
-                        role={result().kind === "error" ? "alert" : "status"}
+                      <InlineAlert
+                        tone={result().kind === "error" ? "danger" : "success"}
                         tabindex={0}
-                        class={[
-                          "callout skill-reader-dialog__notice",
-                          result().kind === "error" ? "danger" : "success",
-                        ]}
+                        class="skill-reader-dialog__notice"
                       >
                         {result().text}
-                      </div>
+                      </InlineAlert>
                     )}
                   </Show>
                   <openclaw-modal-actions class="oc-dialog__footer exec-approval-actions skill-reader-dialog__actions">
@@ -167,12 +165,12 @@ export function ClawHubDetailDialog(props: { view: SkillsProps; installLocked: b
       <div class="oc-dialog__body skill-reader-dialog__body clawhub-skill-detail__body">
         <Errored
           fallback={(error) => (
-            <div class="callout danger skill-reader-dialog__error" role="alert">
+            <InlineAlert tone="danger" class="skill-reader-dialog__error" role="alert">
               <span aria-hidden="true">
                 <Icon name="alertTriangle" />
               </span>
               <span>{formatUiError(error())}</span>
-            </div>
+            </InlineAlert>
           )}
         >
           <Loading
