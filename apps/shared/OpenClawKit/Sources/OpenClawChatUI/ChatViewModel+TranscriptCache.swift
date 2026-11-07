@@ -5,6 +5,19 @@ import Foundation
 // of truth and replace cached rows wholesale.
 
 extension OpenClawChatViewModel {
+    func appendMessage(_ message: OpenClawChatMessage) {
+        self.messages.append(message)
+        self.markTimelineChanged()
+    }
+
+    func removeMessage(id: UUID) {
+        let previousCount = self.messages.count
+        self.messages.removeAll { $0.id == id }
+        if self.messages.count != previousCount {
+            self.markTimelineChanged()
+        }
+    }
+
     struct SessionSnapshot: Equatable {
         var key: String
         var generation: UInt64
@@ -19,9 +32,24 @@ extension OpenClawChatViewModel {
         let reconciled = narration.reconcile(messages, settled: narrationSettled)
         if reconciled.changed { self.narration = narration }
         guard self.messages != reconciled.messages || reconciled.changed else { return }
+        self.retireStreamingSource(for: reconciled.messages)
         self.messages = reconciled.messages
         self.seedInputHistory(from: reconciled.messages)
-        markTimelineChanged()
+        self.markTimelineChanged()
+    }
+
+    /// Consume each fresh owned final once: a history refresh must not retire a later follow-up.
+    func retireStreamingSource(for messages: [OpenClawChatMessage]) {
+        guard let runID = self.streamingAssistantRunID, let raw = self.streamingAssistantText else { return }
+        let boundary = messages.lastIndex { self.streamingPriorMessageIDs.contains($0.id) }
+        guard self.streamingPriorMessageIDs.isEmpty || boundary != nil else { return }
+        let start = boundary.map { messages.index(after: $0) } ?? messages.startIndex
+        for message in messages[start...] where message.isCompletedReply &&
+            (message.workRunID == runID || self.provisionalFinalMessagesByID[message.id]?.runId == runID)
+        {
+            guard self.streamingRetiredFinalIDs.insert(message.id).inserted else { continue }
+            self.streamingRetiredSource = (message.id, raw, self.displayedStreamingAssistantTextUntracked)
+        }
     }
 
     var liveAssistantDisplayText: String? {
@@ -50,10 +78,35 @@ extension OpenClawChatViewModel {
         guard let text = streaming else { return nil }
         let live = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !live.isEmpty else { return text }
-        let recorded = self.transcriptMessages.reversed().prefix { $0.role.lowercased() != "user" }.contains {
-            $0.role.lowercased() == "assistant" && $0.rawText == live
+        // Exact recorded text also covers narration and durable-before-stream delivery.
+        // Only the partial-prefix case below needs a newly arrived completed reply.
+        let exact = self.transcriptMessages.reversed().prefix { $0.role.lowercased() != "user" }.contains {
+            $0.role.lowercased() == "assistant" && $0.rawText == live &&
+                (self.streamingAssistantRunID == nil || $0.workRunID == nil ||
+                    $0.workRunID == self.streamingAssistantRunID)
         }
-        return recorded ? nil : text
+        if exact { return nil }
+        if let retired = self.streamingRetiredSource,
+           self.messages.contains(where: { $0.id == retired.finalID && $0.isCompletedReply }),
+           retired.raw.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix(live) ||
+           retired.displayed?.trimmingCharacters(in: .whitespacesAndNewlines) == live
+        {
+            return nil
+        }
+        if let runID = self.streamingAssistantRunID {
+            // Durable output may overtake the display pacer. Run ownership, not
+            // equality with its partial string, identifies the superseded copy.
+            // Exclude existing rows so a reused run ID cannot hide a new answer.
+            let boundary = self.messages.lastIndex { self.streamingPriorMessageIDs.contains($0.id) }
+            guard self.streamingPriorMessageIDs.isEmpty || boundary != nil else { return text }
+            let start = boundary.map { self.messages.index(after: $0) } ?? self.messages.startIndex
+            let recorded = self.messages[start...].contains { message in
+                message.isCompletedReply && message.rawText.hasPrefix(live) &&
+                    (message.workRunID == runID || self.provisionalFinalMessagesByID[message.id]?.runId == runID)
+            }
+            return recorded ? nil : text
+        }
+        return text
     }
 
     nonisolated static func durableSessionCacheProjection(

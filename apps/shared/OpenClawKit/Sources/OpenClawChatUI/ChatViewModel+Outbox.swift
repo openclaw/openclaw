@@ -363,7 +363,7 @@ extension OpenClawChatViewModel {
             // canceled (or canonical history completed) this mapping. Never
             // leave its stale bubble looking like an ordinary sent message;
             // canonical history can re-add a genuinely delivered row.
-            self.replaceMessages(self.messages.filter { $0.id != messageID })
+            self.removeCanceledOutboxMessage(messageID)
         }
     }
 
@@ -459,6 +459,7 @@ extension OpenClawChatViewModel {
         self.attachments.removeAll { capturedAttachmentIDs.contains($0.id) }
         self.errorText = nil
         self.presentOutboxCommands([command])
+        self.localSendRevision &+= 1
         // Health can recover between the send-gate check and the enqueue;
         // flushing here closes that gap instead of waiting for the next event.
         if self.healthOK {
@@ -1212,6 +1213,12 @@ extension OpenClawChatViewModel {
         self.outboxFailureVersionsByMessageID.removeValue(forKey: messageID)
     }
 
+    func removeCanceledOutboxMessage(_ messageID: UUID) {
+        // A retained reader prefix must not restore an authoritatively canceled row.
+        self.readerHistoryDeletionRevision &+= 1
+        self.replaceMessages(self.messages.filter { $0.id != messageID })
+    }
+
     func handleOutboxChange(_ change: OpenClawChatOutboxChange) {
         // Invalidates every command snapshot that started loading before the
         // store mutation, including snapshots owned by another view model.
@@ -1224,7 +1231,7 @@ extension OpenClawChatViewModel {
             guard !self.cancelingOutboxCommandIDs.contains(commandID) else { return }
             guard let messageID = self.outboxMessageIDsByCommandID[commandID] else { return }
             self.clearOutboxState(forCommandID: commandID)
-            self.replaceMessages(self.messages.filter { $0.id != messageID })
+            self.removeCanceledOutboxMessage(messageID)
         case let .confirmed(_, commandID):
             // Canonical history owns the message row; only its outbox badge
             // and command mapping disappear.

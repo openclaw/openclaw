@@ -1233,7 +1233,9 @@ struct ChatViewModelOutboxTests {
         #expect(await MainActor.run { vm.supportsOfflineTextOutbox })
 
         await MainActor.run { vm.load() }
+        #expect(await vm.localSendRevision == 0)
         try await sendWhileOffline(vm, text: "hello offline")
+        #expect(await vm.localSendRevision == 1)
 
         // Nothing hit the transport; the command is durable instead.
         #expect(await transport.state.sentIdempotencyKeys.isEmpty)
@@ -1261,6 +1263,7 @@ struct ChatViewModelOutboxTests {
         try await waitForOutboxState { vm2.hasRestoredOutboxMessages }
         #expect(await MainActor.run { vm2.messages.contains { vm2.outboxState(for: $0.id) == .queued } })
         #expect(await userTexts(vm2) == ["hello offline"])
+        #expect(await vm2.localSendRevision == 0)
 
         // A cold launch can restore before the gateway provides its default
         // agent. The captured owner still keeps the bubble visible; replay

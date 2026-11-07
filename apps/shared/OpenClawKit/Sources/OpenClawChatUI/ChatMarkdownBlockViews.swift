@@ -208,6 +208,7 @@ struct ChatMarkdownListView: View {
     let variant: ChatMarkdownVariant
     let typography: ChatMarkdownRenderer.Typography
     let textColor: Color
+    var isStreaming = false
 
     var body: some View {
         Grid(alignment: .topLeading, horizontalSpacing: 8, verticalSpacing: 7) {
@@ -271,7 +272,16 @@ struct ChatMarkdownListView: View {
     private func content(_ content: ChatMarkdownListItemContent) -> some View {
         switch content {
         case let .markdown(markdown):
-            self.markdownRenderer(markdown)
+            if self.isStreaming {
+                ChatStreamingAssistantTextBody(
+                    text: ChatStreamingAssistantText(
+                        markdown: markdown,
+                        kind: self.typography == .thinking ? .thinking : .response),
+                    markdownVariant: self.variant,
+                    textColor: self.textColor)
+            } else {
+                self.markdownRenderer(markdown)
+            }
         case let .code(code):
             ChatCodeBlockView(block: code)
         case let .list(list):
@@ -294,7 +304,8 @@ struct ChatMarkdownListView: View {
             context: self.context,
             variant: self.variant,
             typography: self.typography,
-            textColor: self.textColor)
+            textColor: self.textColor,
+            isStreaming: self.isStreaming)
     }
 
     private func markerAccessibilityLabel(at index: Int) -> Text {

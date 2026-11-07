@@ -219,6 +219,49 @@ struct ChatAssistantRunGroupTests {
         if scope != "adjacent-unknown" { #expect(rows[2].id == narration.id) }
     }
 
+    @Test
+    func `live edge groups are laid out outside the lazy history`() throws {
+        // Blank transcript (#191478): rows at the live edge must not be sized by LazyVStack's estimate.
+        var messages: [OpenClawChatMessage] = []
+        for turn in 0..<12 {
+            messages.append(Self.message("user", at: Double(turn * 2), run: "run\(turn)", boundary: true))
+            messages.append(Self.message("assistant", at: Double(turn * 2 + 1), run: "run\(turn)"))
+        }
+        let groups = ChatAssistantRunGroup.build(
+            ChatTranscriptRow.build(from: messages), tools: [],
+            liveRunID: "run11", hasLiveContent: true, searchActive: false)
+        let split = ChatAssistantRunGroup.splitLiveTail(groups)
+
+        #expect(split.tail.count == ChatAssistantRunGroup.liveTailCount)
+        #expect((split.history + split.tail).map(\.id) == groups.map(\.id))
+        let live = try #require(groups.last { $0.includesLive })
+        #expect(split.tail.contains { $0.id == live.id })
+        #expect(!split.history.contains { $0.includesLive })
+        let latestUser = try #require(messages.last { $0.role == "user" })
+        #expect(split.tail.contains { group in group.parts.contains { $0.id == "row:\(latestUser.id)" } })
+    }
+
+    @Test
+    func `short transcripts keep every group at the live edge`() {
+        let rows = ChatTranscriptRow.build(from: [Self.message("user", at: 1), Self.message("assistant", at: 2)])
+        let groups = ChatAssistantRunGroup.build(
+            rows, tools: [], liveRunID: nil, hasLiveContent: false, searchActive: false)
+        let split = ChatAssistantRunGroup.splitLiveTail(groups)
+        #expect(split.history.isEmpty)
+        #expect(split.tail.map(\.id) == groups.map(\.id))
+        #expect(ChatAssistantRunGroup.splitLiveTail([]).tail.isEmpty)
+    }
+
+    @Test
+    func `an overlapping live run above later inputs stays at the live edge`() {
+        var groups = (0..<10).map { _ in ChatAssistantRunGroup(id: .row(UUID()), runID: nil, parts: []) }
+        groups[2].includesLive = true
+        let split = ChatAssistantRunGroup.splitLiveTail(groups)
+        #expect(split.tail.first?.id == groups[2].id)
+        #expect(split.history.count == 2)
+        #expect((split.history + split.tail).map(\.id) == groups.map(\.id))
+    }
+
     private static func message(
         _ role: String,
         at timestamp: Double,

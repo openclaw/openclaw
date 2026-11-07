@@ -78,7 +78,7 @@ extension OpenClawChatViewModel {
         }
         // Chat snapshots concatenate model turns; agent text owns the current item once observed.
         if self.liveRunStateByRunID[runId]?.hasAgentAssistantText != true {
-            self.updateStreamingAssistantText(bufferedText.isEmpty ? nil : bufferedText)
+            self.updateStreamingAssistantText(bufferedText.isEmpty ? nil : bufferedText, runID: runId)
         }
     }
 }
