@@ -150,8 +150,18 @@ export async function runBatchSessionAction(
     return;
   }
   await organizer.runOperation(
-    (operations, scope) =>
-      operations.runBatchSessionAction(organizer.deps, action, rows, allUnread, scope),
+    async (operations, scope) => {
+      const moved = await operations.runBatchSessionAction(
+        organizer.deps,
+        action,
+        rows,
+        allUnread,
+        scope,
+      );
+      if (action.kind === "move-to-group" && moved && moved.length) {
+        organizer.revealSessionGroup(action.category, scope);
+      }
+    },
     action.kind === "toggle-archived" || action.kind === "delete",
   );
 }
@@ -169,20 +179,11 @@ async function runDialog(
   }
 }
 
-export async function createSessionGroup(
+export function createSessionGroup(
   organizer: SessionOrganizer,
   sessions: readonly SidebarRecentSession[] = [],
 ): Promise<void> {
-  const scope = organizer.deps.sessionData.beginSessionMutation();
-  if (!scope) {
-    return;
-  }
-  const signal = organizer.deps.sessionData.sessionDraftSignal;
-  await runDialog(organizer, scope, async () => {
-    const { createSessionGroupDialog } =
-      await import("./session-organizer-group-dialogs.runtime.ts");
-    await createSessionGroupDialog(organizer.deps, scope, signal, sessions, organizer.notify);
-  });
+  return organizer.createSessionGroup(sessions);
 }
 
 export async function renameSessionGroupFromMenu(

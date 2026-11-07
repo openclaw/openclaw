@@ -5,6 +5,7 @@ import { sessionParticipantIdentityKey } from "../lib/chat/sender-label.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { SidebarPanelFilter, SidebarPanelHeader } from "./app-sidebar-panel-headers.tsx";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
+import { Icon } from "./solid/icon.tsx";
 import { InlineAlert } from "./solid/inline-alert.tsx";
 import { Picker } from "./solid/select-picker.tsx";
 import { renderSessionOwnerAvatar } from "./solid/session-presentation.tsx";
@@ -109,6 +110,12 @@ export function countSidebarSessionFilters(host: Pick<SessionListHost, "sessions
 }
 
 export function renderSessionListToolbar(host: SessionListHost & { onToggleSidebar?: () => void }) {
+  const groupAccess = () =>
+    host.readSessionMutationAccess({
+      method: "sessions.groups.put",
+      requiredScope: "operator.write",
+    });
+  const groupLabel = () => t("sessionsView.newGroupTitle");
   const statusLabel = () =>
     host.sessionsStatusFilter === "active"
       ? t("common.active")
@@ -116,6 +123,21 @@ export function renderSessionListToolbar(host: SessionListHost & { onToggleSideb
   return (
     <SidebarPanelHeader class="sidebar-session-toolbar" onToggleSidebar={host.onToggleSidebar}>
       <SidebarOwnerPicker host={host} />
+      {host.sidebarAgentsMode !== "roster" && (
+        <button
+          type="button"
+          class="sidebar-session-toolbar__button"
+          title={(() => {
+            const access = groupAccess();
+            return access.allowed ? groupLabel() : access.reason;
+          })()}
+          aria-label={groupLabel()}
+          disabled={!groupAccess().allowed}
+          onClick={() => void host.sessionOrganizer.createSessionGroup()}
+        >
+          <Icon name="folder" />
+        </button>
+      )}
       <SidebarPanelFilter
         menus={host.sidebarMenus}
         menu="sessionSort"

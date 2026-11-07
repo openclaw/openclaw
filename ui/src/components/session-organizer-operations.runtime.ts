@@ -13,10 +13,11 @@ import {
   formatPreservedWorktreesNotice,
 } from "../lib/sessions/worktree-preservation.ts";
 import { showToast } from "../lib/toast.ts";
-import type {
-  SidebarRecentSession,
-  SidebarSessionMutationResult,
-  SidebarSessionMutationScope,
+import {
+  storeSidebarSessionsGrouping,
+  type SidebarRecentSession,
+  type SidebarSessionMutationResult,
+  type SidebarSessionMutationScope,
 } from "./app-sidebar-session-types.ts";
 import { requestCloudWorkerStop } from "./cloud-worker-stop.runtime.ts";
 import { showConfirmDialog, type ConfirmDialogSkipPreference } from "./confirm-dialog.ts";
@@ -269,7 +270,7 @@ export async function runBatchSessionAction(
   rows: SidebarRecentSession[],
   allUnread: boolean,
   scope: SidebarSessionMutationScope,
-): Promise<void> {
+): Promise<SessionActionRow[] | null | void> {
   switch (action.kind) {
     case "toggle-unread":
       await patchSessionRows(deps, rows, { unread: !allUnread }, scope, { sessionScope: true });
@@ -278,7 +279,7 @@ export async function runBatchSessionAction(
       }
       break;
     case "move-to-group":
-      await moveSessionRowsToCategory(
+      return moveSessionRowsToCategory(
         deps,
         rows.filter(
           (row) => (row.category ?? null) !== action.category || needsGroupPromotion(row),
@@ -286,7 +287,6 @@ export async function runBatchSessionAction(
         action.category,
         scope,
       );
-      break;
     case "toggle-archived":
       if (rows.every((row) => row.archived === true)) {
         await patchSessionRows(deps, rows, { archived: false }, scope, { sessionScope: true });
@@ -393,6 +393,8 @@ export async function assignSessionOwner(
   }
 }
 
+export { createSessionGroupDialog } from "./session-organizer-group-dialogs.runtime.ts";
+
 export async function createSessionGroup(
   deps: SessionOrganizerDependencies,
   name: string,
@@ -427,6 +429,11 @@ export async function createSessionGroup(
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
     return "stale";
   }
+  // An explicitly created folder must be visible even in a flat or filtered list.
+  deps.releaseSidebarSnapshot();
+  deps.sessionsGrouping = "category";
+  storeSidebarSessionsGrouping("category");
+  deps.setSessionsEmptyGroupsMode("never");
   return "completed";
 }
 

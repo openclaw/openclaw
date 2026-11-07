@@ -1,4 +1,4 @@
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { i18n, t } from "../i18n/index.ts";
 import { captureI18nStateForTesting } from "../i18n/lib/translate.test-support.ts";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
@@ -25,6 +25,10 @@ import "../styles/settings-native-controls.css";
 import "./app-sidebar.tsx";
 
 setupSidebarTest();
+beforeEach(async () => {
+  onTestFinished(captureI18nStateForTesting());
+  await i18n.setLocale("en");
+});
 
 const ringStyle = (root: Element, selector: string) =>
   getComputedStyle(root.querySelector(selector)!).outlineStyle;
@@ -220,7 +224,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       await tabTo("button", "Sort by: Created");
       await userEvent.keyboard("{Enter}{ArrowDown}{Enter}");
       await expect.poll(loadStoredSidebarSessionSortMode).toBe("updated");
-      await tabTo("button", "Hide empty groups: When filtering");
+      await tabTo("button", "Hide empty groups: Never");
       await tabTo("switch", "Show message preview");
       await tabTo("link", "Session sources");
       await userEvent.keyboard("{Escape}");
@@ -393,7 +397,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     for (const [label, choice, defaultValue] of [
       ["Group by", "Person", "Custom groups"],
       ["Sort by", "Last updated", "Created"],
-      ["Hide empty groups", "Always", "When filtering"],
+      ["Hide empty groups", "Always", "Never"],
       ["Show message preview", null, null],
     ] as const) {
       if (choice) {
@@ -530,7 +534,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       await expectFilterCount(1);
     }
     expect(menu.querySelector("#sidebar-sessions-owner")).toBeNull();
-    await choose(/^Hide empty groups:/, "Never");
+    await choose(/^Hide empty groups:/, "When filtering");
     await role("button", "Reset").click();
     expect(loadStoredSidebarSessionStatusFilter()).toBe("active");
     expect(sidebar.sessionOwnerFilterId).toBeNull();
@@ -539,7 +543,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     expect(loadStoredSidebarSessionsGrouping()).toBe("category");
     expect(loadStoredSidebarSessionSortMode()).toBe("created");
     expect(loadStoredSidebarSessionsShowPreview()).toBe(false);
-    await expect.element(role("button", "Hide empty groups: When filtering")).toBeVisible();
+    await expect.element(role("button", "Hide empty groups: Never")).toBeVisible();
     await expectFilterCount(0);
     await expect.element(role("radio", "Active")).toHaveFocus();
     expect(query(".sidebar-session-sort-menu")).toBe(menu);

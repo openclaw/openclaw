@@ -82,6 +82,13 @@ export class SessionOrganizer {
     }
   }
 
+  createSessionGroup(sessions: readonly SidebarRecentSession[] = []): Promise<void> {
+    const signal = this.deps.sessionData.sessionDraftSignal;
+    return this.runOperation((operations, scope) =>
+      operations.createSessionGroupDialog(this.deps, scope, signal, sessions, this.notify),
+    );
+  }
+
   readonly patchSession = async (
     session: SidebarRecentSession,
     patch: SidebarSessionPatch,
@@ -401,10 +408,22 @@ export class SessionOrganizer {
   }
 
   assignSessionCategory(session: SidebarRecentSession, category: string | null): Promise<void> {
-    return this.runOperation(
-      (operations, scope) => operations.assignSessionCategory(this.deps, session, category, scope),
-      true,
-    );
+    return this.runOperation(async (operations, scope) => {
+      const result = await operations.assignSessionCategory(this.deps, session, category, scope);
+      if (result === "completed") {
+        this.revealSessionGroup(category, scope);
+      }
+    }, true);
+  }
+
+  revealSessionGroup(category: string | null, scope: SidebarSessionMutationScope): void {
+    if (
+      category &&
+      this.deps.sessionData.isSessionMutationScopeCurrent(scope) &&
+      this.collapsedSessionSections.has(`category:${category}`)
+    ) {
+      this.toggleSection(`category:${category}`);
+    }
   }
 
   private sectionAcceptsSession(

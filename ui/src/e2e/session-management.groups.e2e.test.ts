@@ -471,7 +471,10 @@ suite.define(() => {
       await page.getByRole("button", { name: "Filters" }).click();
       await page.locator(".sessions-filter-popover:popover-open").waitFor();
       await page.locator(".session-groupby__select").selectOption("category");
-      await page.getByRole("button", { name: "New group" }).click();
+      await page
+        .locator(".sessions-filter-popover:popover-open")
+        .getByRole("button", { name: "New group" })
+        .click();
       const field = page.locator("openclaw-modal-dialog input");
       await field.waitFor({ state: "visible" });
       await field.fill("X".repeat(513));
