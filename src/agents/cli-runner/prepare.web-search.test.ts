@@ -109,7 +109,7 @@ it.each<[string, OpenClawConfig, boolean, boolean, boolean, string[]?]>([
         exec: { host: openClaw ? "auto" : "node", mode: "full" },
       },
     };
-    const { preparedBackend, systemPromptReport } = await fixture.prepare({
+    const context = await fixture.prepare({
       provider: "claude-cli",
       config: cfg,
       senderIsOwner: true,
@@ -117,7 +117,8 @@ it.each<[string, OpenClawConfig, boolean, boolean, boolean, string[]?]>([
       model: "fixture-model",
       ...(openClaw ? { cliToolAvailability: { native: ["Read", "WebSearch"], openClaw } } : {}),
     });
-    try {
+    await fixture.withPrepared(context, async () => {
+      const { preparedBackend, systemPromptReport } = context;
       const capture = expectDefined(preparedBackend.mcpClientGrantCapture, "capture");
       capture.activate("fixture-capture", () => {});
       capture.captureNativeTools?.(["Read", "WebSearch"]);
@@ -149,8 +150,6 @@ it.each<[string, OpenClawConfig, boolean, boolean, boolean, string[]?]>([
           command: "node-proof",
         });
       }
-    } finally {
-      await preparedBackend.cleanup?.();
-    }
+    });
   },
 );

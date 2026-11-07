@@ -128,6 +128,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
     });
     return {
       candidateRun,
+      providerScopedAuthProfile: selectedAuthProfile,
       ...resolveRunEntryCliRuntime({
         config: params.runtimeConfig,
         provider,
@@ -406,6 +407,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             result = await runCliFallbackCandidate({
               ...common,
               cliExecutionProvider: runtime.cliExecutionProvider,
+              providerScopedAuthProfile: runtime.providerScopedAuthProfile,
               lifecycleGeneration: params.state.lifecycleGeneration,
               onCompactionAccounting: (fact) => {
                 if (fact.kind === "durable") {

@@ -563,6 +563,7 @@ async function resolveSessionAuthProfileOverride(
 type SessionAuthSelection = {
   profileId: string;
   source: "auto" | "user";
+  configuredPrimaryProvider?: string;
   routeRequirement: ProviderModelRouteAuthRequirement | undefined;
 };
 
@@ -573,6 +574,7 @@ export async function resolveSessionAuthSelection(params: {
   modelId: string;
   agentId: string;
   configuredProfileId?: string;
+  configuredProfileIsDefault?: boolean;
   /** Native login identities admitted by the prepared runtime's core-owned policy. */
   nativeAuthProfileIds?: readonly string[];
   agentDir: string;
@@ -622,9 +624,18 @@ export async function resolveSessionAuthSelection(params: {
     return undefined;
   }
   const source = rotatedPinnedProfileId || configuredProfileId ? "user" : "auto";
+  const selection: Omit<SessionAuthSelection, "routeRequirement"> = {
+    profileId,
+    source,
+    ...(!rotatedPinnedProfileId &&
+    (!params.configuredProfileId || params.configuredProfileIsDefault === true) &&
+    configuredProfileId
+      ? { configuredPrimaryProvider: params.provider }
+      : {}),
+  };
   if (params.nativeAuthProfileIds?.includes(profileId)) {
     // Apply pin/default precedence first; native login identities are not stored credentials.
-    return { profileId, source, routeRequirement: undefined };
+    return { ...selection, routeRequirement: undefined };
   }
   // A session pin overrides the configured account; that unused personal credential
   // does not belong in this operation's private auth view or its validation.
@@ -657,8 +668,7 @@ export async function resolveSessionAuthSelection(params: {
     );
   }
   return {
-    profileId,
-    source,
+    ...selection,
     routeRequirement: profileAuthRequirement({ cfg, store: authStore, profileId }),
   };
 }

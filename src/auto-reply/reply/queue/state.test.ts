@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import {
+  bindConfiguredModelAuthProfileScope,
+  readConfiguredModelAuthProfileProvider,
+} from "../../../config/sessions/auth-profile-override-provenance.js";
 import { makeCronJob } from "../../../cron/delivery.test-helpers.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "../../../cron/scheduled-occurrence.test-support.js";
 import {
@@ -205,6 +209,28 @@ describe("clearRemovedQueuedAuthProfiles", () => {
 });
 
 describe("refreshQueuedFollowupSession", () => {
+  it.each(["account", "thinking"] as const)(
+    "keeps the same account through a %s edit",
+    (change) => {
+      const run = makeRun();
+      bindConfiguredModelAuthProfileScope(run, run.provider);
+      const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+      addSources(queue, { prompt: "pending", enqueuedAt: 1, run });
+
+      refreshQueuedFollowupSession({
+        key: QUEUE_KEY,
+        ...(change === "account"
+          ? { nextAuthProfileId: run.authProfileId, nextAuthProfileIdSource: "user" as const }
+          : { nextThinking: { level: "low" } }),
+      });
+
+      expect(run.authProfileId).toBe("profile-a");
+      expect(run.authProfileIdSource).toBe("user");
+      expect(readConfiguredModelAuthProfileProvider(run)).toBe(
+        change === "thinking" ? "anthropic" : undefined,
+      );
+    },
+  );
   it.each([
     { name: "clears", admitted: "user" as const, next: undefined },
     { name: "adopts", admitted: undefined, next: "user" as const },

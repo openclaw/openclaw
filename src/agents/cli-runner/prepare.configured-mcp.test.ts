@@ -210,7 +210,7 @@ describe("configured MCP servers on CLI turns", () => {
           toolOverrides: { mcpServers: { openclaw: false }, webSearch: false },
           ...(source === "run" ? { execOverrides: { host: "node" as const } } : {}),
         });
-        try {
+        await fixture.withPrepared(context, async () => {
           expect(context.params.cliToolAvailability).toBeUndefined();
           expect(context.hostOwnedTools).toBeUndefined();
           const args = context.preparedBackend.backend.args ?? [];
@@ -234,9 +234,7 @@ describe("configured MCP servers on CLI turns", () => {
             "probe:pong",
           );
           expect(probeServer.calls).toBe(1);
-        } finally {
-          await context.preparedBackend.cleanup?.();
-        }
+        });
       } finally {
         await disposeAllSessionMcpRuntimes();
         await scheduler.stop();
@@ -300,7 +298,7 @@ describe("configured MCP servers on CLI turns", () => {
                 )
               : {}),
           });
-          try {
+          const turn = await fixture.withPrepared(context, async () => {
             const minted = mintGrant.mock.lastCall?.[0];
             const args = context.preparedBackend.backend.args ?? [];
             const bundle = JSON.parse(
@@ -326,17 +324,16 @@ describe("configured MCP servers on CLI turns", () => {
                 new Set(buildMcpToolSchema(scoped.tools).map((entry) => entry.name)),
               ),
             })) as { result: { instructions?: string } };
-            turns.push({
+            return {
               toolsAllow: minted?.context.toolsAllow?.toSorted(),
               listed: scoped.tools.map((tool) => tool.name).toSorted(),
               instructions: initialized.result.instructions,
               result: probe
                 ? getTextContent(await probe.execute("configured-mcp", { word: "pong" }))
                 : undefined,
-            });
-          } finally {
-            await context.preparedBackend.cleanup?.();
-          }
+            };
+          });
+          turns.push(turn);
         }
       } finally {
         await disposeAllSessionMcpRuntimes();
@@ -424,7 +421,7 @@ describe("configured MCP servers on CLI turns", () => {
               ...requester,
               ...(senderId ? { senderId } : {}),
             });
-            try {
+            await fixture.withPrepared(context, async () => {
               const minted = mintGrant.mock.lastCall?.[0];
               const scoped = await resolveMcpLoopbackScopedTools({
                 cfg: config,
@@ -441,9 +438,7 @@ describe("configured MCP servers on CLI turns", () => {
                   ? getTextContent(await tool.execute("echo", { word: "hi" }))
                   : undefined,
               });
-            } finally {
-              await context.preparedBackend.cleanup?.();
-            }
+            });
           }
           // The embedded runner acquires the same owner with the turn's sender.
           const embedded = await materializeBundleMcpToolsForRun(
@@ -522,7 +517,7 @@ describe("configured MCP servers on CLI turns", () => {
         config,
         ...requester,
       });
-      try {
+      await fixture.withPrepared(context, async () => {
         const minted = mintGrant.mock.lastCall?.[0];
         const scoped = await resolveMcpLoopbackScopedTools({
           cfg: config,
@@ -553,9 +548,7 @@ describe("configured MCP servers on CLI turns", () => {
           );
           grantCurrent = true;
         }
-      } finally {
-        await context.preparedBackend.cleanup?.();
-      }
+      });
     } finally {
       await disposeAllSessionMcpRuntimes();
       await scheduler.stop();

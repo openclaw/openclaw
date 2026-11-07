@@ -10,7 +10,10 @@ import {
 import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { setActiveNodeContexts } from "../../infra/active-node-context.js";
-import type { CliBackendExecuteContext } from "../../plugins/cli-backend.types.js";
+import type {
+  CliBackendExecuteContext,
+  CliBackendPlugin,
+} from "../../plugins/cli-backend.types.js";
 import * as globalHooks from "../../plugins/hook-runner-global.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { saveAuthProfileStore } from "../auth-profiles/store-runtime.js";
@@ -104,6 +107,55 @@ describe("CLI durable session context", () => {
       clearRuntimeConfigSnapshot();
     }
   });
+
+  it.each(["legacy", "v2"] as const)(
+    "privately forwards isolated-completion system prompts via %s preparation",
+    async (version) => {
+      const { dir } = fixture.session;
+      const prepareExecution = vi.fn(async () => ({
+        isolatedCompletionEnforced: true as const,
+        toolAvailabilityEnforced: true as const,
+      }));
+      const backend: CliBackendPlugin & { pluginId: string } = {
+        id: "google-gemini-cli",
+        pluginId: "google",
+        bundleMcp: false,
+        nativeToolMode: "selectable",
+        toolAvailabilityEnforcement: "prepare-execution",
+        ...(version === "v2" ? { prepareExecutionV2: prepareExecution } : { prepareExecution }),
+        config: {
+          command: "gemini",
+          args: ["--prompt", "{prompt}"],
+          output: "jsonl",
+          input: "arg",
+          sessionMode: "existing",
+        },
+      };
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [backend],
+      });
+
+      const context = await fixture.prepare({
+        skillsSnapshot: { prompt: "", skills: [] },
+        provider: "google-gemini-cli",
+        executionMode: "side-question",
+        isolatedCompletion: true,
+        extraSystemPrompt: "Return only valid JSON.",
+        cliToolAvailability: { native: [], openClaw: [] },
+      });
+      cleanups.push(() => context.preparedBackend.cleanup?.());
+
+      expect(prepareExecution).toHaveBeenCalledWith(
+        expect.objectContaining({
+          isolatedCompletionCwd: dir,
+          isolatedCompletionModelId: "test-model",
+          isolatedCompletionPrompt: "latest ask",
+          isolatedCompletionSystemPrompt: "Return only valid JSON.",
+        }),
+      );
+    },
+  );
 
   it.each(["plugin", "first-only"])(
     "preserves prompt privacy and order with plugin execution %s",
@@ -476,13 +528,11 @@ describe("CLI durable session context", () => {
       });
     });
     const context = await history.prepare({ sessionKey: sessionTarget.sessionKey });
-    try {
+    await fixture.withPrepared(context, async () => {
       expect(wait).toHaveBeenCalledExactlyOnceWith(sessionTarget.sessionKey);
       expect(context.params.prompt).toContain("FACT_AFTER_MAINTENANCE");
       expect(context.params.transcriptPrompt).toBe("latest ask");
-    } finally {
-      await context.preparedBackend.cleanup?.();
-    }
+    });
   });
 
   it.each([
@@ -543,7 +593,7 @@ describe("CLI durable session context", () => {
           : {}),
       });
       const denied = Boolean(testCase.account || testCase.callerMemory);
-      try {
+      await fixture.withPrepared(context, async () => {
         const logicalPrompt = context.promptForHooks ?? context.params.prompt;
         if (denied) {
           expect(logicalPrompt).not.toContain("RESULT-1234");
@@ -586,9 +636,7 @@ describe("CLI durable session context", () => {
           }
         }
         expect(context.openClawHistoryPrompt).toBeUndefined();
-      } finally {
-        await context.preparedBackend.cleanup?.();
-      }
+      });
     },
   );
 

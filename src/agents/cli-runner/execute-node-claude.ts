@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { racePromiseWithAbortSignal } from "@openclaw/retry";
+import { prepareRuntimeAuthProfileExecution } from "../../config/sessions/session-entry-current-runtime.js";
 import { invokeNodeClaudeCliRun } from "../../gateway/node-agent-cli-runtime.js";
 import { prepareNodeClaudeSkillRuntime } from "../../gateway/node-claude-skill-runtime.js";
 import { createAbortError } from "../../infra/abort-signal.js";
@@ -185,7 +186,18 @@ export async function executeNodeClaudeRun(params: {
       return await runWithAgentToolSourceExecutionScope(assertCurrent, () =>
         invokeNodeClaudeCliRun({
           assertCurrent,
-          assertReadable: params.context.cliHistoryWriter?.assertReadable,
+          assertReadable: async () => {
+            await params.context.cliHistoryWriter?.assertReadable();
+            const { savedCredentialUse } = params.context.preparedBackend;
+            const preparePin = () =>
+              prepareRuntimeAuthProfileExecution(contextParams, assertCurrent);
+            if (savedCredentialUse) {
+              await savedCredentialUse.prepareAfter(preparePin, nodeRunAbortSignal);
+            } else {
+              await preparePin();
+            }
+            assertCurrent();
+          },
           nodeId: params.nodePlacement.nodeId,
           argv: params.executionArgs,
           stdin: params.stdinPayload,

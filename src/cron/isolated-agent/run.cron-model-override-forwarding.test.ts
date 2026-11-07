@@ -114,6 +114,70 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     });
   });
 
+  it.each([undefined, "standard"] as const)(
+    "forwards saved access and the refusal account into a policy retry (%s)",
+    async (savedAccess) => {
+      const provider = "openai";
+      const model = "gpt-5.6";
+      resolveAllowedModelRefMock.mockReturnValue({ ref: { provider, model } });
+      resolveCronSessionMock.mockReturnValue(
+        makeCronSession({
+          sessionEntry: makeCronSessionEntry({ cyberAccessProgram: savedAccess }),
+          isNewSession: false,
+        }),
+      );
+      runWithModelFallbackMock.mockImplementation(
+        async (params: TestModelFallbackRunnerParams) => ({
+          outcome: "completed",
+          result: await runInitialModelFallbackAttempt(params),
+          provider: params.provider,
+          model: params.model,
+          attempts: [],
+        }),
+      );
+      runEmbeddedAgentMock
+        .mockResolvedValueOnce({
+          payloads: [{ text: "policy refusal", isError: true }],
+          meta: {
+            agentMeta: {
+              sessionId: "cron-policy-retry",
+              provider,
+              model,
+              agentHarnessId: "openclaw",
+              providerRefusal: {
+                provider: "openai",
+                category: "cyber",
+                authProfileId: "openai:refused",
+                accessProgram: "standard",
+              },
+            },
+          },
+        })
+        .mockResolvedValueOnce(makeSuccessfulRunResult(provider, model).result.result);
+
+      const result = await runCronIsolatedAgentTurn(
+        makeParams({
+          cfg: { agents: { defaults: { embeddedAgent: { cyberFailover: { mode: "auto" } } } } },
+          job: makeJob({
+            payload: { kind: "agentTurn", message: "summarize", model: `${provider}/${model}` },
+          }),
+        }),
+      );
+
+      expect(result.status).toBe("ok");
+      expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+      expect(firstMockArg(runEmbeddedAgentMock).cyberAccessProgram).toBe(savedAccess);
+      expect(requireEmbeddedAgentCall(1)).toMatchObject({
+        provider,
+        model,
+        cyberAccessProgram: "daybreak_blue",
+        authProfileId: "openai:refused",
+        authProfileIdSource: "user",
+        authProfileFailurePolicy: "local",
+      });
+    },
+  );
+
   it("builds cron context from the published replacement owner", async () => {
     const callerConfig = {
       session: { store: "/tmp/store.json" },
@@ -579,23 +643,29 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     },
   );
 
-  it("selects the configured model auth profile separately", async () => {
-    const ref = { provider: "openai", model: "gpt-5.6-luna" };
+  it.each(["configured", "payload"])("selects %s model auth profile", async (source) => {
+    const { provider, model } = { provider: "openai", model: "gpt-5.6-luna" };
+    const ref = { provider, model };
     const modelRef = "openai/gpt-5.6-luna@openai:test-profile";
-    resolveConfiguredModelRefMock.mockReturnValue(ref);
-    runWithModelFallbackMock.mockResolvedValueOnce(
-      makeSuccessfulRunResult(ref.provider, ref.model),
-    );
+    if (source === "payload") {
+      resolveAllowedModelRefMock.mockReturnValueOnce({ ref });
+    } else {
+      resolveConfiguredModelRefMock.mockReturnValue(ref);
+    }
+    runWithModelFallbackMock.mockResolvedValueOnce(makeSuccessfulRunResult(provider, model));
     await runCronIsolatedAgentTurn(
       makePersistParams({
         cfg: {
           auth: { profiles: { "openai:test-profile": { provider: "openai", mode: "token" } } },
-          agents: { defaults: { model: { primary: modelRef } } },
+          ...(source === "configured"
+            ? { agents: { defaults: { model: { primary: modelRef } } } }
+            : {}),
         },
         job: makeJob({
           payload: {
             kind: "agentTurn",
             message: "run daily digest",
+            ...(source === "payload" ? { model: modelRef } : {}),
           },
         }),
       }),
@@ -605,6 +675,7 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
         provider: "openai",
         modelId: "gpt-5.6-luna",
         configuredProfileId: "openai:test-profile",
+        configuredProfileIsDefault: source === "configured",
       }),
     );
   });

@@ -454,6 +454,13 @@ export function createCliRunnerPrepareFixture(
       }
       return prepareCliRun(prepared);
     },
+    async withPrepared<T>(context: PreparedCliRunContext, body: () => T | Promise<T>) {
+      try {
+        return await body();
+      } finally {
+        await context.preparedBackend.cleanup?.();
+      }
+    },
     appendTranscript(entry: {
       id: string;
       parentId: string | null;

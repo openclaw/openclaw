@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { constants, type DatabaseSync } from "node:sqlite";
 import { MessageChannel } from "node:worker_threads";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createSqlPublicationTestConnection } from "../../../test/helpers/sql-publication-connection.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -35,6 +36,7 @@ import {
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   authProfileCredentialPublication,
+  AuthProfileCredentialPublicationPendingError,
   beginAuthProfileCredentialBatch,
   captureAuthProfileCredentialAuthority,
   withAuthProfileCredentialWrite,
@@ -42,6 +44,7 @@ import {
 import type { WorkerWriteOperationContext } from "../../state/worker-operation-registry.js";
 import { withEnv } from "../../test-utils/env.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
+import { prepareCliCredentialUseCheck } from "../cli-runner/auth-profile-preparation-error.js";
 import { createExternalAuthRuntime } from "./external-auth.js";
 import { noteCommittedSharedAuthStoreOwnership } from "./path-resolve.js";
 import { coercePersistedAuthProfileStore } from "./persisted-store.js";
@@ -76,7 +79,10 @@ const credential = (key: string): AuthProfileCredential => ({
   provider: "fixture",
   key,
 });
-const store = (key: string) => ({ version: 1, profiles: { [profileId]: credential(key) } });
+const store = (value: string | AuthProfileCredential) => ({
+  version: 1,
+  profiles: { [profileId]: typeof value === "string" ? credential(value) : value },
+});
 const nativeRuntime = createAuthProfileStoreRuntime(
   createExternalAuthRuntime(
     () => [],
@@ -109,10 +115,6 @@ function persistedCredential(
 
 function expectCredential(current: Fixture, key: string) {
   expect([current.readPersisted(), current.read()]).toEqual([credential(key), credential(key)]);
-}
-
-function expectDenied(authority: Fixture["authority"], message = "authority is unavailable") {
-  expect(() => authority.readCurrentCredential()).toThrow(message);
 }
 
 function withCommit(current: Fixture, observe: () => void, operation: () => void) {
@@ -183,8 +185,8 @@ function fixture(
   authority.observe(readPersisted());
   const transact = <T>(operation: Parameters<typeof runAuthProfileWriteTransaction<T>>[1]) =>
     runAuthProfileWriteTransaction(agentDir, operation, { env });
-  const write = (key: string) =>
-    transact(({ db }) => writeAuthProfileJsonCell(db, "store", kind, store(key)));
+  const write = (value: string | AuthProfileCredential) =>
+    transact(({ db }) => writeAuthProfileJsonCell(db, "store", kind, store(value)));
   const snapshot = () => captureAuthProfileStorePersistenceSnapshot(agentDir, { env });
   const save = (key: string, supplied = false) =>
     saveSdkAuthProfileStore(store(key), agentDir, saveOptions, supplied ? database : undefined);
@@ -365,7 +367,7 @@ describe("credential authority captured before local database creation", () => {
 
   it.each(["ordinary", "catalog"] as const)(
     "installs %s worker facts on the absent source before releasing denial",
-    (writer) => {
+    async (writer) => {
       const current = absentAgentFixture();
       const receipt = {
         ...createSqliteCommitReceipt({
@@ -386,11 +388,16 @@ describe("credential authority captured before local database creation", () => {
           : undefined;
       const catalog = ordinary ? undefined : beginAuthProfileCredentialBatch(current.context);
       expect(current.read).toThrow();
+      const controller = new AbortController();
+      const stopped = current.authority.waitUntilCurrent(controller.signal);
+      controller.abort();
+      const stoppedCheck = expect(stopped).rejects.toBe(controller.signal.reason);
       ordinary?.committed(structuredClone(receipt));
       catalog?.committed([structuredClone(receipt)]);
       expect(current.read).toThrow();
       ordinary?.finish(true);
       catalog?.finish(true);
+      await stoppedCheck;
       expect(current.read()).toEqual(credential("worker"));
     },
   );
@@ -445,7 +452,7 @@ it.each(["shared-state", "agent", "absent"] as const)(
     if (source !== "absent") {
       const cold = current.capture();
       cold.observe(current.readPersisted());
-      expectDenied(cold);
+      authorityReader(cold).denied();
     }
   },
 );
@@ -494,10 +501,7 @@ describe.each(["shared-state", "agent"] as const)("%s released SDK credential wr
       () => runOutcome(() => current.sdk(writer, "sdk-committed"), outcome, "cancelled SDK commit"),
     );
     expect(observed).toEqual(outcome === "commit" ? credential("sdk-committed") : undefined);
-    expect(current.readPersisted()).toEqual(
-      credential(outcome === "commit" ? "sdk-committed" : "original"),
-    );
-    expect(current.read()).toEqual(current.readPersisted());
+    expectCredential(current, outcome === "commit" ? "sdk-committed" : "original");
     expect(fs.existsSync(marker)).toBe(false);
     expectRetainedCustody(rootPath, false);
   });
@@ -650,7 +654,7 @@ describe.each(["shared-state", "agent"] as const)("%s released SDK credential wr
         current.denied();
         const cold = current.capture();
         cold.observe(credential("unknown"));
-        expectDenied(cold);
+        authorityReader(cold).denied();
       } finally {
         commit.mockRestore();
         lease?.release();
@@ -706,14 +710,19 @@ describe("prepared persisted credential readers", () => {
       useReaderEnvironment(environment);
       const prepare = async () => {
         const retained = await shared.prepareRead(agentDir, store("snapshot-must-not-win"));
+        const { assertCurrent: assertCliCredentialUse } = await prepareCliCredentialUseCheck(
+          profileId,
+          agentDir,
+        );
         expect(retained?.()).toEqual(
           await nativeRuntime.findPersistedAuthProfileCredentialAsync({ agentDir, profileId }),
         );
-        return retained;
+        return { read: retained, assertCliCredentialUse };
       };
-      const read = await (scoped
+      const { read, assertCliCredentialUse } = await (scoped
         ? withAuthProfileStoreAgentDir(agentDir, shared.env.OPENCLAW_STATE_DIR, prepare)
         : prepare());
+      expect(assertCliCredentialUse).not.toThrow();
       expect(read?.()).toEqual(
         credential(source === "populated-child" ? "local-original" : "original"),
       );
@@ -725,6 +734,7 @@ describe("prepared persisted credential readers", () => {
       expect(read?.()).toEqual(credential("shared-new"));
       shared.remove();
       expect(read?.()).toBeUndefined();
+      expect(assertCliCredentialUse).toThrow("was removed");
       if (source === "scoped-child") {
         for (const excluded of [
           { ...credential("private"), copyToAgents: false },
@@ -736,13 +746,8 @@ describe("prepared persisted credential readers", () => {
             expires: Date.now() + 3_600_000,
             copyToAgents: true,
           },
-        ]) {
-          shared.transact(({ db }) =>
-            writeAuthProfileJsonCell(db, "store", "shared-state", {
-              version: 1,
-              profiles: { [profileId]: excluded },
-            }),
-          );
+        ] satisfies AuthProfileCredential[]) {
+          shared.write(excluded);
           expect(read?.()).toBeUndefined();
         }
         shared.write("original");
@@ -767,6 +772,48 @@ describe("prepared persisted credential readers", () => {
       expect(() => read?.()).toThrow("authority is unavailable");
     },
   );
+});
+
+it.for([
+  { kind: "replacement", secret: { key: "original" } },
+  {
+    kind: "structured ref",
+    secret: { keyRef: { source: "env", provider: "default", id: "OPENCLAW_TEST_REF" } },
+  },
+  { kind: "env shorthand", secret: { key: "${OPENCLAW_TEST_REF}" } },
+] as const)("refuses unsafe $kind during CLI admission", async ({ kind, secret }) => {
+  const current = fixture("agent");
+  useReaderEnvironment(current);
+  const agentDir = expectDefined(current.agentDir, "credential fixture agent");
+  const stored = {
+    type: "api_key",
+    provider: "fixture",
+    ...secret,
+  } satisfies AuthProfileCredential;
+  if (kind !== "replacement") {
+    current.write(stored);
+  }
+  const guard = await prepareCliCredentialUseCheck(profileId, agentDir, {
+    expectedCredential: stored,
+  });
+  const publication = beginAuthProfileCredentialBatch(current.context);
+  const admission = guard.prepareAfter(async () => {});
+  const refused =
+    kind === "replacement"
+      ? expect(admission).rejects.toThrow("saved CLI account changed during preparation")
+      : expect(admission).rejects.toBeInstanceOf(AuthProfileCredentialPublicationPendingError);
+  try {
+    await Promise.resolve();
+    if (kind === "replacement") {
+      current.write("replacement");
+    }
+  } finally {
+    publication.finish(true);
+  }
+  await refused;
+  if (kind === "replacement") {
+    expect(current.read()).toEqual(credential("replacement"));
+  }
 });
 
 it.each(["commit", "rollback"])(
@@ -820,12 +867,10 @@ it.each(["commit", "rollback"])(
         }
         return result;
       });
-    const { port1, port2 } = new MessageChannel();
-    const owner: SqliteWorkerOperationContext = { port: port1 };
     try {
-      const transact = () =>
-        currentSqliteWorkerOperationAdmission.run({ active: true, port: port1, owner }, () =>
-          runWithSqliteWorkerStateContext(current.context, () =>
+      const owner = withWorker(current.context, (admitted) => {
+        runOutcome(
+          () =>
             machineStateOperations["machineState.write"](
               { key: "authProfiles.store", value: next },
               {
@@ -835,14 +880,15 @@ it.each(["commit", "rollback"])(
                 writeAdmitted: write,
               },
             ),
-          ),
+          outcome,
+          "synthetic rollback",
         );
+        return admitted;
+      });
       if (outcome === "rollback") {
-        expect(transact).toThrow("synthetic rollback");
         expect(owner.committed).toBeUndefined();
         expect(current.read()).toEqual(credential("original"));
       } else {
-        transact();
         expect(owner.committed).toMatchObject({
           facts: {
             authCredentials: { facts: new Map([["store", { kind: "postimage", value: next }]]) },
@@ -852,8 +898,6 @@ it.each(["commit", "rollback"])(
       }
     } finally {
       writer.mockRestore();
-      port1.close();
-      port2.close();
     }
   },
 );

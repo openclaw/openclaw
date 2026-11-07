@@ -10,7 +10,8 @@ import type { ContextEngine } from "../../context-engine/types.js";
 import type { CronScheduledToolCallerOrigin } from "../../cron/scheduled-tool-policy.js";
 import type { DiagnosticEmbeddedRunOwner } from "../../logging/diagnostic-run-activity.js";
 import type {
-  CliBackendExecute,
+  CliBackendExecuteV2,
+  CliBackendPreparedExecutionV2,
   CliBackendExecutionMode,
   CliBackendPromptContext,
 } from "../../plugins/cli-backend.types.js";
@@ -30,6 +31,7 @@ import type { FailoverReason } from "../failover/signal.js";
 import type { PreparedQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import type { AgentHarnessIsolatedCompletionParamsV2 } from "../harness/types.js";
 import type { IsolatedCompletionPurpose } from "../isolated-completion-purpose.js";
+import type { prepareCliCredentialUseCheck } from "./auth-profile-preparation-error.js";
 import type { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import type { CliSessionBindingFacts } from "./session-binding.types.js";
 
@@ -37,7 +39,7 @@ export type NodeClaudePlacement = { nodeId: string; cwd?: string };
 
 export type CliExecutionTarget =
   | { kind: "node"; placement: NodeClaudePlacement }
-  | { kind: "plugin"; execute: CliBackendExecute }
+  | { kind: "plugin"; execute: CliBackendExecuteV2 }
   | { kind: "process" };
 
 type CliSessionRetryParams = {
@@ -168,9 +170,14 @@ export type RunCliAgentParams = Pick<
 } & AgentRunExecutionContext;
 
 /** Backend config after MCP, skill, env, and cleanup preparation. */
-export type CliSecretInput = SpawnSecretInput & {
+type CliSecretInput = SpawnSecretInput & {
   /** Process-local non-secret generation used only to invalidate a warm child. */
   fingerprint: string;
+};
+
+export type PreparedCliBackendExecution = CliBackendPreparedExecutionV2 & {
+  isolatedCompletionEnforced?: true;
+  secretInput?: CliSecretInput;
 };
 
 type CliPreparedBackend = Awaited<ReturnType<typeof prepareCliBundleMcpConfig>> & {
@@ -184,8 +191,8 @@ type CliPreparedBackend = Awaited<ReturnType<typeof prepareCliBundleMcpConfig>> 
   claimLiveSessionResources?: () => (() => Promise<void>) | undefined;
   /** Private child-only credential transport; never serialized into env or public plugin state. */
   secretInput?: CliSecretInput;
-  /** Check saved-account presence only at process launch and initial input. */
-  prepareCredentialUse?: () => Promise<void>;
+  /** Check the same saved account during admission and at launch or initial input. */
+  savedCredentialUse?: Awaited<ReturnType<typeof prepareCliCredentialUseCheck>>;
   /** Gateway-owned capture fence for this prepared bundle-MCP client. */
   mcpClientGrantCapture?: {
     /** Fresh bearer minted for this prepared turn. */

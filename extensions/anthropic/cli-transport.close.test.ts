@@ -43,7 +43,13 @@ it("waits for Windows tree extinction before ending stdin", async () => {
     withDiagnostics: async (error: unknown) => error,
     [Symbol.dispose]: () => {},
   });
-  const context = { command: "claude", args: [], cwd: ".", env: {} };
+  const context: cliProcess.ClaudeCliProcessContext = {
+    command: "claude",
+    args: [],
+    cwd: ".",
+    env: {},
+    assertCurrent() {},
+  };
   const transport = await createClaudeCliTransport({
     context,
     args: [],

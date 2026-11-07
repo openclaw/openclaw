@@ -1,6 +1,5 @@
 /** Session identity and context preparation for isolated cron runs. */
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope.js";
-import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { scopePreparedModelRuntimeLease } from "../../agents/prepared-model-runtime-generation-scope.js";
 import {
@@ -48,6 +47,7 @@ import {
 import { resolveCronPreflight } from "./run-fallback-policy.js";
 import {
   resolveCronAuthSelection,
+  createCronLiveModelSelection,
   createCronSessionRowWriter,
   retireRolledCronSessionMcpRuntime,
   type RunCronAgentTurnParams,
@@ -603,7 +603,8 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
           job: input.job,
           cronSession,
         });
-        const authSelection = input.job.runtimeAuthority
+        const authSelection: Awaited<ReturnType<typeof resolveCronAuthSelection>> = input.job
+          .runtimeAuthority
           ? undefined
           : input.job.inferenceBinding
             ? {
@@ -618,25 +619,26 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
                 agentRuntime: effectiveAgentRuntime,
                 ...(provider === resolvedModelSelection.provider &&
                 resolvedModelSelection.configuredProfileId
-                  ? { configuredProfileId: resolvedModelSelection.configuredProfileId }
+                  ? {
+                      configuredProfileId: resolvedModelSelection.configuredProfileId,
+                      configuredProfileIsDefault:
+                        resolvedModelSelection.modelSource === "default" ||
+                        resolvedModelSelection.modelSource === "agent" ||
+                        resolvedModelSelection.modelSource === "subagent",
+                    }
                   : {}),
                 agentDir,
                 cronSession,
                 sessionKey: agentSessionKey,
                 isNewSession: cronSession.isNewSession && input.job.sessionTarget !== "isolated",
               });
-        const authProfileId = authSelection?.profileId;
-        const liveSelection: LiveSessionModelSelection = {
+        const liveSelection = createCronLiveModelSelection({
           provider,
           model,
-          agentRuntimeOverride: resolveSessionRuntimeOverrideForProvider({
-            provider,
-            entry: runtimeSessionEntry,
-            cfg: admittedConfig,
-          }),
-          authProfileId,
-          authProfileIdSource: authSelection?.source,
-        };
+          cfg: admittedConfig,
+          sessionEntry: runtimeSessionEntry,
+          authSelection,
+        });
         const runContinuationSession = usesExactRunSession
           ? createCronRunContinuationSession({
               cronSession,

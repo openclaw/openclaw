@@ -1,4 +1,4 @@
-import type { CliBackendExecuteContext } from "openclaw/plugin-sdk/cli-backend";
+import type { CliBackendExecuteContextV2 } from "openclaw/plugin-sdk/cli-backend";
 import { attachErrorDiagnostic } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveFieldValue, redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import {
@@ -9,16 +9,30 @@ import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 
 type ClaudeCliSpawnOptions = Pick<
-  CliBackendExecuteContext,
+  CliBackendExecuteContextV2,
   "command" | "argv0" | "args" | "cwd" | "env"
 > & {
   signal?: AbortSignal;
 };
 
 export type ClaudeCliProcessContext = Pick<
-  CliBackendExecuteContext,
+  ClaudeCliExecuteContext,
   "command" | "argv0" | "args" | "cwd" | "env" | "abortSignal" | "assertCurrent"
-> & { prepareCredentialUse?: () => Promise<void> };
+> &
+  (
+    | Pick<ClaudeCliExecuteContext, "prepareExecutionAdmission" | "assertCredentialUseCurrent">
+    | { prepareExecutionAdmission?: never; assertCredentialUseCurrent?: never }
+  );
+
+/**
+ * Host-internal, like the forwarded auth credential and not part of the plugin SDK: a host
+ * whose history owner can change while the run lasts (a native login) passes a check for
+ * where saved turn context leaves after startup, the prompt send and the prompt hook answer.
+ */
+export type ClaudeCliExecuteContext = CliBackendExecuteContextV2 & {
+  assertPrivateInputCurrent?: () => void;
+  assertCredentialUseCurrent?: () => void;
+};
 
 export type ClaudeCliSecretInput = { fd: 3; createData: () => Buffer };
 
@@ -36,7 +50,7 @@ export function createClaudeCliProcessOwner(
     if (!context) {
       throw new Error("Claude CLI run is no longer active.");
     }
-    context.assertCurrent?.();
+    context.assertCurrent();
   };
   assertCurrent();
   // Prepared credentials are destroyed after each turn; a warm child outlives that preparation.
@@ -93,7 +107,13 @@ export function createClaudeCliProcessOwner(
         exactEnv: true,
         abortSignal: options.signal,
         assertCurrent,
-        prepareTargetSpawn: () => currentContext()?.prepareCredentialUse?.(),
+        prepareTargetSpawn: async () => {
+          const context = currentContext();
+          if (context?.assertCredentialUseCurrent) {
+            await context.prepareExecutionAdmission();
+            context.assertCredentialUseCurrent();
+          }
+        },
         secretInput,
         terminateOnHostLoss: true,
         stdoutConsumption: "awaited",

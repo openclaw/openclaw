@@ -1,6 +1,7 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi, type Mock } from "vitest";
-import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import {
   resetGatewaySuspendCoordinatorForLifecycleRestart,
   resumeGatewaySuspend,
@@ -19,6 +20,7 @@ import { retireSessionControllerInput } from "../sessions/session-controller.mai
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { runWithGatewayRequestEnvelope } from "./server-methods.js";
@@ -282,6 +284,66 @@ describe("gateway request suspension admission", () => {
     suspension?.rollback();
     const release = releaseContinuation as (() => void) | null;
     release?.();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it("joins retained request roots before reporting fixture completion", async () => {
+    const runId = "fixture-retained-request";
+    const observer = await observeGatewayRunExecution({ method: "agent", runId });
+    const held: { release?: () => void } = {};
+    try {
+      const call = dispatch(
+        "agent",
+        ({ respond }) => {
+          held.release = retainGatewayRootWorkAdmissionContinuation() ?? undefined;
+          respond(true, { status: "accepted" });
+        },
+        { scope: "operator.write", requestParams: { idempotencyKey: runId } },
+      );
+      await call.request;
+      expect(call.respond).toHaveBeenCalledExactlyOnceWith(true, { status: "accepted" });
+      expect(held.release).toBeTypeOf("function");
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      await observer.waitForDispatch(runId);
+      const completed = observer.waitForCompletion(runId);
+      await awaitGateBeforeSettlement(
+        nextTurn(),
+        completed,
+        "Fixture completion returned while the request root was still retained",
+      );
+      expectDefined(held.release, "retained request root")();
+      await completed;
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    } finally {
+      held.release?.();
+      await observer.restore();
+    }
+  });
+
+  it("completes observed nested requests before their caller releases its root", async ({
+    signal,
+  }) => {
+    const runId = "fixture-borrowed-request";
+    const observer = await observeGatewayRunExecution({ method: "agent", runId });
+    const parent = expectDefined(tryBeginGatewayRootWorkAdmission("fixture-parent"), "caller root");
+    try {
+      await withinTest(
+        parent.run(async () => {
+          const call = dispatch("agent", ({ respond }) => respond(true, { status: "accepted" }), {
+            scope: "operator.write",
+            requestParams: { idempotencyKey: runId },
+          });
+          await call.request;
+          expect(call.respond).toHaveBeenCalledExactlyOnceWith(true, { status: "accepted" });
+          await observer.waitForCompletion(runId);
+          expect(getActiveGatewayRootWorkCount()).toBe(1);
+        }),
+        signal,
+      );
+    } finally {
+      parent.release();
+      await observer.restore();
+    }
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 

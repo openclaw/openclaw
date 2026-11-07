@@ -11,8 +11,8 @@ import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { testing } from "../agents/cli-backends.test-support.js";
 import * as cliLiveSessions from "../agents/cli-runner/cli-live-session-registry.js";
 import type {
-  CliBackendExecute,
-  CliBackendExecuteContext,
+  CliBackendExecuteV2,
+  CliBackendExecuteContextV2,
   CliBackendPrepareExecutionContext,
 } from "../plugins/cli-backend.types.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
@@ -170,7 +170,10 @@ async function runWatchdogCase(
   const recordAbort = () => {
     abortedAt = clock.now();
   };
-  async function* observeOutput(execute: CliBackendExecute, execution: CliBackendExecuteContext) {
+  async function* observeOutput(
+    execute: CliBackendExecuteV2,
+    execution: CliBackendExecuteContextV2,
+  ) {
     execution.abortSignal?.addEventListener("abort", recordAbort, { once: true });
     try {
       for await (const event of execute(execution)) {
@@ -229,8 +232,9 @@ async function runWatchdogCase(
         resolveRuntimeCliBackends: () =>
           backends.map((backend) =>
             Object.assign({}, backend, {
-              prepareExecution: async (context: CliBackendPrepareExecutionContext) => {
-                const prepared = await backend.prepareExecution?.(context);
+              prepareExecutionV2: async (context: CliBackendPrepareExecutionContext) => {
+                const prepare = backend.prepareExecutionV2 ?? backend.prepareExecution;
+                const prepared = await prepare?.(context);
                 if (!prepared?.execute) {
                   throw new Error("Registered CLI backend must provide its execution transport.");
                 }
@@ -243,7 +247,7 @@ async function runWatchdogCase(
                     OPENCLAW_TEST_CLI_RECEIPTS: nativeRoot,
                     OPENCLAW_TEST_CLI_RECEIPT_PORT: String(receiptPort),
                   },
-                  execute: (execution: CliBackendExecuteContext) =>
+                  execute: (execution: CliBackendExecuteContextV2) =>
                     observeOutput(execute, execution),
                 };
               },

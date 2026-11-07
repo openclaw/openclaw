@@ -28,6 +28,7 @@ export type ResolvedCliBackend = Pick<
   | "ownsNativeCompaction"
   | "manualCompaction"
   | "prepareExecution"
+  | "prepareExecutionV2"
   | "resolveExecutionArgs"
   | "resolveModelId"
   | "parseJsonlEvent"
@@ -89,7 +90,11 @@ export function resolveCliRuntimeProfileAlias(params: {
 export function cliBackendSupportsExactToolAvailability(
   backend: Pick<
     CliBackendPlugin,
-    "nativeToolMode" | "toolAvailabilityEnforcement" | "resolveExecutionArgs" | "prepareExecution"
+    | "nativeToolMode"
+    | "toolAvailabilityEnforcement"
+    | "resolveExecutionArgs"
+    | "prepareExecution"
+    | "prepareExecutionV2"
   >,
 ): boolean {
   return (
@@ -97,7 +102,7 @@ export function cliBackendSupportsExactToolAvailability(
     ((backend.toolAvailabilityEnforcement === "execution-args" &&
       backend.resolveExecutionArgs !== undefined) ||
       (backend.toolAvailabilityEnforcement === "prepare-execution" &&
-        backend.prepareExecution !== undefined))
+        (backend.prepareExecutionV2 !== undefined || backend.prepareExecution !== undefined)))
   );
 }
 
@@ -304,6 +309,7 @@ export function resolveCliBackendConfig(
     ownsNativeCompaction: backend.ownsNativeCompaction,
     manualCompaction: backend.manualCompaction,
     prepareExecution: backend.prepareExecution,
+    prepareExecutionV2: backend.prepareExecutionV2,
     resolveExecutionArgs: backend.resolveExecutionArgs,
     resolveModelId: backend.resolveModelId,
     parseJsonlEvent: backend.parseJsonlEvent,

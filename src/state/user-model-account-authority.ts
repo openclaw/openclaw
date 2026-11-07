@@ -5,6 +5,7 @@ import { inlineAuthProfileCredentialSchema } from "../agents/auth-profiles/crede
 import { withAuthProfileCredentialWriteCustody } from "../agents/auth-profiles/credential-write-custody.js";
 import { coercePersistedAuthProfileStore } from "../agents/auth-profiles/persisted-store.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { sqlPublicationAnchor, type EngineConnection } from "../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import {
@@ -446,7 +447,7 @@ export function createAuthProfileCredentialWriteAdmission(
 }
 
 export class AuthProfileCredentialPublicationPendingError extends Error {
-  constructor(readonly waitUntilCurrent: () => Promise<void>) {
+  constructor(readonly waitUntilCurrent: (signal?: AbortSignal) => Promise<void>) {
     super("Auth profile credential authority is unavailable; retry after owner recovery");
   }
 }
@@ -493,7 +494,8 @@ export function captureAuthProfileCredentialAuthority(
       throw unavailable();
     }
   };
-  const waitUntilCurrent = async () => {
+  const waitUntilCurrent = async (signal?: AbortSignal) => {
+    signal?.throwIfAborted();
     assertOwnerCurrent();
     while (root.pending.size || owner.pending.size) {
       const changed = createDeferredCore();
@@ -508,7 +510,7 @@ export function captureAuthProfileCredentialAuthority(
         },
       });
       try {
-        await changed.promise;
+        await racePromiseWithAbortSignal(changed.promise, signal, (aborted) => aborted.reason);
       } finally {
         unregister();
         root.waiters.delete(changed.resolve);

@@ -3,6 +3,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
+import { prepareRuntimeAuthProfileExecution } from "../../config/sessions/session-entry-current-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertContextEngineHostSupport,
@@ -28,10 +29,7 @@ import {
 } from "../../gateway/mcp-http.runtime.js";
 import { buildSystemAgentToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
 import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
-import type {
-  CliBackendPreparedExecution,
-  CliBackendPromptContext,
-} from "../../plugins/cli-backend.types.js";
+import type { CliBackendPromptContext } from "../../plugins/cli-backend.types.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
@@ -48,9 +46,7 @@ import {
 } from "../admitted-run-context.js";
 import { hasAgentRosterProperty, resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
-import { hasUsableOAuthCredential } from "../auth-profiles/credential-state.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
-import { resolveApiKeyForProfile } from "../auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { isSetupCredentialAccessible } from "../auth-profiles/setup-access.js";
 import { loadAuthProfileStoreForRuntimeAsync } from "../auth-profiles/store-runtime.js";
@@ -115,8 +111,7 @@ import {
 } from "../workspace.js";
 import {
   CliAuthProfilePreparationError,
-  createCliCredentialUseCheck,
-  createCliProfileResolutionError,
+  prepareCliCredentialUseCheck,
 } from "./auth-profile-preparation-error.js";
 import { canTransportSystemPrompt, resolveCliBootstrapPromptHash } from "./bootstrap-transport.js";
 import {
@@ -143,6 +138,7 @@ import { buildCliMcpGrantContext } from "./mcp-grant-context.js";
 import { resolveCliCatalogCapabilities } from "./model-capabilities.js";
 import { detectNodeClaudePlacement, resolveClaudeCliContextModelId } from "./prepare-claude.js";
 import * as mcp from "./prepare-mcp.js";
+import { prepareSelectedCliAuthProfile } from "./prepare-selected-auth.js";
 import { runWithCliPreparationSource } from "./prepare-source.js";
 import {
   capCliToolAvailability,
@@ -174,7 +170,7 @@ import { captureCliRunToolAuthority } from "./tool-authority.js";
 import {
   captureCliRunStartTime,
   type CliReusableSession,
-  type CliSecretInput,
+  type PreparedCliBackendExecution,
   type PreparedCliRunContext,
   type RunCliAgentParams,
 } from "./types.js";
@@ -185,11 +181,6 @@ const CALLER_SURFACE_TOOL_NAMES = new Set([
   "suggest_task",
   "dismiss_task",
 ]);
-
-type PrivateCliBackendPreparedExecution = CliBackendPreparedExecution & {
-  isolatedCompletionEnforced?: true;
-  secretInput?: CliSecretInput;
-};
 
 type RunCliAgentPrepareParams = RunCliAgentParams & {
   /** Ring-zero tool transport supplied only by the OpenClaw orchestrator. */
@@ -303,6 +294,7 @@ async function prepareCliRunContextWithinReadFence(
   if (!backendResolved) {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
+  const prepareExecution = backendResolved.prepareExecutionV2 ?? backendResolved.prepareExecution;
   params = prepareCliRunModelAuthority(params);
   const backendAuthPolicy = resolveBundledCliBackendAuthPolicy(backendResolved.id);
   const canEnforceExactToolAvailability = cliBackendSupportsExactToolAvailability(backendResolved);
@@ -344,6 +336,10 @@ async function prepareCliRunContextWithinReadFence(
   });
   params.assertCurrent?.();
   params.abortSignal?.throwIfAborted();
+  await prepareRuntimeAuthProfileExecution(params, () => {
+    params.assertCurrent?.();
+    params.abortSignal?.throwIfAborted();
+  });
   if (nodeClaudePlacement && params.cliToolAvailability) {
     // Only the personal library has an invocation-bound node callback adapter.
     params = {
@@ -401,7 +397,7 @@ async function prepareCliRunContextWithinReadFence(
     authStore = await loadScopedAuthStore({ profileId: effectiveAuthProfileId });
   } else if (
     backendResolved.autoSelectAuthProfile !== false &&
-    (backendResolved.authEpochMode === "profile-only" || backendResolved.prepareExecution)
+    (backendResolved.authEpochMode === "profile-only" || prepareExecution)
   ) {
     authStore = await loadScopedAuthStore();
     effectiveAuthProfileId =
@@ -415,6 +411,7 @@ async function prepareCliRunContextWithinReadFence(
   let authCredential = effectiveAuthProfileId
     ? authStore?.profiles[effectiveAuthProfileId]
     : undefined;
+  let expectedSavedCredential = authCredential;
   // A later removal must not exempt the credential already copied for this turn.
   const savedAuthProfileIds = new Set(authStore?.runtimePersistedProfileIds);
   if (
@@ -451,58 +448,24 @@ async function prepareCliRunContextWithinReadFence(
       ? authCredential.type !== "oauth" || backendAuthPolicy.oauthRefreshOwner === "core"
       : backendAuthPolicy.strictSelectedProfile)
   ) {
-    const authProfileId = effectiveAuthProfileId;
-    const profileResolutionError = createCliProfileResolutionError(
-      backendResolved.id,
-      authProfileId,
+    const selected = await prepareSelectedCliAuthProfile({
+      backendId: backendResolved.id,
+      strict: backendAuthPolicy.strictSelectedProfile,
+      profileId: effectiveAuthProfileId,
       agentDir,
-    );
-    const selectedAuthStore = await loadScopedAuthStore({ profileId: authProfileId });
-    selectedAuthStore.runtimePersistedProfileIds?.forEach((id) => savedAuthProfileIds.add(id));
-    const resolvedAuth = await resolveApiKeyForProfile({
-      cfg: params.config,
-      store: selectedAuthStore,
-      profileId: authProfileId,
-      agentDir,
-      // Claude's selected profile is an account boundary. Never refresh or
-      // substitute a sibling account while preparing this run.
-      ...(backendAuthPolicy?.strictSelectedProfile ? { allowProfileFallback: false } : {}),
+      provider: params.provider,
+      config: params.config,
+      loadStore: loadScopedAuthStore,
+      assertCurrent: params.assertCurrent,
     });
-    params.assertCurrent?.();
-    if (backendAuthPolicy.strictSelectedProfile && resolvedAuth?.profileId !== authProfileId) {
-      throw profileResolutionError(
-        resolvedAuth?.provider ??
-          selectedAuthStore.profiles[authProfileId]?.provider ??
-          params.provider,
-        resolvedAuth?.profileId,
-      );
-    }
-    const resolvedAuthProfileId = resolvedAuth?.profileId ?? authProfileId;
-    authStore = await loadScopedAuthStore({ profileId: resolvedAuthProfileId });
-    authCredential = resolvedAuth?.credential ?? authStore.profiles[resolvedAuthProfileId];
-    if (
-      backendAuthPolicy?.strictSelectedProfile &&
-      (!authCredential ||
-        (authCredential.type === "oauth" && !hasUsableOAuthCredential(authCredential)))
-    ) {
-      throw profileResolutionError(resolvedAuth?.provider ?? params.provider);
-    }
-    if (resolvedAuth && authCredential) {
-      effectiveAuthProfileId = resolvedAuthProfileId;
-      resolvedProfileAuth = {
-        apiKey: resolvedAuth.apiKey,
-        profileId: resolvedAuthProfileId,
-        source: `profile:${resolvedAuthProfileId}`,
-        mode: resolvedAuth.profileType === "api_key" ? "api-key" : resolvedAuth.profileType,
-      };
-      // Apply resolved strings only to static credentials with secret refs.
-      // OAuth CLI bridges need raw refreshed fields from the reloaded store.
-      if (authCredential.type === "api_key") {
-        authCredential = { ...authCredential, key: resolvedAuth.apiKey };
-      } else if (authCredential.type === "token") {
-        authCredential = { ...authCredential, token: resolvedAuth.apiKey };
-      }
-    }
+    ({
+      authStore,
+      authCredential,
+      resolvedProfileAuth,
+      profileId: effectiveAuthProfileId,
+    } = selected);
+    expectedSavedCredential = selected.expectedCredential;
+    selected.persistedProfileIds?.forEach((id) => savedAuthProfileIds.add(id));
   }
   const extraSystemPrompt = params.extraSystemPrompt?.trim() ?? "";
   const bindingFacts = params.cliSessionBindingFacts;
@@ -965,7 +928,7 @@ async function prepareCliRunContextWithinReadFence(
     contextFiles,
   });
   let cleanupPreparedResources: (() => Promise<void>) | undefined;
-  let preparedExecution: PrivateCliBackendPreparedExecution | undefined;
+  let preparedExecution: PreparedCliBackendExecution | undefined;
   try {
     const mcpClient =
       mcpLoopbackRuntime && mcpGrant
@@ -1150,25 +1113,25 @@ async function prepareCliRunContextWithinReadFence(
       executionMode,
       toolAvailability: params.cliToolAvailability,
       env: preparedBackend.env,
-      // Bundled owners may project this through a native per-process system-prompt
-      // channel. Keep it private so exact isolated inference does not expand the SDK.
-      ...(params.isolatedCompletion
-        ? {
-            isolatedCompletionCwd: cwd,
-            isolatedCompletionModelId: normalizedModel,
-            isolatedCompletionPrompt: params.prompt,
-            isolatedCompletionSystemPrompt: params.extraSystemPrompt ?? "",
-          }
-        : {}),
-    } satisfies Parameters<NonNullable<typeof backendResolved.prepareExecution>>[0];
+    } satisfies Parameters<NonNullable<typeof prepareExecution>>[0];
+    const privatePrepareExecutionContext = params.isolatedCompletion
+      ? {
+          ...prepareExecutionContext,
+          // Bundled owners may project this through a native per-process system-prompt
+          // channel. Keep it private so exact isolated inference does not expand the SDK.
+          isolatedCompletionCwd: cwd,
+          isolatedCompletionModelId: normalizedModel,
+          isolatedCompletionPrompt: params.prompt,
+          isolatedCompletionSystemPrompt: params.extraSystemPrompt ?? "",
+        }
+      : prepareExecutionContext;
     try {
       params.assertCurrent?.();
       // Only bundled backends receive this private credential bridge.
       const backendPrepareContext = backendAuthPolicy
-        ? { ...prepareExecutionContext, authCredential }
-        : prepareExecutionContext;
-      preparedExecution =
-        (await backendResolved.prepareExecution?.(backendPrepareContext)) ?? undefined;
+        ? { ...privatePrepareExecutionContext, authCredential }
+        : privatePrepareExecutionContext;
+      preparedExecution = (await prepareExecution?.(backendPrepareContext)) ?? undefined;
     } catch (error) {
       if (error instanceof CliBackendAuthProfilePreparationError && effectiveAuthProfileId) {
         // Preserve the selected-profile fact across lazy plugin preparation so
@@ -1271,13 +1234,18 @@ async function prepareCliRunContextWithinReadFence(
     );
     cleanupPreparedResources = preparedCleanup;
     const { liveSession: _liveSession, ...processPerTurnBackend } = preparedBackend.backend;
+    const savedCredentialUse =
+      backendAuthPolicy && effectiveAuthProfileId && savedAuthProfileIds.has(effectiveAuthProfileId)
+        ? await prepareCliCredentialUseCheck(effectiveAuthProfileId, agentDir, {
+            store: authStore,
+            signal: params.abortSignal,
+            expectedCredential: expectedSavedCredential,
+          })
+        : undefined;
+    params.assertCurrent?.();
     const preparedBackendFinal = {
       ...preparedBackend,
-      ...(backendAuthPolicy &&
-      effectiveAuthProfileId &&
-      savedAuthProfileIds.has(effectiveAuthProfileId)
-        ? { prepareCredentialUse: createCliCredentialUseCheck(effectiveAuthProfileId, agentDir) }
-        : {}),
+      ...(savedCredentialUse ? { savedCredentialUse } : {}),
       backend: isSideQuestion
         ? { ...processPerTurnBackend, sessionMode: "none" as const }
         : params.disableCliLiveSession

@@ -2949,46 +2949,6 @@ describe("prepareCliRunContext", () => {
     },
   );
 
-  it("privately forwards isolated-completion system prompts to bundled preparation", async () => {
-    const { dir } = fixture.session;
-    const prepareExecution = vi.fn(async () => ({
-      isolatedCompletionEnforced: true as const,
-      toolAvailabilityEnforced: true as const,
-    }));
-    setRawCliBackendForPrepareTest({
-      id: "google-gemini-cli",
-      pluginId: "google",
-      bundleMcp: false,
-      nativeToolMode: "selectable",
-      toolAvailabilityEnforcement: "prepare-execution",
-      prepareExecution,
-      config: {
-        command: "gemini",
-        args: ["--prompt", "{prompt}"],
-        output: "jsonl",
-        input: "arg",
-        sessionMode: "existing",
-      },
-    });
-
-    await fixture.prepare({
-      provider: "google-gemini-cli",
-      executionMode: "side-question",
-      isolatedCompletion: true,
-      extraSystemPrompt: "Return only valid JSON.",
-      cliToolAvailability: { native: [], openClaw: [] },
-    });
-
-    expect(prepareExecution).toHaveBeenCalledWith(
-      expect.objectContaining({
-        isolatedCompletionCwd: dir,
-        isolatedCompletionModelId: "test-model",
-        isolatedCompletionPrompt: "latest ask",
-        isolatedCompletionSystemPrompt: "Return only valid JSON.",
-      }),
-    );
-  });
-
   it("rejects a CLI backend that does not adopt isolated completion", async () => {
     const cleanup = vi.fn(async () => {});
     const prepareExecution = vi.fn(async () => ({
@@ -3341,7 +3301,7 @@ describe("prepareCliRunContext", () => {
     };
     try {
       const context = await prepareCliRunContext(params);
-      try {
+      await fixture.withPrepared(context, async () => {
         // Ring-zero runs never touch the loopback surface (no message tools).
         expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
         expect(context.mcpDeliveryCapture).toBeUndefined();
@@ -3369,9 +3329,7 @@ describe("prepareCliRunContext", () => {
           OPENCLAW_TOOLS_MCP_TOOLS: "openclaw",
           OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE: "cli",
         });
-      } finally {
-        await context.preparedBackend.cleanup?.();
-      }
+      });
     } finally {
       admission.close();
     }

@@ -1,8 +1,11 @@
 /** Lazy preparation runtimes and session lifecycle helpers for cron runs. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
+import type { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
 import { resolveBundledCliBackendAuthPolicy } from "../../agents/cli-runner/cli-backend-auth-policy.js";
+import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
+import { bindConfiguredModelAuthProfileScope } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
@@ -14,7 +17,7 @@ import type {
   CronStoredJob,
 } from "../types.js";
 import type { CronSessionRowWriter, MutableCronSession } from "./run-session-state.js";
-import { logWarn } from "./run.runtime.js";
+import { logWarn, resolveSessionRuntimeOverrideForProvider } from "./run.runtime.js";
 import type { CronLaneWaitCallback, RunCronAgentTurnResult } from "./run.types.js";
 
 export type RunCronAgentTurnParams = {
@@ -109,6 +112,33 @@ export function createCronSessionRowWriter(params: {
   };
 }
 
+type CronAuthSelection = Pick<
+  NonNullable<Awaited<ReturnType<typeof resolveSessionAuthSelection>>>,
+  "profileId" | "source" | "configuredPrimaryProvider"
+>;
+
+export function createCronLiveModelSelection(params: {
+  provider: string;
+  model: string;
+  cfg: OpenClawConfig;
+  sessionEntry: Parameters<typeof resolveSessionRuntimeOverrideForProvider>[0]["entry"];
+  authSelection: CronAuthSelection | undefined;
+}): LiveSessionModelSelection {
+  const selection: LiveSessionModelSelection = {
+    provider: params.provider,
+    model: params.model,
+    agentRuntimeOverride: resolveSessionRuntimeOverrideForProvider({
+      provider: params.provider,
+      entry: params.sessionEntry,
+      cfg: params.cfg,
+    }),
+    authProfileId: params.authSelection?.profileId,
+    authProfileIdSource: params.authSelection?.source,
+  };
+  bindConfiguredModelAuthProfileScope(selection, params.authSelection?.configuredPrimaryProvider);
+  return selection;
+}
+
 /**
  * The shared resolver validates explicit and matching default account selections
  * even without a credential store. Resolution may mutate session state, so it
@@ -121,11 +151,12 @@ export async function resolveCronAuthSelection(params: {
   modelId: string;
   agentRuntime: string;
   configuredProfileId?: string;
+  configuredProfileIsDefault?: boolean;
   agentDir: string;
   cronSession: MutableCronSession;
   sessionKey: string;
   isNewSession: boolean;
-}) {
+}): Promise<CronAuthSelection | undefined> {
   const nativeAuthProfileIds = resolveBundledCliBackendAuthPolicy(
     params.agentRuntime,
   )?.nativeAuthProfileIds;
@@ -136,6 +167,7 @@ export async function resolveCronAuthSelection(params: {
     provider: params.provider,
     modelId: params.modelId,
     ...(params.configuredProfileId ? { configuredProfileId: params.configuredProfileId } : {}),
+    configuredProfileIsDefault: params.configuredProfileIsDefault,
     nativeAuthProfileIds,
     agentDir: params.agentDir,
     sessionEntry: params.cronSession.sessionEntry,

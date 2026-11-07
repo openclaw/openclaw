@@ -123,6 +123,11 @@ export type CliBackendPreparedExecution = {
   execute?: CliBackendExecute;
 };
 
+/** Prepared host execution with required deferred admission in its transport context. */
+export type CliBackendPreparedExecutionV2 = Omit<CliBackendPreparedExecution, "execute"> & {
+  execute?: CliBackendExecuteV2;
+};
+
 export type CliBackendThinkingLevel = ModelThinkingLevel | "adaptive";
 
 export type CliBackendExecutionMode = "agent" | "side-question";
@@ -275,9 +280,20 @@ export type CliBackendExecuteContext = {
   requestUserInput: (request: CliBackendUserInputRequest) => Promise<CliBackendUserInputResult>;
 };
 
+/** Host execution keeps legacy parameter annotations compatible while requiring current admission. */
+export type CliBackendExecuteContextV2 = CliBackendExecuteContext & {
+  assertCurrent: () => void;
+  prepareExecutionAdmission: () => Promise<void>;
+};
+
 /** Plugin-owned runtime yielding the backend's existing structured stream records. */
 export type CliBackendExecute = (
   context: CliBackendExecuteContext,
+) => AsyncIterable<Record<string, unknown>>;
+
+/** Current host dispatch requires awaited admission at deferred effect boundaries. */
+export type CliBackendExecuteV2 = (
+  context: CliBackendExecuteContextV2,
 ) => AsyncIterable<Record<string, unknown>>;
 
 export type CliBackendResolveExecutionArgsContext = Omit<
@@ -521,6 +537,14 @@ type CliBackendPluginBase = {
   ) =>
     | Promise<CliBackendPreparedExecution | null | undefined>
     | CliBackendPreparedExecution
+    | null
+    | undefined;
+  /** Current execution contract; legacy preparation remains source-compatible during migration. */
+  prepareExecutionV2?: (
+    ctx: CliBackendPrepareExecutionContext,
+  ) =>
+    | Promise<CliBackendPreparedExecutionV2 | null | undefined>
+    | CliBackendPreparedExecutionV2
     | null
     | undefined;
   /**
