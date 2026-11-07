@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import { safeRealpathSync } from "@openclaw/fs-safe/path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { compileExecAllowlistPattern } from "./exec-allowlist-pattern.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
@@ -8,6 +7,7 @@ import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
 import {
   resolveExecutablePath as resolveExecutableCandidatePath,
   resolveExecutablePathCandidate,
+  tryResolveFilesystemRealPath as tryResolveRealpath,
 } from "./executable-path.js";
 
 export type ExecutableResolution = {
@@ -27,10 +27,6 @@ export type CommandResolution = {
   policyBlocked?: boolean;
   blockedWrapper?: string;
 };
-
-function tryResolveRealpath(filePath: string | undefined): string | undefined {
-  return filePath ? (safeRealpathSync(filePath) ?? undefined) : undefined;
-}
 
 function buildExecutableResolution(
   rawExecutable: string,

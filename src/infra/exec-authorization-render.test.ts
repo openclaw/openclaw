@@ -13,7 +13,11 @@ import {
   buildAuthorizedShellCommandFromPlan as renderAuthorized,
   buildReviewedShellCommandFromPlan as renderReviewed,
 } from "./exec-authorization-render.js";
-import { prepareSystemRunMutableFileBinding as prepareBinding } from "./system-run-approval-binding.js";
+import {
+  APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
+  prepareSystemRunMutableFileBinding as prepareBinding,
+  revalidateSystemRunMutableFileBinding,
+} from "./system-run-approval-binding.js";
 
 const POSIX_ENV = { PATH: "/usr/bin:/bin" };
 type RenderOptions = Parameters<typeof renderAuthorized>[0];
@@ -142,6 +146,49 @@ describe("exec authorization renderer", () => {
 });
 
 describe.skipIf(process.platform === "win32")("reviewed shell dispatch renderer", () => {
+  it.each([false, true])(
+    "runs the physically approved symlink-parent target (decoy=%s)",
+    async (decoy) => {
+      const cwd = makeExecApprovalsTempDir();
+      const configured = path.join(cwd, "configured");
+      const actual = path.join(cwd, "actual");
+      const replacement = path.join(cwd, "replacement");
+      for (const dir of [configured, actual, replacement]) {
+        fs.mkdirSync(path.join(dir, "bin"), { recursive: true });
+      }
+      for (const [dir, output] of [
+        [actual, "approved"],
+        [replacement, "replacement"],
+      ] as const) {
+        fs.writeFileSync(path.join(dir, "runner"), `#!/bin/sh\nprintf '${output}'\n`, {
+          mode: 0o755,
+        });
+      }
+      if (decoy) {
+        fs.writeFileSync(path.join(configured, "runner"), "#!/bin/sh\nprintf 'decoy'\n", {
+          mode: 0o755,
+        });
+      }
+      const alias = path.join(configured, "alias");
+      fs.symlinkSync(path.join(actual, "bin"), alias, "dir");
+      const prepared = await prepareReviewedCommand(
+        `'${configured}/alias/../runner'`,
+        POSIX_ENV,
+        cwd,
+      );
+      const command = renderOk(renderReviewed(prepared));
+      const binding = { binding: prepared.binding, cwd };
+      await expect(revalidateSystemRunMutableFileBinding(binding)).resolves.toEqual({ ok: true });
+      expect(execFileSync("/bin/sh", ["-c", command], { cwd, encoding: "utf8" })).toBe("approved");
+      fs.unlinkSync(alias);
+      fs.symlinkSync(path.join(replacement, "bin"), alias, "dir");
+      await expect(revalidateSystemRunMutableFileBinding(binding)).resolves.toEqual({
+        ok: false,
+        message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
+      });
+    },
+  );
+
   it("preserves argument expansion and topology", async () => {
     const { dir, env } = executableEnv("env", "ls", "cat");
     const source = '"ls"  "雪" *.txt | cat && env ls ~/docs; ls \\*.txt\nls "*.txt"';
