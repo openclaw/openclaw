@@ -1,6 +1,9 @@
 import type { ChannelIngressQueue } from "./ingress-queue.types.js";
 
 const BACKLOG_PAGE_SIZE = 100;
+// The caller skips blocked lanes itself; excluding them in the read only avoids reading their
+// rows, so the list stays far below SQLite's bound-parameter limit after a wide outage.
+const MAX_EXCLUDED_LANES = 1_000;
 
 type BacklogQueue<TPayload, TMetadata> = Pick<
   ChannelIngressQueue<TPayload, TMetadata>,
@@ -39,7 +42,7 @@ export async function* readIngressBacklogPages<TPayload, TMetadata>(
       ...(options.paged && {
         pendingLimit: BACKLOG_PAGE_SIZE,
         after,
-        excludeLaneKeys: [...options.blockedLaneKeys],
+        excludeLaneKeys: [...options.blockedLaneKeys].slice(0, MAX_EXCLUDED_LANES),
       }),
     });
     // A queue may ignore the page options: a page that ends on the cursor made no progress.
