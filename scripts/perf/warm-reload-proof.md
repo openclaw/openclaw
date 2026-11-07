@@ -460,9 +460,12 @@ metrics before using this report to reject a small change.
 For Team-scale cached Details, use `bench-control-ui-cold-load.ts` with
 `--gateway-http --warm-reload --warm-reload-perf-probe --pane-chrome-probe
 --details-session-facts --details-subagent-activity --viewport 1720x1180`,
-separately for active chat, archived chat (`--archived-session`), and dashboard.
-Keep the real-Gateway proof above as the native workload. Attribute module
-readiness and render work in separate profiled runs before comparing timings.
+separately for active chat (`--transcript-witness --active-transcript`), archived
+chat (`--archived-session`), and dashboard (`--face dashboard`). Keep the
+real-Gateway proof above with `--transcript-late-paint` as the native workload;
+active native targets also use `--active-targets --details-subagent-activity`.
+Attribute module readiness and render work in separate profiled runs before
+comparing timings.
 
 Run both arms on one quiet c7a.4xlarge, using twelve interleaved pairs and an A/A
 control. Report first populated Details paint minus first painted rows for every
