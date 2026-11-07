@@ -1,2 +1,0 @@
-32
-# Real snapshot/plan subprocesses must clean scratch databases after missing plain/gzip input.
