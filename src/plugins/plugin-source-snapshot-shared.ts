@@ -6,7 +6,7 @@ import { createRootFileOpenBatchSync } from "@openclaw/fs-safe/advanced";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { isPathInside, normalizeWindowsPathPreservingCase } from "../infra/path-guards.js";
 import type { PluginFrozenSourceSnapshot } from "./plugin-generation-source.types.js";
-import { pluginSourceStatIdentity } from "./plugin-source-file.js";
+import { closePluginSourceFile, pluginSourceStatIdentity } from "./plugin-source-file.js";
 import type {
   PluginSourceSnapshotEntry,
   PluginSourceSnapshotManifest,
@@ -190,14 +190,20 @@ export function createPluginSharedSnapshotView(params: {
     if (!pinned.ok) {
       fail(`snapshot module failed guarded open: ${filename}`);
     }
+    const close = () => closePluginSourceFile(pinned);
     try {
       assertStat(selected.filename, selected.entry, fs.fstatSync(pinned.fd, { bigint: true }));
     } catch (error) {
-      fs.closeSync(pinned.fd);
+      close();
       throw error;
     }
-    // SAFETY: The file-kind check above rejected non-file entries before guarded open.
-    return { filename: selected.filename, entry: selected.entry as FileEntry, fd: pinned.fd };
+    return {
+      filename: selected.filename,
+      // SAFETY: The file-kind check above rejected non-file entries before guarded open.
+      entry: selected.entry as FileEntry,
+      fd: pinned.fd,
+      close,
+    };
   };
   const readVerifiedFile = (filename: string): Buffer =>
     checked(filename, () => {
@@ -214,7 +220,7 @@ export function createPluginSharedSnapshotView(params: {
         resolveMember(filename);
         return bytes;
       } finally {
-        fs.closeSync(file.fd);
+        file.close();
       }
     });
   const createLease = (): AcquiredPluginSharedSourceSnapshot => {
@@ -272,7 +278,7 @@ export function createPluginSharedSnapshotView(params: {
       iterator: ReturnType<Root["entries"]>;
       entry?: PluginSourceSnapshotEntry;
     };
-    type Pending = { filename: string; entry: FileEntry; fd: number; hash: Hash; offset: number };
+    type Pending = ReturnType<typeof openVerified> & { hash: Hash; offset: number };
     const frames: Frame[] = [];
     const seen = new Set<string>();
     let pending: Pending | undefined;
@@ -288,8 +294,9 @@ export function createPluginSharedSnapshotView(params: {
         disposed = true;
         try {
           if (pending) {
-            fs.closeSync(pending.fd);
+            const cancelled = pending;
             pending = undefined;
+            cancelled.close();
           }
           const outcomes = await Promise.allSettled(
             frames.splice(0).map(async (frame) => await frame.iterator.return?.()),
@@ -381,8 +388,9 @@ export function createPluginSharedSnapshotView(params: {
                 fs.fstatSync(pending.fd, { bigint: true }),
               );
               resolveMember(pending.filename);
-              fs.closeSync(pending.fd);
+              const completed = pending;
               pending = undefined;
+              completed.close();
               files++;
               totalFiles++;
               continue;

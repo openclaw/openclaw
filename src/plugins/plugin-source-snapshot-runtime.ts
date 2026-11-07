@@ -1,6 +1,8 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { getPluginInstallRecordMapEntry } from "../config/plugin-install-record-map.js";
+import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
@@ -8,6 +10,10 @@ import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-inde
 import { updateInstalledPluginSourceSnapshots } from "./installed-plugin-index-store-write.js";
 import { readCurrentInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndexRecord } from "./installed-plugin-index-types.js";
+import {
+  createPluginGenerationMetrics,
+  withPluginGenerationMetrics,
+} from "./plugin-generation-metrics.js";
 import {
   preparePluginGenerationArtifact,
   preparePluginSourceSnapshot,
@@ -24,6 +30,10 @@ import {
   isManagedPluginSnapshotSource,
   pluginSourceSnapshotOptionsDigest,
 } from "./plugin-source-snapshot-options.js";
+import {
+  createPluginSnapshotBackgroundWork,
+  type PluginSnapshotScrubOutcome,
+} from "./plugin-source-snapshot-scrub.js";
 import {
   PluginSourceSnapshotDescriptorSchema,
   pluginSourceSnapshotArtifactPath,
@@ -64,7 +74,22 @@ export async function prepareInstalledPluginGenerationArtifact(params: {
     throw new PluginInventoryRetiredError();
   }
   let selected: InstalledPluginIndexRecord = row;
+  const expected = getPluginInstallRecordMapEntry(record.sourceSnapshotDigests, params.pluginId);
+  const optionsDigest = pluginSourceSnapshotOptionsDigest();
+  let freshCapture = false;
+  let authorityFailure: Error | undefined;
+  const matchesInstallation = (descriptor: PluginSourceSnapshotDescriptor) =>
+    descriptor.formatVersion === 2 &&
+    expected !== undefined &&
+    descriptor.installRecordHash === selected.installRecordHash &&
+    descriptor.contentDigest === expected.contentDigest &&
+    descriptor.dependencyClosureDigest === expected.dependencyClosureDigest &&
+    descriptor.buildResolutionDigest === optionsDigest &&
+    descriptor.packageIntegrity === (record.integrity ?? record.npmIntegrity);
   const assertCurrent = async () => {
+    if (authorityFailure) {
+      throw authorityFailure;
+    }
     const current = (
       await readCurrentInstalledPluginIndex({
         stateDir,
@@ -75,15 +100,27 @@ export async function prepareInstalledPluginGenerationArtifact(params: {
       !current ||
       resolveInstalledPluginIndexInstallOwner(current) !== installOwner ||
       current.rootDir !== selected.rootDir ||
-      current.installRecordHash !== selected.installRecordHash ||
-      !isDeepStrictEqual(current.sourceSnapshot, selected.sourceSnapshot)
+      current.installRecordHash !== selected.installRecordHash
     ) {
       throw new PluginInventoryRetiredError();
     }
+    if (!isDeepStrictEqual(current.sourceSnapshot, selected.sourceSnapshot)) {
+      const sibling = PluginSourceSnapshotDescriptorSchema.safeParse(current.sourceSnapshot);
+      if (
+        !freshCapture ||
+        selected.sourceSnapshot !== undefined ||
+        !sibling.success ||
+        !matchesInstallation(sibling.data)
+      ) {
+        throw new PluginInventoryRetiredError();
+      }
+      // A concurrent first start can publish the same sealed installation. Keep this
+      // fresh capture; the next start independently verifies the winning artifact.
+      selected = current;
+    }
   };
-  const expected = getPluginInstallRecordMapEntry(record.sourceSnapshotDigests, params.pluginId);
-  const optionsDigest = pluginSourceSnapshotOptionsDigest();
   let prepared: PreparedPluginGenerationArtifact | undefined;
+  let publish: ((signal: AbortSignal) => Promise<void>) | undefined;
   if (Object.hasOwn(selected, "sourceSnapshot")) {
     try {
       const parsed = PluginSourceSnapshotDescriptorSchema.safeParse(selected.sourceSnapshot);
@@ -93,15 +130,7 @@ export async function prepareInstalledPluginGenerationArtifact(params: {
           parsed.data.formatVersion,
         );
       }
-      if (
-        !parsed.success ||
-        !expected ||
-        parsed.data.installRecordHash !== selected.installRecordHash ||
-        parsed.data.contentDigest !== expected.contentDigest ||
-        parsed.data.dependencyClosureDigest !== expected.dependencyClosureDigest ||
-        parsed.data.buildResolutionDigest !== optionsDigest ||
-        parsed.data.packageIntegrity !== (record.integrity ?? record.npmIntegrity)
-      ) {
+      if (!parsed.success || !matchesInstallation(parsed.data)) {
         throw new PluginSourceSnapshotValidationError(
           pluginSourceSnapshotArtifactPath(selected.sourceSnapshot) ?? selected.rootDir,
           "snapshot binding does not match this installation and runtime",
@@ -148,20 +177,30 @@ export async function prepareInstalledPluginGenerationArtifact(params: {
   }
   try {
     if (!prepared) {
+      freshCapture = true;
       prepared = await preparePluginGenerationArtifact(params);
       await assertCurrent();
-      // Old records without a content+closure digest deliberately remain on fresh capture.
-      if (expected && !isArtifactPreservingStateRead()) {
-        try {
+      // Publication benefits the next start. Registration and its original capture
+      // finish before the post-ready owner dispatches this optional work.
+      if (expected && !isArtifactPreservingStateRead() && !selected.sourceSnapshot) {
+        publish = async (signal) => {
+          await assertCurrent();
+          signal.throwIfAborted();
+          if (selected.sourceSnapshot) {
+            return;
+          }
           const snapshot = await preparePluginSourceSnapshot({
             rootDir: params.rootDir,
             stateDir,
             shared: true,
+            backgroundSignal: signal,
           });
           let candidate: Omit<PluginSourceSnapshotDescriptor, "installedRevision"> | undefined;
           try {
+            signal.throwIfAborted();
             await assertCurrent();
             if (
+              !selected.sourceSnapshot &&
               snapshot.contentDigest === expected.contentDigest &&
               snapshot.dependencyClosureDigest === expected.dependencyClosureDigest
             ) {
@@ -171,7 +210,11 @@ export async function prepareInstalledPluginGenerationArtifact(params: {
                 buildResolutionDigest: optionsDigest,
                 packageIntegrity: record.integrity ?? record.npmIntegrity,
               }));
+              signal.throwIfAborted();
               await assertCurrent();
+              if (selected.sourceSnapshot) {
+                return;
+              }
               const published = await updateInstalledPluginSourceSnapshots({
                 stateDir,
                 sourceSnapshots: [
@@ -184,7 +227,12 @@ export async function prepareInstalledPluginGenerationArtifact(params: {
                 ],
               });
               if (!published) {
-                throw new PluginInventoryRetiredError();
+                // The index owner arbitrates concurrent publishers atomically.
+                await assertCurrent();
+                if (!selected.sourceSnapshot) {
+                  throw new PluginInventoryRetiredError();
+                }
+                return;
               }
               selected = published.index.plugins.find(
                 (entry) => entry.pluginId === params.pluginId,
@@ -203,22 +251,70 @@ export async function prepareInstalledPluginGenerationArtifact(params: {
               }
             }
           }
-        } catch (error) {
-          if (error instanceof PluginInventoryRetiredError) {
-            throw error;
-          }
-          // Publication benefits the next start; retain this capture only under current authority.
-          await assertCurrent();
-          params.onWarning(
-            `Plugin source snapshot publication failed for ${params.rootDir}: ${String(error)}. Continuing with the prepared guarded capture.`,
-            params.rootDir,
-          );
-        }
+        };
       }
     }
     const artifact = prepared.artifact;
     const scrub = prepared.startScrub;
     const cancelScrub = prepared.cancelScrub;
+    let onBackgroundFailure: (error: unknown) => Promise<void> = async () => {};
+    const publishSource = publish;
+    // Keep the selected source owners without retaining startup work or its accounting.
+    const runInPreparationContext = publishSource
+      ? runOutsideAsyncWorkScope(() =>
+          withPluginGenerationMetrics(createPluginGenerationMetrics(), () =>
+            AsyncLocalStorage.snapshot(),
+          ),
+        )
+      : undefined;
+    const publication =
+      publishSource &&
+      runInPreparationContext &&
+      createPluginSnapshotBackgroundWork((signal) =>
+        runInPreparationContext(async (): Promise<PluginSnapshotScrubOutcome> => {
+          try {
+            await publishSource(signal);
+            return { status: "passed" };
+          } catch (error) {
+            if (signal.aborted) {
+              return { status: "cancelled" };
+            }
+            let failure = error;
+            let current = true;
+            try {
+              await assertCurrent();
+            } catch (currentError) {
+              current = false;
+              failure = currentError;
+            }
+            if (!current || failure instanceof PluginInventoryRetiredError) {
+              const retired =
+                failure instanceof PluginInventoryRetiredError
+                  ? failure
+                  : new PluginInventoryRetiredError();
+              authorityFailure = retired;
+              params.onWarning(
+                `Plugin source snapshot publication lost installation authority for ${params.rootDir}. Retiring this runtime instance.`,
+                params.rootDir,
+              );
+              await onBackgroundFailure(retired);
+              return { status: "failed", error: retired };
+            }
+            params.onWarning(
+              `Plugin source snapshot publication failed for ${params.rootDir}: ${String(failure)}. Continuing with the prepared guarded capture.`,
+              params.rootDir,
+            );
+            return { status: "failed", error: failure };
+          }
+        }),
+      );
+    const cancelBackground = async () => {
+      try {
+        await publication?.cancel();
+      } finally {
+        await cancelScrub?.();
+      }
+    };
     const observedSnapshot = selected.sourceSnapshot;
     let retirement: Promise<void> | undefined;
     const invalidate = (error: unknown): Promise<void> => {
@@ -254,33 +350,40 @@ export async function prepareInstalledPluginGenerationArtifact(params: {
         });
       }
     };
-    const dispose = artifact.dispose.bind(artifact);
     const disposeAsync = artifact.disposeAsync.bind(artifact);
-    artifact.dispose = () => {
-      dispose();
-      void collectInstalledPluginSourceSnapshots(stateDir).catch((error: unknown) =>
-        process.emitWarning(String(error)),
-      );
-    };
-    artifact.disposeAsync = async () => {
-      try {
-        await cancelScrub?.();
-      } finally {
+    let disposal: Promise<void> | undefined;
+    artifact.disposeAsync = () =>
+      (disposal ??= (async () => {
         try {
-          await retirement;
+          await cancelBackground();
         } finally {
           try {
-            await disposeAsync();
+            await retirement;
           } finally {
-            await collectInstalledPluginSourceSnapshots(stateDir);
+            try {
+              await disposeAsync();
+            } finally {
+              await collectInstalledPluginSourceSnapshots(stateDir);
+            }
           }
         }
-      }
+      })());
+    artifact.dispose = () => {
+      // Cancellation is synchronous; physical cleanup joins the active worker RPC.
+      void artifact.disposeAsync().catch((error: unknown) => process.emitWarning(String(error)));
     };
     return {
       ...prepared,
       assertCurrent,
-      startScrub: scrub && (() => scrub(invalidate)),
+      startScrub: scrub
+        ? () => scrub(invalidate)
+        : publication
+          ? (onFailure) => {
+              onBackgroundFailure = onFailure;
+              return publication.start();
+            }
+          : undefined,
+      cancelScrub: cancelBackground,
       onInvalidSnapshot: invalidate,
     };
   } catch (error) {

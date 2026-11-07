@@ -104,6 +104,44 @@ describe("authenticated snapshot resolution", () => {
     );
   });
 
+  it.each(["#sdk", "sdk-alias"])(
+    "preserves admitted %s targets without admitting their direct URLs",
+    (request) => {
+      const f = fixture();
+      const importer = f.add("plugin/index.mjs");
+      f.pkg("plugin", { imports: { "#sdk": "openclaw/plugin-sdk/foo" } });
+      const external = pathToFileURL(path.resolve("host-sdk/foo.cjs")).href;
+      const resolver = createPluginSnapshotResolver(f.source, {
+        alias: { "sdk-alias": "openclaw/plugin-sdk/foo" },
+        resolveHostModule: (specifier) =>
+          specifier === "openclaw/plugin-sdk/foo" ? external : undefined,
+      });
+      for (const mode of ["require", "import"]) {
+        expect(resolver.resolve(importer, request, [mode], true)).toMatchObject({
+          url: external,
+          external: true,
+        });
+        expect(() => resolver.resolve(importer, external, [mode], true)).toThrow(
+          expect.objectContaining({ code: "ERR_PLUGIN_SNAPSHOT_DEPENDENCY" }),
+        );
+      }
+    },
+  );
+
+  it("keeps builtin aliases external in both module modes", () => {
+    const f = fixture();
+    const importer = f.add("plugin/index.cjs");
+    const resolver = createPluginSnapshotResolver(f.source, {
+      alias: { "path-alias": "node:path" },
+    });
+    for (const mode of ["require", "import"]) {
+      expect(resolver.resolve(importer, "path-alias", [mode], true)).toMatchObject({
+        url: "node:path",
+        external: true,
+      });
+    }
+  });
+
   it("keeps absent first array targets absent and rejects dependencies outside the sealed membership", () => {
     const f = fixture();
     const importer = f.add("plugin/index.cjs");
@@ -307,6 +345,26 @@ it.each(["node", "bun"] as const)(
     );
   },
 );
+
+it.each([
+  ["entry.js", "entry.ts"],
+  ["./start", "start.ts"],
+  ["./start", "start.mjs"],
+])("falls back from missing package main %s to index before %s", (main, fallback) => {
+  const f = fixture();
+  const importer = f.add("plugin/index.mjs");
+  f.pkg("plugin/node_modules/legacy", { main });
+  f.add(`plugin/node_modules/legacy/${fallback}`);
+  const expected = f.add("plugin/node_modules/legacy/index.js");
+  for (const runtime of ["node", "bun"] as const) {
+    const resolver = createPluginSnapshotResolver(f.source, { runtime });
+    for (const native of [false, true]) {
+      for (const mode of ["import", "require"]) {
+        expect(resolver.resolve(importer, "legacy", [mode], native).canonical).toBe(expected);
+      }
+    }
+  }
+});
 
 describe("package map selection", () => {
   const select = (map: unknown, request = ".", runtime: "node" | "bun" = "node") =>

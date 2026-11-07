@@ -8,10 +8,98 @@ import type { Identifier } from "@babel/types";
 import { stringifyNonErrorCause } from "@openclaw/normalization-core/error-coercion";
 import { isPathInside } from "../infra/path-guards.js";
 import { createJiti } from "./jiti-factory.js";
-import { useNodeModuleHooks } from "./native-module-require.js";
+import { useNodeModuleHooks, type BunPluginRuntime } from "./native-module-require.js";
 import { markPluginSourceAcquisitionError } from "./plugin-instance-error.js";
 
 const require = createRequire(import.meta.url);
+
+export function createPluginSnapshotSourceReader(read: (filename: string) => Buffer) {
+  const verifiedSources = new Map<string, string>();
+  const asyncSources = new Map<string, boolean>();
+  const transpilers = new Map<"ts" | "jsx" | "tsx", { transformSync(source: string): string }>();
+  const sourceText = (filename: string, stripTypes = false) => {
+    const verified = verifiedSources.get(filename);
+    verifiedSources.delete(filename);
+    const source = verified ?? read(filename).toString("utf8");
+    const jsx =
+      ["1", "true"].includes(process.env.JITI_JSX ?? "") && /\.[cm]?[jt]sx$/.test(filename);
+    if (!process.versions.bun || !(jsx || (stripTypes && /\.[cm]?tsx?$/.test(filename)))) {
+      return source;
+    }
+    const loader = /[jt]sx$/.test(filename) ? (filename.endsWith("jsx") ? "jsx" : "tsx") : "ts";
+    let transpiler = transpilers.get(loader);
+    if (!transpiler) {
+      const bun: BunPluginRuntime = Reflect.get(globalThis, "Bun");
+      transpiler = new bun.Transpiler({
+        loader,
+        tsconfig: {
+          compilerOptions: {
+            jsx: "react",
+            jsxFactory: "React.createElement",
+            jsxFragmentFactory: "React.Fragment",
+          },
+        },
+      });
+      transpilers.set(loader, transpiler);
+    }
+    // Bun otherwise initializes these CommonJS globals with synthetic path defaults.
+    return transpiler.transformSync(stripTypes ? `${source}\nvar __filename,__dirname;` : source);
+  };
+  return {
+    sourceText,
+    shouldCompile: (filename: string, mode: PluginSourceLoadMode) =>
+      (!process.versions.bun || mode === "async") && /(?:\.[cm]?tsx?|\.jsx)$/.test(filename),
+    modeFor(
+      filename: string,
+      format: string,
+      requested: PluginSourceLoadMode,
+    ): PluginSourceLoadMode {
+      if (format !== "commonjs" || !/(?:\.[cm]?tsx?|\.jsx)$/.test(filename)) {
+        return format === "module" && requested === "async" ? "native" : requested;
+      }
+      let asynchronous = asyncSources.get(filename);
+      if (asynchronous === undefined) {
+        const source = sourceText(filename);
+        verifiedSources.set(filename, source);
+        const { parse }: typeof import("@babel/parser") = require("@babel/parser");
+        const { default: traverse }: typeof import("@babel/traverse") = require("@babel/traverse");
+        const ast = parse(source, {
+          sourceType: "unambiguous",
+          allowAwaitOutsideFunction: true,
+          allowReturnOutsideFunction: true,
+          plugins: [
+            "decorators-legacy",
+            ...(!filename.endsWith(".jsx") ? ["typescript" as const] : []),
+            ...(filename.endsWith("x") ? ["jsx" as const] : []),
+          ],
+        });
+        asynchronous = false;
+        traverse(ast, {
+          "AwaitExpression|ForOfStatement|VariableDeclaration"(reference) {
+            const node = reference.node;
+            if (
+              !reference.getFunctionParent() &&
+              (node.type === "AwaitExpression" ||
+                (node.type === "ForOfStatement" && node.await) ||
+                (node.type === "VariableDeclaration" && node.kind === "await using"))
+            ) {
+              asynchronous = true;
+              reference.stop();
+            }
+          },
+        });
+        asyncSources.set(filename, asynchronous);
+      }
+      return asynchronous ? "async" : "native";
+    },
+    remember: (filename: string, source: string) => verifiedSources.set(filename, source),
+    dispose() {
+      verifiedSources.clear();
+      asyncSources.clear();
+      transpilers.clear();
+    },
+  };
+}
 
 export const PLUGIN_SOURCE_RESOLVE_PREFIX = "openclaw-plugin-source-resolve:";
 
@@ -23,9 +111,26 @@ export type PluginSourceFile = {
   generated?: true;
 };
 
+export function loadPluginSnapshotCompiledModule(
+  compilers: Iterable<Pick<ReturnType<typeof buildPluginTypeScriptSource>, "loadSource">>,
+  module: { filename: string; suffix: string },
+) {
+  for (const compiler of compilers) {
+    const contents = compiler.loadSource(
+      module.filename,
+      pathToFileURL(module.filename).href + module.suffix,
+    );
+    if (contents !== undefined) {
+      return { contents, loader: "js" as const };
+    }
+  }
+  return undefined;
+}
+
 type MemorySourceBuild = {
   directory: string;
   readSource: (filename: string) => string;
+  executionFilename: (filename: string) => string;
   transformOutput: (
     source: string,
     code: string,
@@ -36,11 +141,12 @@ type MemorySourceBuild = {
 
 /** Compile captured source into a private namespace; native files stay with their capture owner. */
 export function buildPluginTypeScriptSource(root: string, memory?: MemorySourceBuild) {
-  if (!useNodeModuleHooks()) {
+  if (!useNodeModuleHooks() && !memory) {
     throw new Error("Plugin source builds require Node module hooks");
   }
   const directory = memory?.directory ?? fs.mkdtempSync(path.join(path.dirname(root), ".source-"));
   const memoryOutputs = memory ? new Map<string, string>() : undefined;
+  const executionUrls = new Map<string, { output: string; sourceUrl: string }>();
   const writeOutput = (filename: string, code: string) => {
     if (memoryOutputs) {
       memoryOutputs.set(filename, code);
@@ -73,9 +179,10 @@ export function buildPluginTypeScriptSource(root: string, memory?: MemorySourceB
       const { default: traverse }: typeof import("@babel/traverse") = require("@babel/traverse");
       const { default: generate }: typeof import("@babel/generator") = require("@babel/generator");
       const sourceText = memory ? memory.readSource(input) : fs.readFileSync(input, "utf8");
+      const filename = memory?.executionFilename(input) ?? input;
       const mode = sources.get(destination)?.mode;
       const transformOptions = {
-        sourcefile: input,
+        sourcefile: filename,
         loader: input.endsWith(".jsx") ? "jsx" : input.endsWith("x") ? "tsx" : "ts",
         target: "es2022",
         supported: { "import-attributes": true },
@@ -172,11 +279,39 @@ export const resolve = (specifier, options) => {
         const asynchronous = mode === "async";
         const result = transform({
           source: sourceText,
-          filename: input,
+          filename,
           ts: /\.[cm]?tsx?$/.test(input),
           jsx,
           async: asynchronous,
           interopDefault: true,
+          ...(memory
+            ? {
+                babel: {
+                  plugins: [
+                    {
+                      // The shared execution facade owns metadata, not Jiti's input path literals.
+                      pre(file: { path: NodePath }) {
+                        file.path.traverse({
+                          MetaProperty(reference) {
+                            if (
+                              reference.node.meta.name === "import" &&
+                              reference.node.property.name === "meta" &&
+                              reference.parentPath.isMemberExpression()
+                            ) {
+                              reference.replaceWith({
+                                type: "SequenceExpression",
+                                expressions: [{ type: "NumericLiteral", value: 0 }, reference.node],
+                              });
+                              reference.skip();
+                            }
+                          },
+                        });
+                      },
+                    },
+                  ],
+                },
+              }
+            : {}),
         });
         const error: unknown = result.error;
         if (error) {
@@ -189,14 +324,14 @@ export const resolve = (specifier, options) => {
           throw markPluginSourceAcquisitionError(
             new SyntaxError(
               (error instanceof Error ? error.message : stringifyNonErrorCause(error)).replaceAll(
-                input,
+                filename,
                 path.relative(root, input),
               ),
             ),
           );
         }
         const output = parse(result.code, {
-          sourceType: "script",
+          sourceType: memory ? "module" : "script",
           allowAwaitOutsideFunction: true,
           allowReturnOutsideFunction: true,
         });
@@ -221,10 +356,10 @@ export const resolve = (specifier, options) => {
         }
         const helper = needsHelper ? createImportHelper() : undefined;
         const header =
-          parse(`__filename = ${JSON.stringify(input)}; __dirname = ${JSON.stringify(path.dirname(input))};
+          parse(`__filename = ${JSON.stringify(filename)}; __dirname = ${JSON.stringify(path.dirname(filename))};
           ${
             helper
-              ? `require = require(${JSON.stringify(helper)}).bindRequire(require("node:module").createRequire(${JSON.stringify(pathToFileURL(input).href)}));
+              ? `require = require(${JSON.stringify(helper)}).bindRequire(require("node:module").createRequire(${JSON.stringify(pathToFileURL(filename).href)}));
           const { resolve: jitiESMResolve } = require(${JSON.stringify(helper)});
           const jitiImport = require(${JSON.stringify(helper)}).importModule.bind(null, module);
           ${asynchronous ? "module.require = require;" : ""}`
@@ -235,9 +370,9 @@ export const resolve = (specifier, options) => {
         const code = generate(output).code;
         const emitted = asynchronous
           ? `import Module, { createRequire } from "node:module";
-const owner = new Module(${JSON.stringify(input)});
-owner.filename = ${JSON.stringify(input)};
-owner.paths = Module._nodeModulePaths(${JSON.stringify(path.dirname(input))});
+const owner = new Module(${JSON.stringify(filename)});
+owner.filename = ${JSON.stringify(filename)};
+owner.paths = Module._nodeModulePaths(${JSON.stringify(path.dirname(filename))});
 const require = createRequire(import.meta.url);
 // Publish partial exports before awaiting dependencies; URL keys preserve import query identity.
 require.cache[import.meta.url] = owner;
@@ -271,7 +406,7 @@ export { value as "openclaw:async-commonjs" };`
       let parsed: ReturnType<typeof parse>;
       try {
         parsed = parse(analysis, {
-          sourceFilename: input,
+          sourceFilename: filename,
           sourceType: "unambiguous",
           allowAwaitOutsideFunction: true,
           allowReturnOutsideFunction: true,
@@ -344,7 +479,9 @@ export { value as "openclaw:async-commonjs" };`
         const replacement =
           name === "require"
             ? parseExpression(loader)
-            : parseExpression(JSON.stringify(name === "__filename" ? input : path.dirname(input)));
+            : parseExpression(
+                JSON.stringify(name === "__filename" ? filename : path.dirname(filename)),
+              );
         needsRequire ||= name === "require";
         if (reference.parentPath.isObjectProperty() && reference.key === "value") {
           reference.parentPath.node.shorthand = false;
@@ -357,14 +494,20 @@ export { value as "openclaw:async-commonjs" };`
           ${
             needsRequire
               ? `import { createRequire as ${factory} } from "node:module";
-          const ${loader} = ${factory}(${JSON.stringify(pathToFileURL(input).href)});`
+          const ${loader} = ${factory}(${JSON.stringify(pathToFileURL(filename).href)});`
               : ""
           }
-          import.meta.url = ${JSON.stringify(pathToFileURL(input).href)};
-          import.meta.filename = ${JSON.stringify(input)};
-          import.meta.dirname = ${JSON.stringify(path.dirname(input))};`,
+          import.meta.url = ${JSON.stringify(pathToFileURL(filename).href)};
+          import.meta.filename = ${JSON.stringify(filename)};
+          import.meta.dirname = ${JSON.stringify(path.dirname(filename))};`,
           { sourceType: "module" },
         );
+        if (memory) {
+          // Generated assignments must not overwrite the execution URL's query or fragment.
+          header.program.body = header.program.body.filter(
+            (statement) => statement.type !== "ExpressionStatement",
+          );
+        }
         parsed.program.body.unshift(...header.program.body);
         if (wildcardExports && !explicitInterop) {
           // A CJS wildcard must not replace this source module's require(ESM) namespace.
@@ -388,47 +531,72 @@ export { value as "openclaw:async-commonjs" };`
       }
     };
     // The capture owner resolves inputs; this hook only compiles and labels owned outputs.
-    const hooks = Module.registerHooks({
-      load(url, context, nextLoad) {
-        const filename = url.startsWith("file:") ? fileURLToPath(url) : undefined;
-        if (filename) {
-          const entry = sources.get(filename);
-          if (entry && !formats.has(filename) && !failures.has(filename)) {
-            try {
-              if (entry.mode && entry.mode !== "native") {
-                entry.mode = context.conditions.includes("require") ? "sync" : "async";
+    const hooks = useNodeModuleHooks()
+      ? Module.registerHooks({
+          load(url, context, nextLoad) {
+            const execution = executionUrls.get(url);
+            const filename =
+              execution?.output ?? (url.startsWith("file:") ? fileURLToPath(url) : undefined);
+            if (filename) {
+              const entry = sources.get(filename);
+              if (entry && !formats.has(filename) && !failures.has(filename)) {
+                try {
+                  if (!memory && entry.mode && entry.mode !== "native") {
+                    entry.mode = context.conditions.includes("require") ? "sync" : "async";
+                  }
+                  compile(entry.source, filename, entry.nativeFormat ?? context.format);
+                } catch (error) {
+                  failures.set(filename, error);
+                }
               }
-              compile(entry.source, filename, entry.nativeFormat ?? context.format);
-            } catch (error) {
-              failures.set(filename, error);
             }
-          }
-        }
-        if (filename && failures.has(filename)) {
-          throw failures.get(filename);
-        }
-        const format = filename && formats.get(filename);
-        if (memory && filename && memoryOutputs?.has(filename)) {
-          const entry = sources.get(filename) ?? helpers.get(filename);
-          if (entry) {
-            const outputFormat = format || "module";
-            return {
-              format: outputFormat,
-              source: memory.transformOutput(
-                entry.source,
-                memoryOutputs.get(filename)!,
-                outputFormat,
-                url,
-              ),
-              shortCircuit: true,
-            };
-          }
-        }
-        return nextLoad(url, format ? { ...context, format } : context);
-      },
-    });
+            if (filename && failures.has(filename)) {
+              throw failures.get(filename);
+            }
+            const format = filename && formats.get(filename);
+            if (memory && filename && memoryOutputs?.has(filename)) {
+              const entry = sources.get(filename) ?? helpers.get(filename);
+              if (entry) {
+                const outputFormat = format || "module";
+                return {
+                  format: outputFormat,
+                  source: memory.transformOutput(
+                    entry.source,
+                    memoryOutputs.get(filename)!,
+                    outputFormat,
+                    execution?.sourceUrl ?? url,
+                  ),
+                  shortCircuit: true,
+                };
+              }
+            }
+            return nextLoad(url, format ? { ...context, format } : context);
+          },
+        })
+      : undefined;
     return {
       directory,
+      loadSource(source: string, url: string) {
+        const filename = outputs.get(source) ?? source;
+        const entry = sources.get(filename) ?? helpers.get(filename);
+        if (!memory || !entry) {
+          return undefined;
+        }
+        if (sources.has(filename) && !formats.has(filename) && !failures.has(filename)) {
+          try {
+            compile(entry.source, filename, entry.nativeFormat);
+          } catch (error) {
+            failures.set(filename, error);
+          }
+        }
+        if (failures.has(filename)) {
+          throw failures.get(filename);
+        }
+        const code = memoryOutputs?.get(filename);
+        return code === undefined
+          ? undefined
+          : memory.transformOutput(entry.source, code, formats.get(filename) ?? "module", url);
+      },
       resolve: (source: string, mode?: PluginSourceLoadMode, nativeFormat?: string | null) => {
         if (disposed) {
           throw new Error("Plugin source view has been disposed");
@@ -456,10 +624,14 @@ export { value as "openclaw:async-commonjs" };`
         }
         return filename ?? source;
       },
+      bindExecutionUrl(output: string, url: string, sourceUrl: string) {
+        executionUrls.set(url, { output, sourceUrl });
+      },
       sourceForOutput: (file: string) =>
         sources.get(outputs.get(file) ?? file) ?? helpers.get(file),
       dispose: () => {
-        hooks.deregister();
+        hooks?.deregister();
+        executionUrls.clear();
         dispose();
       },
     };

@@ -4,8 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createPluginModuleGenerationTestHarness } from "./plugin-module-generation.test-support.js";
 import { createPluginSharedSnapshotModuleLoader } from "./plugin-source-snapshot-loader.js";
+import { pluginProcessRuntimeEntrypoints } from "./process-runtime.test-support.js";
 
 const cold = createPluginModuleGenerationTestHarness();
 const cleanups: Array<() => void> = [];
@@ -16,18 +18,32 @@ afterEach(() => {
   }
 });
 
-it.each([false, true])(
-  "matches linked CommonJS ancestry and identity with preserve-symlinks=%s",
-  async (preserve) => {
+it.each(
+  [false, true].flatMap(
+    (preserve) =>
+      [
+        [preserve, "cjs", "mjs"],
+        [preserve, "cts", "mts"],
+        [preserve, "ts", "ts"],
+      ] as const,
+  ),
+)(
+  "matches linked ancestry and identity with preserve-symlinks=%s for %s/%s",
+  async (preserve, extension, esmExtension) => {
+    const commonjs =
+      "module.exports={value:require('b'),relative:require('../shared.cjs'),filename:__filename,dirname:__dirname,asset:require('node:fs').readFileSync(require('node:path').join(__dirname,'..','asset.txt'),'utf8')};";
+    const esm =
+      "import {readFileSync} from 'node:fs';export const location=import.meta.url;export const asset=readFileSync(new URL('../asset.txt',import.meta.url),'utf8');";
     const f = fixture(
       {
-        "entry.cjs":
-          "const a=require('a'), b=require('a2'); module.exports={...a,same:a===b,resolved:require.resolve('a'),esm:()=>import('a/esm.mjs')};",
-        "packages/a/package.json": '{"main":"index.cjs"}',
-        "packages/a/index.cjs":
-          "module.exports={value:require('b'),relative:require('../shared.cjs'),filename:__filename,dirname:__dirname,asset:require('node:fs').readFileSync(require('node:path').join(__dirname,'..','asset.txt'),'utf8')};",
-        "packages/a/esm.mjs":
-          "import {readFileSync} from 'node:fs';export const location=import.meta.url;export const asset=readFileSync(new URL('../asset.txt',import.meta.url),'utf8');",
+        "entry.cjs": `const a=require('a'), b=require('a2'); module.exports={...a,same:a===b,resolved:require.resolve('a'),esm:()=>import('a/esm.${esmExtension}')};`,
+        "native-entry.cjs":
+          "const a=require('a/index.cjs'), b=require('a2/index.cjs'); module.exports={...a,same:a===b,resolved:require.resolve('a/index.cjs'),esm:()=>import('a/esm.mjs')};",
+        "packages/a/package.json": `{"main":"index.${extension}"}`,
+        "packages/a/index.cjs": commonjs,
+        "packages/a/esm.mjs": esm,
+        [`packages/a/index.${extension}`]: commonjs,
+        [`packages/a/esm.${esmExtension}`]: esm,
         "packages/asset.txt": "physical-asset",
         "node_modules/asset.txt": "logical-asset",
         "packages/shared.cjs": "module.exports='physical-relative';",
@@ -47,12 +63,17 @@ it.each([false, true])(
         ...flags,
         "-e",
         "const v=require(process.argv[1]);v.esm().then(esm=>console.log(JSON.stringify({...v,esm}))).catch(e=>{console.error(e);process.exitCode=1});",
-        path.join(f.root, "entry.cjs"),
+        path.join(f.root, "native-entry.cjs"),
       ],
       { encoding: "utf8", env: { ...process.env, NODE_OPTIONS: "" } },
     );
     expect(coldResult.status, coldResult.stderr).toBe(0);
-    const expected: unknown = JSON.parse(coldResult.stdout);
+    // Native Node refuses TS stripping below node_modules; equivalent JS fixes the path contract.
+    const expected: unknown = JSON.parse(
+      coldResult.stdout
+        .replaceAll("index.cjs", `index.${extension}`)
+        .replaceAll("esm.mjs", `esm.${esmExtension}`),
+    );
     try {
       process.execArgv = flags;
       const actual = f.loader().requireModule(path.join(f.root, "entry.cjs")) as Record<
@@ -60,6 +81,8 @@ it.each([false, true])(
         unknown
       > & { esm(): Promise<Record<string, unknown>> };
       expect({ ...actual, esm: { ...(await actual.esm()) } }).toEqual(expected);
+      expect(f.reads).toContain(`node_modules/a/index.${extension}`);
+      expect(f.reads).toContain(`node_modules/a/esm.${esmExtension}`);
     } finally {
       process.execArgv = argv;
     }
@@ -155,7 +178,131 @@ function fixture(files: Record<string, string>, links: Record<string, string> = 
   return { root, loader, reads };
 }
 
+it.each(["cjs", "cts"])(
+  "preserves %s interpreter directives and named exports",
+  async (extension) => {
+    const f = fixture({
+      "entry.mjs": `import {value} from './module.${extension}';export {value};`,
+      [`module.${extension}`]: `#!/usr/bin/env node\nconst value${extension === "cts" ? ":number" : ""}=${extension === "cts" ? "<number>" : ""}42;exports.value=value;`,
+    });
+    const loader = f.loader();
+    expect(loader.requireModule(path.join(f.root, `module.${extension}`))).toMatchObject({
+      value: 42,
+    });
+    expect(await loader.importModule(path.join(f.root, "entry.mjs"))).toMatchObject({ value: 42 });
+  },
+);
+
+it.each(["cjs", "mjs", "cts", "mts"])(
+  "keeps %s stack-based native discovery at the source package",
+  async (extension) => {
+    const body = `const caller${extension === "cts" || extension === "mts" ? ":string" : ""} = getCaller(); const filename = caller.startsWith('file:') ? fileURLToPath(caller) : caller; const addon = require(path.join(path.dirname(filename), 'lib/addon.node'));`;
+    const f = fixture({
+      "get-caller.cjs":
+        "module.exports=function getCaller(){const prior=Error.prepareStackTrace;try{Error.prepareStackTrace=(_,frames)=>frames;const error={};Error.captureStackTrace(error,getCaller);return error.stack[0].getFileName();}finally{Error.prepareStackTrace=prior;}};",
+      [`entry.${extension}`]:
+        extension === "cjs" || extension === "cts"
+          ? `const getCaller=require('./get-caller.cjs'),path=require('node:path'),{fileURLToPath}=require('node:url');${body}module.exports=addon;`
+          : `import getCaller from './get-caller.cjs';import path from 'node:path';import {fileURLToPath} from 'node:url';import {createRequire} from 'node:module';const require=createRequire(import.meta.url);${body}export default addon;`,
+      "lib/addon.node": "synthetic native bytes",
+    });
+    const loader = f.loader({ loadNativeModule: (filename) => filename });
+    const entry = path.join(f.root, `entry.${extension}`);
+    const result =
+      extension === "cjs" || extension === "cts"
+        ? loader.requireModule(entry)
+        : ((await loader.importModule(entry)) as { default: string }).default;
+    expect(result).toBe(path.join(f.root, "lib/addon.node"));
+  },
+);
+
+it("revokes escaped ESM module facade functions after disposal", async () => {
+  const f = fixture({
+    "entry.mjs":
+      "import Module,{createRequire} from 'node:module';import * as workers from 'node:worker_threads';import {fork} from 'node:child_process';const require=createRequire(import.meta.url);export {Module,createRequire,workers,fork,require};export const meta=import.meta;",
+    "owned.cjs": "exports.require=require;",
+  });
+  const loader = f.loader({
+    loadBuiltin: (name) =>
+      name.endsWith("worker_threads")
+        ? { Worker: function Worker() {} }
+        : name.endsWith("child_process")
+          ? { fork() {} }
+          : undefined,
+  });
+  const value = (await loader.importModule(path.join(f.root, "entry.mjs"))) as {
+    createRequire: typeof import("node:module").createRequire;
+    Module: typeof import("node:module");
+    workers: typeof import("node:worker_threads");
+    fork: typeof import("node:child_process").fork;
+    require: NodeJS.Require;
+    meta: ImportMeta;
+  };
+  const anchor = path.join(f.root, "entry.mjs");
+  expect(value.createRequire(anchor).resolve("./entry.mjs")).toBe(anchor);
+  expect(value.createRequire).toBe(value.Module.createRequire);
+  expect(value.workers.Worker).toBe(value.require("node:worker_threads").Worker);
+  expect(value.fork).toBe(value.require("node:child_process").fork);
+  const cache = value.require.cache;
+  expect(cache).toBe(Reflect.get(value.Module, "_cache"));
+  const owned = value.require("./owned.cjs") as { require: NodeJS.Require };
+  const cached = cache[value.require.resolve("./owned.cjs")]!;
+  expect(Reflect.get(cached, "require")).toBe(Reflect.get(owned, "require"));
+  const resolve = Reflect.get(value.meta, "resolve") as ImportMeta["resolve"];
+  loader.dispose();
+  for (const operation of [
+    () => value.createRequire(anchor),
+    () => value.Module.createRequire(anchor),
+    () => value.require.resolve("./owned.cjs"),
+    () => resolve("./owned.cjs"),
+    () => Object.keys(cache),
+    () => cached.require("./owned.cjs"),
+    () => value.workers.Worker.name,
+    () => value.fork.name,
+  ]) {
+    expect(operation).toThrow(/disposed|revoked/);
+  }
+});
+
 describe("shared snapshot verified module evaluation", () => {
+  it.each([
+    ["hosted-module", "hosted-module"],
+    ["#sdk", "hosted-module"],
+    ["hosted-module", "#sdk"],
+    ["sdk-alias", "sdk-alias"],
+  ])(
+    "discovers CommonJS re-exports through require(%s) and import(%s)",
+    async (required, imported) => {
+      const hosted = path.join(
+        cold.fixture({ "index.cjs": "exports.external = 43;" }),
+        "index.cjs",
+      );
+      const f = fixture({
+        "package.json": '{"imports":{"#sdk":"hosted-module"}}',
+        "entry.mjs": `import { value } from './barrel.cjs'; import { external } from './hosted.cjs'; import { external as direct } from '${imported}'; export { value, external, direct }; export const dynamic = request => import(request);`,
+        "barrel.cjs": "module.exports = require('./nested/barrel.cjs');",
+        "nested/barrel.cjs": "module.exports = require('./value.cjs');",
+        "nested/value.cjs": "exports.value = 42;",
+        "hosted.cjs": `module.exports = require('${required}');`,
+      });
+      const loader = f.loader({
+        alias: { "sdk-alias": "hosted-module" },
+        resolveHostModule: (request) => (request === "hosted-module" ? hosted : undefined),
+      });
+      const value = (await loader.importModule(path.join(f.root, "entry.mjs"))) as {
+        dynamic(request: string): Promise<unknown>;
+      };
+      expect(value).toMatchObject({
+        value: 42,
+        external: 43,
+        direct: 43,
+      });
+      await expect(value.dynamic(pathToFileURL(hosted).href)).rejects.toMatchObject({
+        code: "ERR_PLUGIN_SNAPSHOT_DEPENDENCY",
+      });
+    },
+  );
+
   it("retains real asset paths and gives each instance its own CJS and ESM evaluations", async () => {
     const f = fixture({
       "package.json": '{"type":"module"}',
@@ -221,7 +368,7 @@ describe("shared snapshot verified module evaluation", () => {
       })
       .importModule(path.join(f.root, "entry.mjs"))) as { same: boolean; Worker: unknown };
     expect(value.same).toBe(true);
-    expect(value.Worker).toBe(worker);
+    expect(Reflect.construct(value.Worker as Function, [])).toBeInstanceOf(worker);
   });
 
   it("compiles verified TypeScript in memory through the existing compiler", async () => {
@@ -236,6 +383,95 @@ describe("shared snapshot verified module evaluation", () => {
     expect(value.default.answer).toBe(42);
     expect(fs.readdirSync(f.root).toSorted()).toEqual(["entry.ts", "value.ts"]);
     expect(new Set(f.reads)).toEqual(new Set(["entry.ts", "value.ts"]));
+  });
+
+  it.each(["async", "native"])(
+    "preserves compiler-managed JSON imports in %s mode",
+    async (mode) => {
+      const f = fixture({
+        "entry.ts":
+          "import data from './data.json'; export const value = data.answer; export const dynamic = async () => (await import('./data.json')).default.answer;",
+        "native.mjs": "export { value, dynamic } from './entry.ts';",
+        "strict.mjs": "export { default } from './data.json';",
+        "invalid.ts": "import data from './data.json' with {type:'javascript'}; export {data};",
+        "invalid.mjs": "export {data} from './invalid.ts';",
+        "data.json": '{"answer":42}',
+      });
+      const loader = f.loader();
+      const value = (await loader.importModule(
+        path.join(f.root, mode === "async" ? "entry.ts" : "native.mjs"),
+      )) as { value: number; dynamic(): Promise<number> };
+      expect(value.value).toBe(42);
+      expect(await value.dynamic()).toBe(42);
+      if (!process.versions.bun) {
+        await expect(loader.importModule(path.join(f.root, "strict.mjs"))).rejects.toMatchObject({
+          code: "ERR_IMPORT_ATTRIBUTE_MISSING",
+        });
+        if (mode === "native") {
+          await expect(loader.importModule(path.join(f.root, "invalid.mjs"))).rejects.toMatchObject(
+            {
+              code: "ERR_IMPORT_ATTRIBUTE_UNSUPPORTED",
+            },
+          );
+        }
+      }
+    },
+  );
+
+  it.runIf(!process.versions.bun)("supports dynamic import when require(ESM) is disabled", () => {
+    const f = fixture({
+      "entry.cjs": "module.exports = () => import('./later.mjs');",
+      "later.mjs": "export const value = 42;",
+    });
+    const baseline = spawnSync(
+      process.execPath,
+      [
+        "--no-experimental-require-module",
+        "-e",
+        "require(process.argv[1])().then(value=>console.log(JSON.stringify(value)));",
+        path.join(f.root, "entry.cjs"),
+      ],
+      { encoding: "utf8", timeout: 30_000 },
+    );
+    expect(baseline.status, baseline.stderr).toBe(0);
+    expect(JSON.parse(baseline.stdout.trim())).toEqual({ value: 42 });
+    const stateDir = cold.temp.make("snapshot-no-require-esm-");
+    const entrypoints = Object.fromEntries(
+      (
+        ["sourceCapture", "sourceCaptureContext", "sourceSnapshot", "sharedSnapshotLoader"] as const
+      ).map((name) => [name, resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints[name]).href]),
+    );
+    const script = `
+      import path from 'node:path';
+      import {capturePluginSourceSnapshot} from ${JSON.stringify(entrypoints.sourceCapture)};
+      import {withPluginSourceCaptureStorage} from ${JSON.stringify(entrypoints.sourceCaptureContext)};
+      import {stagePluginSharedSourceSnapshot,acquirePluginSharedSourceSnapshot,collectPluginSourceSnapshots,pluginSourceSnapshotClosureDigest} from ${JSON.stringify(entrypoints.sourceSnapshot)};
+      import {createPluginSharedSnapshotModuleLoader} from ${JSON.stringify(entrypoints.sharedSnapshotLoader)};
+      const [stateDir,source]=process.argv.slice(1);
+      const capture=withPluginSourceCaptureStorage({stateDir,placement:'state'},()=>capturePluginSourceSnapshot(source));
+      const pending=await stagePluginSharedSourceSnapshot({stateDir,capture,assertCurrent(){},binding:{installRecordHash:'record',contentDigest:capture.sourceDigest,dependencyClosureDigest:pluginSourceSnapshotClosureDigest(capture),buildResolutionDigest:'options'}});
+      const descriptor={...await pending.publish(),installedRevision:1};
+      const snapshot=await acquirePluginSharedSourceSnapshot({stateDir,descriptor,assertCurrent(){}});
+      const loader=createPluginSharedSnapshotModuleLoader({snapshot,loadNativeModule(){throw new Error('unexpected addon');}});
+      try { console.log(JSON.stringify(await loader.requireModule(path.join(snapshot.rootDir,'entry.cjs'))())); }
+      finally {loader.dispose();await snapshot.releaseAsync();await capture.disposeAsync();await collectPluginSourceSnapshots({stateDir,retiredSnapshots:[descriptor],retainedPaths:new Set(),assertCurrent(){}});}
+    `;
+    const runtime = resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.sharedSnapshotLoader);
+    const child = spawnSync(
+      process.execPath,
+      [
+        ...resolveRuntimeWorkerArgv(runtime).slice(0, -1),
+        "--no-experimental-require-module",
+        "--input-type=module",
+        "-e",
+        script,
+        stateDir,
+        f.root,
+      ],
+      { encoding: "utf8", timeout: 30_000 },
+    );
+    expect(child.status, child.stderr).toBe(0);
+    expect(JSON.parse(child.stdout.trim())).toEqual({ value: 42 });
   });
 
   it("evaluates parent-provided child source with a synthetic anchor and main identity", async () => {
@@ -577,4 +813,44 @@ it("keeps typed dependency cycles in one in-memory mode cache", async () => {
   };
   expect(value.read()).toBe(42);
   expect(fs.readdirSync(f.root).toSorted()).toEqual(["entry.ts", "peer.ts"]);
+});
+
+it.each(["static", "dynamic", "require"])(
+  "shares one CTS evaluation across edges with %s first",
+  async (first) => {
+    const f = fixture({
+      "entry.mjs": `import {createRequire} from 'node:module'; const require=createRequire(import.meta.url);
+        export async function read(kind) {
+          if(kind==='require') return require('./value.cts');
+          if(kind==='static') return (await import('./static.mjs')).default;
+          const ns=await import('./value.cts'); return ns.default??ns;
+        }`,
+      "static.mjs": "import value from './value.cts'; export default value;",
+      "value.cts": "const token:object={}; module.exports={token};",
+    });
+    type Entry = { read: (kind: string) => Promise<{ token: object }> };
+    const assertEdges = async (entry: Entry) => {
+      const initial = await entry.read(first);
+      for (const edge of ["static", "dynamic", "require"]) {
+        expect((await entry.read(edge)).token).toBe(initial.token);
+      }
+    };
+    const baseline = cold.host(f.root);
+    await assertEdges((await baseline.load("entry.mjs")) as Entry);
+    await baseline.dispose();
+    await assertEdges((await f.loader().importModule(path.join(f.root, "entry.mjs"))) as Entry);
+  },
+);
+
+it("preserves cold typed-caller imports of async-only CommonJS", async () => {
+  const f = fixture({
+    "entry.ts": "export const read=()=>import('./value.cts');",
+    "value.cts": "await Promise.resolve(); module.exports={answer:42};",
+  });
+  type Entry = { read: () => Promise<{ answer: number }> };
+  const baseline = cold.host(f.root);
+  expect(await ((await baseline.load("entry.ts")) as Entry).read()).toMatchObject({ answer: 42 });
+  await baseline.dispose();
+  const entry = (await f.loader().importModule(path.join(f.root, "entry.ts"))) as Entry;
+  expect(await entry.read()).toMatchObject({ answer: 42 });
 });

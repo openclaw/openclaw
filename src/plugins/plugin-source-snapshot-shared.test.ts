@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import * as fsSafe from "@openclaw/fs-safe/advanced";
 import { afterEach, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -16,6 +17,10 @@ import {
   stagePluginSharedSourceSnapshot,
   stagePluginSourceSnapshot,
 } from "./plugin-source-snapshot-artifact.js";
+
+vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/fs-safe/advanced")>()),
+}));
 
 const temporary = createTempDirTracker();
 const collectors: Array<() => Promise<unknown>> = [];
@@ -108,6 +113,94 @@ it("keeps shared startup filesystem counts independent of unused file count", as
     expect(await measure(large, sync)).toEqual(await measure(small, sync));
   }
 });
+
+it.each(["native", "fallback"] as const)(
+  "settles %s batch descriptors through publication, reading, and scrub shutdown",
+  async (mode) => {
+    const createBatch = fsSafe.createRootFileOpenBatchSync;
+    const closeFd = fs.closeSync.bind(fs);
+    const active = new Set<number>();
+    const records: Array<{ closeCalls: number }> = [];
+    let rawCloses = 0;
+    vi.spyOn(fs, "closeSync").mockImplementation((fd) => {
+      if (active.delete(fd)) {
+        rawCloses++;
+      }
+      closeFd(fd);
+    });
+    vi.spyOn(fsSafe, "createRootFileOpenBatchSync").mockImplementation(() => {
+      const batch = createBatch();
+      return {
+        ...batch,
+        openFile(params) {
+          const opened =
+            mode === "native" ? batch.openFile(params) : fsSafe.openRootFileSync(params);
+          if (!opened.ok) {
+            return opened;
+          }
+          const record = { closeCalls: 0 };
+          records.push(record);
+          active.add(opened.fd);
+          const owned: typeof opened & { close?: () => void } = opened;
+          return mode === "fallback"
+            ? opened
+            : {
+                ...opened,
+                close() {
+                  record.closeCalls++;
+                  active.delete(opened.fd);
+                  if (owned.close) {
+                    owned.close();
+                  } else {
+                    closeFd(opened.fd);
+                  }
+                },
+              };
+        },
+      };
+    });
+    const subject = await fixture({ large: true });
+    const reader = await subject.acquire();
+    releases.push(() => reader.release());
+    const entry = path.join(reader.rootDir, "index.mjs");
+    expect(reader.readVerifiedFile(entry).toString()).toContain("value = 1");
+    const read = fs.readSync;
+    const readFailure = vi.spyOn(fs, "readSync").mockImplementation((...args) => {
+      if (active.has(args[0])) {
+        throw new Error("descriptor read failed");
+      }
+      return Reflect.apply(read, fs, args);
+    });
+    expect(() => reader.readVerifiedFile(entry)).toThrow("descriptor read failed");
+    readFailure.mockRestore();
+    const fstat = fs.fstatSync;
+    const statFailure = vi.spyOn(fs, "fstatSync").mockImplementation((...args) => {
+      if (active.has(args[0])) {
+        throw new Error("descriptor identity failed");
+      }
+      return Reflect.apply(fstat, fs, args);
+    });
+    expect(() => reader.readVerifiedFile(entry)).toThrow("descriptor identity failed");
+    statFailure.mockRestore();
+    const complete = reader.createScrub();
+    while (!(await complete.step({ maxFiles: 16, maxBytes: 256 * 1024 })).done) {}
+    const cancelled = reader.createScrub();
+    while (active.size === 0) {
+      expect((await cancelled.step({ maxFiles: 1, maxBytes: 1 })).done).toBe(false);
+    }
+    const abort = new AbortController();
+    abort.abort(new Error("shutdown"));
+    await expect(
+      cancelled.step({ maxFiles: 1, maxBytes: 1, signal: abort.signal }),
+    ).rejects.toThrow("shutdown");
+    expect(active.size).toBe(0);
+    expect(records.length).toBeGreaterThan(10);
+    expect(rawCloses).toBe(mode === "fallback" ? records.length : 0);
+    expect(records.map((record) => record.closeCalls)).toEqual(
+      records.map(() => (mode === "native" ? 1 : 0)),
+    );
+  },
+);
 
 it("releases synchronous child custody if authority is lost after manifest validation", async () => {
   const subject = await fixture();

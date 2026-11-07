@@ -22,7 +22,7 @@ import {
   PLUGIN_SOURCE_SNAPSHOT_STAGING_PREFIX,
   resolvePluginSourceCapturesDirectory,
 } from "./plugin-source-capture-path.js";
-import { pluginSourceStatIdentity } from "./plugin-source-file.js";
+import { closePluginSourceFile, pluginSourceStatIdentity } from "./plugin-source-file.js";
 import {
   fail,
   ownerIdentity,
@@ -197,7 +197,7 @@ async function stageSnapshot(params: SnapshotStagingParameters, formatVersion: 1
           try {
             text = readFileDescriptorBoundedSync(pinned.fd, MAX_MANIFEST_BYTES).toString("utf8");
           } finally {
-            fs.closeSync(pinned.fd);
+            closePluginSourceFile(pinned);
           }
           if (digest(text) !== entry.contentHash) {
             fail(stage, `metadata changed while sealing: ${entry.path}`);
@@ -365,7 +365,7 @@ function validateSnapshot(
   try {
     bytes = readFileDescriptorBoundedSync(pinned.fd, MAX_MANIFEST_BYTES).toString("utf8");
   } finally {
-    fs.closeSync(pinned.fd);
+    closePluginSourceFile(pinned);
   }
   if (digest(bytes) !== descriptor.artifact.manifestDigest) {
     fail(root, "manifest content digest changed");

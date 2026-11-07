@@ -2,18 +2,33 @@ import { randomUUID } from "node:crypto";
 import Module, { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { NodePath } from "@babel/traverse";
+import { parse } from "@babel/parser";
+import traverse, { type NodePath } from "@babel/traverse";
 import type { ImportDeclaration, ExportNamedDeclaration, ExportAllDeclaration } from "@babel/types";
 import { isPathInside } from "../infra/path-guards.js";
-import type { BunPluginRuntime } from "./native-module-require.js";
 import { getPluginRuntimeConditions } from "./plugin-native-resolution.js";
 import { PluginSnapshotDependencyError } from "./plugin-snapshot-dependency-error.js";
-import { buildPluginTypeScriptSource, type PluginSourceLoadMode } from "./plugin-source-build.js";
 import {
+  buildPluginTypeScriptSource,
+  createPluginSnapshotSourceReader,
+  loadPluginSnapshotCompiledModule,
+  type PluginSourceLoadMode,
+} from "./plugin-source-build.js";
+import { createPluginSnapshotDispatch } from "./plugin-source-snapshot-dispatch.js";
+import {
+  assertPluginSnapshotSourceRequest,
+  createPluginSnapshotBuiltinTarget,
+  createPluginSnapshotBuiltinSource,
+  createPluginSnapshotHookResolver,
+  createPluginSnapshotInteropTarget,
+  createPluginSnapshotModuleFacade,
+  createPluginSnapshotNativeImporter,
   installHooks,
   pathOf,
   registrySymbol,
+  registerPluginSnapshotVirtualModule,
   state,
+  withPluginSnapshotJsonAttribute,
   type Runtime,
   type VirtualModule,
 } from "./plugin-source-snapshot-module-hooks.js";
@@ -53,6 +68,7 @@ export function createPluginSharedSnapshotModuleLoader(options: Options) {
     tsconfigPaths: options.tsconfigPaths ?? resolvePluginSnapshotTsconfigPaths(),
   });
   const id = randomUUID();
+  const dispatch = createPluginSnapshotDispatch(id);
   const directory = path.join(snapshot.payloadRoot, `.openclaw-snapshot-instance-${id}`);
   const requireCache = createPluginSnapshotRequireCache({
     modulePath: resolver.modulePath,
@@ -63,21 +79,17 @@ export function createPluginSharedSnapshotModuleLoader(options: Options) {
   const { cache, entries: cacheEntries, jsonValue } = requireCache;
   const metas = new Map<string, Record<string, unknown>>();
   const targets = new Map<string, string>();
-  const importers = new Map<
-    string,
-    (request: unknown, attributes?: ImportCallOptions) => Promise<unknown>
-  >();
+  const importers = new Map<string, ReturnType<Runtime["importFor"]>>();
   const ownPaths = new Set<string>();
   const builtinOverrides = new Map<string, unknown>();
   const generated = new Map<string, string>();
   const detectedFormats = new Map<string, "module" | "commonjs">();
-  const verifiedSources = new Map<string, string>();
-  const jsxTranspilers = new Map<"jsx" | "tsx", { transformSync(source: string): string }>();
   const compilers = new Map<PluginSourceLoadMode, ReturnType<typeof buildPluginTypeScriptSource>>();
   let mainFilename = options.mainFilename && resolver.modulePath(options.mainFilename);
   let mainModule: NodeJS.Module | undefined;
   let disposed = false;
-  const access = `globalThis[Symbol.for(${JSON.stringify(Symbol.keyFor(registrySymbol))})].instances.get(${JSON.stringify(id)})`;
+  const ownerAccess = `globalThis[Symbol.for(${JSON.stringify(Symbol.keyFor(registrySymbol))})].instances.get(${JSON.stringify(id)})`;
+  const access = `${ownerAccess}.dispatch`;
   const verify = <T>(operation: () => T): T => {
     try {
       return operation();
@@ -105,35 +117,8 @@ export function createPluginSharedSnapshotModuleLoader(options: Options) {
       ? verify(() => snapshot.readVerifiedFile(filename))
       : Buffer.from(emitted);
   };
-  const sourceText = (filename: string) => {
-    const verified = verifiedSources.get(filename);
-    verifiedSources.delete(filename);
-    const source = verified ?? read(filename).toString("utf8");
-    if (
-      !process.versions.bun ||
-      !["1", "true"].includes(process.env.JITI_JSX ?? "") ||
-      !/\.[cm]?[jt]sx$/.test(filename)
-    ) {
-      return source;
-    }
-    const loader = filename.endsWith(".jsx") ? "jsx" : "tsx";
-    let transpiler = jsxTranspilers.get(loader);
-    if (!transpiler) {
-      const bun: BunPluginRuntime = Reflect.get(globalThis, "Bun");
-      transpiler = new bun.Transpiler({
-        loader,
-        tsconfig: {
-          compilerOptions: {
-            jsx: "react",
-            jsxFactory: "React.createElement",
-            jsxFragmentFactory: "React.Fragment",
-          },
-        },
-      });
-      jsxTranspilers.set(loader, transpiler);
-    }
-    return transpiler.transformSync(source);
-  };
+  const sourceReader = createPluginSnapshotSourceReader(read);
+  const { sourceText } = sourceReader;
   const formatFor = (filename: string) => {
     const declared = resolver.format(filename);
     const bunTyped = process.versions.bun && /(?:\.[cm]?tsx?|\.jsx)$/.test(filename);
@@ -144,7 +129,6 @@ export function createPluginSharedSnapshotModuleLoader(options: Options) {
     if (prior) {
       return prior;
     }
-    const { parse }: typeof import("@babel/parser") = hostRequire("@babel/parser");
     const body = read(filename).toString("utf8");
     const parsed = parse(body, {
       sourceType: "unambiguous",
@@ -154,7 +138,7 @@ export function createPluginSharedSnapshotModuleLoader(options: Options) {
     });
     const format = parsed.program.sourceType === "module" ? "module" : "commonjs";
     detectedFormats.set(filename, format);
-    verifiedSources.set(filename, body);
+    sourceReader.remember(filename, body);
     return format;
   };
   const builtinOverride = (request: string) => {
@@ -166,44 +150,44 @@ export function createPluginSharedSnapshotModuleLoader(options: Options) {
     }
     return builtinOverrides.get(request);
   };
-  const builtin = (request: string) => {
-    return builtinOverride(request) ?? hostRequire(request);
-  };
-  const resolve = (
-    from: string,
-    request: string,
-    requiring: boolean,
-    paths?: string[],
-  ): PluginSnapshotResolvedModule & { generated?: true } => {
-    active();
-    if (
-      isPathInside(directory, pathOf(request)) &&
-      Array.from(compilers.values()).some((compiler) => compiler.sourceForOutput(pathOf(request)))
-    ) {
-      return {
-        filename: pathOf(request),
-        canonical: pathOf(request),
-        url: request.startsWith("file:") ? request : pathToFileURL(request).href,
-        generated: true,
-      };
-    }
-    return resolver.resolve(
-      from,
-      request,
-      requiring ? requireConditions : importConditions,
-      Boolean(requiring && process.versions.bun && /\.[cm]?tsx?$/.test(from)),
-      paths,
+  const builtin = (request: string) => builtinOverride(request) ?? hostRequire(request);
+  const resolve = createPluginSnapshotHookResolver(
+    resolver.modulePath,
+    (from, request, requiring, paths): PluginSnapshotResolvedModule & { generated?: true } => {
+      active();
+      if (
+        isPathInside(directory, pathOf(request)) &&
+        Array.from(compilers.values()).some((compiler) => compiler.sourceForOutput(pathOf(request)))
+      ) {
+        return {
+          filename: pathOf(request),
+          canonical: pathOf(request),
+          url: request.startsWith("file:") ? request : pathToFileURL(request).href,
+          generated: true,
+        };
+      }
+      return resolver.resolve(
+        from,
+        request,
+        requiring ? requireConditions : importConditions,
+        Boolean(requiring && process.versions.bun && /\.[cm]?tsx?$/.test(from)),
+        paths,
+      );
+    },
+  );
+  const addVirtual = (filename: string, module: VirtualModule) =>
+    registerPluginSnapshotVirtualModule(
+      runtime,
+      ownPaths,
+      filename,
+      module,
+      resolver.canonicalPath,
     );
-  };
-  const addVirtual = (filename: string, module: VirtualModule) => {
-    state.paths.set(filename, { runtime, module });
-    ownPaths.add(filename);
-    return pathToFileURL(filename).href;
-  };
   const target = (
     selected: PluginSnapshotResolvedModule & { generated?: true },
-    mode: PluginSourceLoadMode = "async",
+    requestedMode: PluginSourceLoadMode = "async",
   ) => {
+    assertPluginSnapshotSourceRequest(selected.url);
     if (selected.external) {
       if (isBuiltin(selected.canonical) && builtinOverride(selected.canonical) !== undefined) {
         return targetFacade(selected.canonical);
@@ -223,29 +207,52 @@ export function createPluginSharedSnapshotModuleLoader(options: Options) {
       }
       return selected.url;
     }
-    const compile = !process.versions.bun && /(?:\.[cm]?tsx?|\.jsx)$/.test(selected.filename);
-    const key = `${resolver.modulePath(selected.filename)}\0${compile ? mode : ""}\0${format === "commonjs" && !process.versions.bun ? "" : suffix}`;
+    const mode = sourceReader.modeFor(selected.filename, format, requestedMode);
+    const compile = sourceReader.shouldCompile(selected.filename, mode);
+    const executionFormat =
+      compile && mode !== "native" ? (mode === "async" ? "module" : "commonjs") : format;
+    const commonjsIdentity = format === "commonjs" && !process.versions.bun;
+    const key = `${resolver.modulePath(selected.filename)}\0${compile && !commonjsIdentity ? mode : ""}\0${commonjsIdentity ? "" : suffix}`;
     const prior = targets.get(key);
     if (prior) {
-      return prior + (format === "commonjs" && !process.versions.bun ? suffix : "");
+      return prior;
     }
     let compiler = compile ? compilers.get(mode) : undefined;
     if (compile && !compiler) {
       compiler = buildPluginTypeScriptSource(snapshot.payloadRoot, {
         directory: path.join(directory, mode),
         readSource: sourceText,
+        executionFilename: resolver.modulePath,
         transformOutput: (filename, code, outputFormat, url) =>
           transform(
             code,
             filename,
             outputFormat === "commonjs",
             new URL(url).search + new URL(url).hash,
+            true,
           ),
       });
       compilers.set(mode, compiler);
     }
-    // Native JS imports keep named exports; Jiti views retain their existing interop.
     const compiled = compiler?.resolve(selected.filename, mode);
+    if (executionFormat === "module") {
+      const execution = new URL(selected.url);
+      if (commonjsIdentity) {
+        execution.search = "";
+        execution.hash = "";
+      }
+      execution.searchParams.append("__openclaw_instance", compile ? `${id}:${mode}` : id);
+      if (compiled && compiled !== selected.filename) {
+        compiler!.bindExecutionUrl(compiled, execution.href, selected.url);
+      }
+      const value = addVirtual(execution.href, {
+        filename: selected.filename,
+        suffix,
+        format: executionFormat,
+      });
+      targets.set(key, value);
+      return value;
+    }
     const virtual =
       compiled && compiled !== selected.filename
         ? compiled
@@ -259,27 +266,34 @@ export function createPluginSharedSnapshotModuleLoader(options: Options) {
         suffix,
         format,
         ...(format === "addon" ? { native: true } : {}),
-      }) + (compiled && compiled !== selected.filename ? suffix : "");
+      }) + (compiled && compiled !== selected.filename && !commonjsIdentity ? suffix : "");
     targets.set(key, value);
     return value;
   };
-  const targetFacade = (request: string) => {
-    const filename = path.join(directory, `builtin-${request.replace(/[^a-z\d]/gi, "-")}.mjs`);
-    if (!ownPaths.has(filename)) {
-      addVirtual(filename, {
-        filename: snapshot.rootDir,
-        suffix: "",
-        format: "module",
-        facade: request,
-      });
-    }
-    return pathToFileURL(filename).href;
+  const interopTarget = createPluginSnapshotInteropTarget(directory, targets, addVirtual);
+  const typedTarget = (selected: PluginSnapshotResolvedModule & { generated?: true }) => {
+    const url = target(selected, "native");
+    return process.versions.bun ||
+      selected.external ||
+      selected.generated ||
+      formatFor(selected.filename) !== "commonjs"
+      ? url
+      : interopTarget(url);
   };
+  const targetFacade = createPluginSnapshotBuiltinTarget(
+    directory,
+    snapshot.rootDir,
+    ownPaths,
+    addVirtual,
+  );
   const requireFor = (from: string): NodeJS.Require => {
     const native = createRequire(from);
     const load = (selected: PluginSnapshotResolvedModule & { generated?: true }) => {
       const url = target(selected, "sync");
-      return requireCache.load(resolver.modulePath(selected.filename), pathOf(url), () =>
+      const filename = process.versions.bun
+        ? pathOf(url) + new URL(url).search + new URL(url).hash
+        : pathOf(url);
+      return requireCache.load(resolver.modulePath(selected.filename), filename, () =>
         hostRequire(url),
       );
     };
@@ -316,63 +330,18 @@ export function createPluginSharedSnapshotModuleLoader(options: Options) {
       native.resolve,
     );
     const scoped = Object.assign(require, native, { resolve: resolveRequest, cache });
-    Object.defineProperty(scoped, "main", { get: () => mainModule });
+    Object.defineProperty(scoped, "main", { configurable: true, get: () => mainModule });
     return scoped;
   };
-  const scopedCreateRequire = (anchor: string | URL) => {
-    createRequire(anchor);
-    return requireFor(anchor instanceof URL ? fileURLToPath(anchor) : pathOf(anchor));
-  };
-  const modulePrototype = new Proxy(Module.prototype, {
-    get(original, key, receiver) {
-      if (key === "constructor") {
-        return moduleFacade;
-      }
-      if (key === "require") {
-        return function (this: NodeJS.Module, request: string) {
-          return requireFor(this.filename || path.join(snapshot.rootDir, "index.cjs"))(request);
-        };
-      }
-      return Reflect.get(original, key, receiver);
-    },
-  });
-  const moduleFacade: typeof Module = new Proxy(Module, {
-    get(original, key, receiver) {
-      if (key === "createRequire") {
-        return scopedCreateRequire;
-      }
-      if (key === "Module") {
-        return moduleFacade;
-      }
-      if (key === "prototype") {
-        return modulePrototype;
-      }
-      if (key === "_cache") {
-        return cache;
-      }
-      if (key === "_load") {
-        return (request: string, parent?: NodeJS.Module) =>
-          requireFor(parent?.filename || path.join(snapshot.rootDir, "index.cjs"))(request);
-      }
-      if (key === "_resolveFilename") {
-        return (
-          request: string,
-          parent?: NodeJS.Module,
-          _isMain?: boolean,
-          resolveOptions?: { paths?: string[] },
-        ) =>
-          requireFor(parent?.filename || path.join(snapshot.rootDir, "index.cjs")).resolve(
-            request,
-            resolveOptions,
-          );
-      }
-      return Reflect.get(original, key, receiver);
-    },
-  });
-  const transform = (source: string, member: string, commonjs: boolean, suffix = "") => {
+  const moduleFacade = createPluginSnapshotModuleFacade(requireFor, cache, snapshot.rootDir);
+  const transform = (
+    source: string,
+    member: string,
+    commonjs: boolean,
+    suffix = "",
+    compiled = false,
+  ) => {
     const filename = resolver.modulePath(member);
-    const { parse }: typeof import("@babel/parser") = hostRequire("@babel/parser");
-    const { default: traverse }: typeof import("@babel/traverse") = hostRequire("@babel/traverse");
     const ast = parse(source, {
       sourceType: "unambiguous",
       createImportExpressions: true,
@@ -388,11 +357,24 @@ export function createPluginSharedSnapshotModuleLoader(options: Options) {
       if (node?.start == null || node.end == null) {
         return;
       }
+      const selected = resolve(filename, node.value, false);
+      const self =
+        selected.generated &&
+        [...compilers.values()].some((compiler) => {
+          const entry = compiler.sourceForOutput(selected.filename);
+          return entry && !entry.generated && resolver.modulePath(entry.source) === filename;
+        });
+      const destination = self
+        ? resolve(filename, pathToFileURL(filename).href + suffix, false)
+        : selected;
       edits.push({
         start: node.start,
         end: node.end,
-        value: JSON.stringify(target(resolve(filename, node.value, false), "native")),
+        value: JSON.stringify(compiled ? typedTarget(destination) : target(destination, "native")),
       });
+      if (compiled && selected.filename.endsWith(".json") && !declaration.node.attributes?.length) {
+        edits.push({ start: node.end, end: node.end, value: ' with { type: "json" }' });
+      }
     };
     traverse(ast, {
       "ImportDeclaration|ExportNamedDeclaration|ExportAllDeclaration": staticTarget,
@@ -412,7 +394,7 @@ export function createPluginSharedSnapshotModuleLoader(options: Options) {
         edits.push({
           start: expression.node.start,
           end: expression.node.start + 6,
-          value: `${access}.importFor(${JSON.stringify(filename)})`,
+          value: `${access}.importFor(${JSON.stringify(filename)},${compiled})`,
         });
       },
       MetaProperty(meta) {
@@ -430,7 +412,7 @@ export function createPluginSharedSnapshotModuleLoader(options: Options) {
       edits.push({
         start: position,
         end: position,
-        value: `\nrequire=${access}.requireFor(${JSON.stringify(filename)}); module.require=require; Object.defineProperty(module,'constructor',{value:${access}.moduleFacade,writable:true,configurable:true}); __filename=${JSON.stringify(filename)}; __dirname=${JSON.stringify(path.dirname(filename))}; module.filename=__filename; module.id=__filename; module.path=__dirname; ${access}.registerModule(__filename,module);\n`,
+        value: `\nrequire=${access}.requireFor(${JSON.stringify(filename)}); module.require=require; Object.defineProperty(module,'constructor',{value:${access}.moduleFacade,writable:true,configurable:true}); __filename=${JSON.stringify(filename)}; __dirname=${JSON.stringify(path.dirname(filename))}; module.filename=__filename; module.id=__filename; module.path=__dirname; ${ownerAccess}.registerModule(__filename,module,${JSON.stringify(suffix)});\n`,
       });
     } else if (bunRequire) {
       // Bun's implicit ESM require must retain the source anchor and the verified resolver.
@@ -445,24 +427,34 @@ export function createPluginSharedSnapshotModuleLoader(options: Options) {
     for (const edit of edits.toSorted((a, b) => b.start - a.start || b.end - a.end)) {
       output = output.slice(0, edit.start) + edit.value + output.slice(edit.end);
     }
-    return output;
+    const interpreter = commonjs ? ast.program.interpreter?.start : undefined;
+    const scanner =
+      interpreter == null
+        ? output
+        : `${output.slice(0, interpreter)}//${output.slice(interpreter + 2)}`;
+    // Node executes the original body; its scanner and Bun's _compile need no interpreter.
+    return commonjs && !process.versions.bun
+      ? `module.exports=${ownerAccess}.compileCommonJs(module,${JSON.stringify(filename)},${JSON.stringify(output)});return;\n${scanner}`
+      : scanner;
   };
   const cjs = (selected: PluginSnapshotResolvedModule) => {
-    const key = resolver.modulePath(selected.filename);
+    const suffix = new URL(selected.url).search + new URL(selected.url).hash;
+    const key = resolver.modulePath(selected.filename) + (process.versions.bun ? suffix : "");
     const prior = cacheEntries[key];
     if (prior) {
       return prior.exports;
     }
     const module = new Module(key);
     module.filename = selected.filename;
-    module.require = requireFor(selected.filename);
+    module.require = dispatch.requireFor(selected.filename);
     cacheEntries[key] = module;
     try {
       const compile: (source: string, filename: string) => void = Reflect.get(
         module,
         "_compile",
       ).bind(module);
-      compile(transform(sourceText(selected.filename), selected.filename, true), selected.filename);
+      const source = sourceText(selected.filename, true);
+      compile(transform(source, selected.filename, true, suffix), selected.filename);
       module.loaded = true;
       if (mainFilename === key) {
         module.id = ".";
@@ -475,11 +467,21 @@ export function createPluginSharedSnapshotModuleLoader(options: Options) {
     }
   };
   const runtime: Runtime = {
-    requireFor,
-    moduleFacade,
-    loadNative(filename) {
-      return verify(() => options.loadNativeModule(filename, read(filename)));
+    dispatch,
+    compileCommonJs(module, filename, source) {
+      active();
+      const compile: (source: string, filename: string) => void = Reflect.get(
+        module,
+        "_compile",
+      ).bind(module);
+      compile(source, filename);
+      return module.exports;
     },
+    requireFor,
+    resolveFrom: (filename, specifier, requiring) =>
+      target(resolve.fromHook(filename, specifier, requiring), requiring ? "sync" : "native"),
+    moduleFacade,
+    loadNative: (filename) => verify(() => options.loadNativeModule(filename, read(filename))),
     intercept(specifier, parent, requiring) {
       if (!options.interceptSourcePaths || isBuiltin(specifier)) {
         return undefined;
@@ -511,23 +513,27 @@ export function createPluginSharedSnapshotModuleLoader(options: Options) {
         requiring ? "sync" : "native",
       );
     },
-    registerModule(filename: string, module: NodeJS.Module) {
-      cacheEntries[resolver.modulePath(filename)] = module;
+    registerModule(filename: string, module: NodeJS.Module, suffix = "") {
+      cacheEntries[resolver.modulePath(filename) + (process.versions.bun ? suffix : "")] = module;
       if (mainFilename === filename) {
         module.id = ".";
         mainModule = module;
       }
     },
-    importFor(filename: string) {
-      let importer = importers.get(filename);
+    importFor(filename: string, compiled = false) {
+      const key = `${filename}\0${compiled}`;
+      let importer = importers.get(key);
       if (!importer) {
         importer = async (request: unknown, attributes?: ImportCallOptions) => {
           if (typeof request === "symbol") {
             throw new TypeError("Cannot convert a Symbol value to a string");
           }
+          const selected = resolve(filename, String(request), false);
           const value = await nativeImport(
-            target(resolve(filename, String(request), false)),
-            attributes,
+            compiled ? typedTarget(selected) : target(selected),
+            compiled && selected.filename.endsWith(".json")
+              ? withPluginSnapshotJsonAttribute(attributes)
+              : attributes,
           );
           return value &&
             typeof value === "object" &&
@@ -535,7 +541,7 @@ export function createPluginSharedSnapshotModuleLoader(options: Options) {
             ? Reflect.get(value, "openclaw:async-commonjs")
             : value;
         };
-        importers.set(filename, importer);
+        importers.set(key, importer);
       }
       return importer;
     },
@@ -574,18 +580,15 @@ export function createPluginSharedSnapshotModuleLoader(options: Options) {
         return module.trustedSource;
       }
       if (module.facade) {
-        return `const M=${access}.requireFor(${JSON.stringify(path.join(snapshot.rootDir, "index.cjs"))})(${JSON.stringify(module.facade)}); export default M; ${Object.keys(
-          hostRequire(module.facade),
-        )
-          .filter((key) => /^[a-z_$][\w$]*$/iu.test(key))
-          .map(
-            (key, index) =>
-              `const e${index}=M[${JSON.stringify(key)}];export {e${index} as ${key}};`,
-          )
-          .join("\n")}`;
+        return createPluginSnapshotBuiltinSource(
+          module.facade,
+          access,
+          snapshot.rootDir,
+          hostRequire,
+        );
       }
       if (module.native) {
-        return `module.exports=${access}.loadNative(${JSON.stringify(module.filename)});`;
+        return `module.exports=${ownerAccess}.loadNative(${JSON.stringify(module.filename)});`;
       }
       if (module.format === "addon") {
         throw new PluginSnapshotDependencyError(module.filename);
@@ -601,6 +604,10 @@ export function createPluginSharedSnapshotModuleLoader(options: Options) {
       | { contents: string; loader: "js" | "tsx" }
       | { exports: Record<string, unknown>; loader: "object" } {
       active();
+      const compiled = loadPluginSnapshotCompiledModule(compilers.values(), module);
+      if (compiled) {
+        return compiled;
+      }
       if (module.native) {
         const value = runtime.loadNative(module.filename);
         return { exports: { ...Object(value), default: value }, loader: "object" };
@@ -615,7 +622,7 @@ export function createPluginSharedSnapshotModuleLoader(options: Options) {
         const value: unknown = cjs({
           filename: module.filename,
           canonical: resolver.canonicalPath(module.filename),
-          url: pathToFileURL(module.filename).href,
+          url: pathToFileURL(module.filename).href + module.suffix,
         });
         const exports =
           value && (typeof value === "object" || typeof value === "function") ? { ...value } : {};
@@ -670,6 +677,7 @@ export function createPluginSharedSnapshotModuleLoader(options: Options) {
       }
       ownPaths.clear();
       state.instances.delete(id);
+      dispatch.dispose();
       for (const compiler of compilers.values()) {
         compiler.dispose();
       }
@@ -678,28 +686,15 @@ export function createPluginSharedSnapshotModuleLoader(options: Options) {
       metas.clear();
       importers.clear();
       targets.clear();
+      resolve.dispose();
       generated.clear();
-      verifiedSources.clear();
-      jsxTranspilers.clear();
+      sourceReader.dispose();
       detectedFormats.clear();
       builtinOverrides.clear();
     },
   };
   state.instances.set(id, runtime);
   installHooks();
-  const importerPath = path.join(directory, "native-import.mjs");
-  addVirtual(importerPath, {
-    filename: importerPath,
-    suffix: "",
-    format: "module",
-    generated: true,
-    trustedSource: "export const load = (specifier, options) => import(specifier, options);",
-  });
-  const nativeImport = (specifier: string, attributes?: ImportCallOptions): Promise<unknown> => {
-    const importer: {
-      load: (specifier: string, attributes?: ImportCallOptions) => Promise<unknown>;
-    } = hostRequire(pathToFileURL(importerPath).href);
-    return importer.load(specifier, attributes);
-  };
+  const nativeImport = createPluginSnapshotNativeImporter(directory, addVirtual, hostRequire);
   return runtime;
 }

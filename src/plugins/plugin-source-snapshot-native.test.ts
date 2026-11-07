@@ -22,17 +22,24 @@ afterEach(async () => {
   temporary.cleanup();
 });
 
-async function fixture() {
+async function fixture(nativeOwner: "dependency" | "plugin" = "dependency") {
   const stateDir = temporary.make("shared-native-");
   const source = path.join(stateDir, "installed");
-  const addon = path.join(source, "node_modules", "addon");
+  const addon = nativeOwner === "plugin" ? source : path.join(source, "node_modules", "addon");
   const companion = path.join(source, "node_modules", "companion");
   fs.mkdirSync(path.join(addon, "lib"), { recursive: true });
   fs.mkdirSync(companion, { recursive: true });
-  fs.writeFileSync(path.join(source, "package.json"), '{"dependencies":{"addon":"1"}}');
+  fs.writeFileSync(
+    path.join(source, "package.json"),
+    nativeOwner === "plugin"
+      ? '{"dependencies":{"companion":"1"}}'
+      : '{"dependencies":{"addon":"1"}}',
+  );
   fs.writeFileSync(path.join(source, "index.cjs"), "module.exports = 1");
   fs.writeFileSync(path.join(source, "unrelated.txt"), "not a native companion");
-  fs.writeFileSync(path.join(addon, "package.json"), '{"dependencies":{"companion":"1"}}');
+  if (nativeOwner === "dependency") {
+    fs.writeFileSync(path.join(addon, "package.json"), '{"dependencies":{"companion":"1"}}');
+  }
   fs.writeFileSync(path.join(addon, "lib", "addon.node"), "synthetic native bytes");
   fs.writeFileSync(path.join(addon, "lib", "data.txt"), "addon companion");
   fs.writeFileSync(path.join(companion, "package.json"), '{"name":"companion"}');
@@ -122,6 +129,25 @@ it("gives each native instance a private verified namespace without copying unre
     fs.readFileSync(path.join(nativePackage, "node_modules", "companion", "library.so"), "utf8"),
   ).toBe("synthetic companion bytes");
   expect(fs.existsSync(path.join(nativePackage, "unrelated.txt"))).toBe(false);
+});
+
+it("keeps every plugin-root companion private and verifies it again before dlopen", async () => {
+  const subject = await fixture("plugin");
+  const dlopen = fakeNativeLoader();
+  const first = subject.load();
+  const a = first.load(subject.addonFile) as { filename: string };
+  const b = subject.load().load(subject.addonFile) as { filename: string };
+  const asset = (filename: string) =>
+    path.join(path.dirname(path.dirname(filename)), "unrelated.txt");
+  expect(a.filename).not.toBe(b.filename);
+  expect(fs.readFileSync(asset(a.filename), "utf8")).toBe("not a native companion");
+  expect(fs.statSync(asset(a.filename), { bigint: true }).ino).not.toBe(
+    fs.statSync(asset(b.filename), { bigint: true }).ino,
+  );
+  fs.writeFileSync(asset(a.filename), "changed private companion");
+  expect(() => first.load(subject.addonFile)).toThrow();
+  expect(dlopen).toHaveBeenCalledTimes(2);
+  expect(fs.readFileSync(asset(b.filename), "utf8")).toBe("not a native companion");
 });
 
 it.each(["changed", "removed"])(

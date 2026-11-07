@@ -196,8 +196,13 @@ Each instance has its own module identity and evaluates verified module bytes. N
 addons keep private, separately admitted companion namespaces. Real `__dirname`,
 `import.meta.url`, assets and helper paths remain available.
 Native admission copies and verifies the owning package and its companion closure
-for each instance. An addon owned by the plugin root can therefore require work
-proportional to the complete plugin, even when JavaScript uses the shared tree.
+for each instance, and checks them again before each native load. Addons whose
+companion owner is the plugin root are explicitly exempt from constant-work
+startup: they keep the existing whole-plugin copy and pre-dlopen checks, including
+arbitrary package-relative companions and private mutable native state. Their work
+remains proportional to the complete plugin. The shared-tree speedup applies to
+pure-JavaScript plugins and the JavaScript part of a mixed installation; it does
+not narrow the native companion contract or defer native verification to the scrub.
 
 The reader's full-tree scrub runs once per start in bounded steps on the existing
 preparation worker pool after startup settles. It checks bytes, membership, type, owner, mode, link count
@@ -225,6 +230,13 @@ lazy publication only when their persisted content and closure digests match a f
 capture; otherwise they keep fresh capture until reinstall/update. The first
 publication run finishes with its already prepared generation. Failure of optional
 publication keeps a valid fresh capture, while loss of install authority fails closed.
+
+Lazy capture and publication begin only after registration and startup work settle,
+at low priority when the existing preparation worker pool is idle. They do not delay
+the first runtime-ready result. Shutdown cancels queued work and joins any in-flight
+atomic worker operation before releasing its source custody; cancellation does not
+preempt an operation already running. Digests, dependency closure, and current
+installation authority still verify before publication.
 
 Staging paths cannot be acquired, even with complete receipts. After an interrupted publication, cleanup reclaims staged source only after its writer's custody token is released; completed snapshots remain protected by the installed index and their readers. Before leaving staging, the installed-index SQLite owner journals the completed candidate, including on the first install. The index commit atomically takes ownership from that journal. If the installer exits before commit, lifecycle cleanup can reclaim the unreferenced candidate after writer custody releases.
 

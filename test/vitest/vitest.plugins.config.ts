@@ -23,6 +23,8 @@ export const nativeLoaderPluginTestFiles = [
   "src/plugins/plugin-sdk-native-resolver.test.ts",
   "src/plugins/plugin-snapshot-child-host.test.ts",
   "src/plugins/plugin-source-snapshot-loader.test.ts",
+  "src/plugins/plugin-source-snapshot-identity.test.ts",
+  "src/plugins/plugin-source-snapshot-windows.test.ts",
   "src/plugins/public-surface-loader.test.ts",
   "src/plugins/sdk-alias.test.ts",
   "src/plugins/stage-bundled-plugin-runtime.test.ts",

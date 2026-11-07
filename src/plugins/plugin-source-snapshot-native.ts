@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { isPathInside } from "../infra/path-guards.js";
@@ -24,7 +23,11 @@ type Namespace = {
   root: ReturnType<typeof createPluginNativeCaptureRoot>;
 };
 
-/** Native addons retain real, private companion paths and the existing mapped-image owner. */
+/**
+ * Native addons retain real, private companion paths and the existing mapped-image owner.
+ * A plugin-root owner deliberately keeps whole-plugin admission: arbitrary companions
+ * are part of the native contract, so this path is exempt from constant-work startup.
+ */
 export function createPluginSharedSnapshotNativeLoader(
   snapshot: AcquiredPluginSharedSourceSnapshot,
 ) {
@@ -179,18 +182,17 @@ export function createPluginSharedSnapshotNativeLoader(
       if (!member || !entry || member.source !== selected.source) {
         fail(selected.logical, "native namespace membership changed");
       }
-      retained.assertMemberPath(selected.logical);
       if (member.sourceIdentity !== entry.identity) {
         fail(selected.logical, "source identity changed");
       }
       if (entry.kind === "file") {
-        const bytes = retained.readVerifiedFile(selected.logical);
-        if (
-          member.sizeBytes !== bytes.length ||
-          member.contentHash !== createHash("sha256").update(bytes).digest("hex")
-        ) {
+        if (member.sizeBytes !== entry.sizeBytes || member.contentHash !== entry.contentHash) {
           fail(selected.logical, "copied native companion differs from authenticated bytes");
         }
+        // The guarded read verifies the same manifest digest and its full member path.
+        retained.readVerifiedFile(selected.logical);
+      } else {
+        retained.assertMemberPath(selected.logical);
       }
     }
     if (!pluginNativeNamespaceIsCurrent(fact, snapshot.payloadRoot)) {

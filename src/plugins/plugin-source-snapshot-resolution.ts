@@ -342,18 +342,11 @@ export function createPluginSnapshotResolver(
     });
     return selected ? configAt(selected) : undefined;
   };
-  const resolve = (
-    from: string,
+  const resolveExternal = (
     request: string,
+    importer: string,
     conditions: readonly string[],
-    native = false,
-    depth = 0,
-    paths?: readonly string[],
-  ): PluginSnapshotResolvedModule => {
-    const importer = modulePath(from);
-    if (depth > 64) {
-      throw new PluginSnapshotDependencyError(request);
-    }
+  ): PluginSnapshotResolvedModule | undefined => {
     const hosted = options.resolveHostModule?.(request, importer, conditions);
     if (hosted) {
       return {
@@ -367,6 +360,24 @@ export function createPluginSnapshotResolver(
       const builtin = request.startsWith("node:") ? request : `node:${request}`;
       return { filename: builtin, canonical: builtin, url: builtin, external: true };
     }
+    return undefined;
+  };
+  const resolve = (
+    from: string,
+    request: string,
+    conditions: readonly string[],
+    native = false,
+    depth = 0,
+    paths?: readonly string[],
+  ): PluginSnapshotResolvedModule => {
+    const importer = modulePath(from);
+    if (depth > 64) {
+      throw new PluginSnapshotDependencyError(request);
+    }
+    const external = resolveExternal(request, importer, conditions);
+    if (external) {
+      return external;
+    }
     const importing = !conditions.includes("require");
     const nativeOrder = importing
       ? undefined
@@ -379,6 +390,10 @@ export function createPluginSnapshotResolver(
     const alias = aliases.find((key) => request === key || request.startsWith(`${key}/`));
     if (alias) {
       specifier = options.alias![alias]! + request.slice(alias.length);
+      const aliasedExternal = resolveExternal(specifier, importer, conditions);
+      if (aliasedExternal) {
+        return aliasedExternal;
+      }
     }
     if (specifier.startsWith(".") || specifier.startsWith("file:") || path.isAbsolute(specifier)) {
       if (paths && specifier.startsWith(".")) {
@@ -419,22 +434,27 @@ export function createPluginSnapshotResolver(
       throw new PluginSnapshotDependencyError(request);
     }
     const selectMap = (map: unknown, directory: string, subpath: string, internal: boolean) => {
+      let resolvedPackage: PluginSnapshotResolvedModule | undefined;
       const url = selectPluginSnapshotPackageMap(map, {
         packageDir: directory,
         request: subpath,
         conditions: new Set(conditions),
         internal,
         runtime,
-        resolvePackage: (target) =>
-          new URL(
-            resolve(path.join(directory, "package.json"), target, conditions, native, depth + 1)
-              .url,
-          ),
+        resolvePackage: (target) => {
+          resolvedPackage = resolve(
+            path.join(directory, "package.json"),
+            target,
+            conditions,
+            native,
+            depth + 1,
+          );
+          return new URL(resolvedPackage.url);
+        },
       });
-      if (url.protocol !== "file:") {
-        return { filename: url.href, canonical: url.href, url: url.href, external: true as const };
-      }
-      return asModule(fileURLToPath(url), importing ? url.search + url.hash : "");
+      return (
+        resolvedPackage ?? asModule(fileURLToPath(url), importing ? url.search + url.hash : "")
+      );
     };
     const ownScope = scope(importer);
     if (specifier.startsWith("#")) {
@@ -531,7 +551,7 @@ export function createPluginSnapshotResolver(
     const selected =
       !subpath || !native || !importing
         ? // The cold capture owner resolves legacy packages through Node's package resolver on both runtimes.
-          legacyResolve(target, "", importing ? undefined : nodeExtensions)
+          legacyResolve(target, "", nodeExtensions)
         : file(target);
     if (!selected) {
       throw new PluginSnapshotDependencyError(request);

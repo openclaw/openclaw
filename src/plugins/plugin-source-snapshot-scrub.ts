@@ -190,56 +190,68 @@ export type PluginSnapshotScrubOutcome = {
   error?: unknown;
 };
 
+/** Post-ready work yields once and keeps cancellation joined to its resource owner. */
+export function createPluginSnapshotBackgroundWork(
+  run: (signal: AbortSignal) => Promise<PluginSnapshotScrubOutcome>,
+) {
+  const controller = new AbortController();
+  let task: Promise<PluginSnapshotScrubOutcome> | undefined;
+  return {
+    start() {
+      return (task ??= (async () => {
+        try {
+          await nextTurn(undefined, { signal: controller.signal });
+          return await run(controller.signal);
+        } catch (error) {
+          if (controller.signal.aborted) {
+            return { status: "cancelled" };
+          }
+          throw error;
+        }
+      })());
+    },
+    async cancel() {
+      controller.abort();
+      await task;
+    },
+  };
+}
+
 /** The existing preparation pool grants each bounded scrub step only while foreground work is idle. */
 export function createPluginSnapshotScrub(params: {
   create(): PluginSourceSnapshotScrub;
   waitForIdle(signal: AbortSignal): Promise<void>;
   onFailure(error: unknown): Promise<void>;
 }) {
-  const controller = new AbortController();
-  let task: Promise<PluginSnapshotScrubOutcome> | undefined;
-  let last: PluginSourceSnapshotScrubReport | undefined;
-  const run = async (): Promise<PluginSnapshotScrubOutcome> => {
+  return createPluginSnapshotBackgroundWork(async (signal) => {
     let cursor: PluginSourceSnapshotScrub | undefined;
+    let last: PluginSourceSnapshotScrubReport | undefined;
     try {
-      // Startup's promise continuations settle before the first worker request.
-      await nextTurn(undefined, { signal: controller.signal });
-      await params.waitForIdle(controller.signal);
-      controller.signal.throwIfAborted();
+      await params.waitForIdle(signal);
+      signal.throwIfAborted();
       cursor = params.create();
       do {
-        await params.waitForIdle(controller.signal);
-        controller.signal.throwIfAborted();
+        await params.waitForIdle(signal);
+        signal.throwIfAborted();
         last = await cursor.step({ maxFiles: 16, maxBytes: 256 * 1024 });
         if (!last.done) {
-          await nextTurn(undefined, { signal: controller.signal });
+          await nextTurn(undefined, { signal });
         }
       } while (!last.done);
       return { status: "passed", report: last };
     } catch (error) {
-      if (controller.signal.aborted) {
+      if (signal.aborted) {
         return { status: "cancelled", report: last };
       }
       await params.onFailure(error);
       return { status: "failed", report: last, error };
     } finally {
       // Session shutdown owns cancellation cleanup after this in-flight step has joined.
-      if (!controller.signal.aborted) {
+      if (!signal.aborted) {
         await cursor?.dispose();
       }
     }
-  };
-  return {
-    start() {
-      return (task ??= controller.signal.aborted
-        ? Promise.resolve({ status: "cancelled", report: last })
-        : run());
-    },
-    async cancel() {
-      controller.abort();
-      return await (task ?? Promise.resolve({ status: "cancelled", report: last }));
-    },
-  };
+  });
 }
 
 /** Wait only between bounded scrub steps; foreground preparation retains priority. */

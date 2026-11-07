@@ -323,7 +323,12 @@ export function createPluginModuleLoader(options: {
             const startScrub = preparedArtifact.startScrub;
             registerPluginSnapshotScrub(
               instance,
-              () => startScrub(async () => {}),
+              () =>
+                startScrub(async (error) => {
+                  if (error instanceof PluginInventoryRetiredError) {
+                    instance.quiesce();
+                  }
+                }),
               async () => await preparedArtifact.cancelScrub?.(),
             );
           }

@@ -88,8 +88,7 @@ export type PreparedPluginSourceSnapshot = {
   disposeAsync(): Promise<void>;
 };
 type CaptureCommand = Extract<GenerationWorkerInput, { operation: "capture" }>;
-type OwnedPreparationParameters = PreparationParameters &
-  Pick<
+type OwnedPreparationParameters = PreparationParameters & { backgroundSignal?: AbortSignal } & Pick<
     CaptureCommand,
     | "retainSourceCustody"
     | "sourceCustodyId"
@@ -281,10 +280,12 @@ export async function preparePluginSourceSnapshot(params: {
   rootDir: string;
   stateDir: string;
   shared?: true;
+  backgroundSignal?: AbortSignal;
 }): Promise<PreparedPluginSourceSnapshot> {
   const prepared = await prepareOwnedPluginGeneration({
     rootDir: params.rootDir,
     source: params.rootDir,
+    backgroundSignal: params.backgroundSignal,
     snapshotPublication: {
       stateDir: params.stateDir,
       shared: params.shared,
@@ -295,6 +296,7 @@ export async function preparePluginSourceSnapshot(params: {
     // SAFETY: The source-only command returns the worker's owned staging handle.
     prepared.value as Parameters<typeof bindPluginSnapshotPublication>[0],
     params.stateDir,
+    params.backgroundSignal,
   );
 }
 
@@ -473,7 +475,9 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
         asynchronous,
         args: codec.encodeArguments(args),
       };
-      return asynchronous ? request(command, sourceCapture) : requestSync(command, sourceCapture);
+      return asynchronous
+        ? request(command, sourceCapture, !disposal)
+        : requestSync(command, sourceCapture);
     },
     {
       exportRoot: () => {
@@ -526,7 +530,15 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
     }
     return codec.decode(reply.value);
   }
-  async function request(command: GenerationWorkerInput, sourceCapture = false): Promise<unknown> {
+  async function request(
+    command: GenerationWorkerInput,
+    sourceCapture = false,
+    background = true,
+  ): Promise<unknown> {
+    if (background && params.backgroundSignal) {
+      await shared.waitForIdle(params.backgroundSignal);
+      params.backgroundSignal.throwIfAborted();
+    }
     if (closing) {
       throw new Error("Plugin preparation worker has closed");
     }

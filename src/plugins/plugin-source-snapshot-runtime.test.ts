@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -7,10 +8,15 @@ import { closeDefaultRetainedNativeWorkerSource } from "../infra/worker-native-l
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
-import { resolvePluginInstallRoots, withPluginInstallRoots } from "./install-root-context.js";
+import {
+  resolveActivePluginInstallRoots,
+  resolvePluginInstallRoots,
+  withPluginInstallRoots,
+} from "./install-root-context.js";
 import { indexStoreFixture } from "./installed-plugin-index-family.test-support.js";
 import { refreshPersistedInstalledPluginIndexWithReceipt } from "./installed-plugin-index-store-write.js";
 import { parseInstalledPluginIndex } from "./installed-plugin-index-store.js";
+import * as installedIndex from "./installed-plugin-index-store.js";
 import {
   adoptProcessPluginCache,
   createPluginCache,
@@ -18,6 +24,10 @@ import {
   retirePluginCache,
   withPluginCache,
 } from "./plugin-cache.js";
+import {
+  createPluginGenerationMetrics,
+  withPluginGenerationMetrics,
+} from "./plugin-generation-metrics.js";
 import * as worker from "./plugin-generation-worker.js";
 import { PluginInventoryRetiredError } from "./plugin-instance-error.js";
 import { PluginInstance } from "./plugin-instance.js";
@@ -28,9 +38,15 @@ import { collectPluginSourceSnapshots } from "./plugin-source-snapshot-artifact.
 import type { ManagedPluginSnapshotIdentity } from "./plugin-source-snapshot-options.js";
 import { prepareInstalledPluginGenerationArtifact } from "./plugin-source-snapshot-runtime.js";
 import {
+  createPluginSnapshotScrubOwner,
+  registerPluginSnapshotScrub,
+} from "./plugin-source-snapshot-scrub.js";
+import {
   PluginSourceSnapshotDescriptorSchema,
   type PluginSourceSnapshotDescriptor,
 } from "./plugin-source-snapshot.types.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { createPluginRecord } from "./status.test-helpers.js";
 import { createInstalledPluginIndexCandidate } from "./test-helpers/installed-plugin-index.js";
 
 const temp = useAutoCleanupTempDirTracker((cleanup) =>
@@ -56,6 +72,9 @@ async function withFixture(
     writeSnapshot: (descriptor: PluginSourceSnapshotDescriptor) => Promise<void>;
     refresh: (record: PluginInstallRecord) => Promise<unknown>;
     prepare: (
+      installation?: ManagedPluginSnapshotIdentity,
+    ) => ReturnType<typeof prepareInstalledPluginGenerationArtifact>;
+    preparePublished: (
       installation?: ManagedPluginSnapshotIdentity,
     ) => ReturnType<typeof prepareInstalledPluginGenerationArtifact>;
     removeInstallation: () => Promise<unknown>;
@@ -131,7 +150,40 @@ async function withFixture(
               return null;
             }
             const envelope = JSON.parse(row.value_json) as { index: unknown };
-            return parseInstalledPluginIndex(envelope.index);
+            const index = parseInstalledPluginIndex(envelope.index);
+            const snapshot = PluginSourceSnapshotDescriptorSchema.safeParse(
+              index?.plugins[0]?.sourceSnapshot,
+            );
+            if (snapshot.success && !owned.has(snapshot.data.artifact.path)) {
+              owned.set(snapshot.data.artifact.path, snapshot.data);
+            }
+            return index;
+          };
+          const prepare = async (
+            installation = {
+              installOwner: "package-owner",
+              installRecordHash: read()!.plugins[0]!.installRecordHash!,
+            },
+          ) =>
+            await prepareInstalledPluginGenerationArtifact({
+              installation,
+              pluginId: "demo",
+              rootDir,
+              source: entry,
+              onWarning: (message, origin) => warnings.push({ message, source: origin }),
+            });
+          const preparePublished = async (installation?: ManagedPluginSnapshotIdentity) => {
+            const prepared = await prepare(installation);
+            try {
+              if (!prepared.artifact.sharedSnapshot) {
+                await prepared.startScrub?.(async () => {});
+              }
+              read();
+              return prepared;
+            } catch (error) {
+              await prepared.artifact.disposeAsync();
+              throw error;
+            }
           };
           await run({
             rootDir,
@@ -153,27 +205,8 @@ async function withFixture(
                 installRecords: {},
                 reason: "source-changed",
               }),
-            prepare: async (
-              installation = {
-                installOwner: "package-owner",
-                installRecordHash: read()!.plugins[0]!.installRecordHash!,
-              },
-            ) => {
-              const prepared = await prepareInstalledPluginGenerationArtifact({
-                installation,
-                pluginId: "demo",
-                rootDir,
-                source: entry,
-                onWarning: (message, origin) => warnings.push({ message, source: origin }),
-              });
-              const snapshot = PluginSourceSnapshotDescriptorSchema.safeParse(
-                read()?.plugins[0]?.sourceSnapshot,
-              );
-              if (snapshot.success && !owned.has(snapshot.data.artifact.path)) {
-                owned.set(snapshot.data.artifact.path, snapshot.data);
-              }
-              return prepared;
-            },
+            prepare,
+            preparePublished,
             selectInventory: () => adoptProcessPluginCache(cache),
             inventoryRetired: () => Boolean(cache.retirement),
           });
@@ -191,6 +224,180 @@ async function withFixture(
     ),
   );
 }
+
+it("defers lazy publication until the registered post-ready owner starts", async () => {
+  await withFixture(true, async (fixture) => {
+    const source = worker.preparePluginSourceSnapshot;
+    const publish = vi.spyOn(worker, "preparePluginSourceSnapshot").mockImplementation((params) => {
+      expect(resolveActivePluginInstallRoots().stateDir).toBe(path.dirname(fixture.rootDir));
+      return source(params);
+    });
+    const metrics = createPluginGenerationMetrics();
+    const prepared = await withPluginGenerationMetrics(metrics, () => fixture.prepare());
+    const startupMetrics = { ...metrics };
+    const capturedRoot = prepared.artifact.boundaryRoot;
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: "demo" });
+    registry.plugins.push(record);
+    const instance = new PluginInstance(record.id, { record, registry });
+    const owner = createPluginSnapshotScrubOwner(registry);
+    try {
+      expect(publish).not.toHaveBeenCalled();
+      expect(fixture.read()?.plugins[0]).not.toHaveProperty("sourceSnapshot");
+      expect(prepared.startScrub).toBeTypeOf("function");
+      registerPluginSnapshotScrub(
+        instance,
+        () => prepared.startScrub!(async () => {}),
+        async () => prepared.cancelScrub?.(),
+      );
+      await nextTurn();
+      expect(publish).not.toHaveBeenCalled();
+      const otherRoots = resolvePluginInstallRoots({
+        ...process.env,
+        OPENCLAW_STATE_DIR: temp.make("publication-caller-"),
+      });
+      expect(await withPluginInstallRoots(otherRoots, () => owner.start())).toEqual([
+        { status: "passed" },
+      ]);
+      expect(metrics).toEqual(startupMetrics);
+      expect(publish).toHaveBeenCalledOnce();
+      const descriptor = PluginSourceSnapshotDescriptorSchema.parse(
+        fixture.read()?.plugins[0]?.sourceSnapshot,
+      );
+      expect(descriptor.contentDigest).toBe(
+        fixture.record.sourceSnapshotDigests?.demo?.contentDigest,
+      );
+      expect(prepared.artifact.boundaryRoot).toBe(capturedRoot);
+      expect(prepared.artifact.sharedSnapshot).toBeUndefined();
+      await prepared.assertCurrent();
+    } finally {
+      await owner.stop();
+      await instance.dispose();
+      await prepared.artifact.disposeAsync();
+    }
+  });
+});
+
+it("cancels unpublished post-ready work before dispatch", async () => {
+  await withFixture(true, async (fixture) => {
+    const publish = vi.spyOn(worker, "preparePluginSourceSnapshot");
+    const prepared = await fixture.prepare();
+    try {
+      expect(publish).not.toHaveBeenCalled();
+      const work = prepared.startScrub!(async () => {});
+      await prepared.cancelScrub?.();
+      expect((await work).status).toBe("cancelled");
+      expect(publish).not.toHaveBeenCalled();
+      expect(fixture.read()?.plugins[0]).not.toHaveProperty("sourceSnapshot");
+    } finally {
+      await prepared.artifact.disposeAsync();
+    }
+  });
+});
+
+it.each(["cancel", "dispose"] as const)(
+  "joins an in-flight publication capture before %s releases its custody",
+  async (ending) => {
+    await withFixture(true, async (fixture) => {
+      const captured = createDeferredCore();
+      const resume = createDeferredCore();
+      const original = worker.preparePluginSourceSnapshot;
+      const disposed = vi.fn();
+      let signal: AbortSignal | undefined;
+      vi.spyOn(worker, "preparePluginSourceSnapshot").mockImplementationOnce(async (params) => {
+        signal = params.backgroundSignal;
+        const snapshot = await original(params);
+        captured.resolve();
+        await resume.promise;
+        return {
+          ...snapshot,
+          disposeAsync: async () => {
+            await snapshot.disposeAsync();
+            disposed();
+          },
+        };
+      });
+      const prepared = await fixture.prepare();
+      const publication = prepared.startScrub!(async () => {});
+      let joined = false;
+      try {
+        await captured.promise;
+        if (ending === "dispose") {
+          prepared.artifact.dispose();
+        }
+        const cancel = (
+          ending === "dispose" ? prepared.artifact.disposeAsync() : prepared.cancelScrub!()
+        ).then(() => {
+          joined = true;
+        });
+        expect(signal?.aborted).toBe(true);
+        await nextTurn();
+        expect(joined).toBe(false);
+        expect(fs.existsSync(prepared.artifact.boundaryRoot)).toBe(true);
+        resume.resolve();
+        await cancel;
+        expect((await publication).status).toBe("cancelled");
+        expect(disposed).toHaveBeenCalledOnce();
+        expect(fixture.read()?.plugins[0]).not.toHaveProperty("sourceSnapshot");
+      } finally {
+        resume.resolve();
+        await publication;
+        await prepared.artifact.disposeAsync();
+      }
+    });
+  },
+);
+
+it("retires the capture when background publication cannot verify install authority", async () => {
+  await withFixture(true, async (fixture) => {
+    const prepared = await fixture.prepare();
+    const onFailure = vi.fn(async () => {});
+    const read = vi
+      .spyOn(installedIndex, "readCurrentInstalledPluginIndex")
+      .mockRejectedValue(new Error("installation authority is unavailable"));
+    try {
+      expect(await prepared.startScrub!(onFailure)).toMatchObject({
+        status: "failed",
+        error: expect.any(PluginInventoryRetiredError),
+      });
+      expect(onFailure).toHaveBeenCalledWith(expect.any(PluginInventoryRetiredError));
+      read.mockRestore();
+      await expect(prepared.assertCurrent()).rejects.toBeInstanceOf(PluginInventoryRetiredError);
+      expect(fixture.warnings[0]?.message).toContain("Retiring this runtime instance");
+    } finally {
+      read.mockRestore();
+      await prepared.artifact.disposeAsync();
+    }
+  });
+});
+
+it("converges concurrent lazy publishers without replacing either first capture", async () => {
+  await withFixture(true, async (fixture) => {
+    const first = await fixture.prepare();
+    const second = await fixture.prepare();
+    const onFailure = vi.fn(async () => {});
+    try {
+      const roots = [first.artifact.boundaryRoot, second.artifact.boundaryRoot];
+      const outcomes = await Promise.all([
+        first.startScrub!(onFailure),
+        second.startScrub!(onFailure),
+      ]);
+      expect(outcomes.map((outcome) => outcome.status)).toEqual(["passed", "passed"]);
+      expect(onFailure).not.toHaveBeenCalled();
+      expect([first.artifact.boundaryRoot, second.artifact.boundaryRoot]).toEqual(roots);
+      expect(roots.every((root) => fs.existsSync(root))).toBe(true);
+      await first.assertCurrent();
+      await second.assertCurrent();
+      expect(
+        PluginSourceSnapshotDescriptorSchema.safeParse(fixture.read()?.plugins[0]?.sourceSnapshot)
+          .success,
+      ).toBe(true);
+    } finally {
+      await first.artifact.disposeAsync();
+      await second.artifact.disposeAsync();
+    }
+  });
+});
 
 it.each(["removed", "replaced"] as const)(
   "rejects a %s installation before preparing a stale managed candidate",
@@ -220,14 +427,14 @@ it.each(["removed", "replaced"] as const)(
 it("keeps the selected inventory alive while replacing an invalid named snapshot", async () => {
   try {
     await withFixture(true, async (fixture) => {
-      const initial = await fixture.prepare();
+      const initial = await fixture.preparePublished();
       await initial.artifact.disposeAsync();
       const descriptor = PluginSourceSnapshotDescriptorSchema.parse(
         fixture.read()?.plugins[0]?.sourceSnapshot,
       );
       fs.appendFileSync(path.join(descriptor.artifact.path, "manifest.json"), "corrupt");
       fixture.selectInventory();
-      const prepared = await fixture.prepare();
+      const prepared = await fixture.preparePublished();
       try {
         expect(fixture.warnings).toHaveLength(1);
         expect(fixture.inventoryRetired()).toBe(false);
@@ -243,12 +450,12 @@ it("keeps the selected inventory alive while replacing an invalid named snapshot
 
 it("allows raw child reads, then retires corruption at scrub and recaptures next start", async () => {
   await withFixture(true, async (fixture) => {
-    const first = await fixture.prepare();
+    const first = await fixture.preparePublished();
     await first.artifact.disposeAsync();
     const bad = PluginSourceSnapshotDescriptorSchema.parse(
       fixture.read()?.plugins[0]?.sourceSnapshot,
     );
-    const prepared = await fixture.prepare();
+    const prepared = await fixture.preparePublished();
     const host = createPluginSnapshotChildHost({ snapshot: prepared.artifact.sharedSnapshot! });
     const childPath = prepared.artifact.resolve(
       path.join(fixture.rootDir, "node_modules", "dep", "index.js"),
@@ -292,7 +499,7 @@ it("allows raw child reads, then retires corruption at scrub and recaptures next
       await host.disposeAsync();
       await prepared.artifact.disposeAsync();
     }
-    const next = await fixture.prepare();
+    const next = await fixture.preparePublished();
     try {
       expect(
         PluginSourceSnapshotDescriptorSchema.parse(fixture.read()?.plugins[0]?.sourceSnapshot)
@@ -307,7 +514,7 @@ it("allows raw child reads, then retires corruption at scrub and recaptures next
 
 it("keeps legacy installations without a digest on the fresh capture path", async () => {
   await withFixture(false, async (fixture) => {
-    const prepared = await fixture.prepare();
+    const prepared = await fixture.preparePublished();
     try {
       expect(fs.readFileSync(prepared.artifact.resolve(fixture.entry), "utf8")).toContain(
         "installed",
@@ -322,14 +529,14 @@ it("keeps legacy installations without a digest on the fresh capture path", asyn
 
 it("lazily publishes an eligible installation and starts again with its original tree absent", async () => {
   await withFixture(true, async (fixture) => {
-    const first = await fixture.prepare();
+    const first = await fixture.preparePublished();
     await first.artifact.disposeAsync();
     const snapshot = PluginSourceSnapshotDescriptorSchema.parse(
       fixture.read()?.plugins[0]?.sourceSnapshot,
     );
     expect(snapshot.contentDigest).toBe(fixture.record.sourceSnapshotDigests?.demo?.contentDigest);
     fs.rmSync(fixture.rootDir, { recursive: true });
-    const second = await fixture.prepare();
+    const second = await fixture.preparePublished();
     try {
       expect(fs.readFileSync(second.artifact.resolve(fixture.entry), "utf8")).toContain(
         "installed",
@@ -367,7 +574,7 @@ it.each(["capture", "publication"] as const)(
           },
         };
       });
-      const prepared = await fixture.prepare();
+      const prepared = await fixture.preparePublished();
       try {
         expect(fs.readFileSync(prepared.artifact.resolve(fixture.entry), "utf8")).toContain(
           "installed",
@@ -399,7 +606,7 @@ it.each(invalidSnapshots.flatMap((damage) => [false, true].map((edited) => ({ da
   "invalidates $damage and only replaces a matching original (edited=$edited)",
   async ({ damage, edited }) => {
     await withFixture(true, async (fixture) => {
-      const first = await fixture.prepare();
+      const first = await fixture.preparePublished();
       await first.artifact.disposeAsync();
       const bad = PluginSourceSnapshotDescriptorSchema.parse(
         fixture.read()?.plugins[0]?.sourceSnapshot,
@@ -428,7 +635,7 @@ it.each(invalidSnapshots.flatMap((damage) => [false, true].map((edited) => ({ da
       if (edited) {
         fs.writeFileSync(fixture.entry, "export const value = 'edited';\n");
       }
-      const fresh = await fixture.prepare();
+      const fresh = await fixture.preparePublished();
       try {
         expect(fs.readFileSync(fresh.artifact.resolve(fixture.entry), "utf8")).toContain(
           edited ? "edited" : "installed",
@@ -466,12 +673,12 @@ it.each(
   "retires $use $damage corruption at load or scrub and recaptures next start",
   async ({ use, damage }) => {
     await withFixture(true, async (fixture) => {
-      const first = await fixture.prepare();
+      const first = await fixture.preparePublished();
       await first.artifact.disposeAsync();
       const bad = PluginSourceSnapshotDescriptorSchema.parse(
         fixture.read()?.plugins[0]?.sourceSnapshot,
       );
-      const prepared = await fixture.prepare();
+      const prepared = await fixture.preparePublished();
       const shared = prepared.artifact.sharedSnapshot!;
       const source =
         use === "used"
@@ -500,7 +707,7 @@ it.each(
       } finally {
         await prepared.artifact.disposeAsync();
       }
-      const next = await fixture.prepare();
+      const next = await fixture.preparePublished();
       try {
         expect(
           PluginSourceSnapshotDescriptorSchema.parse(fixture.read()?.plugins[0]?.sourceSnapshot)
@@ -515,14 +722,14 @@ it.each(
 
 it("retires an older format quietly and republishes only from a matching receipt", async () => {
   await withFixture(true, async (fixture) => {
-    const first = await fixture.prepare();
+    const first = await fixture.preparePublished();
     await first.artifact.disposeAsync();
     const older = PluginSourceSnapshotDescriptorSchema.parse(
       fixture.read()?.plugins[0]?.sourceSnapshot,
     );
     older.formatVersion = 1;
     await fixture.writeSnapshot(older);
-    const next = await fixture.prepare();
+    const next = await fixture.preparePublished();
     try {
       expect(fixture.warnings).toEqual([]);
       expect(
@@ -561,26 +768,34 @@ it("removes an unpublished candidate after a late owner swap while preserving th
         },
       };
     });
-    const preparing = fixture.prepare();
-    void preparing.catch(() => {});
+    const first = await fixture.prepare();
+    const onFailure = vi.fn(async () => {});
+    const publishing = first.startScrub!(onFailure);
     let successor: Awaited<ReturnType<typeof fixture.prepare>> | undefined;
     try {
       await published.promise;
       await fixture.refresh({ ...fixture.record, spec: "demo@2.0.0" });
-      successor = await fixture.prepare();
+      successor = await fixture.preparePublished();
       const current = PluginSourceSnapshotDescriptorSchema.parse(
         fixture.read()?.plugins[0]?.sourceSnapshot,
       );
       expect(current.artifact.path).not.toBe(candidate!.path);
       resume.resolve();
-      await expect(preparing).rejects.toBeInstanceOf(PluginInventoryRetiredError);
+      expect(await publishing).toMatchObject({
+        status: "failed",
+        error: expect.any(PluginInventoryRetiredError),
+      });
+      expect(onFailure).toHaveBeenCalledWith(expect.any(PluginInventoryRetiredError));
+      await expect(first.assertCurrent()).rejects.toBeInstanceOf(PluginInventoryRetiredError);
       expect(fs.existsSync(candidate!.path)).toBe(false);
-      expect(fs.existsSync(capturedRoot!)).toBe(false);
+      // The old instance is quiesced by its loader owner; custody remains until disposal.
+      expect(fs.existsSync(capturedRoot!)).toBe(true);
       expect(fs.existsSync(current.artifact.path)).toBe(true);
       expect(fixture.read()?.plugins[0]?.sourceSnapshot).toEqual(current);
     } finally {
       resume.resolve();
-      await preparing.catch(() => {});
+      await publishing;
+      await first.artifact.disposeAsync();
       await successor?.artifact.disposeAsync();
     }
   });
@@ -599,7 +814,7 @@ it("refuses binding and releases capture when the installed owner changes during
       await resume.promise;
       return prepared;
     });
-    const preparing = fixture.prepare();
+    const preparing = fixture.preparePublished();
     void preparing.catch(() => {});
     try {
       await started.promise;
@@ -616,12 +831,12 @@ it("refuses binding and releases capture when the installed owner changes during
 
 it("automatically retires a snapshot after a deferred module verification failure", async () => {
   await withFixture(true, async (fixture) => {
-    const first = await fixture.prepare();
+    const first = await fixture.preparePublished();
     await first.artifact.disposeAsync();
     const descriptor = PluginSourceSnapshotDescriptorSchema.parse(
       fixture.read()?.plugins[0]?.sourceSnapshot,
     );
-    const prepared = await fixture.prepare();
+    const prepared = await fixture.preparePublished();
     const instance = new PluginInstance("demo");
     bindPluginSharedSnapshotModuleLoader(
       {
