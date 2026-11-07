@@ -6,6 +6,19 @@ it("normalizes positive fractional limits without emitting empty chunks", () => 
   expect(chunkText("😀😀", 0.5)).toEqual(["😀", "😀"]);
 });
 
+it("keeps text whole for non-finite limits instead of emitting empty chunks", () => {
+  const text = "a message that must never vanish";
+  expect(chunkText(text, Number.NaN)).toEqual([text]);
+  for (const mode of ["hard", "preferred"] as const) {
+    expect(
+      chunkTextRanges(text, { limit: Number.NaN, mode }).map(({ start, end }) =>
+        text.slice(start, end),
+      ),
+      `mode: ${mode}`,
+    ).toEqual([text]);
+  }
+});
+
 it("keeps grapheme boundaries and surrogate-safe progress in each chunking mode", () => {
   const common = [
     { text: "aaaaaaaaaa👨‍👩‍👧‍👦Z", limit: 12, expected: ["aaaaaaaaaa", "👨‍👩‍👧‍👦Z"] },
