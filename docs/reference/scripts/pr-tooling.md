@@ -60,7 +60,10 @@ held on FD 9; an inherited path or a descendant does not grant deletion authorit
 Before an operation child starts, authenticated creator cleanup may retire the
 anchor. After dispatch, the supervisor retires it only after the process group
 has exited and the notification pipe has closed. A creator crash, uncertain drain,
-or changed creation evidence never automatically releases dependency holds.
+or changed creation evidence never automatically releases dependency holds. A
+closed output reader, as in `scripts/pr --help | head`, is an ordinary exit: the
+creator still retires its anchor and releases its holds, then exits 141. A selected
+revision older than the lifetime owner cannot release the hold its parent took.
 There is no startup stale-anchor sweep: PID death, age, and path disappearance on
 their own never authorize release or prove that inherited consumers finished. The
 only operator exception is [Release finished dependency holds](#release-finished-dependency-holds).
