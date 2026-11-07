@@ -4,13 +4,11 @@ import { i18n } from "../../../i18n/index.ts";
 import { channelSenderAvatarMemoKey } from "../../../lib/chat/channel-sender-avatar.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { localParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
-import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
-import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
 import { createPendingSteerLookup } from "../chat-pending-inputs.ts";
 import { resolveTurnRecap, shouldRenderQueuedSendInThread } from "../chat-progress.ts";
 import { projectChatReasoning } from "../chat-reasoning.ts";
-import { groupReadsHandoffRoster, projectSubagentStatus } from "../chat-subagent-wait.ts";
+import { projectSubagentStatus } from "../chat-subagent-wait.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import {
   buildCachedChatItems,
@@ -20,7 +18,7 @@ import {
   setExpansionState,
   syncToolCardExpansionState,
 } from "../chat-thread.ts";
-import { readAsyncQuestions } from "./chat-async-question-content.ts";
+import { isSessionActivityGroup } from "../chat-turn-boundary.ts";
 import { buildChatArchiveNotice } from "./chat-divider.ts";
 import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
@@ -51,8 +49,8 @@ import { projectTranscriptRecovery } from "./chat-transcript-recovery.ts";
 import {
   GuardedTranscriptItem,
   guardChatRenderItems,
+  inspectTranscriptContext,
   trackTranscriptRenderDependencies,
-  transcriptContextDependencies,
 } from "./chat-transcript-render-guard.ts";
 import type { NativeTranscriptView } from "./chat-transcript-rows.ts";
 import type { ChatTranscriptSession, TranscriptHeader } from "./chat-transcript-session.ts";
@@ -337,12 +335,12 @@ export function projectChatTranscript(
     runOutputTokens,
     questionPrompts,
   } satisfies StreamGroupOptions;
-  const pendingSteerForMessage = createPendingSteerLookup(props.pendingInputs);
+  const pendingSteer = createPendingSteerLookup(props.pendingInputs);
   const renderGroupOptions = (item: MessageGroup) => {
     const continuation = continuations.get(item.key);
     return {
       ...sharedMessageRenderOptions,
-      pendingSteer: pendingSteerForMessage,
+      pendingSteer,
       onSteerNow: props.onSteerNow,
       messageReactions: props.messageReactions,
       onReact: props.onReact,
@@ -429,6 +427,7 @@ export function projectChatTranscript(
   };
   // Deferred palettes apply leaf branding after the preference snapshot.
   const appliedBranding = currentThemeBranding();
+  const toolExpansionVersion = getExpansionStateVersion(expandedToolCards);
   trackTranscriptRenderDependencies(state, [
     locale,
     props.branding?.mascot,
@@ -443,7 +442,6 @@ export function projectChatTranscript(
     appliedBranding.artwork,
     appliedBranding.avatarHat,
     expandedToolCards,
-    getExpansionStateVersion(expandedToolCards),
     expandedUserMessages,
     getExpansionStateVersion(expandedUserMessages),
     expandedAssistantMessages,
@@ -461,8 +459,6 @@ export function projectChatTranscript(
     props.showToolCalls,
     props.chatBubbleMode,
     Boolean(props.runActive),
-    activityRunId,
-    activityGroupKey,
     Boolean(props.runWorking),
     Boolean(props.runFinalizing),
     props.startupLabel,
@@ -514,29 +510,26 @@ export function projectChatTranscript(
     props.replyMessageAccess?.navigationId ?? "",
     turnRecap === null ? "" : `${turnRecap.runtimeMs}:${turnRecap.outputTokens ?? ""}`,
   ]);
-  const renderItem = guardChatRenderItems(
+  const { render: renderItem, dependenciesFor } = guardChatRenderItems(
     state.transcriptRenderDependencies,
     (item) => {
-      const groups = chatItemGroups(item);
-      const hasTools = groups.some((group) =>
-        group.messages.some(({ message }) => extractToolCardsCached(message).length > 0),
-      );
-      // Launch rows and resume rules read the child roster.
-      const readsRoster = hasTools || groups.some(groupReadsHandoffRoster);
-      const hasQuestions =
-        asyncQuestions &&
-        groups.some((group) => group.messages.some(({ message }) => readAsyncQuestions(message)));
+      const context = inspectTranscriptContext(item, loadedReplySources, props, pendingSteer);
+      const [groups, hasTools, readsRoster, hasQuestions, dependencies] = context;
+      const readsToolExpansion =
+        item.kind !== "group" || hasTools || item.role === "tool" || isSessionActivityGroup(item);
+      const ownsActivity =
+        !activityGroupKey || groups.some((group) => group.key === activityGroupKey);
       return [
+        readsToolExpansion ? toolExpansionVersion : undefined,
+        ownsActivity ? activityRunId : undefined,
+        ownsActivity ? activityGroupKey : undefined,
+        // A visible activity bubble always belongs to the current activity group.
+        ownsActivity ? bubbleActivityGroupKey : undefined,
         liveStatusSignature(item),
         item.key === liveItem?.key ? resolveLiveStream : undefined,
-        ...transcriptContextDependencies(item, loadedReplySources, props),
-        ...(pendingSteerForMessage
-          ? groups.flatMap((group) =>
-              group.messages.map(({ message }) => pendingSteerForMessage(message)),
-            )
-          : []),
+        ...dependencies,
         // Durable drafts can restore the same map under a new callback generation.
-        hasQuestions ? asyncQuestions.drafts : undefined,
+        hasQuestions ? asyncQuestions?.drafts : undefined,
         hasQuestions ? asyncQuestionGeneration : undefined,
         // Tool plugins own foreground activity.
         hasTools ? presented : undefined,
@@ -593,6 +586,12 @@ export function projectChatTranscript(
             streamOptions: streamGroupOptions,
             workPreviews,
             renderGroupOptions,
+            partDependencies: (part) =>
+              part.kind === "stream" ||
+              part.kind === "reading-indicator" ||
+              part.kind === "question"
+                ? [part, streamGroupOptions]
+                : dependenciesFor(part),
             isWorkExpanded: (key) => expandedToolCards.get(key) ?? false,
             onToggleWork: toggleToolCardExpanded,
             turnRecap: recapForGroup(item.fragment?.source.key ?? item.key),

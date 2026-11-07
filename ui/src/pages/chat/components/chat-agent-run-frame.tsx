@@ -40,6 +40,7 @@ import {
   type StreamGroupPart,
 } from "./chat-message-stream-view.tsx";
 import { NO_REPLY_LINE, resolveGroupReplyLine } from "./chat-reply-attribution.ts";
+import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
 import type { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
 import { WorkGroupSummary } from "./chat-work-group-summary.tsx";
 import "../../../styles/chat/source-previews.css";
@@ -54,6 +55,7 @@ type AgentRunFrameOptions = {
   streamOptions: StreamGroupOptions;
   workPreviews: ReturnType<typeof projectTranscriptWorkPreviews>;
   renderGroupOptions: (group: MessageGroupData) => NativeMessageGroupOptions;
+  partDependencies: (part: BodyPart) => readonly unknown[];
   isWorkExpanded: (key: string) => boolean;
   onToggleWork: (key: string, expanded: boolean) => void;
   turnRecap?: TurnRecap;
@@ -63,10 +65,11 @@ type BodyPart =
   | Exclude<AgentRunFrameRenderItem["parts"][number], { kind: "stream-run" }>
   | StreamGroupPart;
 type PartInput = { part: BodyPart; options: AgentRunFrameOptions };
+type RetainedPartInput = PartInput & { dependencies: readonly unknown[] };
 type PartRange = {
   start: Comment;
   end: Comment;
-  write: (input: PartInput) => void;
+  write: (input: RetainedPartInput) => void;
   dispose: () => void;
 };
 
@@ -134,9 +137,14 @@ function RetainedFrameBody(props: FrameBodyProps): JSX.Element {
     }
     const ordered = parts.map((value) => {
       const key = `${value.kind}:${value.key}`;
+      const input: RetainedPartInput = {
+        part: value,
+        options,
+        dependencies: options.partDependencies(value),
+      };
       const existing = ranges.get(key);
       if (existing) {
-        existing.write({ part: value, options });
+        existing.write(input);
         return existing;
       }
       const start = document.createComment("frame-part");
@@ -146,14 +154,11 @@ function RetainedFrameBody(props: FrameBodyProps): JSX.Element {
       const range = runWithOwner(owner, () =>
         createRoot((dispose): PartRange => {
           // The headline's connection scope must change with its activity.
-          const [readInput, write] = createSignal(
-            { part: value, options },
-            {
-              ownedWrite: true,
-              equals: (before, after) =>
-                before.part === after.part && before.options === after.options,
-            },
-          );
+          const [readInput, write] = createSignal(input, {
+            ownedWrite: true,
+            equals: (before, after) =>
+              transcriptArraysEqual(before.dependencies, after.dependencies),
+          });
           insert(parent, render(readInput), end);
           return { start, end, write, dispose };
         }),
@@ -178,7 +183,11 @@ function RetainedFrameBody(props: FrameBodyProps): JSX.Element {
       reference = range.start;
     }
   };
-  const input = () => ({ parts: props.parts, options: props.options, render: props.children });
+  const input = () => ({
+    parts: props.parts,
+    options: props.options,
+    render: props.children,
+  });
   // Sample once without subscribing the frame owner; the effect owns later range updates.
   // Detached rows include their body immediately, while widgets still adopt after settlement.
   update(untrack(input));
@@ -287,6 +296,7 @@ export function AgentRunFrame(props: FrameProps) {
 
 function RunFrame(props: FrameProps) {
   const state = createMemo(() => prepareFrame(props.frame, props.options));
+  const firstBubbleKey = createMemo(() => state().firstBubbleKey);
   const timedWork = createMemo(() => {
     const recap = props.options.turnRecap;
     if (!recap) {
@@ -318,7 +328,7 @@ function RunFrame(props: FrameProps) {
         const options = () => input().options;
         const groupOptions = (group: MessageGroupData) => ({
           ...options().renderGroupOptions(group),
-          firstBubbleKey: state().firstBubbleKey,
+          firstBubbleKey: firstBubbleKey(),
         });
         const streamPart = () => {
           const value = part();
@@ -348,7 +358,7 @@ function RunFrame(props: FrameProps) {
                   part={stream()}
                   options={{
                     ...options().streamOptions,
-                    firstBubbleKey: state().firstBubbleKey,
+                    firstBubbleKey: firstBubbleKey(),
                   }}
                   presentation="standalone"
                 />

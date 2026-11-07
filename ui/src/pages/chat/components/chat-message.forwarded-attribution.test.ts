@@ -91,6 +91,7 @@ function renderFrame(
           streamOptions: {},
           workPreviews: new Map(),
           renderGroupOptions: () => ({ showReasoning: true, ...options }),
+          partDependencies: (part) => [part, options],
           isWorkExpanded: () => true,
           onToggleWork: () => {},
         },

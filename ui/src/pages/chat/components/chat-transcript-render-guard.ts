@@ -1,5 +1,9 @@
+import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
+import { groupReadsHandoffRoster } from "../chat-subagent-wait.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
+import { readAsyncQuestions } from "./chat-async-question-content.ts";
+import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 import type { LoadedReplySource } from "./chat-reply-preview.ts";
 import type { ChatThreadProps, ChatThreadState } from "./chat-thread-interactions.ts";
 import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
@@ -47,27 +51,43 @@ function itemDependencies(item: ChatRenderItem): readonly unknown[] {
   return [item];
 }
 
-export function transcriptContextDependencies(
+export function inspectTranscriptContext(
   item: ChatRenderItem,
   loadedSources: ReadonlyMap<string, LoadedReplySource>,
   props: Pick<
     ChatThreadProps,
-    "onRetryRun" | "failedMessageEditSource" | "failureActionsRunId" | "modelCatalog"
+    | "onRetryRun"
+    | "failedMessageEditSource"
+    | "failureActionsRunId"
+    | "modelCatalog"
+    | "asyncQuestions"
   >,
-): unknown[] {
-  if (item.kind === "notice") {
-    return [
-      props.onRetryRun,
-      props.failedMessageEditSource,
-      props.failureActionsRunId,
-      item.modelChange ? props.modelCatalog : undefined,
-    ];
-  }
-  const dependencies: unknown[] = [];
+  pendingSteer: NativeMessageGroupOptions["pendingSteer"],
+) {
+  const groups = chatItemGroups(item);
+  const hasTools = groups.some((group) =>
+    group.messages.some(({ message }) => extractToolCardsCached(message).length > 0),
+  );
+  // Launch rows and resume rules read the child roster.
+  const readsRoster = hasTools || groups.some(groupReadsHandoffRoster);
+  const hasQuestions =
+    props.asyncQuestions &&
+    groups.some((group) => group.messages.some(({ message }) => readAsyncQuestions(message)));
+  const dependencies: unknown[] =
+    item.kind === "notice"
+      ? [
+          props.onRetryRun,
+          props.failedMessageEditSource,
+          props.failureActionsRunId,
+          item.modelChange ? props.modelCatalog : undefined,
+        ]
+      : [];
   // The first fragment presents the final answer's reply attribution above the run.
-  const replySource =
-    item.kind === "agent-run-frame" && item.fragment?.first ? item.fragment.source : item;
-  for (const group of chatItemGroups(replySource)) {
+  const replyGroups =
+    item.kind === "agent-run-frame" && item.fragment?.first
+      ? chatItemGroups(item.fragment.source)
+      : groups;
+  for (const group of replyGroups) {
     for (const source of group.messages) {
       if (source.replyTarget?.kind === "id") {
         const loaded = loadedSources.get(source.replyTarget.id);
@@ -75,7 +95,12 @@ export function transcriptContextDependencies(
       }
     }
   }
-  return dependencies;
+  if (pendingSteer) {
+    dependencies.push(
+      ...groups.flatMap((group) => group.messages.map(({ message }) => pendingSteer(message))),
+    );
+  }
+  return [groups, hasTools, readsRoster, hasQuestions, dependencies] as const;
 }
 
 export function trackTranscriptRenderDependencies(
@@ -94,9 +119,14 @@ export function guardChatRenderItems(
   presentationDependencies: (item: ChatRenderItem) => readonly unknown[],
   nativeFor: (item: ChatRenderItem) => NativeTranscriptView | undefined,
 ) {
-  return (item: ChatRenderItem) =>
-    new GuardedTranscriptItem(
-      [...itemDependencies(item), renderDependencies, ...presentationDependencies(item)],
-      nativeFor(item),
-    );
+  const dependenciesFor = (item: ChatRenderItem) => [
+    ...itemDependencies(item),
+    renderDependencies,
+    ...presentationDependencies(item),
+  ];
+  return {
+    dependenciesFor,
+    render: (item: ChatRenderItem) =>
+      new GuardedTranscriptItem(dependenciesFor(item), nativeFor(item)),
+  };
 }
