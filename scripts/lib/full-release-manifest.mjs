@@ -133,8 +133,8 @@ export function buildReleaseValidationManifest({ plan, drain, context, reusedMan
           performanceReportPublication: "artifact-only",
         },
         childRuns: plan.qualificationCoverage
-          ? Object.fromEntries(
-              plan.children.map((child) => [
+          ? Object.fromEntries([
+              ...plan.children.map((child) => [
                 child.key,
                 child.key === "productPerformance"
                   ? {
@@ -144,7 +144,15 @@ export function buildReleaseValidationManifest({ plan, drain, context, reusedMan
                     }
                   : child.runId,
               ]),
-            )
+              ...(plan.qualificationCoverage.exemptions ?? []).map((exemption) => [
+                exemption.childRole,
+                {
+                  disposition: exemption.disposition,
+                  runId: "",
+                  supportingEvidence: exemption.supportingEvidence,
+                },
+              ]),
+            ])
           : {
               normalCi: runs.normalCi ?? "",
               pluginPrereleaseIndependent: runs.pluginPrereleaseIndependent ?? "",
