@@ -28,8 +28,6 @@ import {
   needsSkillCommandsForSessionTitle,
   resolveSessionTitleSource,
 } from "../sessions/session-title-source.js";
-
-const TITLE_SOURCE_CONTROL_OPTIONS = { isControlCommand: isControlCommandMessage } as const;
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import type { SkillCommandSpec } from "../skills/types.js";
@@ -41,6 +39,8 @@ import {
   sessionTitleRequests,
 } from "./session-title-state.js";
 import { readSessionTitleFieldsFromTranscriptAsync } from "./session-transcript-title-reader.js";
+
+const TITLE_SOURCE_CONTROL_OPTIONS = { isControlCommand: isControlCommandMessage } as const;
 
 type DashboardSessionTitleModelEntry = Pick<
   SessionEntry,
