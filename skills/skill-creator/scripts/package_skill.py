@@ -83,7 +83,9 @@ def package_skill(skill_path, output_dir=None):
         with tempfile.TemporaryDirectory(dir=archive_target.parent) as staging_dir:
             staging_root = Path(staging_dir)
             staged_archive = staging_root / skill_filename.name
-            with zipfile.ZipFile(staged_archive, "w", zipfile.ZIP_DEFLATED) as zipf:
+            with zipfile.ZipFile(
+                staged_archive, "w", zipfile.ZIP_DEFLATED, strict_timestamps=False
+            ) as zipf:
                 # Walk in a deterministic order. Sort by the archive-relative POSIX
                 # entry name (not Path object order, which is filesystem/OS-flavour
                 # dependent) so written .skill entries are byte-stable everywhere.
