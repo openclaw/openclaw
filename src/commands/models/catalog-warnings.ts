@@ -1,3 +1,4 @@
+import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import type {
   ModelsListParams,
   ModelsListResult,
@@ -28,6 +29,7 @@ export async function readSelectedGatewayModelCatalog(
     method: "models.list",
     ...(params.preparedOnly ? { sharedStateMode: "read-only" as const } : {}),
     ...(timeoutMs ? { timeoutMs } : {}),
+    caps: [GATEWAY_CLIENT_CAPS.MODEL_SELECTION_POLICY],
     requiredCapabilities: [GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG],
     ...(owner ? { localPortOverride: owner.port } : {}),
     params,

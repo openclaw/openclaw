@@ -196,6 +196,7 @@ describe("models list published transport", () => {
     expect(localStateOwner.runWithLocalStateOwner).not.toHaveBeenCalled();
     expect(gateway.callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
+        caps: ["model-selection-policy"],
         requiredCapabilities: ["published-model-catalog"],
         localPortOverride: 19001,
         params: expect.objectContaining({
@@ -334,6 +335,114 @@ describe("models list published transport", () => {
     expect(runtime.writeStdout).toHaveBeenCalledExactlyOnceWith("catalog-provider/Reader");
     expect(runtime.writeJson).not.toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalled();
+  });
+
+  it("projects scoped manualSelectionAllowed alongside availability", async () => {
+    const blocked: ModelChoice = {
+      ...model,
+      id: "Writer",
+      name: "Writer model",
+      alias: undefined,
+      tags: [],
+      available: true,
+      manualSelectionAllowed: false,
+    };
+    gatewayModels({ ...model, manualSelectionAllowed: true }, blocked);
+    await list({ all: true, json: true });
+    expect(gateway.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        caps: ["model-selection-policy"],
+        params: expect.objectContaining({ view: "all", includeDetails: true }),
+      }),
+    );
+    expectModelRows(
+      [
+        {
+          key: "catalog-provider/Reader",
+          available: true,
+          manualSelectionAllowed: true,
+        },
+        {
+          key: "catalog-provider/Writer",
+          available: true,
+          manualSelectionAllowed: false,
+        },
+      ],
+      { count: 2 },
+    );
+
+    runtime.writeJson.mockClear();
+    vi.mocked(gatewayLock.readActiveGatewayLockIdentity).mockResolvedValue(undefined);
+    const policyConfig: OpenClawConfig = {
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        defaults: {
+          model: { primary: "catalog-provider/Reader" },
+          modelPolicy: { allow: ["catalog-provider/Reader"] },
+        },
+        entries: {
+          work: {
+            workspace: "/tmp/published-cli-work",
+            modelPolicy: { allow: ["catalog-provider/Reader"] },
+          },
+        },
+      },
+    };
+    vi.mocked(configLoader.loadModelsConfig).mockResolvedValue(policyConfig);
+    const readerEntry = {
+      ...model,
+      api: "anthropic-messages" as const,
+      baseUrl: "https://catalog.example.test",
+      input: ["text" as const],
+    };
+    const writerEntry = {
+      ...readerEntry,
+      id: "Writer",
+      name: "Writer model",
+      alias: undefined,
+      tags: [],
+    };
+    owner = {
+      ...createModelRuntimeChoiceOwnerFixture(policyConfig),
+      catalogOwner: { agentId: "work", workspaceDir: "/tmp/published-cli-work" },
+      agentId: "work",
+      agentDir: "/tmp/published-cli-agent",
+      workspaceDir: "/tmp/published-cli-work",
+      authModes: { "catalog-provider": "api_key" },
+      modelCatalog: markPreparedModelCatalogFull({
+        entries: [readerEntry, writerEntry],
+        routeVariants: [readerEntry, writerEntry],
+      }),
+      createStores() {
+        throw new Error("Inventory must not start model execution");
+      },
+    };
+    bindPreparedModelRuntimeAuth(owner, {
+      store: createAuthProfileStoreFixture({
+        "catalog-provider:test": createApiKeyCredential(
+          "catalog-provider",
+          "synthetic-catalog-key",
+        ),
+      }),
+    });
+
+    await list({ agent: "work", all: true, json: true });
+    expectModelRows(
+      [
+        {
+          key: "catalog-provider/Reader",
+          available: true,
+          manualSelectionAllowed: true,
+        },
+        {
+          key: "catalog-provider/Writer",
+          available: true,
+          manualSelectionAllowed: false,
+        },
+      ],
+      { count: 2 },
+    );
   });
 });
 
