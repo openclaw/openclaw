@@ -46,7 +46,10 @@ import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-s
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import * as doctorMaintenance from "./doctor-maintenance.js";
-import { prepareStartupClientCredentials } from "./startup-client-credentials.js";
+import {
+  ClientCredentialGatewayHeldError,
+  prepareStartupClientCredentials,
+} from "./startup-client-credentials.js";
 
 describe("automatic client credential preparation", () => {
   const dirs = useStateDatabaseTempDirs();
@@ -467,6 +470,35 @@ describe("automatic client credential preparation", () => {
       serving.release();
     }
   });
+
+  it.each(["gateway", "agent-embedded"] as const)(
+    "attributes a required migration refusal to the Gateway only when a %s holds state",
+    async (role) => {
+      const fixture = await bootstrap();
+      changeRecordedDevice(fixture.env);
+      const owner = acquireGatewayStateOwner({
+        databasePath: fixture.shared,
+        payload: {
+          pid: process.pid,
+          processNamespace: readGatewayLockProcessNamespace(),
+          role,
+          createdAt: new Date().toISOString(),
+          configPath: fixture.env.OPENCLAW_CONFIG_PATH,
+          stateDir: fixture.root,
+        },
+      });
+      try {
+        const failure = await fixture.prepare().then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        expect(failure instanceof ClientCredentialGatewayHeldError).toBe(role === "gateway");
+        expect(failure).toBeInstanceOf(Error);
+      } finally {
+        owner.release();
+      }
+    },
+  );
 
   it.each([
     { label: "readable credentials", required: false, recoveryPreview: false },

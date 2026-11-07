@@ -126,6 +126,18 @@ async function readCredentialPreparationState(
   }
 }
 
+/**
+ * A running Gateway holds the state this required migration must change. Native startup uses
+ * the code to explain that Gateway's owner instead of attributing every failure to it.
+ */
+export class ClientCredentialGatewayHeldError extends Error {
+  readonly code = "client_credentials_gateway_held";
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "ClientCredentialGatewayHeldError";
+  }
+}
+
 /** Complete the selected root's cutover before any client acquires credentials. */
 export async function prepareStartupClientCredentials(
   params: {
@@ -215,6 +227,17 @@ export async function prepareStartupClientCredentials(
         }
         // Admission has settled. A peer may have completed required recovery meanwhile.
         return;
+      }
+      const gatewayHeld = causes.some(
+        (cause) =>
+          cause instanceof GatewayStateOwnerContentionError && cause.holder?.role === "gateway",
+      );
+      if (
+        gatewayHeld &&
+        !causes.some((cause) => cause instanceof AggregateError) &&
+        !hasCommandProcessCleanupError(error)
+      ) {
+        throw new ClientCredentialGatewayHeldError(error);
       }
       throw error;
     }

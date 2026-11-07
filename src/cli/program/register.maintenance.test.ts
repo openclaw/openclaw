@@ -25,7 +25,10 @@ const runDoctorLintCli = vi.mocked(runDoctorLintCliEntry);
 // mock-isolation: Verify maintenance dispatch without executing repair, reset, or uninstall operations.
 vi.mock("../../commands/doctor.js", () => ({ doctorCommand: mocks.doctorCommand }));
 // mock-isolation: Verify the narrow credential dispatch without accessing operator credentials.
-vi.mock("../../commands/startup-client-credentials.js", () => ({
+vi.mock("../../commands/startup-client-credentials.js", async (importOriginal) => ({
+  ClientCredentialGatewayHeldError: (
+    await importOriginal<typeof import("../../commands/startup-client-credentials.js")>()
+  ).ClientCredentialGatewayHeldError,
   prepareStartupClientCredentials: mocks.prepareStartupClientCredentials,
 }));
 // mock-isolation: Capture dispatch without collecting diagnostics or launching agents.
@@ -176,6 +179,24 @@ describe("registered maintenance commands", () => {
       expect(runtime.exit).toHaveBeenCalledWith(0);
     },
   );
+
+  it("codes a Gateway-held credential migration refusal for native startup", async () => {
+    const { ClientCredentialGatewayHeldError } =
+      await import("../../commands/startup-client-credentials.js");
+    mocks.prepareStartupClientCredentials.mockRejectedValueOnce(
+      new ClientCredentialGatewayHeldError(new Error("state database is busy")),
+    );
+    await runCli("doctor --client-credentials --fix --non-interactive --json");
+    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith({
+      ok: false,
+      error: {
+        type: "cli_error",
+        message: "state database is busy",
+        code: "client_credentials_gateway_held",
+      },
+    });
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
 
   it.each([
     ["--repair", "requires --repair (or --fix) and --non-interactive."],
