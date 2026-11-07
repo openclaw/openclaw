@@ -23,24 +23,21 @@ import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelRefreshStatus } from "../../components/solid/panel-refresh-status.tsx";
-import { renderSessionOwnerChip } from "../../components/solid/session-presentation.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerDashboardsEnglish } from "../../i18n/locales/en-dashboards.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { formatRelativeTimestamp } from "../../lib/format.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
-import type { SessionCreatedActor } from "../../lib/session-owner.ts";
-import {
-  isSessionKeyAddressable,
-  sessionNavigationTarget,
-} from "../../lib/sessions/route-navigation.ts";
-import { HoverMarquee } from "../../lib/solid/hover-marquee.tsx";
 import "../../styles/dashboards.css";
+import { DashboardDisplayMenu } from "./dashboard-display-menu.tsx";
+import {
+  DashboardEntry,
+  dashboardAuthor,
+  dashboardGroups,
+  type DashboardRow,
+} from "./dashboard-entry.tsx";
 import { DashboardFilterPopover } from "./dashboard-filter-popover.tsx";
-import { DashboardPreview } from "./dashboard-preview.tsx";
 import type { DashboardGalleryFilters, DashboardGalleryHandlers } from "./gallery-filters.ts";
 
 registerDashboardsEnglish();
@@ -53,19 +50,6 @@ export type DashboardsRouteData = {
   mainKey: string;
   globalScope: boolean;
 };
-
-type DashboardRow = SessionsListResult["sessions"][number];
-
-function dashboardAuthor(row: DashboardRow, fallbackAgentId: string) {
-  const actor = row.createdActor ?? row.owner?.actor;
-  const id = actor?.id?.trim() || row.agentId?.trim() || fallbackAgentId;
-  const label = actor?.label?.trim() || id;
-  // Without an actor id the author is the session's agent, drawn with its agent avatar.
-  const avatar: SessionCreatedActor = actor?.id?.trim()
-    ? actor
-    : { type: "agent", id, label, identity: { type: "agent", id } };
-  return { id, label, avatar };
-}
 
 function visibleDashboardRows(data: DashboardsRouteData, filters: DashboardGalleryFilters) {
   const query = filters.query.trim().toLocaleLowerCase().normalize("NFC");
@@ -115,127 +99,6 @@ function DashboardGrid(props: {
   handlers: DashboardGalleryHandlers;
   gatewaySnapshot?: ApplicationGatewaySnapshot;
 }) {
-  function DashboardCard(childProps: {
-    row: DashboardRow;
-    contentRef: (element: HTMLElement) => void;
-  }) {
-    const target = createMemo(() =>
-      isSessionKeyAddressable(childProps.row.key, props.data.globalScope)
-        ? sessionNavigationTarget({
-            face: "dashboard",
-            sessionKey: childProps.row.key,
-            fallbackAgentId:
-              childProps.row.key === "global"
-                ? childProps.row.agentId?.trim() || props.data.fallbackAgentId
-                : props.data.fallbackAgentId,
-            basePath: props.data.basePath,
-            row: childProps.row,
-            mainKey: props.data.mainKey,
-          })
-        : null,
-    );
-    const author = () => dashboardAuthor(childProps.row, props.data.fallbackAgentId);
-    const authorName = () =>
-      author().id === props.gatewaySnapshot?.selfUser?.id
-        ? t("dashboardsPage.you")
-        : author().label;
-    const title = createMemo(() => resolveSessionDisplayName(childProps.row.key, childProps.row));
-    let card!: HTMLElement;
-    const Content = () => (
-      <>
-        <div class="dashboard-preview" aria-hidden="true" inert>
-          <div class="dashboard-preview__sheet">
-            <DashboardPreview
-              gatewaySnapshot={props.gatewaySnapshot}
-              sessionKey={childProps.row.key}
-              agentId={childProps.row.agentId}
-            />
-          </div>
-        </div>
-        <div class="dashboard-card__body">
-          <div class="dashboard-card__heading">
-            <h2>
-              <HoverMarquee
-                content={title()}
-                class="dashboard-card__title"
-                options={{ loop: true, host: () => card }}
-              />
-            </h2>
-            {/* Reserved even while idle, so a run starting never shifts the title. */}
-            <span class="dashboard-card__status">
-              <Show when={childProps.row.status === "running"}>
-                <span
-                  class="session-run-spinner"
-                  role="img"
-                  aria-label={t("dashboardsPage.running")}
-                  title={t("dashboardsPage.running")}
-                />
-              </Show>
-            </span>
-          </div>
-          <div class="dashboard-card__meta">
-            <span class="dashboard-card__author">
-              {renderSessionOwnerChip(author().avatar, "row")}
-              <HoverMarquee
-                content={authorName()}
-                class="dashboard-card__author-name"
-                options={{ stationary: true, host: () => card }}
-              />
-            </span>
-            <span class="dashboard-card__updated">
-              <Show when={childProps.row.updatedAt} fallback={t("dashboardsPage.updatedUnknown")}>
-                {(updatedAt) => (
-                  <>
-                    <span class="dashboard-card__updated-label">
-                      {t("dashboardsPage.updatedLabel")}
-                    </span>{" "}
-                    <span class="dashboard-card__updated-time">
-                      {formatRelativeTimestamp(updatedAt())}
-                    </span>
-                  </>
-                )}
-              </Show>
-            </span>
-          </div>
-        </div>
-      </>
-    );
-    return (
-      <article
-        ref={(element) => (card = element)}
-        class="dashboard-card"
-        data-dashboard-session={childProps.row.key}
-      >
-        <Show
-          when={target()}
-          fallback={
-            <div class="dashboard-card__main" ref={childProps.contentRef}>
-              <Content />
-            </div>
-          }
-        >
-          {(destination) => (
-            <a
-              ref={childProps.contentRef}
-              class="dashboard-card__main"
-              href={destination().href}
-              aria-label={title()}
-              onClick={(event: MouseEvent) => {
-                const current = target();
-                if (current && props.handlers.onNavigate && shouldHandleNavigationClick(event)) {
-                  event.preventDefault();
-                  props.handlers.onNavigate("dashboard", current.options);
-                }
-              }}
-            >
-              <Content />
-            </a>
-          )}
-        </Show>
-      </article>
-    );
-  }
-
   let grid!: HTMLDivElement;
   let scroller: HTMLElement | null = null;
   let columns = 3;
@@ -419,7 +282,14 @@ function DashboardGrid(props: {
         style={position()}
         onFocusIn={() => setFocused(card.row.key)}
       >
-        <DashboardCard row={card.row} contentRef={bindContent} />
+        <DashboardEntry
+          variant="card"
+          data={props.data}
+          row={card.row}
+          handlers={props.handlers}
+          gatewaySnapshot={props.gatewaySnapshot}
+          contentRef={bindContent}
+        />
       </div>
     );
   }
@@ -509,22 +379,6 @@ function DashboardList(props: {
                 </For>
               </select>
             </label>
-            <label class="dashboards-select">
-              <span>{t("dashboardsPage.sortLabel")}</span>
-              <select
-                class="settings-select"
-                value={props.filters.sort}
-                onChange={(event) => {
-                  const sort = event.currentTarget.value;
-                  if (sort === "updated" || sort === "title") {
-                    props.handlers.onFilterChange({ sort });
-                  }
-                }}
-              >
-                <option value="updated">{t("dashboardsPage.sortUpdated")}</option>
-                <option value="title">{t("dashboardsPage.sortTitle")}</option>
-              </select>
-            </label>
           </div>
           <div class="dashboards-results" role="status">
             {t("dashboardsPage.resultCount", { count: String(visibleRows().length) })}
@@ -541,12 +395,50 @@ function DashboardList(props: {
               </div>
             }
           >
-            <DashboardGrid
-              data={props.data}
-              rows={visibleRows()}
-              handlers={props.handlers}
-              gatewaySnapshot={props.gatewaySnapshot}
-            />
+            <For
+              each={dashboardGroups(
+                props.data,
+                visibleRows(),
+                props.filters.group,
+                props.gatewaySnapshot?.selfUser?.id,
+              )}
+              keyed={(group) => group.key}
+            >
+              {(group) => (
+                <section class="dashboards-group">
+                  <Show when={group().label}>
+                    <h3 class="dashboards-group__heading">{group().label}</h3>
+                  </Show>
+                  <Show
+                    when={props.filters.view === "list"}
+                    fallback={
+                      <DashboardGrid
+                        data={props.data}
+                        rows={group().rows}
+                        handlers={props.handlers}
+                        gatewaySnapshot={props.gatewaySnapshot}
+                      />
+                    }
+                  >
+                    <div class="dashboards-list" role="list">
+                      <For each={group().rows} keyed={(row) => row.key}>
+                        {(row) => (
+                          <div role="listitem">
+                            <DashboardEntry
+                              variant="row"
+                              data={props.data}
+                              row={row()}
+                              handlers={props.handlers}
+                              gatewaySnapshot={props.gatewaySnapshot}
+                            />
+                          </div>
+                        )}
+                      </For>
+                    </div>
+                  </Show>
+                </section>
+              )}
+            </For>
           </Show>
         </section>
       </Show>
@@ -564,14 +456,10 @@ function DashboardGallerySkeleton() {
         <div class="dashboards-toolbar">
           <div class="dashboards-search skeleton dashboards-loading__control" />
           <div class="dashboards-filter skeleton dashboards-loading__filter" />
-          <For each={[0, 1]}>
-            {() => (
-              <div class="dashboards-select dashboards-loading__select">
-                <div class="skeleton skeleton-line dashboards-loading__label" />
-                <div class="skeleton dashboards-loading__control" />
-              </div>
-            )}
-          </For>
+          <div class="dashboards-select dashboards-loading__select">
+            <div class="skeleton skeleton-line dashboards-loading__label" />
+            <div class="skeleton dashboards-loading__control" />
+          </div>
         </div>
         <div class="dashboards-results">
           <div class="skeleton skeleton-line dashboards-loading__label" />
@@ -619,11 +507,8 @@ export function DashboardsView(props: {
         docsUrl="https://docs.openclaw.ai/web/dashboards"
         class="dashboards-header"
         actions={
-          <Show when={props.data?.result}>
-            <div class="dashboards-header__count">
-              <strong>{props.data?.result?.sessions.length}</strong>
-              <span>{t("dashboardsPage.totalLabel")}</span>
-            </div>
+          <Show when={props.data?.result?.sessions.length}>
+            <DashboardDisplayMenu filters={props.filters} handlers={props.handlers} />
           </Show>
         }
       />

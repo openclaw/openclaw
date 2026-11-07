@@ -81,11 +81,6 @@ export function DashboardFilterPopover(props: {
     );
     return () => controller.abort();
   });
-  const sorts = () =>
-    [
-      ["updated", t("dashboardsPage.sortUpdated")],
-      ["title", t("dashboardsPage.sortTitle")],
-    ] as const;
   return (
     <div ref={(element) => (root = element)} class="dashboards-filter">
       <Popover
@@ -97,7 +92,7 @@ export function DashboardFilterPopover(props: {
         placement="bottom-end"
         triggerClass={[
           "btn btn--sm dashboards-filter__trigger",
-          { active: props.filters.ownerId !== "" || props.filters.sort !== "updated" },
+          { active: props.filters.ownerId !== "" },
         ]}
         triggerTitle={t("chat.sidebar.menuFilters")}
         trigger={<Icon name="listFilter" />}
@@ -105,7 +100,6 @@ export function DashboardFilterPopover(props: {
         <h6 id="dashboards-filter-author" class="dashboards-filter__heading">
           {t("dashboardsPage.authorFilter")}
         </h6>
-        {/* A long author list scrolls on its own so Sort stays in view. */}
         <div
           class="dashboards-filter__authors"
           role="radiogroup"
@@ -124,24 +118,6 @@ export function DashboardFilterPopover(props: {
                 label={owner().label}
                 checked={props.filters.ownerId === owner().id}
                 onSelect={() => props.handlers.onFilterChange({ ownerId: owner().id })}
-              />
-            )}
-          </For>
-        </div>
-        <h6 id="dashboards-filter-sort" class="dashboards-filter__heading">
-          {t("dashboardsPage.sortLabel")}
-        </h6>
-        <div
-          role="radiogroup"
-          aria-labelledby="dashboards-filter-sort"
-          onKeyDown={moveCheckedOption}
-        >
-          <For each={sorts()} keyed={([sort]) => sort}>
-            {(entry) => (
-              <DashboardFilterOption
-                label={entry()[1]}
-                checked={props.filters.sort === entry()[0]}
-                onSelect={() => props.handlers.onFilterChange({ sort: entry()[0] })}
               />
             )}
           </For>
