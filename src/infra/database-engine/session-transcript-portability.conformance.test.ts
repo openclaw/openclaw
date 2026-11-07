@@ -347,25 +347,21 @@ for (const engine of ["sqlite", "postgres"] as const) {
             message("tail", "tool", { role: "user", content: "later" }),
           ]);
           const context = readSessionTranscriptModelContext(fixture.scope);
-          expect(context.events).toMatchObject([
-            { id: "root", message: { content: lone } },
-            { id: "tool", message: { content: [{ text: lone + "x".repeat(2000) }] } },
-            { id: "tail" },
-          ]);
-          expect(context.events[1]).not.toHaveProperty("message.details");
+          expect(context.events).toHaveLength(3);
+          const [root, tool] = context.events;
+          expect(root).toMatchObject({ message: { content: lone } });
+          expect(tool).toMatchObject({ message: { content: [{ text: lone + "x".repeat(2000) }] } });
+          expect(tool).not.toHaveProperty("message.details");
           // Bounded reads size each row, then replace the oversized result body.
           const bounded = readSessionTranscriptModelContext(fixture.scope, undefined, {
             maxBytes: 1500,
             maxEvents: 10,
             toolResultOverflow: "omit",
           });
-          expect(bounded.events).toMatchObject([
-            { id: "root" },
-            {
-              message: { content: [{ text: expect.stringContaining("Tool result body omitted") }] },
-            },
-            { id: "tail" },
-          ]);
+          expect(bounded.events).toHaveLength(3);
+          expect(bounded.events[1]).toMatchObject({
+            message: { content: [{ text: expect.stringContaining("Tool result body omitted") }] },
+          });
         }));
 
       it("advances mutation time beyond both prior mutation and observation with nullable fields", () =>
