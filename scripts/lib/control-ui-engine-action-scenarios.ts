@@ -126,7 +126,9 @@ function createProviderArtworkScenario(
         providerName: "Synthetic Workstation",
         providerIcon: { source: "asset" as const, url: `${providerArtworkPath}?v=census` },
       };
-      const models = base.models.slice(-modelCount).map((model) => ({ ...model, ...presentation }));
+      const models = base.models
+        .slice(-modelCount)
+        .map((model) => Object.assign({}, model, presentation));
       return {
         models,
         methodResponses: {
