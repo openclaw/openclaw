@@ -105,7 +105,8 @@ function logBrowserTabs(tabs: BrowserTab[]) {
   printBrowserList(tabs, "No tabs (browser closed or no targets).", (t, i) => {
     const labelHandle = t.label ? `label:${t.label}` : undefined;
     const suggested = t.suggestedTargetId ? `use: ${t.suggestedTargetId}` : undefined;
-    const handles = [suggested, t.tabId ? `tab: ${t.tabId}` : undefined, labelHandle]
+    const crashed = t.crashed ? "crashed" : undefined;
+    const handles = [crashed, suggested, t.tabId ? `tab: ${t.tabId}` : undefined, labelHandle]
       .filter(Boolean)
       .join(" ");
     return `${i + 1}. ${t.title || "(untitled)"}${handles ? ` [${handles}]` : ""}\n   ${t.url}\n   id: ${t.targetId}`;
