@@ -1,10 +1,21 @@
 import { isAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { getQueueSize } from "../process/command-queue.js";
 import {
+  getActiveGatewayRootWorkCount,
   getGatewayRestartDrainSignal,
   isGatewayRestartDrainError,
   tryBeginGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { CommandLane } from "../process/lanes.js";
+
+export function isGatewayBackgroundMaintenanceBusy(): boolean {
+  return (
+    getQueueSize(CommandLane.Background) > 0 ||
+    getQueueSize(CommandLane.RestartRecovery) > 0 ||
+    getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0
+  );
+}
 
 export type GatewayIdleTaskHandle = {
   name?: string;

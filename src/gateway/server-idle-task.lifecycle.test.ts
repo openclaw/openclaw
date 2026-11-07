@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import * as factsBackfill from "../config/sessions/session-transcript-facts-backfill.js";
+import * as agentRuns from "../infra/agent-run-registry.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import {
   beginGatewayRestartSignalAdmission,
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
+  tryBeginGatewayIndependentRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import {
@@ -16,6 +19,7 @@ import { scheduleGatewayIdleTask } from "./server-idle-task.js";
 import * as lazyCoreHandlers from "./server-methods/lazy-core-handlers.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 import { scheduleGatewayHandlerPrewarm } from "./server-startup-handler-prewarm.js";
+import { scheduleGatewaySessionFactsBackfill } from "./server-startup-session-migration.js";
 
 let clock: ReturnType<typeof createGatewaySchedulerClock>;
 let scheduler: GatewayScheduler;
@@ -55,6 +59,51 @@ function scheduleHandler(load: () => Promise<void>, log: { warn: (message: strin
     log,
   });
 }
+
+it.each(["complete", "shutdown"] as const)(
+  "paces facts backfill outside foreground work and stops on %s",
+  async (outcome) => {
+    const liveRuns = vi.spyOn(agentRuns, "getActiveAgentRunContextCount").mockReturnValue(1);
+    const entered = createDeferred();
+    const runBatch = vi.fn(async (signal: AbortSignal) => {
+      entered.resolve();
+      if (outcome === "shutdown") {
+        await new Promise<void>((resolve) => {
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        expect(signal.aborted).toBe(true);
+      }
+      return outcome === "complete";
+    });
+    vi.spyOn(factsBackfill, "createSessionTranscriptFactsBackfill").mockReturnValue(runBatch);
+    const foreground = tryBeginGatewayIndependentRootWorkAdmission("test:foreground");
+    expect(foreground).not.toBeNull();
+    scheduleGatewaySessionFactsBackfill({
+      databases: [
+        { database: { agentId: "main", path: "/synthetic/agent.sqlite" }, assertCurrent() {} },
+      ],
+      scheduler,
+      signal: scheduler.signal,
+      log: { info: vi.fn(), warn: vi.fn() },
+    });
+    await clock.advanceBy(250);
+    expect(runBatch).not.toHaveBeenCalled();
+    foreground!.release();
+    await clock.advanceBy(1_000);
+    expect(runBatch).not.toHaveBeenCalled();
+    liveRuns.mockReturnValue(0);
+    const tick = clock.advanceBy(1_000);
+    await entered.promise;
+    if (outcome === "shutdown") {
+      await scheduler.stop();
+    }
+    await tick;
+    expect(runBatch).toHaveBeenCalledOnce();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+    await clock.advanceBy(60_000);
+    expect(runBatch).toHaveBeenCalledOnce();
+  },
+);
 
 it.each(["idle", "handler"] as const)(
   "joins started %s work before the Gateway sidecar owner closes",

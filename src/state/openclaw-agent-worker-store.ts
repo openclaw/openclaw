@@ -144,6 +144,7 @@ type AgentWorkerPublicationExecution = Pick<
 type AgentWorkerPublicationOptions = {
   moduleUrl: URL;
   input: unknown;
+  priority?: "background";
   assertAdmission?: (request: SqliteWorkerAdmissionRequest) => SqliteWorkerAdmissionRequest;
   observeAdmission?: (
     admission: SqliteWorkerOperationAdmission,
@@ -452,6 +453,7 @@ async function createOpenClawAgentSqliteWorkerStore<Operations extends SqliteWor
           () => operation(execution, source),
           undefined,
           signal,
+          worker.priority,
         );
         completed = { ok: true, value: publicationValue };
       } catch (error) {

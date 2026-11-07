@@ -7,6 +7,7 @@ import {
   resolveConfiguredAgentDatabaseTargets,
 } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -37,6 +38,7 @@ export function activateGatewayAgentDatabaseStartup(params: {
   context: GatewayRequestContext;
   preparationReady: Promise<void>;
   waitForPostReadyWork: () => Promise<void>;
+  scheduler: GatewayScheduler;
   getConfig: () => OpenClawConfig;
   getPluginRegistry: () => PluginRegistry;
   getPluginMetadataSnapshot: () => PluginMetadataSnapshot | undefined;
@@ -143,7 +145,7 @@ export function activateGatewayAgentDatabaseStartup(params: {
           maintain: () =>
             runWithSpawnBroker(broker, async () => {
               await params.waitForPostReadyWork();
-              const { runGatewaySessionStartupMaintenance } =
+              const { runGatewaySessionStartupMaintenance, scheduleGatewaySessionFactsBackfill } =
                 await import("./server-startup-session-migration.js");
               await runGatewaySessionStartupMaintenance({
                 databases,
@@ -151,6 +153,13 @@ export function activateGatewayAgentDatabaseStartup(params: {
                 assertCurrent: createPreparationGuard(agentId, paths, env, signal, () =>
                   signal.throwIfAborted(),
                 ),
+                log: params.log,
+              });
+              signal.throwIfAborted();
+              scheduleGatewaySessionFactsBackfill({
+                databases,
+                scheduler: params.scheduler,
+                signal,
                 log: params.log,
               });
             }),
