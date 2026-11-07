@@ -736,7 +736,7 @@ it.each([0, 252])(
   },
 );
 
-it("keeps smooth latest through settlement and idle until the target", async () => {
+it("keeps smooth latest through idle and measured estimates", async () => {
   const flushFrames = stubAnimationFrames();
   transcriptDomState.measuredRowHeight = 120;
   const rows = numberedContentRows(40);
@@ -773,6 +773,11 @@ it("keeps smooth latest through settlement and idle until the target", async () 
   vi.advanceTimersByTime(150);
   expect(scrollTo).toHaveBeenCalledExactlyOnceWith({ top: 4300, behavior: "instant" });
   expect(transcript.isProgrammaticScroll).toBe(false);
+  await Promise.resolve();
+  flush();
+  emitRowSizes(transcriptRows(container), 120);
+  flushFrames();
+  expect(transcript.scrollToEnd({ source: "auto", behavior: "instant" })).toBe(true);
 });
 
 it.each([false, true])(

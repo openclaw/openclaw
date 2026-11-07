@@ -552,7 +552,6 @@ describe("CI changed Node test plan", () => {
 
     const sourceInventories = [
       "test/scripts/pr-wrapper-source-closure.test.ts",
-      "test/scripts/pr-worktree-provision.test.ts",
       "test/scripts/eager-import-closure.test.ts",
       "test/scripts/update-restart-module-outcome.test.ts",
       "test/scripts/type-suppression-inventory.test.ts",
