@@ -15,14 +15,9 @@ export function resolveStalledTurnNoticeText(operation: ReplyOperation | undefin
 }
 
 export const STALLED_TURN_GUIDANCE =
-  "Your previous turn stopped making progress and was interrupted. Resume the user's " +
-  "unfinished request from the transcript, honoring any newer instructions and current " +
-  "tool permissions. First reconcile pending tool calls and actions whose outcomes are " +
-  "unknown; do not repeat completed actions. Use the tools needed to finish and verify " +
-  "the remaining work instead of ending with an incomplete status summary. Do not ask " +
-  "the user to say continue merely because the previous turn was interrupted. If the " +
-  "request is already complete, provide its result. If a real blocker or required " +
-  "approval prevents further work, explain what is needed and what remains unverified.";
+  "Your previous turn was interrupted. Continue the user's request from the transcript " +
+  "and any newer message. Reconcile pending actions before retrying; do not repeat " +
+  "completed work. Finish and verify the remaining work, or explain the blocker.";
 
 /** A stale watchdog expired this operation before it delivered output: the user saw nothing. */
 export function isReplyOperationStalledBeforeOutput(
