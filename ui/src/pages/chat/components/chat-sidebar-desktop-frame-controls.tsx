@@ -136,7 +136,7 @@ export function DesktopFrameControls(
         label={t("chat.sidePanel.panelPosition")}
         panelClass="side-panel-position-menu"
         placement="bottom-end"
-        triggerClass="rail-header__action side-panel__frame-action"
+        triggerClass="oc-icon-button oc-icon-button--28 rail-header__action side-panel__frame-action"
         triggerAttributes={{ title: t("chat.sidePanel.panelPosition") }}
         trigger={<Icon name="moreHorizontal" />}
         disabled={!props.callbacks}
@@ -171,7 +171,7 @@ export function DesktopFrameControls(
       />
       <button
         type="button"
-        class="rail-header__action side-panel__frame-action"
+        class="oc-icon-button oc-icon-button--28 rail-header__action side-panel__frame-action"
         title={expandLabel()}
         aria-label={expandLabel()}
         disabled={!props.callbacks}
@@ -182,7 +182,7 @@ export function DesktopFrameControls(
       <Show when={sidebarDock(props.layout) === "bottom"}>
         <button
           type="button"
-          class="rail-header__action side-panel__frame-action"
+          class="oc-icon-button oc-icon-button--28 rail-header__action side-panel__frame-action"
           title={t("chat.sidePanel.minimize")}
           aria-label={t("chat.sidePanel.minimize")}
           disabled={!props.callbacks}

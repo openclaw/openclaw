@@ -33,6 +33,7 @@ export const PROFILE_SETTINGS_TARGET_IDS = {
   identity: "settings-profile-identity",
   personalInstructions: "settings-profile-personal-instructions",
   githubConnections: "settings-profile-github-connections",
+  attribution: "settings-profile-attribution",
 } as const;
 
 export type SettingsSearchTarget = {
@@ -240,8 +241,6 @@ export const SETTINGS_SEARCH_TARGETS = {
       "profilePage.identity.chooseAvatar",
       "profilePage.identity.displayName",
       "profilePage.identity.linkedEmails",
-      "profilePage.identity.prAttribution",
-      "profilePage.identity.prAttributionDescription",
     ],
     aliases: "profile avatar image email",
     requiresIdentity: true,
@@ -267,6 +266,18 @@ export const SETTINGS_SEARCH_TARGETS = {
     ],
     aliases:
       "github oauth account connection publication authentication auth status dashboard actions",
+  },
+  attribution: {
+    routeId: "profile",
+    labelKey: "profilePage.identity.attribution",
+    hash: `#${PROFILE_SETTINGS_TARGET_IDS.attribution}`,
+    searchKeys: [
+      "profilePage.identity.gitCoauthor",
+      "profilePage.identity.prAttribution",
+      "profilePage.identity.prAttributionDescription",
+    ],
+    aliases: "co-author credit pull request",
+    requiresIdentity: true,
   },
   modelBehavior: {
     ...SETTINGS_ROUTE_TARGETS.modelBehavior,
@@ -337,7 +348,6 @@ export const SETTINGS_SEARCH_TARGETS = {
     labelKey: "configView.appearance.tabIcon.title",
     searchKeys: [
       "configView.appearance.tabIcon.agent",
-      "configView.appearance.tabIcon.shape",
       "configView.appearance.tabIcon.square",
       "configView.appearance.tabIcon.rounded",
       "configView.appearance.tabIcon.circle",
@@ -425,14 +435,11 @@ export const SETTINGS_SEARCH_TARGETS = {
     ],
     aliases: "voice audio input dictation dictate",
   },
-  appearanceConnection: {
-    ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.connection),
+  gatewayConnection: {
+    routeId: "connection",
     labelKey: "configView.connection.title",
-    searchKeys: [
-      "configView.connection.gateway",
-      "configView.connection.status",
-      "configView.connection.assistant",
-    ],
+    hash: "",
+    searchKeys: ["configView.connection.gateway", "configView.connection.status"],
     aliases: "version",
   },
   notifications: {
@@ -445,6 +452,9 @@ export const SETTINGS_SEARCH_TARGETS = {
       "configView.notifications.status",
       "configView.notifications.subscribed",
       "configView.notifications.notSubscribed",
+      "configView.notifications.localSubscription",
+      "configView.notifications.blocked",
+      "configView.notifications.gatewayAccess",
       "configView.notifications.enable",
       "configView.notifications.nativeTitle",
       "configView.notifications.openSystemSettings",

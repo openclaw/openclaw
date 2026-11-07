@@ -17,14 +17,13 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isSessionRunVisuallyActive } from "../../lib/session-run-state.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
-import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import {
   buildPendingInputQueueItems,
-  dismissChatPendingInputs,
   getChatPendingInputs,
   isPendingInputDismissHidden,
+  mutateChatPendingInput,
 } from "./chat-pending-inputs.ts";
 import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
 import { chatStartupStatusLabel } from "./chat-run-startup.ts";
@@ -64,6 +63,7 @@ export type ChatProps = Omit<
   | "onRetryQueuedMessage"
   | "onDiscardQueuedMessage"
   | "onDismissPendingInput"
+  | "onSteerNow"
   | "onFocusComposer"
   | "commentAttachments"
   | "commentsDisabled"
@@ -101,11 +101,13 @@ export type ChatProps = Omit<
     historyState?: ChatState;
     /** Session access presentation for dismissing retired inputs; independent of model availability. */
     canDismissPendingInputs?: boolean;
+    canSteerNow?: boolean;
     environmentStartStatus?: import("../../../../packages/gateway-protocol/src/schema/environments.js").WorkerEnvironmentStartStatus;
     providerPolicyNotice?: ProviderPolicyNotice | null;
     // Resolve after the first pane frame prepares the Solid owner's permission facts.
     readProviderReview?: () => ChatProviderReviewOwner | undefined;
     error: string | null;
+    errorDetail?: unknown;
     diskSpace?: SessionPlacementDiskSpace;
     workerRuntimeInstall?: SessionPlacementWorkerRuntimeInstall;
     inlineApproval?: ExecApprovalRequest | null;
@@ -203,10 +205,6 @@ export function createChatViewFrame(
             if (props.readSignal?.aborted) {
               return true;
             }
-            if (!selectionContextOnly && !uploadsEnabled(props.uploadConfig)) {
-              showToast({ message: uploadsDisabledMessage() });
-              return false;
-            }
             const attachment = createChatSelectionAttachment(
               { ...selection, comment, sessionKey: props.sessionKey },
               { attachmentLimits: props.attachmentLimits, selectionContextOnly },
@@ -226,7 +224,7 @@ export function createChatViewFrame(
       );
     } catch (error) {
       if (current()) {
-        showToast({ message: formatUiError(error) });
+        showToast({ severity: "error", message: formatUiError(error) });
       }
     }
   };
@@ -234,7 +232,7 @@ export function createChatViewFrame(
   const historyState = props.historyState;
   const dismissPendingInput =
     props.connected && props.canDismissPendingInputs && historyState
-      ? (inputId: string) => void dismissChatPendingInputs(historyState, [inputId])
+      ? (inputId: string) => void mutateChatPendingInput(historyState, { kind: "dismiss", inputId })
       : undefined;
   const questionState = getTranscriptState(props.paneId);
   const openImage = props.onOpenImage
@@ -292,6 +290,10 @@ export function createChatViewFrame(
     onRetryQueuedMessage: props.connected && canCompose ? props.onQueueRetry : undefined,
     onDiscardQueuedMessage: props.onQueueRemove,
     onDismissPendingInput: dismissPendingInput,
+    onSteerNow:
+      props.connected && props.canSteerNow && historyState
+        ? (runId: string) => void mutateChatPendingInput(historyState, { kind: "steer", runId })
+        : undefined,
     onCompanionSelection:
       props.canSend && !props.suggestionComposer && props.onCompanionStageAttachment
         ? (selection, anchorRect) =>
@@ -307,7 +309,7 @@ export function createChatViewFrame(
     commentAttachments: props.suggestionComposer ? undefined : props.attachments,
     commentsDisabled: !canCompose || Boolean(props.readSignal?.aborted),
     onAddToChat:
-      props.canSend && !props.suggestionComposer && uploadsEnabled(props.uploadConfig)
+      props.canSend && !props.suggestionComposer
         ? (selection, anchorRect) =>
             void openSelectionComment(
               selection,

@@ -122,9 +122,10 @@ export function ShellSettingsSidebar(props: {
       activeHash: host.routeState.location?.hash ?? "",
       lastError: gatewaySnapshot.lastError,
       gatewayVersion: config.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? "",
-      searchQuery: props.sidebarProps.presentation === "embed-list" ? "" : host.settingsSearchQuery,
+      searchQuery: host.settingsSearchQuery,
       searchParams: {
         query: host.settingsSearchQuery,
+        openclawIdEnabled: config.openclawIdEnabled,
         schema: runtimeConfig.configSchema,
         value: runtimeConfig.configForm ?? runtimeConfig.configSnapshot?.config ?? null,
         uiHints: runtimeConfig.configUiHints,

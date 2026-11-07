@@ -8,6 +8,8 @@ export type {
   ChannelApprovalCapability,
   ChannelCommandConversationContext,
   ChannelCapabilities,
+  ChannelDisplayMention,
+  ChannelMentionAdapter,
   ChannelDirectoryEntry,
   ChannelResolveKind,
   ChannelResolveResult,

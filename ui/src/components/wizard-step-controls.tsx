@@ -5,13 +5,15 @@ import { registerModelSetupEnglish } from "../i18n/locales/en-model-setup.ts";
 import { formatUiExternalText } from "../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { liveValue } from "../lib/reactive/live-value.ts";
+import { createPendingFocus } from "../lib/reactive/pending-focus.ts";
 import { handleCopyButton } from "./copy-button-state.ts";
 import { Picker, type PickerParams } from "./select-picker.ts";
 import { SensitiveInput } from "./sensitive-input.tsx";
 import { ChannelPicker, type ChannelPickerOption } from "./solid/channel-picker.tsx";
+import { Checkbox } from "./solid/checkbox.tsx";
 import { Icon } from "./solid/icon.tsx";
-import { ModelSetupSignIn } from "./wizard-sign-in.tsx";
 import "../styles/wizard-step-controls.css";
+import { ModelSetupSignIn } from "./wizard-sign-in.tsx";
 
 registerEnglishCatalog(registerModelSetupEnglish);
 
@@ -245,8 +247,23 @@ function TextForm(props: WizardStepControlsProps) {
   // Channel drafts stay in the input until submit; unrelated refreshes must not overwrite them.
   const value = createMemo(() => (typeof props.value === "string" ? props.value : ""));
   const focusText = () => props.presentation === "model-setup";
+  let form: HTMLFormElement | undefined;
+  // Disabling the field while a reply is pending drops its focus to the page. When the reply
+  // settles on this step (e.g. a validation rejection), give it back unless focus moved elsewhere.
+  createPendingFocus(() => props.busy, {
+    requested: (busy, wasBusy) => !busy && wasBusy === true,
+    focus: () => {
+      const input = form?.elements.namedItem("wizard-text");
+      if (document.activeElement === document.body && input instanceof HTMLInputElement) {
+        input.focus({ preventScroll: true });
+      }
+    },
+  });
   return (
     <form
+      ref={(element) => {
+        form = element;
+      }}
       class="wizard-step__form"
       onSubmit={(event) => {
         event.preventDefault();
@@ -455,8 +472,7 @@ function MultipleChoice(props: WizardStepControlsProps & { options: WizardStepOp
               when={props.presentation === "channels"}
               fallback={
                 <label class="wizard-step__option">
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={selected().some((value) => Object.is(value, option().value))}
                     disabled={props.busy}
                     aria-invalid={props.validationErrorId ? "true" : undefined}

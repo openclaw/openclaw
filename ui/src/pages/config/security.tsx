@@ -58,22 +58,35 @@ function networkAccessDetail(access: GatewayNetworkAccess) {
       return t("quickSettings.security.networkAccessDetail.configuredHost", { host: access.host });
     case "via":
       return t("quickSettings.security.networkAccessDetail.via", { host: access.host });
+    case "reportedTailnet":
+    case "reportedHost":
+      return t("quickSettings.security.networkAccessDetail.listening", { host: access.host });
+    case "reportedLoopback":
+    case "reportedAllInterfaces":
+      return undefined;
+    case "reportedServe":
+    case "reportedFunnel":
+      return t(`quickSettings.security.networkAccessDetail.${access.kind}`);
     default:
       return t("quickSettings.security.networkAccessDetail.configured");
   }
 }
 
-/** Config can raise a concern but can't vouch for the running Gateway, so nothing here reassures. */
-function networkAccessWarns(access: GatewayNetworkAccess, gatewayAuth: string) {
-  if (access.kind === "funnel") {
-    return true;
+/** Config can raise a concern but can't vouch for the running Gateway; only a report reassures. */
+function networkAccessStatus(access: GatewayNetworkAccess, gatewayAuth: string) {
+  if (access.kind === "funnel" || access.kind === "reportedFunnel") {
+    return "warn";
   }
-  return (
-    gatewayAuth === "none" &&
-    access.kind !== "unknown" &&
-    access.kind !== "default" &&
-    access.kind !== "loopback"
-  );
+  if (access.kind === "reportedLoopback") {
+    return "ok";
+  }
+  if (access.kind === "unknown" || access.kind === "default" || access.kind === "loopback") {
+    return null;
+  }
+  if (gatewayAuth === "none") {
+    return "warn";
+  }
+  return access.kind === "reportedServe" || access.kind === "reportedTailnet" ? "ok" : null;
 }
 
 function GatewayAccessSection(props: SecurityViewProps) {
@@ -81,14 +94,18 @@ function GatewayAccessSection(props: SecurityViewProps) {
     knownValueLabel(GATEWAY_AUTH_VALUES, "gatewayAuthValue", props.security.gatewayAuth);
   const networkAccessLabel = () =>
     t(`quickSettings.security.networkAccessValue.${props.security.networkAccess.kind}`);
+  const networkStatus = () =>
+    networkAccessStatus(props.security.networkAccess, props.security.gatewayAuth);
   return (
     <SettingsSection title={t("quickSettings.security.accessTitle")}>
       <SettingsNavRow
         title={t("quickSettings.security.gatewayAuth")}
         control={
-          // The reported mode can miss a startup --auth, so it can raise a concern but not reassure.
+          // Older Gateways' reported mode can miss a startup --auth, so only a real report reassures.
           props.security.gatewayAuth === "none" ? (
             <SettingsStatus kind="warn" label={gatewayAuthLabel()} />
+          ) : props.security.gatewayAuthReported ? (
+            <SettingsStatus kind="ok" label={gatewayAuthLabel()} />
           ) : (
             <SettingsValue value={gatewayAuthLabel()} />
           )
@@ -99,8 +116,8 @@ function GatewayAccessSection(props: SecurityViewProps) {
         title={t("quickSettings.security.networkAccess")}
         description={networkAccessDetail(props.security.networkAccess)}
         control={
-          networkAccessWarns(props.security.networkAccess, props.security.gatewayAuth) ? (
-            <SettingsStatus kind="warn" label={networkAccessLabel()} />
+          networkStatus() ? (
+            <SettingsStatus kind={networkStatus() ?? "muted"} label={networkAccessLabel()} />
           ) : (
             <SettingsValue value={networkAccessLabel()} />
           )
@@ -272,6 +289,8 @@ export function SecurityPage(props: {
         configLoaded: props.configLoaded,
         authMode: props.context.gateway.snapshot.hello?.snapshot?.authMode,
         connectedHost: gatewayUrlHost(props.gatewayUrl),
+        bindHost: props.context.gateway.snapshot.hello?.snapshot?.bindHost,
+        tailscaleMode: props.context.gateway.snapshot.hello?.snapshot?.tailscaleMode,
         execApprovalDefaults: execApprovalDefaults(),
       })}
       configBusy={props.configBusy}

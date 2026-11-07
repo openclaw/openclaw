@@ -80,22 +80,37 @@ function statusesByText(scope: Element, text: string): HTMLElement[] {
 }
 
 describe("devices pending rendering", () => {
-  it("normalizes pending device ids before matching paired access", () => {
+  it.each([
+    {
+      name: "normalizes pending device ids before matching paired access",
+      pending: { deviceId: " device-1 ", scopes: ["operator.admin", "operator.read"] },
+      pairedKey: undefined,
+      summary: /^Access change needs approval · requested /u,
+      approved: ["approved now: Roles: operator Scopes: operator.read"],
+    },
+    {
+      name: "does not show upgrade context for key-mismatched pending requests",
+      pending: { deviceId: "device-1", publicKey: "new-key", scopes: ["operator.admin"] },
+      pairedKey: "old-key",
+      summary: /^New device pairing request · requested /u,
+      approved: [],
+    },
+  ])("$name", ({ pending, pairedKey, summary, approved }) => {
     const container = renderDevicesContainer({
       devicesList: {
         pending: [
           {
             requestId: "req-1",
-            deviceId: " device-1 ",
             displayName: "Device One",
             role: "operator",
-            scopes: ["operator.admin", "operator.read"],
             ts: Date.now(),
+            ...pending,
           },
         ],
         paired: [
           {
             deviceId: "device-1",
+            publicKey: pairedKey,
             displayName: "Device One",
             roles: ["operator"],
             scopes: ["operator.read"],
@@ -105,44 +120,10 @@ describe("devices pending rendering", () => {
     });
     const details = getPendingDeviceDetails(container);
 
-    expect(details[0]).toMatch(/^Scope upgrade requires approval · requested /u);
+    expect(details[0]).toMatch(summary);
     expect(details.slice(1)).toEqual([
       "requested: Roles: operator Scopes: operator.admin, operator.read, operator.write",
-      "approved now: Roles: operator Scopes: operator.read",
-    ]);
-  });
-
-  it("does not show upgrade context for key-mismatched pending requests", () => {
-    const container = renderDevicesContainer({
-      devicesList: {
-        pending: [
-          {
-            requestId: "req-1",
-            deviceId: "device-1",
-            publicKey: "new-key",
-            displayName: "Device One",
-            role: "operator",
-            scopes: ["operator.admin"],
-            ts: Date.now(),
-          },
-        ],
-        paired: [
-          {
-            deviceId: "device-1",
-            publicKey: "old-key",
-            displayName: "Device One",
-            roles: ["operator"],
-            scopes: ["operator.read"],
-          },
-        ],
-      },
-    });
-    const details = getPendingDeviceDetails(container);
-
-    expect(details[0]).toMatch(/^New device pairing request · requested /u);
-    expect(details).toEqual([
-      details[0] ?? "",
-      "requested: Roles: operator Scopes: operator.admin, operator.read, operator.write",
+      ...approved,
     ]);
   });
 
@@ -378,7 +359,7 @@ describe("devices inventory rendering", () => {
       vi.mocked(openDesktopFocus).mockClear();
       const container = renderDevicesContainer({
         basePath: "/ui",
-        presence: [{ host: "Gateway", mode: "gateway", ts: 1000 }],
+        presence: [{ host: "This computer", mode: "gateway", ts: 1000 }],
         nodes: [{ nodeId: "studio", displayName: "Studio", paired: true, connected: true }],
         desktopEnvironments: [
           { id: environmentId, type: "host", status: "available", desktop: true },
@@ -386,7 +367,7 @@ describe("devices inventory rendering", () => {
       });
       expect(container.querySelectorAll(".device-entry__desktop")).toHaveLength(1);
       findButton(
-        getSettingsRow(container, environmentId === "gateway" ? "Gateway" : "Studio"),
+        getSettingsRow(container, environmentId === "gateway" ? "This computer" : "Studio"),
         "Open desktop",
       ).click();
       expect(openDesktopFocus).toHaveBeenCalledExactlyOnceWith("/ui", environmentId);
@@ -407,13 +388,13 @@ describe("devices inventory rendering", () => {
     expect(row.querySelector(".device-entry__desktop")).toBeNull();
     // Reads on a phone too, where a title would never show.
     expect(row.textContent).toContain("Desktop sharing");
-    expect(row.textContent).toContain("pending desktop capability request");
+    expect(row.textContent).toContain("pending desktop access request");
     expect(row.querySelector(".device-entry__facts")?.textContent).toContain("desktop.stream");
   });
 
   it("renders Gateway resources and uptime from system info", () => {
     const container = renderDevicesContainer({
-      presence: [{ host: "Gateway", mode: "gateway", ts: 1000 }],
+      presence: [{ host: "This computer", mode: "gateway", ts: 1000 }],
       gatewaySystemInfo: {
         ...deviceSystemInfo,
         uptimeMs: (11 * 24 + 4) * 3600000,
@@ -425,7 +406,7 @@ describe("devices inventory rendering", () => {
         diskAvailableBytes: 1.2 * 1024 ** 4,
       },
     });
-    const row = getSettingsRow(container, "Gateway");
+    const row = getSettingsRow(container, "This computer");
     expect(row.querySelectorAll(".device-resource")).toHaveLength(3);
     expect(row.querySelector(".device-resource--load")?.textContent).toContain("3.2");
     expect(row.textContent).toContain("1.2 TB free");
@@ -451,7 +432,9 @@ describe("devices inventory rendering", () => {
     });
 
     const section = getInventorySection(container);
-    expect(section.querySelector(".settings-empty")?.textContent).toContain("No paired devices.");
+    expect(section.querySelector(".settings-empty")?.textContent).toContain(
+      "No paired devices yet.",
+    );
   });
 
   it("renders one row per machine with duplicates collapsed", () => {
@@ -624,22 +607,22 @@ describe("devices inventory rendering", () => {
     const missing = rows.find((row) => row.textContent?.includes("Missing Mac"));
 
     expect(installed?.querySelector(".device-entry__facts")?.textContent).toContain(
-      "Worker 2026.8.9",
+      "Device software 2026.8.9",
     );
     expect(installed?.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
       "1 of 2 slots busy",
     );
     expect(
       installed?.querySelector("summary .device-entry__meta")?.textContent ?? "",
-    ).not.toContain("Worker");
+    ).not.toContain("Device software");
     expect(installed ? statusesByText(installed, "Connected") : []).toHaveLength(1);
-    expect(installed ? statusesByText(installed, "Worker missing") : []).toHaveLength(0);
-    expect(missing ? statusesByText(missing, "Worker missing") : []).toHaveLength(1);
+    expect(installed ? statusesByText(installed, "Device software missing") : []).toHaveLength(0);
+    expect(missing ? statusesByText(missing, "Device software missing") : []).toHaveLength(1);
     const missingDetail =
-      "The Gateway-managed worker bundle is missing. Start a new session on this device to reinstall it.";
+      "Required device software is missing. Start a new session on this device to reinstall it.";
     expect(
       Array.from(missing?.querySelectorAll<HTMLElement>("[title]") ?? [])
-        .find((element) => element.textContent?.trim() === "Worker missing")
+        .find((element) => element.textContent?.trim() === "Device software missing")
         ?.getAttribute("title"),
     ).toBe(missingDetail);
     // A title never shows on a phone, so the open row says it too.
@@ -698,9 +681,9 @@ describe("devices inventory rendering", () => {
         .map((status) => status.getAttribute("title"))
         .toSorted((left, right) => (left ?? "").localeCompare(right ?? "")),
     ).toEqual([
-      "Device 2026.6.10; Gateway 2026.7.2. Update the older component to align the fleet.",
-      "Device 2026.6.11; Gateway 2026.7.2. Update the older component to align the fleet.",
-      "Device 2026.8.1; Gateway 2026.7.2. Update the older component to align the fleet.",
+      "Device 2026.6.10; Gateway 2026.7.2. Update the older version to match.",
+      "Device 2026.6.11; Gateway 2026.7.2. Update the older version to match.",
+      "Device 2026.8.1; Gateway 2026.7.2. Update the older version to match.",
     ]);
   });
 
@@ -734,7 +717,7 @@ describe("devices inventory rendering", () => {
     const row = getSettingsRow(section, "Mixed-role Windows");
 
     expect(row.querySelector(".capacity-meter-pips")?.getAttribute("aria-label")).toBe(
-      "Slot utilization unavailable",
+      "Couldn’t load device capacity. Try again.",
     );
     expect(row.querySelectorAll(".device-resource .session-context-meter--stale")).toHaveLength(3);
     // Stale numbers say so once, and never count as live pressure on the closed row.
@@ -743,7 +726,7 @@ describe("devices inventory rendering", () => {
     expect(row.querySelectorAll(".capacity-meter-pips__pip--filled")).toHaveLength(0);
     expect(
       Array.from(row.querySelectorAll(".settings-status"), (status) => status.textContent?.trim()),
-    ).toEqual(["Manual wake required", "Offline"]);
+    ).toEqual(["Manual wake required", "Disconnected"]);
   });
 
   it("preserves the slot-less exec affordance through node inventory", () => {
@@ -796,10 +779,15 @@ describe("devices inventory rendering", () => {
       "Scopes",
     );
     const [active, revoked] = Array.from(facts.querySelectorAll(".device-token"));
-    expect(active?.querySelector(".device-token__role")?.textContent).toBe("operator");
-    expect(active?.querySelector(".settings-row__desc")?.textContent).toContain("operator.read");
+    expect(active?.querySelector(".device-token__role")?.textContent).toBe("Access token");
+    expect(active?.querySelector("details")?.textContent).toContain("operator.read");
     expect(active?.textContent).not.toContain("Revoked");
-    expect(revoked?.textContent).toContain("Revoked");
+    expect(
+      revoked?.querySelector(".device-token__text > .device-entry__meta")?.textContent,
+    ).toContain("Revoked");
+    expect(revoked?.querySelector(".device-token__role")?.textContent).toBe("Device token");
+    expect(revoked?.querySelector("details")?.open).toBe(false);
+    expect(revoked?.querySelector("details")?.textContent).toContain("node");
     expect(revoked?.querySelectorAll("button")).toHaveLength(1);
     findButton(section, "Rotate").click();
     // The rotate callback carries the row label, so the outcome dialog can name it.
@@ -949,14 +937,14 @@ describe("devices access gating", () => {
     });
 
     expect(container.querySelectorAll(".callout.info")).toHaveLength(1);
-    expect(container.textContent).toContain("Device changes require operator.pairing");
-    for (const label of ["Approve", "Reject", "Rotate", "Revoke", "Save"]) {
+    expect(container.textContent).toContain("only admins can change them");
+    for (const label of ["Approve", "Reject", "Rotate", "Revoke"]) {
       expect(findButton(container, label).disabled).toBe(true);
     }
     const row = getSettingsRow(container, "Device One");
     for (const name of ["remove", "editAlias"]) {
       expect(action(row, name).disabled).toBe(true);
-      expect(action(row, name).title).toContain("operator.pairing");
+      expect(action(row, name).title).toContain("only admins");
       action(row, name).click();
     }
     const pendingNode = getSettingsRow(getSection(container, "Pending approval"), "Pending node");
@@ -968,8 +956,6 @@ describe("devices access gating", () => {
     expect(onDeviceRename).not.toHaveBeenCalled();
     expect(onNodeApprove).not.toHaveBeenCalled();
     expect(onNodeReject).not.toHaveBeenCalled();
-    expect(container.textContent).toContain(
-      "Browsing only. Exec approvals and node bindings require operator.admin access.",
-    );
+    expect(container.textContent).not.toContain("Command approvals");
   });
 });

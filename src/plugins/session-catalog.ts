@@ -62,6 +62,8 @@ export type SessionCatalogContinueProviderParams = Omit<
   allowProcessHomeFallback?: boolean;
   /** Caller's gateway scopes so providers can gate high-authority continues up front. */
   clientScopes?: readonly string[];
+  /** Host-bound source authority, retained only for this continuation request. */
+  assertCurrent?: () => void;
 };
 export type SessionCatalogArchiveProviderParams = Omit<
   SessionsCatalogArchiveParams,
@@ -204,13 +206,38 @@ export type SessionCatalogProvider = {
   };
   /** Items are newest-first by source order; nextCursor continues to older items. */
   read: (params: SessionCatalogReadProviderParams) => Promise<SessionsCatalogReadResult>;
+  /** Read-only discovery of an existing receiver-owned logical conversation. Never creates or binds. */
+  resolveGatewayConversation?: (params: SessionCatalogContinueProviderParams) => Promise<
+    | {
+        id: string;
+        sessionKey: string;
+        agentId: string;
+        assertCurrent: () => void;
+        release: () => void;
+      }
+    | undefined
+  >;
   continueSession?: (
     params: SessionCatalogContinueProviderParams,
   ) => Promise<SessionCatalogContinueProviderResult>;
   /** Copy catalog history into a new ordinary Gateway-owned session. */
-  copyToGatewaySession?: (
-    params: SessionCatalogContinueProviderParams,
-  ) => Promise<{ displayName?: string; preferredModel?: string }>;
+  copyToGatewaySession?: (params: SessionCatalogContinueProviderParams) => Promise<{
+    displayName?: string;
+    preferredModel?: string;
+    /** Receiver-owned logical identity. Reuse never imports history a second time. */
+    continuation?: {
+      id: string;
+      sessionKey: string;
+      agentId: string;
+      reservedNow: boolean;
+      assertCurrent: () => void;
+      release: () => void;
+      beginCreate: (assertDestinationCurrent: () => void) => Promise<boolean>;
+      rollback: () => Promise<void>;
+      complete: (assertDestinationCurrent: () => void) => Promise<void>;
+      read: SessionCatalogProvider["read"];
+    };
+  }>;
   checkUpstreamActivity?: (
     probes: SessionUpstreamProbe[],
     policy?: { allowProcessHomeFallback?: boolean },

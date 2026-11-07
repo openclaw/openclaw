@@ -6,6 +6,7 @@ import type {
   ConfigSecretFields,
   StoredSecretSources,
 } from "../lib/config/config-secret-fields.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { Icon } from "./solid/icon.tsx";
 
@@ -104,7 +105,7 @@ export function createSecretFieldHold(read: () => SecretFieldSource) {
       setSaving(true);
       const result = await secretFields
         .save(path, value)
-        .catch((cause: unknown) => ({ ok: false as const, error: String(cause) }));
+        .catch((cause: unknown) => ({ ok: false as const, error: formatUiError(cause) }));
       setSaving(false);
       if (!result.ok) {
         error = result.error;
@@ -124,7 +125,7 @@ export type SecretFieldHold = ReturnType<typeof createSecretFieldHold>;
  * Save and Cancel sit beside the field, within the field's own width, so the row keeps its
  * height. They keep their place through Saving and Saved, so the field doesn't move twice.
  */
-export function SecretFieldActions(props: {
+function SecretFieldActions(props: {
   hold: SecretFieldHold;
   label: string;
   disabled: boolean;
@@ -182,7 +183,7 @@ export function SecretFieldActions(props: {
  * The eye inside the field. While an edit is held it shows only what was typed here, never a
  * stored value; otherwise the field's own toggle, if any, takes its place.
  */
-export function HeldSecretToggle(props: {
+function HeldSecretToggle(props: {
   hold: SecretFieldHold;
   hidesText: boolean;
   fallback: JSX.Element;

@@ -4,10 +4,12 @@ import {
   createAcceptedChannelDeliveryResult,
   createChannelInboundEnvelopeBuilderAsync,
   createChannelPartialDeliveryError,
+  formatInboundMediaUnavailableText,
   implicitMentionKindWhen,
   isChannelPartialDeliveryError,
   logInboundDrop,
   resolveInboundMentionDecision,
+  type InboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import type { ChannelIngressContextBinding } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
@@ -421,12 +423,13 @@ export async function monitorZalouserProvider(options: ZalouserMonitorOptions) {
         cliMsgId: message.cliMsgId,
         fallback: `${message.timestampMs}`,
       });
-      accessDecision = await resolveAccessDecision({
+      const routeContextBinding: ChannelIngressContextBinding = {
         agentId: route.agentId,
         sessionKey: route.sessionKey,
         messageId: messageSid,
         inboundEventKind: "user_request",
-      });
+      };
+      accessDecision = await resolveAccessDecision(routeContextBinding);
       if (!accessDecision.senderAccess.allowed) {
         logVerbose(
           core,
@@ -563,6 +566,81 @@ export async function monitorZalouserProvider(options: ZalouserMonitorOptions) {
         cliMsgId: message.cliMsgId,
       });
 
+      let bodyForAgent = rawBody;
+      let media: InboundMediaFacts[] | undefined;
+      const attachment = message.attachment;
+      if (attachment) {
+        const signal = turnAdoptionLifecycle
+          ? AbortSignal.any([abortSignal, turnAdoptionLifecycle.abortSignal])
+          : abortSignal;
+        accessDecision = await resolveAccessDecision(routeContextBinding);
+        signal.throwIfAborted();
+        if (
+          !accessDecision.senderAccess.allowed ||
+          (isGroup && hasControlCommand && !accessDecision.commandAccess.authorized)
+        ) {
+          return;
+        }
+        let saved: Awaited<ReturnType<typeof core.channel.media.saveRemoteMedia>> | undefined;
+        try {
+          saved = await core.channel.media.saveRemoteMedia({
+            url: attachment.url,
+            maxBytes: account.mediaMaxBytes,
+            requireHttps: true,
+            // Attachment payloads may name only Zalo CDN hosts, including redirects.
+            ssrfPolicy: {
+              hostnameAllowlist: ["*.zdn.vn", "*.dlfl.vn", "*.flchat.vn", "*.dlmd.me"],
+            },
+            responseHeaderTimeoutMs: 30_000,
+            readIdleTimeoutMs: 30_000,
+            timeoutMs: 120_000,
+            requestInit: { signal },
+            assertCurrent: () => signal.throwIfAborted(),
+            originalFilename: attachment.fileName,
+            filePathHint: attachment.fileName,
+          });
+        } catch {
+          signal.throwIfAborted();
+          runtime.error?.(`[${account.accountId}] Failed to download Zalo ${attachment.kind}`);
+          bodyForAgent = formatInboundMediaUnavailableText({
+            body: rawBody,
+            notice: `[zalouser ${attachment.kind} attachment unavailable]`,
+          });
+        }
+        try {
+          // Downloads can outlive pairing access or the owning ingress claim.
+          accessDecision = await resolveAccessDecision(routeContextBinding);
+          signal.throwIfAborted();
+          commandAuthorized = accessDecision.commandAccess.requested
+            ? accessDecision.commandAccess.authorized
+            : undefined;
+          if (
+            !accessDecision.senderAccess.allowed ||
+            (isGroup && hasControlCommand && commandAuthorized !== true)
+          ) {
+            return;
+          }
+          if (saved) {
+            media = [
+              {
+                path: saved.path,
+                url: saved.path,
+                contentType: saved.contentType,
+                fileName: attachment.fileName ?? saved.fileName,
+                sizeBytes: saved.size,
+                kind: attachment.kind,
+              },
+            ];
+          }
+        } finally {
+          if (saved && !media) {
+            await core.channel.media.deleteMediaBuffer(saved.id).catch(() => {
+              runtime.error?.(`[${account.accountId}] Failed to discard rejected Zalo attachment`);
+            });
+          }
+        }
+      }
+
       const ctxPayload = core.channel.inbound.buildContext({
         channelIngress: accessDecision,
         channel: "zalouser",
@@ -593,11 +671,12 @@ export async function monitorZalouserProvider(options: ZalouserMonitorOptions) {
         },
         message: {
           body: combinedBody,
-          bodyForAgent: rawBody,
+          bodyForAgent,
           rawBody,
           commandBody,
           inboundHistory,
         },
+        media,
         extra: {
           BodyForCommands: commandBody,
           GroupSubject: isGroup ? groupName || undefined : undefined,

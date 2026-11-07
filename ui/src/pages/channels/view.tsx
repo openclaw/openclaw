@@ -4,39 +4,35 @@ import type { ChannelsStatusSnapshot } from "../../api/types.ts";
 import "../../styles/channels.css";
 import { ChannelIcon } from "../../components/solid/channel-icon.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import "../../components/openclaw-mascot.tsx";
 import {
   SettingsEmpty,
   SettingsPage,
   SettingsSection,
-  SettingsStatus,
 } from "../../components/solid/settings-ui.tsx";
-import "../../components/openclaw-mascot.tsx";
 import { WizardBusyButton, WizardStepControls } from "../../components/wizard-step-controls.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import {
   channelSnapshotEntryIsActive,
-  resolveChannelAccounts,
   type ChannelRead,
   type ChannelsState,
 } from "../../lib/channels/index.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
-import { formatRelativeTimestamp } from "../../lib/format.ts";
-import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../../components/modal-dialog.tsx";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { channelDocsUrl } from "./hub-meta.ts";
 import { renderChannelDetail as ChannelDetail } from "./view.detail.tsx";
 import { renderChannelPairingPrompt, renderChannelPairingQueue } from "./view.pairing.tsx";
-import { ChannelRefresh, resolveChannelDisplayState } from "./view.shared.tsx";
+import {
+  ChannelHealthStatus,
+  channelLastActivity,
+  ChannelRefresh,
+  resolveChannelHealth,
+} from "./view.shared.tsx";
 import type { ChannelsProps } from "./view.types.ts";
 import type { ChannelWizardState } from "./wizard-runner.ts";
 registerEnglishCatalog(registerSettingsEnglish);
-
-const CHANNEL_CARD_STATES = {
-  running: { kind: "ok", labelKey: "channels.hub.stateRunning" },
-  configured: { kind: "muted", labelKey: "channels.hub.stateConfigured" },
-  attention: { kind: "danger", labelKey: "channels.hub.stateAttention" },
-} as const;
-type ChannelCardState = keyof typeof CHANNEL_CARD_STATES;
 
 const RECOMMENDED_CHANNEL_ORDER: string[] = [
   "whatsapp",
@@ -67,18 +63,19 @@ function ChannelStatusNotices(props: { channels: ChannelsState; error: string | 
   return (
     <>
       {showingStaleSnapshot() ? (
-        <div class="callout info">{t("channels.refreshingStaleSnapshot")}</div>
+        <span class="settings-control__sr-label" role="status">
+          {t("channels.refreshingStaleSnapshot")}
+        </span>
       ) : undefined}
       {props.channels.channelsSnapshot?.partial ? (
-        <div class="callout warn">
-          {t("channels.hub.partialSnapshot")}
-          {partialWarnings()}
-        </div>
+        <InlineAlert tone="warning">
+          {t("channels.hub.partialSnapshot")} {partialWarnings()}
+        </InlineAlert>
       ) : undefined}
       {props.error ? (
-        <div class="callout danger" role="alert">
+        <InlineAlert tone="danger" role="alert">
           {props.error}
-        </div>
+        </InlineAlert>
       ) : undefined}
     </>
   );
@@ -139,11 +136,10 @@ export function ChannelsView(props: ChannelsProps) {
         {props.wizardHost.blockedByDirtyConfig() &&
         !props.selectedChannel &&
         (props.config.configFormDirty || Object.keys(props.configEdits).length > 0) ? (
-          <div class="callout warn">{t("channels.hub.saveBeforeSetup")}</div>
+          <InlineAlert tone="warning">{t("channels.hub.saveBeforeSetup")}</InlineAlert>
         ) : undefined}
         <SettingsSection
           title={t("channels.hub.connectedTitle")}
-          count={connected().length > 0 ? connected().length : undefined}
           actions={
             <ChannelRefresh
               updatedAt={props.channels.channelsLastSuccess}
@@ -168,9 +164,9 @@ export function ChannelsView(props: ChannelsProps) {
           description={t("channels.hub.addSubtitle")}
         >
           {!props.canAdmin && props.channels.connected ? (
-            <div class="callout info" role="note">
+            <InlineAlert tone="info" role="note">
               {t("channels.hub.adminRequired")}
-            </div>
+            </InlineAlert>
           ) : (
             <>
               <For each={available()}>
@@ -231,39 +227,6 @@ function resolveChannelDetailLabel(props: ChannelsProps, key: string): string | 
   return detail && detail !== resolveChannelLabel(props, key) ? detail : null;
 }
 
-function resolveRowState(key: string, props: ChannelsProps): ChannelCardState {
-  const displayState = resolveChannelDisplayState(key, props);
-  const lastError =
-    typeof displayState.status?.lastError === "string" && displayState.status.lastError.trim()
-      ? displayState.status.lastError
-      : resolveChannelAccounts(props.channels.channelsSnapshot?.channelAccounts, key).find(
-          (account) => account.lastError,
-        )?.lastError;
-  if (lastError) {
-    return "attention";
-  }
-  if (displayState.running === true || displayState.connected === true) {
-    return "running";
-  }
-  return "configured";
-}
-
-function rowStatus(state: ChannelCardState) {
-  const { kind, labelKey } = CHANNEL_CARD_STATES[state];
-  return <SettingsStatus kind={kind} label={t(labelKey)} />;
-}
-
-function lastActivityLine(key: string, props: ChannelsProps): string | null {
-  const lastInbound = resolveChannelAccounts(
-    props.channels.channelsSnapshot?.channelAccounts,
-    key,
-  ).reduce((latest, account) => Math.max(latest, account.lastInboundAt ?? 0), 0);
-  if (!lastInbound) {
-    return null;
-  }
-  return t("channels.hub.lastMessageAgo", { ago: formatRelativeTimestamp(lastInbound) });
-}
-
 function ConnectedRow(params: { channelId: string; props: ChannelsProps }) {
   const label = createMemo(() => resolveChannelLabel(params.props, params.channelId));
   const statusIssue = createMemo(() =>
@@ -281,7 +244,7 @@ function ConnectedRow(params: { channelId: string; props: ChannelsProps }) {
     }
     return (
       issue ??
-      lastActivityLine(params.channelId, params.props) ??
+      channelLastActivity(params.channelId, params.props) ??
       resolveChannelDetailLabel(params.props, params.channelId) ??
       t("channels.hub.openDetails")
     );
@@ -303,7 +266,7 @@ function ConnectedRow(params: { channelId: string; props: ChannelsProps }) {
         <span class="settings-row__desc">{description()}</span>
       </div>
       <div class="settings-row__control">
-        {rowStatus(statusIssue() ? "attention" : resolveRowState(params.channelId, params.props))}
+        <ChannelHealthStatus health={resolveChannelHealth(params.channelId, params.props)} />
         <span class="settings-row__chevron">
           <Icon name="chevronRight" />
         </span>
@@ -646,9 +609,9 @@ function WizardDialog(props: { controls: ChannelsProps }) {
           </Show>
           <Show when={error()}>
             {(failure) => (
-              <div class="callout danger channels-wizard__error" role="alert">
+              <InlineAlert tone="danger" class="channels-wizard__error" role="alert">
                 {failure().message}
-              </div>
+              </InlineAlert>
             )}
           </Show>
           <Show when={done()}>
@@ -658,13 +621,14 @@ function WizardDialog(props: { controls: ChannelsProps }) {
             {(current) => (
               <>
                 {current().validationError ? (
-                  <div
+                  <InlineAlert
+                    tone="danger"
+                    class="channels-wizard__error"
                     id="channel-wizard-validation-error"
-                    class="callout danger channels-wizard__error"
                     role="alert"
                   >
                     {current().validationError}
-                  </div>
+                  </InlineAlert>
                 ) : undefined}
                 <WizardStepBody wizard={current()} controls={props.controls} />
               </>

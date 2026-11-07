@@ -1,6 +1,5 @@
 @import "./session-menu.css";
 
-.context-usage__title,
 .palette-session-settings__title,
 .palette-session-settings__machine {
   color: var(--muted);
@@ -440,8 +439,8 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 
 .settings-sidebar__back-icon {
   display: inline-flex;
-  width: 15px;
-  height: 15px;
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
 }
 
 .settings-sidebar__title {
@@ -468,7 +467,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 
 @media (pointer: coarse) {
   .settings-sidebar__loading-agent {
-    height: 44px;
+    height: var(--settings-touch-control-height);
   }
 }
 
@@ -484,9 +483,9 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 .settings-sidebar__back-icon svg {
-  width: 15px;
-  height: 15px;
-  stroke-width: 1.7px;
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
+  stroke-width: var(--chrome-icon-stroke);
 }
 
 .settings-sidebar__nav {
@@ -505,6 +504,17 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   color: var(--muted);
   font-size: calc(12.5px * var(--control-ui-text-scale));
   line-height: 1.45;
+}
+
+.settings-sidebar__empty--search {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.settings-sidebar__empty--search p {
+  margin: 0;
 }
 
 /* Loading skeleton reuses __nav/__group/__item geometry; only the fills are placeholders. */
@@ -527,8 +537,8 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 .settings-sidebar__loading-icon {
-  width: 16px;
-  height: 16px;
+  width: var(--list-row-icon-size);
+  height: var(--list-row-icon-size);
   flex-shrink: 0;
   border-radius: 4px;
 }
@@ -567,6 +577,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 .settings-sidebar__item {
+  gap: 9px;
   min-height: 32px;
   padding: 0 9px;
   transition:
@@ -695,7 +706,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   border: 0;
   border-radius: var(--radius-md);
   background: var(--sidebar-rail-action-bg);
-  color: var(--accent-foreground);
+  color: var(--sidebar-rail-action-foreground);
   text-decoration: none;
 }
 
@@ -706,7 +717,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 
 .header-new-session:hover:not(:disabled, [aria-disabled="true"]) {
   background: var(--sidebar-rail-action-hover-bg);
-  color: var(--accent-foreground);
+  color: var(--sidebar-rail-action-foreground);
 }
 
 .header-new-session:focus-visible {
@@ -873,34 +884,23 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
      both values share --sidebar-pad-x so they cannot drift. */
   margin-right: calc(-1 * var(--sidebar-pad-x));
   padding-right: var(--sidebar-pad-x);
-  scrollbar-color: color-mix(in srgb, var(--muted) 10%, transparent) transparent;
 }
 
-.sidebar-shell:hover .sidebar-shell__body {
-  scrollbar-color: color-mix(in srgb, var(--muted) 16%, transparent) transparent;
-}
-
+/* The whole sidebar counts as the scroller's hover zone, header and footer included. */
 @supports selector(::-webkit-scrollbar) {
-  .sidebar-shell__body {
-    /* Native scrollbar colors override the separate thumb-hover treatment. */
-    scrollbar-width: auto;
-    scrollbar-color: auto;
-  }
-
-  .sidebar-shell:hover .sidebar-shell__body {
-    scrollbar-color: auto;
-  }
-
-  .sidebar-shell__body::-webkit-scrollbar-thumb {
-    background-color: color-mix(in srgb, var(--muted) 10%, transparent);
-  }
-
   .sidebar-shell:hover .sidebar-shell__body::-webkit-scrollbar-thumb {
-    background-color: color-mix(in srgb, var(--muted) 16%, transparent);
+    background-color: var(--scrollbar-thumb-near);
   }
 
-  .sidebar-shell .sidebar-shell__body::-webkit-scrollbar-thumb:hover {
+  .sidebar-shell .sidebar-shell__body::-webkit-scrollbar-thumb:hover,
+  .sidebar-shell .sidebar-shell__body::-webkit-scrollbar-thumb:active {
     background-color: var(--scrollbar-thumb-hover);
+  }
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  .sidebar-shell:hover .sidebar-shell__body {
+    scrollbar-color: var(--scrollbar-thumb-near) transparent;
   }
 }
 
@@ -965,7 +965,6 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   flex: 0 0 auto;
   align-items: flex-start;
   margin: 8px;
-  border-color: color-mix(in srgb, var(--danger) 22%, var(--border));
   box-shadow: var(--shadow-sm);
 }
 
@@ -1502,6 +1501,16 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 .sidebar-session-window {
   /* The virtual window owns anchoring while its rows mount and unmount. */
   overflow-anchor: none;
+}
+
+/* While an archived row fades out (app-sidebar-archive-exit.ts), the rows below
+   and the sections after the list glide into its slot; 60 + 180 ms matches it. */
+.sidebar-session-window[data-sidebar-archive-exiting] {
+  transition: height 180ms cubic-bezier(0.2, 0, 0, 1) 60ms;
+}
+
+.sidebar-session-window[data-sidebar-archive-exiting] > .sidebar-session-tree {
+  transition: transform 180ms cubic-bezier(0.2, 0, 0, 1) 60ms;
 }
 
 .sidebar-recent-sessions__list {
@@ -2096,8 +2105,9 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   display: none;
 }
 
-/* The disclosure stays rightmost; actions sit beside it. */
-.sidebar-recent-session:not(.sidebar-recent-session--child):has(> .sidebar-child-session-toggle)
+/* Every depth shares the disclosure endcap. Keep row-host specificity so touch
+   alignment cannot reset its horizontal space. */
+.sidebar-recent-session.session-row-host:has(> .sidebar-child-session-toggle)
   > .sidebar-recent-session__aside {
   right: calc(var(--sidebar-child-session-toggle-width) + 4px);
 }
@@ -2520,8 +2530,10 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   bottom: -2px;
 }
 
+/* Rows keep their intrinsic height; capped menus scroll instead of squeezing multiline labels. */
 .sidebar-customize-menu__item {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 6px;
   width: 100%;
@@ -2670,6 +2682,12 @@ a:is(
   stroke-width: 1.5px;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.settings-sidebar__item-icon svg {
+  width: var(--list-row-icon-size);
+  height: var(--list-row-icon-size);
+  stroke-width: var(--list-row-icon-stroke);
 }
 
 .nav-item__text {
@@ -2859,12 +2877,16 @@ a:is(
   outline-offset: 1px;
 }
 
+.sidebar-workspace-header__mark,
+.sidebar-agent-card__avatar {
+  width: 28px;
+  height: 28px;
+  flex: none;
+}
+
 .sidebar-workspace-header__mark {
   display: grid;
   place-items: center;
-  width: var(--sidebar-agent-avatar-size);
-  height: var(--sidebar-agent-avatar-size);
-  flex: none;
 }
 
 .sidebar-workspace-header__mark > svg {
@@ -2877,9 +2899,6 @@ a:is(
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: var(--sidebar-agent-avatar-size);
-  height: var(--sidebar-agent-avatar-size);
-  flex: none;
   border-radius: var(--radius-full);
   background: var(--secondary);
   color: var(--secondary-foreground);
@@ -3570,7 +3589,8 @@ openclaw-tooltip.sidebar-hover-tooltip {
 }
 
 .content--workboard > openclaw-router-outlet,
-.content--custodian > openclaw-router-outlet {
+.content--custodian > openclaw-router-outlet,
+.content.content--systems > openclaw-router-outlet {
   /* These pages already fill the shell. A retained outlet box would move when
      their route inset replaces the previous page's, creating a layout shift. */
   display: contents;
@@ -3740,7 +3760,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
   );
 
   /* Stacked headers and pages without a toolbar clear floating chrome with padding. */
-  &:not(.content--toolbar-header) {
+  &:not(.content--toolbar-header, .content--plugin-embed) {
     padding-top: calc(var(--page-toolbar-height) + var(--page-toolbar-clearance) + 16px);
   }
 
@@ -3764,7 +3784,7 @@ html.openclaw-native-web-chrome
       var(--shell-native-titlebar-controls-width) + 8px - var(--content-inline-padding)
   );
 
-  &:not(.content--toolbar-header) {
+  &:not(.content--toolbar-header, .content--plugin-embed) {
     padding-top: calc(var(--page-toolbar-height) + 16px);
   }
 }
@@ -3798,11 +3818,12 @@ html.openclaw-native-web-chrome
   color: var(--muted);
 }
 
-.page-meta,
-.dreaming-header-controls {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.content-header--settings:not(.hub-page-header) .page-subtitle {
+  max-width: none;
+}
+
+.page-subtitle .learn-more-link {
+  white-space: nowrap;
 }
 
 .grid {
@@ -3926,7 +3947,8 @@ html.openclaw-native-web-chrome
 .sidebar-recent-session--single-line .sidebar-recent-session__text {
   flex-direction: row;
   align-items: center;
-  gap: calc(var(--sidebar-row-gap) + var(--sidebar-row-gap));
+  /* Trailing metadata needs less separation than the leading status icon. */
+  gap: 6px;
 }
 
 /* Basis 0 mirrors the two-line subtitle contract: the title absorbs all

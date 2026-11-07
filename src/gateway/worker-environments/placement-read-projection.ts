@@ -406,3 +406,10 @@ export function readWorkerPlacementRecoveryCandidatesInDatabase(
     return [...candidates.values()];
   });
 }
+
+export const workerPlacementReadOperations = {
+  "workers.placementRecoveryCandidates": (_input: undefined, db: EngineConnection) => ({
+    type: "workers.placementRecoveryCandidates" as const,
+    candidates: readWorkerPlacementRecoveryCandidatesInDatabase(db),
+  }),
+};

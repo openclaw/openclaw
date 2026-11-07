@@ -18,6 +18,8 @@ type SaveScope = {
   target: string | null;
 };
 
+const SAVED_NOTICE_MS = 2400;
+
 export function createDevicePolicyActions(options: {
   scope: Accessor<SaveScope>;
   canSave(): boolean;
@@ -41,6 +43,27 @@ export function createDevicePolicyActions(options: {
     return { ...current, approvalsSaving, setApprovalsSaving };
   });
   let lifetime = Promise.withResolvers<void>();
+  let savedNotice: { state: DevicesPageDataState; timer: ReturnType<typeof setTimeout> } | null =
+    null;
+  const clearSavedNotice = () => {
+    if (savedNotice) {
+      clearTimeout(savedNotice.timer);
+      savedNotice.state.execApprovalsSavedNotice = false;
+      savedNotice = null;
+    }
+  };
+  const fadeSavedNotice = (state: DevicesPageDataState) => {
+    if (savedNotice) {
+      clearTimeout(savedNotice.timer);
+    }
+    savedNotice = {
+      state,
+      timer: setTimeout(() => {
+        clearSavedNotice();
+        options.publish();
+      }, SAVED_NOTICE_MS),
+    };
+  };
   const present = action(function* (
     view: ReturnType<typeof presentation>,
     currentLifetime: typeof lifetime,
@@ -60,7 +83,7 @@ export function createDevicePolicyActions(options: {
       }
     } catch (error) {
       if (isCurrent()) {
-        view.state.lastError = formatUiError(error);
+        view.state.execApprovalsError = formatUiError(error);
         options.publish();
       }
     }
@@ -87,6 +110,7 @@ export function createDevicePolicyActions(options: {
     },
     approvalsSaving: () => presentation().approvalsSaving(),
     retire() {
+      clearSavedNotice();
       lifetime.resolve();
       lifetime = Promise.withResolvers<void>();
     },
@@ -97,6 +121,10 @@ export function createDevicePolicyActions(options: {
       const view = presentation();
       const currentLifetime = lifetime;
       const pending = options.run();
+      void pending.then(
+        () => fadeSavedNotice(view.state),
+        () => undefined,
+      );
       // Publish the owner's admitted operation before opening its presentation.
       await Promise.resolve();
       return present(view, currentLifetime, pending);

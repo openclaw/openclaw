@@ -16,7 +16,6 @@ export const APPEARANCE_SETTINGS_TARGET_IDS = {
   chat: "settings-appearance-chat",
   devices: "settings-appearance-devices",
   sessionSources: "settings-session-sources",
-  connection: "settings-appearance-connection",
 } as const;
 
 export const appearanceSettingsRouteTarget = (targetId: string) =>

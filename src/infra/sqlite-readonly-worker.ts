@@ -313,6 +313,7 @@ export function runSqliteReadOnlyWorker(
     mode: "sync" | "async" | "file-generation";
     stagingRoot?: string;
     signal?: AbortSignal;
+    expectedSourceIdentity?: DatabaseFileIdentity;
   },
 ): Promise<string>;
 export function runSqliteReadOnlyWorker(
@@ -370,6 +371,15 @@ export function closeSqliteReadOnlyWorkersForBroker(broker: SpawnBrokerHost): Pr
   return sqliteReadOnlyWorkerPool.closeBroker(broker);
 }
 
+export function runSqliteReadOnlyWorkerOnce(
+  pathname: string,
+  options: { mode: "staging-sweep"; signal?: AbortSignal },
+): Promise<import("./sqlite-snapshot-reclamation.js").SqliteSnapshotReclamation>;
+export function runSqliteReadOnlyWorkerOnce(
+  pathname: string,
+  options: SqliteReadOnlyWorkerOptions,
+  launch?: Pick<SqliteReadOnlyWorkerLaunch, "env" | "cwd"> & { deadlineOwnedByCaller?: boolean },
+): Promise<SqliteReadOnlyWorkerValue>;
 export function runSqliteReadOnlyWorkerOnce(
   pathname: string,
   options: SqliteReadOnlyWorkerOptions,

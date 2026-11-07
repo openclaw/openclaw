@@ -57,13 +57,13 @@ async function bindingControls(
   });
   await page.goto(`${suite.server.baseUrl}settings/devices`);
   const section = page.locator(".settings-section").filter({
-    has: page.getByRole("heading", { name: "Exec node binding", exact: true }),
+    has: page.getByRole("heading", { name: "Device binding", exact: true }),
   });
-  const defaultSelect = section.getByRole("combobox", { name: "Node", exact: true });
+  const defaultSelect = section.getByRole("combobox", { name: "Device", exact: true });
   const researchSelect = section
     .locator(".settings-row")
     .filter({
-      has: page.locator(".settings-row__title").getByText("Research (research)", { exact: true }),
+      has: page.locator(".settings-row__title").getByText("Research", { exact: true }),
     })
     .getByRole("combobox");
   return { gateway, section, defaultSelect, researchSelect };
@@ -162,6 +162,7 @@ suite.define(() => {
       const requireRecord = createRequireRecord("record", "expected-object-value");
       const config = makeConfig("default-node", "agent-node");
       await suite.withPage({ viewport: { width: 1280, height: 1000 } }, async ({ page }) => {
+        await page.clock.install();
         const artifacts = captureUiProof
           ? createControlUiE2eArtifactDir("device-binding-clear")
           : undefined;
@@ -196,7 +197,7 @@ suite.define(() => {
           await page.screenshot({ path: path.join(artifacts, "unavailable-clear-enabled.png") });
         }
         await gateway.deferNext("config.set");
-        await defaultSelect.selectOption({ label: "Any node" });
+        await defaultSelect.selectOption({ label: "Any device" });
         const clearedDefault = requireRecord((await gateway.waitForRequest("config.set")).params);
         expect(JSON.parse(String(clearedDefault.raw))).toEqual({
           ...config,
@@ -218,16 +219,22 @@ suite.define(() => {
         await expect(researchSelect).toBeEnabled();
 
         await gateway.deferNext("config.set");
-        await researchSelect.selectOption({ label: "Use default" });
+        await researchSelect.selectOption({ label: "Use default (Any device)" });
         const clearedAgent = requireRecord(
           (await gateway.waitForRequest("config.set", { after: 1 })).params,
         );
         expect(JSON.parse(String(clearedAgent.raw))).toEqual(makeConfig("", ""));
         await gateway.resolveDeferred("config.set");
-        await expect(indicator).toContainText("Apply changes");
-        await expect(researchSelect).toHaveValue("__default__");
-        await expect(researchSelect).toBeDisabled();
-        await expect(defaultSelect).toBeDisabled();
+        await expect
+          .poll(async () => {
+            // Let each real config.get settle before advancing the next polling window.
+            await page.clock.runFor(1_000);
+            return indicator.textContent();
+          })
+          .toContain("Apply changes");
+        await expect(
+          section.getByText("No devices can run commands yet.", { exact: true }),
+        ).toBeVisible();
         if (artifacts) {
           await page.screenshot({ path: path.join(artifacts, "unavailable-cleared.png") });
         }

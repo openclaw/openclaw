@@ -6,6 +6,7 @@ import type { UserProfileIdentity } from "../../state/user-profiles.types.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { GatewayAuthPolicy } from "../auth-policy.types.js";
 import type { AuthenticatedGitHubIdentitySync } from "../github-user-identity.types.js";
+import type { OpenClawIdTunnelPrincipal } from "../openclaw-id/tunnel-principal.js";
 import type { GatewayOperatorAccessAuthority } from "../operator-access-policy.types.js";
 import type { GatewayOperatorRoleActor } from "../operator-role-actor.js";
 import type { PluginNodeCapabilityClient } from "../plugin-node-capability.js";
@@ -79,6 +80,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   preparedRecipientProfileId?: string;
   preparedSessionProfile?: UserProfileIdentity;
   authenticatedUserProfile?: GatewayAuthenticatedUserProfile;
+  /** Initialized even for broad (undefined) access; must match this connection's published hello. */
+  profileActivity?: { viewerId: string | null | undefined };
   clientIp?: string;
   /** Server-attested inputs for rechecking browser-origin policy after config publication. */
   browserOrigin?: GatewayWsBrowserOrigin;
@@ -89,6 +92,10 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
     operatorDeviceTokenIdentity?: Readonly<PairedDeviceTokenIdentity> | null;
     /** Handshake-attested direct-local transport; never accepted from wire params. */
     isLocalClient?: true;
+    /** Device key W of a connection relayed by the OpenClaw ID tunnel child; never from wire params. */
+    openclawIdPeerKey?: string;
+    /** Original peer admission; every later grant checks the live membership owner. */
+    openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
     /** Authenticated Control UI operator ingress; never accepted from wire params. */
     authenticatedControlUi?: true;
     /** Authenticated Control UI admin admission; never accepted from wire params. */

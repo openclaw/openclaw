@@ -81,7 +81,7 @@ export function linkPluginGenerationDependency(
 }
 
 /** Native child imports can follow host identity without borrowing parent resolver hooks. */
-export function linkPluginGenerationHostModule(link: string, target: string): boolean {
+function linkPluginGenerationHostModule(link: string, target: string): boolean {
   if (fs.lstatSync(link, { throwIfNoEntry: false })) {
     return false;
   }

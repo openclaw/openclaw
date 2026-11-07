@@ -18,17 +18,22 @@ import {
 } from "./config-form.shared.ts";
 import { splitConfigSchemaByTier } from "./config-form.tiers.ts";
 import { Icon } from "./solid/icon.tsx";
+import { InlineAlert } from "./solid/inline-alert.tsx";
 import { Popover, type PopoverHandle } from "./solid/popover.tsx";
 import { SettingsDisclosure } from "./solid/settings-disclosure.tsx";
 import { SettingsEmpty, SettingsPage, LearnMoreLink } from "./solid/settings-ui.tsx";
 
-export function ConfigTierGroups(props: ConfigTierGroupsProps): SolidJSX.Element {
-  const split = createMemo(() =>
-    splitConfigSchemaByTier({
-      schema: props.schema,
-      path: props.path.map(String),
-      hints: props.hints,
-    }),
+export function ConfigTierGroups(
+  props: ConfigTierGroupsProps & { tiers?: ReturnType<typeof splitConfigSchemaByTier> },
+): SolidJSX.Element {
+  const split = createMemo(
+    () =>
+      props.tiers ??
+      splitConfigSchemaByTier({
+        schema: props.schema,
+        path: props.path.map(String),
+        hints: props.hints,
+      }),
   );
   return (
     <div class="config-tier-groups">
@@ -84,6 +89,9 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
     const key = path.at(-1)!;
     const hint = localizedHintForPath(path, hints());
     const sectionMeta = path.length === 1 ? SECTION_META[key] : undefined;
+    if (props.form.sectionTitle) {
+      return { label: props.form.sectionTitle, description: "" };
+    }
     return {
       label:
         sectionMeta?.label ??
@@ -126,14 +134,47 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
       : hintForPath(props.section.path.slice(0, 1), props.form.uiHints)?.docsUrl;
   const docsTriggerId = () => `settings-section-help-${props.section.id}`;
   const hasSectionHelp = () => Boolean(docsUrl()) || liftedHelp().length > 0;
+  const contextLabel = () => {
+    const label = curated()?.label;
+    return typeof label === "string" ? label : meta().label;
+  };
+  const headingRepeats = () => {
+    const heading = contextLabel().toLowerCase();
+    return (props.form.repeatedHeadings ?? []).some((name) =>
+      `${name?.toLowerCase()} `.startsWith(`${heading} `),
+    );
+  };
   // A search result or deep link has to land on open rows.
   const revealTarget = () =>
     props.form.forceAdvancedSection === props.section.path[0] || Boolean(props.form.searchQuery);
   const revealAdvanced = () => props.form.showAdvanced === true || revealTarget();
   return (
-    <section class="settings-section" id={props.section.id}>
-      <div class="settings-section__header">
-        <h2 class="settings-section__heading">{curated()?.label ?? meta().label}</h2>
+    <section
+      class="settings-section"
+      id={props.section.id}
+      aria-label={headingRepeats() ? meta().label : undefined}
+    >
+      <div
+        class="settings-section__header"
+        hidden={
+          headingRepeats() &&
+          !(meta().description && !curated()) &&
+          !props.form.sectionActions &&
+          !hasSectionHelp()
+        }
+      >
+        <Show
+          when={!headingRepeats()}
+          fallback={
+            <Show when={!curated() && meta().description}>
+              <div class="settings-section__copy">
+                <p class="settings-section__desc">{meta().description}</p>
+              </div>
+            </Show>
+          }
+        >
+          <h2 class="settings-section__heading">{curated()?.label ?? meta().label}</h2>
+        </Show>
         <Show when={props.form.sectionActions || hasSectionHelp()}>
           <div class="settings-section__actions">
             {props.form.sectionActions}
@@ -184,10 +225,11 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
           </div>
         </Show>
       </div>
-      <Show when={curated() ? null : meta().description}>
+      <Show when={!curated() && meta().description && !headingRepeats() && !docsUrl()}>
         <p class="settings-section__desc">{meta().description}</p>
       </Show>
       <ConfigTierGroups
+        tiers={tiers()}
         flat={Boolean(curated())}
         schema={props.section.node}
         path={props.section.path}
@@ -215,8 +257,10 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
               disabled: props.form.disabled ?? false,
               showLabel: false,
               showHeaderMeta: true,
+              contextLabel: contextLabel(),
               sectionRoot: true,
               collapseObjects: curated() ? !revealTarget() : revealTarget() ? false : undefined,
+              progressive: props.form.progressive,
               summarizeObject: curated()?.summarizeObject,
               searchCriteria: parseConfigSearchQuery(props.form.searchQuery ?? ""),
               revealSensitive: props.form.revealSensitive ?? false,
@@ -312,7 +356,7 @@ export function ConfigForm(props: ConfigFormProps): SolidJSX.Element {
     >
       <Show
         when={schemaType(props.schema!) === "object" && props.schema!.properties}
-        fallback={<div class="callout danger">{t("configForm.unsupportedSchema")}</div>}
+        fallback={<InlineAlert tone="danger">{t("configForm.unsupportedSchema")}</InlineAlert>}
       >
         <Show
           when={visibleSections().length > 0}
@@ -339,7 +383,7 @@ export function ConfigForm(props: ConfigFormProps): SolidJSX.Element {
 
 function ConfigSections(props: { sections: Section[]; form: ConfigFormProps }): SolidJSX.Element {
   const visible = createProgressiveList(() => props.sections, {
-    initial: 1,
+    initial: 0,
     batch: 7,
     enabled: () => props.form.progressive === true,
   });

@@ -2,6 +2,7 @@ import { createMemo, For, lazy, Show } from "solid-js";
 import type { ThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import type { ChatReplyTarget, ChatItem } from "../../../lib/chat/chat-types.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 import "../../../components/tooltip.ts";
 import { ChatAvatar, type ChatAvatarProps } from "../chat-avatar-view.tsx";
 import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
@@ -165,7 +166,7 @@ function StreamingMessage(props: {
     resolveMessageActionDetails(prepared(), {
       messageId: part().key,
       onReply: props.options.onReply,
-      senderLabel: props.options.assistant?.name ?? "Assistant",
+      senderLabel: props.options.assistant?.name ?? t("sessionsView.assistant"),
     }),
   );
   return (
@@ -204,6 +205,7 @@ export function StreamGroup(props: { parts: StreamGroupPart[]; options: StreamGr
         messages: [],
         replyToSender: source()?.replyToSender,
         replyToMessage: source()?.replyToMessage,
+        replyPreviousMessageId: source()?.replyPreviousMessageId,
       },
       props.options.resolveReplyPreview,
     );
@@ -241,7 +243,9 @@ export function StreamGroup(props: { parts: StreamGroupPart[]; options: StreamGr
         <div class="chat-group-footer" aria-hidden={active() ? "true" : undefined}>
           <Show when={!active()}>
             <div class="chat-group-footer__meta">
-              <span class="chat-sender-name">{props.options.assistant?.name ?? "Assistant"}</span>
+              <span class="chat-sender-name">
+                {props.options.assistant?.name ?? t("sessionsView.assistant")}
+              </span>
               <ChatTimestamp timestamp={startedAt()!} />
             </div>
           </Show>

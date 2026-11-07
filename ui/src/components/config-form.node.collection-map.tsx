@@ -3,12 +3,14 @@ import { For, Show, createMemo, createSignal } from "solid-js";
 import { containsRedactedSentinel, copyWithPathPatch } from "../lib/config-form-utils.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { liveValue } from "../lib/reactive/live-value.ts";
+import { createProgressiveList } from "../lib/reactive/progressive-list.ts";
 import {
   ConfigCollectionDraft,
   type ConfigCollectionDraftHandle,
   type ConfigFormCollectionDraftProps,
 } from "./config-form-collection-draft.tsx";
 import { configValuesEqual, defaultValue, NO_SAFE_DEFAULT } from "./config-form.constraints.ts";
+import { configLabelInContext } from "./config-form.label-context.ts";
 import {
   configChildRenderOptions,
   createCollectionFocus,
@@ -93,13 +95,14 @@ function ConfigMapRow(
         controlIdentity: props.params.value,
         searchCriteria: props.params.searchCriteria,
         showLabel: false,
+        contextLabel: props.params.contextLabel,
         onPatch: props.params.onPatch,
       }) satisfies ConfigNodeRenderParams,
     { lazy: true },
   );
   return (
     <>
-      <div class="settings-row">
+      <div class="settings-row cfg-collection-row">
         <div class="settings-row__text">
           <input
             type="text"
@@ -191,6 +194,11 @@ function ConfigMapRow(
 export function ConfigMapField(props: MapProps & { heading?: MapHeading }): JSX.Element {
   let draft!: ConfigCollectionDraftHandle;
   const content = createMemo(() => resolveMapContent(props.params));
+  const visible = createProgressiveList(() => content().visibleEntries, {
+    initial: 2,
+    batch: 5,
+    enabled: () => props.params.progressive === true,
+  });
   let localEdit: { expected: unknown; retained: unknown } | undefined;
   let sourceRevision = 0;
   let sourceSnapshot: { source: unknown; revision: number } | undefined;
@@ -239,8 +247,8 @@ export function ConfigMapField(props: MapProps & { heading?: MapHeading }): JSX.
   const focus = createCollectionFocus(() => content().visibleEntries.map(([key]) => key));
   return (
     <Show when={content().visible}>
-      <div class="cfg-block cfg-map">
-        <div class="settings-row">
+      <div class="cfg-block cfg-map" aria-busy={visible.pending() ? "true" : undefined}>
+        <div class="settings-row cfg-collection-row">
           <Show
             when={props.heading}
             fallback={
@@ -262,7 +270,7 @@ export function ConfigMapField(props: MapProps & { heading?: MapHeading }): JSX.
               return (
                 <div class="settings-row__text">
                   <span class="settings-row__title">
-                    {heading().label}
+                    {configLabelInContext(heading().label, props.params.contextLabel)}
                     <Show when={copy().hasHelp}>
                       <ConfigFieldHelp
                         path={props.params.path}
@@ -304,7 +312,7 @@ export function ConfigMapField(props: MapProps & { heading?: MapHeading }): JSX.
                 }
               }}
             >
-              {t("configForm.addEntry")}
+              {t("configForm.add")}
             </button>
           </div>
         </div>
@@ -325,7 +333,7 @@ export function ConfigMapField(props: MapProps & { heading?: MapHeading }): JSX.
         />
         <Show when={content().visibleEntries.length > 0}>
           <div class="settings-subrows cfg-subrows">
-            <For each={content().visibleEntries} keyed={(entry) => entry[0]}>
+            <For each={visible.items()} keyed={(entry) => entry[0]}>
               {(entry) => (
                 <ConfigMapRow
                   params={{ ...props.params, onPatch: patchChild }}

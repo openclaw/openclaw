@@ -366,16 +366,15 @@
 
 .model-setup-wizard--auth,
 .model-setup-wizard--done {
-  grid-template-rows: auto minmax(0, 1fr) auto;
   height: min(420px, calc(100dvh - 48px));
 }
 
-.model-setup-wizard--done {
+.oc-dialog.model-setup-wizard--done {
   grid-template-rows: minmax(0, 1fr) auto;
 }
 
 /* Sign-in steps size to their content; the provider badge replaces the header. */
-.model-setup-wizard--sign-in {
+.oc-dialog.model-setup-wizard--sign-in {
   position: relative;
   grid-template-rows: minmax(0, 1fr);
   height: auto;
@@ -383,8 +382,8 @@
 
 .model-setup-wizard__close {
   position: absolute;
-  top: 10px;
-  right: 10px;
+  top: 12px;
+  right: 12px;
   z-index: 1;
   display: grid;
   width: var(--overlay-modal-close-size);
@@ -453,24 +452,6 @@
   line-height: 1.5;
 }
 
-.model-setup-wizard__header,
-.model-setup-wizard__body,
-.model-setup-wizard__footer {
-  padding: 18px;
-}
-
-.model-setup-wizard__header {
-  border-bottom: 1px solid var(--border);
-}
-
-.model-setup-wizard__body {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  min-width: 0;
-  gap: 14px;
-  overflow: auto;
-}
-
 .model-setup-wizard__error {
   position: relative;
 }
@@ -493,15 +474,9 @@
   right: 8px;
 }
 
-.model-setup-wizard__footer {
-  border-top: 1px solid var(--border);
-}
-
 .model-setup-wizard--done .model-setup-wizard__footer {
   flex-direction: column;
   align-items: center;
-  padding: 0 24px 24px;
-  border-top: 0;
 }
 
 @media (max-width: 640px) {
@@ -522,11 +497,6 @@
   }
 }
 
-/* Discovery has body + footer; its body must shrink before the footer can clip. */
-.model-setup-discovery {
-  grid-template-rows: minmax(0, 1fr) auto;
-}
-
-.model-setup-discovery > .model-setup-wizard__body {
-  min-height: 0;
+.model-setup-discovery .model-setup > .btn {
+  justify-self: start;
 }

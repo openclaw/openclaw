@@ -35,6 +35,7 @@ function renderSecurity(
   const props: SecurityViewProps = {
     security: {
       gatewayAuth: "token",
+      gatewayAuthReported: false,
       networkAccess: { kind: "loopback" },
       execPolicy: "allowlist",
       browserEnabled: true,
@@ -57,7 +58,9 @@ describe("Security", () => {
     expect(expectRowByTitle(container, "Available tools").querySelector("select")?.disabled).toBe(
       true,
     );
-    expect(expectRowByTitle(container, "Exec policy").matches("button:not(:disabled)")).toBe(true);
+    expect(
+      expectRowByTitle(container, "Command permissions").matches("button:not(:disabled)"),
+    ).toBe(true);
     expect(expectRowByTitle(container, "Devices").matches("button:not(:disabled)")).toBe(true);
   });
 
@@ -69,7 +72,10 @@ describe("Security", () => {
     ["unknown", "Unknown", false],
     ["hand-edited", "hand-edited", false],
   ])("shows %s auth without vouching for it", (gatewayAuth, label, warns) => {
-    const row = expectRowByTitle(renderSecurity({ gatewayAuth }).container, "Gateway auth");
+    const row = expectRowByTitle(
+      renderSecurity({ gatewayAuth }).container,
+      "Gateway authentication",
+    );
     expect(row.querySelector(".settings-row__control")?.textContent?.trim()).toBe(label);
     expect(row.querySelector(".settings-status")?.className).toBe(
       warns ? "settings-status settings-status--warn" : undefined,
@@ -88,7 +94,7 @@ describe("Security", () => {
     [
       { kind: "custom", host: "gw.example.test" },
       "token",
-      "Custom host",
+      "Custom address",
       "gw.example.test, as configured. A startup flag can override this.",
       false,
     ],
@@ -155,10 +161,10 @@ describe("Security", () => {
   });
 
   it.each([
-    ["Gateway auth", "onOpenGatewaySettings"],
+    ["Gateway authentication", "onOpenGatewaySettings"],
     ["Network access", "onOpenGatewaySettings"],
     ["Devices", "onOpenDevices"],
-    ["Exec policy", "onOpenDevices"],
+    ["Command permissions", "onOpenDevices"],
     ["Approvals", "onOpenApprovals"],
   ] as const)("opens the owner of %s", (title, handler) => {
     const open = vi.fn();
@@ -294,7 +300,141 @@ describe("extractQuickSettingsSecurity", () => {
     expect(row.querySelector(".settings-status")).toBeNull();
     expect(row.querySelector(".settings-row__control")?.textContent?.trim()).toBe(label);
     expect(row.querySelector(".settings-row__desc")?.textContent).toBe(CONFIGURED);
-    expect(row.textContent).not.toContain("This device only");
+    expect(row.textContent).not.toContain("This computer only");
+  });
+
+  it.each([
+    [{ kind: "reportedLoopback" }, "token", "This computer only", undefined, "ok"],
+    [{ kind: "reportedLoopback" }, "none", "This computer only", undefined, "ok"],
+    [{ kind: "reportedAllInterfaces" }, "token", "All interfaces", undefined, null],
+    [{ kind: "reportedAllInterfaces" }, "none", "All interfaces", undefined, "warn"],
+    [
+      { kind: "reportedTailnet", host: "100.64.0.1" },
+      "token",
+      "Tailnet",
+      "Listening on 100.64.0.1.",
+      "ok",
+    ],
+    [
+      { kind: "reportedHost", host: "192.0.2.10" },
+      "token",
+      "Custom address",
+      "Listening on 192.0.2.10.",
+      null,
+    ],
+    [{ kind: "reportedServe" }, "token", "Tailnet", "Through Tailscale Serve.", "ok"],
+    [{ kind: "reportedServe" }, "none", "Tailnet", "Through Tailscale Serve.", "warn"],
+    [
+      { kind: "reportedFunnel" },
+      "password",
+      "Public internet",
+      "Through Tailscale Funnel.",
+      "warn",
+    ],
+  ] as const)(
+    "states what the Gateway reports: %j with %s auth",
+    (networkAccess, gatewayAuth, label, detail, kind) => {
+      const row = expectRowByTitle(
+        renderSecurity({ networkAccess, gatewayAuth }).container,
+        "Network access",
+      );
+      expect(row.querySelector(".settings-row__control")?.textContent?.trim()).toBe(label);
+      expect(row.querySelector(".settings-status")?.className).toBe(
+        kind ? `settings-status settings-status--${kind}` : undefined,
+      );
+      expect(row.querySelector(".settings-row__desc")?.textContent ?? undefined).toBe(detail);
+    },
+  );
+
+  it.each([
+    ["127.0.0.1", "off", null, { kind: "reportedLoopback" }],
+    ["127.0.0.1", "off", "localhost", { kind: "reportedLoopback" }],
+    ["::1", "off", "[::1]", { kind: "reportedLoopback" }],
+    // The flag case: config is silent, the browser is on loopback, the Gateway is on the LAN.
+    ["0.0.0.0", "off", "127.0.0.1", { kind: "reportedAllInterfaces" }],
+    ["::", "off", "127.0.0.1", { kind: "reportedAllInterfaces" }],
+    ["100.100.1.2", "off", null, { kind: "reportedTailnet", host: "100.100.1.2" }],
+    ["100.128.0.1", "off", null, { kind: "reportedHost", host: "100.128.0.1" }],
+    ["192.0.2.10", "off", null, { kind: "reportedHost", host: "192.0.2.10" }],
+    // Tailscale keeps a loopback bind, so the bind alone would wrongly reassure.
+    ["127.0.0.1", "funnel", "127.0.0.1", { kind: "reportedFunnel" }],
+    ["127.0.0.1", "serve", "gw.example.test", { kind: "reportedServe" }],
+    // A proxy or tunnel in front of loopback is still not "this device only".
+    ["127.0.0.1", "off", "gw.example.test", { kind: "via", host: "gw.example.test" }],
+  ])(
+    "reads a report of %s with Tailscale %s at %s",
+    (bindHost, tailscaleMode, connectedHost, expected) => {
+      // Config is deliberately the opposite, because the report has to outrank it.
+      const gateway = { bind: "tailnet", tailscale: { mode: "off" } };
+      expect(
+        extractQuickSettingsSecurity({ gateway }, { bindHost, tailscaleMode, connectedHost })
+          .networkAccess,
+      ).toEqual(expected);
+    },
+  );
+
+  it.each([
+    ["token", "Token"],
+    ["password", "Password"],
+    ["trusted-proxy", "Trusted proxy"],
+  ])("vouches for %s auth once the Gateway really reports it", (gatewayAuth, label) => {
+    const row = expectRowByTitle(
+      renderSecurity({ gatewayAuth, gatewayAuthReported: true }).container,
+      "Gateway authentication",
+    );
+    expect(row.querySelector(".settings-status")?.className).toBe(
+      "settings-status settings-status--ok",
+    );
+    expect(row.querySelector(".settings-row__control")?.textContent?.trim()).toBe(label);
+  });
+
+  it("still warns about no auth when the Gateway reports it", () => {
+    const row = expectRowByTitle(
+      renderSecurity({ gatewayAuth: "none", gatewayAuthReported: true }).container,
+      "Gateway authentication",
+    );
+    expect(row.querySelector(".settings-status")?.className).toBe(
+      "settings-status settings-status--warn",
+    );
+  });
+
+  it.each([
+    ["an older Gateway", { authMode: "token" }, false],
+    ["config alone", {}, false],
+    ["a partial report", { authMode: "token", bindHost: "127.0.0.1" }, false],
+    ["a full report", { authMode: "token", bindHost: "127.0.0.1", tailscaleMode: "off" }, true],
+  ])("treats auth from %s as reported: %s", (_name, live, reported) => {
+    const root = { gateway: { auth: { mode: "token" } } };
+    expect(extractQuickSettingsSecurity(root, live).gatewayAuthReported).toBe(reported);
+  });
+
+  it("reports even when config can't be read", () => {
+    expect(
+      extractQuickSettingsSecurity(
+        {},
+        { configLoaded: false, bindHost: "127.0.0.1", tailscaleMode: "off" },
+      ).networkAccess,
+    ).toEqual({ kind: "reportedLoopback" });
+  });
+
+  it.each([
+    ["an older Gateway", {}],
+    ["a bind with no Tailscale report", { bindHost: "127.0.0.1" }],
+    ["a Tailscale report with no bind", { tailscaleMode: "off" }],
+    ["empty fields", { bindHost: null, tailscaleMode: null }],
+  ])("stays neutral for %s", (_name, fields) => {
+    const live = { authMode: "token", connectedHost: "127.0.0.1", ...fields };
+    expect(extractQuickSettingsSecurity({ gateway: {} }, live).networkAccess).toEqual({
+      kind: "default",
+    });
+    const row = expectRowByTitle(
+      renderSecurity({
+        networkAccess: extractQuickSettingsSecurity({ gateway: {} }, live).networkAccess,
+      }).container,
+      "Network access",
+    );
+    expect(row.querySelector(".settings-status")).toBeNull();
+    expect(row.textContent).not.toContain("This computer only");
   });
 
   it("claims nothing about config it has not read", () => {
@@ -329,7 +469,7 @@ it.each([["operator.admin"], ["operator.read"]])(
       />
     ));
     await waitForSolid(() => {
-      const row = expectRowByTitle(container, "Exec policy");
+      const row = expectRowByTitle(container, "Command permissions");
       expect(row.querySelector(".settings-row__control")?.textContent).toBe("Unknown");
       expect(row.querySelector(".settings-row__desc")).toBeNull();
     });
@@ -370,7 +510,8 @@ it("retires host policy reads across reconnects of the same client", async () =>
   await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
   currentRead.resolve({ resolvedDefaults: { security: "deny", ask: "off" } });
   const policy = () =>
-    expectRowByTitle(container, "Exec policy").querySelector(".settings-row__control")?.textContent;
+    expectRowByTitle(container, "Command permissions").querySelector(".settings-row__control")
+      ?.textContent;
   await waitForSolid(() => expect(policy()).toBe("Deny"));
   oldRead.resolve({ resolvedDefaults: { security: "full", ask: "off" } });
   await oldRead.promise;

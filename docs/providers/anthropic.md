@@ -269,8 +269,11 @@ OpenClaw release:
     Claude Code client version, or the installed CLI version when newer.
     Anthropic uses that identity to gate newer models. A missing, older, or
     failed CLI check uses OpenClaw's maintained version floor. Discovery is
-    shared with the CLI backend and cached until process restart; API-key
-    requests do not run the check.
+    shared with the CLI backend and cached for the resolved executable file.
+    After an in-place update or symlink change, the next request checks the new
+    file without a Gateway restart. Failed checks keep the floor until the
+    executable changes. Native-install fallback locations outside `PATH` keep
+    their existing process-scoped lookup. API-key requests do not run the check.
 
     ### Config example
 

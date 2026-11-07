@@ -190,7 +190,12 @@ export async function dispatchChatSlashCommand(
       : undefined;
   let runtimeOwnsRequest = false;
   try {
-    const { dispatchCapturedChatSlashCommand } = await import("./chat-command-dispatch.runtime.ts");
+    const [{ dispatchCapturedChatSlashCommand }, { registerChatCommandResultsEnglish }] =
+      await Promise.all([
+        import("./chat-command-dispatch.runtime.ts"),
+        import("../../i18n/locales/en-chat-command-results.ts"),
+      ]);
+    registerChatCommandResultsEnglish();
     if (!isCurrent() || request?.signal.aborted) {
       return "cancelled";
     }

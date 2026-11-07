@@ -8,7 +8,11 @@ import {
 } from "../../app/settings-contract.ts";
 import { Picker } from "../../components/select-picker.ts";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
-import { SettingsRow, SettingsToggleRow } from "../../components/solid/settings-ui.tsx";
+import {
+  SettingsRow,
+  SettingsSegmented,
+  SettingsToggleRow,
+} from "../../components/solid/settings-ui.tsx";
 import { SUPPORTED_LOCALES, type Locale } from "../../i18n/index.ts";
 import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
@@ -18,7 +22,6 @@ import { LocalToggleRow } from "./local-toggle-row.tsx";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
 import { SessionObserverSettings } from "./session-observer-settings-view.tsx";
 import { SettingsSectionHeader } from "./settings-section-header.tsx";
-import { SettingsSelectRow } from "./settings-select-row.tsx";
 import type { ConfigProps } from "./view-types.ts";
 
 registerEnglishCatalog(registerChatComposerEnglish);
@@ -31,7 +34,7 @@ function languageLabel(locale: Locale) {
 }
 
 export { LobsterPetSection } from "./view-appearance-lobster.tsx";
-export function serverUiPrefProvenanceHint(provenance: ServerUiPrefProvenance): string {
+function serverUiPrefProvenanceHint(provenance: ServerUiPrefProvenance): string {
   if (provenance === "profile") {
     return t("configView.profileSyncedHint");
   }
@@ -238,10 +241,8 @@ export function ChatPreferencesSection(props: ConfigProps) {
     <section id={APPEARANCE_SETTINGS_TARGET_IDS.chat} class="settings-section">
       <SettingsSectionHeader title={t("configView.chatPrefs.title")} />
       <div class="settings-group">
-        <SettingsSelectRow
+        <SettingsRow
           title={t("chat.sendShortcut")}
-          value={props.chatSendShortcut}
-          setting={"send-shortcut"}
           description={
             <>
               {t("chat.sendShortcutHint")}
@@ -249,28 +250,48 @@ export function ChatPreferencesSection(props: ConfigProps) {
               {sendShortcutProvenance()}
             </>
           }
-          options={[
-            {
-              value: "enter",
-              label: t("chat.sendShortcutEnter"),
-            },
-            {
-              value: "modifier-enter",
-              label: t("chat.sendShortcutModifierEnter"),
-            },
-          ]}
-          onChange={(value) =>
-            props.onAppearanceChange({
-              chatSendShortcut: normalizeChatSendShortcut(value),
-            })
+          stackedOnNarrow={true}
+          control={
+            <SettingsSegmented
+              value={props.chatSendShortcut}
+              ariaLabel={t("chat.sendShortcut")}
+              options={[
+                {
+                  value: "enter",
+                  label: t("chat.sendShortcutEnter"),
+                  testId: "send-shortcut-enter",
+                },
+                {
+                  value: "modifier-enter",
+                  label: t("chat.sendShortcutModifierEnter"),
+                  testId: "send-shortcut-modifier-enter",
+                },
+              ]}
+              onChange={(value) =>
+                props.onAppearanceChange({
+                  chatSendShortcut: normalizeChatSendShortcut(value),
+                })
+              }
+            />
           }
         />
         <SettingsRow
           title={t("chat.followUpMode")}
           description={
-            <>
-              {followUpDescription()} {followUpProvenance()}
-            </>
+            <span class="settings-follow-up-status">
+              {followUpProvenance()}
+              <br />
+              {followUpDescription()}{" "}
+              {props.chatFollowUpModeOverridden ? (
+                <button
+                  type="button"
+                  class="settings-row__desc-action"
+                  onClick={() => props.resetChatFollowUpMode()}
+                >
+                  {t("chat.followUpModeReset")}
+                </button>
+              ) : undefined}
+            </span>
           }
           control={
             <>
@@ -294,15 +315,6 @@ export function ChatPreferencesSection(props: ConfigProps) {
                   { value: "queue", label: t("chat.followUpModeQueue") },
                 ]}
               />
-              {props.chatFollowUpModeOverridden ? (
-                <button
-                  type="button"
-                  class="btn btn--sm"
-                  onClick={() => props.resetChatFollowUpMode()}
-                >
-                  {t("chat.followUpModeReset")}
-                </button>
-              ) : undefined}
             </>
           }
         />
@@ -348,24 +360,23 @@ export function ChatPreferencesSection(props: ConfigProps) {
           hint={t("configView.chatPrefs.collapseTaskProgressHint")}
           disabled={!props.chatShowTaskProgress}
         />
-        <SettingsSelectRow
+        <SettingsRow
           title={t("chat.catalogOpenTarget")}
-          value={props.catalogOpenTarget}
-          setting={"catalog-open-target"}
-          options={[
-            {
-              value: "viewer",
-              label: t("chat.catalogOpenTargetViewer"),
-            },
-            {
-              value: "terminal",
-              label: t("chat.catalogOpenTargetTerminal"),
-            },
-          ]}
-          onChange={(value) =>
-            props.onAppearanceChange({
-              catalogOpenTarget: normalizeCatalogOpenTarget(value),
-            })
+          stackedOnNarrow={true}
+          control={
+            <SettingsSegmented
+              value={props.catalogOpenTarget}
+              ariaLabel={t("chat.catalogOpenTarget")}
+              options={[
+                { value: "viewer", label: t("chat.catalogOpenTargetViewer") },
+                { value: "terminal", label: t("chat.catalogOpenTargetTerminal") },
+              ]}
+              onChange={(value) =>
+                props.onAppearanceChange({
+                  catalogOpenTarget: normalizeCatalogOpenTarget(value),
+                })
+              }
+            />
           }
         />
         <SettingsToggleRow

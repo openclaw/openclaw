@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { setImmediate } from "node:timers/promises";
-import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
@@ -131,6 +131,15 @@ it("retains installed rows through a failed refresh and its retry", async () => 
   const selector = '.plugins-settings-row[data-plugin-id="workboard"]';
   await waitForSolid(() => expect(find(selector)).not.toBeNull());
   const row = find(selector);
+  const badge = find(`${selector} .plugins-settings-row__status`);
+  const removed: Node[] = [];
+  const observer = new MutationObserver((records) => {
+    for (const record of records) {
+      removed.push(...record.removedNodes);
+    }
+  });
+  observer.observe(row!, { subtree: true, childList: true });
+  onTestFinished(() => observer.disconnect());
   harness.publishGeneration(1);
   await harness.waitForCall("plugins.list");
   expect(find(selector)).toBe(row);
@@ -138,13 +147,25 @@ it("retains installed rows through a failed refresh and its retry", async () => 
   await waitForSolid(() => expect(page.textContent).toContain("Synthetic inventory unavailable"));
   expect(find(selector)).toBe(row);
   response = retry.promise;
-  find<HTMLButtonElement>(".plugins-settings-error button")!.click();
+  find<HTMLButtonElement>(".callout.danger button")!.click();
   await waitForSolid(() => expect(harness.calls("plugins.list")).toHaveLength(2));
   expect(find(selector)).toBe(row);
   retry.resolve(createResult(createPlugin({ name: "Updated Workboard" })));
   await waitForSolid(() => expect(find(selector)?.textContent).toContain("Updated Workboard"));
   expect(find(selector)).toBe(row);
   expect(page.textContent).not.toContain("Synthetic inventory unavailable");
+  expect(removed.filter((node) => node === badge)).toHaveLength(0);
+  expect(find(`${selector} .plugins-settings-row__status`)).toBe(badge);
+
+  response = Promise.resolve(createResult(createPlugin({ enabled: true, state: "enabled" })));
+  harness.publishGeneration(2);
+  await waitForSolid(() =>
+    expect(
+      find(`${selector} .plugins-settings-row__status`)?.getAttribute("data-plugin-state"),
+    ).toBe("enabled"),
+  );
+  expect(find(`${selector} .plugins-settings-row__status`)?.textContent).toContain("Enabled");
+  expect(find(`${selector} .settings-status--ok`)).not.toBeNull();
 });
 
 it.each([
@@ -409,7 +430,7 @@ it("retains same-plugin inspection after a failed refresh", async () => {
   fresh.reject(new Error("Inspection unavailable"));
   await waitForSolid(() => expect(page.textContent).toContain("Inspection unavailable"));
   expect(page.textContent).toContain("Known skill");
-  page.querySelector<HTMLButtonElement>(".plugins-settings-error button")!.click();
+  page.querySelector<HTMLButtonElement>(".callout.danger button")!.click();
   await waitForSolid(() => expect(inspections).toBe(3));
   await waitForSolid(() => expect(page.textContent).not.toContain("Inspection unavailable"));
   expect(page.textContent).toContain("Known skill");
@@ -440,24 +461,21 @@ it("retries a failed selected catalog read through its visible error action", as
   expect(page.textContent).not.toContain("Synthetic catalog unavailable");
 });
 
-it.each(["settings", "discovery"] as const)(
-  "closes a held %s detail without waiting for transport",
-  async (surface) => {
-    const held = deferred();
-    const harness = pageFixture({
-      "plugins.inspect": () => held.promise,
-      "plugins.catalog.get": () => held.promise,
-      "plugins.catalog.browse": () => ({ items: [], categories: [] }),
-    });
-    const inventory = surface === "settings" ? createResult() : createResult([]);
-    const path =
-      surface === "settings" ? "/settings/plugins/workboard" : "/plugins/catalog-workboard";
-    const { page } = await mountPage(harness.context, harness.route(path, inventory), surface);
-    await harness.waitForCall(surface === "settings" ? "plugins.inspect" : "plugins.catalog.get");
-    page.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    await waitForSolid(() => expect(page.querySelector(".plugin-catalog-detail")).toBeNull());
-    held.reject(new Error("Retired detail must not reappear"));
-    await settlePlugins();
-    expect(page.textContent).not.toContain("Retired detail must not reappear");
-  },
-);
+it("closes a held discovery detail without waiting for transport", async () => {
+  const held = deferred();
+  const harness = pageFixture({
+    "plugins.catalog.get": () => held.promise,
+    "plugins.catalog.browse": () => ({ items: [], categories: [] }),
+  });
+  const { page } = await mountPage(
+    harness.context,
+    harness.route("/plugins/catalog-workboard", createResult([])),
+    "discovery",
+  );
+  await harness.waitForCall("plugins.catalog.get");
+  page.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await waitForSolid(() => expect(page.querySelector(".plugin-catalog-detail")).toBeNull());
+  held.reject(new Error("Retired detail must not reappear"));
+  await settlePlugins();
+  expect(page.textContent).not.toContain("Retired detail must not reappear");
+});

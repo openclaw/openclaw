@@ -11,6 +11,8 @@ import type {
 } from "../lib/config/config-secret-fields.ts";
 import { formatUnknownText } from "../lib/format.ts";
 import { isSupportedConfigValueValid } from "./config-form.constraints.ts";
+import { configLabelInContext } from "./config-form.label-context.ts";
+import { humanizeConfigEnumValue } from "./config-form.labels.ts";
 import { formatConfigFormNumber } from "./config-form.numeric.ts";
 import { resolveConfigFieldMeta, type ConfigSearchCriteria } from "./config-form.search.ts";
 import {
@@ -49,6 +51,8 @@ export type ConfigNodeRenderParams = {
   /** Compact editors show effective defaults and inline collection controls. */
   compact?: boolean;
   commitOnBlur?: boolean;
+  /** The nearest visible heading, whose name a row's label need not repeat. */
+  contextLabel?: string;
   /** Help of an enclosing object that renders no row of its own. */
   helpContext?: readonly string[];
   /** The surrounding section heading names this object, and its "?" carries lifted help. */
@@ -61,6 +65,8 @@ export type ConfigNodeRenderParams = {
   showHeaderMeta?: boolean;
   /** Keep every nested group of settings closed until it is opened. */
   collapseObjects?: boolean;
+  /** Yield initial collection rows with the form's first-visit presentation. */
+  progressive?: boolean;
   /** State worth reading without opening a nested group, shown on its summary row. */
   summarizeObject?: (path: Array<string | number>, value: unknown) => JSX.Element;
   searchCriteria?: ConfigSearchCriteria;
@@ -90,6 +96,7 @@ export function configChildRenderOptions(params: ConfigNodeRenderParams) {
     compact: params.compact,
     commitOnBlur: params.commitOnBlur,
     collapseObjects: params.collapseObjects,
+    progressive: params.progressive,
     summarizeObject: params.summarizeObject,
     revealSensitive: params.revealSensitive,
     isSensitivePathRevealed: params.isSensitivePathRevealed,
@@ -105,8 +112,10 @@ export function resolveConfigFieldPresentation(params: ConfigNodeRenderParams) {
   const showLabel = params.showLabel ?? true;
   return {
     label,
+    title: configLabelInContext(label, params.contextLabel),
     help,
     showLabel,
+    placement: params.compact ? undefined : ("column" as const),
     path: params.path,
     helpContext: params.helpContext,
     required: configFieldRequiresInput(params),
@@ -202,14 +211,16 @@ export function getSensitiveRenderState(params: {
 
 export function configEnumOptionLabel(option: unknown, options: readonly unknown[]): string {
   const presentsBooleanState = options.includes(true) && options.includes(false);
-  if (!presentsBooleanState) {
-    return formatConfigValueText(option);
-  }
-  if (option === true) {
+  if (presentsBooleanState && option === true) {
     return t("configForm.enumOn");
   }
-  if (option === false) {
+  if (presentsBooleanState && option === false) {
     return t("configForm.enumOff");
   }
-  return option === "auto" ? t("configForm.enumAuto") : formatConfigValueText(option);
+  if (presentsBooleanState && option === "auto") {
+    return t("configForm.enumAuto");
+  }
+  return typeof option === "string"
+    ? humanizeConfigEnumValue(option)
+    : formatConfigValueText(option);
 }

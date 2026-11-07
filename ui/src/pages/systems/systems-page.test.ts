@@ -167,6 +167,44 @@ async function mount(controller: Systems, presented = () => true) {
 }
 
 describe("Systems workspace", () => {
+  const cloudWorker: NonNullable<EnvironmentSummary["worker"]> = {
+    providerId: "crabbox",
+    profileId: "standard",
+    state: "ready",
+    ageMs: 0,
+    attachedSessionIds: [],
+    tunnelStatus: "stopped",
+  };
+  it.each([
+    [worker, "Device"],
+    [{ ...worker, worker: { ...cloudWorker, providerId: "device" } }, "Device"],
+    [{ ...worker, worker: cloudWorker }, "Cloud device · standard"],
+  ] satisfies [EnvironmentSummary, string][])(
+    "labels device placement from provisioned metadata %#",
+    async (device, label) => {
+      const { controller } = harness(async () => [device]);
+      controller.select(device.id);
+      const { page } = await mount(controller);
+      expect(text(page, ".systems-heading span")).toBe(label);
+    },
+  );
+
+  it.each([
+    [[], "You need admin access to view a desktop.", "You need read access to view backups."],
+    [["operator.admin"], "Desktop access isn’t available on this device.", "No backups yet."],
+  ])(
+    "distinguishes desktop permissions from unavailable service %#",
+    async (scopes, hint, backup) => {
+      const { controller, gateway } = harness(async () => [{ ...host, desktop: true }]);
+      controller.select(host.id);
+      const { page } = await mount(controller);
+      gateway.publish({
+        hello: gatewayHelloForMethods(["environments.list", "node.list", "system.info"], scopes),
+      });
+      await waitForContent(page, ".systems-state", hint);
+      await waitForContent(page, ".systems-backups", backup);
+    },
+  );
   it("shows and refreshes backup health on the landing view without machines", async () => {
     vi.useFakeTimers();
     const pending = createDeferred<BackupStatusResult>();
@@ -180,13 +218,13 @@ describe("Systems workspace", () => {
       backups,
     );
     const { page } = await mount(controller);
-    expect(text(page, ".systems-heading h2")).toBe("Select a machine");
+    expect(text(page, ".systems-heading h2")).toBe("Select a device");
     expect(text(page, ".systems-backups")).toContain("Loading backups…");
     pending.reject(new Error("Backup history unavailable"));
     await waitForContent(page, '.systems-backups [role="alert"]', "Backup history unavailable");
     await controller.refreshBackups();
-    await waitForContent(page, ".systems-backups", "No backups recorded —");
-    page.querySelector<HTMLButtonElement>('[aria-label="Machine details"]')!.click();
+    await waitForContent(page, ".systems-backups", "No backups yet.");
+    page.querySelector<HTMLButtonElement>('[aria-label="Device details"]')!.click();
     await waitForSolid(() =>
       expect(text(page, ".systems-details .systems-backups code")).toBe(
         "openclaw backup enable --to <location>",
@@ -326,7 +364,7 @@ describe("Systems workspace", () => {
       expect(backup.textContent).toMatch(/Last local success: .*ago/);
       expect(text(backup, ".systems-backup__error")).toBe(
         target.latest.error ??
-          "Local backup succeeded, but pushing to the Git remote failed. Check the remote and retry.",
+          "The local backup succeeded, but couldn’t be pushed to the Git remote. Check the remote and try again.",
       );
     }
     expect(calls(request, "storage.locations.probe")).toHaveLength(0);
@@ -602,9 +640,7 @@ describe("Systems workspace", () => {
     expect(names()).toEqual(["Test Gateway", "Be\u0301ta", "Zulu laptop", "Cloud worker"]);
     await search("  A\u0301LPHA  ");
     expect(names()).toEqual([]);
-    expect(text(sidebar, ".systems-sidebar__empty")).toBe(
-      "No machines match your search or filters.",
-    );
+    expect(text(sidebar, ".systems-sidebar__empty")).toBe("No devices match your search.");
     await choose("status:all");
     expect(names()).toEqual(["Álpha"]);
     await choose("status:offline");
@@ -807,7 +843,7 @@ describe("Systems workspace", () => {
     node = { ...node, status: "unavailable" };
     await controller.refresh();
     flush();
-    expect(page.textContent).toContain("This machine is offline");
+    expect(page.textContent).toContain("This device is offline");
     expect(page.textContent).toContain("Last reported");
     expect(page.querySelector('.systems-metrics[data-stale="true"]')).not.toBeNull();
     expect(connect).not.toHaveBeenCalled();
@@ -913,14 +949,14 @@ describe("Systems workspace", () => {
     await controller.refresh();
     flush();
     expect(controller.state.selectedId).toBe(worker.id);
-    expect(page.textContent).toContain("This machine is no longer listed");
+    expect(page.textContent).toContain("This device is no longer listed");
     expect(page.querySelector<HTMLSelectElement>(".systems-mobile-picker")?.value).toBe("");
     expect(page.querySelector("openclaw-desktop-panel")).toBeNull();
     await waitForSolid(() => expect(handle.disconnect).toHaveBeenCalled());
     openDesktop("worker-no-longer-known");
     flush();
     expect(controller.state.selectedId).toBe("worker-no-longer-known");
-    expect(page.textContent).toContain("This machine is no longer listed");
+    expect(page.textContent).toContain("This device is no longer listed");
     expect(connect).toHaveBeenCalledOnce();
     unmount();
   });

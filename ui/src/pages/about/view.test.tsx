@@ -51,30 +51,32 @@ function render(
 
 beforeEach(() => i18n.setLocale("en"));
 
-it("renders the hero, links, license, and Clawd's active wave", () => {
-  const { query, props, update } = render({ clawdWaving: true });
-  const hero = query(".about-hero");
-  expect(hero?.querySelector(".about-hero__name")?.textContent).toBe("OpenClaw");
-  expect(hero?.querySelector(".about-hero__clawd svg")).not.toBeNull();
+it("renders the identity, links, license, and Clawd's active wave", () => {
+  const { container, query, props, update } = render({ clawdWaving: true });
+  const identity = query(".about-identity");
+  expect(identity?.querySelector(".about-identity__name")?.textContent).toBe("OpenClaw");
+  expect(identity?.querySelector(".about-identity__clawd svg")).not.toBeNull();
 
-  const clawd = hero?.querySelector<HTMLButtonElement>(".about-hero__clawd");
+  const clawd = identity?.querySelector<HTMLButtonElement>(".about-identity__clawd");
   expect(clawd?.getAttribute("aria-label")).toBe("Wave hello to Clawd");
   clawd?.click();
   expect(props.onPokeClawd).toHaveBeenCalledOnce();
-  expect(query(".about-hero__clawd--wave")).not.toBeNull();
+  expect(query(".about-identity__clawd--wave")).not.toBeNull();
   update({ ...props, clawdWaving: false });
   flush();
-  expect(query(".about-hero__clawd--wave")).toBeNull();
+  expect(query(".about-identity__clawd--wave")).toBeNull();
 
-  const links = Array.from(hero?.querySelectorAll<HTMLAnchorElement>(".about-hero__link") ?? []);
+  const links = Array.from(
+    container.querySelectorAll<HTMLAnchorElement>("nav a.settings-row--nav"),
+  );
   expect(links.map((link) => link.getAttribute("href"))).toEqual([
     "https://community.openclaw.ai/",
-    "https://openclaw.ai",
     "https://docs.openclaw.ai",
-    "https://github.com/openclaw/openclaw",
-    "https://discord.gg/clawd",
-    "https://x.com/openclaw",
     "https://docs.openclaw.ai/releases",
+    "https://openclaw.ai",
+    "https://github.com/openclaw/openclaw",
+    "https://openclaw.ai/discord?from=openclaw-app-community",
+    "https://x.com/openclaw",
   ]);
   for (const link of links) {
     expect(link.getAttribute("target")).toBe("_blank");
@@ -85,7 +87,7 @@ it("renders the hero, links, license, and Clawd's active wave", () => {
 });
 
 function facts(container: HTMLElement, label: string) {
-  const list = container.querySelector(`dl.settings-kv[aria-label="${label}"]`);
+  const list = container.querySelector(`dl.about-build__facts[aria-label="${label}"]`);
   const rows = new Map<string, Element>();
   for (const term of Array.from(list?.querySelectorAll("dt") ?? [])) {
     rows.set(term.textContent ?? "", term.nextElementSibling!);
@@ -95,8 +97,11 @@ function facts(container: HTMLElement, label: string) {
 
 it("shows Control UI and Gateway build identity with the shared settings facts", async () => {
   const { container } = render();
-  const headings = Array.from(container.querySelectorAll(".settings-section__heading"));
-  expect(headings.map((heading) => heading.textContent)).toEqual(["Control UI", "Gateway"]);
+  const rows = Array.from(container.querySelectorAll(".about-build"));
+  expect(rows.map((row) => row.querySelector(".settings-row__title")?.textContent)).toEqual([
+    "Control UI",
+    "Gateway",
+  ]);
   const ui = facts(container, "Control UI build details");
   const gateway = facts(container, "Gateway");
   expect([...ui.rows.keys()]).toEqual(["Version", "Commit", "Branch", "Built"]);
@@ -110,10 +115,10 @@ it("shows Control UI and Gateway build identity with the shared settings facts",
   expect(ui.rows.get("Branch")?.textContent).toBe("feature/build-chip*");
   expect(gateway.rows.get("Version")?.textContent).toBe("2026.7.9");
   expect(gateway.rows.get("Commit")?.querySelector("code")?.textContent).toBe("abcdef0");
-  for (const list of [ui, gateway]) {
+  for (const row of rows) {
     expect(
-      list.rows.get("Commit")?.querySelector("button.chat-copy-btn")?.getAttribute("aria-label"),
-    ).toBe("Copy full commit hash");
+      row.querySelector(".settings-row__control button.chat-copy-btn")?.getAttribute("aria-label"),
+    ).toBe("Copy version and commit");
   }
   const time = ui.rows.get("Built")?.querySelector("time");
   expect(time).toMatchObject({ dateTime: BUILT_AT, title: BUILT_AT, dir: "auto" });
@@ -131,7 +136,27 @@ it("shows Control UI and Gateway build identity with the shared settings facts",
     });
     expect(time?.textContent).toBe(stamp.format(new Date(BUILT_AT)));
   }
-  expect(container.querySelector(".settings-section__desc")).toBeNull();
+});
+
+it("copies version and full commit, falling back to whichever exists", async () => {
+  const writeText = vi.fn(async () => {});
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
+  const { container, props, update } = render();
+  const copy = async (index: number) => {
+    writeText.mockClear();
+    const rows = container.querySelectorAll(".about-build");
+    rows[index]?.querySelector<HTMLButtonElement>(".chat-copy-btn")?.click();
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledOnce());
+    return writeText.mock.calls[0]?.at(0);
+  };
+  expect(await copy(0)).toBe(`2026.7.10 (${COMMIT})`);
+  update({ ...props, gateway: { version: "2026.7.9", commit: null, builtAt: null } });
+  flush();
+  expect(await copy(1)).toBe("2026.7.9");
+  update({ ...props, gateway: { version: null, commit: "abcdef0", builtAt: null } });
+  flush();
+  expect(await copy(1)).toBe("abcdef0");
+  vi.unstubAllGlobals();
 });
 
 it("omits unknown facts and marks a disconnected Gateway unavailable", () => {
@@ -145,5 +170,7 @@ it("omits unknown facts and marks a disconnected Gateway unavailable", () => {
   expect(ui.rows.get("Version")?.textContent).toBe("2026.7.10");
   expect([...gateway.rows.keys()]).toEqual(["Version"]);
   expect(gateway.rows.get("Version")?.textContent).toBe("Unavailable");
-  expect(container.querySelector(".chat-copy-btn")).toBeNull();
+  const rows = container.querySelectorAll(".about-build");
+  expect(rows[0]?.querySelector(".chat-copy-btn")).not.toBeNull();
+  expect(rows[1]?.querySelector(".chat-copy-btn")).toBeNull();
 });

@@ -5,7 +5,10 @@ import type { SourceFile } from "typescript/ast";
 import { afterAll, describe, expect, it } from "vitest";
 import { getChangedPathFacts } from "../scripts/lib/changed-path-facts.mjs";
 import { collectModuleReferencesFromSource } from "../scripts/lib/guard-inventory-utils.mjs";
-import { createNativeTypeScriptParser } from "../scripts/lib/native-typescript.mts";
+import {
+  createNativeTypeScriptParser,
+  type NativeTypeScriptSource,
+} from "../scripts/lib/native-typescript.mts";
 import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../src/plugin-sdk/test-helpers/public-artifacts.js";
 import { expectNoReaddirSyncDuring } from "../src/test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../src/test-utils/repo-files.js";
@@ -64,6 +67,15 @@ function findExtensionImports(source: SourceFile): string[] {
       // This guard owns import specifiers, not URL construction for fixture roots or manifests.
       .filter(({ kind }) => kind !== "import-meta-url")
       .map(({ specifier }) => specifier)
+  );
+}
+
+function parseExtensionImportSources(sources: readonly NativeTypeScriptSource[]) {
+  return parser.parseSourceFiles(
+    sources.filter(
+      // Escapes can spell an extension path without the literal substring.
+      ({ text }) => text.includes("extensions") || text.includes("\\"),
+    ),
   );
 }
 
@@ -164,6 +176,15 @@ describe("non-extension test boundaries", () => {
     ).toEqual([]);
   });
 
+  it.each([
+    'import value from "../../extensions/example/private.js";',
+    String.raw`import value from "../../extens\u0069ons/example/private.js";`,
+  ])("retains extension imports through the syntax screen: %s", (text) => {
+    const [source] = parseExtensionImportSources([{ fileName: "source.ts", text }]);
+    expect(source).toBeDefined();
+    expect(findExtensionImports(source!)).toEqual(["../../extensions/example/private.js"]);
+  });
+
   it("lists boundary scan files from git without walking repo roots", () => {
     expectNoReaddirSyncDuring(() => {
       const srcTests = walk(path.join(repoRoot, "src"));
@@ -187,7 +208,7 @@ describe("non-extension test boundaries", () => {
         fileName,
         text: fs.readFileSync(path.join(repoRoot, fileName), "utf8"),
       }));
-      for (const source of parser.parseSourceFiles(sources)) {
+      for (const source of parseExtensionImportSources(sources)) {
         const file = toRepoRelativePath(repoRoot, source.fileName);
         const imports = findExtensionImports(source).filter(
           (specifier) => !isAllowedExtensionPublicImport(specifier),

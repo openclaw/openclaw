@@ -4,6 +4,8 @@ import type { JSX } from "@solidjs/web";
 import { For, Show } from "solid-js";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
+import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { formatList } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 
@@ -120,8 +122,11 @@ export function CommandFact(props: { values: readonly string[] }) {
   return (
     <Show when={props.values.length > 0}>
       <DeviceFact label={t("devices.inventory.commands")} mono>
-        {formatList(visible())}
-        {overflow() > 0 ? ` +${overflow()}` : ""}
+        <details>
+          <summary>{t("devices.inventory.showDetails")}</summary>
+          {formatList(visible())}
+          {overflow() > 0 ? ` +${overflow()}` : ""}
+        </details>
       </DeviceFact>
     </Show>
   );
@@ -142,4 +147,92 @@ export function MetaLine(props: { parts: readonly string[]; plain?: boolean }) {
       </span>
     </Show>
   );
+}
+
+/** One expandable row: what it is at a glance, everything else on demand. */
+export function DeviceDisclosure(props: {
+  deviceId?: string;
+  name: string;
+  meta: readonly string[];
+  alerts?: JSX.Element;
+  status?: JSX.Element;
+  children: JSX.Element;
+}) {
+  return (
+    <details class="device-entry" data-device-id={props.deviceId}>
+      <summary class="settings-row settings-row--nav device-entry__summary">
+        <span class="settings-row__text">
+          <span class="settings-row__title">{props.name}</span>
+          <span class="device-entry__line">
+            <MetaLine parts={props.meta} />
+            {props.alerts}
+          </span>
+        </span>
+        <span class="settings-row__control">
+          <Show when={props.status}>
+            <span class="device-entry__status">{props.status}</span>
+          </Show>
+          <span class="settings-row__chevron">
+            <Icon name="chevronDown" />
+          </span>
+        </span>
+      </summary>
+      <div class="device-entry__body">{props.children}</div>
+    </details>
+  );
+}
+
+/** A note and its action share one line at every width. */
+export function PolicyActionRow(props: {
+  class?: string;
+  title?: JSX.Element;
+  description?: JSX.Element;
+  children?: JSX.Element;
+}) {
+  return (
+    <div class={["settings-row", "device-policy__action", props.class]}>
+      <div class="settings-row__text">
+        <Show when={props.title}>
+          <span class="settings-row__title">{props.title}</span>
+        </Show>
+        <Show when={props.description}>
+          <span class="settings-row__desc">{props.description}</span>
+        </Show>
+      </div>
+      <Show when={props.children}>
+        <div class="settings-row__control">{props.children}</div>
+      </Show>
+    </div>
+  );
+}
+
+export function PolicyFailure(props: {
+  title: string;
+  message: string;
+  busy?: boolean;
+  onRetry: () => void;
+}) {
+  return (
+    <PolicyActionRow
+      title={
+        <span role="alert">
+          <SettingsStatus kind="danger" label={props.title} />
+        </span>
+      }
+      description={props.message}
+    >
+      <button class="btn" disabled={props.busy} onClick={() => props.onRetry()}>
+        {t("common.retry")}
+      </button>
+    </PolicyActionRow>
+  );
+}
+
+/** The id only says something when it differs from the name. */
+export function agentDisplayName(agent: { id: string; name?: string }): string {
+  const name = agent.name?.trim();
+  if (!name) {
+    return agent.id;
+  }
+  return name.toLowerCase() === agent.id.toLowerCase() ? name : `${name} (${agent.id})`;
 }

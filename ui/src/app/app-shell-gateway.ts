@@ -151,7 +151,11 @@ export class ShellGatewayOwner {
           await import("../lib/chat/composer-draft-retirement.runtime.ts");
         retireDrafts = retireDeletedComposerDrafts;
       } catch {
-        showToast({ message: t("sessionsView.draftCleanupFailed") });
+        showToast({
+          placement: "top-right",
+          severity: "warning",
+          message: t("sessionsView.draftCleanupFailed"),
+        });
         return;
       }
       return retireDrafts(context, scope, deletedSessions);
@@ -261,7 +265,10 @@ export class ShellGatewayOwner {
       event.event === "chat.metadata.changed" ? asNullableRecord(event.payload) : undefined;
     const commandsChanged = metadataChange?.commandsChanged !== false;
     if (client && modelAuthEventInvalidates(event)) {
-      invalidateModelAuthStatusRequests(client);
+      invalidateModelAuthStatusRequests(
+        client,
+        typeof metadataChange?.agentId === "string" ? metadataChange.agentId : undefined,
+      );
     }
     if (
       client &&
