@@ -122,6 +122,7 @@
   "secret-file-runtime",
   "security-runtime",
   "gateway-config-runtime",
+  "gateway-http-testing",
   "gateway-ingress",
   "gateway-method-runtime",
   "gateway-runtime",

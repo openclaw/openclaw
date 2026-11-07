@@ -1,0 +1,3 @@
+# Gateway routing regression for unsupported /a2a/v1 descendants.
+# Credit matches this branch's test-line delta.
+129
