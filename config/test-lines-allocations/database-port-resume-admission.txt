@@ -1,2 +1,2 @@
 # Cover fresh/resumed descriptor admission, anchor preservation, valid controls, and built-CLI recovery without false publication.
-391
+394

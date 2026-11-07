@@ -213,9 +213,12 @@ describe.skipIf(!connection)("built CLI resumed staging admission", () => {
         const published = JSON.parse(await fs.readFile(fixture.configPath, "utf8"));
         expect(published.database.families.state.engine).toBe("postgres");
         expect(published.gateway.mode).toBe("local");
-        const namespace = staged.targets[0]!.intended.namespace;
+        const intended = staged.targets[0]!.intended;
+        if (intended.engine !== "postgres") {
+          throw new Error("Expected a PostgreSQL staging target");
+        }
         const stored = await client.query(
-          `SELECT value_json FROM "${namespace}".config_machine_state WHERE state_key = 'port.resume.fixture'`,
+          `SELECT value_json FROM "${intended.namespace}".config_machine_state WHERE state_key = 'port.resume.fixture'`,
         );
         expect(stored.rows).toEqual([{ value_json: '{"retained":true}' }]);
       } finally {
