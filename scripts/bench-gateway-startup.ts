@@ -2303,12 +2303,23 @@ async function runGatewaySample(
       }
       // Compare CPU/RSS after the same optional startup work, even when publication
       // recovery overlaps that work on only one side of the comparison.
+      const { gateway } = {
+        ...options.benchCase.config,
+        ...options.benchCase.bundledPluginFixture,
+      };
+      const lastGatewayDataPhase =
+        isRecord(gateway) && isRecord(gateway.controlUi) && gateway.controlUi.enabled === false
+          ? "memory-search"
+          : "plugins";
       const postReadyCompletion =
         publicationMarker ||
         options.benchCase.publicationApiDelayMs !== undefined ||
         options.exitListeners
           ? await Promise.all(
-              ["post-ready.startup-maintenance", "post-ready.gateway-data.plugins"].map((phase) =>
+              [
+                "post-ready.startup-maintenance",
+                `post-ready.gateway-data.${lastGatewayDataPhase}`,
+              ].map((phase) =>
                 waitForStartupTracePhase({
                   deadlineAt,
                   isDone: () => childExited,

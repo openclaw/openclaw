@@ -10,6 +10,7 @@ const graph = createRuntimeImportGraph(
     "src/gateway/server-close.runtime.ts",
     "src/gateway/server-methods/sessions-create.ts",
     "src/gateway/server-methods/chat-send-external-entry.ts",
+    "src/gateway/worker-environments/local-workspace-prewarm.ts",
   ],
   { sourceImports: true },
 );
@@ -28,6 +29,22 @@ function collectStaticValueImports(entryRelativePath: string): string[] {
 }
 
 describe("gateway startup import boundaries", () => {
+  it("keeps sandbox workspace preparation out of the prewarm selection graph", () => {
+    const modules = collectStaticValueImports(
+      "src/gateway/worker-environments/local-workspace-prewarm.ts",
+    );
+    for (const file of [
+      "src/agents/worktrees/allocation.ts",
+      "src/agents/worktrees/base-ref.ts",
+      "src/agents/worktrees/repository-paths.ts",
+      "src/agents/worktrees/run-end-lifecycle.ts",
+      "src/agents/worktrees/service-preparation.ts",
+      "src/gateway/worker-environments/local-workspace-template.ts",
+    ]) {
+      expect(modules).not.toContain(path.normalize(file));
+    }
+  });
+
   it("prepares chat.send without loading the media execution runtime", () => {
     expect(
       collectStaticValueImports("src/gateway/server-methods/chat-send-external-entry.ts"),
