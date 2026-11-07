@@ -155,6 +155,8 @@ const { values } = parseArgs({
     output: { type: "string", default: ".artifacts/control-ui-engines" },
     engines: { type: "string", default: "chromium,webkit" },
     "network-profiles": { type: "string", default: "localhost" },
+    "rpc-delay-method": { type: "string" },
+    "rpc-delay-ms": { type: "string", default: "0" },
     configurations: { type: "string", default: "default" },
     viewport: { type: "string", default: "both" },
     steps: { type: "string" },
@@ -181,6 +183,14 @@ const { values } = parseArgs({
   },
 });
 const pairs = Number(values.pairs);
+const rpcDelayMs = Number(values["rpc-delay-ms"]);
+if (
+  !Number.isFinite(rpcDelayMs) ||
+  rpcDelayMs < 0 ||
+  (rpcDelayMs > 0 && !values["rpc-delay-method"])
+) {
+  throw new Error("rpc-delay-ms must be nonnegative and needs rpc-delay-method when positive");
+}
 const configurations = resolveEngineConfigurations(values.configurations);
 const memorySoakRounds = Number(values["memory-soak-rounds"]);
 if (!Number.isInteger(memorySoakRounds) || memorySoakRounds < 1 || memorySoakRounds > 10) {
@@ -694,6 +704,9 @@ try {
     pairs,
     viewports,
     networkProfiles,
+    methodDelay: values["rpc-delay-method"]
+      ? { method: values["rpc-delay-method"], delayMs: rpcDelayMs }
+      : null,
     pageOrigin,
     configurations,
     trace: values.trace,
@@ -1119,7 +1132,18 @@ try {
                 ? undefined
                 : await installNativePluginMockGateway(
                     page,
-                    { ...fixture, awaitInitialRoster: false },
+                    {
+                      ...fixture,
+                      awaitInitialRoster: false,
+                      ...(values["rpc-delay-method"]
+                        ? {
+                            methodDelays: {
+                              ...fixture.methodDelays,
+                              [values["rpc-delay-method"]]: rpcDelayMs,
+                            },
+                          }
+                        : {}),
+                    },
                     {
                       nativeAssetLatencyMs: networkProfile.httpLatencyMs,
                       requestHandlers: {

@@ -58,7 +58,9 @@ const controlUiPerformanceBudgets = {
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
   // Coordinator accepted the sidebar snapshot-save repair; complete build plus 64 B.
-  chatBootJsGzipBytes: 1_294_652,
+  // Vyctor Brzezowski approved the hovercard hover-intent corridor overage (#192212,
+  // 2026-11-07): CI measured 1,295,184 B after trims. Retain 64 B build variance.
+  chatBootJsGzipBytes: 1_295_248,
   // Channels: raw -159 B, served +22 B; coordinator-accepted normalized trade +64 B.
   newBootJsGzipBytes: 803_250,
   startupCssRequests: 1,

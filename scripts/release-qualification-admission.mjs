@@ -411,7 +411,7 @@ function verifyProducerContract(producer, runGh) {
 
 // Supporting evidence describes the old target only. Its exact reviewed bytes
 // authorize a not-run disposition; they never qualify the new candidate.
-function validateQualificationExemptionEvidence(exemption, runGh) {
+function validateQualificationExemptionEvidence(exemption, runGh, downloadArchive = runGh) {
   const evidence = exemption.supportingEvidence;
   const expected = {
     repository: REPOSITORY,
@@ -441,7 +441,9 @@ function validateQualificationExemptionEvidence(exemption, runGh) {
     run.conclusion === "failure" && Date.parse(metadata.expires_at) > Date.now(),
     "Historical exemption evidence is not the retained failed attempt",
   );
-  const archive = runGh(apiArgs(REPOSITORY, "actions/artifacts/" + evidence.artifactId + "/zip"));
+  const archive = downloadArchive(
+    apiArgs(REPOSITORY, "actions/artifacts/" + evidence.artifactId + "/zip"),
+  );
   requireValue(
     archive instanceof Uint8Array &&
       archive.byteLength === evidence.artifactSizeBytes &&
@@ -822,16 +824,19 @@ export function revalidateQualificationAdmissionAuthority({
   );
 }
 
-export function verifyQualificationAdmission({
-  descriptor,
-  repository,
-  candidateSha,
-  qualificationSha,
-  workflowRef,
-  inputs,
-  runGh = runQualificationAdmissionGh,
-  downloadArchive = runQualificationAdmissionGh,
-}) {
+function readQualificationAdmission(
+  {
+    descriptor,
+    repository,
+    candidateSha,
+    qualificationSha,
+    workflowRef,
+    inputs,
+    runGh = runQualificationAdmissionGh,
+    downloadArchive = runQualificationAdmissionGh,
+  },
+  verifySupportingEvidence,
+) {
   requireValue(
     repository === REPOSITORY && SHA.test(candidateSha) && candidateSha === qualificationSha,
     "Qualification admission requires the canonical C=Q identity",
@@ -864,8 +869,10 @@ export function verifyQualificationAdmission({
   const receipt = validateReceipt(
     json(files.get(QUALIFICATION_ADMISSION_FILE), "qualification admission"),
   );
-  for (const exemption of receipt.coverage.exemptions ?? []) {
-    validateQualificationExemptionEvidence(exemption, runGh);
+  if (verifySupportingEvidence) {
+    for (const exemption of receipt.coverage.exemptions ?? []) {
+      validateQualificationExemptionEvidence(exemption, runGh, downloadArchive);
+    }
   }
   const request = receipt.request;
   requireValue(
@@ -891,6 +898,19 @@ export function verifyQualificationAdmission({
     "Admission authority changed during acquisition",
   );
   return receipt;
+}
+
+// Acquisition only: authenticate the P receipt and return its bounded historical
+// locators, never a qualification verdict. The final verifier below still checks
+// the historical bytes and rereads both operators after all evidence acquisition.
+export function qualificationAdmissionSupportingEvidence(params) {
+  return (readQualificationAdmission(params, false).coverage.exemptions ?? []).map(
+    ({ supportingEvidence }) => supportingEvidence,
+  );
+}
+
+export function verifyQualificationAdmission(params) {
+  return readQualificationAdmission(params, true);
 }
 
 function main() {
