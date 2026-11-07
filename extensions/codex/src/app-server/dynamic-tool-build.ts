@@ -231,6 +231,7 @@ export async function buildDynamicTools(
       sessionId: params.sessionId,
       runId: params.runId,
       memoryAudience: params.memoryAudience,
+      conversationRecall: params.conversationRecall,
       agentDir,
       preparedModelRuntime: params.preparedModelRuntime,
       cwd: input.effectiveCwd ?? input.effectiveWorkspace,
