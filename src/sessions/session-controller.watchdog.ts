@@ -543,9 +543,9 @@ export function createSessionControllerWatchdog(params: {
         current() &&
         !attemptClosed &&
         (parent ? parent.isCurrent() : attempt === next);
-      const close = () => {
+      const closeAttempt = () => {
         attemptClosed = true;
-        parentReleases?.delete(close);
+        parentReleases?.delete(closeAttempt);
         if (maintenanceExecution) {
           executions.delete(maintenanceExecution);
         }
@@ -690,10 +690,10 @@ export function createSessionControllerWatchdog(params: {
             }
           }
         },
-        close,
+        close: closeAttempt,
       };
       if (parent) {
-        parentReleases?.add(close);
+        parentReleases?.add(closeAttempt);
       } else {
         attempt = next;
         attemptReleases = ownedReleases;
