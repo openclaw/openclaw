@@ -478,7 +478,7 @@ describe("gatherDaemonStatus", () => {
     findExtraGatewayServices.mockReset().mockResolvedValue({ services: [], errors: [] });
     findStaleOpenClawUpdateLaunchdJobs.mockReset();
     findStaleOpenClawUpdateLaunchdJobs.mockResolvedValue([]);
-    findForeignLaunchdJobs.mockReset().mockResolvedValue([]);
+    findForeignLaunchdJobs.mockReset().mockResolvedValue({ jobs: [] });
     loadInstalledPluginIndexInstallRecords.mockClear();
     loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
     fetchNpmPackageTargetStatus.mockClear();
@@ -1299,7 +1299,7 @@ describe("gatherDaemonStatus", () => {
         gatewayActions: ["restart"],
         safeToRemove: true,
       };
-      findForeignLaunchdJobs.mockResolvedValue([job]);
+      findForeignLaunchdJobs.mockResolvedValue({ jobs: [job] });
 
       const status = await gatherStatus({ probe: false });
 

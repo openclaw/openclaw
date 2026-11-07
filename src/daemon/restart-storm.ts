@@ -86,8 +86,8 @@ export async function warnAboutGatewayRestartStorm(
     return;
   }
   const { findForeignLaunchdJobs } = await import("./launchd-foreign-jobs.js");
-  const jobs = await findForeignLaunchdJobs(env).catch(() => []);
-  const likelyJobs = jobs
+  const scan = await findForeignLaunchdJobs(env).catch(() => undefined);
+  const likelyJobs = (scan?.jobs ?? [])
     .filter((job) => job.keepAlive && job.safeToRemove && job.gatewayActions.includes("restart"))
     .map((job) => job.label)
     .toSorted()
@@ -97,8 +97,11 @@ export async function warnAboutGatewayRestartStorm(
     likelyJobs.length > 0
       ? `Likely stray launchd jobs: ${likelyJobs.join(", ")}.`
       : "Check for a stray keepalive launchd job invoking openclaw gateway restart.",
+    scan?.warning,
     "Run openclaw gateway status to inspect jobs and openclaw doctor --fix to remove eligible stray jobs.",
-  ].join(" ");
+  ]
+    .filter(Boolean)
+    .join(" ");
   try {
     fs.appendFileSync(
       resolveGatewayRestartLogPath(env),

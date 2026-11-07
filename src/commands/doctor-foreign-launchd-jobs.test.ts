@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ForeignLaunchdJob } from "../daemon/launchd-foreign-jobs.js";
+import type { ForeignLaunchdJob, ForeignLaunchdJobScan } from "../daemon/launchd-foreign-jobs.js";
 import { noteMacForeignLaunchdJobs } from "./doctor-foreign-launchd-jobs.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 
 const mocks = vi.hoisted(() => ({
-  find: vi.fn<() => Promise<ForeignLaunchdJob[]>>(),
+  find: vi.fn<() => Promise<ForeignLaunchdJobScan>>(),
   repair: vi.fn<() => Promise<{ removed: boolean; detail: string }>>(),
   note: vi.fn(),
   defaultIdentity: vi.fn(() => true),
@@ -54,7 +54,7 @@ describe("Doctor foreign launchd jobs", () => {
   beforeEach(() => {
     Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
     vi.resetAllMocks();
-    mocks.find.mockResolvedValue([lifecycleJob, reportOnlyJob]);
+    mocks.find.mockResolvedValue({ jobs: [lifecycleJob, reportOnlyJob] });
     mocks.defaultIdentity.mockReturnValue(true);
     mocks.manageService.mockResolvedValue(true);
   });
@@ -62,9 +62,12 @@ describe("Doctor foreign launchd jobs", () => {
   afterEach(() => Object.defineProperty(process, "platform", platform));
 
   it("reports lifecycle details without removal when --fix is absent", async () => {
+    const warning = "Foreign launchd scan incomplete: 1 of 65 candidates not inspected.";
+    mocks.find.mockResolvedValueOnce({ jobs: [lifecycleJob, reportOnlyJob], warning });
     await run({});
 
     const report = mocks.note.mock.calls[0]?.[0];
+    expect(report).toContain(warning);
     expect(report).toContain(lifecycleJob.label);
     expect(report).toContain(lifecycleJob.program);
     expect(report).toContain("keepalive=true");
@@ -84,7 +87,7 @@ describe("Doctor foreign launchd jobs", () => {
 
   it("reports repair failure and continues to the next candidate", async () => {
     const secondJob = { ...lifecycleJob, label: "ai.openclaw.test.w15.second" };
-    mocks.find.mockResolvedValue([lifecycleJob, secondJob]);
+    mocks.find.mockResolvedValue({ jobs: [lifecycleJob, secondJob] });
     mocks.repair.mockRejectedValueOnce(new Error("launchd job inspection failed"));
     mocks.repair.mockResolvedValueOnce({ removed: true, detail: removed(secondJob.label) });
     await run();
