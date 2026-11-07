@@ -57,8 +57,8 @@ export function describeSpawnAuth(
   const mode = evaluation.selectedAuthMode?.replaceAll("_", "-");
   // Same order as session_status. A harness login names its credential kind (the Codex login
   // probe reports api-key, oauth or token from `codex login status`), so that kind wins. A CLI
-  // backend owns its login: session_status labels it native, and its probe reports one fixed
-  // mode for every login method, so that mode is not evidence of the credential kind.
+  // backend owns its login: session_status labels it native, and the Claude CLI discovery reports
+  // one fixed mode for every login method, so that mode is not evidence of the credential kind.
   const kindless = evaluation.runtimeAuth && !profile && options.cliBackend;
   const resolvedAuth: SpawnResolvedAuth =
     !kindless && (mode === "api-key" || mode === "oauth" || mode === "token")

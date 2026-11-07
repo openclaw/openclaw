@@ -108,7 +108,11 @@ its credential kind shows that kind, so a Codex child signed in with an API key
 reads `api-key`, as `session_status` does. `resolvedAuthProfile`
 names the auth profile that supplies the credential (`personal account` for
 personal account profiles). Together they show whether the child bills through
-an API key or a subscription login. They describe the primary model at spawn
+an API key or a subscription login, with one exception: `native` does not tell
+a Claude CLI signed in with an API key, an `apiKeyHelper`, or a third-party
+provider login apart from a claude.ai subscription login, because the Claude
+CLI discovery reports one mode for every login method (`session_status` shows
+`native (claude-cli)` for all of them). They describe the primary model at spawn
 time; the run re-resolves credentials when it starts and may use a configured
 fallback. Before the Gateway has published its prepared model facts (for
 example right after startup), a CLI or harness runtime's own login is not
