@@ -208,6 +208,16 @@ async function stage(
         : task.sourceVerification,
     );
   }
+  const admitStagingTarget = async () => {
+    assertCurrent();
+    await descriptor.admit?.(
+      task.targetPath,
+      task.to === "postgres"
+        ? (getScopedDatabaseEngineSelection()?.postgres ??
+            (await resolveDatabaseEngineInput(task.config)))
+        : undefined,
+    );
+  };
   const occupied = await fs.stat(task.targetPath).then(
     () => true,
     (error: unknown) =>
@@ -220,15 +230,21 @@ async function stage(
       refuse("observed occupied target file; required absent private staging path");
     }
     const { targetPath: sourcePath, to: engine } = task;
+    let resumeVerified = false;
     try {
       await verify({ ...task, operation: "verify", sourcePath, engine, verification }, descriptor);
-      return { verification };
+      resumeVerified = true;
     } catch {
       // Only unverified private staging is rebuilt; occupied namespaces are checked below.
       for (const suffix of ["", "-wal", "-shm", "-journal"]) {
         assertCurrent();
         await fs.rm(task.targetPath + suffix, { force: true });
       }
+    }
+    if (resumeVerified) {
+      // Admission is not part of copy verification and must not delete a verified anchor on refusal.
+      await admitStagingTarget();
+      return { verification };
     }
   }
   if (task.to === "postgres") {
@@ -294,14 +310,7 @@ async function stage(
       },
     });
   }
-  assertCurrent();
-  await descriptor.admit?.(
-    task.targetPath,
-    task.to === "postgres"
-      ? (getScopedDatabaseEngineSelection()?.postgres ??
-          (await resolveDatabaseEngineInput(task.config)))
-      : undefined,
-  );
+  await admitStagingTarget();
   if (task.to === "sqlite") {
     using image = openNodeSqliteDatabase(task.targetPath, { readOnly: true });
     compare((await inspectSqliteImage(image, descriptor)).verification!, verification);
