@@ -23,6 +23,22 @@ describe("normalizeAttachmentPath", () => {
 });
 
 describe("normalizeAttachments", () => {
+  it.each(["unknown", "Unknown"])(
+    "selects a CAF voice note with %s MIME for audio",
+    (contentType) => {
+      const attachments = normalizeAttachments({
+        media: [
+          { path: "/tmp/voice.caf", contentType, kind: "unknown" },
+          { path: "/tmp/opaque", contentType, kind: "unknown" },
+          { path: "/tmp/document.caf", contentType, kind: "document" },
+        ],
+      });
+      expect(selectAttachments({ capability: "audio", attachments }).selected).toEqual([
+        attachments[0],
+      ]);
+    },
+  );
+
   it("uses staged fact paths at the attachment consumer", () => {
     expect(
       normalizeAttachments({

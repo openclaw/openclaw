@@ -302,7 +302,11 @@ export function resolveMediaFactKind(fact: MediaFactInput): MediaKind | undefine
     return fact.kind;
   }
   const normalizedContentType = normalizeMimeType(fact.contentType);
-  if (normalizedContentType && !isGenericBinaryMediaContentType(normalizedContentType)) {
+  if (
+    normalizedContentType &&
+    normalizedContentType !== "unknown" &&
+    !isGenericBinaryMediaContentType(normalizedContentType)
+  ) {
     const mimeKind = kindFromMime(normalizedContentType);
     if (mimeKind) {
       return mimeKind;
