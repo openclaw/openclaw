@@ -1,5 +1,11 @@
+import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import { buildSkillLibraryMock } from "../../test-helpers/skill-library-fixtures.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { pages } from "./route.ts";
+import { mountSkills, personalLibrary } from "./skills-page.test-support.tsx";
+import { libraryEntry } from "./skills.test-support.ts";
 import { cleanupSkillsViews, renderSkills } from "./view.solid.test-support.tsx";
 import { createProps, createReport, createSkill } from "./view.test-support.ts";
 afterEach(cleanupSkillsViews);
@@ -29,6 +35,68 @@ const remoteSkill = (owner = "alice", slug = "repo", displayName = "Repo") => ({
 });
 
 describe("unified skill discovery", () => {
+  it.each(process.env.OPENCLAW_PAGE_PERF === "1" ? [0, 1, 2, 3, 4] : [0])(
+    "first content does not wait for installed skill status %#",
+    async () => {
+      const entry = libraryEntry();
+      let statusReady = false;
+      const report = { workspaceDir: "/workspace", managedSkillsDir: "/managed", skills: [] };
+      const status = new Promise<typeof report>((resolve) => {
+        setTimeout(() => {
+          statusReady = true;
+          resolve(report);
+        }, 250);
+      });
+      const request = vi.fn(async (method: string) => {
+        if (method === "skills.status") {
+          return status;
+        }
+        if (method === "skills.library.list") {
+          return { ...personalLibrary, entries: [entry] };
+        }
+        if (method === "skills.search") {
+          return { results: [] };
+        }
+        throw new Error("Unexpected method: " + method);
+      });
+      const mounted = mountSkills(request, "discovery", { pendingRoute: true });
+      const loader = pages[0].loader;
+      if (!loader) {
+        throw new Error("Skills loader missing");
+      }
+      const start = performance.now();
+      const route = await loader(
+        mounted.context,
+        createRouteLoaderOptions({ pathname: "/skills", search: "", hash: "" }),
+      );
+      expect
+        .soft(route)
+        .toMatchObject({ selectedAgentId: "main", report: null, reportRead: expect.any(Promise) });
+      mounted.publishRouteData({ report: null, reportRead: status });
+      await waitForFast(() =>
+        expect(
+          mounted.container.querySelector('[data-skill-id="library:' + entry.skillId + '"]'),
+        ).not.toBeNull(),
+      );
+      console.log(
+        "PAGE_FIRST_CONTENT",
+        JSON.stringify({
+          page: "skills",
+          elapsedMs: performance.now() - start,
+          delayedMetadataMs: 250,
+        }),
+      );
+      try {
+        expect.soft(statusReady).toBe(false);
+      } finally {
+        await status;
+        flush();
+        mounted.unmount();
+      }
+      expect(request.mock.calls.filter(([method]) => method === "skills.status")).toHaveLength(1);
+    },
+  );
+
   it("keeps cards visible without a loading label while loading", () => {
     const container = document.createElement("div");
     for (const loading of [true, false]) {
