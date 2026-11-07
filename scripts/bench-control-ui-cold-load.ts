@@ -115,6 +115,7 @@ import {
   installWidgetReadiness,
 } from "./lib/control-ui-dashboard-probe.ts";
 import {
+  collectInteractionStyleSheets,
   summarizeInteractionSelectors,
   summarizeLongTaskCpuProfiles,
   type InteractionStyleSheet,
@@ -2504,19 +2505,7 @@ try {
     const rawTrace: unknown[] = [];
     const styleSheets = new Map<string, InteractionStyleSheet>();
     if (values["selector-stats"]) {
-      cdp.on(
-        "CSS.styleSheetAdded",
-        ({ header }: { header: InteractionStyleSheet & { styleSheetId: string } }) =>
-          styleSheets.set(header.styleSheetId, {
-            sourceURL: header.sourceURL,
-            origin: header.origin,
-            title: header.title,
-            startLine: header.startLine,
-            startColumn: header.startColumn,
-          }),
-      );
-      await cdp.send("DOM.enable");
-      await cdp.send("CSS.enable");
+      await collectInteractionStyleSheets(cdp, styleSheets);
     }
     let collectedTrace = rawTrace;
     cdp.on("Tracing.dataCollected", (data) => collectedTrace.push(...data.value));
