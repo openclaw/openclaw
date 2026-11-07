@@ -39,6 +39,8 @@ export async function clearAbortCutoffInSessionRuntime(params: {
  * for the caller whose write retired it, so one prompt says it.
  */
 export async function clearUserStopInSessionRuntime(params: {
+  /** The reply's agent: a key without one (`global`) cannot name the store the Stop was recorded in. */
+  agentId: string;
   sessionId: string;
   stoppedAt: number;
   sessionEntry: SessionEntry;
@@ -46,7 +48,8 @@ export async function clearUserStopInSessionRuntime(params: {
   sessionKey?: string;
   storePath?: string;
 }): Promise<boolean> {
-  const { sessionId, stoppedAt, sessionEntry, sessionStore, sessionKey, storePath } = params;
+  const { agentId, sessionId, stoppedAt, sessionEntry, sessionStore, sessionKey, storePath } =
+    params;
   const stated = (entry: SessionEntry) =>
     entry.sessionId === sessionId && resolveUserStoppedAt(entry) === stoppedAt;
   const retired = { userStoppedAt: undefined, userStoppedSessionId: undefined };
@@ -61,7 +64,7 @@ export async function clearUserStopInSessionRuntime(params: {
     // The durable row decides: its serialized write retires the Stop for exactly one caller, and
     // a missing row retires nothing.
     claimed = false;
-    await patchSessionEntryCore({ storePath, sessionKey }, (current) => {
+    await patchSessionEntryCore({ agentId, storePath, sessionKey }, (current) => {
       claimed = stated(current);
       return claimed ? retired : null;
     });

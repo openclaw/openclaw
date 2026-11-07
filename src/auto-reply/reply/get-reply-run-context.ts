@@ -680,6 +680,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     (await (
       await abortCutoffRuntimeLoader.load()
     ).clearUserStopInSessionRuntime({
+      agentId,
       sessionId: sessionEntry.sessionId,
       stoppedAt: statedStopAt,
       sessionEntry,
