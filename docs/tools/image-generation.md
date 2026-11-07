@@ -378,6 +378,11 @@ and ComfyUI support 1.
     those into a supported `size`, otherwise the tool reports them as
     ignored overrides.
 
+    OpenClaw also reports `size` in `ignoredOverrides` when it can read a
+    returned image's dimensions and they differ from the explicit requested
+    size, including when the request was normalized to a supported preset.
+    The generated image is still returned.
+
     For direct OpenAI Images API requests, `gpt-image-2` and its
     `gpt-image-2-2026-04-21` snapshot preserve valid explicit
     `WIDTHxHEIGHT` sizes instead of snapping them to presets. Both

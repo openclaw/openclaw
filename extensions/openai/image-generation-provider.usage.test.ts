@@ -1,16 +1,19 @@
 import "openclaw/plugin-sdk/image-generation";
 import "openclaw/plugin-sdk/media-generation-runtime";
 import "openclaw/plugin-sdk/provider-http";
+import { generateImage } from "openclaw/plugin-sdk/image-generation-runtime";
+import { encodePngRgba } from "openclaw/plugin-sdk/media-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
 
-const { postJsonRequest, postMultipartRequest } = vi.hoisted(() => ({
+const { postJsonRequest, postMultipartRequest, resolveApiKeyForProvider } = vi.hoisted(() => ({
   postJsonRequest: vi.fn(),
   postMultipartRequest: vi.fn(),
+  resolveApiKeyForProvider: vi.fn(async () => ({ apiKey: "image-fixture-key", mode: "api-key" })),
 }));
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-runtime")>()),
-  resolveApiKeyForProvider: async () => ({ apiKey: "image-fixture-key", mode: "api-key" }),
+  resolveApiKeyForProvider,
 }));
 vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>()),
@@ -83,5 +86,30 @@ describe("direct OpenAI image token usage", () => {
     expect(result.metadata).toEqual({
       usage: { input_tokens_details: { text_tokens: 0, image_tokens: 9 } },
     });
+  });
+});
+
+describe("Codex Responses image sizes", () => {
+  it.each([
+    ["2048x1152", [{ key: "size", value: "2048x1152" }]],
+    ["1536x1024", []],
+    [undefined, []],
+  ] as const)("reports ignored size %s from returned image dimensions", async (size, ignored) => {
+    resolveApiKeyForProvider.mockResolvedValueOnce({ apiKey: "image-fixture-key", mode: "oauth" });
+    const buffer = encodePngRgba(Buffer.alloc(1536 * 1024 * 4), 1536, 1024);
+    const event = {
+      type: "response.completed",
+      response: { output: [{ type: "image_generation_call", result: buffer.toString("base64") }] },
+    };
+    postJsonRequest.mockResolvedValue({
+      response: new Response(`data: ${JSON.stringify(event)}\n\n`),
+      release: async () => {},
+    });
+    const result = await generateImage(
+      { cfg: {}, modelOverride: "openai/gpt-image-1", prompt: "A red bicycle", size },
+      { getProvider: () => provider, listProviders: () => [provider] },
+    );
+    expect(result.images[0]?.buffer).toEqual(buffer);
+    expect(result.ignoredOverrides).toEqual(ignored);
   });
 });
