@@ -192,7 +192,8 @@ export class TranscriptReaderAnchor {
     if (!correction) {
       return;
     }
-    if (this.holdsNativeOffset()) {
+    // At native zero a negative correction already clamps; don't paint a temporary shift.
+    if (this.holdsNativeOffset() && !(correction < 0 && element.scrollTop === 0)) {
       this.columnShift += correction;
       this.syncColumn();
     } else {

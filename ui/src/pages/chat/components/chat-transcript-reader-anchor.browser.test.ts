@@ -4,15 +4,17 @@ import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import { TranscriptOffsetState } from "./chat-transcript-offset-observer.ts";
 import { TranscriptReaderAnchor } from "./chat-transcript-reader-anchor.ts";
 
-it.each([false, true])(
-  "preserves a visible row and native motion=%s when predecessors first measure inside the viewport",
-  async (scrolling) => {
+it.each(["settled", "scrolling", "start"] as const)(
+  "reconciles first predecessor measurements while %s",
+  async (phase) => {
+    const scrolling = phase !== "settled";
+    const offset = phase === "start" ? 0 : 500;
     const viewport = document.body.appendChild(document.createElement("div"));
     viewport.style.cssText = "height:400px;width:400px;overflow:auto;overflow-anchor:none";
     const content = viewport.appendChild(document.createElement("div"));
     content.style.cssText = "height:12000px;position:relative";
     const column = content.appendChild(document.createElement("div"));
-    column.style.cssText = "position:absolute;top:740px;width:400px";
+    column.style.cssText = `position:absolute;top:${offset + 240}px;width:400px`;
     const row = (index: number) => {
       const element = document.createElement("div");
       element.style.height = "80px";
@@ -21,15 +23,15 @@ it.each([false, true])(
       return element;
     };
     const retained = column.appendChild(row(2));
-    viewport.scrollTop = 500;
+    viewport.scrollTop = offset;
     const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
       count: 100,
       estimateSize: () => 120,
       getItemKey: String,
       getScrollElement: () => viewport,
       initialRect: { width: 400, height: 400 },
-      initialOffset: 500,
-      scrollMargin: 500,
+      initialOffset: offset,
+      scrollMargin: offset,
       overscan: 1,
       scrollToFn: vi.fn(),
       observeElementRect: vi.fn(),
@@ -83,8 +85,17 @@ it.each([false, true])(
       ready.observe(predecessors[1]!);
     });
     column.prepend(...predecessors);
-    column.style.top = "500px";
-    expect(await measured).toBe(top);
+    column.style.top = `${offset}px`;
+    const measuredTop = await measured;
+    if (phase === "start") {
+      expect(viewport.scrollTop).toBe(0);
+      expect(column.style.marginTop).toBe("");
+      expect(predecessors[0]!.getBoundingClientRect().top).toBe(
+        viewport.getBoundingClientRect().top,
+      );
+      return;
+    }
+    expect(measuredTop).toBe(top);
     if (scrolling) {
       expect(viewport.scrollTop).toBe(500);
       viewport.scrollTop = 40;
