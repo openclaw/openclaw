@@ -1,7 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
-  errorShape,
   validateChatAbortParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { captureExecRequestCancellation } from "../../agents/bash-process-control.js";
@@ -25,7 +24,6 @@ import {
   type SessionStopHookContext,
 } from "../../sessions/session-controller.stop.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
-import { resolveStateContentionPresentation } from "../../sessions/session-run-error-presentation.js";
 import {
   waitForChatAbortAcknowledgment,
   waitForChatAbortTerminalPersistence,
@@ -67,6 +65,7 @@ import {
 import { persistAbortedPartials } from "./chat-transcript-persistence.js";
 import { respondError } from "./response.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import { withStopStateContention } from "./stop-state-contention.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -700,24 +699,7 @@ export async function handleChatAbortRequest(options: GatewayRequestHandlerOptio
       formatStopRequest("chat.abort", options.client, options.params),
     );
   }
-  try {
-    await handleChatAbortRequestWithLifecycle(options);
-  } catch (error) {
-    const contention = resolveStateContentionPresentation(error);
-    if (!contention) {
-      throw error;
-    }
-    // A session read can fail even though cancellation takes effect. Do not
-    // replay Stop or claim it had no effect; preserve uncertainty at the RPC boundary.
-    options.respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.UNAVAILABLE,
-        "The server is busy. Check this turn's status before trying Stop again.\n\n" +
-          "SQLite transaction admission remained busy. Stopping may already have taken effect.",
-        { details: { errorKind: contention.errorKind } },
-      ),
-    );
-  }
+  await withStopStateContention(options.respond, () =>
+    handleChatAbortRequestWithLifecycle(options),
+  );
 }
