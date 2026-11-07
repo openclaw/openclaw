@@ -101,14 +101,19 @@ also include resolved child model metadata:
 the provider prefix when the ref has one. Native subagent and visible-session
 spawns also report `resolvedRuntime`, the runtime the child resolves to (for
 example `openclaw` or `claude-cli`), and `resolvedAuth`, the credential kind:
-`api-key`, `oauth`, `token`, `native` for the runtime's own login, `unavailable`
-when the selected route has no credential, or `unknown`. `resolvedAuthProfile`
+`api-key`, `oauth`, `token`, `native` for a CLI runtime's own login (for
+example the Claude CLI's sign-in, which the CLI owns), `unavailable` when the
+selected route has no credential, or `unknown`. A harness login that reports
+its credential kind shows that kind, so a Codex child signed in with an API key
+reads `api-key`, as `session_status` does. `resolvedAuthProfile`
 names the auth profile that supplies the credential (`personal account` for
 personal account profiles). Together they show whether the child bills through
 an API key or a subscription login. They describe the primary model at spawn
 time; the run re-resolves credentials when it starts and may use a configured
-fallback. Cloud-placed visible sessions omit them because the worker's
-credentials are not visible to the Gateway.
+fallback. Before the Gateway has published its prepared model facts (for
+example right after startup), a CLI or harness runtime's own login is not
+visible, so those children read `unknown`. Cloud-placed visible sessions omit
+them because the worker's credentials are not visible to the Gateway.
 
 ### Cloud placement
 

@@ -78,6 +78,15 @@ describe("describeSpawnAuth", () => {
       { availability: true, runtimeAuth: { id: "claude-cli", source: "native" as const } },
       { resolvedAuth: "native" },
     ],
+    // A runtime login that names its credential kind reports that kind, like session_status.
+    [
+      {
+        availability: true,
+        selectedAuthMode: "api_key",
+        runtimeAuth: { id: "codex", source: "native" as const },
+      },
+      { resolvedAuth: "api-key" },
+    ],
     [{ availability: true, selectedAuthMode: "native-command" }, { resolvedAuth: "native" }],
     [{ availability: true, selectedAuthMode: "aws-sdk" }, { resolvedAuth: "unknown" }],
     // Personal account locators stay private, matching session_status.
@@ -101,6 +110,19 @@ describe("describeSpawnAuth", () => {
     ],
   ])("maps %j", (evaluation, expected) => {
     expect(describeSpawnAuth(evaluation)).toEqual(expected);
+  });
+
+  it("keeps a CLI backend's own login native, like session_status", () => {
+    expect(
+      describeSpawnAuth(
+        {
+          availability: true,
+          selectedAuthMode: "oauth",
+          runtimeAuth: { id: "claude-cli", source: "native" },
+        },
+        { cliBackend: true },
+      ),
+    ).toEqual({ resolvedAuth: "native" });
   });
 });
 
@@ -165,7 +187,8 @@ describe("resolveSpawnBillingRoute with a prepared Codex login", () => {
   });
 
   it.each([
-    [{ codex: { source: "native", mode: "api_key" } }, "native"],
+    [{ codex: { source: "native", mode: "api_key" } }, "api-key"],
+    [{ codex: { source: "native", mode: "oauth" } }, "oauth"],
     [{}, "unavailable"],
   ] as const)(
     "reports a registered Codex harness login %j as %s",
@@ -236,6 +259,18 @@ describe("resolveSpawnBillingRoute with a prepared Claude CLI login", () => {
         model: "claude-haiku-4-5",
       }),
     ).resolves.toEqual({ resolvedRuntime: "claude-cli", resolvedAuth });
+  });
+
+  it("reports unknown, not unavailable, before prepared facts are published", async () => {
+    // Without the prepared owner the CLI's own login is invisible to the evaluator.
+    await expect(
+      resolveSpawnBillingRoute({
+        cfg: config,
+        agentId: "main",
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+      }),
+    ).resolves.toEqual({ resolvedRuntime: "claude-cli", resolvedAuth: "unknown" });
   });
 });
 

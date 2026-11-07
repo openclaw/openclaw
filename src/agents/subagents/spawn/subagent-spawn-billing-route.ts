@@ -2,6 +2,7 @@ import type { ModelApi } from "../../../config/model-config-vocabulary.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { isUserModelAuthProfileId } from "../../../state/user-model-account-id.js";
+import { OPENCLAW_AGENT_RUNTIME_ID } from "../../agent-runtime-id.js";
 import { resolveAgentDir } from "../../agent-scope-config.js";
 import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "../../auth-profiles.js";
 import { resolveRunEntryCliRuntime } from "../../embedded-agent-runner/run-entry-runtime.js";
@@ -44,6 +45,7 @@ export function describeSpawnAuth(
     ModelAuthAvailabilityEvaluation,
     "availability" | "selectedAuthMode" | "selectedProfileId" | "runtimeAuth"
   >,
+  options: { cliBackend?: boolean } = {},
 ): Pick<SpawnBillingRoute, "resolvedAuth" | "resolvedAuthProfile"> {
   if (evaluation.availability === false) {
     return { resolvedAuth: "unavailable" };
@@ -53,11 +55,16 @@ export function describeSpawnAuth(
   }
   const profile = evaluation.selectedProfileId;
   const mode = evaluation.selectedAuthMode?.replaceAll("_", "-");
+  // Same order as session_status. A harness login names its credential kind (the Codex login
+  // probe reports api-key, oauth or token from `codex login status`), so that kind wins. A CLI
+  // backend owns its login: session_status labels it native, and its probe reports one fixed
+  // mode for every login method, so that mode is not evidence of the credential kind.
+  const kindless = evaluation.runtimeAuth && !profile && options.cliBackend;
   const resolvedAuth: SpawnResolvedAuth =
-    (evaluation.runtimeAuth && !profile) || mode === "native-command"
-      ? "native"
-      : mode === "api-key" || mode === "oauth" || mode === "token"
-        ? mode
+    !kindless && (mode === "api-key" || mode === "oauth" || mode === "token")
+      ? mode
+      : evaluation.runtimeAuth || mode === "native-command"
+        ? "native"
         : "unknown";
   return {
     resolvedAuth,
@@ -98,7 +105,7 @@ async function resolveSpawnRuntime(params: {
   model: string;
   authProfileId?: string;
   transport: SpawnModelTransport;
-}): Promise<string> {
+}): Promise<{ id: string; cliBackend: boolean }> {
   const { cfg, agentId, provider, model } = params;
   const cli = resolveRunEntryCliRuntime({
     config: cfg,
@@ -108,21 +115,22 @@ async function resolveSpawnRuntime(params: {
     authProfileId: params.authProfileId,
   });
   if (cli.useCliExecution) {
-    return cli.cliExecutionProvider;
+    return { id: cli.cliExecutionProvider, cliBackend: true };
   }
   try {
     // Lazy: harness selection reaches agent tool assembly, which imports sessions_spawn.
     const { selectAgentHarness } = await import("../../harness/selection.js");
-    return selectAgentHarness({
+    const harness = selectAgentHarness({
       provider,
       modelId: model,
       config: cfg,
       agentId,
       modelProvider: params.transport,
-    }).id;
+    });
+    return { id: harness.id, cliBackend: false };
   } catch {
     // Selection can refuse a route the turn would also refuse; report the configured runtime.
-    return resolveEffectiveAgentRuntime({
+    const id = resolveEffectiveAgentRuntime({
       cfg,
       provider,
       modelId: model,
@@ -131,6 +139,7 @@ async function resolveSpawnRuntime(params: {
       agentId,
       mode: "execution",
     });
+    return { id, cliBackend: false };
   }
 }
 
@@ -219,7 +228,8 @@ export async function resolveSpawnBillingRoute(params: {
     );
   }
   const transport = resolveSpawnModelTransport({ cfg, provider, model, owner });
-  const resolvedRuntime = await resolveSpawnRuntime({ ...params, transport });
+  const runtime = await resolveSpawnRuntime({ ...params, transport });
+  const resolvedRuntime = runtime.id;
   try {
     const preparedAuthStore = owner && getPreparedModelRuntimeAuthStore(owner);
     const evaluation =
@@ -243,13 +253,31 @@ export async function resolveSpawnBillingRoute(params: {
               allowKeychainPrompt: false,
             }),
             externalCliProviderIds: [],
+            ...(owner
+              ? {
+                  metadataSnapshot: owner.metadataSnapshot,
+                  preparedRuntimeAuthModes: owner.authModes,
+                }
+              : {}),
           }).evaluateRuntimeModelAuth(provider, {
             modelId: model,
             runtimeId: resolvedRuntime,
             pinnedProfileId: params.authProfileId,
             ...transport,
           });
-    return { resolvedRuntime, ...describeSpawnAuth(evaluation) };
+    // Without prepared facts a runtime's own login is invisible, so a missing credential
+    // is not evidence that the child has none.
+    if (
+      !preparedAuthStore &&
+      evaluation.availability === false &&
+      resolvedRuntime !== OPENCLAW_AGENT_RUNTIME_ID
+    ) {
+      return { resolvedRuntime, resolvedAuth: "unknown" };
+    }
+    return {
+      resolvedRuntime,
+      ...describeSpawnAuth(evaluation, { cliBackend: runtime.cliBackend }),
+    };
   } catch (error) {
     log.warn(`spawn billing route unresolved for ${provider}/${model}: ${String(error)}`);
     return { resolvedRuntime, resolvedAuth: "unknown" };

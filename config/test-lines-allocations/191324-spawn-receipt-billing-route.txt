@@ -1,2 +1,2 @@
-# Spawn receipts name the child's runtime and credential: real-evaluator cases for API-key, Claude CLI and Codex native logins, transport-selected harnesses, and the native and visible receipt paths for PR #191324.
-335
+# Spawn receipts name the child's runtime and credential: real-evaluator cases for API-key, Claude CLI and Codex logins by credential kind, the no-prepared-facts fallback, transport-selected harnesses, and the native and visible receipt paths for PR #191324.
+370
