@@ -37,13 +37,6 @@ assertion. Existing configured fallback chains remain authoritative; this contra
 does not append a default model to an exhausted chain or override an explicit
 empty chain.
 
-For an interactive, unlocked selection with no configured fallback chain, the
-runner may record a same-provider configured-default candidate when exactly one
-profile is configured and eligible. This is switch-only metadata, not proof that
-the target is currently available, an admission grant, or permission to resume.
-Runtime, catalog, authentication pins, current selection, and session authority
-still belong to the existing selection and run owners.
-
 Internal continuation is unavailable under this contract. Neither an empty
 trajectory nor a transcript without tool messages proves zero dispatches; sending
 the original prompt again is not continuation.

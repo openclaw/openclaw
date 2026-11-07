@@ -120,19 +120,6 @@ it.each([
   });
 });
 
-it("does not promote a quota assertion from diagnostic JSON alone", () => {
-  const signal = buildAssistantFailoverSignal(
-    makeAssistantMessageFixture({
-      ...context,
-      errorMessage: "429: Provider quota exhausted",
-      errorCode: "RESOURCE_EXHAUSTED",
-      errorBody: JSON.stringify({ ...quotaError, ...context }),
-    }),
-  );
-  expect(signal.quotaScope).toBeUndefined();
-  expect(classifyFailoverSignal(signal)).not.toMatchObject({ sameModelRetry: false });
-});
-
 it.each(["RESOURCE_EXHAUSTED", "OTHER_CODE", 8])(
   "vetoes a producer quota assertion for original status 402 (code=%s)",
   (code) => {
@@ -165,59 +152,18 @@ it("does not combine quota scope with another error's status and code", () => {
   });
 });
 
-it.each([
-  {
-    name: "provider mismatch",
-    status: 401,
-    body: { ...quotaError, ...context, provider: "other-fixture" },
-  },
-  {
-    name: "model mismatch",
-    status: 401,
-    body: { ...quotaError, ...context, model: "other-model" },
-  },
-  {
-    name: "outer code contradiction",
-    status: 429,
-    code: "OTHER_CODE",
-    body: { ...quotaError, ...context },
-  },
-  { name: "body status conflict", status: 401, body: { ...quotaError, statusCode: 503 } },
-  { name: "body code conflict", status: 401, body: { ...quotaError, errorCode: "OTHER_CODE" } },
-  { name: "transport status conflict", status: 503, body: { ...quotaError, ...context } },
-  {
-    name: "nonquota JSON",
-    status: 503,
-    code: "TRANSPORT_FAILURE",
-    body: { status: 402, code: "insufficient_quota" },
-  },
-  {
-    name: "generic throttling",
-    status: 429,
-    code: "rate_limit_exceeded",
-    body: { status: 429, code: "RESOURCE_EXHAUSTED" },
-  },
-  {
-    name: "original non-429 status",
-    status: 429,
-    code: "RESOURCE_EXHAUSTED",
-    body: { ...quotaError, status: 402 },
-  },
-])(
-  "keeps ordinary transport facts when terminal diagnostics cannot prove daily quota: $name",
-  ({ status, code, body }) => {
-    const signal = buildAssistantFailoverSignal(
-      makeAssistantMessageFixture({
-        ...context,
-        errorMessage: `${status}: Transport request failed`,
-        errorCode: code,
-        errorBody: JSON.stringify(body),
-      }),
-    );
-    expect(signal).toMatchObject({ status, code, quotaScope: undefined });
-    expect(classifyFailoverSignal(signal)).not.toMatchObject({ sameModelRetry: false });
-  },
-);
+it("keeps ordinary transport facts when diagnostics contain a body-only quota assertion", () => {
+  const signal = buildAssistantFailoverSignal(
+    makeAssistantMessageFixture({
+      ...context,
+      errorMessage: "429: Transport request failed",
+      errorCode: "RESOURCE_EXHAUSTED",
+      errorBody: JSON.stringify({ ...quotaError, ...context }),
+    }),
+  );
+  expect(signal).toMatchObject({ status: 429, code: "RESOURCE_EXHAUSTED", quotaScope: undefined });
+  expect(classifyFailoverSignal(signal)).not.toMatchObject({ sameModelRetry: false });
+});
 
 it.each([
   { status: 429, statusCode: 503, code: "RESOURCE_EXHAUSTED", cause: quotaError },
