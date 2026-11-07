@@ -1,0 +1,2 @@
+# Regression coverage for scoped Workboard lifecycle candidate reads and worktree cleanup.
+147
