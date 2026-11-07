@@ -1,6 +1,7 @@
 import "./agent.snapshot-mocks.test-support.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserRouteContext } from "../server-context.js";
+import { BrowserTargetCrashedError, isBrowserTargetCrashed } from "../target-crash.js";
 import { expectResponse, expectResponseContaining, runRoute } from "./agent-route.test-support.js";
 import {
   captureBrowserOperationTarget,
@@ -30,6 +31,7 @@ const routeState = vi.hoisted(() => ({
 }));
 
 const cdp = vi.hoisted(() => ({
+  assertCdpTargetResponsive: vi.fn(async () => {}),
   captureScreenshot: vi.fn(),
   getDocumentIdentitiesViaCdp: vi.fn<
     (_opts?: unknown) => Promise<{ mainFrame?: string; frameTree?: string }>
@@ -172,6 +174,7 @@ describe("local-managed browser snapshot routes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     pwMocks.screenshot = false;
+    cdp.assertCdpTargetResponsive.mockReset().mockResolvedValue(undefined);
     cdp.getDocumentIdentitiesViaCdp.mockReset();
     cdp.snapshotRoleViaCdp.mockReset();
     playwright.module = null;
@@ -187,6 +190,20 @@ describe("local-managed browser snapshot routes", () => {
       url: "http://127.0.0.1:8080/admin",
       ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
     });
+    expect(cdp.snapshotRoleViaCdp).not.toHaveBeenCalled();
+  });
+
+  it("reports a crashed target before starting snapshot work", async () => {
+    cdp.assertCdpTargetResponsive.mockRejectedValueOnce(new BrowserTargetCrashedError());
+
+    const response = await snapshot(roleQuery);
+
+    expectResponse(response, { error: new BrowserTargetCrashedError().message }, 400);
+    expect(cdp.assertCdpTargetResponsive).toHaveBeenCalledWith(
+      expect.objectContaining({ wsUrl: "ws://127.0.0.1/devtools/page/7" }),
+    );
+    expect(isBrowserTargetCrashed("http://127.0.0.1:18800", "7")).toBe(true);
+    expect(cdp.getDocumentIdentitiesViaCdp).not.toHaveBeenCalled();
     expect(cdp.snapshotRoleViaCdp).not.toHaveBeenCalled();
   });
 

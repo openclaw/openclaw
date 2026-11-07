@@ -23,6 +23,7 @@ import type {
   ProfileRuntimeState,
 } from "./server-context.types.js";
 import { dispatchBrowserTabClose } from "./session-tab-store.js";
+import { isBrowserTargetCrashed } from "./target-crash.js";
 import { resolveBrowserTabOrThrow, resolveTargetIdFromTabs } from "./target-id.js";
 
 type SelectionDeps = {
@@ -164,6 +165,17 @@ export function createProfileSelectionOps({
       throw lastListError instanceof Error
         ? lastListError
         : new Error(formatErrorMessage(lastListError));
+    }
+
+    // Prefer a healthy tab for implicit selection; an explicit target still reaches
+    // the crash guidance instead of silently switching pages.
+    if (targetId === undefined) {
+      const healthyCandidates = candidates.filter(
+        (tab) => !isBrowserTargetCrashed(profile.cdpUrl, tab.targetId),
+      );
+      if (healthyCandidates.length > 0) {
+        candidates = healthyCandidates;
+      }
     }
 
     const stickyTargetId = runtime.lastTargetId ?? undefined;

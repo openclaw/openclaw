@@ -109,6 +109,7 @@ vi.mock("./routes/dispatcher.js", () => ({
 }));
 
 const { fetchBrowserJson } = await import("./client-fetch.js");
+const { BrowserTargetCrashedError } = await import("./target-crash.js");
 
 function stubJsonFetchOk() {
   const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
@@ -312,6 +313,24 @@ describe("fetchBrowserJson loopback auth", () => {
       contains: ["internal error"],
       omits: ["rate limit", retry, noRetry],
     });
+  });
+
+  it("keeps tab-scoped crash guidance out of browser-wide unavailability", async () => {
+    dispatchError(500, { error: "page.screenshot: Target crashed" });
+
+    await expectThrownBrowserFetchError("/screenshot", {
+      contains: ["page.screenshot: Target crashed", "Open the page again in a new tab"],
+      omits: [retry, noRetry, "browser is currently unavailable"],
+    });
+  });
+
+  it("does not repeat tab-crash guidance already present in the service error", async () => {
+    dispatchError(409, { error: new BrowserTargetCrashedError().message });
+
+    const error = await fetchBrowserJson("/snapshot").catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message.match(/open the page again in a new tab/gi)).toHaveLength(1);
   });
 
   it("uses operation metadata rather than timeout wording over HTTP", async () => {
