@@ -14,7 +14,7 @@ import {
   shouldPrecompressControlUiAsset,
 } from "../ui/config/control-ui-asset-compression.ts";
 import { extractControlUiStartupAssetPaths } from "../ui/config/control-ui-startup-assets.ts";
-import { reportLimitViolations } from "./lib/check-limits.mts";
+import { limitsAreAdvisory, reportLimitViolations } from "./lib/check-limits.mts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
 import {
   MERMAID_RENDERER_ASSET,
@@ -441,6 +441,15 @@ function controlUiPerformanceWarnings(
   budgets: Readonly<typeof CONTROL_UI_PERFORMANCE_BUDGETS>,
 ): string[] {
   const warnings: string[] = [];
+  for (const [metric, actual, cap] of [
+    ["document gzip", metrics.document.gzipBytes, budgets.documentGzipBytes],
+    ["total CSS gzip", metrics.total.css.gzipBytes, budgets.totalCssGzipBytes],
+    ["total CSS raw", metrics.total.css.rawBytes, budgets.totalCssRawBytes],
+  ] as const) {
+    if (actual > cap) {
+      warnings.push(`${metric} is ${actual - cap} B over its fixed ceiling (${actual} > ${cap} B)`);
+    }
+  }
   if (metrics.startup.css.gzipBytes > CONTROL_UI_STARTUP_CSS_GZIP_TARGET_BYTES) {
     warnings.push(
       `startup CSS gzip is above the ${CONTROL_UI_STARTUP_CSS_GZIP_TARGET_BYTES} B advisory target; remaining hard-ceiling headroom: ${budgets.startupCssGzipBytes - metrics.startup.css.gzipBytes} B`,
@@ -814,6 +823,16 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     );
   } else {
     process.stdout.write(`${result.report}\n`);
+  }
+  // Keep inherited overages visible even when the build only reports budgets.
+  if (limitsAreAdvisory()) {
+    reportLimitViolations(
+      result.warnings.map((message) => ({
+        file: "scripts/check-control-ui-performance.mts",
+        title: "Control UI performance warning",
+        message,
+      })),
+    );
   }
   if (!reportOnly) {
     const metricFiles: Record<string, string> = {
