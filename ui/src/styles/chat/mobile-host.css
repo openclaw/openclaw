@@ -176,7 +176,7 @@
     inset-inline-start: 3px;
     width: calc(50% - 3px);
     border-radius: 16px;
-    background: var(--bg-hover);
+    background: var(--surface-selected);
     transition: inset-inline-start var(--motion-sheet);
   }
 

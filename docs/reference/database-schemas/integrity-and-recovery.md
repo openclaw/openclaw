@@ -51,6 +51,15 @@ as well as Gateway startup: admission records `deferred/pending`, logs repaired
 index names, and leaves full verification owed without minting a verification
 timestamp or clean-close seal.
 
+Full admission can also repair a missing or drifted canonical unique index that
+backs a foreign key. Physical integrity checks run first. If SQLite then reports
+an exact foreign-key schema mismatch and the repair plan restores a canonical
+unique index on that parent table, the owner repairs the indexes transactionally
+and repeats the complete required integrity check before admission. Duplicate
+parent keys, actual orphaned children, and unresolved schema mismatches refuse
+admission and roll back the repair. A successful QUICK check still does not mint
+a FULL verification receipt.
+
 On Linux, macOS, and Windows, a separate process, such as a CLI `agent exec` run while the Gateway
 holds the same agent database, reuses the Gateway's completed admission. The peer
 must hold a lease on the exact path, have finished admission, still match its

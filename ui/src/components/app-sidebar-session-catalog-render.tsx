@@ -185,6 +185,7 @@ function renderCatalogHostGroup(
               "sidebar-recent-session--active": active(),
               "sidebar-recent-session--catalog-project-child": projectChild,
               "session-row-host--running": running(),
+              "sidebar-recent-session--menu-open": menuOpen(),
             },
           ]}
           style={color() ? `--session-color: var(--session-color-${color()})` : undefined}
