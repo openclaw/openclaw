@@ -143,6 +143,20 @@ function splitOversizedRichBlock(block: InputRichBlock, limits: RichBlockLimits)
         : { type: "paragraph", text: piece },
     );
   }
+  if (block.type === "expandable_blockquote") {
+    const { credit } = block;
+    const remainingText = textLimit - countRichTextChars(credit ?? "");
+    if (remainingText <= 0) {
+      return [block];
+    }
+    // Attribution belongs at the quote's end, so emit the credit only once.
+    const pieces = splitRichTextByChars(block.text, remainingText);
+    return pieces.map((text, index) =>
+      index === pieces.length - 1 && credit !== undefined
+        ? { type: "expandable_blockquote", text, credit }
+        : { type: "expandable_blockquote", text },
+    );
+  }
   if (
     block.type === "blockquote" ||
     block.type === "details" ||
