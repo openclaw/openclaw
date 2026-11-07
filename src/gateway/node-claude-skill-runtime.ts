@@ -32,7 +32,10 @@ import {
 import { NODE_AGENT_CLI_CLAUDE_RUN_COMMAND } from "../infra/node-commands.js";
 import { createNodeDuplexEndpoint } from "../infra/node-duplex-framing.js";
 import { createPluginToolsMcpHandlers } from "../mcp/plugin-tools-handlers.js";
-import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  getInProcessGatewayRequestContext,
+  getPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import { prepareSkillResourceDelivery } from "../skills/runtime/resources.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
 import { buildMcpToolSchema } from "./mcp-http.schema.js";
@@ -66,7 +69,8 @@ export async function prepareNodeClaudeSkillRuntime(
   ) {
     return undefined;
   }
-  const gateway = getPluginRuntimeGatewayRequestScope()?.context;
+  const resolveGatewayContext = getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+  const gateway = getInProcessGatewayRequestContext();
   const target = context.executionTarget;
   const node =
     target.kind === "node" ? gateway?.nodeRegistry.get(target.placement.nodeId) : undefined;
@@ -197,6 +201,7 @@ export async function prepareNodeClaudeSkillRuntime(
       const currentPlacement = readPlacement();
       if (
         !sourceActive ||
+        (resolveGatewayContext && resolveGatewayContext() !== gateway) ||
         (!memory && !retained?.isCurrent()) ||
         gateway.nodeRegistry.get(node.nodeId) !== node ||
         node.connId !== connectionId ||

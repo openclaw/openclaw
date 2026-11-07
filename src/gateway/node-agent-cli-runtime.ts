@@ -5,7 +5,10 @@ import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
   NODE_CLAUDE_NATIVE_AUTH_CAPABILITY,
 } from "../infra/node-commands.js";
-import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  getInProcessGatewayRequestContext,
+  getPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import {
   invokeNodeClaudeSkillRuntime,
   type NodeClaudeSkillRuntime,
@@ -34,7 +37,8 @@ export async function invokeNodeClaudeCliRun(params: {
   signal?: AbortSignal;
   skillRuntime?: NodeClaudeSkillRuntime;
 }): Promise<NodeInvokeResult> {
-  const context = getPluginRuntimeGatewayRequestScope()?.context;
+  const resolveGatewayContext = getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+  const context = getInProcessGatewayRequestContext();
   if (!context) {
     return {
       ok: false,
@@ -109,7 +113,7 @@ export async function invokeNodeClaudeCliRun(params: {
       : undefined,
     isDispatchAuthorized: () => {
       params.assertCurrent?.();
-      return true;
+      return !resolveGatewayContext || resolveGatewayContext() === context;
     },
   };
   return params.skillRuntime

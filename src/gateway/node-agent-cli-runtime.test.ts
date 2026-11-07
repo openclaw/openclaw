@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { decodeClaudeCliNodeRunParams } from "../node-host/invoke-agent-cli-claude-params.js";
+import {
+  withPluginRuntimeGatewayContextResolver,
+  withPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
@@ -10,14 +15,10 @@ const mocks = vi.hoisted(() => ({
   resolveNodeCommandAllowlist: vi.fn(() => new Set<string>()),
 }));
 
-vi.mock("../plugins/runtime/gateway-request-scope.js", () => ({
-  getPluginRuntimeGatewayRequestScope: () => ({
-    context: {
-      getRuntimeConfig: mocks.getRuntimeConfig,
-      nodeRegistry: { get: mocks.get, invoke: mocks.invoke },
-    },
-  }),
-}));
+const gateway = {
+  getRuntimeConfig: mocks.getRuntimeConfig,
+  nodeRegistry: { get: mocks.get, invoke: mocks.invoke },
+} as unknown as GatewayRequestContext;
 
 vi.mock("./node-command-policy.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./node-command-policy.js")>()),
@@ -30,15 +31,19 @@ import { NodeRegistry } from "./node-registry.js";
 import { makeClient } from "./node-registry.test-helpers.js";
 
 function invoke(overrides: Partial<Parameters<typeof invokeNodeClaudeCliRun>[0]> = {}) {
-  return invokeNodeClaudeCliRun({
-    nodeId: "node-1",
-    argv: ["-p"],
-    stdin: "hello",
-    timeoutMs: 10_000,
-    idleTimeoutMs: 1_000,
-    onProgress: () => {},
-    ...overrides,
-  });
+  return withPluginRuntimeGatewayRequestScope(
+    { context: gateway, isWebchatConnect: () => false },
+    () =>
+      invokeNodeClaudeCliRun({
+        nodeId: "node-1",
+        argv: ["-p"],
+        stdin: "hello",
+        timeoutMs: 10_000,
+        idleTimeoutMs: 1_000,
+        onProgress: () => {},
+        ...overrides,
+      }),
+  );
 }
 
 describe("invokeNodeClaudeCliRun", () => {
@@ -155,4 +160,78 @@ describe("invokeNodeClaudeCliRun", () => {
       registry.unregister("conn-1");
     }
   });
+});
+
+it("uses the live Gateway resolver for detached node runs", async () => {
+  mocks.get.mockReturnValue({
+    nodeId: "node-1",
+    connId: "conn-1",
+    commands: ["agent.cli.claude.run.v1"],
+    caps: [],
+  });
+  mocks.isNodeCommandAllowed.mockReturnValue({ ok: true });
+  mocks.invoke.mockResolvedValue({ ok: true });
+  await expect(
+    withPluginRuntimeGatewayContextResolver(
+      () => gateway,
+      () =>
+        invokeNodeClaudeCliRun({
+          nodeId: "node-1",
+          argv: ["-p"],
+          stdin: "hello",
+          timeoutMs: 10_000,
+          idleTimeoutMs: 1_000,
+          onProgress: () => {},
+        }),
+    ),
+  ).resolves.toEqual({ ok: true });
+});
+
+it("rejects an expired resolver despite a stale request context", async () => {
+  mocks.get.mockClear();
+  mocks.invoke.mockClear();
+  await expect(
+    withPluginRuntimeGatewayRequestScope(
+      { context: gateway, resolveGatewayContext: () => undefined, isWebchatConnect: () => false },
+      () =>
+        invokeNodeClaudeCliRun({
+          nodeId: "node-1",
+          argv: ["-p"],
+          stdin: "hello",
+          timeoutMs: 10_000,
+          idleTimeoutMs: 1_000,
+          onProgress: () => {},
+        }),
+    ),
+  ).resolves.toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
+  expect(mocks.get).not.toHaveBeenCalled();
+  expect(mocks.invoke).not.toHaveBeenCalled();
+});
+
+it("revokes dispatch when the Gateway resolver retires after preparation", async () => {
+  let active = true;
+  mocks.get.mockReturnValue({
+    nodeId: "node-1",
+    connId: "conn-1",
+    commands: ["agent.cli.claude.run.v1"],
+    caps: [],
+  });
+  mocks.isNodeCommandAllowed.mockReturnValue({ ok: true });
+  mocks.invoke.mockImplementation(async ({ isDispatchAuthorized }) => {
+    active = false;
+    expect(isDispatchAuthorized()).toBe(false);
+    return { ok: false };
+  });
+  await withPluginRuntimeGatewayContextResolver(
+    () => (active ? gateway : undefined),
+    () =>
+      invokeNodeClaudeCliRun({
+        nodeId: "node-1",
+        argv: ["-p"],
+        stdin: "hello",
+        timeoutMs: 10_000,
+        idleTimeoutMs: 1_000,
+        onProgress: () => {},
+      }),
+  );
 });
