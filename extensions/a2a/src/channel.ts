@@ -46,7 +46,7 @@ import {
 } from "./protocol.js";
 import { filterA2aReplyPayload } from "./reply-payload.js";
 import { getA2aChannelRuntime } from "./runtime.js";
-import { A2aTaskStore, openTerminalStore } from "./task-store.js";
+import { A2aTaskStore, openPendingStore, openTerminalStore } from "./task-store.js";
 import type { A2aChannelConfig, ResolvedA2aChannelAccount } from "./types.js";
 
 const MAX_REQUEST_BODY_BYTES = 1024 * 1024;
@@ -261,7 +261,10 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
         const version = runtime.version;
         // SAFETY: Gateway injects its full runtime despite the narrowed public contract.
         const channelRuntime = (ctx.channelRuntime ?? runtime.channel) as PluginRuntime["channel"];
-        const store = new A2aTaskStore(openTerminalStore(runtime, account.accountId));
+        const store = new A2aTaskStore(
+          openTerminalStore(runtime, account.accountId),
+          openPendingStore(runtime, account.accountId),
+        );
         await store.restore();
         const unregisterRoutes: Array<() => void> = [];
         function createAgentCard(request: IncomingMessage) {
@@ -404,7 +407,7 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
                   peerName,
                   messageId,
                 );
-                if (store.start(task.id)) {
+                if ((await store.start(task.id)) && !ctx.abortSignal.aborted) {
                   // Reserve detached work before the HTTP request releases its admission root.
                   void runDetachedWebhookWork(async () => {
                     await dispatchA2aInbound({

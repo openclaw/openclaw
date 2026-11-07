@@ -10,7 +10,10 @@ import { resolveA2aChannelAccount } from "./accounts.js";
 import { a2aChannelPlugin } from "./channel.js";
 import { dispatchA2aInbound } from "./inbound.js";
 import { A2aTaskStore } from "./task-store.js";
-import { createTerminalStoreFixture } from "./task-store.test-support.js";
+import {
+  createPendingStoreFixture,
+  createTerminalStoreFixture,
+} from "./task-store.test-support.js";
 
 type InboundParams = Parameters<typeof dispatchA2aInbound>[0];
 type InboundTurn = Parameters<InboundParams["channelRuntime"]["inbound"]["dispatch"]>[0];
@@ -44,12 +47,12 @@ const registerChannel = () =>
     createTestRegistry([{ pluginId: "a2a", plugin: a2aChannelPlugin, source: "test" }]),
   );
 
-function createA2aInboundFixture(peerName = "hermes") {
+async function createA2aInboundFixture(peerName = "hermes") {
   const runtime = createPluginRuntimeMock();
-  const store = new A2aTaskStore(createTerminalStoreFixture());
+  const store = new A2aTaskStore(createTerminalStoreFixture(), createPendingStoreFixture());
   stores.push(store);
   const task = store.create("ctx-inbound", peerName, "incoming-message");
-  store.start(task.id);
+  await store.start(task.id);
   const account = resolveA2aChannelAccount({
     cfg: { channels: { a2a: { peers: { hermes: { token: "test-token" } } } } },
   });
@@ -75,9 +78,9 @@ function createA2aInboundFixture(peerName = "hermes") {
   };
 }
 
-let fixture: ReturnType<typeof createA2aInboundFixture>;
-beforeEach(() => {
-  fixture = createA2aInboundFixture();
+let fixture: Awaited<ReturnType<typeof createA2aInboundFixture>>;
+beforeEach(async () => {
+  fixture = await createA2aInboundFixture();
 });
 
 describe("A2A channel inbound dispatch", () => {
@@ -161,7 +164,7 @@ describe("A2A channel inbound dispatch", () => {
     async (peerName) => {
       fixture.params.account.config.peers!.crew = { token: "second-token" };
       const second = fixture.store.create(fixture.task.contextId, peerName, "second");
-      fixture.store.start(second.id);
+      await fixture.store.start(second.id);
       fixture.dispatch.mockImplementation(async (turn) => dispatched(turn, false, true));
       const config = { session: { dmScope: "per-channel-peer" as const } };
       await Promise.all([
@@ -215,7 +218,7 @@ describe("A2A channel inbound dispatch", () => {
       fixture.dispatch.mockImplementation(async (turn) => dispatched(turn, false, true));
       await fixture.run();
       const other = fixture.store.create(fixture.task.contextId, "hermes", "next-task");
-      fixture.store.start(other.id);
+      await fixture.store.start(other.id);
       const turn = fixture.dispatch.mock.calls[0]![0];
       const deliver = turn.replyOptions?.onQueuedFollowupReplyBatch;
       expect(deliver).toBeDefined();
@@ -254,7 +257,7 @@ describe("A2A channel inbound dispatch", () => {
 
   it("routes a stable peer binding before account fallback while preserving exact context overrides", async () => {
     const exactTask = fixture.store.create("ctx-exact", "hermes", "exact-message");
-    fixture.store.start(exactTask.id);
+    await fixture.store.start(exactTask.id);
     fixture.dispatch.mockImplementation(async (turn) => dispatched(turn));
     const bindings = [
       ["a2a_context", "hermes:ctx-exact"],
@@ -292,7 +295,7 @@ describe("A2A channel inbound dispatch", () => {
   });
 
   it("rejects a sender missing from the configured peer allowlist before dispatch", async () => {
-    fixture = createA2aInboundFixture("unknown-peer");
+    fixture = await createA2aInboundFixture("unknown-peer");
 
     await fixture.run();
 

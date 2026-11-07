@@ -17,3 +17,21 @@ export function createTerminalStoreFixture() {
     },
   } satisfies Store & { rows: typeof rows };
 }
+
+export function createPendingStoreFixture() {
+  type Store = ConstructorParameters<typeof A2aTaskStore>[1];
+  type Value = Parameters<Store["register"]>[1];
+  const rows = new Map<string, { key: string; value: Value; createdAt: number }>();
+  return {
+    rows,
+    async entries() {
+      return structuredClone([...rows.values()]);
+    },
+    async register(this: void, key: string, value: Value) {
+      rows.set(key, { key, value: structuredClone(value), createdAt: Date.now() });
+    },
+    async delete(key: string) {
+      return rows.delete(key);
+    },
+  } satisfies Store & { rows: typeof rows };
+}
