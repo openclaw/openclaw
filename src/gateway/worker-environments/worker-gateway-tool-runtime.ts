@@ -10,6 +10,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { getAgentToolExecutionLocation } from "../../agents/agent-tool-metadata.js";
+import { buildCodeModeTurnFragments } from "../../agents/code-mode.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../../agents/harness/tool-surface-bridge.js";
 import { consumeMcpCodeModeGuestResult } from "../../agents/mcp-content.js";
@@ -178,6 +179,11 @@ export function createWorkerGatewayToolRuntime(params: {
               parameters,
             })),
             toolSchemaDirectoryPrompt: projected.toolSchemaDirectoryPrompt,
+            // Rendered here because cleanup below clears the catalog it reads.
+            codeModeTurnFragments: buildCodeModeTurnFragments(
+              runtime.codeModeControlsEnabled,
+              runtime.toolSearchCatalogRef?.current?.entries,
+            ),
           };
         } finally {
           runtime.cleanup();

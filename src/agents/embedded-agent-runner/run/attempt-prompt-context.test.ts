@@ -170,6 +170,45 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     expect(systemFragments).toEqual([{ kind: "conversation-data", text: "System context" }]);
   });
 
+  it("adds Code Mode turn fragments as turn facts that never make a blank turn runtime-only", async () => {
+    const contract = { kind: "runtime-instruction" as const, text: "Code Mode turn contract" };
+    const fixture = createInput({
+      attempt: createAttempt({ currentInboundContext: undefined }),
+      prompt: createPrompt({ effectivePrompt: "", effectiveTranscriptPrompt: "" }),
+    });
+
+    const result = await prepareContext({ ...fixture.input, codeModeTurnFragments: [contract] });
+
+    expect(result.promptSubmission.runtimeOnly).toBeUndefined();
+    expect(result.promptForSession).not.toBe("Continue the OpenClaw runtime event.");
+    expect(result.runtimeContextFragments).toContainEqual(contract);
+  });
+
+  it.each([
+    { label: "raw model runs", isRawModelRun: true, operation: undefined },
+    {
+      label: "settled tool finalization",
+      isRawModelRun: false,
+      operation: "settled-tool-finalization",
+    },
+  ] as const)(
+    "leaves Code Mode turn fragments out of $label",
+    async ({ isRawModelRun, operation }) => {
+      const contract = { kind: "runtime-instruction" as const, text: "Code Mode turn contract" };
+      const fixture = createInput({
+        attempt: createAttempt({ currentInboundContext: undefined, operation }),
+      });
+
+      const result = await prepareContext({
+        ...fixture.input,
+        isRawModelRun,
+        codeModeTurnFragments: [contract],
+      });
+
+      expect(result.runtimeContextFragments).not.toContainEqual(contract);
+    },
+  );
+
   it.each(
     [3, 4].flatMap((sessionVersion) =>
       ["dispatched", "pending", "internal", "raw"].map((state) => ({ sessionVersion, state })),
