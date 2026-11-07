@@ -25,6 +25,57 @@ FILTERS = 'scenario:fresh-install,scenario:bundled-plugin-startup'
 ACTIVE = None
 BASE_ENV = None
 
+# In-process profiler: emitted only for the optional non-root snapshot diagnostic.
+SNAPSHOT_PRELOAD = r"""
+'use strict';
+// Diagnostic-only, in-process Inspector session: no port, attach, or signal handler.
+const fs = require('node:fs');
+const path = require('node:path');
+const { Session } = require('node:inspector');
+const { threadId } = require('node:worker_threads');
+const dir = path.join(__dirname, 'snapshots');
+const prefix = `${process.pid}.${threadId}`;
+const request = path.join(dir, `${process.pid}.request`);
+const session = new Session();
+const startedAt = Date.now();
+// These counters cover the whole process; worker receipts must not be summed.
+const cpuAtStart = process.cpuUsage();
+let checks = 0;
+let timer;
+function fail(error) {
+  if (timer) clearInterval(timer);
+  fs.writeFileSync(path.join(dir, `${prefix}.error.json`), JSON.stringify({ pid: process.pid, threadId, code: error.code || 'snapshot-failed' }), { mode: 0o600 });
+  session.disconnect();
+}
+session.connect();
+session.post('Profiler.enable', (error) => {
+  if (error) return fail(error);
+  session.post('Profiler.setSamplingInterval', { interval: 1000 }, (error) => {
+    if (error) return fail(error);
+    session.post('Profiler.start', (error) => {
+      if (error) return fail(error);
+      fs.writeFileSync(path.join(dir, `${prefix}.armed.json`), JSON.stringify({ pid: process.pid, threadId, startedAt }), { mode: 0o600 });
+      timer = setInterval(() => {
+        checks++;
+        if (!fs.existsSync(request)) return;
+        clearInterval(timer);
+        const requestedAt = Date.now();
+        const cpuAtRequest = process.cpuUsage();
+        session.post('Profiler.stop', (error, result) => {
+          if (error) return fail(error);
+          const output = path.join(dir, `${prefix}.cpuprofile`);
+          fs.writeFileSync(output + '.pending', JSON.stringify(result.profile), { mode: 0o600 });
+          fs.renameSync(output + '.pending', output);
+          fs.writeFileSync(path.join(dir, `${prefix}.done.json`), JSON.stringify({ pid: process.pid, threadId, startedAt, requestedAt, completedAt: Date.now(), checks, processCpuAtStart: cpuAtStart, processCpuAtRequest: cpuAtRequest, processCpuAtComplete: process.cpuUsage() }), { mode: 0o600 });
+          session.disconnect();
+        });
+      }, 100);
+      timer.unref();
+    });
+  });
+});
+"""
+
 def save(path, value):
     Path(path).write_text(json.dumps(value, indent=2) + '\n')
 
@@ -102,6 +153,72 @@ def warm_ready(path, expected, env_name, since):
         time.sleep(0.1)
     raise RuntimeError('missing final gateway.ready timeline mark for the warm PID')
 
+def snapshot_before_destroy(arm, name, real, env):
+    warm = json.loads((arm / 'receipts' / (name + '.json')).read_text())['warm']
+    current = receipt(status(real, name, env), env)
+    if (current['pid'], current['startTicks']) != (warm['pid'], warm['startTicks']):
+        raise RuntimeError('snapshot target is not the verified warm gateway')
+    directory = arm / 'snapshots'
+    pid = warm['pid']
+    started = time.time()
+    (directory / f'{pid}.request').touch(exist_ok=False)
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        done = list(directory.glob(f'{pid}.*.done.json'))
+        if list(directory.glob(f'{pid}.*.error.json')):
+            raise RuntimeError('in-process snapshot failed; inspect private receipt')
+        completed = {p.name.replace('.done.json', '') for p in done}
+        if f'{pid}.0' in completed:
+            profiles = []
+            sqlite_worker = False
+            for marker in done:
+                prefix = marker.name.removesuffix('.done.json')
+                data = json.loads((directory / (prefix + '.cpuprofile')).read_text())
+                thread = int(prefix.split('.')[1])
+                if not data.get('samples') or len(data['samples']) != len(data.get('timeDeltas', [])):
+                    raise RuntimeError('empty/inconsistent pre-exit snapshot')
+                sqlite_worker |= thread > 0 and any('sqlite' in n.get('callFrame', {}).get('url', '').lower() for n in data['nodes'])
+                profiles.append({'file': prefix + '.cpuprofile', 'threadId': thread, 'samples': len(data['samples']),
+                                 'sha256': sha(directory / (prefix + '.cpuprofile'))})
+            if sqlite_worker:
+                current = receipt(status(real, name, env), env)
+                if (current['pid'], current['startTicks']) != (warm['pid'], warm['startTicks']):
+                    raise RuntimeError('warm gateway exited before snapshot confirmation')
+                save(arm / 'snapshot-capture.json', {'qualification': False, 'warm': warm,
+                     'requestedAt': started, 'confirmedAt': time.time(), 'profiles': profiles,
+                     'scope': 'pre-teardown samples, not shutdown trace or comparable performance qualification'})
+                return
+        time.sleep(0.05)
+    raise RuntimeError('main and SQLite worker snapshots not confirmed within 20 seconds')
+
+def preserve_shutdown_logs(arm, name, env):
+    warm = json.loads((arm / 'snapshot-capture.json').read_text())['warm']
+    deadline = time.monotonic() + 5
+    exited = False
+    while time.monotonic() < deadline:
+        try:
+            ticks = Path(f"/proc/{warm['pid']}/stat").read_text().split(') ', 1)[1].split()[19]
+        except FileNotFoundError:
+            exited = True
+            break
+        if ticks != warm['startTicks']:
+            exited = True
+            break
+        time.sleep(0.05)
+    save(arm / 'shutdown-observation.json', {'warm': warm, 'exitConfirmed': exited, 'observedAt': time.time()})
+    source = Path(env['OCM_HOME']) / 'supervisor' / 'logs'
+    target = arm / 'logs' / 'post-shutdown'
+    target.mkdir(exist_ok=True)
+    for filename in ['daemon.stdout.log', 'daemon.stderr.log', name + '.stdout.log', name + '.stderr.log']:
+        path = source / filename
+        if path.is_file():
+            # Bound copies; never print log or profile content.
+            with path.open('rb') as stream:
+                stream.seek(max(0, path.stat().st_size - 1024 * 1024))
+                (target / filename).write_bytes(stream.read())
+    if not exited:
+        raise RuntimeError('warm process exit unconfirmed; logs retained after stop attempt')
+
 def shim():
     env = dict(os.environ)
     real, arm = env['CAUSAL_OCM'], Path(env['CAUSAL_ARM'])
@@ -110,7 +227,8 @@ def shim():
     # ONLY this command wrapper adds profiler flags. Never profile npm, pnpm,
     # builds, the Kova controller, or unrelated OCM introspection commands.
     if service:
-        env['NODE_OPTIONS'] = '--cpu-prof --cpu-prof-dir=' + str(arm / 'profiles')
+        env['NODE_OPTIONS'] = ('--require=' + str(arm / 'snapshot.cjs') if env.get('CAUSAL_SHUTDOWN_SNAPSHOT') == '1'
+                               else '--cpu-prof --cpu-prof-dir=' + str(arm / 'profiles'))
     else:
         env.pop('NODE_OPTIONS', None)
     before = None
@@ -118,9 +236,16 @@ def shim():
     if service and args[1] == 'restart':
         before = receipt(status(real, args[2], env), env)
     if args[:2] == ['env', 'destroy'] and len(args) >= 3:
-        # Kova has stopped/exported this env; uninstall its service policy before
-        # destruction so the last env also tears down the owned OCM daemon.
-        subprocess.run([real, 'service', 'uninstall', args[2], '--json'], env=env, check=True, stdout=subprocess.DEVNULL)
+        # Without Kova OCM-diagnostics mode, this uninstall is the first stop.
+        # Snapshot while the verified warm process is alive; keep teardown unchanged.
+        snapshot = env.get('CAUSAL_SHUTDOWN_SNAPSHOT') == '1'
+        if snapshot:
+            snapshot_before_destroy(arm, args[2], real, env)
+        try:
+            subprocess.run([real, 'service', 'uninstall', args[2], '--json'], env=env, check=True, stdout=subprocess.DEVNULL)
+        finally:
+            if snapshot:
+                preserve_shutdown_logs(arm, args[2], env)
     result = subprocess.run([real] + args, env=env)
     if result.returncode == 0 and service and args[1] == 'restart':
         after = receipt(status(real, args[2], env), env)
@@ -192,9 +317,9 @@ def validate_profiles(arm):
             raise RuntimeError('missing warm-PID SQLite WORKER capture')
     save(arm / 'profile-summary.json', {'qualification': False, 'warmReceipts': records, 'profiles': inventory})
 
-def scenario_result(arm, plan, code):
+def scenario_result(arm, plan, code, repeat=3):
     expected = {(e['scenario']['id'], e['state']['id'], iteration)
-                for e in plan['entries'] for iteration in range(1, 4)}
+                for e in plan['entries'] for iteration in range(1, repeat + 1)}
     reports = []
     errors = []
     for path in (arm / 'reports').glob('*.json'):
@@ -264,6 +389,10 @@ def extract(archive, dest):
 
 def run(options):
     global ACTIVE, BASE_ENV
+    snapshot = getattr(options, 'shutdown_snapshot', False)
+    arms = ARMS[:1] if snapshot else ARMS
+    filters = 'scenario:bundled-plugin-startup' if snapshot else FILTERS
+    repeat = 1 if snapshot else 3
     root = options.root.resolve()
     if root.exists() or re.search(r'[^a-zA-Z0-9_./-]', str(root)):
         raise RuntimeError('root must be fresh, absolute, and contain no shell/Node-option metacharacters')
@@ -319,22 +448,27 @@ def run(options):
     if captured(['git', '-C', str(kova), 'rev-parse', 'HEAD'], BASE_ENV) != KOVA:
         raise RuntimeError('Kova identity mismatch')
     logged([str(nodebin / 'npm'), 'ci', '--ignore-scripts', '--no-audit', '--no-fund'], root / 'toolchain.log', BASE_ENV, kova)
-    save(root / 'identity.json', {'qualification': False, 'arms': ARMS, 'kova': KOVA,
+    save(root / 'identity.json', {'qualification': False, 'arms': arms, 'kova': KOVA,
                                 'nodeArchiveSha256': NODE_SHA, 'ocmArchiveSha256': OCM_SHA,
-                                'filter': FILTERS, 'repeat': 3, 'host': os.uname().release,
+                                'filter': filters, 'repeat': repeat, 'shutdownSnapshot': snapshot, 'host': os.uname().release,
                                 'availableCpu': len(os.sched_getaffinity(0)),
                                 'meminfo': Path('/proc/meminfo').read_text(),
                                 'loadavg': Path('/proc/loadavg').read_text()})
     failures = []
     arm_results = {}
-    for name, commit in ARMS:
+    for name, commit in arms:
         arm = root / name
         for directory in ['profiles', 'receipts', 'logs', 'reports', 'shim']:
             (arm / directory).mkdir(parents=True, exist_ok=True)
         (arm / 'shim' / 'ocm').symlink_to(Path(__file__).resolve())
+        if snapshot:
+            (arm / 'snapshots').mkdir()
+            (arm / 'snapshot.cjs').write_text(SNAPSHOT_PRELOAD)
         env = dict(BASE_ENV, OCM_HOME=str(arm / 'ocm-home'), KOVA_HOME=str(arm / 'kova-home'),
                    CAUSAL_ARM=str(arm), CAUSAL_OCM=str(ocm), CAUSAL_NODE=str(node), CAUSAL_SHA=commit)
         env['PATH'] = str(arm / 'shim') + ':' + env['PATH']
+        if snapshot:
+            env['CAUSAL_SHUTDOWN_SNAPSHOT'] = '1'
         ACTIVE = (arm, env)
         source = arm / 'source'
         logged(['git', 'clone', '--no-hardlinks', '--no-checkout', str(options.openclaw_repo.resolve()), str(source)], arm / 'logs' / 'setup.log', env)
@@ -345,22 +479,29 @@ def run(options):
         logged(['pnpm', 'install', '--frozen-lockfile'], arm / 'logs' / 'setup.log', env, source)
         plan = json.loads(captured([str(node), str(kova / 'bin' / 'kova.mjs'), 'matrix', 'plan',
                                     '--profile', 'release', '--target', 'local-build:' + str(source),
-                                    '--include', FILTERS, '--parallel', '1', '--repeat', '3', '--json'], env, source))
-        if plan.get('controls', {}).get('include') != FILTERS.split(','):
+                                    '--include', filters, '--parallel', '1', '--repeat', str(repeat), '--json'], env, source))
+        if plan.get('controls', {}).get('include') != filters.split(','):
             raise RuntimeError('Kova plan changed requested filters')
+        if snapshot and [(e['scenario']['id'], e['state']['id']) for e in plan['entries']] != [('bundled-plugin-startup', 'fresh')]:
+            raise RuntimeError('snapshot proof requires exactly one bundled/fresh plan entry')
         save(arm / 'plan.json', plan)
         args = [str(node), str(kova / 'bin' / 'kova.mjs'), 'matrix', 'run', '--profile', 'release',
-                '--target', 'local-build:' + str(source), '--include', FILTERS, '--auth', 'mock',
-                '--parallel', '1', '--repeat', '3', '--timeout-ms', '900000',
+                '--target', 'local-build:' + str(source), '--include', filters, '--auth', 'mock',
+                '--parallel', '1', '--repeat', str(repeat), '--timeout-ms', '900000',
                 '--report-dir', str(arm / 'reports'), '--execute', '--json']
         code = logged(args, arm / 'logs' / 'kova.log', env, source, allowed=True)
-        arm_results[name] = scenario_result(arm, plan, code)
+        arm_results[name] = scenario_result(arm, plan, code, repeat)
         save(arm / 'exit.json', {'qualification': False, **arm_results[name]})
         cleanup()
         try:
             if not (arm / 'runtime-identity.json').exists():
                 raise RuntimeError('missing installed runtime source identity')
-            validate_profiles(arm)
+            if snapshot:
+                capture = json.loads((arm / 'snapshot-capture.json').read_text())
+                if not capture['profiles']:
+                    raise RuntimeError('missing confirmed pre-exit capture')
+            else:
+                validate_profiles(arm)
         except Exception as error:
             failures.append(name + ': ' + str(error))
     scenario_valid = all(result['scenarioValid'] for result in arm_results.values())
@@ -376,6 +517,8 @@ def main():
         return shim()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--dry-run', action='store_true')
+    parser.add_argument('--shutdown-snapshot', action='store_true',
+                        help='one b764 bundled warm restart; non-root pre-teardown Inspector snapshots')
     parser.add_argument('--root', type=Path)
     parser.add_argument('--openclaw-repo', type=Path)
     parser.add_argument('--kova-repo', type=Path)
@@ -384,11 +527,13 @@ def main():
     parser.add_argument('--exclusive-account')
     options = parser.parse_args()
     if options.dry_run:
-        print(json.dumps({'qualification': False, 'arms': ARMS, 'kova': KOVA, 'node': '24.22.1',
+        print(json.dumps({'qualification': False, 'arms': ARMS[:1] if options.shutdown_snapshot else ARMS, 'kova': KOVA, 'node': '24.22.1',
                           'nodeArchiveSha256': NODE_SHA, 'ocmArchiveSha256': OCM_SHA,
-                          'filters': FILTERS, 'repeat': 3, 'parallel': 1,
+                          'filters': 'scenario:bundled-plugin-startup' if options.shutdown_snapshot else FILTERS,
+                          'repeat': 1 if options.shutdown_snapshot else 3, 'parallel': 1,
+                          'shutdownSnapshot': options.shutdown_snapshot,
                           'profilerScope': 'OCM service install/start/restart wrapper only',
-                          'requiredCapture': 'all three warm PIDs: main + SQLite worker'}, indent=2))
+                          'requiredCapture': 'one live warm PID: main + SQLite worker pre-teardown' if options.shutdown_snapshot else 'all three warm PIDs: main + SQLite worker'}, indent=2))
         return 0
     if any(getattr(options, name) is None for name in ['root', 'openclaw_repo', 'kova_repo', 'node_archive', 'ocm_archive', 'exclusive_account']):
         parser.error('execution requires every path and --exclusive-account')

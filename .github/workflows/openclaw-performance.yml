@@ -6,6 +6,11 @@ name: Release 37 causal diagnostic (nonqualification)
 on:
   workflow_dispatch:
     inputs:
+      shutdown_snapshot:
+        description: One b764 bundled warm restart with non-root pre-teardown snapshots (not comparable qualification)
+        required: false
+        type: boolean
+        default: false
       artifact_recipient_certificate:
         description: Public PEM X.509 encryption certificate; retain matching private key OFF runner
         required: true
@@ -59,7 +64,7 @@ jobs:
           test "$(git -C seed/openclaw rev-parse HEAD)" = e2db37f28cc774d75a54d963817d0f153387a229
           git -C seed/openclaw cat-file -e b764253ddf0edf89887ecc0dcc2a8615ad791bc2^{commit}
           test "$(git -C seed/kova rev-parse HEAD)" = 4b8b1681446b868a44193ed6e97253a6c8bcbbbf
-          echo '4d06a1be6ccf11bd6fd3fe1e3114a5e87b266053682b6069bd933bad52448746  control/scripts/diagnostics/release37-causal.py' | sha256sum --check
+          echo 'e8cea914508e2620473c60183feb198324f3fcd96b50b74748f602d5f30f216a  control/scripts/diagnostics/release37-causal.py' | sha256sum --check
           sudo install -d -m 0700 /srv/causal-inputs
           sudo cp -a seed/openclaw seed/kova /srv/causal-inputs/
           sudo install -m 0700 control/scripts/diagnostics/release37-causal.py /srv/causal-inputs/causal-diagnostic.py
@@ -72,11 +77,15 @@ jobs:
           sudo systemctl start "user@$uid.service"
           sudo chown -R openclaw-causal:openclaw-causal /srv/causal-inputs
           sudo install -d -m 0700 -o openclaw-causal -g openclaw-causal /srv/causal-work
-      - name: Execute both serial frozen arms (not qualification)
+      - name: Execute selected frozen diagnostic (not qualification)
         shell: bash
+        env:
+          SHUTDOWN_SNAPSHOT: ${{ inputs.shutdown_snapshot }}
         run: |
           set -euo pipefail
           uid=$(id -u openclaw-causal)
+          diagnostic_args=()
+          if test "$SHUTDOWN_SNAPSHOT" = true; then diagnostic_args+=(--shutdown-snapshot); fi
           # No token, provider secret, or ambient NODE_OPTIONS enters this account.
           # Redirect source/build/error output to the encrypted-evidence staging area.
           sudo -u openclaw-causal env -i \
@@ -84,7 +93,7 @@ jobs:
             PATH=/usr/bin:/bin XDG_RUNTIME_DIR=/run/user/$uid \
             DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus \
             /usr/bin/python3 /srv/causal-inputs/causal-diagnostic.py \
-            --exclusive-account openclaw-causal --root /srv/causal-work/run \
+            --exclusive-account openclaw-causal --root /srv/causal-work/run "${diagnostic_args[@]}" \
             --openclaw-repo /srv/causal-inputs/openclaw --kova-repo /srv/causal-inputs/kova \
             --node-archive /srv/causal-inputs/node.tar.xz --ocm-archive /srv/causal-inputs/ocm.tar.gz \
             > "$RUNNER_TEMP/causal-private/controller.log" 2>&1
