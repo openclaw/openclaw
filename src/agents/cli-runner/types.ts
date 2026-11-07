@@ -64,6 +64,7 @@ export type RunCliAgentParams = Pick<
   | "toolsAllow"
   | "skillLibraryAuthoring"
   | "disableTrajectory"
+  | "toolBindings"
 > & {
   preparedTtsPreferences?: import("../../tts/tts-preferences.js").PreparedTtsPreferences;
   /** Core lifecycle owner; never forwarded to the plugin execution context. */

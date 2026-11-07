@@ -297,6 +297,10 @@ export type AgentCommandIngressOpts = Omit<
   allowModelOverride: boolean;
 };
 
+/** Plugin-runtime ingress; the host admits bindings only for the caller's declared tools. */
+export type AgentCommandPluginIngressOpts = AgentCommandIngressOpts &
+  Pick<AgentCommandOpts, "toolBindings">;
+
 /** Gateway-only ingress carries host-issued authority and execution ownership. */
 export type AgentCommandGatewayIngressOpts = AgentCommandIngressOpts &
   Pick<AgentCommandOpts, AgentCommandGatewayOnlyKey>;

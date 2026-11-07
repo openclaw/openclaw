@@ -103,6 +103,8 @@ export type McpLoopbackRequestContext = {
   toolsAllow?: string[];
   /** Host-minted search exclusion; independent of coding-tool authority in toolsAllow. */
   webSearchDisabled?: true;
+  /** Host-bound tool scope, such as a phone consult's active call; never read from headers. */
+  toolBindings?: Readonly<Record<string, unknown>>;
   /** Canonical observed native authority; null awaits this turn's initialization. */
   nativeCronCreatorToolAllowlist?: string[] | null;
   /**

@@ -44,6 +44,9 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
     payloads,
     meta: {},
   }));
+  const runCommandFromIngress = vi.fn<ConsultParams["agentRuntime"]["runCommandFromIngress"]>(
+    async () => ({ payloads, meta: {} }) as never,
+  );
   const prepareSessionEntryPatch = vi.fn<
     ConsultParams["agentRuntime"]["session"]["prepareSessionEntryPatch"]
   >(async (params) => {
@@ -80,8 +83,10 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
         prepareSessionEntryPatch,
       },
       runEmbeddedAgent,
+      runCommandFromIngress,
     },
     runEmbeddedAgent,
+    runCommandFromIngress,
     sessionStore,
   };
 }
@@ -328,6 +333,68 @@ describe("realtime voice agent consult runtime", () => {
     expect(call.extraSystemPrompt).toBe(
       "You are the configured OpenClaw agent receiving delegated requests from a live voice bridge. Act on behalf of the user, use available tools when appropriate, and return a brief speakable result.",
     );
+  });
+
+  it("runs an agent-turn consult as a guest turn of the prepared consult session", async () => {
+    const { runtime, runEmbeddedAgent, runCommandFromIngress, sessionStore } = createAgentRuntime([
+      { text: "Passed it on." },
+      { text: "Tool failed.", isError: true },
+    ]);
+    const toolBindings = { voice_call: { kind: "active-call", callId: "call-1" } };
+
+    const result = await runConsult(runtime, {
+      runner: "agent-turn",
+      agentId: "estimator",
+      sessionKey: "agent:estimator:voice:15550001234",
+      senderId: "+15550001234",
+      toolBindings,
+      provider: "anthropic",
+      model: "claude-opus-5-5",
+      fastMode: true,
+      timeoutMs: 9_500,
+      args: { question: "Tell the engineer the slab is poured." },
+    });
+
+    expect(result).toEqual({ text: "Passed it on." });
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    const voiceSession = expectDefined(
+      sessionStore["agent:estimator:voice:15550001234"],
+      "voice session",
+    );
+    const [turn, commandRuntime] = expectDefined(runCommandFromIngress.mock.calls[0], "agent turn");
+    expect(turn).toStrictEqual({
+      message: expect.stringContaining("User request:\nTell the engineer the slab is poured."),
+      agentId: "estimator",
+      sessionKey: "agent:estimator:voice:15550001234",
+      messageProvider: "voice",
+      runContext: { senderId: "+15550001234" },
+      senderIsOwner: false,
+      allowModelOverride: true,
+      provider: "anthropic",
+      model: "claude-opus-5-5",
+      thinkingOnce: "high",
+      fastMode: true,
+      verbose: "off",
+      timeout: "10",
+      runId: expect.stringMatching(/^voice-consult-/u),
+      lane: "voice",
+      extraSystemPrompt: expect.stringContaining("live voice bridge"),
+      toolsAllow: undefined,
+      toolBindings,
+      deliver: false,
+      abortSignal: expect.any(AbortSignal),
+    });
+    expect(commandRuntime.exit).toEqual(expect.any(Function));
+    expect(voiceSession.sessionId).toMatch(/\S/u);
+  });
+
+  it("refuses embedded tool context adaptation on an agent-turn consult", async () => {
+    const { runtime, runCommandFromIngress } = createAgentRuntime();
+
+    await expect(
+      runConsult(runtime, { runner: "agent-turn", prepareToolContext: () => ({}) }),
+    ).rejects.toThrow("An agent-turn consult cannot adapt embedded tool context.");
+    expect(runCommandFromIngress).not.toHaveBeenCalled();
   });
 
   it.each(["consult", "requester"])(

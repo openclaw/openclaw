@@ -33,6 +33,15 @@ function buildGrant(
 }
 
 describe("buildCliMcpGrantContext", () => {
+  it("snapshots host tool bindings into the grant", () => {
+    const toolBindings = { voice_call: { kind: "active-call", callId: "call-1" } };
+    const grant = buildGrant({ toolBindings });
+    toolBindings.voice_call.callId = "later-call";
+
+    expect(grant.toolBindings).toEqual({ voice_call: { kind: "active-call", callId: "call-1" } });
+    expect(buildGrant()).not.toHaveProperty("toolBindings");
+  });
+
   it("snapshots policy and logical model fields without copying private metadata", () => {
     const elevated = {
       enabled: false,

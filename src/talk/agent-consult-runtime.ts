@@ -21,6 +21,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeLogger, PluginRuntimeCore } from "../plugins/runtime/types-core.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { createNonExitingRuntime } from "../runtime.js";
 import { isModelSelectionLocked, ModelSelectionLockedError } from "../sessions/model-overrides.js";
 import type { ReplyToolAuthorityOverlay } from "../sessions/session-controller.contracts.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
@@ -53,6 +54,24 @@ const REALTIME_VOICE_YIELD_ACK_FALLBACK =
 export const REALTIME_VOICE_AGENT_CONSULT_SENDER_AUTH_VERSION = 1;
 
 type RealtimeVoiceAgentConsultContextMode = "isolated" | "fork";
+
+/**
+ * `embedded` runs the consult with `runEmbeddedAgent`. `agent-turn` runs it as an ordinary
+ * guest turn of the consult session through `runCommandFromIngress`, so the agent's configured
+ * runtime (including a CLI runtime), its session history and its tool policy apply as they do
+ * for a channel turn.
+ */
+type RealtimeVoiceAgentConsultRunner = "embedded" | "agent-turn";
+
+type RealtimeVoiceAgentConsultTurnResult = {
+  payloads?: Array<{
+    text?: unknown;
+    isError?: boolean;
+    isReasoning?: boolean;
+    isCommentary?: boolean;
+  }>;
+  meta?: EmbeddedAgentRunMeta;
+};
 
 type RealtimeVoiceAgentConsultRunRegistration = {
   abortSignal?: AbortSignal;
@@ -222,6 +241,8 @@ export async function consultRealtimeVoiceAgent(params: {
   /** Trusted owner bit established by the caller's ingress authorization boundary. */
   senderIsOwner?: boolean;
   contextMode?: RealtimeVoiceAgentConsultContextMode;
+  /** Defaults to `embedded`; `agent-turn` admits guest authority only. */
+  runner?: RealtimeVoiceAgentConsultRunner;
   provider?: RunEmbeddedAgentParams["provider"];
   model?: RunEmbeddedAgentParams["model"];
   thinkLevel?: RunEmbeddedAgentParams["thinkLevel"];
@@ -521,60 +542,99 @@ export async function consultRealtimeVoiceAgent(params: {
       const abortSignal = runRegistration?.abortSignal
         ? AbortSignal.any([lifecycleAbortController.signal, runRegistration.abortSignal])
         : lifecycleAbortController.signal;
-      let runPromise: ReturnType<RealtimeVoiceAgentConsultRuntime["runEmbeddedAgent"]>;
+      const prompt = buildRealtimeVoiceAgentConsultPrompt(params);
+      const extraSystemPrompt =
+        params.extraSystemPrompt ??
+        "You are the configured OpenClaw agent receiving delegated requests from a live voice bridge. Act on behalf of the user, use available tools when appropriate, and return a brief speakable result.";
+      const thinkLevel = params.thinkLevel ?? "high";
+      let runPromise: Promise<RealtimeVoiceAgentConsultTurnResult>;
       try {
         abortSignal.throwIfAborted();
         await assertConsultModelSelectionUnlocked(modelLockParams);
         abortSignal.throwIfAborted();
-        // Voice consults suppress verbose/reasoning output because the bridge needs a short,
-        // speakable answer, not agent-run diagnostics or hidden reasoning artifacts.
-        runPromise = params.agentRuntime.runEmbeddedAgent({
-          sessionId,
-          sessionKey: params.sessionKey,
-          sessionTarget: {
-            agentId,
+        if (params.runner === "agent-turn") {
+          if (params.prepareToolContext) {
+            throw new Error("An agent-turn consult cannot adapt embedded tool context.");
+          }
+          // The host resolves runtime, history and tool policy from the consult session and the
+          // guest sender, exactly as for a channel turn; no transcript delivery happens here.
+          runPromise = params.agentRuntime.runCommandFromIngress(
+            {
+              message: prompt,
+              agentId,
+              sessionKey: params.sessionKey,
+              messageProvider: toolAuthorityOverlay.messageProvider,
+              runContext: { senderId: params.senderId ?? undefined },
+              senderIsOwner: params.senderIsOwner === true,
+              allowModelOverride: Boolean(params.provider || params.model),
+              provider: params.provider,
+              model: params.model,
+              thinkingOnce: thinkLevel,
+              fastMode: params.fastMode,
+              verbose: "off",
+              timeout: String(Math.max(1, Math.ceil(timeoutMs / 1000))),
+              runId,
+              lane: params.lane,
+              extraSystemPrompt,
+              toolsAllow: params.toolsAllow,
+              toolBindings: params.toolBindings,
+              deliver: false,
+              abortSignal,
+            },
+            createNonExitingRuntime(),
+          );
+        } else {
+          // Voice consults suppress verbose/reasoning output because the bridge needs a short,
+          // speakable answer, not agent-run diagnostics or hidden reasoning artifacts.
+          runPromise = params.agentRuntime.runEmbeddedAgent({
             sessionId,
             sessionKey: params.sessionKey,
-            storePath,
-          },
-          spawnedBy: sessionEntry.spawnedBy,
-          sandboxSessionKey: resolveRealtimeVoiceAgentSandboxSessionKey(agentId, params.sessionKey),
-          agentId,
-          ...toolAuthorityOverlay,
-          // ASR voice ingress has no trace/client-tool or privileged handoff capability.
-          messageProvider: toolAuthorityOverlay.messageProvider,
-          messageTo: consultDeliveryContext?.to,
-          messageThreadId: consultDeliveryContext?.threadId,
-          currentChannelId: consultDeliveryContext?.to,
-          currentThreadTs:
-            consultDeliveryContext?.threadId != null
-              ? String(consultDeliveryContext.threadId)
-              : undefined,
-          workspaceDir,
-          cwd,
-          config: params.cfg,
-          prompt: buildRealtimeVoiceAgentConsultPrompt(params),
-          provider: params.provider,
-          model: params.model,
-          thinkLevel: params.thinkLevel ?? "high",
-          fastMode: params.fastMode,
-          verboseLevel: "off",
-          reasoningLevel: "off",
-          toolResultFormat: "plain",
-          execSession: sessionEntry,
-          sessionRoot: normalizeOptionalString(sessionEntry.sessionRoot),
-          toolsAllow: params.toolsAllow,
-          toolBindings: params.toolBindings,
-          timeoutMs,
-          runId,
-          lane: params.lane,
-          extraSystemPrompt:
-            params.extraSystemPrompt ??
-            "You are the configured OpenClaw agent receiving delegated requests from a live voice bridge. Act on behalf of the user, use available tools when appropriate, and return a brief speakable result.",
-          agentDir,
-          ...params.prepareToolContext?.(sessionEntry),
-          abortSignal,
-        });
+            sessionTarget: {
+              agentId,
+              sessionId,
+              sessionKey: params.sessionKey,
+              storePath,
+            },
+            spawnedBy: sessionEntry.spawnedBy,
+            sandboxSessionKey: resolveRealtimeVoiceAgentSandboxSessionKey(
+              agentId,
+              params.sessionKey,
+            ),
+            agentId,
+            ...toolAuthorityOverlay,
+            // ASR voice ingress has no trace/client-tool or privileged handoff capability.
+            messageProvider: toolAuthorityOverlay.messageProvider,
+            messageTo: consultDeliveryContext?.to,
+            messageThreadId: consultDeliveryContext?.threadId,
+            currentChannelId: consultDeliveryContext?.to,
+            currentThreadTs:
+              consultDeliveryContext?.threadId != null
+                ? String(consultDeliveryContext.threadId)
+                : undefined,
+            workspaceDir,
+            cwd,
+            config: params.cfg,
+            prompt,
+            provider: params.provider,
+            model: params.model,
+            thinkLevel,
+            fastMode: params.fastMode,
+            verboseLevel: "off",
+            reasoningLevel: "off",
+            toolResultFormat: "plain",
+            execSession: sessionEntry,
+            sessionRoot: normalizeOptionalString(sessionEntry.sessionRoot),
+            toolsAllow: params.toolsAllow,
+            toolBindings: params.toolBindings,
+            timeoutMs,
+            runId,
+            lane: params.lane,
+            extraSystemPrompt,
+            agentDir,
+            ...params.prepareToolContext?.(sessionEntry),
+            abortSignal,
+          });
+        }
       } catch (error) {
         try {
           runRegistration?.cleanupBeforeRun?.();

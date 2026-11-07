@@ -355,6 +355,7 @@ export async function resolveGatewayScopedTools(
     currentInboundAudio: params.currentInboundAudio,
     sessionId: params.sessionId,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
+    toolBindings: params.toolBindings,
     senderIsOwner,
     gitContributorProfileId: params.gitContributorProfileId,
     config: params.cfg,

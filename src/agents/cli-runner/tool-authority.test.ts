@@ -43,6 +43,7 @@ describe("CLI question creator binding", () => {
       "authProfileId",
       "clientCaps",
       "gatewayUiCommandTarget",
+      "toolBindings",
     ] as const satisfies readonly (keyof RunCliAgentParams)[];
     let promptReads = 0;
     const params: RunCliAgentParams = {
@@ -80,7 +81,6 @@ describe("CLI question creator binding", () => {
       "memberRoleIds",
       "messageThreadId",
       "runtimePluginToolGrant",
-      "toolBindings",
       "traceAuthorized",
     ] as const satisfies readonly Exclude<
       keyof ReplyToolAuthorityInput["run"],
