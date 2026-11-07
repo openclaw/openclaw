@@ -56,7 +56,7 @@ import { page as logsPage } from "./pages/logs/route.ts";
 import { page as meetingsPage } from "./pages/meetings/route.tsx";
 import { page as memoryImportPage } from "./pages/memory-import/route.ts";
 import { page as modelProvidersPage } from "./pages/model-providers/route.ts";
-import { page as modelSetupPage } from "./pages/model-setup/route.ts";
+import { canonicalModelSetupLocation, page as modelSetupPage } from "./pages/model-setup/route.ts";
 import { page as newSessionPage } from "./pages/new-session/route.ts";
 import { page as pluginPage } from "./pages/plugin/route.tsx";
 import { canonicalPluginsRouteLocation } from "./pages/plugins/route-data.ts";
@@ -172,13 +172,15 @@ function canonicalRouteLocation(
 ): RouteLocation {
   return routeId === "config"
     ? canonicalGeneralSettingsLocation(location, basePath)
-    : routeId === "workboard"
-      ? (resolveWorkboardRouteLocation(location, basePath).canonicalLocation ?? location)
-      : routeId === "plugin"
-        ? canonicalPluginTabLocation(location, basePath)
-        : routeId === "plugins" || routeId === "plugin-settings"
-          ? (canonicalPluginsRouteLocation(location, basePath) ?? location)
-          : location;
+    : routeId === "model-setup"
+      ? canonicalModelSetupLocation(location, basePath)
+      : routeId === "workboard"
+        ? (resolveWorkboardRouteLocation(location, basePath).canonicalLocation ?? location)
+        : routeId === "plugin"
+          ? canonicalPluginTabLocation(location, basePath)
+          : routeId === "plugins" || routeId === "plugin-settings"
+            ? (canonicalPluginsRouteLocation(location, basePath) ?? location)
+            : location;
 }
 
 export function createApplicationRouter(): ApplicationRouter {
@@ -195,14 +197,16 @@ export function createApplicationRouter(): ApplicationRouter {
         return Promise.resolve();
       }
       const canonical =
-        location || routeId === "config"
+        location || routeId === "config" || routeId === "model-setup"
           ? canonicalRouteLocation(routeId, requested, context.basePath)
           : undefined;
-      // General is a retired URL, not a page to mount between two live destinations.
+      const destination =
+        canonical && (routeId === "config" || routeId === "model-setup")
+          ? (routeIdFromPath(canonical.pathname, context.basePath) ?? routeId)
+          : routeId;
+      // Retired URLs must not mount a page between two live destinations.
       return router.navigate(
-        routeId === "config"
-          ? (routeIdFromPath(canonical!.pathname, context.basePath) ?? routeId)
-          : routeId,
+        destination,
         context,
         routeId === "config"
           ? { ...options, history: options?.history === "push" ? "push" : "replace" }

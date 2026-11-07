@@ -191,14 +191,16 @@ suite.define(() => {
               progress: string | null;
               sections: Array<{ id: string; top: number; height: number }>;
             }> = [];
+            // Active panes can still be fully transparent before presentation.
+            const visibility = { checkOpacity: true, visibilityProperty: true };
             const sample = () => {
               const pane = document.querySelector(".chat-pane-cache__pane--active");
               const panel = pane?.querySelector(".chat-details");
               const session = panel?.querySelector("section.chat-details-session");
-              if (pane?.querySelector(".chat-pane__header")?.checkVisibility()) {
+              if (pane?.querySelector(".chat-pane__header")?.checkVisibility(visibility)) {
                 const top = panel?.getBoundingClientRect().top ?? 0;
                 frames.push({
-                  details: Boolean(session?.checkVisibility()),
+                  details: Boolean(session?.checkVisibility(visibility)),
                   environment:
                     panel?.querySelector(".chat-environment__branch-name")?.textContent ?? null,
                   progress:

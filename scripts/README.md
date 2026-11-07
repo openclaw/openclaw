@@ -674,6 +674,41 @@ benchmark-only Worker wrapper records highlighter starts, replies, errors,
 termination and live count; no-op completion uses these events rather than an
 assumed delay.
 
+`heavy-window-{code,diff,table,terminal-dense,json-nested-dense,images,large-images}`
+loads 2,000 messages and evicts/remounts the heavy row three times. Code is
+expanded again on each return (its disclosure state is DOM-local); tool-card
+expansion retains its session-owned state. `crossing1Ms` through `crossing3Ms`
+measure browser-local scroll-to-content settlement without intervening driver
+round trips. These programmatic crossings isolate rendering, not native input
+or compositor latency. Evidence includes highlighter requests, loaded images,
+page-wide explicit `decode()` calls, settled mounted rows, retained messages and
+settled heights. `observedHeightChanges` counts virtualizer size updates after
+each target row is found, excluding its initial insertion/measurement. Image
+load/decode-call counts do not identify physical browser decoder work.
+The large-image case uses the same forty embedded 1-megapixel images as the
+arrival workload, keeping source and admission behavior comparable.
+
+Add `-counts` to a window scenario for diagnostic source-map instrumentation of
+Markdown rendering, Markdown-it parsing, tool formatting and diff analysis.
+Check each `*Instrumented` flag before interpreting a zero. Formatter entries
+are not cache misses, and Markdown-it counts cover `render`, not direct `parse`.
+`targetMarkdownRenders` and `targetParserRenders` count only input beginning with
+the fixture's exact `Heavy window target ` prefix; the page-wide totals also
+include unrelated prewarming. `warmup*` totals cover navigation and preparation
+before the measured crossings, providing a positive instrumentation control.
+The diff fixture is a Markdown fence; tool cases reopen the 8,000-character
+in-row preview, not the full-output sidebar. These intercepted builds are for
+work counts only. `heavy-megabyte-{markdown,line}-arrival` and
+`heavy-window-megabyte-{markdown,line}` exercise the existing one-MiB source /
+140,000-character fallback contract on first arrival and return.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --bundle-dir <base> --compare-bundle-dir <head> --control-bundle-dir <base> \
+  --steps heavy-window-code,heavy-window-diff --pairs 20 \
+  --engines chromium,webkit,firefox --viewport desktop --output .artifacts/heavy-window
+```
+
 `heavy-table-copy` verifies independent expected TSV; code/diff and tool copy
 steps verify every original text character. Native scrolling uses overlapping
 viewport bands and verifies the actual bottom. Large-image evidence reports
