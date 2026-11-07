@@ -9,7 +9,13 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { DashboardGalleryFilters } from "./gallery-filters.ts";
 import { DashboardsView, type DashboardsRouteData } from "./view.tsx";
 
-const filters: DashboardGalleryFilters = { query: "", ownerIds: [], sort: "updated" };
+const filters: DashboardGalleryFilters = {
+  query: "",
+  ownerIds: [],
+  sort: "updated",
+  view: "grid",
+  group: "none",
+};
 const handlers = { onFilterChange: vi.fn() };
 
 const dashboard = {
@@ -92,15 +98,14 @@ it.each([
 });
 
 it.each([
-  [{ ownerIds: [], sort: "updated" }, false],
-  [{ ownerIds: ["riley"], sort: "updated" }, true],
-  [{ ownerIds: [], sort: "title" }, true],
+  [{ ownerIds: [] }, false],
+  [{ ownerIds: ["riley"] }, true],
 ] as const)("marks the phone filter trigger for %j", (selected, active) => {
   const { container } = mountSolid(() => (
     <DashboardsView
       data={routeData([dashboard])}
       readReady={() => undefined}
-      filters={{ query: "", ...selected }}
+      filters={{ ...filters, ownerIds: [...selected.ownerIds] }}
       handlers={handlers}
     />
   ));

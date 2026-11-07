@@ -1,9 +1,9 @@
 import type { ApplicationContext } from "../../app/context.ts";
+import type { DashboardsDisplay } from "../../app/settings-contract.ts";
 
-export type DashboardGalleryFilters = {
+export type DashboardGalleryFilters = DashboardsDisplay & {
   query: string;
   ownerIds: string[];
-  sort: "updated" | "title";
 };
 
 export type DashboardGalleryHandlers = {

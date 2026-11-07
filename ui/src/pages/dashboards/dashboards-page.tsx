@@ -1,4 +1,6 @@
 import { createMemo, createSignal, createStore, onSettled, untrack } from "solid-js";
+import { DASHBOARDS_DISPLAY_DEFAULTS } from "../../app/settings-contract.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectSessionList } from "../../lib/reactive/domain-capabilities.ts";
@@ -9,10 +11,11 @@ import { DashboardsView, type DashboardsRouteData } from "./view.tsx";
 
 export function DashboardsPage(props: { routeData?: DashboardsRouteData }) {
   const context = useApplication();
+  // Display (view, ordering, grouping) is remembered per browser, like other view preferences.
   const [filters, setFilters] = createStore<DashboardGalleryFilters>({
     query: "",
     ownerIds: [],
-    sort: "updated",
+    ...(loadSettings().dashboardsDisplay ?? DASHBOARDS_DISPLAY_DEFAULTS),
   });
   // Loader data is an initial seed; session publications own subsequent updates.
   const initialData = untrack(() => props.routeData);
@@ -86,10 +89,19 @@ export function DashboardsPage(props: { routeData?: DashboardsRouteData }) {
         readReady={ready}
         filters={filters}
         handlers={{
-          onFilterChange: (filter) =>
+          onFilterChange: (filter) => {
+            const display = {
+              view: filter.view ?? filters.view,
+              sort: filter.sort ?? filters.sort,
+              group: filter.group ?? filters.group,
+            };
             setFilters((draft) => {
               Object.assign(draft, filter);
-            }),
+            });
+            if (filter.view || filter.sort || filter.group) {
+              patchSettings({ dashboardsDisplay: display });
+            }
+          },
           onNavigate: context.navigate,
         }}
         gatewaySnapshot={gateway.read().snapshot}

@@ -44,6 +44,36 @@ export type CatalogOpenTarget = (typeof CATALOG_OPEN_TARGETS)[number];
 
 export const normalizeCatalogOpenTarget = normalizeChoice(CATALOG_OPEN_TARGETS, "viewer");
 
+const DASHBOARDS_VIEWS = ["grid", "list"] as const;
+const DASHBOARDS_SORTS = ["updated", "title"] as const;
+const DASHBOARDS_GROUPS = ["none", "updated", "author"] as const;
+export type DashboardsDisplay = {
+  view: (typeof DASHBOARDS_VIEWS)[number];
+  sort: (typeof DASHBOARDS_SORTS)[number];
+  group: (typeof DASHBOARDS_GROUPS)[number];
+};
+export const DASHBOARDS_DISPLAY_DEFAULTS: DashboardsDisplay = {
+  view: "grid",
+  sort: "updated",
+  group: "none",
+};
+
+/** Browser-local gallery display; the defaults are not stored. */
+export function normalizeDashboardsDisplay(value: unknown): DashboardsDisplay | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const display: DashboardsDisplay = {
+    view: normalizeChoice(DASHBOARDS_VIEWS, "grid")(record.view),
+    sort: normalizeChoice(DASHBOARDS_SORTS, "updated")(record.sort),
+    group: normalizeChoice(DASHBOARDS_GROUPS, "none")(record.group),
+  };
+  return display.view === "grid" && display.sort === "updated" && display.group === "none"
+    ? undefined
+    : display;
+}
+
 const CHAT_WORKSPACE_DOCKS = ["right", "bottom"] as const;
 type ChatWorkspaceDock = (typeof CHAT_WORKSPACE_DOCKS)[number];
 
@@ -157,6 +187,7 @@ export type UiSettings = {
   chatSplitLayout?: ChatSplitLayout;
   chatWorkspaceDock?: ChatWorkspaceDock; // Session workspace rail dock edge (default "right")
   boardSessionViews?: BoardSessionViews; // Per-device active dashboard tab and dock state
+  dashboardsDisplay?: DashboardsDisplay; // Dashboards gallery view, ordering and grouping
   sidebarSessionLayouts?: SidebarSessionLayouts; // Sidebar columns and widths per session
   sidebarSessionActivePanels?: SidebarSessionActivePanels; // Collapsed active panel per session
   navCollapsed: boolean; // Collapsible sidebar state
