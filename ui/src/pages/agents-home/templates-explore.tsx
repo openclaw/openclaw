@@ -18,6 +18,7 @@ import {
 } from "../../components/solid/catalog-discovery.tsx";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { registerTemplatesEnglish } from "../../i18n/locales/en-templates.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -30,14 +31,14 @@ import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
 import { observeWindowResize } from "../../lib/reactive/window-resize.ts";
 import { TemplateArtwork } from "./template-artwork.tsx";
+import "../../styles/agents-home.css";
+import "../../styles/carapace-control-ui.css";
+import "../../styles/plugins.css";
 import {
   readTemplatesOverview,
   searchTemplates,
   type TemplateCatalogEntry,
 } from "./templates-catalog-client.ts";
-import "../../styles/agents-home.css";
-import "../../styles/carapace-control-ui.css";
-import "../../styles/plugins.css";
 
 registerEnglishCatalog(registerTemplatesEnglish);
 
@@ -249,9 +250,9 @@ export function TemplatesExplore(props: { onSelect?: (entry: TemplateCatalogEntr
             </CatalogDiscoveryChips>
             <div class="plugin-catalog-results__body">
               <Show when={unavailable()}>
-                <div class="callout warn" role="status">
+                <InlineAlert tone="warning" role="status">
                   {t("templatesCatalog.unavailable")}
-                </div>
+                </InlineAlert>
               </Show>
               <Show when={request()} keyed>
                 {(current) => {
@@ -323,12 +324,12 @@ export function TemplatesExplore(props: { onSelect?: (entry: TemplateCatalogEntr
                   return (
                     <Errored
                       fallback={(error) => (
-                        <div class="callout danger" role="alert">
+                        <InlineAlert tone="danger" role="alert">
                           {formatUiError(error(), t("templatesCatalog.unavailable"))}
                           <button type="button" class="btn btn--sm" onClick={() => loadCatalog()}>
                             {t("templatesCatalog.retry")}
                           </button>
-                        </div>
+                        </InlineAlert>
                       )}
                     >
                       <Loading fallback={<TemplateCatalogSkeleton />}>

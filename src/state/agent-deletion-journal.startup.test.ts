@@ -56,7 +56,9 @@ function expectDeleted(refusal: unknown, agentId: string) {
   expect(refusal).toMatchObject({
     code: "agent-database-inspection-failed",
     reason: `Agent ${agentId} was deleted during startup inspection`,
+    repairHint: expect.stringContaining("retry agents.delete"),
   });
+  expect(refusal).not.toMatchObject({ repairHint: expect.stringContaining("doctor --fix") });
 }
 
 it.each(["warm", "cold"] as const)(
