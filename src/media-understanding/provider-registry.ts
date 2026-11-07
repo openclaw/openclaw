@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
@@ -5,6 +6,7 @@ import {
   listImageCapableConfiguredProviders,
   resolveConfiguredMediaProviderCapabilities,
 } from "./config-provider-models.js";
+import { buildMediaProviderIdentityRegistry } from "./provider-identities.js";
 import type { MediaUnderstandingProvider } from "./provider-types.js";
 
 function mergeProviderIntoRegistry(
@@ -12,7 +14,7 @@ function mergeProviderIntoRegistry(
   provider: MediaUnderstandingProvider,
   registryKey = provider.id,
 ) {
-  const normalizedKey = normalizeMediaProviderId(registryKey);
+  const normalizedKey = normalizeProviderId(registryKey);
   const existing = registry.get(normalizedKey);
   const merged = existing
     ? {
@@ -30,6 +32,20 @@ function mergeProviderIntoRegistry(
   registry.set(normalizedKey, merged);
 }
 
+function mergeProviderOverride(
+  registry: Map<string, MediaUnderstandingProvider>,
+  identities: Set<string>,
+  key: string,
+  provider: MediaUnderstandingProvider,
+) {
+  const normalizedKey = normalizeMediaProviderId(key, identities);
+  // An alias lookup must not install another provider's hooks over a declared owner.
+  if (identities.has(normalizedKey) && normalizeProviderId(provider.id) !== normalizedKey) {
+    return;
+  }
+  mergeProviderIntoRegistry(registry, provider, normalizedKey);
+}
+
 export { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 
 /** Builds the media-understanding provider registry from plugin capabilities and config providers. */
@@ -38,24 +54,34 @@ export function buildMediaUnderstandingRegistry(
   cfg?: OpenClawConfig,
   preparedProviders?: readonly MediaUnderstandingProvider[],
 ): Map<string, MediaUnderstandingProvider> {
-  const registry = new Map<string, MediaUnderstandingProvider>();
+  const modelIdentities = buildMediaProviderIdentityRegistry(cfg);
   const providers =
     preparedProviders ??
     resolvePluginCapabilityProviders({
       key: "mediaUnderstandingProviders",
       cfg,
     });
-  for (const provider of providers) {
+  const nativeIds = new Set([
+    ...providers.map((provider) => normalizeProviderId(provider.id)),
+    ...Object.values(overrides ?? {}).map((provider) => normalizeProviderId(provider.id)),
+  ]);
+  const identities = new Set([...modelIdentities.keys(), ...nativeIds]);
+  // Identity-only placeholders must not override native hook-inferred capabilities.
+  const registry = new Map([...modelIdentities].filter(([id]) => !nativeIds.has(id)));
+  for (const provider of [...registry.values(), ...providers]) {
     mergeProviderIntoRegistry(
       registry,
       provider.inheritConfiguredImageCapability
-        ? { ...provider, capabilities: resolveConfiguredMediaProviderCapabilities(provider, cfg) }
+        ? {
+            ...provider,
+            capabilities: resolveConfiguredMediaProviderCapabilities(provider, cfg, identities),
+          }
         : provider,
     );
   }
   // Auto-register media-understanding for config providers with image-capable models (#51392)
   for (const providerId of listImageCapableConfiguredProviders(cfg)) {
-    const normalizedKey = normalizeMediaProviderId(providerId);
+    const normalizedKey = normalizeMediaProviderId(providerId, identities);
     if (!registry.has(normalizedKey)) {
       mergeProviderIntoRegistry(registry, {
         id: normalizedKey,
@@ -63,10 +89,8 @@ export function buildMediaUnderstandingRegistry(
       });
     }
   }
-  if (overrides) {
-    for (const [key, provider] of Object.entries(overrides)) {
-      mergeProviderIntoRegistry(registry, provider, key);
-    }
+  for (const [key, provider] of Object.entries(overrides ?? {})) {
+    mergeProviderOverride(registry, identities, key, provider);
   }
   return registry;
 }
@@ -76,5 +100,5 @@ export function getMediaUnderstandingProvider(
   id: string,
   registry: Map<string, MediaUnderstandingProvider>,
 ): MediaUnderstandingProvider | undefined {
-  return registry.get(normalizeMediaProviderId(id));
+  return registry.get(normalizeMediaProviderId(id, registry));
 }

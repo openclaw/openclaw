@@ -288,7 +288,9 @@ export async function describePreparedImageWithModel(
   assertMediaExecutionCurrent(execution);
   const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
   const providerRegistry = buildProviderRegistry(undefined, params.cfg);
-  const provider = providerRegistry.get(normalizeMediaProviderId(params.provider));
+  const provider = providerRegistry.get(
+    normalizeMediaProviderId(params.provider, providerRegistry),
+  );
   const describeImage = provider?.describeImage ?? describeImageWithModel;
   const agentDir =
     params.agentDir ??

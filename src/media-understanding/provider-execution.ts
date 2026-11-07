@@ -160,7 +160,7 @@ export async function isAudioModelEntryAvailable(params: {
     const cli = resolveCliModelEntry(entry);
     return cli.ok && Boolean(resolveExecutablePath(cli.value.command));
   }
-  const providerId = normalizeMediaProviderId(entry.provider ?? "");
+  const providerId = normalizeMediaProviderId(entry.provider ?? "", params.providerRegistry);
   const provider = getMediaUnderstandingProvider(providerId, params.providerRegistry);
   if (!provider?.transcribeAudio && !provider?.transcribeAudioWithContext) {
     return false;

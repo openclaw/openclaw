@@ -8,6 +8,7 @@ import {
   describeImageWithModel,
   describeImagesWithModel,
 } from "../../media-understanding/image-runtime.js";
+import { buildMediaProviderIdentityRegistry } from "../../media-understanding/provider-identities.js";
 import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
@@ -16,6 +17,7 @@ import type { MediaUnderstandingProvider } from "../../media-understanding/provi
 import { resolveTimeoutMs } from "../../media-understanding/resolve.js";
 import type { ImageCompressionPolicy } from "../../media/web-media.js";
 import { resolvePluginCapabilityProvider } from "../../plugins/capability-provider-runtime.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { runWithAsyncWorkResources } from "../../shared/async-work-resources.js";
 import {
   bindOperatorModelExecution,
@@ -95,8 +97,11 @@ function matchesImageTimeoutEntry(params: {
   model: string;
   providerRegistry: Map<string, MediaUnderstandingProvider>;
 }): boolean {
-  const configuredProvider = normalizeMediaProviderId(params.entry.provider ?? "");
-  const selectedProvider = normalizeMediaProviderId(params.provider);
+  const configuredProvider = normalizeMediaProviderId(
+    params.entry.provider ?? "",
+    params.providerRegistry,
+  );
+  const selectedProvider = normalizeMediaProviderId(params.provider, params.providerRegistry);
   if (
     !configuredProvider ||
     configuredProvider !== selectedProvider ||
@@ -130,6 +135,14 @@ export async function runImagePrompt(params: {
   operatorAuthority?: AdmittedRunOperatorAuthority;
   assertCurrent?: () => void;
 }) {
+  const run = () => runImagePromptInScope(params);
+  // Retained tools carry their own metadata and handlers, even inside a newer ambient run.
+  return params.preparedModelRuntime?.metadataSnapshot
+    ? withPluginRuntimeGenerationScope(params.preparedModelRuntime, run)
+    : run();
+}
+
+async function runImagePromptInScope(params: Parameters<typeof runImagePrompt>[0]) {
   const effectiveCfg = applyAgentDefaultModelConfig(
     params.cfg,
     "imageModel",
@@ -139,6 +152,12 @@ export async function runImagePrompt(params: {
   const preparedProviders =
     params.preparedModelRuntime?.mediaCapabilityProviders?.mediaUnderstandingProviders;
 
+  const preparedProviderIds = preparedProviders
+    ? new Set([
+        ...buildMediaProviderIdentityRegistry(providerCfg, params.workspaceDir).keys(),
+        ...preparedProviders.map((entry) => entry.id.trim().toLowerCase()),
+      ])
+    : undefined;
   const result = await runWithImageModelFallback({
     cfg: effectiveCfg,
     manifestPlugins: params.preparedModelRuntime?.metadataSnapshot,
@@ -171,7 +190,7 @@ export async function runImagePrompt(params: {
           ? findCapabilityProviderById({
               providers: preparedProviders,
               providerId: provider,
-              normalizeProviderId: normalizeMediaProviderId,
+              normalizeProviderId: (id) => normalizeMediaProviderId(id, preparedProviderIds),
             })
           : resolvePluginCapabilityProvider({
               key: "mediaUnderstandingProviders",

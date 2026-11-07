@@ -11,7 +11,9 @@ export function resolveDefaultMediaModelFromRegistry(params: {
   capability: MediaUnderstandingCapability;
   providerRegistry: Map<string, MediaUnderstandingProvider>;
 }): string | undefined {
-  const provider = params.providerRegistry.get(normalizeMediaProviderId(params.providerId));
+  const provider = params.providerRegistry.get(
+    normalizeMediaProviderId(params.providerId, params.providerRegistry),
+  );
   return normalizeOptionalString(provider?.defaultModels?.[params.capability]);
 }
 
@@ -36,6 +38,6 @@ export function resolveAutoMediaKeyProvidersFromRegistry(params: {
       (left, right) =>
         left.priority - right.priority || left.provider.id.localeCompare(right.provider.id),
     )
-    .map((entry) => normalizeMediaProviderId(entry.provider.id))
+    .map((entry) => normalizeMediaProviderId(entry.provider.id, params.providerRegistry))
     .filter(Boolean);
 }
