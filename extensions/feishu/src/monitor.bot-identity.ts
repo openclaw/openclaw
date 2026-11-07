@@ -41,6 +41,9 @@ async function retryBotIdentityProbe(
       abortSignal,
       allowCachedFallback: false,
     });
+    if (abortSignal?.aborted) {
+      return;
+    }
     if (identity.botOpenId && identity.source === "provider") {
       const resolved = applyBotIdentityState(accountId, identity);
       log(`feishu[${accountId}]: bot open_id recovered via background retry: ${resolved}`);
