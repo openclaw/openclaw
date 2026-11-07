@@ -477,3 +477,27 @@ at most one frame (17 ms), using each order's median candidate delta minus its
 A/A median, then averaging the two orders. Report raw deltas and both spreads.
 Hello, first post-hello RPC, final rows, LoAF, CLS, Details co-framing, stable
 Details section geometry, and zero transcript backtracking remain required.
+
+## Harness calibration
+
+Warm-reload comparisons must identify the instrumentation used on both arms.
+A geometry sampler, compositor screencast, RPC census, and CPU profiler are
+separate workloads; do not compare absolute paint times from captures with
+different instrumentation or source revisions. Keep geometry/backtracking and
+visual proofs available as separate attribution captures.
+
+Calibrate on one build, one quiet instance, and real old-page reloads. Record
+Element Timing rows, FCP, pane-start marks, hello, and long animation frames.
+Compare each probe with a minimal PerformanceObserver collector using eight
+alternating AB/BA pairs and a matching A/A control. For each order, subtract the
+median A/A candidate-minus-baseline delta from the comparison's median delta.
+Report both order-specific effects and spreads, their mean, raw paired medians,
+and arm medians/IQRs. Raw better-pair counts alone cannot separate harness cost
+from the run-order effect.
+
+Record the measured reload ordinal and trace code-cache consumption/production
+separately with `v8` and `devtools.timeline`, without the CPU sampler. An absolute
+480 ms qualification against the 500 ms paint hold must name its harness and
+cache state. Navigation-relative Element Timing and lifecycle-relative paint
+are different clocks: report the trace's first `BeginLifecycleUpdates` and
+`CommitLoad` offsets before comparing them with the hold deadline.
