@@ -11,7 +11,8 @@ import {
 } from "./rich-block-model.js";
 import { splitTelegramPlainTextChunks } from "./rich-plain-fallback.js";
 
-const TELEGRAM_RICH_MEDIA_LIMIT = 50;
+// Keep sends and edits below the server's observed silent-truncation threshold.
+export const TELEGRAM_RICH_MEDIA_LIMIT = 20;
 
 type RichBlockBudget = { chars: number; blocks: number; media: number };
 type RichBlockLimits = { textLimit: number; blockLimit: number };
@@ -158,12 +159,13 @@ function splitOversizedRichBlock(block: InputRichBlock, limits: RichBlockLimits)
             countRichTextChars(block.caption?.credit ?? "");
     const remainingText = textLimit - wrapperChars;
     if (
-      block.blocks.length === 0 ||
-      remainingText < 0 ||
-      (remainingText === 0 && measureInputRichBlocks(block.blocks).chars > 0)
+      (block.blocks.length === 0 ||
+        remainingText < 0 ||
+        (remainingText === 0 && measureInputRichBlocks(block.blocks).chars > 0)) &&
+      measureInputRichBlocks(block.blocks).media <= TELEGRAM_RICH_MEDIA_LIMIT
     ) {
-      // Wrapper text cannot be divided without losing its owner; the existing
-      // plain fallback handles this irreducibly oversized semantic unit.
+      // Keep indivisible wrapper text for plain fallback, but never let it
+      // bypass the media cap when the local text target is smaller than the wrapper.
       return [block];
     }
     const pieces = splitTelegramRichBlocks(block.blocks, {
@@ -221,8 +223,22 @@ function splitOversizedRichBlock(block: InputRichBlock, limits: RichBlockLimits)
     return pieces;
   }
   if (block.type === "list") {
+    const expandedItems: typeof block.items = [];
+    for (const item of block.items) {
+      if (measureInputRichBlocks(item.blocks).media <= TELEGRAM_RICH_MEDIA_LIMIT) {
+        expandedItems.push(item);
+        continue;
+      }
+      for (const blocks of splitTelegramRichBlocks(item.blocks, {
+        textLimit,
+        // Reserve one block for the list wrapper and one for the item itself.
+        blockLimit: Math.max(1, blockLimit - 2),
+      })) {
+        expandedItems.push({ ...item, blocks });
+      }
+    }
     return groupRichBlockItems(
-      block.items,
+      expandedItems,
       limits,
       (item) => {
         const measured = measureInputRichBlocks(item.blocks);

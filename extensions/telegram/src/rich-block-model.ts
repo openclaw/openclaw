@@ -275,7 +275,7 @@ export function measureInputRichBlocks(blocks: readonly InputRichBlock[]) {
           measureRichBlockCaption(block.caption, size, depth + 1);
           break;
         case "map":
-          // Live-verified: maps do not consume the 50-attachment budget.
+          // Maps do not consume the rich-media attachment budget.
           measureRichBlockCaption(block.caption, size, depth + 1);
           break;
         case "anchor":

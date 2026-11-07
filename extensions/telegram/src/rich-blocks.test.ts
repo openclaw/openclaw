@@ -296,7 +296,7 @@ describe("splitTelegramRichBlocks", () => {
     const collage: InputRichBlock = {
       type: "collage",
       caption: { text: "Album caption" },
-      blocks: Array.from({ length: 51 }, (_, index) => ({
+      blocks: Array.from({ length: 21 }, (_, index) => ({
         type: "photo" as const,
         photo: { type: "photo" as const, media: `https://example.com/${index}.jpg` },
       })),
@@ -308,10 +308,59 @@ describe("splitTelegramRichBlocks", () => {
     expectBudget(tableChunks, "blocks", 5);
     expect(tables.flatMap((part) => part.cells)).toEqual(table.cells);
     expect(tables.map((part) => part.caption).filter(Boolean)).toEqual(["Table caption"]);
-    expectBudget(mediaChunks, "media", 50);
+    expectBudget(mediaChunks, "media", 20);
     expect(albums.flatMap((album) => album.blocks)).toEqual(collage.blocks);
     expect(albums.flatMap(({ caption }) => (caption ? [caption.text] : []))).toEqual([
       "Album caption",
+    ]);
+  });
+
+  it("splits a media-heavy list item without losing mixed media, metadata, or its tail", () => {
+    const media: InputRichBlock[] = Array.from({ length: 19 }, (_, index) => ({
+      type: "photo",
+      photo: { type: "photo", media: `https://example.com/${index}.jpg` },
+    }));
+    media.push(
+      { type: "video", video: { type: "video", media: "https://example.com/19.mp4" } },
+      { type: "audio", audio: { type: "audio", media: "https://example.com/20.mp3" } },
+    );
+    const metadata = { value: 7, type: "A", has_checkbox: true, is_checked: true } as const;
+    const tail: InputRichBlock = { type: "paragraph", text: "after media" };
+    const chunks = splitTelegramRichBlocks([
+      { type: "list", items: [{ ...metadata, blocks: [...media, tail] }] },
+    ]);
+    const lists = chunks.flat().filter((block) => block.type === "list");
+
+    expect(chunks.map((chunk) => measureInputRichBlocks(chunk).media)).toEqual([20, 1]);
+    expect(lists.flatMap((list) => list.items).flatMap((item) => item.blocks)).toEqual([
+      ...media,
+      tail,
+    ]);
+    expect(lists.flatMap((list) => list.items).map(({ blocks: _blocks, ...item }) => item)).toEqual(
+      [metadata, metadata],
+    );
+  });
+
+  it("moves a gallery whole to the next rich message and preserves surrounding text order", () => {
+    const photo = (index: number): InputRichBlock => ({
+      type: "photo",
+      photo: { type: "photo", media: `https://example.com/${index}.jpg` },
+    });
+    const leadingPhotos = Array.from({ length: 18 }, (_, index) => photo(index));
+    const slideshow: InputRichBlock = {
+      type: "slideshow",
+      blocks: Array.from({ length: 5 }, (_, index) => photo(index + 18)),
+    };
+    const chunks = splitTelegramRichBlocks([
+      ...leadingPhotos,
+      { type: "paragraph", text: "between albums" },
+      slideshow,
+      { type: "paragraph", text: "after albums" },
+    ]);
+
+    expect(chunks).toEqual([
+      [...leadingPhotos, { type: "paragraph", text: "between albums" }],
+      [slideshow, { type: "paragraph", text: "after albums" }],
     ]);
   });
 });
