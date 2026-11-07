@@ -78,11 +78,14 @@ export function createTelegramLegacyWebhookAuthLimiter(config: OpenClawConfig | 
       ? (parseIpLiteral(headerValue(req.headers["x-real-ip"])) ?? "unknown")
       : "unknown";
   };
-  return (req: IncomingMessage, res: ServerResponse) =>
+  // routeIdentity lets callers key equivalent URLs (query variants, trailing
+  // slashes) to one failed-auth budget instead of minting a fresh budget per
+  // raw req.url.
+  return (req: IncomingMessage, res: ServerResponse, routeIdentity?: string) =>
     applyBasicWebhookRequestGuards({
       req,
       res,
       rateLimiter,
-      rateLimitKey: `${req.url}:${clientIp(req)}`,
+      rateLimitKey: `${routeIdentity ?? req.url}:${clientIp(req)}`,
     });
 }
