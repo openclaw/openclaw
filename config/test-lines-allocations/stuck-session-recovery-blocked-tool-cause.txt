@@ -1,0 +1,12 @@
+136
+# Stuck-session recovery classification (#138528): controller-to-cron regression
+# coverage for the blocked_tool_call watchdog cause carried into run history and
+# the chat failure alert, plus the thrown-failure attribution path.
+#
+# 136 is this change's own retained net added test lines: the two agent-stall
+# renderer cases folded into the existing table, the cron-owner regressions in
+# run.watchdog-cause.test.ts, and the recovery-cause cases in
+# diagnostic-stuck-session-recovery-cause.test.ts. The checker rejects credit
+# above net added test lines, so this number tracks the diff exactly; baseline
+# debt from the pinned introduction base stays with that base instead of
+# borrowing credit here.

@@ -28,6 +28,9 @@ export function requestStuckSessionRecovery(params: {
     ...params.request,
     operation,
     allowActiveAbort: decision?.action === "stop",
+    // Carry the attention classification so the recovery outcome can report the
+    // semantic cause (e.g. blocked_tool_call) instead of a cause-free literal.
+    classification: params.classification,
   };
   const sessionFields = {
     sessionId: request.sessionId,

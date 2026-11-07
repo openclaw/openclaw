@@ -53,9 +53,9 @@ import {
   resolveCronAbortReasonText,
 } from "../service/execution-errors.js";
 import { isCronOneShotContinuationJob } from "../service/one-shot-schedule.js";
-import type { CronAgentExecutionPhaseUpdate } from "../types.js";
+import type { CronAgentExecutionPhaseUpdate, CronFailureNotificationDetail } from "../types.js";
 import type { CronRunExecutionParams } from "./run-execution.types.js";
-import { finalizeCronRun } from "./run-finalize.js";
+import { finalizeCronRun, resolveCronRecoveryClassification } from "./run-finalize.js";
 import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
 import { prepareCronRunContext, type PreparedCronRunContext } from "./run-prepare.js";
 import type { MutableCronSession } from "./run-session-state.js";
@@ -206,6 +206,8 @@ async function runCronIsolatedAgentTurnInTrace(
               executionStarted ? undefined : { executionStarted: false, providerStarted: false };
             let admissionDeferredReason: "busy" | "active-hours" | undefined;
             const ownReplyOperation = getCurrentSessionControllerOwner();
+            const resolveRecoveryClassification = () =>
+              resolveCronRecoveryClassification(ownReplyOperation);
             const resolveStartDeferral = (): "busy" | "active-hours" | undefined => {
               const cfg = selectLiveRuntimeConfig(params.cfg);
               if (
@@ -496,6 +498,7 @@ async function runCronIsolatedAgentTurnInTrace(
                 automationResult,
                 prepared: prepared.context,
                 execution,
+                recoveryClassification: resolveRecoveryClassification(),
                 abortReason,
                 isAborted,
                 settleUsage,
@@ -532,7 +535,21 @@ async function runCronIsolatedAgentTurnInTrace(
               }
               const isCronLaneTimeout =
                 isAborted() || isCommandLaneTaskTimeoutError(err, CommandLane.CronNested);
-              const error = isCronLaneTimeout ? abortReason() : normalizeCronRunErrorText(err);
+              // A watchdog-cancelled run throws a generic abort. Surface the precise
+              // recovery cause (e.g. blocked_tool_call) on the persisted error so the run
+              // history (result.error -> job.state.lastError) and the chat/webhook alert
+              // (params.error) record it instead of a cause-free literal. Restart
+              // precedence is preserved, and a rate-limited stop keeps its own recovery
+              // text instead of the mechanical watchdog reason.
+              const recoveryClassification = resolveRecoveryClassification();
+              const error =
+                recoveryClassification &&
+                recoveryClassification.trim().length > 0 &&
+                !interruptedByRestart
+                  ? recoveryClassification
+                  : isCronLaneTimeout
+                    ? abortReason()
+                    : normalizeCronRunErrorText(err);
               // Preserve the provider's closed reason before user-facing text replaces the error object.
               const errorReason = resolveCronRunErrorReason(
                 isCronLaneTimeout ? error : err,
@@ -560,6 +577,22 @@ async function runCronIsolatedAgentTurnInTrace(
               return prepared.context.withRunSession({
                 status: "error",
                 error,
+                // Project the controller-owned watchdog classification into this thrown
+                // outcome so a watchdog-cancelled CLI run (which throws instead of
+                // reaching finalizeCronRun) still records blocked_tool_call in the run
+                // history and chat alert. Restart precedence is preserved: when the
+                // failure was an interrupted restart, errorClassification already wins
+                // and we omit the stall detail.
+                ...(!interruptedByRestart &&
+                recoveryClassification &&
+                recoveryClassification.trim().length > 0
+                  ? {
+                      failureNotificationDetail: {
+                        kind: "agent-stall",
+                        classification: recoveryClassification,
+                      } satisfies CronFailureNotificationDetail,
+                    }
+                  : {}),
                 ...(!isCronLaneTimeout &&
                 !interruptedByRestart &&
                 executionStarted &&

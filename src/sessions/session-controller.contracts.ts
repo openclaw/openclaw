@@ -200,6 +200,16 @@ export type ReplyOperation = {
   readonly terminalProducerBlocked: boolean;
   /** Set when a stale-watchdog expiry forced this operation's run_stalled result. */
   readonly staleExpiryReason?: ReplyOperationStaleReason;
+  /**
+   * Semantic cause a stuck-session recovery acted on when it aborted the embedded
+   * run (e.g. `blocked_tool_call`). Recorded by the controller's authoritative
+   * stall-stop path (expireOwner -> abortForStall) before the abort commits, so
+   * both the watchdog-timer-driven and diagnostics-triggered stops carry it into
+   * cron finalization; diagnostics supplies the precise cause when available, and
+   * the controller falls back to the watchdog decision reason otherwise. Absent
+   * when recovery did not abort the run or supplied no classification.
+   */
+  recoveryClassification?: string;
   readonly startedAtMs: number;
   readonly lastActivityAtMs: number;
   /** True when this operation has owned the supplied session ID. */
