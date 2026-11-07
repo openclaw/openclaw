@@ -34,6 +34,7 @@ export type GenerationWireValue =
   | { kind: "array" | "set"; id: number; entries: GenerationWireValue[] }
   | { kind: "map"; id: number; entries: [GenerationWireValue, GenerationWireValue][] }
   | { kind: "url"; id: number; value: string }
+  | { kind: "bytes"; id: number; value: Uint8Array }
   | { kind: "native-root"; id: number; rootId: number }
   | { kind: "native"; id: number; snapshot: GenerationWireValue };
 
@@ -192,6 +193,10 @@ export class GenerationCodec {
     if (value instanceof URL) {
       return { kind: "url", id, value: value.href };
     }
+    if (Buffer.isBuffer(value)) {
+      // Copy only the admitted view, never its pooled backing allocation.
+      return { kind: "bytes", id, value: Uint8Array.from(value) };
+    }
     if (value instanceof Map) {
       return {
         kind: "map",
@@ -305,6 +310,8 @@ export class GenerationCodec {
       );
     } else if (value.kind === "url") {
       result = new URL(value.value);
+    } else if (value.kind === "bytes") {
+      result = Buffer.from(value.value);
     } else if (value.kind === "native-root") {
       result = this.nativeRoots.importRoot(value.rootId);
     } else if (value.kind === "native") {

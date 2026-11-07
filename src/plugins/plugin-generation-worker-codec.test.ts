@@ -23,6 +23,19 @@ function nativeRootTransport(): GenerationNativeRootTransport {
 
 const disposable = () => ({ dispose() {}, async disposeAsync() {} });
 
+it("transfers verified bytes without exposing the producer's mutable buffer", () => {
+  const sender = new GenerationCodec(() => undefined, nativeRootTransport());
+  const receiver = new GenerationCodec(() => undefined, nativeRootTransport());
+  const bytes = Buffer.from([0, 255, 195, 40]);
+  const encoded = structuredClone(sender.encode({ bytes, same: bytes }));
+  const decoded = receiver.decode(encoded) as { bytes: Buffer; same: Buffer };
+  expect(Buffer.isBuffer(decoded.bytes)).toBe(true);
+  expect(decoded.bytes).toEqual(bytes);
+  expect(decoded.same).toBe(decoded.bytes);
+  decoded.bytes.fill(17);
+  expect(bytes).toEqual(Buffer.from([0, 255, 195, 40]));
+});
+
 it("attests source preparation handles independently of callback names and capture deadlines", () => {
   const sender = new GenerationCodec(() => undefined, nativeRootTransport());
   const prepare = sender.encode(markPluginSourcePreparationOperation(() => undefined));

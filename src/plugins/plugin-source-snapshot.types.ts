@@ -59,7 +59,7 @@ type PluginSourceSnapshotRemoval = {
   rootDir: string;
   installRecordHash: string;
   expectedSnapshot: unknown;
-  warning: PluginSourceSnapshotWarning;
+  warning?: PluginSourceSnapshotWarning;
 };
 
 export type PluginSourceSnapshotChanges = {
