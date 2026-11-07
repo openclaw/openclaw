@@ -5,6 +5,7 @@ import { computeBaseConfigSchemaResponse } from "../../src/config/schema-base.ts
 import type { UsageSummary } from "../../src/infra/provider-usage.types.ts";
 import type { ControlUiLinkReaderDocument } from "../../src/shared/control-ui-link-reader.ts";
 import type { SessionsUsageResult } from "../../src/shared/usage-types.ts";
+import type { ClawHubTemplateCatalogEntry } from "../../src/templates/clawhub-source.ts";
 import { defaultControlUiFeatureMethods } from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import type { NativeControlUiMockGatewayScenario } from "../../ui/src/test-helpers/control-ui-plugin-e2e.ts";
 import { createControlUiSessionRow } from "../../ui/src/test-helpers/control-ui-session-fixtures.ts";
@@ -349,7 +350,22 @@ export const parityBaseScenario: NativeControlUiMockGatewayScenario = {
         message: "Round-trip measurement is unavailable in this deterministic fixture.",
       },
     },
-    "system-presence": [],
+    // Mirrors the hello roster so presence settles the same whichever source lands last.
+    "system-presence": [
+      {
+        instanceId: "parity-webchat",
+        mode: "webchat",
+        reason: "connect",
+        ts: fixedTime,
+        user: {
+          id: profiles[0]!.id,
+          identity: { type: "profile", id: profiles[0]!.id },
+          name: profiles[0]!.displayName,
+          email: profiles[0]!.emails[0],
+        },
+        watchedSessions: [],
+      },
+    ],
     "channels.status": {
       ts: fixedTime,
       channelOrder: [],
@@ -377,6 +393,55 @@ export const parityWorkboardScenario: NativeControlUiMockGatewayScenario = {
   methodResponses: workboard.methodResponses,
 };
 export const parityPluginPath = "/plugin?plugin=workboard&id=workboard";
+
+// Templates is a Labs feature; only its own scene enables it, so other shells keep their navigation.
+const templatesConfig = {
+  ...config,
+  gateway: { controlUi: { experimental: { templates: true } } },
+};
+const template = (
+  packageName: string,
+  displayName: string,
+  summary: string,
+): ClawHubTemplateCatalogEntry => ({
+  packageName,
+  displayName,
+  summary,
+  latestVersion: "1.0.0",
+  channel: "official",
+  official: true,
+  ownerHandle: "openclaw",
+  downloads: 1_200,
+  installs: 340,
+  updatedAtMs: fixedTime - 86_400_000,
+});
+export const parityTemplatesScenario: NativeControlUiMockGatewayScenario = {
+  featureMethods: [...parityBaseScenario.featureMethods!, "templates.catalog.search"],
+  methodResponses: {
+    "config.get": {
+      config: templatesConfig,
+      raw: JSON.stringify(templatesConfig),
+      hash: "parity-templates-config",
+      valid: true,
+      issues: [],
+    },
+    "templates.catalog.search": {
+      entries: [],
+      overview: {
+        featured: [
+          template("@openclaw/release-reviewer", "Release reviewer", "Checks release notes."),
+          template("@openclaw/inbox-triage", "Inbox triage", "Sorts and drafts replies."),
+        ],
+        sections: [
+          {
+            category: "productivity",
+            entries: [template("@openclaw/meeting-notes", "Meeting notes", "Summarizes calls.")],
+          },
+        ],
+      },
+    },
+  },
+};
 
 export const parityReaderDocuments: ControlUiLinkReaderDocument[] = Array.from(
   { length: 10 },
