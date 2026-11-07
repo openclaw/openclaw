@@ -1,6 +1,6 @@
 ---
 name: block-kit
-description: "Use proactively for structured or interactive Slack replies, and when asked to author or validate native Slack Block Kit JSON"
+description: "Use proactively for structured or interactive Slack replies, and when asked to author or validate native Slack Block Kit JSON."
 metadata: { "openclaw": { "emoji": "🧱", "requires": { "config": ["channels.slack"] } } }
 allowed-tools: ["message"]
 ---

@@ -1,6 +1,6 @@
 ---
 name: knowledge-recall
-description: Find and answer from saved Knowledge vault pages with source citations. Use for questions about stored documents, meetings, people, or projects; not for recalling conversation history or searching the web
+description: Find and answer from saved Knowledge vault pages with source citations. Use for questions about stored documents, meetings, people, or projects; not for recalling conversation history or searching the web.
 ---
 
 # Recall saved knowledge

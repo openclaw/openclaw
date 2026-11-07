@@ -1,6 +1,6 @@
 ---
 name: skill-creator
-description: "Author or review AgentSkills: create, repair, validate, or restructure SKILL.md files and bundled resources"
+description: "Author or review AgentSkills: create, repair, validate, or restructure SKILL.md files and bundled resources."
 ---
 
 # Skill Creator

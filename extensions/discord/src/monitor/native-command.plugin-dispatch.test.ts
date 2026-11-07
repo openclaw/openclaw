@@ -152,7 +152,7 @@ async function createNativeCommand(
   cfg: OpenClawConfig,
   commandSpec: NativeCommandSpec = {
     name: "new",
-    description: "Start a new session",
+    description: "Start a new session.",
     acceptsArgs: true,
   },
   dispatchReplyFromConfig?: Parameters<
@@ -328,7 +328,7 @@ describe("Discord native plugin command dispatch", () => {
       >();
     const command = await createNativeCommand(
       cfg,
-      { name: "new", description: "Start a new session", acceptsArgs: true },
+      { name: "new", description: "Start a new session.", acceptsArgs: true },
       dispatchReplyFromConfig,
     );
 

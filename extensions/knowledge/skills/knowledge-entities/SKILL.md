@@ -1,6 +1,6 @@
 ---
 name: knowledge-entities
-description: Resolve and enrich Knowledge people, companies, projects, and concepts during an authorized ingestion or entity update, with sourced State, source notes, and links. Read-only identity questions do not authorize writes
+description: Resolve and enrich Knowledge people, companies, projects, and concepts during an authorized ingestion or entity update, with sourced State, source notes, and links. Read-only identity questions do not authorize writes.
 ---
 
 # Resolve and enrich entities

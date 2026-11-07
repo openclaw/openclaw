@@ -1,6 +1,6 @@
 ---
 name: github
-description: "GitHub CLI for issues, PRs, CI/check logs, comments, reviews, releases, repos, and gh api queries"
+description: "GitHub CLI for issues, PRs, CI/check logs, comments, reviews, releases, repos, and gh api queries."
 metadata:
   {
     "openclaw":

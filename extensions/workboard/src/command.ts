@@ -70,7 +70,7 @@ export function registerWorkboardCommand(params: {
 }): void {
   params.api.registerCommand({
     name: "workboard",
-    description: "List, create, inspect, and dispatch Workboard cards",
+    description: "List, create, inspect, and dispatch Workboard cards.",
     acceptsArgs: true,
     exposeSenderIsOwner: true,
     handler: async (ctx): Promise<{ text: string; isError?: boolean }> => {

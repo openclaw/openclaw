@@ -167,7 +167,7 @@ suite.define(() => {
               {
                 name: "pair",
                 textAliases: ["/pair"],
-                description: "Generate setup codes and approve device pairing requests",
+                description: "Generate setup codes and approve device pairing requests.",
                 source: "plugin",
                 scope: "both",
                 acceptsArgs: true,
@@ -232,7 +232,7 @@ suite.define(() => {
           {
             name: "pair",
             textAliases: ["/pair"],
-            description: "Generate setup codes and approve device pairing requests",
+            description: "Generate setup codes and approve device pairing requests.",
             source: "plugin",
             scope: "both",
             acceptsArgs: true,

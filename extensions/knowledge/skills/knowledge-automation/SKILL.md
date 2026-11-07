@@ -1,6 +1,6 @@
 ---
 name: knowledge-automation
-description: Create scheduled Knowledge ingestion automations with a verified worker, private-vault authority, and an end-to-end scheduled run. Use when asked to schedule or repair recurring ingestion from any source
+description: Create scheduled Knowledge ingestion automations with a verified worker, private-vault authority, and an end-to-end scheduled run. Use when asked to schedule or repair recurring ingestion from any source.
 ---
 
 # Knowledge automation

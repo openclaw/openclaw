@@ -1,7 +1,7 @@
 ---
 name: feishu-drive
 description: |
-  Feishu cloud-storage and comment workflows. Activate when the user mentions cloud space, folders, Drive files, or document comments
+  Feishu cloud-storage and comment workflows. Activate when the user mentions cloud space, folders, Drive files, or document comments.
 ---
 
 # Feishu Drive

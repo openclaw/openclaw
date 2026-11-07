@@ -1,6 +1,6 @@
 ---
 name: diffs
-description: Use the diffs tool to produce real, shareable diffs (viewer URL, file artifact, or both) instead of manual edit summaries
+description: Use the diffs tool to produce real, shareable diffs (viewer URL, file artifact, or both) instead of manual edit summaries.
 ---
 
 When you need to show edits as a real diff, prefer the `diffs` tool instead of writing a manual summary.

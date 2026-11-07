@@ -339,11 +339,11 @@ it("lists commands with aliases and hints", () => {
   expect(text).toContain("ℹ️ Slash commands");
   expect(text).toContain("Status");
   expect(text).toContain("/demo_skill - Demo skill");
-  expect(text).toContain("/commands - List all slash commands");
-  expect(text).toContain("/skill - Run a skill by name");
-  expect(text).toContain("/think (/thinking, /t) - Set thinking level");
-  expect(text).toContain("/compact - Compact the session context");
-  expect(text).toContain("/models - List model providers and their models");
+  expect(text).toContain("/commands - List all slash commands.");
+  expect(text).toContain("/skill - Run a skill by name.");
+  expect(text).toContain("/think (/thinking, /t) - Set thinking level.");
+  expect(text).toContain("/compact - Compact the session context.");
+  expect(text).toContain("/models - List model providers/models.");
   expect(text).not.toContain("/config");
   expect(text).not.toContain("/debug");
 });
@@ -361,7 +361,7 @@ it("includes plugin commands in the paginated list", () => {
   const firstPage = renderPage();
   expect(firstPage.text).toContain("ℹ️ Commands (1/");
   expect(firstPage.text).toContain("Session");
-  expect(firstPage.text).toContain("/stop - Stop the current run");
+  expect(firstPage.text).toContain("/stop - Stop the current run.");
   const pages = Array.from({ length: firstPage.totalPages }, (_, index) => renderPage(index + 1));
   const pluginPage = pages.find((page) => page.text.includes("/plugin_cmd (demo-plugin)"));
   expect(pluginPage?.text).toContain("Plugins");

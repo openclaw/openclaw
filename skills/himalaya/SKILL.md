@@ -1,6 +1,6 @@
 ---
 name: himalaya
-description: "Himalaya CLI for IMAP/SMTP mail: list, read, search, compose, reply, forward, copy, move, delete"
+description: "Himalaya CLI for IMAP/SMTP mail: list, read, search, compose, reply, forward, copy, move, delete."
 homepage: https://github.com/pimalaya/himalaya
 metadata:
   {

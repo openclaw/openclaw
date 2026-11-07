@@ -133,20 +133,20 @@ export function buildBuiltinChatCommands(
     return ["default", ...levels.filter((level) => level !== "default")];
   };
   return [
-    defineBuiltinCommand("help", "Show available commands", "status", "essential", {
+    defineBuiltinCommand("help", "Show available commands.", "status", "essential", {
       activeRunSafe: true,
       modelIndependent: "always",
     }),
-    defineBuiltinCommand("commands", "List all slash commands", "status", "power", {
+    defineBuiltinCommand("commands", "List all slash commands.", "status", "power", {
       activeRunSafe: true,
       modelIndependent: "no-args",
     }),
-    defineBuiltinCommand("tools", "List available runtime tools", "status", "standard", {
+    defineBuiltinCommand("tools", "List available runtime tools.", "status", "standard", {
       activeRunSafe: true,
       modelIndependent: "always",
       ...choiceMenu("mode", "compact or verbose", ["compact", "verbose"]),
     }),
-    defineBuiltinCommand("skill", "Run a skill by name", "tools", "standard", {
+    defineBuiltinCommand("skill", "Run a skill by name.", "tools", "standard", {
       modelIndependent: "no-args",
       args: [
         defineCommandArgument("name", "Skill name", { required: true }),
@@ -155,21 +155,21 @@ export function buildBuiltinChatCommands(
     }),
     defineBuiltinCommand(
       "dashboard",
-      "Create or update this session's dashboard",
+      "Create or update this session's dashboard.",
       "tools",
       "standard",
       freeformArgs("request", "Dashboard requirements"),
     ),
     defineBuiltinCommand(
       "learn",
-      "Save lessons from recent work or named sources to skills or memory",
+      "Save lessons from recent work or named sources to skills or memory.",
       "tools",
       "standard",
       freeformArgs("request", "Sources and what to learn from them"),
     ),
     defineBuiltinCommand(
       "loop",
-      "Run and manage recurring prompts in this conversation",
+      "Run and manage recurring prompts in this conversation.",
       "tools",
       "standard",
       {
@@ -177,12 +177,12 @@ export function buildBuiltinChatCommands(
         ...freeformArgs("spec", "[interval] prompt, or status/stop", { required: false }),
       },
     ),
-    defineBuiltinCommand("status", "Show current status", "status", "essential", {
+    defineBuiltinCommand("status", "Show current status.", "status", "essential", {
       acceptsArgs: true,
       activeRunSafe: true,
       modelIndependent: "always",
     }),
-    defineBuiltinCommand("goal", "Show or control the current goal", "status", "standard", {
+    defineBuiltinCommand("goal", "Show or control the current goal.", "status", "standard", {
       modelIndependent: (args) => {
         const parsed = parseSlashCommandOrNull(`/goal ${args}`, "/goal", "status");
         return (
@@ -206,7 +206,7 @@ export function buildBuiltinChatCommands(
     }),
     defineBuiltinCommand(
       "diagnostics",
-      "Request Gateway diagnostics and optional Codex feedback uploads",
+      "Request Gateway diagnostics and optional Codex feedback uploads.",
       "status",
       "standard",
       {
@@ -214,14 +214,14 @@ export function buildBuiltinChatCommands(
         ...freeformArgs("note", "Optional note for Codex feedback upload"),
       },
     ),
-    defineBuiltinCommand("login", "Connect a model provider", "management", "standard", {
+    defineBuiltinCommand("login", "Connect a model provider.", "management", "standard", {
       modelIndependent: "always",
       nativeProviders: ["discord", "slack", "telegram"],
       args: [defineCommandArgument("provider", "Provider or connection method")],
     }),
     defineBuiltinCommand(
       "openclaw",
-      "Run the OpenClaw setup and repair helper",
+      "Run the OpenClaw setup and repair helper.",
       "management",
       "essential",
       {
@@ -232,7 +232,7 @@ export function buildBuiltinChatCommands(
     ),
     defineBuiltinCommand(
       "allowlist",
-      "List, add, or remove allowlist entries",
+      "List, add, or remove allowlist entries.",
       "management",
       "power",
       {
@@ -241,21 +241,21 @@ export function buildBuiltinChatCommands(
         acceptsArgs: true,
       },
     ),
-    defineBuiltinCommand("approve", "Approve or deny pending requests", "management", "power", {
+    defineBuiltinCommand("approve", "Approve or deny pending requests.", "management", "power", {
       acceptsArgs: true,
       activeRunSafe: true,
       modelIndependent: "always",
     }),
     defineBuiltinCommand(
       "context",
-      "Explain how context is built and used",
+      "Explain how context is built and used.",
       "status",
       "standard",
       { acceptsArgs: true, activeRunSafe: true, modelIndependent: "always" },
     ),
     defineBuiltinCommand(
       "btw",
-      "Ask a side question without changing future session context",
+      "Ask a side question without changing future session context.",
       "tools",
       "standard",
       {
@@ -268,7 +268,7 @@ export function buildBuiltinChatCommands(
     ),
     defineBuiltinCommand(
       "fork",
-      "Fork this conversation into a separate thread",
+      "Fork this conversation into a separate thread.",
       "session",
       "standard",
       {
@@ -285,7 +285,7 @@ export function buildBuiltinChatCommands(
     ),
     defineBuiltinCommand(
       "export-session",
-      "Export current session to an owner-only HTML file in the workspace",
+      "Export current session to an owner-only HTML file in the workspace.",
       "status",
       "essential",
       {
@@ -300,7 +300,7 @@ export function buildBuiltinChatCommands(
     ),
     defineBuiltinCommand(
       "export-trajectory",
-      "Export a JSONL trajectory bundle for the active session",
+      "Export a JSONL trajectory bundle for the active session.",
       "status",
       "essential",
       {
@@ -313,7 +313,7 @@ export function buildBuiltinChatCommands(
         ],
       },
     ),
-    defineBuiltinCommand("tts", "Control text-to-speech (TTS)", "media", "standard", {
+    defineBuiltinCommand("tts", "Control text-to-speech (TTS).", "media", "standard", {
       modelIndependent: "always",
       args: [
         defineCommandArgument("action", "TTS action", {
@@ -344,14 +344,14 @@ export function buildBuiltinChatCommands(
           "• Help – Show usage guide",
       },
     }),
-    defineBuiltinCommand("whoami", "Show your sender id", "status", "power", {
+    defineBuiltinCommand("whoami", "Show your sender id.", "status", "power", {
       textAliases: ["/whoami", "/id"],
       activeRunSafe: true,
       modelIndependent: "no-args",
     }),
     defineBuiltinCommand(
       "session",
-      "Manage conversation bindings and session lifecycle settings",
+      "Manage conversation bindings and session lifecycle settings.",
       "session",
       "power",
       {
@@ -367,7 +367,7 @@ export function buildBuiltinChatCommands(
     ),
     defineBuiltinCommand(
       "subagents",
-      "Inspect subagent runs for this session",
+      "Inspect subagent runs for this session.",
       "management",
       "standard",
       {
@@ -385,7 +385,7 @@ export function buildBuiltinChatCommands(
         argsMenu: "auto",
       },
     ),
-    defineBuiltinCommand("acp", "Manage ACP sessions and runtime options", "management", "power", {
+    defineBuiltinCommand("acp", "Manage ACP sessions and runtime options.", "management", "power", {
       modelIndependent: (args) => {
         const parsed = parseSlashCommandOrNull(`/acp ${args}`, "/acp", "help");
         return parsed !== null && (parsed.action !== "steer" || !parsed.args);
@@ -418,14 +418,14 @@ export function buildBuiltinChatCommands(
     }),
     defineBuiltinCommand(
       "agents",
-      "List agents and conversation bindings for this session",
+      "List agents and conversation bindings for this session.",
       "management",
       "standard",
       { activeRunSafe: true, modelIndependent: "always" },
     ),
     defineBuiltinCommand(
       "steer",
-      "Send guidance to the active run in this session",
+      "Send guidance to the active run in this session.",
       "management",
       "standard",
       {
@@ -436,28 +436,28 @@ export function buildBuiltinChatCommands(
     ),
     defineBuiltinCommand(
       "followup",
-      "Run this message as a new turn without changing queue mode",
+      "Run this message as a new turn without changing queue mode.",
       "management",
       "standard",
       { modelIndependent: "no-args", ...freeformArgs("message", "Followup message") },
     ),
     definePathCommand(
       "config",
-      "Show or set config values",
+      "Show or set config values.",
       ["show", "get", "set", "unset"],
       "Config path",
       "Value for set",
     ),
     definePathCommand(
       "mcp",
-      "Show or set OpenClaw MCP servers",
+      "Show or set OpenClaw MCP servers.",
       ["show", "get", "set", "unset"],
       "MCP server name",
       "JSON config for set",
     ),
     definePathCommand(
       "plugins",
-      "List, show, enable, or disable plugins",
+      "List, show, enable, or disable plugins.",
       ["list", "show", "get", "enable", "disable"],
       "Plugin id or name",
       undefined,
@@ -465,14 +465,14 @@ export function buildBuiltinChatCommands(
     ),
     definePathCommand(
       "debug",
-      "Set runtime debug overrides",
+      "Set runtime debug overrides.",
       ["show", "reset", "set", "unset"],
       "Debug path",
       "Value for set",
     ),
     defineBuiltinCommand(
       "usage",
-      "Set the usage footer or show a cost summary",
+      "Set the usage footer or show a cost summary.",
       "options",
       "standard",
       {
@@ -480,23 +480,23 @@ export function buildBuiltinChatCommands(
         ...choiceMenu("mode", "off, tokens, full, or cost", ["off", "tokens", "full", "cost"]),
       },
     ),
-    defineBuiltinCommand("stop", "Stop the current run", "session", "essential", {
+    defineBuiltinCommand("stop", "Stop the current run.", "session", "essential", {
       activeRunSafe: true,
       modelIndependent: "no-args",
     }),
-    defineBuiltinCommand("restart", "Restart OpenClaw", "tools", "power", {
+    defineBuiltinCommand("restart", "Restart OpenClaw.", "tools", "power", {
       modelIndependent: "no-args",
     }),
-    defineBuiltinCommand("update", "Update OpenClaw and restart", "tools", "power", {
+    defineBuiltinCommand("update", "Update OpenClaw and restart.", "tools", "power", {
       modelIndependent: "no-args",
     }),
-    defineBuiltinCommand("activation", "Set group activation mode", "management", "power", {
+    defineBuiltinCommand("activation", "Set group activation mode.", "management", "power", {
       modelIndependent: (args) => parseActivationCommand(`/activation ${args}`).hasCommand,
       ...choiceMenu("mode", "mention or always", ["mention", "always"]),
     }),
     defineBuiltinCommand(
       "send",
-      "Control message delivery for this session",
+      "Control message delivery for this session.",
       "management",
       "power",
       {
@@ -505,27 +505,27 @@ export function buildBuiltinChatCommands(
       },
     ),
     // Reset handlers must reach lifecycle cleanup before waiting on the work they interrupt.
-    defineBuiltinCommand("reset", "Reset the current session", "session", "essential", {
+    defineBuiltinCommand("reset", "Reset the current session.", "session", "essential", {
       activeRunSafe: true,
       acceptsArgs: true,
     }),
-    defineBuiltinCommand("new", "Start a new session", "session", "essential", {
+    defineBuiltinCommand("new", "Start a new session.", "session", "essential", {
       activeRunSafe: true,
       modelIndependent: "always",
       acceptsArgs: true,
     }),
-    defineBuiltinCommand("name", "Name or rename the current session", "session", "standard", {
+    defineBuiltinCommand("name", "Name or rename the current session.", "session", "standard", {
       modelIndependent: "always",
       ...freeformArgs("title", "New session name (omit to see a suggestion)"),
     }),
     defineBuiltinCommand(
       "compact",
-      "Compact the session context",
+      "Compact the session context.",
       "session",
       "essential",
       freeformArgs("instructions", "Extra compaction instructions"),
     ),
-    defineBuiltinCommand("think", "Set thinking level", "options", "essential", {
+    defineBuiltinCommand("think", "Set thinking level.", "options", "essential", {
       modelIndependent: "always",
       textAliases: ["/think", "/thinking", "/t"],
       activeRunSafe: true,
@@ -533,16 +533,16 @@ export function buildBuiltinChatCommands(
         listThinkingLevelChoices(provider, model, catalog, agentRuntime),
       ),
     }),
-    defineBuiltinCommand("verbose", "Toggle verbose mode", "options", "standard", {
+    defineBuiltinCommand("verbose", "Toggle verbose mode.", "options", "standard", {
       modelIndependent: "always",
       textAliases: ["/verbose", "/v"],
       ...choiceMenu("mode", "on, off, or full", ["on", "off", "full"]),
     }),
-    defineBuiltinCommand("trace", "Toggle plugin trace lines", "options", "power", {
+    defineBuiltinCommand("trace", "Toggle plugin trace lines.", "options", "power", {
       modelIndependent: "directive",
       ...choiceMenu("mode", "on, off, or raw", ["on", "off", "raw"]),
     }),
-    defineBuiltinCommand("fast", "Toggle fast mode", "options", "standard", {
+    defineBuiltinCommand("fast", "Toggle fast mode.", "options", "standard", {
       modelIndependent: "always",
       ...choiceMenu(
         "mode",
@@ -562,17 +562,17 @@ export function buildBuiltinChatCommands(
         ],
       ),
     }),
-    defineBuiltinCommand("reasoning", "Toggle reasoning visibility", "options", "standard", {
+    defineBuiltinCommand("reasoning", "Toggle reasoning visibility.", "options", "standard", {
       modelIndependent: "directive",
       textAliases: ["/reasoning", "/reason"],
       ...choiceMenu("mode", "on, off, or stream", ["on", "off", "stream"]),
     }),
-    defineBuiltinCommand("elevated", "Toggle elevated mode", "options", "power", {
+    defineBuiltinCommand("elevated", "Toggle elevated mode.", "options", "power", {
       modelIndependent: "directive",
       textAliases: ["/elevated", "/elev"],
       ...choiceMenu("mode", "on, off, ask, or full", ["on", "off", "ask", "full"]),
     }),
-    defineBuiltinCommand("exec", "Set exec defaults for this session", "options", "power", {
+    defineBuiltinCommand("exec", "Set exec defaults for this session.", "options", "power", {
       modelIndependent: "directive",
       args: [
         defineCommandArgument("host", "auto, sandbox, gateway, or node", {
@@ -589,7 +589,7 @@ export function buildBuiltinChatCommands(
       argsParsing: "none",
       formatArgs: COMMAND_ARG_FORMATTERS.exec,
     }),
-    defineBuiltinCommand("model", "Show or set the model", "options", "essential", {
+    defineBuiltinCommand("model", "Show or set the model.", "options", "essential", {
       modelIndependent: "directive",
       args: [
         defineCommandArgument(
@@ -600,7 +600,7 @@ export function buildBuiltinChatCommands(
     }),
     defineBuiltinCommand(
       "models",
-      "List model providers and their models",
+      "List model providers and their models.",
       "options",
       "standard",
       {
@@ -609,7 +609,7 @@ export function buildBuiltinChatCommands(
         modelIndependent: "always",
       },
     ),
-    defineBuiltinCommand("queue", "Adjust queue settings", "options", "power", {
+    defineBuiltinCommand("queue", "Adjust queue settings.", "options", "power", {
       modelIndependent: "directive",
       args: [
         defineCommandArgument("mode", "queue mode", {
@@ -622,7 +622,7 @@ export function buildBuiltinChatCommands(
       argsParsing: "none",
       formatArgs: COMMAND_ARG_FORMATTERS.queue,
     }),
-    defineBuiltinCommand("bash", "Run shell commands on the host", "tools", "power", {
+    defineBuiltinCommand("bash", "Run shell commands on the host.", "tools", "power", {
       modelIndependent: "always",
       nativeName: false,
       ...freeformArgs("command", "Shell command"),

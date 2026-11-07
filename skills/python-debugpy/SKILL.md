@@ -1,6 +1,6 @@
 ---
 name: python-debugpy
-description: Debug Python with pdb, breakpoint(), post-mortem inspection, and debugpy remote attach
+description: Debug Python with pdb, breakpoint(), post-mortem inspection, and debugpy remote attach.
 metadata: { "openclaw": { "requires": { "bins": ["python3"] } } }
 ---
 

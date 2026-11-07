@@ -78,7 +78,7 @@ export default definePluginEntry({
       nativeNames: {
         discord: "talkvoice",
       },
-      description: "List/set Talk provider voices (affects iOS Talk playback)",
+      description: "List/set Talk provider voices (affects iOS Talk playback).",
       acceptsArgs: true,
       exposeSenderIsOwner: true,
       handler: async (ctx) => {

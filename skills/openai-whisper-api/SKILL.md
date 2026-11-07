@@ -1,6 +1,6 @@
 ---
 name: openai-whisper-api
-description: "OpenAI Audio Transcriptions API via curl; gpt-4o-transcribe, mini, diarize, or whisper-1"
+description: "OpenAI Audio Transcriptions API via curl; gpt-4o-transcribe, mini, diarize, or whisper-1."
 homepage: https://platform.openai.com/docs/guides/speech-to-text
 metadata:
   {

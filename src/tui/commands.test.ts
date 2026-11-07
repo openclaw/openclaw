@@ -113,7 +113,7 @@ describe("getSlashCommands", () => {
         {
           name: "dreaming",
           textAliases: ["/dreaming", "/dream"],
-          description: "Enable or disable memory dreaming",
+          description: "Enable or disable memory dreaming.",
           source: "plugin",
           scope: "both",
           acceptsArgs: true,
@@ -121,7 +121,7 @@ describe("getSlashCommands", () => {
       ],
     });
     expect(commands.find(({ name }) => name === "dreaming")?.description).toBe(
-      "Enable or disable memory dreaming",
+      "Enable or disable memory dreaming.",
     );
     expect(
       commands.find(({ name }) => name === "dream")?.getArgumentCompletions?.(""),

@@ -1,6 +1,6 @@
 ---
 name: visualize
-description: "Create inline visuals for code and explanations, or author persistent OpenClaw dashboard widgets with show_widget"
+description: "Create inline visuals for code and explanations, or author persistent OpenClaw dashboard widgets with show_widget."
 ---
 
 # Visualize

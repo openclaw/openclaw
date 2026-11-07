@@ -1,6 +1,6 @@
 ---
 name: clawhub
-description: "Search ClawHub for plugins by default, or skills and agent Templates when requested; add Templates; install, verify, update, uninstall, publish, or sync skills"
+description: "Search ClawHub for plugins by default, or skills and agent Templates when requested; add Templates; install, verify, update, uninstall, publish, or sync skills."
 ---
 
 # ClawHub

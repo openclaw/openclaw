@@ -1,6 +1,6 @@
 ---
 name: slack
-description: "Slack messaging workflows through OpenClaw's message tool"
+description: "Slack messaging workflows through OpenClaw's message tool."
 metadata: { "openclaw": { "emoji": "💬", "requires": { "config": ["channels.slack"] } } }
 allowed-tools: ["message"]
 ---

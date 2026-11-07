@@ -1,6 +1,6 @@
 ---
 name: knowledge-source-ingest
-description: Incrementally ingest enumerable external sources into Knowledge with canonical source identity, retained snapshot manifests, overlap-aware diffing, and reconciliation of changed or deleted items. Includes a generic manifest tool and a read-only Discrawl adapter
+description: Incrementally ingest enumerable external sources into Knowledge with canonical source identity, retained snapshot manifests, overlap-aware diffing, and reconciliation of changed or deleted items. Includes a generic manifest tool and a read-only Discrawl adapter.
 ---
 
 # Source Ingest Skill

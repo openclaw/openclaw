@@ -420,7 +420,7 @@ export default definePluginEntry({
 
     api.registerCommand({
       name: "dreaming",
-      description: "Enable or disable memory dreaming",
+      description: "Enable or disable memory dreaming.",
       acceptsArgs: true,
       exposeSenderIsOwner: true,
       handler: async (ctx) => {

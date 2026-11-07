@@ -1,6 +1,6 @@
 ---
 name: facetime
-description: "Inspect FaceTime internal stages, place an approved call to a configured owner handle, and request hangup through facetime_call"
+description: "Inspect FaceTime internal stages, place an approved call to a configured owner handle, and request hangup through facetime_call."
 metadata:
   { "openclaw": { "emoji": "📞", "requires": { "config": ["plugins.entries.facetime.enabled"] } } }
 allowed-tools: facetime_call

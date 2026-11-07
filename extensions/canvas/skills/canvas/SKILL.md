@@ -1,6 +1,6 @@
 ---
 name: canvas
-description: "Present hosted widget documents on a connected macOS panel and control panel visibility or navigation"
+description: "Present hosted widget documents on a connected macOS panel and control panel visibility or navigation."
 metadata: { "openclaw": { "emoji": "🖼️" } }
 ---
 
