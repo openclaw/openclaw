@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isChannelRunAuthorizationError } from "../channels/message-access/run-authorization-error.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isSqliteTranscriptMutationConflict } from "../config/sessions/session-mutation-conflict-error.js";
@@ -518,6 +519,18 @@ export function buildFailoverRemediationHint(err: unknown): string | undefined {
   const provider = err.provider?.trim();
   if (!provider) {
     return undefined;
+  }
+  // A provider that states its own credential recovery (e.g. "Create a new API
+  // key" for a stored key that signing in cannot renew) outranks the generic
+  // re-auth command.
+  const withProviderInstruction = [err.rawError, err.message].find(
+    (value) => typeof value === "string" && /create a new api key/i.test(value),
+  );
+  if (typeof withProviderInstruction === "string") {
+    const instruction = withProviderInstruction.match(/[^.!]*create a new api key[^.!]*\.?/i)?.[0];
+    if (instruction?.trim()) {
+      return truncateUtf16Safe(instruction.trim(), 300);
+    }
   }
   if (provider === "google-gemini-cli") {
     return `Authenticate in Gemini CLI directly, or configure a supported Google API key with: ${formatCliCommand("openclaw configure")}`;
