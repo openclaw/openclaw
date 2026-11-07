@@ -15,6 +15,9 @@ export function buildInlineKeyboard(
             return undefined;
           }
           const label = { text: button.text, ...(button.style ? { style: button.style } : {}) };
+          if (button.disabled) {
+            return { ...label, disabled: {} };
+          }
           if (button.url) {
             return { ...label, url: button.url };
           }

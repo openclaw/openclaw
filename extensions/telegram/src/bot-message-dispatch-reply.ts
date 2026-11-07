@@ -112,6 +112,7 @@ function resolvePayloadTelegramControls(
     },
     {
       allowWebAppButtons: resolveTelegramTargetChatType(String(turn.context.chatId)) === "direct",
+      supportsDisabled: turn.richMessages,
       onDroppedControl: (control) => droppedControls.push(control),
       questionOptionIndices: resolveAskUserQuestionOptionIndices(payload),
     },
