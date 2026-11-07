@@ -413,6 +413,33 @@ describe("github-copilot plugin", () => {
       ).toEqual(["gpt-5.4"]);
     },
   );
+  it.each(["inactive", "expired"] as const)(
+    "discovers models with a usable saved sign-in after an %s profile",
+    async (state) => {
+      const dir = await createAgentDir();
+      writeProfiles(dir, {
+        [PROFILE]: {
+          ...tokenProfile("unusable-token"),
+          ...(state === "expired"
+            ? { expires: 1 }
+            : { setup: { replacement: true, modelRef: STARTER, configJson: "{}" } }),
+        },
+        "github-copilot:working": tokenProfile("working-token"),
+      });
+      runtimeAuth.mockImplementation(async ({ githubToken }) => {
+        if (githubToken !== "working-token") {
+          throw new CopilotRuntimeAuthError({ reason: "http_error", status: 401 });
+        }
+        return { apiKey: "usable-catalog-token", baseUrl: "https://api.githubcopilot.saved-test" };
+      });
+      mockCatalog([catalogModel("claude-sonnet-5")]);
+      const result = await catalog(dir);
+      expect(
+        result && "provider" in result ? result.provider.models.map(({ id }) => id) : [],
+      ).toEqual(["claude-sonnet-5"]);
+      expect(runtimeAuth).toHaveBeenCalledTimes(1);
+    },
+  );
   it("ignores generic GITHUB_TOKEN during catalog discovery", async () => {
     expect(await catalog(await createAgentDir(), {}, { GITHUB_TOKEN: "generic-token" })).toBeNull();
     noCalls(runtimeAuth);
