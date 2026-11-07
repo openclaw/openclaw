@@ -12,7 +12,9 @@
  *
  * Records one A/A pair, AB/BA timing pairs (1,000 calls/arm), and separate sampled
  * host-allocation AB/BA pairs. Process CPU includes Worker threads; thread CPU and
- * heap sampling cover the host. This isolates open/close overhead, not payload
+ * heap sampling cover the host. --control-pairs 4 --iterations 10000 lengthens
+ * untraced qualification when the initial short A/A controls show noise.
+ * This isolates open/close overhead, not payload
  * batch cost, pacing, Gateway scheduling, or a claim of SQLite reopening.
  */
 import assert from "node:assert/strict";
@@ -42,6 +44,7 @@ const { values } = parseArgs({
     session: { type: "string", default: "synthetic-2" },
     "after-position": { type: "string" },
     iterations: { type: "string", default: "1000" },
+    "control-pairs": { type: "string", default: "1" },
     "allocation-iterations": { type: "string", default: "1000" },
   },
 });
@@ -54,6 +57,7 @@ const integer = (value: string) => {
   return n;
 };
 const iterations = integer(values.iterations);
+const controlPairs = integer(values["control-pairs"]);
 const allocationIterations = integer(values["allocation-iterations"]);
 assert(iterations > 0);
 const fixture = path.resolve(values.fixture);
@@ -210,8 +214,10 @@ await withOpenClawTestState(
           inspector?.disconnect();
         }
       };
-      await run("reopen", iterations, "aa-0", false);
-      await run("reopen", iterations, "aa-1", false);
+      for (let pair = 0; pair < controlPairs; pair++) {
+        await run("reopen", iterations, `aa-${pair}-0`, false);
+        await run("reopen", iterations, `aa-${pair}-1`, false);
+      }
       await run("reopen", iterations, "ab-base", false);
       await run("retain", iterations, "ab-candidate", false);
       await run("retain", iterations, "ba-candidate", false);
