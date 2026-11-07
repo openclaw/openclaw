@@ -189,6 +189,30 @@ it.each([true, undefined] as const)(
   },
 );
 
+it.each([true, undefined] as const)(
+  "admits authenticated native-app admin chat management with locality %s",
+  (isLocalClient) => {
+    const client = createClient({ isLocalClient, authenticatedOperator: true });
+    client.connect.client = {
+      id: "openclaw-macos",
+      mode: "ui",
+      version: "test",
+      platform: "macOS",
+    };
+    expect(admitChat({ client })?.managementEntitlement).toEqual({ source: "native-app-admin" });
+    client.connect.scopes = ["operator.write"];
+    expect(admitChat({ client })?.managementEntitlement).toBeUndefined();
+    client.connect.scopes = ["operator.admin"];
+    client.internal!.authenticatedOperator = undefined;
+    expect(admitChat({ client })?.managementEntitlement).toBeUndefined();
+    client.internal!.authenticatedOperator = true;
+    expect(admitChat({ client, isReconnectResume: true })).toBeUndefined();
+    expect(admitChat({ client, isSystemGenerated: true })).toBeUndefined();
+    client.connect.client.mode = "node";
+    expect(admitChat({ client })?.managementEntitlement).toBeUndefined();
+  },
+);
+
 it("does not derive Control UI authority from a claimed client name or session route", () => {
   const client = createClient({ isLocalClient: undefined });
   client.connect.client = {

@@ -119,7 +119,7 @@ function input(): Parameters<typeof runCronSessionTurn>[0] {
           sourceRunId: "original-request",
           snapshot: operatorRecoverySnapshotFixture("requester", "original-grant", {
             sourceIngress: "control-ui",
-            controlUiAdmin: true,
+            automationAdmin: true,
           }),
         },
       },
@@ -144,7 +144,8 @@ function restoredSource(): RestoredGatewayOperatorAuthority {
       hasAvatar: false,
       updatedAt: 0,
     },
-    controlUiAdmin: true,
+    automationAdmin: true,
+    controlUiAdmin: false,
     release: vi.fn(),
   };
 }
@@ -408,7 +409,7 @@ describe("scheduled session execution custody", () => {
     await accepted.promise;
     expect(source.release).not.toHaveBeenCalled();
     expect(options.scheduledAutomation?.operatorAuthority).toBe(source.authority);
-    expect(options.scheduledAutomation?.controlUiAdmin).toBe(true);
+    expect(options.scheduledAutomation?.automationAdmin).toBe(true);
     expect(options.scheduledAutomation?.admissionSource).toBe("requester-schedule");
     options.scheduledAutomation?.onExecutionStarted?.({
       runId: "scheduled-run",

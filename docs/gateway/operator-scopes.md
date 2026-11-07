@@ -57,6 +57,11 @@ is committed. Other people's automations remain read-only; global creation and
 administration still require `operator.admin`. Global scheduler status requires
 `operator.read`.
 
+Fresh authenticated admin chat turns from the Control UI or a native app UI can
+manage automations across conversations. Native UI identity alone is insufficient:
+the connection must hold `operator.admin`. The deployment-level
+`tools.gatewayPolicy.automations.scope: "caller"` restriction still takes precedence.
+
 The **Owner** field under **Agent** shows the human responsible for an automation.
 Its current human owner or an administrator can select another existing profile.
 Transferring ownership pauses the automation, cancels any active occurrence, and
@@ -885,3 +890,22 @@ boundary separation.
 - [Trusted proxy auth](/gateway/trusted-proxy-auth) — how a trusted proxy supplies the operator identity these scopes attach to
 - [Gateway protocol](/gateway/protocol) — the methods these scopes authorize
 - [Cloud Workers](/gateway/cloud-workers) — worker dispatch, whose environment and session calls are authorized against these scopes
+
+### Automation administrator delegation across UI clients
+
+Browser and native UI administrator turns use the same automation delegation
+policy. Authenticated macOS, Linux, iOS, and Android UI administrators retain
+this delegation when their recorded operator source is restored for scheduled
+runs, repair notices, and continuations. Restoration still revalidates the
+original device, profile, scopes, and live authority. Timing-only edits cannot
+upgrade a job's standing delegation. Historical browser grants remain valid;
+historical native sources without recorded delegation are not upgraded.
+
+This does not make native clients browser clients, grant direct-local command
+execution, or equate distinct personal administrators. Authenticated shared-owner native UI
+turns use the same continuation rules as shared-owner browser turns. Native UI
+also retains signed-in requester identity, can acknowledge provider reviews and
+submit human mentions, and can use task suggestions when advertising the required
+capability. Device-backed native reconnects use the same exact-identity custody
+checks. Explicit caller-only automation
+policy and tool restrictions still apply.

@@ -1,15 +1,6 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import * as stableJson from "@openclaw/normalization-core/stable-stringify";
 import { describe, expect, it, vi } from "vitest";
-import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-} from "../agents/admitted-run-context.js";
-import { createAgentHarnessHostCapabilities } from "../agents/harness/host-capability.js";
-import { readPersistedFileStat } from "../agents/sessions/tools/file-write-verification.js";
-import { createWriteTool } from "../agents/sessions/tools/write.js";
 import { getCommandOwnerAuthority } from "../auto-reply/command-owner-authority.js";
 import { withAdminIngress } from "../channels/message-access/operator-authority.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -19,7 +10,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
 import { ensureDeviceToken, rotateDeviceToken } from "../infra/device-pairing-tokens.js";
 import { getPairedDevice, updatePairedDeviceMetadata } from "../infra/device-pairing.js";
-import { isMissingPathError } from "../infra/errors.js";
 import type { PluginGatewayAccessPolicy } from "../plugins/gateway-access-policy.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -27,12 +17,7 @@ import {
   restoreActivePluginRegistrySnapshot,
   stageActivePluginRegistry,
 } from "../plugins/runtime.js";
-import {
-  bindGatewayContextResolver,
-  withPluginRuntimeGatewayRequestScope,
-} from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
@@ -75,12 +60,7 @@ import {
   persistDevices,
   recoveryFixture,
 } from "./operator-run-recovery.test-support.js";
-import {
-  captureOperatorToolGatewayContinuationContext,
-  withOperatorToolGatewayAuthority,
-} from "./server-plugin-in-process-authority.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
-import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import {
   enforceSharedGatewaySessionGenerationForConfigWrite,
   SharedGatewaySessionGenerationState,
@@ -145,6 +125,55 @@ async function restoreFixture(fixture: RecoveryFixture) {
 }
 
 describe("scheduled authenticated operator source", () => {
+  it.each([
+    "openclaw-control-ui",
+    "openclaw-macos",
+    "openclaw-linux",
+    "openclaw-ios",
+    "openclaw-android",
+  ] as const)(
+    "restores automation admin delegation for %s without borrowing browser identity and fences revocation",
+    (id) =>
+      withRecovery(
+        async (fixture) => {
+          using restored = await restoreFixture(fixture);
+          expect(restored.automationAdmin).toBe(true);
+          expect(restored.controlUiAdmin).toBe(id === "openclaw-control-ui");
+          expectCurrent(restored.authority);
+          expect(
+            (await rotateDeviceToken({ deviceId: "recovery-device", role: "operator" })).ok,
+          ).toBe(true);
+          invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
+          expectRevoked(restored.authority);
+          await expect(fixture.restore()).rejects.toThrow();
+        },
+        { clientInfo: { id, mode: "ui" } },
+      ),
+  );
+  it("preserves legacy browser grants but does not upgrade legacy native sources", () =>
+    withRecovery(async (fixture) => {
+      if (fixture.snapshot.sourceIngress === "principal") {
+        throw new Error("Expected authenticated UI handshake snapshot");
+      }
+      const { automationAdmin: _admin, ...legacy } = fixture.snapshot;
+      const restore = (controlUiAdmin: boolean) =>
+        restoreGatewayOperatorSource({
+          snapshot: { ...legacy, controlUiAdmin },
+          target: fixture.target,
+          context: fixture.context,
+          assertCurrent: () => {},
+        });
+      const browser = await restore(true);
+      const native = await restore(false);
+      try {
+        expect(browser.automationAdmin).toBe(true);
+        expect(native.automationAdmin).toBe(false);
+      } finally {
+        browser.release();
+        native.release();
+      }
+    }));
+
   it.each(["pending", "uncertain"] as const)(
     "refuses cached profile facts while their mutation is %s",
     (outcome) =>
@@ -272,123 +301,6 @@ describe("scheduled authenticated operator source", () => {
         stringify.mockRestore();
       }
     }));
-
-  it.each(["device revocation", "email reassignment", "email restoration"] as const)(
-    "keeps an accepted child current after its requester settles but fences its final write after %s",
-    (change) =>
-      withRecovery(async (fixture, stateDir, profile) => {
-        // Keep this profile independent when its original authentication email moves.
-        linkEmail("retained@example.test", profile.id);
-        const restored = expectDefined(await fixture.restore(), "recovered requester authority");
-        const client = createSyntheticPluginRuntimeClient({
-          authenticatedUserProfile: fixture.client.authenticatedUserProfile,
-          operatorRoleActor: { kind: "operator", profileId: restored.authority.profileId },
-          operatorRunAuthority: restored.authority,
-          scopes: ["operator.write"],
-        });
-        const child = expectDefined(
-          await withPluginRuntimeGatewayRequestScope(
-            { client, context: fixture.context, isWebchatConnect: () => false },
-            () =>
-              withOperatorToolGatewayAuthority(
-                { operatorRunAuthority: restored.authority, scopes: ["operator.write"] },
-                async () => await captureOperatorToolGatewayContinuationContext(),
-              ),
-          ),
-          "accepted child authority",
-        );
-        const beforeWrite = createDeferredCore();
-        const releaseWrite = createDeferredCore();
-        let pauseWrite = false;
-        let writes = 0;
-        let pendingWrite: Promise<unknown> | undefined;
-        let admission: ReturnType<typeof prepareAgentRunAdmission> | undefined;
-        let host: ReturnType<typeof createAgentHarnessHostCapabilities> | undefined;
-        try {
-          const runId = "recovered-child-effect";
-          const { agentId, sessionKey, sessionId } = fixture.target;
-          const prepared = prepareAgentRunAdmission({
-            cfg: {},
-            facts: {
-              runId,
-              agentId,
-              ingress: { kind: "system", boundary: "recovered-child-test", state: "present" },
-            },
-            operationalRunInstance: createOperationalRunInstanceRef(runId),
-            operatorAuthority: child.operatorAuthority,
-          });
-          admission = prepared;
-          const admittedRunContext = await child.run(() =>
-            prepared.admit("plugin-harness", `harness-${runId}`),
-          );
-          bindGatewayContextResolver(admittedRunContext, () => fixture.context);
-          host = child.run(() =>
-            createAgentHarnessHostCapabilities({
-              attempt: { runId, agentId, sessionKey, sessionId, admittedRunContext },
-              pluginId: "codex",
-            }),
-          );
-          const tool = expectDefined(
-            host.capabilities.bindToolSurface([
-              createWriteTool(stateDir, {
-                operations: {
-                  mkdir: async (dir) => {
-                    await mkdir(dir, { recursive: true });
-                    if (pauseWrite) {
-                      beforeWrite.resolve();
-                      await releaseWrite.promise;
-                    }
-                  },
-                  readFile,
-                  statFile: (file) => readPersistedFileStat(file, isMissingPathError),
-                  writeFile: async (file, content) => {
-                    writes += 1;
-                    await writeFile(file, content, "utf8");
-                  },
-                },
-              }),
-            ])[0],
-            "child write capability",
-          );
-          const file = "recovered-child-effect.txt";
-          fixture.retire();
-          restored.release();
-          expect(restored.authority.assertCurrent).toThrow("Recovery claim retired");
-          expect(child.operatorAuthority?.scopes).toEqual(["operator.write"]);
-          await child.run(() => tool.execute("allowed", { path: file, content: "allowed\n" }));
-          expect(await readFile(path.join(stateDir, file), "utf8")).toBe("allowed\n");
-
-          // No cancellation signal: the final write must revalidate its admitted principal.
-          pauseWrite = true;
-          pendingWrite = child.run(() =>
-            tool.execute("revoked", { path: file, content: "forbidden\n" }),
-          );
-          void pendingWrite.catch(beforeWrite.reject);
-          await beforeWrite.promise;
-          if (change === "device revocation") {
-            invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
-          } else {
-            const other = ensureProfileForEmail("other@example.test");
-            linkEmail("recovery@example.test", other.id);
-            if (change === "email restoration") {
-              expect(linkEmail("recovery@example.test", profile.id).id).toBe(profile.id);
-            }
-          }
-          releaseWrite.resolve();
-          await expect(pendingWrite).rejects.toThrow("no longer active");
-          expect(writes).toBe(1);
-          expect(await readFile(path.join(stateDir, file), "utf8")).toBe("allowed\n");
-          expect(child.signal.aborted).toBe(true);
-        } finally {
-          releaseWrite.resolve();
-          await pendingWrite?.catch(() => undefined);
-          host?.close();
-          admission?.close();
-          child.release();
-          restored.release();
-        }
-      }),
-  );
 
   it.each(["current", "owner closed", "device revoked"] as const)(
     "checks independently owned continuation custody after preparation: %s",

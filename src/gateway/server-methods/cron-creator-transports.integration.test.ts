@@ -521,3 +521,110 @@ it.each([
     }
   },
 );
+
+it.each(["admin", "caller", "non-admin", "revoked"] as const)(
+  "enforces native-app final-write authority: %s",
+  async (scenario) => {
+    const scope = scenario === "caller" ? "caller" : undefined;
+    const caller = captureGatewayDeviceRevocation(
+      fixture.context,
+      { deviceId: "native-admin-device", role: "operator" },
+      () => true,
+    );
+    config.tools = {
+      ...config.tools,
+      gatewayPolicy: {
+        allow: [AUTOMATIONS_TOOL_NAME],
+        actions: { [AUTOMATIONS_TOOL_NAME]: ["list", "get", "update"] },
+        automations: { scope },
+      },
+    };
+    setRuntimeConfigSnapshot(config);
+    const client = createOperatorClient({
+      profileId: CREATOR.id,
+      scopes: [scenario === "non-admin" ? "operator.write" : "operator.admin"],
+    });
+    client.connect.client = {
+      id: "openclaw-macos",
+      mode: "ui",
+      version: "test",
+      platform: "macOS",
+    };
+    client.internal = { authenticatedOperator: true };
+    const runId = "native-admin-management";
+    const creatorAdmission = resolveGatewayChatCronCreatorAuthorityAdmission({
+      runId,
+      resolvedSessionKey: SESSION,
+      client,
+      isCurrent: caller.isCurrent,
+      hasExplicitOrigin: false,
+      hasRestoredCronContinuation: false,
+      isIncognito: false,
+      isReconnectResume: false,
+      isSystemGenerated: false,
+      turnKind: "main",
+      isDirectExternalUser: true,
+    });
+    const foreign = await cronService.add({
+      name: "Foreign automation",
+      enabled: false,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "Original prompt", toolsAllow: [] },
+      owner: { agentId: "main", sessionKey: "agent:main:foreign", accountId: "other" },
+      delivery: { mode: "none" },
+    });
+    try {
+      await inRun(
+        runId,
+        creatorAdmission,
+        boundTo(fixture, async (_identity, admitted, creator) => {
+          const tools = await createCreatorTransportTools({
+            transport: "embedded",
+            config,
+            admitted,
+            creator,
+            senderIsOwner: false,
+          });
+          const inventory = await tools.invoke(AUTOMATIONS_TOOL_NAME, {
+            action: "list",
+            includeDisabled: true,
+          });
+          expect(inventory).toHaveProperty(
+            "details.scope",
+            scenario === "non-admin" ? "caller" : (scope ?? "gateway"),
+          );
+          const update = () =>
+            tools.invoke(AUTOMATIONS_TOOL_NAME, {
+              action: "update",
+              jobId: foreign.id,
+              job: { payload: { kind: "agentTurn", message: "Repaired prompt" } },
+            });
+          if (scope === "caller" || scenario === "non-admin") {
+            const before = await fixture.read();
+            await expect(update()).rejects.toThrow("not found");
+            expect(await fixture.read()).toEqual(before);
+            await expect(
+              tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "get", jobId: foreign.id }),
+            ).rejects.toThrow("not found");
+            return;
+          }
+          if (scenario === "revoked") {
+            await fixture.rejectMutation(update, /authority.*no longer active/i, () =>
+              invalidateGatewayDeviceRevocation(fixture.context, "native-admin-device", "operator"),
+            );
+            return;
+          }
+          await update();
+          expect(await fixture.read()).toMatchObject([
+            { id: foreign.id, payload: { message: "Repaired prompt" } },
+          ]);
+        }),
+      );
+    } finally {
+      fixture.release.resolve();
+      caller.release();
+    }
+  },
+);
