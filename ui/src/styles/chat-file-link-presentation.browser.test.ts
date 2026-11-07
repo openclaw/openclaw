@@ -432,3 +432,59 @@ fixture.describe("chat GitHub link presentation", () => {
     },
   );
 });
+
+const HEADING_LINKS = `
+  <a class="markdown-file-link" data-file-kind="code" data-file-path="src/app.ts">app.ts:366</a>
+  <a class="markdown-github-link markdown-github-item" data-github-kind="pull" href="https://github.com/openclaw/openclaw/pull/1">openclaw/openclaw#1</a>
+  <a class="markdown-github-link" href="https://github.com/openclaw">github.com/openclaw</a>
+  <a class="markdown-session-link" href="#">agent:main</a>
+  <a href="https://example.com"><img class="markdown-link-favicon is-loaded" width="16" height="16" alt="">example</a>
+`;
+
+const headingMarkup = [`<div class="chat-text">`, `<div class="sidebar-markdown">`]
+  .map(
+    (open) =>
+      `${open}<h2 class="in-heading">${HEADING_LINKS}</h2><p class="in-body">${HEADING_LINKS}</p></div>`,
+  )
+  .join("");
+
+fixture.describe("chat heading link presentation", () => {
+  it.each(["light", "dark"] as const)(
+    "paints link marks in body text but not in headings in %s",
+    async (themeMode) => {
+      await fixture.withPage(
+        `heading-${themeMode}`,
+        chatDocument(headingMarkup, themeMode),
+        async (page) => {
+          const paint = (selector: string) =>
+            page.locator(selector).evaluateAll((elements) =>
+              elements.map((element) => {
+                const style = getComputedStyle(element);
+                const before = getComputedStyle(element, "::before");
+                const favicon = element.querySelector(".markdown-link-favicon");
+                return {
+                  markPainted: before.display !== "none" && before.content !== "none",
+                  faviconShown: favicon ? getComputedStyle(favicon).display !== "none" : null,
+                  paddingLeft: style.paddingLeft,
+                  paddingRight: style.paddingRight,
+                };
+              }),
+            );
+          const inHeading = await paint(".in-heading > a");
+          const inBody = await paint(".in-body > a");
+          expect(inHeading).toHaveLength(10);
+          for (const link of inHeading) {
+            expect(link.markPainted).toBe(false);
+            expect(link.faviconShown).not.toBe(true);
+            // No icon reserve: plain links sit flush; chips keep symmetric padding.
+            expect(link.paddingLeft).toBe(link.paddingRight);
+          }
+          // Body links are untouched: every decorated anchor still paints its mark
+          // (GitHub marks are bubble-only, so the Detail Panel paints file and session marks).
+          expect(inBody.filter((link) => link.markPainted)).toHaveLength(6);
+          expect(inBody.filter((link) => link.faviconShown)).toHaveLength(2);
+        },
+      );
+    },
+  );
+});
