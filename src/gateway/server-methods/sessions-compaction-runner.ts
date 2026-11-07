@@ -102,17 +102,19 @@ export async function runGatewaySessionCompaction(
     storePath: params.storePath,
   };
   const resolvedModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
-  const workspaceDir =
-    resolveIngressWorkspaceOverrideForSessionRun({
-      spawnedBy: params.entry.spawnedBy,
-      workspaceDir: params.entry.spawnedWorkspaceDir,
-      cwd: params.entry.spawnedCwd,
-    }) ?? resolveAgentWorkspaceDir(params.cfg, params.agentId);
   const compactionCliTarget = resolveManualCompactionCliTarget({
     provider: resolvedModel.provider,
     entry: params.entry,
     cfg: params.cfg,
   });
+  const workspaceDir =
+    resolveIngressWorkspaceOverrideForSessionRun({
+      spawnedBy: params.entry.spawnedBy,
+      workspaceDir: params.entry.spawnedWorkspaceDir,
+      cwd: params.entry.spawnedCwd,
+      execHost: params.entry.execHost,
+      runtimeBackendId: compactionCliTarget.agentHarnessId,
+    }) ?? resolveAgentWorkspaceDir(params.cfg, params.agentId);
   const primaryConversation = host?.preparedSession
     ? host.preparedSession.primaryConversation
     : await resolveCurrentSessionPrimaryConversation(transcriptTarget);

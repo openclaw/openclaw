@@ -248,6 +248,7 @@ export function createChatSendMessageInjectionStarter(params: {
           agentId,
           sessionKey,
           workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
+          model: resolvedSessionModel,
           sessionEntry: entry,
           skillOverrides: params.admittedSessionSettings?.toolOverrides?.skills,
           abortSignal: params.abortSignal,

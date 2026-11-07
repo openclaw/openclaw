@@ -1,7 +1,9 @@
-import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
+import { resolveSessionEntryIngressWorkspace } from "../../agents/spawned-context.js";
+import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeMsgContext, TemplateContext } from "../templating.js";
+import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { stageSandboxMedia } from "./stage-sandbox-media.js";
 
 /** Turns and active-run steers stage against the same session workspace and private skills. */
@@ -12,6 +14,7 @@ export async function stageReplyMedia(params: {
   agentId: string;
   sessionKey: string;
   workspaceDir: string;
+  model: { provider: string; model: string };
   sessionEntry?: SessionEntry;
   skillFilter?: string[];
   skillOverrides?: Record<string, boolean>;
@@ -26,11 +29,17 @@ export async function stageReplyMedia(params: {
   };
   assertCurrent();
   const stagingWorkspaceDir =
-    resolveIngressWorkspaceOverrideForSessionRun({
-      spawnedBy: sessionEntry?.spawnedBy,
-      workspaceDir: sessionEntry?.spawnedWorkspaceDir,
-      cwd: sessionEntry?.spawnedCwd,
-    }) ?? workspaceDir;
+    resolveSessionEntryIngressWorkspace(
+      sessionEntry,
+      resolveEffectiveAgentRuntime({
+        cfg,
+        provider: params.model.provider,
+        modelId: params.model.model,
+        agentId,
+        sessionKey: resolveRuntimePolicySessionKey(params),
+        sessionEntry,
+      }),
+    ) ?? workspaceDir;
   // Private selections affect sandbox identity; a stale snapshot must not select another runtime.
   const selectedSkills =
     sessionEntry?.skillLibrarySelections ?? sessionEntry?.skillsSnapshot?.librarySelections;

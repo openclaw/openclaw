@@ -899,22 +899,21 @@ async function resolveReplyFromConfig(
       !hasStagedMediaFacts(ctx.media) &&
       hasInboundMedia(ctx)
     ) {
-      const stagingSessionEntry =
-        sessionEntryHandle?.getCurrent() ?? sessionStore?.[sessionKey] ?? sessionEntry;
+      const stagingInput = {
+        ctx,
+        sessionCtx,
+        ...workspaceContext,
+        sessionKey,
+        model: { provider: runProvider, model: runModel },
+        sessionEntry:
+          sessionEntryHandle?.getCurrent() ?? sessionStore?.[sessionKey] ?? sessionEntry,
+        skillFilter: preparedReplyOpts?.skillFilter,
+        skillOverrides: preparedReplyOpts?.skillOverrides,
+        abortSignal: optsWithSkillFilter?.abortSignal,
+        awaitSessionDiffBaseline: resolvedOpts?.awaitSessionDiffBaseline,
+      };
       const stageResult = await traceGetReplyPhase("reply.stage_media", async () =>
-        (await stageReplyMediaRuntimeLoader.load()).stageReplyMedia({
-          ctx,
-          sessionCtx,
-          cfg,
-          agentId,
-          sessionKey,
-          workspaceDir,
-          sessionEntry: stagingSessionEntry,
-          skillFilter: preparedReplyOpts?.skillFilter,
-          skillOverrides: preparedReplyOpts?.skillOverrides,
-          abortSignal: optsWithSkillFilter?.abortSignal,
-          awaitSessionDiffBaseline: resolvedOpts?.awaitSessionDiffBaseline,
-        }),
+        (await stageReplyMediaRuntimeLoader.load()).stageReplyMedia(stagingInput),
       );
       stagedAttachmentPaths = stageResult.staged;
     }
