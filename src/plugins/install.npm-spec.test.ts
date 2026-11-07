@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, assert, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -975,9 +976,11 @@ describe("installPluginFromNpmSpec", () => {
     expectAbsent(installedPackageDir(npmRoot, packageName));
   });
 
-  it.each([true, false])(
-    "settles current-platform package repair (repair succeeds: %s)",
-    async (repair) => {
+  it.each(["repair succeeds", "repair fails", "X_OK denied with EPERM"] as const)(
+    "settles current-platform package repair: %s",
+    async (scenario) => {
+      const repair = scenario !== "repair fails";
+      const completeInitially = scenario === "X_OK denied with EPERM";
       const packageName = "@openclaw/codex-fixture";
       const platformPackage = "@vendor/codex-platform";
       const platformPackageLocation = path.posix.join(
@@ -986,6 +989,11 @@ describe("installPluginFromNpmSpec", () => {
         "node_modules",
         platformPackage,
       );
+      mockPackage({ spec: `${packageName}@0.9.0`, version: "0.9.0", pluginId: "codex-fixture" });
+      const previous = await installNpm(`${packageName}@0.9.0`);
+      assert(previous.ok, JSON.stringify(previous));
+      const previousContents = readTextFileTree(previous.targetDir);
+      const previousNpmContents = readTextFileTree(npmRoot);
       mockPackage({
         spec: `${packageName}@1.0.0`,
         pluginId: "codex-fixture",
@@ -999,7 +1007,9 @@ describe("installPluginFromNpmSpec", () => {
       let attempts = 0;
       let repairCache = "";
       let removedIncomplete = false;
+      let stageRoot = "";
       interceptInstalls(async (root, next, env) => {
+        stageRoot = root;
         const packageDir = path.join(root, ...platformPackageLocation.split("/"));
         if (repair && attempts === 1) {
           removedIncomplete = !fs.existsSync(packageDir);
@@ -1028,7 +1038,7 @@ describe("installPluginFromNpmSpec", () => {
           });
           const binDir = path.join(packageDir, "vendor", "current-platform", "bin");
           fs.mkdirSync(binDir, { recursive: true });
-          if (attempts === 1) {
+          if (attempts === 1 && !completeInitially) {
             writeText(path.join(binDir, "codex-helper"), "helper");
           } else {
             repairCache = env?.npm_config_cache ?? "";
@@ -1041,12 +1051,27 @@ describe("installPluginFromNpmSpec", () => {
         }
         return result;
       });
-      const result = await installNpm(
-        `${packageName}@1.0.0`,
-        repair ? { logger: warningLogger(warnings) } : {},
-      );
-      expect(attempts).toBe(2);
-      if (repair) {
+      const access = fsPromises.access;
+      using accessSpy = vi.spyOn(fsPromises, "access").mockImplementation(async (file, mode) => {
+        if (mode === fs.constants.X_OK) {
+          throw Object.assign(new Error("mocked stage execution denial"), { code: "EPERM" });
+        }
+        return access(file, mode);
+      });
+      const result = await installNpm(`${packageName}@1.0.0`, {
+        mode: "update",
+        logger: warningLogger(warnings),
+      });
+      expect(attempts).toBe(completeInitially ? 1 : 2);
+      expect(readTextFileTree(previous.targetDir)).toEqual(previousContents);
+      expectAbsent(stageRoot);
+      expect(accessSpy.mock.calls.filter(([, mode]) => mode === fs.constants.X_OK)).toEqual([]);
+      if (completeInitially) {
+        assert(result.ok, JSON.stringify(result));
+        expect(result.targetDir).not.toBe(previous.targetDir);
+        expectPresent(result.targetDir, "dist", "index.js");
+        expect(warnings).toEqual([]);
+      } else if (repair) {
         expect({ ok: result.ok, removedIncomplete }).toEqual({ ok: true, removedIncomplete: true });
         expect(repairCache).toContain("openclaw-npm-cache-");
         expectAbsent(repairCache);
@@ -1059,7 +1084,7 @@ describe("installPluginFromNpmSpec", () => {
           undefined,
           `npm install reported success but left required current-platform package(s) missing or incomplete: ${platformPackage}`,
         );
-        expectAbsent(installedPackageDir(npmRoot, packageName));
+        expect(readTextFileTree(npmRoot)).toEqual(previousNpmContents);
       }
     },
   );

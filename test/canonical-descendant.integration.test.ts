@@ -1204,7 +1204,7 @@ describe("canonical descendant lifecycle through real owners", () => {
     );
   }, 180_000);
 
-  it("forks with the current native model instead of the stale persisted model", async () => {
+  it("forks with the current native model and keeps provider guidance on cold resume", async () => {
     await withFixture(async (fixture, fork) => {
       const source = await fixture.adopt();
       const binding = await fixture.turn(source.sessionKey, "canonical");
@@ -1221,6 +1221,21 @@ describe("canonical descendant lifecycle through real owners", () => {
         modelProvider: current.thread.modelProvider,
       });
       expect(current.model).toBe("gpt-5.6-luna");
+
+      // Supervision strips the outer runtime plan, so the native provider owns this guidance.
+      const parentBase = expectDefined(
+        nativeCalls(fixture, "thread/start").at(-1)?.params.baseInstructions,
+        "supervised parent base",
+      );
+      expect(parentBase).toContain("<execution_policy>");
+      await fixture.native.restart();
+      const offset = fixture.native.calls.length;
+      await fixture.turn(childKey, "continue the canonical fork");
+      const resume = expectDefined(
+        nativeCalls(fixture, "thread/resume", offset).at(-1),
+        "canonical fork cold resume",
+      );
+      expect(resume.params.baseInstructions).toBe(parentBase);
     });
   }, 180_000);
 

@@ -59,7 +59,7 @@ suite.define(() => {
     expect(Math.max(...offsets), JSON.stringify(offsets)).toBeLessThanOrEqual(0.5);
   });
 
-  it("fits a tall model catalog above the mobile new-session composer", async () => {
+  it("reaches the final model with only the catalog list scrolling", async () => {
     await suite.withPage(
       { viewport: { width: 393, height: 500 }, isMobile: true, hasTouch: true },
       async ({ page }) => {
@@ -74,18 +74,17 @@ suite.define(() => {
         await page.goto(suite.server.baseUrl + "new?agent=main");
         const trigger = page.locator("[data-chat-model-select]");
         await trigger.click();
-        const search = page.locator("[data-chat-model-search]");
-        await search.waitFor();
+        const panel = page.locator(".chat-picker-overlay:popover-open");
         await page.locator("[data-chat-model-provider-toggle]").first().click();
-        const composer = await page.locator(".agent-chat__input").boundingBox();
-        const panel = await page.locator(".chat-picker-overlay:popover-open").boundingBox();
-        expect(panel!.y).toBeGreaterThanOrEqual(0);
-        expect(panel!.y + panel!.height).toBeLessThan(composer!.y);
-        expect(panel!.height).toBeGreaterThan(200);
-        await search.fill("Model 23");
-        await page.locator('[data-chat-model-option="example/model-23"]').click();
+        await page.locator("[data-chat-model-more-toggle]").click();
+        const options = panel.locator(".chat-controls__model-options");
+        await options.evaluate((node) => node.scrollTo(0, node.scrollHeight));
+        const lastModel = panel.locator('[data-chat-model-option="example/model-23"]');
+        await lastModel.scrollIntoViewIfNeeded();
+        expect(await panel.evaluate((node) => node.scrollHeight - node.clientHeight)).toBe(0);
+        await lastModel.click();
         expect(await trigger.textContent()).toContain("Model 23");
-        expect(await search.isVisible()).toBe(false);
+        expect(await panel.isVisible()).toBe(false);
       },
     );
   });

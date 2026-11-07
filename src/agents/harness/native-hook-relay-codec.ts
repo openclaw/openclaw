@@ -2,11 +2,11 @@ import { stableStringify } from "@openclaw/normalization-core";
 import { isPluginJsonValue } from "../../plugins/host-hook-json.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
 import { NATIVE_HOOK_INEXACT_NUMBER_PATHS_FIELD } from "./native-hook-relay-constants.js";
+import type { NativeHookRelayRegistration } from "./native-hook-relay-contexts.js";
 import type {
   JsonValue,
   NativeHookRelayInvocation,
   NativeHookRelayInvocationMetadata,
-  NativeHookRelayRegistration,
 } from "./native-hook-relay-types.js";
 import {
   isJsonObject,

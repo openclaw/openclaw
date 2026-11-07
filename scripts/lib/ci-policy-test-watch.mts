@@ -94,9 +94,9 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   })),
   // New or removed modules and new import edges can escape a static inventory.
   // Watch source edits conservatively: the absent inventory entry cannot own its guard.
+  // Provisioning uses the explicit copied-input watch below; these guards detect new edges.
   ...[
     "test/scripts/pr-wrapper-source-closure.test.ts",
-    "test/scripts/pr-worktree-provision.test.ts",
     "test/scripts/eager-import-closure.test.ts",
     "test/scripts/update-restart-module-outcome.test.ts",
     "test/scripts/type-suppression-inventory.test.ts",

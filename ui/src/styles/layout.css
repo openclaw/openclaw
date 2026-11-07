@@ -1,6 +1,5 @@
 @import "./session-menu.css";
 
-.context-usage__title,
 .palette-session-settings__title,
 .palette-session-settings__machine {
   color: var(--muted);
@@ -707,7 +706,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   border: 0;
   border-radius: var(--radius-md);
   background: var(--sidebar-rail-action-bg);
-  color: var(--accent-foreground);
+  color: var(--sidebar-rail-action-foreground);
   text-decoration: none;
 }
 
@@ -718,7 +717,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 
 .header-new-session:hover:not(:disabled, [aria-disabled="true"]) {
   background: var(--sidebar-rail-action-hover-bg);
-  color: var(--accent-foreground);
+  color: var(--sidebar-rail-action-foreground);
 }
 
 .header-new-session:focus-visible {
@@ -885,34 +884,23 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
      both values share --sidebar-pad-x so they cannot drift. */
   margin-right: calc(-1 * var(--sidebar-pad-x));
   padding-right: var(--sidebar-pad-x);
-  scrollbar-color: color-mix(in srgb, var(--muted) 10%, transparent) transparent;
 }
 
-.sidebar-shell:hover .sidebar-shell__body {
-  scrollbar-color: color-mix(in srgb, var(--muted) 16%, transparent) transparent;
-}
-
+/* The whole sidebar counts as the scroller's hover zone, header and footer included. */
 @supports selector(::-webkit-scrollbar) {
-  .sidebar-shell__body {
-    /* Native scrollbar colors override the separate thumb-hover treatment. */
-    scrollbar-width: auto;
-    scrollbar-color: auto;
-  }
-
-  .sidebar-shell:hover .sidebar-shell__body {
-    scrollbar-color: auto;
-  }
-
-  .sidebar-shell__body::-webkit-scrollbar-thumb {
-    background-color: color-mix(in srgb, var(--muted) 10%, transparent);
-  }
-
   .sidebar-shell:hover .sidebar-shell__body::-webkit-scrollbar-thumb {
-    background-color: color-mix(in srgb, var(--muted) 16%, transparent);
+    background-color: var(--scrollbar-thumb-near);
   }
 
-  .sidebar-shell .sidebar-shell__body::-webkit-scrollbar-thumb:hover {
+  .sidebar-shell .sidebar-shell__body::-webkit-scrollbar-thumb:hover,
+  .sidebar-shell .sidebar-shell__body::-webkit-scrollbar-thumb:active {
     background-color: var(--scrollbar-thumb-hover);
+  }
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  .sidebar-shell:hover .sidebar-shell__body {
+    scrollbar-color: var(--scrollbar-thumb-near) transparent;
   }
 }
 
@@ -1513,6 +1501,16 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 .sidebar-session-window {
   /* The virtual window owns anchoring while its rows mount and unmount. */
   overflow-anchor: none;
+}
+
+/* While an archived row fades out (app-sidebar-archive-exit.ts), the rows below
+   and the sections after the list glide into its slot; 60 + 180 ms matches it. */
+.sidebar-session-window[data-sidebar-archive-exiting] {
+  transition: height 180ms cubic-bezier(0.2, 0, 0, 1) 60ms;
+}
+
+.sidebar-session-window[data-sidebar-archive-exiting] > .sidebar-session-tree {
+  transition: transform 180ms cubic-bezier(0.2, 0, 0, 1) 60ms;
 }
 
 .sidebar-recent-sessions__list {
@@ -2532,8 +2530,10 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   bottom: -2px;
 }
 
+/* Rows keep their intrinsic height; capped menus scroll instead of squeezing multiline labels. */
 .sidebar-customize-menu__item {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 6px;
   width: 100%;
@@ -3824,12 +3824,6 @@ html.openclaw-native-web-chrome
 
 .page-subtitle .learn-more-link {
   white-space: nowrap;
-}
-
-.page-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 
 .grid {

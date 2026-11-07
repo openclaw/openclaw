@@ -7,6 +7,7 @@ import {
 } from "../../../../packages/gateway-protocol/src/schema/plugin-declared-surface-groups.js";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/modal-dialog.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
   RetryAction,
   SettingsRow,
@@ -536,7 +537,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
           >
             <Errored
               fallback={(error, reset) => (
-                <div class="callout danger plugins-consent__error" role="alert">
+                <InlineAlert tone="danger" class="plugins-consent__error" role="alert">
                   <span>{formatUiError(error())}</span>
                   <RetryAction
                     type="button"
@@ -547,7 +548,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
                       reset();
                     }}
                   />
-                </div>
+                </InlineAlert>
               )}
             >
               <InspectionBody />

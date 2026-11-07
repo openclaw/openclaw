@@ -35,10 +35,7 @@ function themeBranding(settings: UiPreferences, catalogTheme?: CatalogTheme) {
   );
 }
 
-function subscribeMediaQuery(query: string, onChange: () => void): (() => void) | undefined {
-  if (typeof globalThis.matchMedia !== "function") {
-    return undefined;
-  }
+function subscribeMediaQuery(query: string, onChange: () => void): () => void {
   return listen(globalThis.matchMedia(query), "change", onChange);
 }
 
@@ -301,7 +298,7 @@ export function createApplicationTheme(
       stopGateway();
       presentationGeneration += 1;
       detachSystemThemeListener();
-      chromeBreakpointCleanup?.();
+      chromeBreakpointCleanup();
       listeners.clear();
     },
   };

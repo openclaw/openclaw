@@ -104,7 +104,7 @@ describe("cross-OS release checks workflow", () => {
   it("gives every lane unique proof identities and both packaged runtimes", () => {
     const { include } = resolveRunnerMatrix({ mode: "both", ref: "main" });
     expect(new Set(include.map((entry) => `${entry.os_id}/${entry.runner}`))).toEqual(
-      new Set(["ubuntu/blacksmith-8vcpu-ubuntu-2404", "windows/windows-2025", "macos/xcode-27"]),
+      new Set(["ubuntu/blacksmith-2vcpu-ubuntu-2404", "windows/windows-2025", "macos/xcode-27"]),
     );
     expect(new Set(include.map((entry) => `${entry.display_name}/${entry.suite_label}`)).size).toBe(
       include.length,

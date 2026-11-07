@@ -1,8 +1,7 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
-import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   LearnMoreLink,
@@ -20,10 +19,14 @@ import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subti
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatTimeMs } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import {
+  ModelProviderIcon,
+  useProviderDisplayLabel,
+} from "../../lib/reactive/provider-presentation.tsx";
 import type { JSX } from "../../types/solid-elements.js";
-import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
 import "../../styles/model-providers.css";
 import "../../styles/usage.css";
+import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import { DefaultModels } from "./default-models-view.tsx";
 import {
@@ -46,6 +49,7 @@ registerEnglishCatalog(registerSettingsEnglish);
 registerRouteSubtitlesEnglish();
 
 function AddProvider(props: ModelProvidersViewProps) {
+  const displayLabel = useProviderDisplayLabel();
   const busy = () => Boolean(props.busy.add);
   const disabled = () => configMutationDisabled(props) || busy();
   const provider = () =>
@@ -64,8 +68,8 @@ function AddProvider(props: ModelProvidersViewProps) {
         <div class="oc-dialog model-setup-wizard" data-models-key-dialog>
           <div class="oc-dialog__header">
             <h2 class="oc-dialog__title">
-              <ProviderBrandIcon provider={props.addProviderId} class="model-providers__icon" />{" "}
-              {provider()?.displayName ?? providerDisplayLabel(props.addProviderId)}
+              <ModelProviderIcon provider={props.addProviderId} class="model-providers__icon" />{" "}
+              {provider()?.displayName ?? displayLabel(props.addProviderId)}
             </h2>
             <button
               class="oc-dialog__close"
@@ -220,9 +224,9 @@ export function ModelProviders(props: ModelProvidersViewProps) {
             {props.installedAgents}
             <ProviderAccess {...props} />
             {props.providerUsageStalled ? (
-              <div class="callout warning" role="status">
+              <InlineAlert tone="warning" role="status">
                 {t("usage.providerUsage.stalled")}
-              </div>
+              </InlineAlert>
             ) : undefined}
           </Show>
         </>

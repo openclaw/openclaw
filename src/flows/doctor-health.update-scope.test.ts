@@ -38,8 +38,12 @@ vi.mock("../infra/git-exec.js", () => ({
 vi.mock("../commands/doctor-db-bloat.js", () => ({
   noteSqliteDatabaseBloat: () => obs.record("db-size-advice", undefined),
 }));
-vi.mock("../commands/doctor-sandbox.js", () => ({
+vi.mock("../commands/doctor-sandbox.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/doctor-sandbox.js")>()),
   noteCodexBwrapNamespaceWarnings: obs.codexBwrap,
+  maybeRepairSandboxImages: async () => ["Sandbox base image missing: synthetic-image."],
+  maybeRepairSandboxRegistryFiles: async () => {},
+  noteSandboxScopeWarnings: () => {},
 }));
 // mock-isolation: record advisory selection without reading real workspace bootstrap files.
 vi.mock("../commands/doctor-bootstrap-size.js", () => ({
@@ -66,6 +70,16 @@ import {
   runDoctorHealthContributionList,
 } from "./doctor-health-contributions.test-support.js";
 afterEach(() => vi.unstubAllEnvs());
+it("retains missing sandbox images as warnings during post-update Doctor", async () => {
+  const ctx = createDoctorHealthFlowContext({
+    env: { OPENCLAW_UPDATE_IN_PROGRESS: "1", OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" },
+    options: { repair: true, yes: true, nonInteractive: true },
+  });
+  const sandbox = resolveDoctorHealthContributions().find((c) => c.id === "doctor:sandbox")!;
+  await runDoctorHealthContributionList(ctx, [sandbox]);
+  expect(ctx.updateWarnings).toContain("Sandbox base image missing: synthetic-image.");
+  expect(ctx.runtime.exit).not.toHaveBeenCalled();
+});
 it.each(["standalone", "post-core"])(
   "keeps standalone advisory work outside update: %s",
   async (mode) => {
