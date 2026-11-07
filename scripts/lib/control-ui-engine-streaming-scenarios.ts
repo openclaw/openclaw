@@ -634,6 +634,18 @@ export function createEngineStreamingScenarios(): readonly EngineScenario[] {
     streamScenario({ id: "streaming-two-panes", panes: 2 }),
     streamScenario({ id: "streaming-tool-code", content: "tool-code" }),
     streamScenario({ id: "streaming-mixed-fast", rate: 150, content: "mixed" }),
+    {
+      ...longScroll,
+      id: "transcript-fast-scroll",
+      expected:
+        "Scroll through 400 messages, retaining visible rows and reporting frame gaps and blank samples.",
+      fixtureOverrides: () => ({
+        sessionTranscripts: { [sessionKey]: { messages: createEngineTranscript(400) } },
+      }),
+      prepare: async (page) => {
+        await waitForEngineTranscript(page, 400);
+      },
+    },
     longScroll,
     {
       ...longScroll,

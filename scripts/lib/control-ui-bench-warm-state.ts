@@ -59,12 +59,12 @@ export function qualifyDetailsSubagentsWarmState(input: {
     const ordinary = receipt?.rows.filter((row) => row.listed === false) ?? [];
     return (
       input.rows.length > 0 &&
-      ordinary.length === input.rows.length &&
+      ordinary.length === Math.min(input.rows.length, 3) &&
       receipt?.counts
         .filter((count) => count.listed === false)
         .reduce((total, count) => total + count.count, 0) === input.rows.length &&
-      input.rows.every((row) =>
-        ordinary.some((saved) => saved.key === row.key && saved.label === row.label),
+      ordinary.every((saved) =>
+        input.rows.some((row) => saved.key === row.key && saved.label === row.label),
       )
     );
   };
@@ -78,8 +78,9 @@ export function qualifyDetailsSubagentsWarmState(input: {
     !matches(entry[1].snapshot.details?.subagents) ||
     !group ||
     document.fonts.status !== "loaded" ||
-    labels.length !== input.rows.length ||
-    !input.rows.every((row) => labels.includes(row.label)) ||
+    labels.length < Math.min(input.rows.length, 3) ||
+    labels.length > input.rows.length ||
+    !labels.every((label) => input.rows.some((row) => row.label === label)) ||
     group
       .getAnimations({ subtree: true })
       .some(
@@ -237,6 +238,9 @@ export async function persistColdLoadWarmState(input: {
       },
       messages: record.snapshot.messages.length,
       snapshotBytes,
+      ...(input.detailsSubagentsWarmState
+        ? { detailsSubagentsWarmState: input.detailsSubagentsWarmState }
+        : {}),
       ...(input.lateRowFacts
         ? {
             displayFacts: {

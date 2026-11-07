@@ -454,7 +454,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps the selected session through archive refreshes and restores the composer", async () => {
+  it("keeps the selected session through archive refreshes and restores an empty composer", async () => {
     await withSessionPage(
       suite,
       async (page) => {
@@ -535,7 +535,10 @@ suite.define(() => {
         await rowFor(selected.key).waitFor({ state: "visible", timeout: 10_000 });
         await rowFor(selected.key).locator("a").first().click();
         await assertSelectedRoute();
-        await activePane.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
+        const composer = activePane.locator(".agent-chat__input textarea");
+        await composer.waitFor({ state: "visible" });
+        // Archiving discards the draft instead of restoring it on unarchive.
+        await composer.fill("Draft typed before archiving");
         // An unresolved reply_to_current keeps its answer without a reply strip.
         const retainedReply = activePane
           .locator(".chat-group")
@@ -669,7 +672,8 @@ suite.define(() => {
         await archivedNotice.waitFor({ state: "detached", timeout: 10_000 });
         await archiveEvent.waitFor({ state: "detached", timeout: 10_000 });
         await selectedRow.waitFor({ state: "visible", timeout: 10_000 });
-        await activePane.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
+        await composer.waitFor({ state: "visible" });
+        await expect.poll(() => composer.inputValue()).toBe("");
         await openChatDetails(activePane);
         await progressCard.waitFor({ state: "visible" });
         await expect

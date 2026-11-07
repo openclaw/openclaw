@@ -169,6 +169,11 @@ export default class FixtureRunner extends Runner {
       : Runner.prototype.onAfterRunFiles;
     await cleanup.call(this, files);
     expect(vi.resetModules, "file cleanup restores the native module reset").toBe(resetModules);
+    if (files.some(file => file.filepath.includes("00-resource-free-"))) {
+      for (const name of ["agentDatabaseReaders", "agentDatabaseAsyncResources"]) {
+        expect(Object.hasOwn(globalThis, Symbol.for("openclaw." + name)), "empty file cleanup must not initialize " + name).toBe(false);
+      }
+    }
   }
 }
 `,
@@ -188,6 +193,22 @@ it("applies the first file's mock before loading its production importer", async
     await import(${sourcePath("infra/openclaw-root.ts")});
   expect(resolveOpenClawPackageRootSync({ cwd: root })).toBe(root);
   await expect(resolveOpenClawPackageRoot({ cwd: root })).resolves.toBe(root);
+});
+`,
+    "00-resource-free-node.test.ts": `/* @vitest-environment node */
+import { expect, it } from "vitest";
+it("runs a node file without initializing agent database owners", () => {
+  for (const name of ["agentDatabaseReaders", "agentDatabaseAsyncResources"]) {
+    expect(Object.hasOwn(globalThis, Symbol.for("openclaw." + name))).toBe(false);
+  }
+});
+`,
+    "00-resource-free-jsdom.test.ts": `/* @vitest-environment jsdom */
+import { expect, it } from "vitest";
+it("runs a jsdom file without initializing agent database owners", () => {
+  for (const name of ["agentDatabaseReaders", "agentDatabaseAsyncResources"]) {
+    expect(Object.hasOwn(globalThis, Symbol.for("openclaw." + name))).toBe(false);
+  }
 });
 `,
     "01-dep.ts": 'export function flavor(): string {\n  return "real";\n}\n',
@@ -592,8 +613,8 @@ async function assertCompletion(
 
   expect(report.testResults.map((file) => file.name).toSorted()).toEqual(expected.files);
   expect(report).toMatchObject({
-    numTotalTests: 80,
-    numPassedTests: 79,
+    numTotalTests: 82,
+    numPassedTests: 81,
     numPendingTests: 1,
     numFailedTests: 0,
     numTodoTests: 0,
