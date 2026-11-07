@@ -81,4 +81,29 @@ describe("Signal formatting", () => {
       })),
     );
   });
+
+  it("prefixes every quoted line and keeps styles aligned", () => {
+    const result = markdownToSignalText(
+      "> > **one** [docs](https://example.com/a)\n> > two **three**\n>\n> back",
+    );
+    const text = "> > one docs (https://example.com/a)\n> > two three\n\n> back";
+
+    expect(result).toEqual({
+      text,
+      styles: [
+        { start: text.indexOf("one"), length: 3, style: "BOLD" },
+        { start: text.indexOf("three"), length: 5, style: "BOLD" },
+      ],
+    });
+  });
+
+  it("prefixes quoted continuations in later chunks", () => {
+    const chunks = markdownToSignalTextChunks(`> ${"word ".repeat(12)}`, 20);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.text.startsWith("> ") && chunk.text.length <= 20)).toBe(
+      true,
+    );
+    expect(chunks.map((chunk) => chunk.text.slice(2)).join(" ")).toBe("word ".repeat(12).trim());
+  });
 });
