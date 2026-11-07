@@ -13,6 +13,7 @@ import {
   composeRedactionEdits,
   type RedactionEdit,
 } from "./redact-edit-composition.js";
+import { createEncodedUrlQueryAssignmentPattern } from "./redact-encoded-url.js";
 import {
   redactJsonRecord,
   type RedactionMessage,
@@ -109,10 +110,11 @@ const FORM_BODY_CONTEXT_SINGLE_PAIR_RE = new RegExp(
   String.raw`(\b(?:body|form(?:[-_\s]?body)?)\s*[:=]\s*(["'\x60]?))(${FORM_BODY_KEY})=(${FORM_BODY_VALUE})(["'\x60]?)`,
   "giu",
 );
-const URL_QUERY_PAIR_RE = new RegExp(
-  String.raw`([?&])(${FORM_BODY_KEY})=(${URL_QUERY_VALUE})`,
-  "gu",
-);
+// Bound nested query scanning the way net-policy bounds nested decoding, so a
+// hostile chain of nested callbacks cannot grow the work it costs to scan one value.
+const MAX_NESTED_URL_QUERY_DEPTH = 8;
+const URL_QUERY_PAIR = String.raw`([?&])(${FORM_BODY_KEY})=(${URL_QUERY_VALUE})`;
+const URL_QUERY_PAIR_RE = new RegExp(URL_QUERY_PAIR, "gu");
 const FORM_BODY_LINE_BREAK_SPLIT_RE = /(\r\n|\r|\n)/u;
 const FORM_BODY_LINE_BREAK_SEGMENT_RE = /^(?:\r\n|\r|\n)$/u;
 const STRUCTURED_SECRET_FIELD_RE = new RegExp(
@@ -321,11 +323,31 @@ function visitSensitiveAssignments(
   if (kind === "context" && !/[=:]/u.test(text)) {
     return;
   }
-  const visitPair = (key: string, token: string, valueOffset: number): void => {
+  const visitPair = (key: string, token: string, valueOffset: number, depth = 0): void => {
     if (kind === "encoded" && !hasEncodedOrInvisibleFormKey(key)) {
       return;
     }
     if (!isSensitiveBodyKey(key)) {
+      // A nested URL carried in a query value (`?cb=https://in/?token=...`) is one
+      // value whose own name is not a credential, so the credential in its query was
+      // never classified. Only `?` can open an assignment inside a value; `&` cannot
+      // appear in one. A sensitive value is still masked whole below, so scanning
+      // only non-sensitive values keeps this additive -- nothing masked before stops
+      // being masked. A fresh regex per level keeps `lastIndex` out of the recursion.
+      if (kind !== "url" || depth >= MAX_NESTED_URL_QUERY_DEPTH || !token.includes("?")) {
+        return;
+      }
+      const nested = new RegExp(URL_QUERY_PAIR, "gu");
+      for (let match = nested.exec(token); match; match = nested.exec(token)) {
+        const nestedPrefix = match[1] ?? "";
+        const nestedKey = match[2] ?? "";
+        visitPair(
+          nestedKey,
+          match[3] ?? "",
+          valueOffset + match.index + nestedPrefix.length + nestedKey.length + 1,
+          depth + 1,
+        );
+      }
       return;
     }
     const { maskable, maskStart, maskEnd } = splitSecretValueForMask(token);
@@ -586,6 +608,9 @@ export function redactText(
   try {
     let next = redactFormBody(
       redactAssignmentValues(redactStructuredAuthHeaders(text, "***"), "url"),
+    );
+    next = replaceRedactPattern(next, ENCODED_URL_QUERY_ASSIGNMENT_PATTERN, (match) =>
+      redactMatch(match, ENCODED_URL_QUERY_ASSIGNMENT_PATTERN),
     );
     let pattern: ResolvedRedactPattern;
     const replace = (match: RedactMatch) => redactMatch(match, pattern);
@@ -993,6 +1018,11 @@ function* redactionEditMatches(input: string, edits: RedactionEdit[]): Iterable<
   }
 }
 
+const ENCODED_URL_QUERY_ASSIGNMENT_PATTERN = createEncodedUrlQueryAssignmentPattern(
+  isSensitiveBodyKey,
+  MAX_NESTED_URL_QUERY_DEPTH,
+);
+
 const preparationPatterns: ResolvedRedactPattern[] = [
   {
     source: "registered secret values",
@@ -1027,6 +1057,7 @@ const preparationPatterns: ResolvedRedactPattern[] = [
       yield* redactionEditMatches(input, edits);
     },
   },
+  ENCODED_URL_QUERY_ASSIGNMENT_PATTERN,
   {
     source: "form bodies",
     *exec(input) {

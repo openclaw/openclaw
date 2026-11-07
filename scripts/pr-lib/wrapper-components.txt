@@ -1499,6 +1499,7 @@ src/logging/logger-file-transport.ts
 src/logging/logger.ts
 src/logging/redact-bounded.ts
 src/logging/redact-edit-composition.ts
+src/logging/redact-encoded-url.ts
 src/logging/redact-json-tokens.ts
 src/logging/redact-json.ts
 src/logging/redact-linear-matchers.ts
