@@ -1837,6 +1837,7 @@ src/process/child-memory.ts
 src/process/child-process-tree.ts
 src/process/child-process.ts
 src/process/command-error.ts
+src/process/command-reservation-census.ts
 src/process/darwin-process-inspection.ts
 src/process/exec-output.ts
 src/process/exec-result.ts
