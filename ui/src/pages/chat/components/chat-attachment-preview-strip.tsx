@@ -1,10 +1,14 @@
 import { For, Show, onSettled } from "solid-js";
+import { showConfirmDialog } from "../../../components/confirm-dialog.ts";
+import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import "../../../components/tooltip.ts";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import type { BrowserAnnotationAttachment, ChatAttachment } from "../../../lib/chat/chat-types.ts";
+import { downloadBlobFile } from "../../../lib/download.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
+import { showToast } from "../../../lib/toast.ts";
 import { getChatAttachmentPreviewUrl } from "../attachment-payload-store.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { removeDraftAttachment } from "./chat-attachment-draft.ts";
@@ -123,6 +127,34 @@ function AttachmentTile(props: {
   const att = () => props.entry.attachment;
   const reading = () => props.entry.state === "reading";
   const failed = () => props.entry.state === "error";
+  const compatibleCopy = () => props.entry.preparation === "compatible-copy";
+  const confirmCompatibleCopy = () => {
+    const accept = props.entry.read.createCompatibleCopy;
+    if (!accept || props.controls.disabled) {
+      return;
+    }
+    const canConfirm = () =>
+      !props.controls.disabled && props.entry.read.createCompatibleCopy === accept;
+    void showConfirmDialog({
+      title: t("chat.attachments.compatibleCopyTitle"),
+      message: t("chat.attachments.compatibleCopyDisclosure"),
+      confirmLabel: t("chat.attachments.createCompatibleCopy"),
+      signal: props.controls.readSignal,
+      canConfirm,
+    })
+      .then((confirmed) => {
+        if (confirmed && canConfirm()) {
+          accept();
+        }
+      })
+      .catch(() =>
+        showToast({
+          message: t("chat.attachments.compressionFailed"),
+          severity: "error",
+          placement: "top-center",
+        }),
+      );
+  };
   const preparing = () =>
     Boolean(
       props.entry.preparation || (props.entry.errorMessage && att().mimeType.startsWith("video/")),
@@ -150,12 +182,17 @@ function AttachmentTile(props: {
                 "chat-attachment-thumb",
                 {
                   "chat-attachment-thumb--preparation": preparing(),
+                  "chat-attachment-thumb--original": Boolean(props.entry.read.originalFile),
                   "chat-attachment-thumb--video": att().mimeType.startsWith("video/"),
                   "chat-attachment-thumb--file": !att().mimeType.startsWith("image/"),
                   "chat-attachment-thumb--error": failed(),
                 },
               ]}
-              aria-busy={reading() && props.entry.preparation !== "offer" ? "true" : "false"}
+              aria-busy={
+                reading() && props.entry.preparation !== "offer" && !compatibleCopy()
+                  ? "true"
+                  : "false"
+              }
             >
               {preparing() ? (
                 <CompactAttachmentFile
@@ -181,15 +218,29 @@ function AttachmentTile(props: {
                         <button
                           type="button"
                           class="chat-attachment-compress"
-                          title={failed() ? failureLabel() : t("chat.attachments.compressionHint")}
+                          title={
+                            failed()
+                              ? failureLabel()
+                              : t(
+                                  compatibleCopy()
+                                    ? "chat.attachments.compatibleCopyDisclosure"
+                                    : "chat.attachments.compressionHint",
+                                )
+                          }
                           disabled={props.controls.disabled}
-                          onClick={() => props.entry.read.compress?.()}
+                          onClick={() =>
+                            compatibleCopy()
+                              ? confirmCompatibleCopy()
+                              : props.entry.read.compress?.()
+                          }
                         >
                           <span>
                             {t(
                               failed()
                                 ? "chat.attachments.retryCompression"
-                                : "chat.attachments.compressToFit",
+                                : compatibleCopy()
+                                  ? "chat.attachments.createCompatibleCopy"
+                                  : "chat.attachments.compressToFit",
                             )}
                           </span>
                         </button>
@@ -208,6 +259,20 @@ function AttachmentTile(props: {
               ) : (
                 <CompactAttachmentFile attachment={att()} />
               )}
+              <Show when={props.entry.read.originalFile}>
+                {(original) => (
+                  <button
+                    type="button"
+                    class="chat-attachment-original"
+                    aria-label={t("chat.attachments.downloadOriginal")}
+                    title={t("chat.attachments.downloadOriginal")}
+                    disabled={props.controls.disabled}
+                    onClick={() => downloadBlobFile(original().name, original(), 30_000)}
+                  >
+                    <Icon name="download" />
+                  </button>
+                )}
+              </Show>
               <Show when={reading() && !preparing()}>
                 <span
                   class="chat-attachment-loading"
