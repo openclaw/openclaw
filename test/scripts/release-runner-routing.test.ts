@@ -88,7 +88,9 @@ it("keeps artifact producers and FRV plugin consumers on hosted runners", () => 
   expect(artifacts.jobs.npm!.with?.use_github_hosted_runners).toBe(true);
   expect(artifacts.jobs.docker!.with?.use_github_hosted_runners).toBe(true);
   expect(candidate.jobs.prepare!.with?.use_github_hosted_runners).toBe(true);
-  expect(plugins.jobs["plugin-prerelease-docker-suite"]!.with?.use_github_hosted_runners).toBe(true);
+  expect(plugins.jobs["plugin-prerelease-docker-suite"]!.with?.use_github_hosted_runners).toBe(
+    true,
+  );
   for (const source of [artifacts, candidate, plugins]) {
     for (const job of Object.values(source.jobs)) {
       if (job["runs-on"]) {
@@ -112,9 +114,7 @@ it("lets explicit hosted selection override groups without changing unselected c
     "docker-release-prepare",
   ]) {
     const labels =
-      name === "docker-release-prepare"
-        ? ["ubuntu-24.04", "ubuntu-24.04-arm"]
-        : ["ubuntu-24.04"];
+      name === "docker-release-prepare" ? ["ubuntu-24.04", "ubuntu-24.04-arm"] : ["ubuntu-24.04"];
     for (const [jobName, job] of Object.entries(workflow(name).jobs)) {
       if (!job["runs-on"]) {
         continue;
@@ -127,10 +127,9 @@ it("lets explicit hosted selection override groups without changing unselected c
         };
         const expected =
           name === "docker-release-prepare" && jobName === "build" ? label : "ubuntu-24.04";
-        expect(
-          runner(job["runs-on"], { ...selection, useGithubHostedRunners: true }),
-          name,
-        ).toBe(expected);
+        expect(runner(job["runs-on"], { ...selection, useGithubHostedRunners: true }), name).toBe(
+          expected,
+        );
         const unreserved = runner(job["runs-on"], {
           ...selection,
           releaseRunnerGroup: "",
@@ -147,21 +146,30 @@ it("lets explicit hosted selection override groups without changing unselected c
   }
 });
 
-it.each([false, true])("builds live image artifacts with the selected builder (hosted=%s)", (hosted) => {
-  const steps = workflow("openclaw-live-and-e2e-checks-reusable").jobs.prepare_live_test_image!.steps!;
-  const selected = steps
-    .filter((step) => step.uses?.startsWith("docker/") || step.uses?.startsWith("useblacksmith/"))
-    .filter((step) =>
-      runner("${{ " + step.if + " }}", {
-        ...reserved,
-        useGithubHostedRunners: hosted,
-        inputs: { shared_image_policy: "no-push-artifact" },
-      }),
+it.each([false, true])(
+  "builds live image artifacts with the selected builder (hosted=%s)",
+  (hosted) => {
+    const steps = workflow("openclaw-live-and-e2e-checks-reusable").jobs.prepare_live_test_image!
+      .steps!;
+    const selected = steps
+      .filter((step) => step.uses?.startsWith("docker/") || step.uses?.startsWith("useblacksmith/"))
+      .filter((step) =>
+        runner("${{ " + step.if + " }}", {
+          ...reserved,
+          useGithubHostedRunners: hosted,
+          inputs: { shared_image_policy: "no-push-artifact" },
+        }),
+      );
+    expect(selected.map((step) => step.uses!.split("@")[0])).toEqual(
+      hosted
+        ? ["docker/setup-buildx-action", "docker/build-push-action"]
+        : ["useblacksmith/setup-docker-builder", "useblacksmith/build-push-action"],
     );
-  expect(selected.map((step) => step.uses!.split("@")[0])).toEqual(
-    hosted
-      ? ["docker/setup-buildx-action", "docker/build-push-action"]
-      : ["useblacksmith/setup-docker-builder", "useblacksmith/build-push-action"],
-  );
-  expect(selected[1]!.with).toMatchObject({ load: true, push: false, provenance: false, sbom: false });
-});
+    expect(selected[1]!.with).toMatchObject({
+      load: true,
+      push: false,
+      provenance: false,
+      sbom: false,
+    });
+  },
+);

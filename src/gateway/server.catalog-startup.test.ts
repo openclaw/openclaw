@@ -1,6 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
-import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   getActiveRemoteModelCatalog,
@@ -60,7 +64,11 @@ async function captureCatalogBeforeBootstrap(absent: boolean, signal: AbortSigna
   const startup = startGatewayServerCore(0).catch((error: unknown) => error);
   try {
     await withinTest(
-      awaitGateBeforeSettlement(enteredBootstrap.promise, startup, "Gateway did not reach bootstrap"),
+      awaitGateBeforeSettlement(
+        enteredBootstrap.promise,
+        startup,
+        "Gateway did not reach bootstrap",
+      ),
       signal,
     );
     read.mockReturnValue({ ...stored, bundle_json: catalog("downloaded-model", 3, 4) });

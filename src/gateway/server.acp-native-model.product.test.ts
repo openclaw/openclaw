@@ -39,8 +39,10 @@ type ChatEvent = {
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
 
-it("preserves ACP across native policy, overrides and failures", { timeout: 120_000 }, ({ signal }) =>
-  fixture.run(() => proveNativeModelPolicy(signal)),
+it(
+  "preserves ACP across native policy, overrides and failures",
+  { timeout: 120_000 },
+  ({ signal }) => fixture.run(() => proveNativeModelPolicy(signal)),
 );
 
 async function proveNativeModelPolicy(signal: AbortSignal) {
