@@ -132,7 +132,7 @@ export function ClawHubDetailDialog(props: { view: SkillsProps; installLocked: b
                       </InlineAlert>
                     )}
                   </Show>
-                  <openclaw-modal-actions class="oc-dialog__footer exec-approval-actions skill-reader-dialog__actions">
+                  <openclaw-modal-actions class="oc-dialog__footer skill-reader-dialog__actions">
                     <button
                       class={["btn", { primary: !installed() }]}
                       disabled={props.installLocked || installed()}
