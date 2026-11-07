@@ -30,6 +30,7 @@ it(
           forcedRuntime: "openclaw",
           runtimeSelection: "configured",
           controlUiEnabled: false,
+          enabledPluginIds: ["skill-workshop"],
           runtimeEnvPatch: {
             HTTP_PROXY: "http://127.0.0.1:9",
             HTTPS_PROXY: "http://127.0.0.1:9",
@@ -38,7 +39,17 @@ it(
           },
           mutateConfig: (config) => ({
             ...config,
-            skills: { workshop: { autonomous: { mode: "off" } } },
+            meta: {
+              ...config.meta,
+              migrations: { ...config.meta?.migrations, skillWorkshopPlugin: true },
+            },
+            plugins: {
+              ...config.plugins,
+              entries: {
+                ...config.plugins?.entries,
+                "skill-workshop": { config: { autonomous: { mode: "off" } } },
+              },
+            },
             tools: { profile: "full", allow: ["agents_list"] },
             agents: {
               ...config.agents,

@@ -1,4 +1,4 @@
 # PR #75225: retained description Unicode/aggregate and authorized-roster tests
 # plus public Gateway HTTP discovery regressions; exact net growth vs main266a7aa.
-# 162 QA-lab lines +110 agents_list test lines; no inherited debt or shared scalar change.
-272
+# 173 QA-lab lines +110 agents_list test lines; no inherited debt or shared scalar change.
+283
