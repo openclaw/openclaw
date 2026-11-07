@@ -1,5 +1,6 @@
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import {
   replaceFileAtomicSync,
@@ -171,7 +172,7 @@ function stagingFilesystem(): ReplaceFileAtomicSyncFileSystem {
         mode === undefined ? fs.openSync(pathname, flags) : fs.openSync(pathname, flags, mode);
       const stagedPath = String(pathname);
       if (
-        process.platform === "darwin" &&
+        os.platform() === "darwin" &&
         flags === "wx" &&
         path.basename(stagedPath).startsWith(".openclaw-dns-config")
       ) {
@@ -187,7 +188,7 @@ function stagingFilesystem(): ReplaceFileAtomicSyncFileSystem {
           }
           throw new Error(
             `could not clear inherited access grants on the staging file: ${
-              String(stripped.stderr ?? "").trim() || "chmod -N failed"
+              (stripped.stderr ?? "").trim() || "chmod -N failed"
             }`,
           );
         }
@@ -340,7 +341,7 @@ function publishConfigFileWithSudo(filePath: string, content: string): void {
     // Inherited directory grants land on the staged inode at creation and a
     // 0600 mode does not remove them; strip them before any configuration
     // byte exists, and restore the operator's own entries below.
-    if (process.platform === "darwin") {
+    if (os.platform() === "darwin") {
       run("sudo", ["chmod", "-N", tempPath]);
     }
     const staged = spawnSync("sudo", ["tee", tempPath], {
