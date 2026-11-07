@@ -1,5 +1,6 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { fetchXService, type XAssertActive } from "./fetch.js";
 import { uploadXMedia, type XMediaUploadParams } from "./media-api.js";
 import { createXOAuthAccess, type XOAuthOptions } from "./oauth.js";
@@ -57,7 +58,7 @@ async function readErrorDetail(
       .toSorted((a, b) => b.length - a.length)) {
       detail = detail.replaceAll(secret, "[redacted]");
     }
-    return detail.replace(/\s+/g, " ").trim().slice(0, 512);
+    return truncateUtf16Safe(detail.replace(/\s+/g, " ").trim(), 512);
   } catch {
     return undefined;
   }
