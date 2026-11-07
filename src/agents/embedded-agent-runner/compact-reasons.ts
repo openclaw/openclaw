@@ -27,6 +27,9 @@ const COMPACTION_TEXT_REASONS: ReadonlyArray<
 
 const COMPACTION_SAFEGUARD_ENVELOPE_RE =
   /^compaction safeguard could not summarize the session:\s*/i;
+// Live summarizer errors nest the status as "Summarization failed: 429 ...",
+// which is not an "API error (429)" and otherwise classifies as unknown.
+const SUMMARIZER_FAILED_HTTP_STATUS_RE = /\bsummarization failed:\s*(\d{3})\b/i;
 
 export const DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON =
   "deferred to background context-engine maintenance";
@@ -36,6 +39,11 @@ export function buildCompactionFailureResult(
   failure?: EmbeddedAgentCompactResult["failure"],
 ): EmbeddedAgentCompactResult {
   return { ok: false, compacted: false, reason, ...(failure ? { failure } : {}) };
+}
+
+function extractSummarizerFailedHttpStatus(message: string | undefined): number | undefined {
+  const code = Number(message?.match(SUMMARIZER_FAILED_HTTP_STATUS_RE)?.[1]);
+  return Number.isInteger(code) ? code : undefined;
 }
 
 function isGenericCompactionCancelledReason(reason: string): boolean {
@@ -106,7 +114,9 @@ export function classifyCompactionReason(reason?: string): string {
     return "auth_failed";
   }
   // Prefer an embedded HTTP status over broad substring rows.
-  const status = extractFailoverHttpStatus(unwrapped, { includeLabeledStatus: true });
+  const status =
+    extractFailoverHttpStatus(unwrapped, { includeLabeledStatus: true }) ??
+    extractSummarizerFailedHttpStatus(unwrapped);
   if (status !== undefined && COMPACTION_PROVIDER_4XX.has(status)) {
     return "provider_error_4xx";
   }

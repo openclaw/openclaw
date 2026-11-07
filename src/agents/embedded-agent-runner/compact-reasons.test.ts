@@ -62,6 +62,14 @@ it.each([
     "Compaction safeguard could not summarize the session: OpenAI API error (500): upstream failed",
     "provider_error_5xx",
   ],
+  [
+    "Compaction safeguard could not summarize the session: Summarization failed for 1 messages: Summarization failed: 429 Daily token quota exceeded | summarization_failed",
+    "provider_error_4xx",
+  ],
+  [
+    "Summarization failed: 500 upstream failed | summarization_failed",
+    "provider_error_5xx",
+  ],
 ])("classifies compaction failure %s", (reason, expected) => {
   expect(classifyCompactionReason(reason)).toBe(expected);
 });
