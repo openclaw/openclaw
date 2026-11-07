@@ -1,11 +1,12 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   adoptBootComposer,
   bootComposerElement,
   retireBootComposer,
   settleBootComposer,
+  snapshotBootComposerScroll,
   takeBootComposer,
 } from "./boot-composer.ts";
 import { canReloadControlUiDocument } from "./document-reload-guard.ts";
@@ -78,6 +79,36 @@ describe("boot composer", () => {
     settleBootComposer();
     expect(document.activeElement).not.toBe(textarea);
     expect(takeBootComposer()).toMatchObject({ text: "", submit: false, focused: false });
+  });
+
+  it("snapshots an empty editor without reading layout and clears its old scroll", () => {
+    const textarea = bootDocument();
+    adoptBootComposer(true);
+    const left = vi.spyOn(textarea, "scrollLeft", "get");
+    const top = vi.spyOn(textarea, "scrollTop", "get");
+    snapshotBootComposerScroll();
+    expect(left).not.toHaveBeenCalled();
+    expect(top).not.toHaveBeenCalled();
+
+    textarea.value = "An early multiline draft";
+    textarea.scrollLeft = 12;
+    textarea.scrollTop = 48;
+    snapshotBootComposerScroll();
+    expect(left).toHaveBeenCalledOnce();
+    expect(top).toHaveBeenCalledOnce();
+    textarea.remove();
+    expect(takeBootComposer()?.scroll).toEqual([12, 48]);
+
+    document.getElementById("next")!.append(textarea);
+    adoptBootComposer(true);
+    textarea.value = "";
+    left.mockClear();
+    top.mockClear();
+    snapshotBootComposerScroll();
+    textarea.remove();
+    expect(takeBootComposer()?.scroll).toEqual([0, 0]);
+    expect(left).not.toHaveBeenCalled();
+    expect(top).not.toHaveBeenCalled();
   });
 
   it("discards early input when history leaves the linked session", () => {

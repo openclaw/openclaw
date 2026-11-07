@@ -65,7 +65,7 @@ export function bootComposerElement(): HTMLTextAreaElement | null {
 /** Capture before a frame moves or removes the editor; scroll events may still be pending. */
 export function snapshotBootComposerScroll(): void {
   if (element?.isConnected) {
-    scroll = [element.scrollLeft, element.scrollTop];
+    scroll = element.value ? [element.scrollLeft, element.scrollTop] : [0, 0];
   }
 }
 
