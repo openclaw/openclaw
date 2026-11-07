@@ -91,6 +91,34 @@ function sameFacts(previous: readonly unknown[] | undefined, current: readonly u
   return true;
 }
 
+/** Owned row JSON must retain property order as well as values, including on full replies. */
+function sameRowField(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) {
+    return true;
+  }
+  if (
+    !left ||
+    !right ||
+    typeof left !== "object" ||
+    typeof right !== "object" ||
+    Array.isArray(left) !== Array.isArray(right)
+  ) {
+    return false;
+  }
+  if (Array.isArray(left) && Array.isArray(right) && left.length !== right.length) {
+    return false;
+  }
+  const keys = Object.keys(left);
+  const previous = Object.keys(right);
+  return (
+    keys.length === previous.length &&
+    keys.every(
+      (key, index) =>
+        key === previous[index] && sameRowField(Reflect.get(left, key), Reflect.get(right, key)),
+    )
+  );
+}
+
 const sharedLists = new WeakMap<
   GatewaySessionRow[],
   ReturnType<typeof shareSessionRowFacts> & { rowsRevision: string }
@@ -399,7 +427,7 @@ export function prepareProjectedSessionPresentation(
     // Writers replace materialized facts; only live run, placement and clock facts need
     // comparison here. These witnesses never grant disclosure to another recipient.
     const temporal = runState(record.key, record.materialized.source);
-    let published = publicationRows?.get(record.materialized);
+    let published = publicationRows?.get(record.materialized.publicationIdentity);
     if (publicationRows) {
       const liveModel = resolveProjectedAgentRunModel({
         agentId: record.agentId,
@@ -442,15 +470,28 @@ export function prepareProjectedSessionPresentation(
       // A changed child fact retires timestamped views even when the aggregate stays equal.
       facts[22] = childActivity.revision;
       facts[23] = backgroundProcessCount;
-      facts.length = 24;
+      facts[24] = record.materialized;
+      facts.length = 25;
       if (run?.runIds) {
         for (const id of run.runIds) {
           facts.push(id);
         }
       }
       if (!sameFacts(published?.facts, facts)) {
-        published = { facts, views: new Map(), target: toProjectedSessionSharingTarget(record) };
-        publicationRows.set(record.materialized, published);
+        // Retain only the preceding publication's observed variants for structural sharing.
+        // Current recipient checks still run before a variant can supply immutable field values.
+        const views = published?.views ?? new Map<string, SessionRowView[]>();
+        const previousRevision = published?.facts;
+        for (const [key, variants] of views) {
+          const retained = variants.filter((view) => view.revision === previousRevision);
+          if (retained.length) {
+            views.set(key, retained);
+          } else {
+            views.delete(key);
+          }
+        }
+        published = { facts, views, target: toProjectedSessionSharingTarget(record) };
+        publicationRows.set(record.materialized.publicationIdentity, published);
         facts = [];
       }
     }
@@ -484,12 +525,9 @@ export function prepareProjectedSessionPresentation(
     recipientFacts[7] = recipientView?.workspaceReadDisabledReason;
     recipientFacts.length = 8;
     const variants = signature === undefined ? undefined : views?.get(signature);
-    if (variants) {
-      for (const cached of variants) {
-        if (sameFacts(cached.facts, recipientFacts)) {
-          return projectModels(cached.row, cached);
-        }
-      }
+    const previous = variants?.find((cached) => sameFacts(cached.facts, recipientFacts));
+    if (previous && previous.revision === published?.facts) {
+      return projectModels(previous.row, previous);
     }
     const row = projection.present(record, {
       ...options,
@@ -552,9 +590,20 @@ export function prepareProjectedSessionPresentation(
     }
     if (signature !== undefined) {
       // Shared-fact replies never send this raw row; encode only at the wire boundary.
+      if (previous) {
+        for (const field of Object.keys(row)) {
+          const current = Reflect.get(row, field);
+          const retained = Reflect.get(previous.row, field);
+          if (current && typeof current === "object" && sameRowField(current, retained)) {
+            Reflect.set(row, field, retained);
+          }
+        }
+      }
       const snapshot = freezeTrustedJsonSnapshot(row);
-      const view = { facts: recipientFacts, row: snapshot };
-      if (variants) {
+      const view = { facts: recipientFacts, revision: published!.facts, row: snapshot };
+      if (previous && variants) {
+        variants[variants.indexOf(previous)] = view;
+      } else if (variants) {
         variants.push(view);
       } else {
         views?.set(signature, [view]);

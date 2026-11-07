@@ -7,6 +7,7 @@ import type { GatewaySessionRow } from "./session-utils.types.js";
 
 export type SessionRowView = {
   facts: readonly unknown[];
+  revision: readonly unknown[];
   row: Readonly<GatewaySessionRow>;
   modelRows?: Readonly<GatewaySessionRow>[];
 };
@@ -14,7 +15,7 @@ export type SessionRowView = {
 type Publication = {
   factsRevision: number;
   rows: WeakMap<
-    records.MaterializedRow["materialized"],
+    records.MaterializedRow["materialized"]["publicationIdentity"],
     {
       facts: readonly unknown[];
       views: Map<string, SessionRowView[]>;

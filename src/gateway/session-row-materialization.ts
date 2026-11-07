@@ -17,7 +17,7 @@ export function materializeSessionRowIfChanged(
     recordSessionRowMaterialization("skipped", false);
     return record.materialized;
   }
-  const next = materializeSessionRow(input);
+  const next = materializeSessionRow(input, record.materialized?.publicationIdentity);
   const previous = record.materialized;
   const deepCompared =
     previous !== undefined &&
