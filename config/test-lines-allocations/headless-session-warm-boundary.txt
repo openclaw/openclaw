@@ -1,0 +1,2 @@
+# Prove headless lazy session rows through RPC and keep error transport schema-free.
+37
