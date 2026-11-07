@@ -1,6 +1,7 @@
 /** Per-admission preparation and durable enqueue; the monitor retains scheduling and drain custody. */
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { readIngressUnsettled } from "./ingress-drain-backlog.js";
 import type { createChannelIngressDrainOwner } from "./ingress-drain.js";
 import { appendIngressWithRetry } from "./ingress-monitor-tasks.js";
 import type {
@@ -56,10 +57,9 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
   let laneTails: Map<string, LaneTail> | undefined;
   let lastArrivalAt = -Infinity;
   const readLaneTails = async () => {
-    const queue = options.getQueue();
-    const { pending, claims } = queue.listUnsettled
-      ? await queue.listUnsettled()
-      : { pending: await queue.listPending({ limit: "all" }), claims: await queue.listClaims() };
+    const { pending, claims } = await readIngressUnsettled(options.getQueue(), {
+      orderBy: "received",
+    });
     const tails = new Map<string, LaneTail>();
     for (const { laneKey, receivedAt, id } of [...pending, ...claims]) {
       const tail = laneKey === undefined ? undefined : tails.get(laneKey);
