@@ -1,6 +1,7 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ConfigUiHints } from "../../api/types.ts";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
+import type { ConfigSecretFields } from "../../lib/config/config-secret-fields.ts";
 import type { ConfigRead } from "../../lib/config/config-state-model.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import type { PluginListResult } from "../../lib/plugins/index.ts";
@@ -22,6 +23,7 @@ export type PluginSettingsEditorModel = {
   configSchemaRead: RuntimeConfigCapability["schemaRead"] | undefined;
   onConfigPatch: (path: Array<string | number>, value: unknown) => boolean | void;
   onConfigRemove: (path: Array<string | number>) => boolean | void;
+  configSecretFields?: ConfigSecretFields;
   onConfigReadRetry: () => void;
   onConfigWriteRetry: () => void;
   backHref: string;

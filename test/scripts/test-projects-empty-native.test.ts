@@ -103,6 +103,7 @@ it.for([
     // Copy the real configs so their repoRoot is isolated; link their unchanged
     // setup, runner and source dependencies from the source checkout.
     fs.mkdirSync(at("test/scripts"), { recursive: true });
+    fs.symlinkSync(path.join(repoRoot, "test/helpers"), at("test/helpers"), "junction");
     for (const name of ["vitest", "tsconfig"]) {
       fs.cpSync(path.join(repoRoot, "test", name), at(`test/${name}`), {
         recursive: true,

@@ -3,7 +3,7 @@ import { SourceMap } from "node:module";
 import path from "node:path";
 import { gzip } from "pako";
 
-type BootAsset = { file: string; type: string; gzipBytes: number };
+type BootAsset = { file: string; type: string; servedGzipBytes: number };
 type BootGraphs = Record<string, { assets: readonly BootAsset[] }>;
 type ModuleBytes = { module: string; rawBytes: number; standaloneGzipBytes: number };
 
@@ -152,7 +152,7 @@ export function collectControlUiModuleAttribution(distDir: string, graphs: BootG
       return [
         route,
         {
-          shippedGzipBytes: assets.reduce((sum, asset) => sum + asset.gzipBytes, 0),
+          shippedGzipBytes: assets.reduce((sum, asset) => sum + asset.servedGzipBytes, 0),
           mappedRawBytes: ranked.reduce((sum, module) => sum + module.rawBytes, 0),
           unmappedRawBytes: unmapped.reduce((sum, part) => sum + part.byteLength, 0),
           unmappedStandaloneGzipBytes: standaloneGzipBytes(unmapped),

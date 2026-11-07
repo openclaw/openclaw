@@ -290,8 +290,9 @@ export async function prepareManagedHandoffRepair(
     previous.mutationOriginal ||
     (!legacyUpdateChild(previous) &&
       (previous.action.kind !== "triage" ||
-        previous.action.lifetime.kind !== "foreground" ||
-        !["running", "uncertain"].includes(previous.action.phase)))
+        (previous.action.phase !== "closing" &&
+          (previous.action.lifetime.kind !== "foreground" ||
+            !["running", "uncertain"].includes(previous.action.phase)))))
   ) {
     return null;
   }
@@ -318,7 +319,7 @@ export async function prepareManagedHandoffRepair(
   const metadata = withDatabase(true, (db) =>
     readManagedHandoffRepairMetadata(db, previous, (operation) => store.transact(db, operation)),
   );
-  if (previous.action.kind === "triage" && previous.action.phase !== "uncertain" && !metadata) {
+  if (previous.action.kind === "triage" && previous.action.phase === "running" && !metadata) {
     return null;
   }
   const source = metadata?.source ?? managedHandoffLeaseRow(previous);
@@ -334,6 +335,17 @@ export async function prepareManagedHandoffRepair(
     };
     assertDead();
     const assertChildrenSettled = (db: DatabaseSync) => {
+      // Native closing also retains its cgroup until the existing scope owner
+      // proves it empty. Dead helper/executor PIDs alone do not settle that work.
+      if (
+        previous.action.kind === "triage" &&
+        previous.action.lifetime.kind === "native" &&
+        !reclaimable(previous, db)
+      ) {
+        throw new Error(
+          `Native triage scope ${previous.action.lifetime.scope} remains live or unverified. Verify it through the owning service manager, then run openclaw update repair.`,
+        );
+      }
       // A proven reboot closes legacy process claims, never newer receipt-owned custody.
       if (
         !children.every((child) => legacyUpdateChild(child) && familyExited(child)) &&
@@ -349,9 +361,8 @@ export async function prepareManagedHandoffRepair(
       env,
       metadata?.facts.runIds[0],
     );
-    // An interrupted cancelled-custody claim existed only after that family's grace
-    // elapsed. Count from the cancelled source, not the claim; the claim's own
-    // process and the census remain checked.
+    // A resumed claim retains the cancelled family's activity and census scope;
+    // its own process identity is checked too.
     let facts = await inspectManagedHandoffRepairFacts(
       sourceLease.version === 4 ? sourceLease : previous,
       sourceLease.version === 4
@@ -359,11 +370,18 @@ export async function prepareManagedHandoffRepair(
         : discovered,
       metadata?.facts,
       familyExited(previous),
+      processState,
     );
     const retainedChildren = children.filter((child) => child.key !== previous.key);
     for (const child of retainedChildren) {
       const childFacts = await readManagedHandoffRepairFacts(child, env);
-      facts = await inspectManagedHandoffRepairFacts(child, childFacts, facts, familyExited(child));
+      facts = await inspectManagedHandoffRepairFacts(
+        child,
+        childFacts,
+        facts,
+        familyExited(child),
+        processState,
+      );
     }
     // Keep the original child key with its existing recovery metadata after
     // promoting an orphan to the installation's exclusive repair claim.
@@ -400,14 +418,20 @@ export async function prepareManagedHandoffRepair(
           }),
     });
   };
-  if (sourceLease.version !== 4) {
-    return await resume();
-  }
-  // An interrupted cancelled-custody repair still guards that custody.
   try {
     return await resume();
   } catch (error) {
-    throw new ManagedHandoffCustodyRetainedError(sourceLease, error);
+    // An interrupted cancelled-custody repair still guards that custody.
+    if (sourceLease.version === 4) {
+      throw new ManagedHandoffCustodyRetainedError(sourceLease, error);
+    }
+    if (previous.action.kind === "triage" && previous.action.phase === "closing") {
+      throw new Error(
+        `Triage/repair lease remains at ${previous.key} (owner ${previous.owner}, lease version ${previous.version}, phase closing, last activity ${new Date(previous.updatedAt).toISOString()}): ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      );
+    }
+    throw error;
   }
 }
 
@@ -470,6 +494,9 @@ async function prepareCancelledCustodyRepair(
         ...family.flatMap((lease) => [lease.helper, lease.executor]),
       ],
     },
+    undefined,
+    false,
+    processState,
   );
   facts.timeoutMs = Math.max(facts.timeoutMs ?? 0, timeoutMs ?? 0) || null;
   const retired = family.filter((lease) => lease.key !== origin.key);

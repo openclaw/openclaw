@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { contextBudgetStatusFixture } from "../config/sessions/context-budget.test-support.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import { buildStatusMessage, statusModelRefs } from "./status-message.test-support.js";
 
 it("keeps measured zero counters instead of hydrating historical transcript totals", () => {
@@ -20,7 +21,7 @@ it("keeps measured zero counters instead of hydrating historical transcript tota
       outputTokens: 0,
       totalTokens: 0,
       totalTokensFresh: true,
-      totalTokensVersion: 1,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     },
   });
   expect(text).toContain("Tokens: 0 in / 0 out");

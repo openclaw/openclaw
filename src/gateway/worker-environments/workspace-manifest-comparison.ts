@@ -1,6 +1,10 @@
+import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { isStagedInputPath, stagedInputDirectoriesFromEntries } from "../../media/staged-inputs.js";
 import {
-  MAX_RECONCILIATION_ENTRIES,
+  MAX_WORKSPACE_RESULT_CHANGED_PATHS,
+  WorkspaceResultLimitError,
+} from "./workspace-inventory-limits.js";
+import {
   MAX_RECONCILIATION_FILE_BYTES,
   MAX_RECONCILIATION_TOTAL_BYTES,
   type WorkerWorkspaceManifest,
@@ -10,11 +14,35 @@ import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { isDerivedWorkspacePath, buildCacheInputPaths } from "./workspace-path-exclusions.js";
 
 type ManifestNode = WorkerWorkspaceManifestEntry | { path: string; type: "directory" };
-export const OVERSIZED_WORKSPACE_FILE_ERROR_PREFIX = "Cloud workspace result is too large: ";
+const OVERSIZED_WORKSPACE_FILE_ERROR_PREFIX = "Cloud workspace result is too large: ";
+export const OVERSIZED_WORKSPACE_TOTAL_ERROR_PREFIX =
+  "Cloud workspace staged result exceeds its byte limit";
+const RECOVERY_CANDIDATES_PREFIX = "Largest new files: ";
+/** Worker errors preserve messages, not custom fields; these paths are advice, never authority. */
+export function workspaceSizeRecoveryPaths(error: Error): string[] {
+  if (error.message.startsWith(OVERSIZED_WORKSPACE_FILE_ERROR_PREFIX)) {
+    return [error.message.slice(OVERSIZED_WORKSPACE_FILE_ERROR_PREFIX.length)];
+  }
+  if (!error.message.startsWith(OVERSIZED_WORKSPACE_TOTAL_ERROR_PREFIX)) {
+    return [];
+  }
+  const line = error.message.split("\n")[1];
+  if (!line?.startsWith(RECOVERY_CANDIDATES_PREFIX)) {
+    return [];
+  }
+  try {
+    const paths: unknown = JSON.parse(line.slice(RECOVERY_CANDIDATES_PREFIX.length));
+    return isStringArray(paths) ? paths : [];
+  } catch {
+    return [];
+  }
+}
 
 export type WorkspaceNode = ManifestNode | { path: string; type: "unsupported" } | undefined;
 
 type ManifestNodes = ReturnType<typeof manifestNodes>;
+type ComparisonNodes = { baseNodes: ManifestNodes; currentNodes: ManifestNodes };
+export type WorkspaceReconciliationPreparation = ReturnType<typeof prepareWorkspaceReconciliation>;
 export type WorkspacePreflightInput = {
   baseNodes: Array<[string, ManifestNode]>;
   currentNodes: WorkspacePreflightInput["baseNodes"];
@@ -111,9 +139,11 @@ export function diffNodePaths(baseNodes: ManifestNodes, currentNodes: ManifestNo
 export function prepareWorkspaceReconciliation(
   base: WorkerWorkspaceManifest,
   current: WorkerWorkspaceManifest,
+  { baseNodes, currentNodes }: ComparisonNodes = {
+    baseNodes: manifestNodes(base),
+    currentNodes: manifestNodes(current),
+  },
 ) {
-  const baseNodes = manifestNodes(base);
-  const currentNodes = manifestNodes(current);
   const changed = diffNodePaths(baseNodes, currentNodes);
   const inspected = new Set(changed);
   for (const entryPath of changed) {
@@ -145,31 +175,46 @@ export function prepareWorkspaceReconciliation(
       preflight.currentNodes.push([entryPath, next]);
     }
   }
-  return { baseNodes, currentNodes, changed, preflight };
+  return {
+    preflight,
+    includePaths: current.baseCommit
+      ? new Set([...baseNodes.keys(), ...currentNodes.keys()])
+      : undefined,
+  };
 }
 
 export function parseChangedWorkspaceResult(
   base: WorkerWorkspaceManifest,
   current: WorkerWorkspaceManifest,
-  enforceRecordLimit = true,
+  enforceChangeLimit = true,
+  { baseNodes, currentNodes }: ComparisonNodes = {
+    baseNodes: manifestNodes(base),
+    currentNodes: manifestNodes(current),
+  },
 ): { changed: boolean; entries: WorkerWorkspaceManifestEntry[] } {
-  const remainingBase = manifestNodes(base);
-  let recordCount = 0;
+  let changedPathCount = 0;
   const entries: WorkerWorkspaceManifestEntry[] = [];
-  for (const entry of manifestNodes(current).values()) {
-    const previous = remainingBase.get(entry.path);
+  const newFiles: Array<Extract<WorkerWorkspaceManifestEntry, { type: "file" }>> = [];
+  for (const entry of currentNodes.values()) {
+    const previous = baseNodes.get(entry.path);
     if (!sameEntry(previous, entry)) {
-      recordCount += previous ? 2 : 1;
+      changedPathCount++;
       if (entry.type !== "directory") {
         entries.push(entry);
+        if (!previous && entry.type === "file" && entry.size > 0) {
+          newFiles.push(entry);
+        }
       }
     }
-    remainingBase.delete(entry.path);
   }
-  recordCount += remainingBase.size;
-  if (enforceRecordLimit && recordCount > MAX_RECONCILIATION_ENTRIES) {
-    throw new Error(
-      `Cloud workspace reconciliation exceeds the ${MAX_RECONCILIATION_ENTRIES} entry limit`,
+  for (const entryPath of baseNodes.keys()) {
+    if (!currentNodes.has(entryPath)) {
+      changedPathCount++;
+    }
+  }
+  if (enforceChangeLimit && changedPathCount > MAX_WORKSPACE_RESULT_CHANGED_PATHS) {
+    throw new WorkspaceResultLimitError(
+      `Workspace result changes ${changedPathCount} files/directories (limit ${MAX_WORKSPACE_RESULT_CHANGED_PATHS}).`,
     );
   }
   let totalBytes = 0;
@@ -178,9 +223,22 @@ export function parseChangedWorkspaceResult(
       throw new Error(OVERSIZED_WORKSPACE_FILE_ERROR_PREFIX + entry.path);
     }
     totalBytes += entry.type === "file" ? entry.size : Buffer.byteLength(entry.target);
-    if (totalBytes > MAX_RECONCILIATION_TOTAL_BYTES) {
-      throw new Error("Cloud workspace staged result exceeds its byte limit");
-    }
   }
-  return { changed: recordCount > 0, entries };
+  if (totalBytes > MAX_RECONCILIATION_TOTAL_BYTES) {
+    const candidates = newFiles.toSorted((left, right) => right.size - left.size).slice(0, 5);
+    throw new WorkspaceResultLimitError(
+      OVERSIZED_WORKSPACE_TOTAL_ERROR_PREFIX +
+        ": " +
+        totalBytes +
+        " bytes across " +
+        entries.length +
+        " changed files/symlinks; " +
+        MAX_RECONCILIATION_TOTAL_BYTES +
+        " byte limit.\n" +
+        RECOVERY_CANDIDATES_PREFIX +
+        JSON.stringify(candidates.map((entry) => entry.path)) +
+        "\n",
+    );
+  }
+  return { changed: changedPathCount > 0, entries };
 }

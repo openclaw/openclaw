@@ -4,7 +4,11 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
-import { isStaleLifecycleEventForSession } from "../config/sessions/session-run-lifecycle-projection.js";
+import {
+  isStaleLifecycleEventForSession,
+  projectSessionLifecyclePatch,
+  type SessionLifecyclePatchInput,
+} from "../config/sessions/session-run-lifecycle-projection.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 
 const persistenceMocks = vi.hoisted(() => ({
@@ -115,56 +119,29 @@ describe("session lifecycle state", () => {
   beforeEach(() => setRuntimeConfigSnapshot({}));
   afterEach(clearRuntimeConfigSnapshot);
 
-  const goalEntry: SessionEntry = {
-    sessionId: "goal-session",
-    updatedAt: 1_000,
-    startedAt: 1_000,
+  const goalEntry = {
+    ...runningEntry,
     lifecycleRunId: "goal-run",
     goal: createSessionGoalFixture("goal-1", "Finish the work", {
       createdAt: 1_000,
       updatedAt: 1_000,
       tokensUsed: 12,
     }),
-  };
-  const goalFailure: LifecycleEvent = {
-    sessionId: "goal-session",
-    runId: "goal-run",
-    ts: 2_000,
+  } satisfies SessionEntry;
+  const goalFailure = lifecycleEvent(
+    { phase: "error", endedAt: 2_000, error: "stream disconnected before completion" },
+    { runId: "goal-run" },
+  );
+  const goalStop: LifecycleEvent = {
+    ...goalFailure,
     data: {
-      phase: "error",
-      startedAt: 1_000,
-      endedAt: 2_000,
-      error: "stream disconnected before completion",
+      ...goalFailure.data,
+      phase: "end",
+      status: "cancelled",
+      aborted: true,
+      stopReason: "rpc",
     },
   };
-
-  it.each([
-    { phase: "error", stopReason: undefined, status: "failed" },
-    { phase: "end", stopReason: "error", status: "failed" },
-    { phase: "end", stopReason: "timeout", status: "timeout" },
-  ])("pauses an active goal when its run settles as $status via $phase", async (terminal) => {
-    const stopped = await persistLifecycle(goalEntry, {
-      ...goalFailure,
-      data: { ...goalFailure.data, phase: terminal.phase, stopReason: terminal.stopReason },
-    });
-    expect(stopped.status).toBe(terminal.status);
-    expect(stopped.goal).toMatchObject({
-      id: "goal-1",
-      objective: "Finish the work",
-      status: "paused",
-      pausedAt: 2_000,
-      updatedAt: 2_000,
-      tokensUsed: 12,
-      lastStatusNote: expect.stringContaining("stream disconnected before completion"),
-    });
-    const next = await persistLifecycle(stopped, {
-      ...goalFailure,
-      runId: "next-run",
-      ts: 3_000,
-      data: { phase: "start", startedAt: 3_000 },
-    });
-    expect(next.goal).toEqual(stopped.goal);
-  });
 
   it("preserves an already paused goal on run failure", async () => {
     const entry = { ...goalEntry, goal: { ...goalEntry.goal!, status: "paused" as const } };
@@ -173,7 +150,8 @@ describe("session lifecycle state", () => {
 
   it.each([
     { phase: "start", startedAt: 1_000 },
-    { phase: "end", endedAt: 2_000 },
+    { phase: "end", endedAt: 2_000, stopReason: "stop" },
+    { phase: "end", aborted: true, stopReason: "superseded", endedAt: 2_000 },
     { phase: "end", yielded: true, livenessState: "waiting", endedAt: 2_000 },
     { phase: "error", aborted: true, stopReason: "restart", endedAt: 2_000 },
   ])("keeps the goal active for non-failure lifecycle $phase / $stopReason", async (data) => {
@@ -182,13 +160,90 @@ describe("session lifecycle state", () => {
     );
   });
 
-  it("does not pause the goal for a stale run or pre-reset session failure (#88538)", async () => {
-    for (const event of [
-      { ...goalFailure, sessionId: "old-session" },
-      { ...goalFailure, runId: "old-run", data: { ...goalFailure.data, startedAt: 500 } },
+  it.each([true, false])(
+    "stops an admitted pre-run Goal only for its own input (own: %s)",
+    async (own) => {
+      const stopped = await persistLifecycle(goalEntry, {
+        ...goalStop,
+        runId: own ? "goal-run" : "queued-run",
+        data: { ...goalStop.data, executionStarted: false },
+      });
+      expect(stopped.goal?.status).toBe(own ? "paused" : "active");
+      expect(stopped.goal?.lastStatusNote).toBe(
+        own ? "Paused after Stop. Resume to continue." : undefined,
+      );
+      if (!own) {
+        expect(stopped).toEqual(goalEntry);
+      }
+    },
+  );
+
+  it.each([goalFailure, goalStop])(
+    "preserves newer Goal/session ownership (#88538) via $data.phase / $data.stopReason",
+    async (event) => {
+      for (const newer of [
+        { ...goalEntry, sessionId: "new-session" },
+        { ...goalEntry, lifecycleRunId: "new-run", startedAt: 2_500 },
+        { ...goalEntry, goal: { ...goalEntry.goal!, updatedAt: 2_500 } },
+        {
+          ...goalEntry,
+          goal: { ...goalEntry.goal!, id: "replacement-goal", createdAt: 2_500, updatedAt: 2_500 },
+        },
+      ]) {
+        const persisted = await persistLifecycle(newer, {
+          ...event,
+          data: { ...event.data, startedAt: 1_000 },
+        });
+        expect(persisted.goal).toEqual(newer.goal);
+      }
+    },
+  );
+
+  it("records an explicitly captured preparation failure only on its unowned session revision", () => {
+    const entry: SessionEntry = {
+      ...freshEntry,
+      lifecycleRevision: "preparation-revision",
+      goal: goalEntry.goal,
+    };
+    const input: SessionLifecyclePatchInput = {
+      canonicalKey: "agent:main:preparation",
+      currentLifecycleGeneration: getAgentEventLifecycleGeneration(),
+      lifecycleRevision: entry.lifecycleRevision,
+      exactCronRun: false,
+      expectedWriter: {
+        allowUnstartedFailure: true,
+        runId: "preparation-run",
+        sessionId: entry.sessionId,
+        lifecycleRevision: entry.lifecycleRevision,
+      },
+      event: lifecycleEvent(
+        { phase: "error", startedAt: 1_000, endedAt: 2_000, error: "Checkout failed" },
+        { sessionId: entry.sessionId, runId: "preparation-run" },
+      ),
+    };
+    expect(projectSessionLifecyclePatch(entry, input).patch).toMatchObject({
+      status: "failed",
+      lastRunId: "preparation-run",
+    });
+    for (const replacement of [
+      { ...entry, activeWriterRunId: "other-run" },
+      { ...entry, lifecycleRunId: "other-run" },
+      { ...entry, sessionId: "replaced-session" },
+      { ...entry, lifecycleRevision: "replaced-revision" },
+      { ...entry, startedAt: 1_500 },
     ]) {
-      expect((await persistLifecycle(goalEntry, event)).goal).toEqual(goalEntry.goal);
+      expect(projectSessionLifecyclePatch(replacement, input).patch).toBeNull();
     }
+    expect(
+      projectSessionLifecyclePatch(entry, {
+        ...input,
+        expectedWriter: {
+          runId: "preparation-run",
+          sessionId: entry.sessionId,
+          lifecycleRevision: entry.lifecycleRevision,
+        },
+      }).patch,
+    ).toBeNull();
   });
 
   it("does not guard when the owning sessionId is unknown (preserves legacy behavior)", () => {
@@ -264,7 +319,7 @@ describe("session lifecycle state", () => {
     },
   );
 
-  it("settles a same-run terminal event whose outer start time predates its embedded start", async () => {
+  it("settles a same-run terminal before its embedded start and refuses a delayed same-run start", async () => {
     const started = await persistLifecycle(freshEntry, startEvent(2_000, "run-a"));
     const completed = await persistLifecycle(
       started,
@@ -279,77 +334,44 @@ describe("session lifecycle state", () => {
       startedAt: 1_900,
       endedAt: 3_000,
       runtimeMs: 1_100,
-    });
-    expect(completed.lifecycleRunId).toBeUndefined();
-  });
-
-  it("does not reopen a terminal row when its same-run start persistence arrives late", async () => {
-    const completed = await persistLifecycle(
-      {
-        sessionId: "session-id",
-        updatedAt: 2_000,
-        status: "done",
-        startedAt: 1_000,
-        endedAt: 2_000,
-        runtimeMs: 1_000,
-        lastRunId: "run-a",
-      },
-      { ...startEvent(1_000, "run-a"), ts: 2_100 },
-    );
-
-    expect(completed).toMatchObject({
-      status: "done",
-      endedAt: 2_000,
       lastRunId: "run-a",
     });
+    expect(completed.lifecycleRunId).toBeUndefined();
+    expect(await persistLifecycle(completed, { ...startEvent(1_900, "run-a"), ts: 3_100 })).toEqual(
+      completed,
+    );
   });
 
   it.each([false, true])(
     "keeps provider ownership while recording the client terminal run (separate fact: %s)",
     async (separate) => {
-      const started = await persistLifecycle(
-        freshEntry,
-        {
-          ...startEvent(1_000, "provider-run"),
-          ...(!separate ? { clientRunId: "client-run" } : {}),
-        },
-        undefined,
-        separate ? "client-run" : undefined,
-      );
+      const persistClientRun = (entry: SessionEntry, event: LifecycleEvent) =>
+        persistLifecycle(
+          entry,
+          { ...event, ...(!separate ? { clientRunId: "client-run" } : {}) },
+          undefined,
+          separate ? "client-run" : undefined,
+        );
+      const started = await persistClientRun(freshEntry, startEvent(1_000, "provider-run"));
       expect(started.lifecycleRunId).toBe("provider-run");
       expect(started.status).toBeUndefined();
-      expect(started.restartRecoveryRuns).toEqual([
-        { runId: "provider-run", lifecycleGeneration: getAgentEventLifecycleGeneration() },
-      ]);
 
-      const completed = await persistLifecycle(
+      const completed = await persistClientRun(
         started,
         lifecycleEvent(
           { phase: "end", startedAt: 1_000, endedAt: 2_000 },
-          {
-            runId: "provider-run",
-            ...(!separate ? { clientRunId: "client-run" } : {}),
-          },
+          { runId: "provider-run" },
         ),
-        undefined,
-        separate ? "client-run" : undefined,
       );
 
       expect(completed.lifecycleRunId).toBeUndefined();
       expect(completed.lastRunId).toBe("client-run");
-      expect(completed.restartRecoveryRuns).toBeUndefined();
     },
   );
 
   it("clears inherited run ownership when a start event has no run id", async () => {
     const started = await persistLifecycle(
-      {
-        sessionId: "session-id",
-        updatedAt: 900,
-        startedAt: 900,
-        lifecycleRunId: "old-run",
-        lastRunId: "old-run",
-      },
+      { ...freshEntry, startedAt: 900, lifecycleRunId: "old-run", lastRunId: "old-run" },
       startEvent(2_000),
     );
 
@@ -358,6 +380,24 @@ describe("session lifecycle state", () => {
   });
 
   it.each([
+    terminalCase("error", goalFailure.data),
+    terminalCase("error final", { ...goalFailure.data, phase: "end", stopReason: "error" }),
+    terminalCase(
+      "timeout final",
+      { ...goalFailure.data, phase: "end", stopReason: "timeout" },
+      "timeout",
+    ),
+    terminalCase("RPC Stop", goalStop.data, "killed", true),
+    terminalCase(
+      "end_turn without yield metadata",
+      { phase: "end", livenessState: "paused", stopReason: "end_turn" },
+      "done",
+    ),
+    terminalCase(
+      "hook-handled turn without provider dispatch",
+      { phase: "end", providerStarted: false },
+      "done",
+    ),
     terminalCase("aborted", { phase: "end", stopReason: "aborted" }, "killed", true),
     terminalCase("signal-only cancellation", { phase: "end", aborted: true }, "killed", true),
     terminalCase(
@@ -385,8 +425,11 @@ describe("session lifecycle state", () => {
       livenessState: "paused",
       stopReason: "end_turn",
     }),
-  ])("persists $name terminal state", async ({ data, status, abortedLastRun }) => {
-    const persisted = await persistLifecycle(runningEntry, lifecycleEvent(data));
+  ])("persists $name terminal state and Goal status", async ({ data, status, abortedLastRun }) => {
+    const persisted = await persistLifecycle(
+      goalEntry,
+      lifecycleEvent(data, { runId: "goal-run" }),
+    );
 
     expect(persisted).toMatchObject({
       status,
@@ -395,6 +438,25 @@ describe("session lifecycle state", () => {
       runtimeMs: 750,
       abortedLastRun,
     });
+    expect(persisted.goal).toMatchObject(
+      status === "done"
+        ? goalEntry.goal
+        : {
+            ...goalEntry.goal,
+            status: "paused",
+            pausedAt: 1_800,
+            updatedAt: 1_800,
+            lastStatusNote:
+              status === "killed"
+                ? "Paused after Stop. Resume to continue."
+                : expect.stringContaining("Paused after an error."),
+          },
+    );
+    if (status !== "killed" && data.error) {
+      expect(persisted.goal?.lastStatusNote).toContain(data.error);
+    }
+    const next = await persistLifecycle(persisted, startEvent(2_100, "next-run"));
+    expect(next.goal).toEqual(persisted.goal);
   });
 
   it.each([
@@ -413,15 +475,10 @@ describe("session lifecycle state", () => {
   );
 
   it("retains yielded continuation custody without recording a terminal outcome", async () => {
-    const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    const restartRecoveryRuns = [{ runId: "yielded-recovery-run", lifecycleGeneration }];
-    loggerMocks.info.mockClear();
-    loggerMocks.warn.mockClear();
     const yielded = await persistLifecycle(
       {
         ...runningEntry,
-        lifecycleRunId: "yielded-recovery-run",
-        restartRecoveryRuns,
+        lifecycleRunId: "yielded-run",
       },
       lifecycleEvent(
         {
@@ -431,7 +488,7 @@ describe("session lifecycle state", () => {
           livenessState: "paused",
           stopReason: "end_turn",
         },
-        { runId: "yielded-recovery-run", lifecycleGeneration, mainSessionRestartRecovery: true },
+        { runId: "yielded-run" },
       ),
     );
 
@@ -439,31 +496,14 @@ describe("session lifecycle state", () => {
       endedAt: 1_800,
       runtimeMs: 750,
       abortedLastRun: false,
-      lifecycleRunId: "yielded-recovery-run",
-      restartRecoveryRuns,
+      lifecycleRunId: "yielded-run",
     });
     expect(yielded.status).toBeUndefined();
-    expect(loggerMocks.info).not.toHaveBeenCalled();
-    expect(loggerMocks.warn).not.toHaveBeenCalled();
 
-    const resumed = await persistLifecycle(yielded, startEvent(2_100, "yielded-recovery-run"));
+    const resumed = await persistLifecycle(yielded, startEvent(2_100, "yielded-run"));
     expect(resumed.status).toBeUndefined();
     expect(resumed.endedAt).toBeUndefined();
     expect(resumed.startedAt).toBe(2_100);
-  });
-
-  it("does not infer pending continuation from end_turn without explicit yield metadata", async () => {
-    const persisted = await persistLifecycle(
-      runningEntry,
-      lifecycleEvent({
-        phase: "end",
-        endedAt: 1_800,
-        livenessState: "paused",
-        stopReason: "end_turn",
-      }),
-    );
-
-    expect(persisted.status).toBe("done");
   });
 
   it.each([
@@ -504,23 +544,7 @@ describe("session lifecycle state", () => {
   });
 });
 
-it("keeps a suppressed lifecycle projection empty while preserving intentional field clears", () => {
-  const current: SessionEntry = {
-    sessionId: "projection-recovery",
-    updatedAt: 1_000,
-    startedAt: 900,
-    status: "interrupted",
-    lifecycleRunId: "foreground-run",
-    abortedLastRun: true,
-    restartRecoveryRuns: [{ runId: "restart-run", lifecycleGeneration: "pre-restart" }],
-    mainRestartRecovery: { cycleId: "cycle-1", revision: 2, chargedAttempts: 2 },
-  };
-  const suppressed = deriveGatewaySessionLifecycleProjectionPatch({
-    entry: current,
-    event: { ts: 2_000, sessionId: current.sessionId, data: { phase: "end", endedAt: 1_800 } },
-  });
-  expect(suppressed).toStrictEqual({});
-
+it("preserves intentional field clears in a lifecycle projection", () => {
   const next = deriveGatewaySessionLifecycleProjectionPatch({
     entry: { endedAt: 1_800, runtimeMs: 900 },
     event: { ts: 2_100, runId: "new-run", data: { phase: "start", startedAt: 2_100 } },

@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -29,6 +30,7 @@ import {
   StateDatabaseAdmissionPendingError,
   StateDatabaseMaintenanceScopeError,
 } from "./gateway-state-owner-record.js";
+import { normalizeWindowsPathForComparison } from "./path-guards.js";
 import { normalizeSqliteNonNegativeInteger } from "./sqlite-busy-timeout.js";
 import { runWithSqliteCleanup } from "./sqlite-lifecycle-errors.js";
 
@@ -162,7 +164,7 @@ const schemaOwners = resolveGlobalSingleton(
     >(),
 );
 
-/** The synchronous lexical owner is live authority, not the existence of its sidecar. */
+/** The active lexical owner is live authority, not the existence of its sidecar. */
 export function getStateDatabaseSchemaLease(
   databasePath: string,
 ): StateDatabaseSchemaLease | undefined {
@@ -219,6 +221,29 @@ function leaseForFile(
   let released = false;
   const holdsPhysicalLease = () =>
     verifyOwnerLock(owner, lock) && (!projection || projection.verifyStillHeld());
+  function run<T>(operation: () => T): T;
+  function run(operation: () => unknown): unknown {
+    lease.assertCurrent();
+    readOwnerPaths.clear();
+    const inherited = new Map(schemaOwners.getStore());
+    const entry = { lease, active: true };
+    inherited.set(owner.key, entry);
+    const leave = () => {
+      entry.active = false;
+      readOwnerPaths.clear();
+    };
+    try {
+      const result = schemaOwners.run(inherited, operation);
+      if (isPromiseLike(result)) {
+        return Promise.resolve(result).finally(leave);
+      }
+      leave();
+      return result;
+    } catch (error) {
+      leave();
+      throw error;
+    }
+  }
   const lease: StateDatabaseSchemaLease = {
     path: pathname,
     assertCurrent() {
@@ -236,19 +261,7 @@ function leaseForFile(
         throw new Error("OpenClaw state maintenance does not own this database");
       }
     },
-    run(operation) {
-      lease.assertCurrent();
-      readOwnerPaths.clear();
-      const inherited = new Map(schemaOwners.getStore());
-      const entry = { lease, active: true };
-      inherited.set(owner.key, entry);
-      try {
-        return schemaOwners.run(inherited, operation);
-      } finally {
-        entry.active = false;
-        readOwnerPaths.clear();
-      }
-    },
+    run,
     release() {
       readOwnerPaths.clear();
       if (!released) {
@@ -488,18 +501,24 @@ export function hasActiveGatewayStateOwner(databasePath: string): boolean {
 
 /** Capture registered process custody; a PID or copied lock payload grants no authority. */
 export function captureGatewayStateOwner(databasePath: string) {
-  const key = resolveStateOwnerIdentity(databasePath).key;
+  const identity = resolveStateOwnerIdentity(databasePath);
+  const { key } = identity;
   const owner = owners.get(key);
   if (!owner || owner.kind !== "process") {
     return undefined;
   }
-  const assertCurrent = () => {
+  // A caller's current locator must still name this retained owner, never a successor.
+  const assertCurrent = (selectedPath = databasePath) => {
     owner.lost.signal.throwIfAborted();
-    const identity = resolveStateOwnerIdentity(databasePath);
+    const canonicalPath = resolveIdentityPathViaExistingAncestorSync(selectedPath);
+    const currentKey =
+      process.platform === "win32"
+        ? normalizeWindowsPathForComparison(canonicalPath)
+        : canonicalPath;
     if (
       owners.get(key) !== owner ||
       !owner.accepting ||
-      identity.key !== key ||
+      currentKey !== key ||
       (owner.getProjection && !owner.getProjection()?.verifyStillHeld())
     ) {
       throw new GatewayStateOwnerContentionError(databasePath);

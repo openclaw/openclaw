@@ -1,4 +1,5 @@
 import type { WindowsJobExtinction } from "../../../scripts/lib/managed-windows-job.mts";
+import type { ProcessExecutionIntent } from "../linux-exec-cgroup.js";
 import type { SpawnInitiation } from "../spawn-initiation.js";
 
 export type ProcessExtinctionResult = void | WindowsJobExtinction;
@@ -62,6 +63,9 @@ export type SpawnSecretInput = {
 };
 
 export type ProcessAdapterConstruction = {
+  executionIntent?: ProcessExecutionIntent;
+  /** Stable session budget identity, independent of command cancellation ownership. */
+  executionScopeKey?: string;
   assertCurrent?: () => void;
   initiateSpawn?: SpawnInitiation;
   /** Synchronous launch admission; never recheck after the target command starts. */
@@ -113,6 +117,8 @@ export type ProcessAdapterStartup<Adapter extends SpawnProcessAdapter> = {
 };
 
 type SpawnBaseInput = {
+  executionIntent?: ProcessExecutionIntent;
+  executionScopeKey?: string;
   initiateSpawn?: SpawnInitiation;
   /** The local subprocess transports execution owned outside its local process tree. */
   cleanupOwnership?: "external";
@@ -129,8 +135,6 @@ type SpawnBaseInput = {
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
   noOutputTimeoutMs?: number;
-  /** Internal host-exec policy; sandbox transports keep their backend's limits. */
-  memoryLimitBytes?: number;
   /**
    * When false, stdout/stderr are streamed via callbacks only and not retained in RunExit payload.
    */
@@ -160,6 +164,8 @@ export type SpawnInput =
       input?: string;
       /** Prepare input authority at the adapter's stdin delivery boundary. */
       prepareInput?: () => void | Promise<void>;
+      /** Prepare async policy after transport setup, before the target starts. */
+      prepareTargetSpawn?: () => void | Promise<void>;
       stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
       secretInput?: SpawnSecretInput;
       onStdoutRaw?: (chunk: Buffer) => void;

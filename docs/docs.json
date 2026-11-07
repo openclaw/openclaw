@@ -3,6 +3,18 @@
   "description": "Self-hosted gateway that connects Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more to AI coding agents. Run one Gateway process on your own machine and message your AI assistant from anywhere.",
   "redirects": [
     {
+      "source": "/start/teams",
+      "destination": "/start/multiplayer"
+    },
+    {
+      "source": "/gateway/team-server",
+      "destination": "/start/multiplayer"
+    },
+    {
+      "source": "/cli/claws",
+      "destination": "/cli/templates"
+    },
+    {
       "source": "/cli/commitments",
       "destination": "/automation#retired-inferred-commitments"
     },
@@ -1361,7 +1373,7 @@
                 "group": "Setup guides and reference",
                 "pages": [
                   "start/openclaw",
-                  "start/teams",
+                  "start/multiplayer",
                   "start/wizard-cli-reference",
                   "start/wizard-cli-automation"
                 ]
@@ -1465,6 +1477,7 @@
                     "pages": [
                       "install/ansible",
                       "install/docker-vm-runtime",
+                      "install/jetson",
                       "install/kubernetes",
                       "install/macos-vm",
                       "install/raspberry-pi"
@@ -2099,6 +2112,7 @@
                     "group": "Web search",
                     "pages": [
                       "tools/web",
+                      "tools/deep-research",
                       "tools/brave-search",
                       "tools/duckduckgo-search",
                       "tools/exa-search",
@@ -2241,6 +2255,7 @@
                       "providers/github-copilot",
                       "providers/gmi",
                       "providers/google",
+                      "providers/google-vertex",
                       "providers/groq",
                       "providers/huggingface",
                       "providers/levanto",
@@ -2269,6 +2284,7 @@
                       },
                       "providers/opencode",
                       "providers/opencode-go",
+                      "providers/particle",
                       "providers/perplexity-provider",
                       "providers/poolside",
                       "providers/qianfan",
@@ -2288,7 +2304,7 @@
                   },
                   {
                     "group": "Decision models",
-                    "pages": ["providers/liquid-ai"]
+                    "pages": ["providers/liquid-ai", "providers/rerank"]
                   },
                   {
                     "group": "Speech and audio",
@@ -2591,7 +2607,6 @@
                     "pages": [
                       "gateway/security/index",
                       "gateway/security/trust-model",
-                      "gateway/security/presets",
                       "gateway/security/running-the-audit",
                       "gateway/security/audit-checks",
                       "gateway/security/hardened-baseline",
@@ -2684,8 +2699,7 @@
                   "gateway/remote",
                   "gateway/stable-https-url",
                   "gateway/tailscale",
-                  "gateway/cloudflare-access",
-                  "gateway/team-server"
+                  "gateway/cloudflare-access"
                 ]
               },
               {
@@ -2858,7 +2872,7 @@
                     "pages": [
                       "cli/agent",
                       "cli/agents",
-                      "cli/claws",
+                      "cli/templates",
                       "cli/infer",
                       "cli/memory",
                       "cli/models",
@@ -3252,6 +3266,9 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.11.1",
+                  "releases/2026.10.10",
+                  "releases/2026.10.9",
                   "releases/2026.10.8",
                   "releases/2026.10.7",
                   "releases/2026.10.6",

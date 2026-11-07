@@ -33,9 +33,14 @@ export function captureChannelAccountRestart(params: {
   channelId: ChannelId;
   accountId: string;
   reason: StartChannelOptions["reason"];
+  resetRestartAttempts?: boolean;
   manager: Pick<
     ChannelAccountLifecycle,
-    "stopChannel" | "startChannel" | "isAccountListed" | "isManuallyStopped"
+    | "stopChannel"
+    | "startChannel"
+    | "isAccountListed"
+    | "isManuallyStopped"
+    | "resetRestartAttempts"
   >;
   log: SubsystemLogger;
 }): ReturnType<ChannelAccountLifecycle["captureAccountRestart"]> {
@@ -78,6 +83,11 @@ export function captureChannelAccountRestart(params: {
       !manager.isAccountListed(channelId, accountId)
     ) {
       return true;
+    }
+    if (params.resetRestartAttempts) {
+      // Health recovery resets before fallible preparation, but never for a
+      // replacement or an account whose recovery authority was withdrawn.
+      manager.resetRestartAttempts(channelId, accountId);
     }
     const outcomes = await manager.startChannel(channelId, accountId, {
       reason,

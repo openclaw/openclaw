@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../src/shared/deferred.ts";
 import {
   APP_ROUTE_IDS,
   pathForRoute,
@@ -6,6 +7,42 @@ import {
   sameRouteLocation,
 } from "./app-route-paths.ts";
 import { createApplicationRouter } from "./app-routes.ts";
+import type { ApplicationContext } from "./app/context.ts";
+
+it.each([
+  ["", "appearance", "?section=__appearance__", "#settings-language"],
+  ["#settings-general-model", "model-providers", "", "#settings-model-behavior"],
+] as const)(
+  "navigates General %s directly to its live destination",
+  async (hash, target, search, targetHash) => {
+    const router = createApplicationRouter();
+    const destination = createDeferredCore<{ renderSolid: () => null }>();
+    const page = router.getRoute(target)!;
+    const component = vi.spyOn(page, "component").mockReturnValue(destination.promise);
+    const loader = vi.spyOn(page, "loader").mockReturnValue(undefined);
+    // SAFETY: These navigation-only fixtures replace the destination loader and component.
+    const context = { basePath: "/ui" } as ApplicationContext;
+    const navigation = router.navigate("config", context, undefined, {
+      pathname: "/ui/settings/general",
+      search: "?section=env",
+      hash,
+    });
+    try {
+      expect(router.getState().pendingMatches[0]?.routeId).toBe(target);
+      expect(router.getState().location).toEqual({
+        pathname: pathForRoute(target, "/ui"),
+        search,
+        hash: targetHash,
+      });
+    } finally {
+      destination.resolve({ renderSolid: () => null });
+      await navigation;
+      router.stop();
+      component.mockRestore();
+      loader.mockRestore();
+    }
+  },
+);
 
 // Page definitions derive path/aliases from the route table via routePageSpec,
 // so router matching cannot disagree with routeIdFromPath/base-path inference
@@ -36,11 +73,11 @@ describe("application router registration", () => {
     expect(routeIdFromPath("/control/tasks", "/control")).toBeNull();
   });
 
-  it("replaces the Agents overview with Claws while keeping per-agent settings", () => {
+  it("replaces the Agents overview with Templates while keeping per-agent settings", () => {
     expect(routeIdFromPath("/agents")).toBeNull();
-    expect(routeIdFromPath("/agents/claws/workflow-operator")).toBeNull();
-    expect(routeIdFromPath("/claws")).toBe("claws");
-    expect(routeIdFromPath("/claws/workflow-operator")).toBe("claws");
+    expect(routeIdFromPath("/agents/templates/workflow-operator")).toBeNull();
+    expect(routeIdFromPath("/templates")).toBe("templates");
+    expect(routeIdFromPath("/templates/workflow-operator")).toBe("templates");
     expect(routeIdFromPath("/settings/agents/research")).toBe("agents");
     expect(routeIdFromPath("/settings/agents/research/tools")).toBe("agents");
   });

@@ -65,13 +65,14 @@ suite.define(() => {
         messages: pageMessages,
         hasMore: true,
         nextOffset: messages.length,
+        olderCursor: "older-reply",
         totalMessages: messages.length + 1,
         sessionId: "reply-preview-history",
       });
       const historyPages = (pageMessages: unknown[]) => ({
         cases: [
           {
-            match: { offset: messages.length },
+            match: { cursor: "older-reply" },
             response: {
               messages: [source],
               hasMore: false,
@@ -106,7 +107,7 @@ suite.define(() => {
       await expect.poll(() => preview.getByRole("button").count()).toBe(1);
       expect(await gateway.getRequests("chat.message.get")).toHaveLength(0);
       await preview.getByRole("button").click();
-      await waitForRequests(gateway, "chat.history", 1, { offset: messages.length });
+      await waitForRequests(gateway, "chat.history", 1, { cursor: "older-reply" });
       await pane
         .locator(".chat-text")
         .getByText("The current original answer.", { exact: true })

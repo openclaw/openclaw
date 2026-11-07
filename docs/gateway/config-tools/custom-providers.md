@@ -61,6 +61,59 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
   </Accordion>
 </AccordionGroup>
 
+## Provider names and icons
+
+Set `models.providers.<id>.name` and `icon` to customize how a provider appears
+in model pickers and provider settings. These fields are presentation only: the
+provider ID, model references, credentials, routing, and existing sessions stay
+unchanged. Omit them to keep the existing appearance.
+
+```json5
+{
+  models: {
+    providers: {
+      workstation: {
+        baseUrl: "http://127.0.0.1:8080/v1",
+        api: "openai-completions",
+        auth: "none",
+        name: "Workstation",
+        icon: { source: "file", path: "icons/workstation.png" },
+        models: [{ id: "local-model", name: "Local model" }],
+      },
+    },
+  },
+}
+```
+
+The optional name must contain 1–100 characters after trimming. Choose one icon source:
+
+- Local artwork: `{ source: "file", path: "icons/workstation.png" }`. Absolute
+  paths and `~/` are supported. Relative paths resolve from the directory containing
+  the active OpenClaw configuration file, not the workspace or browser. The file
+  must be readable by the Gateway user.
+- HTTPS artwork: `{ source: "url", url: "https://images.example.com/icon.png" }`.
+  URLs must not contain credentials or fragments. Only public HTTPS destinations
+  are supported; private-network destinations and unsafe redirects are rejected.
+- Bundled artwork: `{ source: "builtin", name: "server" }`. Use an icon bundled
+  with the Control UI; an unknown name falls back gracefully.
+
+Local and remote artwork supports **PNG, JPEG, WebP, and GIF**, at most **2 MiB**
+and **4096 pixels per side**. The Gateway validates and decodes the image, removes
+metadata and animation, and serves a static PNG thumbnail no larger than 256 × 256.
+SVG and other active or unsupported formats are not accepted. Remote downloads
+are bounded by a five-second timeout and the same byte limit; the browser never
+fetches the configured remote URL directly.
+
+The UI tries the configured icon first, then the provider's built-in brand, then
+an initial from the effective display name. Missing, unreadable, invalid, or
+unavailable artwork does not prevent model selection. Local files are served
+through a provider-scoped Gateway asset route; that route accepts a provider ID,
+not an arbitrary filesystem path or remote URL.
+
+Save the configuration through the normal configuration lifecycle to reload
+presentation changes. No frontend rebuild, provider rename, or model-reference
+migration is needed.
+
 ## Provider field details
 
 <AccordionGroup>
@@ -78,6 +131,8 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     - `models.providers.*.timeoutSeconds`: optional per-provider model HTTP request timeout in seconds, including connect, headers, body, and total request abort handling.
     - `models.providers.*.injectNumCtxForOpenAICompat`: for Ollama + `openai-completions`, inject `options.num_ctx` into requests (default: `true`).
     - `models.providers.*.authHeader`: force credential transport in the `Authorization` header when required.
+    - `models.providers.*.name`: optional display name (1–100 characters), independent of the provider ID.
+    - `models.providers.*.icon`: optional file, HTTPS URL, or bundled artwork; see [Provider names and icons](/gateway/config-tools/custom-providers#provider-names-and-icons).
     - `models.providers.*.baseUrl`: upstream API base URL.
     - `models.providers.*.headers`: extra static headers for proxy/tenant routing.
 
@@ -98,6 +153,9 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     - `models.providers.*.models.*.contextWindow`: native context-window metadata for that model.
     - `models.providers.*.models.*.contextTokens`: optional active-input cap for that model; use it when you want an effective budget distinct from the model's native `contextWindow`; `openclaw models list` shows both when they differ.
     - `models.providers.*.models.*.responseModelEquivalent`: optional boolean for a user-authored custom-provider row in config. Set `true` when a router or broker resolves this model id itself and reports the concrete model it served. OpenClaw then treats any response model from that endpoint as the requested route, including endpoint-internal substitutions. The served model id and usage remain visible in metadata, but no model route change is announced to parent agents. OpenClaw fallbacks and overrides to another configured model or provider still produce a notice. Bundled and official provider policy remains authoritative; this key cannot override it, even if the provider has no equivalence hook. Plugin/catalog rows, agent `models.json` rows, and rows marked `metadataSource: "models-add"` cannot grant equivalence. Omitted or `false` preserves normal route detection. This optional key requires no Doctor migration.
+
+    OpenAI-compatible stream response ids and served-model metadata ignore empty
+    keepalives and role-only placeholders; those frames do not establish a model route change.
 
     #### Custom provider capability declarations
 

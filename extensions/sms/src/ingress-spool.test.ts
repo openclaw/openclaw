@@ -5,6 +5,8 @@ import path from "node:path";
 import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { saveRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
+import { createFixtureLifetime } from "openclaw/plugin-sdk/test-env";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import type { SmsChannelRuntime } from "./inbound.js";
@@ -26,6 +28,7 @@ const account = createSmsTestAccount({ accountId: "default" });
 
 const stateDirs: string[] = [];
 const disposers: Array<() => void | Promise<void>> = [];
+const heldFixtures: Array<{ retire: () => void; drain: () => Promise<void> }> = [];
 type SmsIngressDeliver = NonNullable<Parameters<typeof createSmsIngressSpool>[0]["deliver"]>;
 type SmsIngressSpool = ReturnType<typeof createSmsIngressSpool>;
 
@@ -83,11 +86,34 @@ async function listenSmsTestServer(server: ReturnType<typeof createServer>): Pro
 }
 
 afterEach(async () => {
-  for (const dispose of disposers.splice(0).toReversed()) {
-    await dispose();
+  const failures: unknown[] = [];
+  const fixtures = heldFixtures.splice(0);
+  // Stop cancellation cannot join a non-cooperative callback. Release its test gate
+  // and join the actual producer before removing the queue's state directory.
+  for (const fixture of fixtures) {
+    fixture.retire();
   }
-  for (const stateDir of stateDirs.splice(0).toReversed()) {
-    await rm(stateDir, { recursive: true, force: true });
+  // Snapshot each next stage only after the previous one joins late acquisitions.
+  for (const callbacks of [
+    () => fixtures.map((fixture) => fixture.drain),
+    () => disposers.splice(0).toReversed(),
+    () =>
+      stateDirs
+        .splice(0)
+        .toReversed()
+        .map((stateDir) => () => rm(stateDir, { recursive: true, force: true })),
+  ]) {
+    for (const dispose of callbacks()) {
+      try {
+        await dispose();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+  }
+  vi.useRealTimers();
+  if (failures.length) {
+    throw new AggregateError(failures, "SMS ingress fixture cleanup failed");
   }
 });
 
@@ -314,25 +340,50 @@ describe("createSmsIngressSpool", () => {
     }
   });
 
-  it("does not let a non-cooperative delivery block route replacement shutdown", async () => {
-    const stateDir = await createStateDir();
-    const { promise: deliveryStarted, resolve: markDeliveryStarted } =
-      Promise.withResolvers<void>();
-    let deliverySignal: AbortSignal | undefined;
-    const spool = createTestSpool(stateDir, {
-      deliver: vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
-        deliverySignal = lifecycle.abortSignal;
-        markDeliveryStarted();
-        await new Promise<void>(() => {});
-      }),
+  it("does not let a non-cooperative delivery block route replacement shutdown", () => {
+    const lifetime = createFixtureLifetime();
+    const retirement = new AbortController();
+    const deliveryGate = Promise.withResolvers<void>();
+    let spool: SmsIngressSpool | undefined;
+    heldFixtures.push({
+      retire: () => {
+        retirement.abort(new Error("SMS ingress fixture retired"));
+        deliveryGate.resolve();
+      },
+      drain: async () => {
+        await lifetime.cleanup();
+        // This is supplemental monitor settlement, not a replacement for the
+        // exact callback join above after the monitor's non-waiting stop.
+        await spool?.waitForIdle();
+      },
     });
-    spool.start();
-    await spool.enqueue(form("SM-non-cooperative-stop"));
-    await deliveryStarted;
+    return lifetime.run(async () => {
+      const stateDir = await createStateDir();
+      retirement.signal.throwIfAborted();
+      const { promise: deliveryStarted, resolve: markDeliveryStarted } =
+        Promise.withResolvers<void>();
+      let deliverySignal: AbortSignal | undefined;
+      spool = createTestSpool(stateDir, {
+        deliver: vi.fn<SmsIngressDeliver>((_message, lifecycle) =>
+          lifetime.run(async () => {
+            deliverySignal = lifecycle.abortSignal;
+            markDeliveryStarted();
+            await deliveryGate.promise;
+          }),
+        ),
+      });
+      spool.start();
+      await withinTest(
+        lifetime.track(spool.enqueue(form("SM-non-cooperative-stop"))),
+        retirement.signal,
+      );
+      await withinTest(deliveryStarted, retirement.signal);
 
-    await spool.stop();
+      await withinTest(lifetime.track(spool.stop()), retirement.signal);
 
-    expect(deliverySignal?.aborted).toBe(true);
+      expect(deliverySignal?.aborted).toBe(true);
+      deliveryGate.resolve();
+    });
   });
 
   it.each(["SmsMessageSid"])("accepts the legacy %s event id alias", async (key) => {

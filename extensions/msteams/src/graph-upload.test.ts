@@ -2,11 +2,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withFetchPreconnect, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
-import {
-  getDriveItemProperties,
-  requireMSTeamsSharePointSiteId,
-  uploadAndShareSharePoint,
-} from "./graph-upload.js";
+import { getDriveItemProperties, uploadAndShareSharePoint } from "./graph-upload.js";
 import {
   MSTEAMS_REQUEST_TIMEOUT_MS,
   resolveMSTeamsSharePointUploadTimeoutMs,
@@ -256,13 +252,6 @@ async function startTimedUpload(
 }
 
 describe("graph upload helpers", () => {
-  it("requires a non-empty SharePoint site ID", () => {
-    expect(() => requireMSTeamsSharePointSiteId()).toThrow(
-      "channels.msteams.sharePointSiteId is required",
-    );
-    expect(requireMSTeamsSharePointSiteId(" site-123 ")).toBe("site-123");
-  });
-
   it.each(["application/pdf"])(
     "uploads to SharePoint with the site drive path and MIME %s",
     async (contentType) => {

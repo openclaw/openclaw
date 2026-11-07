@@ -142,6 +142,33 @@ function bindChannelCallbacks<T extends object>(callbacks: T, consumer: PluginIn
   });
 }
 type ChannelDeliveryCustody = { deferred: boolean };
+function bindChannelAdoption(
+  source: TurnAdoptionLifecycle | undefined,
+  consumer: PluginInstanceConsumer,
+  custody: ChannelDeliveryCustody,
+): TurnAdoptionLifecycle {
+  return {
+    ...source,
+    onAdopted: source?.onAdopted ?? (() => {}),
+    onDeferred: () => {
+      const accepted = source?.onDeferred?.();
+      if (accepted !== false) {
+        custody.deferred = true;
+      }
+      return accepted;
+    },
+    onSettled: async () => {
+      try {
+        await source?.onSettled?.();
+      } finally {
+        if (custody.deferred) {
+          consumer.release();
+        }
+      }
+    },
+  };
+}
+
 function bindChannelDelivery<
   T extends {
     delivery: object;
@@ -151,29 +178,10 @@ function bindChannelDelivery<
 >(params: T, consumer?: PluginInstanceConsumer, custody?: ChannelDeliveryCustody): T {
   let replyOptions = params.replyOptions;
   let adoption: TurnAdoptionLifecycle | undefined;
-  if (consumer && custody && replyOptions?.onQueuedFollowupReplyBatch) {
-    // Queued source delivery outlives dispatch; the queue owns its final release.
-    const source = params.turnAdoptionLifecycle ?? replyOptions.turnAdoptionLifecycle;
-    adoption = {
-      ...source,
-      onAdopted: source?.onAdopted ?? (() => {}),
-      onDeferred: () => {
-        const accepted = source?.onDeferred?.();
-        if (accepted !== false) {
-          custody.deferred = true;
-        }
-        return accepted;
-      },
-      onSettled: async () => {
-        try {
-          await source?.onSettled?.();
-        } finally {
-          if (custody.deferred) {
-            consumer.release();
-          }
-        }
-      },
-    };
+  const source = params.turnAdoptionLifecycle ?? replyOptions?.turnAdoptionLifecycle;
+  if (consumer && custody && (source || replyOptions?.onQueuedFollowupReplyBatch)) {
+    // Queued observers and source delivery outlive dispatch; settlement releases both.
+    adoption = bindChannelAdoption(source, consumer, custody);
     replyOptions = { ...replyOptions, turnAdoptionLifecycle: adoption };
   }
   return consumer
@@ -230,7 +238,7 @@ const runChannelTurnCore = createLazyRuntimeMethod(
 ) as typeof import("../../channels/turn/run-channel-turn.js").runChannelTurn;
 const runChannelTurn = ((params: Parameters<typeof runChannelTurnCore>[0]) =>
   withChannelDeliveryCustody(params, (turn, consumer, custody) => {
-    if (!consumer) {
+    if (!consumer || !custody) {
       return runChannelTurnCore(publicChannelTurnParams(turn));
     }
     const adapter = bindChannelCallbacks(turn.adapter, consumer);
@@ -239,17 +247,27 @@ const runChannelTurn = ((params: Parameters<typeof runChannelTurnCore>[0]) =>
       const instance = getPluginValueInstance(consumer.wrap(() => undefined))!;
       // SAFETY: Exact-owner restoration preserves the adapter's resolved turn contract.
       const original = (getPluginOriginalValue(resolved, instance) ?? resolved) as typeof resolved;
-      return "delivery" in original ? bindChannelDelivery(original, consumer, custody) : original;
+      if (!("delivery" in original)) {
+        return original;
+      }
+      if (turn.turnAdoptionLifecycle) {
+        // Core assembly selects this top-level lifecycle, not the resolved turn's.
+        // Prepared dispatch closures keep their original exact lifecycle identity.
+        preparedTurn.turnAdoptionLifecycle = bindChannelCallbacks(
+          bindChannelAdoption(turn.turnAdoptionLifecycle, consumer, custody),
+          consumer,
+        );
+      }
+      return bindChannelDelivery(original, consumer, custody);
     };
-    return runChannelTurnCore(
-      publicChannelTurnParams({
-        ...turn,
-        adapter: new Proxy(adapter, {
-          get: (target, key) =>
-            key === "resolveTurn" ? resolveTurn : Reflect.get(target, key, target),
-        }),
+    const preparedTurn = publicChannelTurnParams({
+      ...turn,
+      adapter: new Proxy(adapter, {
+        get: (target, key) =>
+          key === "resolveTurn" ? resolveTurn : Reflect.get(target, key, target),
       }),
-    );
+    });
+    return runChannelTurnCore(preparedTurn);
     // SAFETY: Forwarding async overloads unchanged preserves raw-event and dispatch-result generics.
   })) as typeof import("../../channels/turn/run-channel-turn.js").runChannelTurn;
 

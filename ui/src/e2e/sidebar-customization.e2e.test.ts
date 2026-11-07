@@ -1,19 +1,21 @@
 // Control UI tests cover customizable sidebar navigation and persistence.
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
-import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import {
+  controlUiBundledGatewayUrl,
   controlUiSessionPath,
-  installMockGateway,
   waitForControlUiRoute,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
+import { installNativePluginMockGateway } from "../test-helpers/control-ui-plugin-e2e.ts";
+import { revealSidebarTarget } from "../test-helpers/control-ui-sidebar-window.ts";
 import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
 import { compactCronJobFixture } from "../test-helpers/cron.ts";
 import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { openSidebarPages, openSidebarPinMenu } from "./sidebar-customization.test-support.ts";
+import { expandSidebarSessions } from "./sidebar-session-pagination.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI sidebar customization mocked Gateway E2E",
@@ -44,7 +46,7 @@ suite.define(() => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { height: 954, width: 1105 } },
         async ({ page }) => {
-          await installMockGateway(page, {
+          await installNativePluginMockGateway(page, {
             sessions: Array.from({ length: 40 }, (_, index) => ({
               key: `agent:main:divider-session-${index}`,
               label: `Project checkpoint ${index + 1}`,
@@ -56,10 +58,11 @@ suite.define(() => {
           const body = page.locator(".sidebar-shell__body");
           const nav = page.locator(".shell-nav");
           const resizer = page.getByRole("separator", { name: "Resize sidebar" });
-          for (let batch = 0; batch < 3; batch++) {
-            const more = body.getByRole("button", { name: "Show more", exact: true }).first();
-            await more.click();
-          }
+          await expandSidebarSessions(body, 40);
+          await revealSidebarTarget(
+            body,
+            body.locator('[data-session-key="agent:main:divider-session-39"]'),
+          );
           await expect
             .poll(() => body.evaluate((element) => element.scrollHeight > element.clientHeight))
             .toBe(true);
@@ -140,7 +143,7 @@ suite.define(() => {
             { id: "default", total: 0, active: 0, archived: 0, byStatus: {} },
             { id: "ops", name: "Operations", total: 0, active: 0, archived: 0, byStatus: {} },
           ];
-          await installMockGateway(page, {
+          await installNativePluginMockGateway(page, {
             ...workboardUi,
             methodResponses: {
               "workboard.boards.list": { boards },
@@ -268,7 +271,7 @@ suite.define(() => {
       key: hiddenSessionCatalogsStorageKey,
       value: ["claude", "offline-catalog"],
     });
-    const gateway = await installMockGateway(page, {
+    const gateway = await installNativePluginMockGateway(page, {
       featureMethods: ["sessions.catalog.list"],
       methodResponses: {
         "sessions.catalog.list": {
@@ -317,7 +320,7 @@ suite.define(() => {
       viewport: { height: 900, width: 1440 },
     });
     const page = await context.newPage();
-    await installMockGateway(page, {
+    await installNativePluginMockGateway(page, {
       controlUiTabs: [{ group: "control", id: "logbook", label: "Logbook", pluginId: "logbook" }],
       methodResponses: {
         "config.get": {
@@ -429,7 +432,7 @@ suite.define(() => {
         )
         .toBe("page");
       const settingsLinks = settingsSidebar.locator(".settings-sidebar__item");
-      expect(await trimmedTextContents(settingsLinks)).not.toContain("Agent Defaults");
+      expect(await trimmedTextContents(settingsLinks)).not.toContain("Agent defaults");
       await expect
         .poll(() =>
           settingsSearch.evaluate((input) => {
@@ -446,25 +449,11 @@ suite.define(() => {
       await settingsSearch.fill("system");
       await expect
         .poll(() => trimmedTextContents(settingsLinks))
-        .toEqual([
-          "Ask OpenClaw",
-          "Approvals",
-          "Infrastructure",
-          "Labs",
-          "Advanced",
-          "Debug",
-          "Logs",
-          "Updates",
-          "About",
-          "Profile",
-          "Appearance",
-          "Notifications",
-          "Gateway",
-        ]);
+        .toEqual(["Infrastructure", "Labs", "Advanced", "Debug", "Logs", "Updates", "About"]);
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/mcp");
       await settingsSearch.fill("browser");
       const browserResult = settingsSidebar.getByRole("link", {
-        name: "Browser",
+        name: "Browser Infrastructure",
         exact: true,
       });
       await expect.poll(() => browserResult.isVisible()).toBe(true);
@@ -479,7 +468,7 @@ suite.define(() => {
       await settingsSearch.fill("session observer");
       const sidebarPreferencesResult = settingsSidebar.getByRole("link", {
         exact: true,
-        name: "Sidebar",
+        name: "Sidebar Appearance",
       });
       await expect.poll(() => sidebarPreferencesResult.isVisible()).toBe(true);
       await sidebarPreferencesResult.click();
@@ -490,7 +479,7 @@ suite.define(() => {
         .poll(() =>
           page
             .locator("#settings-appearance-sidebar")
-            .getByRole("heading", { name: "Session observer" })
+            .getByText("Session observer", { exact: true })
             .isVisible(),
         )
         .toBe(true);
@@ -498,7 +487,7 @@ suite.define(() => {
       await settingsSearch.fill("message width");
       const chatPreferencesResult = settingsSidebar.getByRole("link", {
         exact: true,
-        name: "Chat",
+        name: "Chat Appearance",
       });
       await expect.poll(() => chatPreferencesResult.isVisible()).toBe(true);
       await chatPreferencesResult.click();
@@ -531,7 +520,10 @@ suite.define(() => {
         )
         .toBe("page");
       await settingsSearch.fill("sandbox access");
-      const toolsResult = settingsSidebar.getByRole("link", { name: "Tools", exact: true });
+      const toolsResult = settingsSidebar.getByRole("link", {
+        name: "Tools Agent defaults",
+        exact: true,
+      });
       await expect.poll(() => toolsResult.isVisible()).toBe(true);
       await toolsResult.click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/ai-agents");
@@ -712,11 +704,40 @@ suite.define(() => {
         viewport: { height: 900, width: 1440 },
       },
       async ({ page }) => {
-        await installMockGateway(page, {
+        await installNativePluginMockGateway(page, {
           sessions: [
             { hasActiveRun: true, key: "main", kind: "direct", status: "running", updatedAt: 100 },
           ],
         });
+        // Seed the outbox owner; shell commits replace direct sidebar property assignments.
+        await page.addInitScript((gatewayOwner) => {
+          const recoveryScope = "e2e-recovery-scope";
+          const sessionKey = "agent:main:main";
+          sessionStorage.setItem(
+            `openclaw.control.chatComposer.v4:${encodeURIComponent(gatewayOwner)}:account:${encodeURIComponent(recoveryScope)}`,
+            JSON.stringify({
+              version: 4,
+              gatewayOwner,
+              recovery: {},
+              sessions: {
+                [`${sessionKey}\u0000agent:main`]: {
+                  updatedAt: Date.now(),
+                  queue: [
+                    {
+                      id: "sidebar-home-held-input",
+                      text: "Synthetic held sidebar input",
+                      createdAt: Date.now(),
+                      sessionKey,
+                      agentId: "main",
+                      storageScope: JSON.stringify([gatewayOwner, recoveryScope]),
+                      sendState: "held",
+                    },
+                  ],
+                },
+              },
+            }),
+          );
+        }, controlUiBundledGatewayUrl(suite.server.baseUrl));
 
         await page.goto(`${suite.server.baseUrl}chat`);
         const sidebar = page.locator("openclaw-app-sidebar");
@@ -729,14 +750,6 @@ suite.define(() => {
         await sidebar.getByRole("button", { name: "Sessions", exact: true }).click();
         const home = sidebar.locator(".sidebar-footer-bar__home");
         await expect.poll(() => home.isVisible()).toBe(true);
-        await sidebar.evaluate((element) => {
-          // This layout fixture supplies the sidebar's declared presentation input.
-          (element as AppSidebarElement).storedOutboxes = {
-            total: 1,
-            attentionCountForSession: () => 1,
-            hasSessionDraft: () => false,
-          };
-        });
 
         const activity = home.locator(".session-glyph");
         const shortcut = sidebar
@@ -787,7 +800,7 @@ suite.define(() => {
         viewport: { height: 900, width: 1440 },
       },
       async ({ page }) => {
-        const gateway = await installMockGateway(page, {
+        const gateway = await installNativePluginMockGateway(page, {
           methodResponses: {
             "cron.list": {
               jobs: [

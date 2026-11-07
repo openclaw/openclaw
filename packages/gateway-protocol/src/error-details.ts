@@ -9,7 +9,7 @@ export {
   isMcpAppViewExpiredError,
   readCronJobNotFoundError,
   readClawHubRiskAcknowledgementRequiredError,
-  readClawReviewRequiredError,
+  readTemplateReviewRequiredError,
   readMissingScopeError,
   readMissingScopeErrorDetails,
 } from "./gateway-error-details.js";
@@ -26,7 +26,7 @@ export type {
   SetupAdmissionBusyErrorDetails,
   SessionWorkspaceRecoveryRequiredErrorDetails,
   ClawHubRiskAcknowledgementRequiredErrorDetails,
-  ClawReviewRequiredErrorDetails,
+  TemplateReviewRequiredErrorDetails,
 } from "./gateway-error-details.js";
 export {
   CronJobNotFoundErrorDetailsSchema,
@@ -39,7 +39,7 @@ export {
   SetupAdmissionBusyErrorDetailsSchema,
   SessionWorkspaceRecoveryRequiredErrorDetailsSchema,
   ClawHubRiskAcknowledgementRequiredErrorDetailsSchema,
-  ClawReviewRequiredErrorDetailsSchema,
+  TemplateReviewRequiredErrorDetailsSchema,
   buildMissingScopeErrorDetails,
   errorShape,
   missingScopeErrorShape,

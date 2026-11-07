@@ -57,6 +57,9 @@ suite.define(() => {
         methodResponses: { "config.get": { exists: true, valid: true, sourceConfig: {} } },
       });
       const dialog = await openCreationDialog(page);
+      expect(await dialog.evaluate((form) => form.closest("dialog")?.open)).toBe(true);
+      const name = dialog.locator('input[name="name"]');
+      await name.fill("Harbor guide");
       const presets = dialog.locator(".avatar-picker__preset");
       await presets.first().click();
       await expect.poll(() => presets.first().getAttribute("aria-pressed")).toBe("true");
@@ -73,6 +76,7 @@ suite.define(() => {
       const during = await bounds();
       await expect.poll(() => presets.nth(1).getAttribute("aria-pressed")).toBe("true");
       const after = await bounds();
+      expect(await name.inputValue()).toBe("Harbor guide");
       const frames = [before, during, after];
       for (const dimension of ["height", "top"] as const) {
         const values = frames.map((frame) => frame[dimension]);

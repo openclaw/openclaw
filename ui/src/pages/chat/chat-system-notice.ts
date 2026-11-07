@@ -10,7 +10,11 @@ import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { optionalBoundaryIdentity } from "./chat-thread-run-identity.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
-import { resolveSystemNoticeKind, type PendingInputStatus } from "./system-notice-kinds.ts";
+import {
+  resolveSystemNoticeKind,
+  projectSystemNoticeSummary,
+  type PendingInputStatus,
+} from "./system-notice-kinds.ts";
 
 registerChatSessionEnglish();
 
@@ -30,7 +34,7 @@ function readSubmittedModel(value: unknown): SubmittedModel | undefined {
 export function createSubmittedModelNoticeProjector() {
   let previous: SubmittedModel | undefined;
   let hasConversation = false;
-  return (item: Extract<ChatItem, { kind: "message" }>): ChatItem | undefined => {
+  const project = (item: Extract<ChatItem, { kind: "message" }>): ChatItem | undefined => {
     const raw = asRecord(item.message);
     const metadata = asRecord(raw?.["__openclaw"]);
     if (metadata?.kind === "reset") {
@@ -81,6 +85,9 @@ export function createSubmittedModelNoticeProjector() {
       text: "",
     };
   };
+  /** Everything a later message's notice depends on. */
+  const state = () => JSON.stringify([previous, hasConversation]);
+  return Object.assign(project, { state });
 }
 
 /** Pending custody and persisted history share the same system-turn presentation. */
@@ -91,22 +98,11 @@ export function projectChatSystemNotice(
     status: PendingInputStatus;
     key: string;
     timestamp: number;
+    cancelledByUser?: true;
     retired?: NonNullable<Extract<ChatItem, { kind: "notice" }>["retiredPendingInput"]>;
   },
 ): ChatItem[] {
   const raw = asRecord(item.message);
-  if (raw?.role === "custom" && raw.customType === "session-send-recovery-blocked") {
-    return [
-      {
-        kind: "notice",
-        key: item.key,
-        timestamp: (normalized ?? safeNormalizeMessage(item.message))?.timestamp ?? 0,
-        icon: "cpu",
-        systemEvent: "delivery-warning",
-        text: extractTextCached(item.message) ?? "",
-      },
-    ];
-  }
   if (raw?.role === "custom" && raw.customType === "session-model-change") {
     const details = asRecord(raw.details);
     if (typeof details?.from === "string" && typeof details.to === "string") {
@@ -126,11 +122,13 @@ export function projectChatSystemNotice(
   const provenance = asRecord(raw?.provenance);
   const agentUpdate = provenance?.kind === "inter_session";
   const pendingText =
-    pending && agentUpdate && (pending.status === "cancelled" || pending.status === "interrupted")
-      ? t(`chat.pendingInputs.agentUpdate.${pending.status}`)
-      : pending && pending.status !== "queued"
-        ? t(`chat.pendingInputs.${pending.status}`)
-        : undefined;
+    pending?.status === "cancelled" && pending.cancelledByUser
+      ? undefined
+      : pending && agentUpdate && pending.status === "cancelled"
+        ? t(`chat.pendingInputs.agentUpdate.${pending.status}`)
+        : pending && pending.status !== "queued"
+          ? t(`chat.pendingInputs.${pending.status}`)
+          : undefined;
   const pendingItems: ChatItem[] =
     pending && pendingText
       ? [
@@ -190,6 +188,9 @@ export function projectChatSystemNotice(
     return [item, ...pendingItems];
   }
   const sourceTool = typeof provenance.sourceTool === "string" ? provenance.sourceTool : undefined;
+  if (sourceTool === "restart") {
+    return [];
+  }
   const noticeKind = resolveSystemNoticeKind(sourceTool);
   const pluginSteering = sourceTool?.startsWith("plugin:")
     ? asRecord(asRecord(raw?.["__openclaw"])?.pluginSteering)
@@ -200,32 +201,33 @@ export function projectChatSystemNotice(
       : typeof pluginSteering?.pluginId === "string" && pluginSteering.pluginId.trim()
         ? pluginSteering.pluginId
         : sourceTool?.slice("plugin:".length);
-  const pendingSummaryKey = pending && noticeKind?.pendingSummaryKeys?.[pending.status];
-  const summaryKey = pendingSummaryKey ?? noticeKind?.summaryKey;
-  const text =
-    summaryKey === null
-      ? ""
-      : summaryKey
-        ? t(summaryKey)
-        : (extractTextCached(item.message)?.replace(/^\[System\] /u, "") ?? "");
-  if (!text.trim() && summaryKey !== null) {
+  const summaryKey = noticeKind?.summaryKey;
+  const text = summaryKey
+    ? t(summaryKey)
+    : (extractTextCached(item.message)?.replace(/^\[System\] /u, "") ?? "");
+  if (!text.trim()) {
     return pendingItems;
   }
+  const summary = projectSystemNoticeSummary({
+    label: noticeKind ? t(noticeKind.labelKey, { plugin: pluginName ?? "" }) : t("common.system"),
+    text,
+    detailed: Boolean(noticeKind?.collapsedBody),
+    statusOnly: Boolean(summaryKey),
+  });
   return [
     {
       kind: "notice",
       key: item.key,
-      icon: noticeKind?.icon ?? "cpu",
+      icon: "cpu",
       ...(pending ? {} : { systemEvent: "info" as const }),
-      label: noticeKind ? t(noticeKind.labelKey, { plugin: pluginName ?? "" }) : t("common.system"),
+      label: summary.label,
       ...(noticeKind?.startsTurn === false ? {} : { startsTurn: true }),
-      ...(noticeKind?.collapsedBody ? { collapsedBody: true } : {}),
+      ...(summary.collapsedBody ? { collapsedBody: true } : {}),
       ...(noticeKind?.showTimestamp ? { showTimestamp: true } : {}),
-      text,
+      text: summary.text,
       timestamp: message.timestamp,
       ...optionalBoundaryIdentity(userTurnRunId(item.message)),
-      ...(pendingSummaryKey && pending?.retired ? { retiredPendingInput: pending.retired } : {}),
     },
-    ...(pendingSummaryKey ? [] : pendingItems),
+    ...pendingItems,
   ];
 }

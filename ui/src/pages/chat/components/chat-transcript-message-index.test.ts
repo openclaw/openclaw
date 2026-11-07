@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as fnv1a from "../../../../../src/shared/fnv1a.js";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { resetWorkingProgress } from "../chat-progress.ts";
 import { buildChatItems, type BuildChatItemsProps } from "../chat-thread-build.ts";
@@ -10,6 +11,7 @@ import {
   projectTranscriptIndex,
   projectTranscriptRows,
 } from "./chat-transcript-message-index.ts";
+import { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
 
 const sessionKey = "agent:main:dashboard:0f6d5a1c-5a9e-4c1e-9b1a-2f3c4d5e6f70";
 
@@ -89,6 +91,190 @@ const replyFrameShape = (outcome: unknown, ...parts: unknown[]) => ({
   parts,
 });
 
+describe("long completed runs", () => {
+  function longRun(extra: unknown[] = [], steps = 300, run = 0) {
+    const suffix = run === 0 ? "" : `-${run}`;
+    const runId = `run-${run + 1}`;
+    const offset = run * 10_000;
+    return [
+      makeMessage(`question${suffix}`, offset + 1, { role: "user", runId }),
+      ...Array.from({ length: steps }, (_, index) => [
+        makeMessage(`step-${index}${suffix}`, offset + index * 2 + 2, {
+          runId,
+          phase: "commentary",
+          stopReason: "toolUse",
+          content: [
+            { type: "text", text: `Inspecting file ${index}` },
+            {
+              type: "toolCall",
+              id: `tool-${index}${suffix}`,
+              name: "read",
+              arguments: { path: `file-${index}.md` },
+            },
+          ],
+        }),
+        makeTool(
+          `tool-${index}${suffix}`,
+          offset + index * 2 + 3,
+          runId,
+          offset * 10 + index * 20 + 30,
+        ),
+      ]).flat(),
+      ...extra,
+      finalAnswer(`long-answer${suffix}`, offset + steps * 2 + 2 + extra.length, { runId }),
+    ];
+  }
+
+  it.each([
+    { name: "single run", runs: 1, steps: 99, windowed: false, retained: false },
+    { name: "combined runs", runs: 2, steps: 99, windowed: true, retained: false },
+    { name: "512-message medium boundary", runs: 1, steps: 255, windowed: true, retained: false },
+    { name: "514-message large boundary", runs: 1, steps: 256, windowed: true, retained: true },
+  ])("$name preserves window and preparation policy", ({ runs, steps, windowed, retained }) => {
+    const messages = Array.from({ length: runs }, (_, run) => longRun([], steps, run)).flat();
+    const chain = projectHistory(messages, { sessionKey: "agent:main:telegram:direct:42" });
+    const frames = framesOf(chain);
+    expect(frames).toHaveLength(runs);
+    const index = indexFor(chain);
+    const preparation = { retainDom: windowed, prewarm: windowed && !retained };
+    for (const [run, frame] of frames.entries()) {
+      const suffix = run === 0 ? "" : `-${run}`;
+      const first = index.messageRowKeysById.get(`step-0${suffix}`);
+      const last = index.messageRowKeysById.get(`step-${steps - 1}${suffix}`);
+      expect(first === frame.key).toBe(!windowed);
+      expect(first === last).toBe(!windowed);
+      expect(index.messageRowKeysById.get(`long-answer${suffix}`)).toBe(frame.key);
+      expect(index.rows.find((row) => row.key === first)).toMatchObject(preparation);
+    }
+  });
+
+  it.each([sessionKey, "agent:main:telegram:direct:42"])(
+    "windows completed work and maps distant replies to their own row in %s",
+    (key) => {
+      const chain = projectHistory(longRun(), { sessionKey: key });
+      const frame = onlyFrame(chain);
+      const expanded = new Map<string, boolean>();
+      for (const part of kind(frame.parts, "work-group")) {
+        setExpansionState(expanded, part.key, true);
+      }
+      const index = indexFor(chain, expanded);
+      const rows = index.rows.filter((row) => row.kind === "item");
+      const workRows = rows.filter((row) => row.item.kind === "agent-run-frame");
+      expect(workRows.length).toBeGreaterThan(1);
+      for (const row of workRows) {
+        if (row.item.kind !== "agent-run-frame" || !row.item.fragment) {
+          continue;
+        }
+        // Only middle fragments can restore geometry without reading source-run edge chrome.
+        const edge = row.item.fragment.first || row.item.fragment.last;
+        expect(row.revision === undefined).toBe(edge);
+      }
+      expect(index.messageRowKeysById.get("step-0")).not.toBe(
+        index.messageRowKeysById.get("step-299"),
+      );
+      expect(index.messageRowKeysById.get("long-answer")).toBe(frame.key);
+      expect(rows.at(-1)?.key).toBe(frame.key);
+      for (const row of workRows) {
+        const parts = row.item.kind === "agent-run-frame" ? row.item.parts : [];
+        const content = parts.filter((part) => part.kind !== "work-group");
+        expect(messagesIn(content).length).toBeLessThanOrEqual(1);
+      }
+      const summary = rows.find(
+        (row) => row.item.kind === "agent-run-frame" && row.item.parts[0]?.kind === "work-group",
+      );
+      if (summary) {
+        const collapsed = indexFor(chain);
+        expect(collapsed.rows.some((row) => row.key === summary.key)).toBe(true);
+      }
+    },
+  );
+
+  it.each([400, 512, 514])("keeps ordered message coverage in %i-message fragments", (count) => {
+    const messages = [
+      makeMessage("question", 1, { role: "user", runId: "run-1" }),
+      ...Array.from({ length: count - 2 }, (_, index) =>
+        makeMessage(`body-${index}`, index + 2, { runId: "run-1" }),
+      ),
+      finalAnswer("answer", count, { runId: "run-1" }),
+    ];
+    const chain = projectHistory(messages, { sessionKey: "agent:main:telegram:direct:42" });
+    const index = indexFor(chain);
+    const items = index.rows.flatMap((row) => (row.kind === "item" ? [row.item] : []));
+    expect(messagesIn(items)).toEqual(messages);
+    expect(index.messageRowKeysById.get("answer")).toBe(onlyFrame(chain).key);
+    expect(index.messageRowKeysById.get("body-0") === index.messageRowKeysById.get("body-1")).toBe(
+      count <= 512,
+    );
+    for (const item of items) {
+      expect(messagesIn([item]).length).toBeLessThanOrEqual(count <= 512 ? 2 : 1);
+    }
+  });
+
+  it("keeps widget-bearing completed runs in the retained frame", () => {
+    const canvas = makeMessage("canvas", 602, {
+      content: [
+        {
+          type: "canvas",
+          preview: {
+            kind: "canvas",
+            surface: "assistant_message",
+            render: "url",
+            viewId: "cv_long_run",
+            url: "/__openclaw__/canvas/documents/cv_long_run/index.html",
+          },
+        },
+      ],
+    });
+    const messages = longRun([canvas]);
+    const key = "agent:main:telegram:direct:42";
+    const activeChain = projectHistory(messages.slice(0, -1), {
+      sessionKey: key,
+      runWorking: true,
+      runId: "run-1",
+      activeRunId: "run-1",
+      streamStartedAt: 1_000,
+    });
+    const activeFrame = onlyFrame(activeChain);
+    expect(activeFrame.outcome.kind).toBe("active");
+    expect(indexFor(activeChain).messageRowKeysById.get("canvas")).toBe(activeFrame.key);
+    const chain = projectHistory(messages, { sessionKey: key });
+    const frame = onlyFrame(chain);
+    expect(frame.key).toBe(activeFrame.key);
+    expect(
+      indexFor(chain).rows.filter((row) => row.kind === "item" && row.item === frame),
+    ).toHaveLength(1);
+    expect(indexFor(chain).messageRowKeysById.get("canvas")).toBe(frame.key);
+  });
+
+  it("retains the answer row when completed work follows the final answer", () => {
+    const chain = projectHistory([...longRun(), makeTool("late-tool", 603, "run-1", 6_030)], {
+      sessionKey: "agent:main:telegram:direct:42",
+    });
+    const frame = onlyFrame(chain);
+    expect(frame.outcome).toMatchObject(completedOutcome({ __openclaw: { id: "long-answer" } }));
+    expect(indexFor(chain).messageRowKeysById.get("long-answer")).toBe(frame.key);
+    expect(
+      indexFor(chain)
+        .rows.filter((row) => row.kind === "item")
+        .map((row) => row.key),
+    ).toEqual([chain.transcriptItems[0]!.key, frame.key]);
+  });
+
+  it("retains the summary row when completed work has no answer", () => {
+    const chain = projectHistory(longRun().slice(0, -1));
+    const frame = onlyFrame(chain);
+    expect(frame.outcome).toEqual({ kind: "completed", actionOwner: null });
+    const collapsed = indexFor(chain);
+    const expanded = new Map<string, boolean>();
+    for (const part of kind(frame.parts, "work-group")) {
+      setExpansionState(expanded, part.key, true);
+    }
+    expect(indexFor(chain, expanded).rows.map((row) => row.key)).toEqual(
+      collapsed.rows.map((row) => row.key),
+    );
+  });
+});
+
 it.each([
   { key: sessionKey, working: true, projected: false, untagged: false },
   { key: sessionKey, working: true, projected: true, untagged: false },
@@ -136,6 +322,49 @@ it("changes the footprint revision when the same message ID receives new content
     before.kind === "item" && before.revision,
   );
   expect(replay.kind === "item" && replay.revision).toBe(before.kind === "item" && before.revision);
+});
+
+it("does not serialize settled history again when a live status changes the row model", () => {
+  let serializations = 0;
+  const message = makeMessage("older", 1, {
+    role: "user",
+    metadata: {
+      toJSON: () => {
+        serializations++;
+        return { label: "Settled history" };
+      },
+    },
+  });
+  const items = chatItems({ messages: [message] });
+  serializations = 0;
+  const before = indexFor(chainFor(items)).rows[0]!;
+  expect(serializations).toBe(1);
+  const during = indexFor(
+    chainFor([...items, { kind: "reading-indicator", key: "waiting", startedAt: 32 }]),
+  ).rows[0]!;
+  expect(during.kind === "item" && during.revision).toBe(before.kind === "item" && before.revision);
+  expect(serializations).toBe(1);
+});
+
+it("fingerprints loaded rows once when an older page rebuilds the index", () => {
+  const turn = (id: string, seq: number, content: string) =>
+    makeMessage(id, seq, { role: seq % 2 ? "user" : "assistant", runId: `run-${seq}`, content });
+  const body = "Loaded reply. ".repeat(400);
+  const loaded = Array.from({ length: 20 }, (_, index) =>
+    turn(`loaded-${index}`, 21 + index, body),
+  );
+  const older = Array.from({ length: 20 }, (_, index) =>
+    turn(`older-${index}`, 1 + index, "Older"),
+  );
+  const before = indexFor(projectHistory(loaded)).rows;
+  const hash = vi.spyOn(fnv1a, "fnv1aUtf16");
+  const after = indexFor(projectHistory([...older, ...loaded])).rows;
+  const hashed = hash.mock.calls.reduce((sum, [value]) => sum + value.length, 0);
+  hash.mockRestore();
+  expect(after.slice(-before.length).map((row) => row.kind === "item" && row.revision)).toEqual(
+    before.map((row) => row.kind === "item" && row.revision),
+  );
+  expect(hashed).toBeLessThan(body.length);
 });
 
 it("invalidates only a changed reaction row while retaining other cached footprints", () => {
@@ -238,42 +467,35 @@ describe("completed reply frame ownership", () => {
     const original = structuredClone(messages);
     const options = { sessionKey: key };
     const chain = projectHistory(messages, options);
-    const frame = framesOf(chain).at(-1);
-    const workFrame = framesOf(chain)[0]!;
+    const [frame] = framesOf(chain);
     expect(chain.transcriptItems).toEqual([
       ...(prompt ? [expect.objectContaining({ role: "user" })] : []),
-      ...(failed ? [workFrame, expect.objectContaining({ outcome: { kind: "failed" } })] : []),
       frame,
     ]);
     expect(frame).toMatchObject({
-      key: failed
-        ? 'agent-run:["run-1","send:run-1","group:assistant:msg:id:failed-attempt:0"]'
-        : 'agent-run:["run-1","send:run-1"]',
+      key: 'agent-run:["run-1","send:run-1"]',
       ...replyFrameShape(
         completedOutcome(messages.at(-1)),
-        ...(failed ? [] : [{ kind: key === sessionKey ? "work-group" : "group" }]),
+        { kind: key === sessionKey ? "work-group" : "group" },
         { kind: "group", role: "assistant" },
       ),
     });
-    const work = workFrame.parts[0]!;
+    const work = frame!.parts[0]!;
     if (key === sessionKey) {
       if (work.kind !== "work-group") {
         throw new Error("expected work inside the reply frame");
       }
-      expect(work.groups.map((group) => group.runId)).toEqual(workRunIds);
-      expect(work.durationMs).toBeNull();
-      expect(messagesIn([work])).not.toContain(failure);
+      if (failed) {
+        expect(messagesIn([work])).toContain(failure);
+      } else {
+        expect(work.groups.map((group) => group.runId)).toEqual(workRunIds);
+      }
     }
-    expect(messagesIn(framesOf(chain))).toEqual(messages.slice(prompt ? 1 : 0));
-    if (failed) {
-      const failedFrame = framesOf(chain)[1]!;
-      expect(frameShows(failedFrame, failure)).toBe(true);
-      expect(indexFor(chain).messageRowKeysById.get("failed-attempt")).toBe(failedFrame.key);
-    }
+    expect(messagesIn([frame!])).toEqual(messages.slice(prompt ? 1 : 0));
     expect(messages).toEqual(original);
     const index = indexFor(chain);
     expect(index.transcriptMessageKeys.get(chatItemGroups(work)[0]!.messages[0]!.key)).toBe(
-      workFrame.key,
+      frame?.key,
     );
     expect(index.messageRowKeysById.get("final")).toBe(frame?.key);
     if (!prompt) {
@@ -308,14 +530,15 @@ describe("completed reply frame ownership", () => {
     messages.splice(prompt ? 2 : 1, 0, inserted);
     const chain = projectHistory(messages);
     expect(framesOf(chain).at(-1)?.outcome).toMatchObject(completedOutcome(messages.at(-1)));
-    const work = kind(transcriptParts(chain), "work-group")[0];
+    const work = (forwarded ? chain.transcriptItems : transcriptParts(chain)).find(
+      (item) => item.kind === "work-group",
+    );
+    expect(work).toBeDefined();
     if (forwarded) {
       expect(messagesIn(framesOf(chain))).not.toContain(inserted);
-      expect(messagesIn(kind(chain.transcriptItems, "group"))).toContain(inserted);
-      expect(messagesIn(kind(transcriptParts(chain), "work-group"))).not.toContain(inserted);
-      expect(messagesIn(chain.transcriptItems)).toEqual(messages);
+      const standalone = phase ? kind(chain.transcriptItems, "group") : [work!];
+      expect(messagesIn(standalone)).toContain(inserted);
     } else {
-      expect(work).toBeDefined();
       expect(
         messagesIn(
           kind(transcriptParts(chain), "group").filter((item) => item.role === "assistant"),
@@ -324,8 +547,9 @@ describe("completed reply frame ownership", () => {
       expect(framesOf(chain).map((frame) => frame.runId)).toEqual(
         runId === "run-1" ? ["run-1"] : ["run-other", "run-1"],
       );
-      expect(framesOf(chain)[0]?.parts[0]).toBe(work);
-      expect(work?.replyRunId).toBe(runId);
+      expect(runId === "run-1" ? framesOf(chain)[0]?.parts[0] : chain.transcriptItems[1]).toBe(
+        work,
+      );
     }
   });
 
@@ -566,6 +790,12 @@ describe("subagent handoff", () => {
   });
   const waitingChain = () =>
     projectHistory(waiting, { subagentWait: { startedAt: 32, runId: "run-1" } });
+  const resumedSession = {
+    key: sessionKey,
+    lastRunId: "announce:resume",
+    status: "done",
+    runtimeMs: 4_000,
+  } as const;
   it.each([
     [
       "waiting",
@@ -575,7 +805,7 @@ describe("subagent handoff", () => {
     ],
     ["wait ended", {}, "run-1", null],
     ["resume pending", { runWorking: true, runActive: true }, undefined, { startedAt: 10 }],
-    ["answered", {}, "announce:resume", null],
+    ["answered", { session: resumedSession }, "announce:resume", null],
   ] as const)("preserves handoff: %s", (state, options, runId, statusShape) => {
     const waitingKey = onlyFrame(waitingChain()).key;
     if (state === "resume pending") {
@@ -649,7 +879,7 @@ describe("subagent handoff", () => {
     expect(logsOf([...waiting, spoke, resumedRow, answer])).toEqual([]);
   });
 
-  it("keeps successful and failed late work after the answer without crossing channel boundaries", () => {
+  it("moves successful late work before the answer but preserves failure and channel ordering", () => {
     const wrapper = readRow("wrapper", "announce:resume", 9);
     const stopped = makeMessage("stopped", 9, {
       content: [{ type: "toolCall", id: "late", name: "read", arguments: {} }],
@@ -658,7 +888,7 @@ describe("subagent handoff", () => {
       runId: "announce:resume",
     });
     for (const [trailing, answerLast, logSizes, key] of [
-      [wrapper, false, [2], sessionKey],
+      [wrapper, true, [3], sessionKey],
       [{ ...wrapper, isError: true }, false, [2], sessionKey],
       [stopped, false, undefined, sessionKey],
       [wrapper, false, [2], "agent:main:main"],
@@ -666,6 +896,7 @@ describe("subagent handoff", () => {
       const { parts } = onlyFrame(
         projectHistory([...waiting, readRow("read-2", "announce:resume", 7), answer, trailing], {
           sessionKey: key,
+          session: { key, lastRunId: "announce:resume", status: "done" },
         }),
       );
       const last = parts.at(-1);
@@ -697,7 +928,7 @@ describe("system event presentation", () => {
     role: "user",
     content: "[System] Continue the interrupted turn.",
     timestamp: 20,
-    provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
+    provenance: { kind: "internal_system", sourceTool: "system-event" },
     __openclaw: { id, idempotencyKey: runId + ":user" },
   });
 
@@ -728,10 +959,7 @@ describe("system event presentation", () => {
       runId: "run-b",
       boundaryId: "send:run-b",
     });
-    const searched = chainFor(chatItems({ messages }), {
-      ...chainOptions,
-      searchActive: true,
-    });
+    const searched = projectHistory(messages, { searchActive: true });
     expect(searched.transcriptItems.filter((item) => item.kind === "notice")).toHaveLength(4);
     expect(searched.transcriptItems.some((item) => item.kind === "system-event-group")).toBe(false);
   });
@@ -752,29 +980,62 @@ describe("system event presentation", () => {
   });
 });
 
-it.each([false, true])(
-  "indexes the original split envelope with a visible reply anchor (trailing work=%s)",
-  (trailingWork) => {
-    const message = finalAnswer("mixed-source", 1, {
+it.each([
+  ["data:image/png;base64,cG5n", false],
+  ["blob:synthetic-inline", false],
+  ["https://images.example.test/saved.png", false],
+])("keeps ordinary image rows in the viewport only: %s", (url, retained) => {
+  const chain = projectHistory([
+    makeMessage("image-row", 1, {
+      role: "user",
       content: [
-        { type: "text", text: "First finding" },
-        { type: "thinking", thinking: "Private work" },
-        { type: "text", text: "Second finding" },
-        ...(trailingWork ? [{ type: "toolCall", id: "call", name: "read", arguments: {} }] : []),
+        { type: "text", text: "Image" },
+        { type: "image", url },
       ],
-    });
-    const chain = projectHistory([message]);
-    const index = indexFor(chain);
-    const source = index.loadedReplySources.get("mixed-source");
-    expect(source?.message).toBe(message);
-    expect(source?.messageId).toBe(
-      chatItems({ messages: [message] }).flatMap(chatItemGroups)[0]?.messages[0]?.key,
-    );
-    const rowKey = index.messageRowKeysById.get("mixed-source");
-    const row = index.rows.find((candidate) => candidate.key === rowKey);
-    expect(
-      row?.kind === "item" &&
-        chatItemGroups(row.item).some((group) => group.visibleContent === "text"),
-    ).toBe(true);
+    }),
+  ]);
+  expect(indexFor(chain).rows[0]?.retainDom).toBe(retained);
+});
+
+it.each([
+  ["work in both runs", true],
+  ["work only in the later run", false],
+] as const)(
+  "keeps a collapsed browser preview after an earlier run's reply: %s",
+  (_name, early) => {
+    const browse = {
+      ...makeMessage("browse", 4, { role: "toolResult", content: "Opened", runId: "run-b" }),
+      toolName: "browser",
+      toolCallId: "browse",
+      details: {
+        browserTab: {
+          profile: "managed",
+          target: "host",
+          targetId: "tab-1",
+          url: "https://example.com",
+          title: "Example",
+        },
+      },
+    };
+    const chain = projectHistory([
+      history[0],
+      ...(early ? [makeTool("work-0", 2, "run-a", 20)] : []),
+      makeMessage("reply-a", 3, { runId: "run-a", stopReason: "stop" }),
+      browse,
+      makeMessage("reply-b", 5, { runId: "run-b", stopReason: "stop" }),
+    ]);
+    // No visible reply owns the rollup, so it stays outside the frames; its preview follows reply A.
+    expect(chain.transcriptItems.map((item) => item.kind)).toEqual([
+      "group",
+      "work-group",
+      "agent-run-frame",
+      "agent-run-frame",
+    ]);
+    const expanded = new Map<string, boolean>();
+    const previews = projectTranscriptWorkPreviews(chain.workGroups, { sessionKey, expanded });
+    const rows = projectTranscriptRows(indexFor(chain, expanded).rows, previews, []);
+    const frame = framesOf(chain)[0]!;
+    expect(rows.map((row) => row.key)).not.toContain(`work-previews:${frame.key}`);
+    expect(previews.get(frame.parts.find((part) => part.kind === "group")!.key)).toHaveLength(1);
   },
 );

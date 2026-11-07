@@ -1,6 +1,6 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   withMemoryWorkspaceLock as write,
   withMemoryWorkspacePreparation as prepare,
@@ -40,6 +40,18 @@ function setup() {
 }
 
 describe("memory workspace ordering", () => {
+  it("serializes writers from overlapping module generations", async () => {
+    const f = setup();
+    const predecessor = write(f.workspace, f.hold("predecessor"));
+    await f.entered.promise;
+    vi.resetModules();
+    const successorModule = await import("./memory-workspace-lock.js");
+    expect(successorModule.withMemoryWorkspaceLock).not.toBe(write);
+    const successor = successorModule.withMemoryWorkspaceLock(f.workspace, f.step("successor"));
+    await f.expectBlocked(["predecessor"], predecessor, successor);
+    expect(f.order).toEqual(["predecessor", "successor"]);
+  });
+
   it("keeps preparations and writers in the same local FIFO", async () => {
     const f = setup();
     const first = prepare(f.workspace, f.hold("first preparation"));

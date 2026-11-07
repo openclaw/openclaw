@@ -9,7 +9,9 @@ sidebarTitle: "Handshake and roles"
 doc-schema-version: 1
 ---
 
-The first frame and what comes back: the connect request, the `hello-ok` payload, the worker role, client capabilities, and the role and scope model.
+Connect a client, read the Gateway response, and negotiate capabilities.
+For authentication setup, see [Gateway authentication](/gateway/authentication);
+for permissions, see [Operator scopes](/gateway/operator-scopes).
 
 ## Handshake
 
@@ -77,7 +79,7 @@ nor protocol version 4; clients that wait for hello continue to work. Protocol
 changes remain additive first, with an explicit version decision required for an
 incompatible change.
 
-Gateway responds with `hello-ok`:
+### Hello response
 
 The default connect deadline is 30 seconds, allowing authentication and profile
 preparation to finish on busy or slower hosts. It is a total deadline, not an idle
@@ -124,29 +126,24 @@ reports the negotiated role and the current socket's effective authorization
 scopes even when no device token is issued (shape above). `deviceToken`, when
 present, is the primary reusable credential for the same device and role.
 
-Clients that do not use health details at connection time can advertise
-`hello-health-on-demand` in `connect.caps`, as the Control UI does. The Gateway
-then sends `snapshot.health: {}` instead of the cached health details. The
-required snapshot fields and version counters remain present; health RPCs and
-health events are unchanged. Clients without this capability retain the full
-cached health snapshot, and older Gateways ignore the capability.
+Optional hello fields:
 
-Clients can independently advertise `health-summary` to omit `agents` and
-`sessions` from health events and cached hello health. Channel status, errors,
-and other health fields remain present. The `health` RPC always retains the
-full diagnostic snapshot, including heartbeat configuration and recent sessions.
+| Field                             | Client use                                                                                                                                                                                                                                                                                   |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `server.commit`, `server.builtAt` | Running Gateway build provenance, captured at startup and omitted when unavailable. Visible to authenticated members; the Control UI shows it in **Settings → About**, separately from frontend details. Diagnostic/update RPC scopes are unchanged.                                         |
+| `controlUiUrl`                    | Credential-free public Control UI origin/base path for shareable links, independent of tunnels or dev servers. Omitted when `gateway.publicOrigin` is unset or the UI is disabled; grants no access.                                                                                         |
+| `snapshot.appliedConfigHash`      | Active runtime's accepted config revision. Compare with `config.get.configRevisionHash` to detect unapplied saved changes. `config.get.hash` instead guards authored root/include-file writes.                                                                                               |
+| `snapshot.controlUiIdentityUrl`   | HTTPS dashboard sign-in URL for trusted-proxy/Tailscale Serve identity. Use normal HTTPS trust, not native TLS pins; never send native connection tokens/passwords. Refresh on reconnect and discard on disconnect. Serve-route removal/replacement closes affected connections with `1012`. |
+| `pluginSurfaceUrls`               | Map of surface names to scoped, potentially expiring URLs. Renew with `{ surface: "canvas" }` through `node.pluginSurface.refresh` (nodes) or `plugin.surface.refresh` (Control UI with `operator.read`, including write/admin). Stop automatic renewal on `FORBIDDEN` until reconnect.      |
 
-The Control UI also advertises `hello-presence-self`: hello contains only the
-connecting client's presence row, preserving its profile bootstrap. The existing
-presence event stream supplies the full roster after hello, including the initial
-reset for `presence-deltas` clients. Clients without this capability keep the full
-hello roster. This avoids sending that roster twice during reconnects without
-caching presence across connections or authorization changes.
+Clients with `operator.admin` also receive the running Gateway's `authMode`,
+`bindHost`, and `tailscaleMode`. These include startup flags such as `--bind`
+and `--tailscale`, which the config file can't show. Older Gateways omit
+`bindHost` and `tailscaleMode`, so clients must not infer exposure from their
+absence.
 
-`controlUiUrl` optionally advertises the Gateway's configured public Control UI
-origin and base path for shareable links, independent of the client's tunnel or
-development-server address. It is omitted when `gateway.publicOrigin` is unset
-or the Control UI is disabled. It contains no credentials and grants no access.
+### Attachment limits
+
 `policy.attachments` is optional (older gateways omit it) and advertises
 the decoded-size ceilings chat attachments face on `chat.send`, `sessions.send`,
 and session-creation initial turns:
@@ -172,40 +169,17 @@ Validating before send:
 4. Re-read the values on every reconnect. They are a connection-time snapshot, so
    a live `mediaMaxMb` edit reaches existing connections only after they reconnect.
 
-`pluginSurfaceUrls` is optional and maps plugin surface names (e.g.
-`canvas`) to scoped hosted URLs; it may expire, so nodes call
-`node.pluginSurface.refresh` with `{ "surface": "canvas" }` for a fresh entry.
-The Control UI uses `plugin.surface.refresh` only when the hello's granted scopes
-satisfy `operator.read` (including `operator.write` and `operator.admin`). A
-`FORBIDDEN` response stops automatic renewal retries for the current lease;
-reconnecting evaluates the new hello's grants.
-The deprecated `canvasHostUrl` / `canvasCapability` / `node.canvas.capability.refresh`
-path is not supported; use plugin surfaces.
-The `sessions.observer.ask` method was removed; use `sessions.companion.ask`.
-The snapshot's optional `appliedConfigHash` is the resolved source-config revision
-accepted by the active Gateway runtime. Clients can compare it with
-`config.get.configRevisionHash` to determine whether a newer saved config still
-needs a restart. `config.get.hash` is the opaque authored revision used by config
-write conflict guards. It covers root-file bytes and the captured identities and
-content of included files.
+### Connection lifecycle and credentials
 
-The snapshot's optional `controlUiIdentityUrl` advertises the active Gateway's
-HTTPS dashboard URL when it uses trusted-proxy or Tailscale Serve identity.
-Operator clients can open this URL for personal browser sign-in instead of
-forwarding shared device credentials. The URL includes the Control UI base path;
-clients must use normal HTTPS trust instead of native TLS pins and must not send
-native connection tokens or passwords to it. Re-read it from each authenticated
-hello snapshot and discard it when that connection closes. If the managed Serve
-route exits or is replaced, the Gateway closes connections that received its
-identity URL with code `1012`; reconnect to discover the current route.
+`openclaw.setup.verify` checks active config/restart state before and after live
+inference. It returns `{ ok: false, status: "unavailable", error }` while saved
+settings are unapplied, restart work remains, or the verified runtime changes.
+Preserve the selected model and retry after application/restart. Standalone CLI
+verification tests saved configuration without requiring a running Gateway.
 
-`openclaw.setup.verify` additionally checks the Gateway's current application and
-restart state before and after its live inference check. It returns
-`{ ok: false, status: "unavailable", error }` while saved settings are not active,
-restart work remains, or the verified runtime changes during the check. Clients
-should preserve the selected model and retry after application or restart finishes.
-Standalone CLI verification still tests saved configuration without requiring a
-running Gateway.
+Retired APIs: use plugin surfaces instead of `canvasHostUrl`, `canvasCapability`,
+or `node.canvas.capability.refresh`; use `sessions.companion.ask` instead of
+`sessions.observer.ask`.
 
 While the Gateway is preparing authentication and request state, `connect` can return a
 retryable `UNAVAILABLE` error with `details.reason: "startup-sidecars"` and
@@ -306,22 +280,52 @@ base-leaf compare-and-swap, and durable sequence replay; the gateway generates
 transcript entry and parent IDs through the normal session writer. Ownership and
 expiry are rechecked on each RPC.
 
+<a id="chat-input-custody-capability" />
+
+### Server capabilities
+
+`hello-ok.features.capabilities` advertises supported contracts, not permissions.
+If a marker is absent, support is unknown: retain existing behavior rather than
+infer support from the protocol version or method list. Examples:
+
+- `chat-input-custody-v1`: chat queue modes and exact input receipts; see
+  [Chat input reconciliation](/gateway/protocol/rpc-session-control#chat-input-reconciliation).
+- `chat-send-routing-contract`: chat send routing; see
+  [Session control](/gateway/protocol/rpc-session-control).
+- `control-ui-browser-focus`: bundled Control UI focus routing; omitted for
+  configured UI roots or a disabled Control UI.
+
 ### Client capabilities
 
-Operator clients may advertise optional capabilities in `connect.params.caps`:
+Declare optional capabilities in `connect.params.caps`. Older Gateways ignore
+unsupported capability declarations.
 
-- `tool-events`: accepts structured tool lifecycle events.
-- `inline-widgets`: can render hosted inline widget tool results.
-- `ultrafast`: accepts the explicit `"ultrafast"` fast-mode value in session metadata.
-  Without it, session responses and events present that value as Fast (`true`)
-  for released native decoders that only accept booleans and `"auto"`. This is a
-  per-connection presentation: stored selection and execution stay `"ultrafast"`.
-  Upgraded clients advertise this capability to retain the explicit selection;
-  remove the legacy projection only when those released clients are no longer supported.
-- `chat-only-assistant-text`: renders assistant text from `chat` and omits the
-  redundant assistant-text `agent` stream. See [event families](/gateway/protocol/rpc-bootstrap-and-events#common-event-families).
+| Capability                 | Effect                                                                                                                                                                          |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hello-health-on-demand`   | Sends `snapshot.health: {}` instead of cached health; required snapshot fields, version counters, health RPCs, and events remain.                                               |
+| `health-summary`           | Omits `agents` and `sessions` from health events and cached hello health. Other health fields remain; the `health` RPC retains full diagnostics.                                |
+| `hello-presence-self`      | Sends only the connecting client's hello presence row. The presence event stream supplies the full roster, including the initial reset for `presence-deltas` clients.           |
+| `tool-events`              | Accepts structured tool lifecycle events.                                                                                                                                       |
+| `inline-widgets`           | Renders hosted inline widget tool results.                                                                                                                                      |
+| `no-question-input`        | Cannot collect structured answers; turns omit `ask_user` and ask in ordinary text (used by the ACP bridge).                                                                     |
+| `ultrafast`                | Accepts the explicit `"ultrafast"` value. Without it, session responses/events project it as Fast (`true`) for released decoders; stored selection and execution are unchanged. |
+| `chat-only-assistant-text` | Renders assistant text from `chat`, omitting redundant assistant-text `agent` events. See [event families](/gateway/protocol/rpc-bootstrap-and-events#common-event-families).   |
+| `chat-queue-status`        | Displays authoritative pending-input receipts instead of transient successful queue acknowledgments. Refusals, drops, and errors remain visible.                                |
 
-Client capabilities describe the connected client, not authorization. Agent tools may declare required capabilities. The session metadata owner records the operator client's declaration for tool listing and replaces it on the next operator turn; an empty declaration or a channel-originated turn clears it. Internal wakes and restart recovery retain that session fact, so they list the same tools even without a current client. Session reset or deletion removes it. Existing sessions acquire it on their next operator turn. Calls still require current client capabilities, and attached-client tools check that their bound recipient is connected at execution. For example, `screen` refuses a call without its requesting Control UI and asks the model to retry from the open Control UI.
+Without the health/presence options, clients retain full cached hello health and
+presence. The Control UI advertises `hello-health-on-demand` and
+`hello-presence-self`; the presence stream avoids caching a roster across
+connections. Keep the `ultrafast` legacy projection while released decoders need it.
+
+Capabilities do not grant authorization. For tools that require client capabilities:
+
+- The session records the operator declaration on each operator turn. Empty
+  declarations or channel turns clear it; internal wakes and restart resumes
+  retain it. Existing sessions acquire it on their next operator turn; reset or
+  deletion removes it.
+- Tool listing uses that session fact. Execution still checks current client
+  capabilities and, for attached-client tools, the bound recipient's connection.
+  For example, `screen` requires its requesting Control UI to remain connected.
 
 ### Node connect example
 
@@ -358,15 +362,6 @@ Client capabilities describe the connected client, not authorization. Agent tool
 }
 ```
 
-Nodes declare capability claims at connect time:
-
-- `caps`: high-level categories such as `camera`, `canvas`, `screen`,
-  `location`, `voice`, `talk`.
-- `commands`: command allowlist for invoke.
-- `permissions`: granular toggles (e.g. `screen.record`, `camera.capture`).
-
-The gateway treats these as claims and enforces server-side allowlists.
-
 ## Roles and scopes
 
 For the full operator scope model, approval-time checks, and shared-secret
@@ -378,51 +373,21 @@ Roles:
 - `node`: capability host (camera/screen/canvas/system.run).
 - `worker`: cloud execution host on the dedicated, closed worker protocol.
 
-Operator scopes (`src/gateway/operator-scopes.ts`), the full closed set:
+Request the least privilege needed; `hello-ok.auth.scopes` reports the effective
+grants. Use the canonical [scope table](/gateway/operator-scopes#scope-levels)
+and [method-level checks](/gateway/operator-scopes#method-scope-is-only-the-first-gate).
+In particular:
 
-- `operator.read`
-- `operator.write`
-- `operator.admin`
-- `operator.approvals`
-- `operator.questions`
-- `operator.pairing`
-- `operator.talk`
-- `operator.talk.secrets`
-
-`operator.write` continues to satisfy `operator.talk` for compatibility with
-existing clients. Voice-device setup can issue the narrower Talk grant without
-general Gateway write access.
-
-`talk.config` with `includeSecrets: true` requires `operator.talk.secrets` (or
-`operator.admin`). When secrets are included, read the active Talk provider
-credential from `talk.resolved.config.apiKey`; `talk.providers.<id>.apiKey`
-stays source-shaped and may be a SecretRef object or a redacted string.
-
-Plugin-registered gateway RPC methods may request their own operator scope,
-but these reserved core prefixes always resolve to `operator.admin`
-(`src/shared/gateway-method-policy.ts`): `config.*`, `exec.approvals.*`,
-`wizard.*`, `update.*`.
-
-Method scope is only the first gate. Some slash commands reached through
-`chat.send` apply stricter command-level checks: persistent `/config set` and
-`/config unset` writes require `operator.admin` even for gateway clients that
-already hold a lower operator scope.
-
-`node.pair.approve` has an extra approval-time scope check on top of the base
-method scope (`operator.pairing`), based on the pending request's declared
-`commands` (`src/infra/node-pairing-authz.ts`):
-
-| Declared commands                                                                                                                                        | Required scopes                       |
-| -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| none                                                                                                                                                     | `operator.pairing`                    |
-| ordinary commands                                                                                                                                        | `operator.pairing` + `operator.write` |
-| includes `system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir`, or `system.execApprovals.get/set` | `operator.pairing` + `operator.admin` |
-
-In this table, `fs.listDir` is the node command relayed through `node.invoke`.
-The top-level Gateway `fs.listDir` RPC needs `operator.write` for
-workspace-contained host browsing and `operator.admin` when `nodeId` is present.
-Pass directory paths exactly as returned by `fs.listDir`: whitespace in directory
-names, including trailing spaces, is significant.
+- `operator.write` also satisfies `operator.talk`; Talk secret reads require
+  `operator.talk.secrets` or admin. Use `talk.resolved.config.apiKey` for the
+  resolved secret, not source-shaped `talk.providers.<id>.apiKey`.
+- Reserved plugin RPC prefixes (`config.*`, `exec.approvals.*`, `wizard.*`,
+  `update.*`) require admin. Persistent `/config set` and `/config unset` also
+  require admin even when reached through lower-scoped `chat.send`.
+- [Pairing](/gateway/operator-scopes#node-pairing-approvals)
+  require additional scopes based on the declared commands.
+- Gateway `fs.listDir` needs write for workspace-contained host browsing and admin
+  when `nodeId` is present. Pass returned paths verbatim, including whitespace.
 
 ### Caps/commands/permissions (node)
 

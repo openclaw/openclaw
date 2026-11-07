@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { ConfigSnapshot } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -78,7 +79,9 @@ describe("DevicesPage policy saves", () => {
       expect(save.disabled).toBe(outcome === "accepted");
       if (outcome === "rejected") {
         expect(page.container.textContent).toContain("Policy changed; reload before saving.");
-        const mode = page.container.querySelector<HTMLSelectElement>('select[aria-label="Mode"]');
+        const mode = page.container.querySelector<HTMLSelectElement>(
+          'select[aria-label="Security"]',
+        );
         expect(mode?.value).toBe("allowlist");
       }
     },
@@ -101,24 +104,13 @@ describe("DevicesPage policy saves", () => {
     );
   });
 
-  it("shows binding-save progress through the runtime config owner's accepted receipt", async () => {
-    const saved = createDeferred();
-    const config = { tools: { exec: { node: "original-node" } } };
-    const updated = { tools: { exec: { node: "node-1" } } };
-    let accepted = false;
+  it("saves a binding on its own, with no Save beside it", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "config.get") {
-        return {
-          config: accepted ? updated : config,
-          hash: accepted ? "config-saved" : "config-base",
-          valid: true,
-          issues: [],
-        };
+        return { config: { tools: { exec: {} } }, hash: "config-base", valid: true, issues: [] };
       }
       if (method === "config.set") {
-        await saved.promise;
-        accepted = true;
-        return { config: updated, hash: "config-saved" };
+        return { config: { tools: { exec: { node: "node-1" } } }, hash: "config-saved" };
       }
       return responseFor(method);
     });
@@ -131,11 +123,64 @@ describe("DevicesPage policy saves", () => {
     await runtimeConfig.ensureLoaded();
     runtimeConfig.patchForm(["tools", "exec", "node"], "node-1");
     const page = mountPage(fixture, { nodes: [{ nodeId: "node-1" }] }, undefined, runtimeConfig);
-    const save = await startSave(page.container);
-    saved.resolve();
-    await waitForSolid(() => expect(save.textContent?.trim()).toBe(t("common.save")));
-    expect(runtimeConfig.state.configSnapshot?.hash).toBe("config-saved");
+    expect(runtimeConfig.state.configFormDirty).toBe(true);
+    expect(
+      [...page.container.querySelectorAll("button")].filter(
+        (candidate) => candidate.textContent?.trim() === t("common.save") && !candidate.disabled,
+      ),
+    ).toHaveLength(0);
+    await waitForSolid(
+      () => expect(runtimeConfig.state.configSnapshot?.hash).toBe("config-saved"),
+      {
+        timeout: 3_000,
+      },
+    );
     expect(runtimeConfig.state.configFormDirty).toBe(false);
-    expect(save.disabled).toBe(true);
+  });
+
+  it("clears a saved binding after connecting during a shared display read", async () => {
+    const displayRead = createDeferred<ConfigSnapshot>();
+    const original = { tools: { exec: { node: "saved-node" } } };
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return displayRead.promise;
+      }
+      if (method === "config.set") {
+        return { config: { tools: { exec: {} } }, hash: "saved" };
+      }
+      return responseFor(method);
+    });
+    const { client } = clientFor(request);
+    const fixture = gatewayFixture(gatewaySnapshot(null, false));
+    const runtimeConfig = createRuntimeConfigCapability(fixture.source);
+    cleanups.push(() => runtimeConfig.dispose());
+    const page = mountPage(fixture, {}, undefined, runtimeConfig);
+    await waitForSolid(() => expect(page.container.textContent).toContain("Devices"));
+
+    fixture.emitSnapshot(gatewaySnapshot(client, true, ["config.set"], ["operator.admin"]));
+    expect(runtimeConfig.state.configLoading).toBe(true);
+    displayRead.resolve({
+      config: original,
+      raw: JSON.stringify(original),
+      hash: "original",
+      valid: true,
+      issues: [],
+    });
+    const binding = await waitForSolid(() => {
+      const select = expectDefined(
+        page.container.querySelector<HTMLSelectElement>('select[aria-label="Device"]'),
+        "saved binding",
+      );
+      expect(select.value).toBe("saved-node");
+      expect(select.disabled).toBe(false);
+      return select;
+    });
+    binding.value = "";
+    binding.dispatchEvent(new Event("change", { bubbles: true }));
+    await runtimeConfig.flushFormChanges();
+    expect(request).toHaveBeenCalledWith("config.set", {
+      raw: `${JSON.stringify({ tools: { exec: {} } }, null, 2)}\n`,
+      baseHash: "original",
+    });
   });
 });

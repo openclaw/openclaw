@@ -1,6 +1,4 @@
 // Byteplus tests cover index plugin behavior.
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
@@ -10,6 +8,7 @@ import {
   BYTEPLUS_MODEL_CATALOG,
   BYTEPLUS_PROVIDER_CATALOG,
 } from "./models.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 describe("byteplus plugin", () => {
   it("preserves both provider-owned static catalogs and paired ordering", async () => {
@@ -55,13 +54,13 @@ describe("byteplus plugin", () => {
     ]);
   });
 
-  it("declares its coding provider auth alias in the manifest", () => {
-    const pluginJson = JSON.parse(
-      readFileSync(resolve(import.meta.dirname, "openclaw.plugin.json"), "utf-8"),
-    );
-
-    expect(pluginJson.providerAuthAliases).toEqual({
+  it("declares provider auth and streaming usage capabilities in the manifest", () => {
+    expect(manifest.providerAuthAliases).toEqual({
       "byteplus-plan": "byteplus",
+    });
+    expect(manifest.providerRequest?.providers).toMatchObject({
+      byteplus: { openAICompletions: { supportsStreamingUsage: true } },
+      "byteplus-plan": { openAICompletions: { supportsStreamingUsage: true } },
     });
   });
 

@@ -19,7 +19,7 @@ For tooling that writes config over the gateway API, prefer this flow:
   deletes, arrays replace when explicitly confirmed with `replacePaths` if
   entries would be removed)
 - `config.apply` only when you intend to replace the entire config
-- `update.run` for explicit self-update plus restart; include `continuationMessage` when the post-restart session should run one follow-up turn
+- `update.run` for explicit self-update plus restart and a passive outcome report; a running session resumes through the ordinary graceful-shutdown marker
 - `update.status` to inspect the latest update restart sentinel and verify the running version after a restart
 
 Agents should treat `config.schema.lookup` as the first stop for exact

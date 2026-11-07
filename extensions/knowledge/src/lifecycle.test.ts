@@ -579,3 +579,26 @@ it("supersede rejects self, repeats, cycles, other subjects, pages, stale fences
   const corrected = await f.service.correct(correction(f, await read(f, a.id)), f.owner);
   await rejects(supersede(f, corrected, [a], { undo: true }), /replaced by knowledge_correct/);
 });
+
+it("supersede rejects a replacement that depends on a superseded claim, directly or through a dependent", async () => {
+  const f = await foundation();
+  const red = await f.service.create_claim(f.claim({ title: "CI red" }), f.owner);
+  const deps = (id: string) => [f.pages.meeting.id, id];
+  const merged = await f.service.create_claim(
+    f.claim({ title: "Merged", dependencies: deps(red.id) }),
+    f.owner,
+  );
+  const summary = await f.service.save_page(
+    { ...draft(), title: "Run summary", dependencies: [red.id] },
+    f.owner,
+  );
+  const shipped = await f.service.create_claim(
+    f.claim({ title: "Shipped", dependencies: deps(summary.id) }),
+    f.owner,
+  );
+  for (const by of [merged, shipped]) {
+    await expect(supersede(f, by, [red])).rejects.toThrow(/would hide the replacement/);
+    expect((await f.service.lookup({ query: by.id }, f.owner)).total).toBe(1);
+  }
+  expect((await read(f, red.id)).lifecycle).toBe("active");
+});

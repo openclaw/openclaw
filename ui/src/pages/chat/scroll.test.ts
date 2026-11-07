@@ -10,6 +10,7 @@ import {
   getChatSessionScrollPosition,
   handleChatScroll,
   handleChatScrollTakeover,
+  hasPendingManualChatScroll,
   lockChatScroll,
   resetChatScroll,
   saveChatSessionScrollPosition,
@@ -269,6 +270,26 @@ it("resets state for new chat session", () => {
 describe("programmatic scroll ownership", () => {
   beforeEach(immediateFrames);
 
+  it("keeps resize-anchor motion out of reader policy until explicit takeover", () => {
+    const { host: base, container } = createScrollHost({ scrollTop: 1500, clientHeight: 400 });
+    const host = Object.assign(base, { chatIsMaintenanceScroll: () => true });
+    host.chatLastScrollTop = 1490;
+    scroll(host, 1510);
+    expect(host).toMatchObject({
+      chatFollowLocked: false,
+      chatUserNearBottom: true,
+      chatNewMessagesBelow: false,
+    });
+
+    container.scrollTop = 1510;
+    handleChatScrollTakeover(host);
+    expect(host).toMatchObject({
+      chatFollowLocked: true,
+      chatUserNearBottom: false,
+      chatNewMessagesBelow: true,
+    });
+  });
+
   it("leaves restoration policy unchanged when automatic follow is declined", () => {
     const { host, container } = createScrollHost({ scrollTop: 420 });
     host.chatScrollToEnd = vi.fn(() => false);
@@ -287,14 +308,17 @@ describe("programmatic scroll ownership", () => {
     host.chatIsProgrammaticScroll = () => true;
     host.chatNewMessagesBelow = true;
     host.chatLastScrollTop = 500;
+    expect(hasPendingManualChatScroll(host)).toBe(false);
     scheduleChatScroll(host, true, true, { source: "manual" });
     expect(canAutoFollowChat(host)).toBe(false);
+    expect(hasPendingManualChatScroll(host)).toBe(true);
     frames.runNext();
     expect(canAutoFollowChat(host)).toBe(false);
     expect(host.chatScrollToEnd).not.toHaveBeenCalled();
     scheduleCommittedChatScroll(host, false, false, { source: "resize" });
     frames.runNext();
     expect(canAutoFollowChat(host)).toBe(true);
+    expect(hasPendingManualChatScroll(host)).toBe(false);
     expect(host.chatScrollToEnd).toHaveBeenCalledWith({ behavior: "smooth", source: "manual" });
     expect(frames.pending.size).toBe(0);
     scroll(host, 900);

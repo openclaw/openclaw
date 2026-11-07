@@ -7,6 +7,9 @@ import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import { pluginProcessRuntimeEntrypoints } from "../plugins/process-runtime.test-support.js";
 import { createInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
+import { getQueueSize } from "../process/command-queue.js";
+import { getActiveGatewayRootWorkHolders } from "../process/gateway-work-admission.js";
+import { CommandLane } from "../process/lanes.js";
 import { createGatewaySchedulerClock } from "../test-utils/gateway-scheduler-clock.js";
 import { getFreePort } from "../test-utils/ports.js";
 import type { GatewayServer } from "./server-public.js";
@@ -116,7 +119,15 @@ it.each(["settles", "closes", "repair-closes"] as const)(
         await vi.waitFor(
           () => {
             repairWake = clock.advanceBy(1_000) ?? repairWake;
-            expect(optionalRepair).toHaveBeenCalledOnce();
+            expect(
+              optionalRepair,
+              JSON.stringify({
+                holders: getActiveGatewayRootWorkHolders(),
+                background: getQueueSize(CommandLane.Background),
+                restart: getQueueSize(CommandLane.RestartRecovery),
+                armedAtMs: clock.armedAtMs,
+              }),
+            ).toHaveBeenCalledOnce();
           },
           { timeout: 10_000, interval: 10 },
         );

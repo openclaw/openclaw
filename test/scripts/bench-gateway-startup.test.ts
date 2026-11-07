@@ -120,6 +120,7 @@ function gatewaySample(overrides: Partial<GatewaySample> = {}): GatewaySample {
     signal: null,
     startupTrace: {},
     startupTraceLines: [],
+    pluginMigration: { total: 0, completed: 0, warnings: 0 },
     ...overrides,
   };
 }
@@ -379,6 +380,7 @@ server.listen(port, "127.0.0.1", () => {
   console.log("[gateway] ready (0 plugins, 0.0s)");
   console.log("startup trace: sidecars.model-runtime-build agentCount=" + (10 + sample) + " workspaceGroupCount=" + sample + " workspaceFactsMs=2.5");
   console.log("startup trace: memory.ready rssMb=32.5 heapUsedMb=16.25 externalMb=2");
+  if (teamBoot) console.log("startup trace: plugins.runtime-post-bind 1.0ms total=1.0ms");
 });
 `,
         );
@@ -699,7 +701,7 @@ server.listen(port, "127.0.0.1", () => {
     { fast: 5, slow: 9, errors: 0, valid: false },
     { fast: 5, slow: 11, errors: 1, valid: false },
   ])(
-    "enforces independent slow-agent recovery (fast=$fast, slow=$slow, errors=$errors)",
+    "enforces independent slow-agent database admission (fast=$fast, slow=$slow, errors=$errors)",
     ({ fast, slow, errors, valid }) => {
       const result = testing.summarizeCase(
         { config: {}, id: "slowAgentDatabase", name: "slow agent database" },

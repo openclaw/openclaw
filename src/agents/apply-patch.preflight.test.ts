@@ -305,7 +305,9 @@ describe("applyPatch preflight", () => {
       await fs.writeFile(path.join(dir, "unrelated.txt"), "keep\n", "utf8");
       const input = patch("*** Delete File: unrelated.txt", update("link.txt", "keep", "changed"));
 
-      await expect(applyPatch(input, { cwd: dir })).rejects.toThrow(/sandbox root/);
+      await expect(applyPatch(input, { cwd: dir, workspaceOnly: true })).rejects.toThrow(
+        /sandbox root/,
+      );
 
       await expect(fs.readFile(path.join(dir, "unrelated.txt"), "utf8")).resolves.toBe("keep\n");
     },

@@ -82,9 +82,46 @@ describe("MCP App sandbox security", () => {
       ["/mcp-app-sandbox", 8443],
       ["/mcp-app-sandbox", 8444, hostOrigin, gatewayUrl, "https://control.example"],
     ];
+    const message = "Couldn’t load this app. Check its URL and try again.";
     for (const args of invalid) {
-      expect(() => resolve(...args)).toThrow("MCP App sandbox URL is invalid");
+      expect(() => resolve(...args)).toThrow(message);
     }
+  });
+
+  it("admits only the exact issued file-preview shell without changing origin isolation", () => {
+    const path = "/__openclaw__/file-preview/connection/ticket/report/preview.html";
+    const resolve = (value: string, expected = path, port = 8444, origin?: string) =>
+      resolveSandboxHostUrl(
+        value,
+        port,
+        origin,
+        "https://gateway.example:8443",
+        "https://control.example",
+        undefined,
+        expected,
+      );
+    expect(resolve(path)).toBe(`https://gateway.example:8444${path}`);
+    expect(() =>
+      resolveSandboxHostUrl(
+        path,
+        8444,
+        undefined,
+        "https://gateway.example:8443",
+        "https://control.example",
+      ),
+    ).toThrow();
+    for (const value of [
+      path + "?asset=other",
+      path + "#other",
+      path.replace("ticket", "other"),
+      `https://other.example${path}`,
+    ]) {
+      expect(() => resolve(value)).toThrow();
+    }
+    expect(() => resolve("/other", "/other")).toThrow();
+    expect(() => resolve(path, path, 8443)).toThrow();
+    expect(() => resolve(path, path, 8444, "https://control.example")).toThrow();
+    expect(() => resolve(path + "/../other", path + "/../other")).toThrow();
   });
 
   it("keeps the per-view prompt budget across iframe remounts", async () => {

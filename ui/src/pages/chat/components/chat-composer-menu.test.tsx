@@ -51,22 +51,13 @@ it("keeps loading suggestions named, selected and actionable", () => {
     <div role="listbox" aria-label="Suggestions">
       <ComposerMenuLoadingRows
         activeId={activeId()}
-        rows={[
-          {
-            id: "pending-status",
-            name: "/status",
-            description: "Show status",
-            select,
-            hover: () => setActiveId("pending-status"),
-          },
-          {
-            id: "pending-help",
-            name: "/help",
-            description: "Show help",
-            select,
-            hover: () => setActiveId("pending-help"),
-          },
-        ]}
+        rows={["status", "help"].map((name) => ({
+          id: `pending-${name}`,
+          name: `/${name}`,
+          description: `Show ${name}`,
+          select,
+          hover: () => setActiveId(`pending-${name}`),
+        }))}
       />
     </div>
   ));
@@ -82,10 +73,6 @@ it("keeps loading suggestions named, selected and actionable", () => {
 
 it("keeps current editing state when suggestion rows load after dismissal", async () => {
   const { menu, host, view } = mountSlashMenu("lazy-menu-dismissal");
-  expect(view.getByRole("listbox")).toBeTruthy();
-  expect(view.container.querySelectorAll(".slash-menu-item")).toHaveLength(
-    menu.state.slashMenuItems.length,
-  );
   menu.reset();
   await import("./chat-composer-slash-menu-options.tsx");
   flush();
@@ -99,23 +86,19 @@ it("keeps current editing state when suggestion rows load after dismissal", asyn
 });
 
 it("uses the current focus policy on a retained suggestion option", () => {
-  let setPreserveFocus!: (value: boolean) => void;
-  const view = mountSolid(() => {
-    const [preserveFocus, update] = createSignal(true);
-    setPreserveFocus = update;
-    return (
-      <ComposerMenuOption
-        id="retained-option"
-        active={false}
-        preserveFocus={preserveFocus()}
-        select={vi.fn()}
-        hover={vi.fn()}
-        icon={undefined}
-        name="Suggestion"
-        description=""
-      />
-    );
-  });
+  const [preserveFocus, setPreserveFocus] = createSignal(true);
+  const view = mountSolid(() => (
+    <ComposerMenuOption
+      id="retained-option"
+      active={false}
+      preserveFocus={preserveFocus()}
+      select={vi.fn()}
+      hover={vi.fn()}
+      icon={undefined}
+      name="Suggestion"
+      description=""
+    />
+  ));
   const option = view.getByRole("option");
   for (const preserve of [true, false, true]) {
     setPreserveFocus(preserve);
@@ -140,7 +123,7 @@ it("retains the slash viewport through row loading and selection changes, and re
   expect(viewport.scrollTop).toBe(120);
   expect(view.getByRole("option", { selected: true }).textContent).toContain("/status");
 
-  host.resolveArgOptions = () => ["on", "off"];
+  host.resolveArgOptions = () => ["on", "off", "other"];
   menu.selectCommand(command, host);
   flush();
   await waitForSolid(() => expect(view.getByRole("option", { selected: true })).toBeTruthy());
@@ -148,6 +131,20 @@ it("retains the slash viewport through row loading and selection changes, and re
   expect(argumentsViewport).not.toBe(viewport);
   expect(argumentsViewport.scrollTop).toBe(0);
   expect(view.getByRole("option", { selected: true }).textContent).toContain("/status on");
+  for (const [draft, args, expected] of [
+    ["/status ", ["on", "off", "other"], "off"],
+    ["/status ", ["off", "on", "other"], "off"],
+    ["/status o", ["off", "on", "other"], "off"],
+    ["/status o", ["off", "other"], "off"],
+    ["/verbose ", ["off", "other"], "off"],
+  ] as const) {
+    menu.hover(1);
+    flush();
+    host.resolveArgOptions = () => [...args];
+    menu.update(draft, host);
+    flush();
+    expect(menu.state.slashMenuArgItems[menu.state.slashMenuIndex]).toBe(expected);
+  }
 
   menu.reset();
   flush();
@@ -183,10 +180,11 @@ it("retains the focused capability row and management link through catalog refre
       capabilityMenu: makeCapabilities({ ...previous.capabilityMenu!.read()!, ...capability }),
     }));
   await import("./chat-composer-plus-menu-content.tsx");
+  await import("./chat-composer-plus-menu-subview.tsx");
   await waitForSolid(() => expect(checkbox("Focused skill")).toBeTruthy());
   for (const [name, description] of [
-    ["Broken", "deps missing"],
-    ["Private", "not available for this agent"],
+    ["Broken", "Missing dependencies"],
+    ["Private", "Not available for this agent"],
   ]) {
     expect(
       view.getByRole("menuitem", { name, description, hidden: true }).hasAttribute("disabled"),
@@ -578,7 +576,7 @@ it("filters skills across groups and restores the catalog when header search clo
     capabilityMenu: makeCapabilities({
       skills: [
         { key: "notes", name: "Notes", enabled: true, baseEnabled: true },
-        { key: "weather", name: "Weather", enabled: false, baseEnabled: false, missingDeps: true },
+        { key: "nfd", name: "e\u0301", enabled: false, baseEnabled: false, missingDeps: true },
       ],
     }),
   });
@@ -589,18 +587,18 @@ it("filters skills across groups and restores the catalog when header search clo
   );
   view.getByRole("button", { name: "Search skills", hidden: true }).click();
   await waitForSolid(() =>
-    expect(view.queryByRole("textbox", { name: "Search skills", hidden: true })).not.toBeNull(),
+    expect(view.queryByRole("searchbox", { name: "Search skills", hidden: true })).not.toBeNull(),
   );
-  const input = view.getByRole("textbox", {
+  const input = view.getByRole("searchbox", {
     name: "Search skills",
     hidden: true,
   }) as HTMLInputElement;
-  input.value = "weather";
+  input.value = "É";
   input.dispatchEvent(new Event("input", { bubbles: true }));
   await waitForSolid(() => {
     expect(view.queryByRole("menuitemcheckbox", { name: "Notes", hidden: true })).toBeNull();
     expect(
-      view.getByRole("menuitem", { name: "Weather", hidden: true }).getAttribute("aria-disabled"),
+      view.getByRole("menuitem", { name: "e\u0301", hidden: true }).getAttribute("aria-disabled"),
     ).toBe("true");
   });
   input.value = "missing";
@@ -610,9 +608,9 @@ it("filters skills across groups and restores the catalog when header search clo
   );
   view.getByRole("menuitem", { name: "Skills", hidden: true }).click();
   await waitForSolid(() => {
-    expect(view.queryByRole("textbox", { name: "Search skills", hidden: true })).toBeNull();
+    expect(view.queryByRole("searchbox", { name: "Search skills", hidden: true })).toBeNull();
     expect(view.getByRole("menuitemcheckbox", { name: "Notes", hidden: true })).not.toBeNull();
-    expect(view.getByRole("menuitem", { name: "Weather", hidden: true })).not.toBeNull();
+    expect(view.getByRole("menuitem", { name: "e\u0301", hidden: true })).not.toBeNull();
   });
   setMenu((previous) => ({ ...previous, view: "libraries" }));
   await waitForSolid(() => {
@@ -720,15 +718,15 @@ it("expands one server at a time and keeps switch and bulk tool actions separate
   setCurrentView("root");
   await waitForSolid(() =>
     expect(
-      view.queryByRole("menuitem", { name: "2 changes for this session", hidden: true }),
+      view.queryByRole("menuitem", { name: "2 changes in this session", hidden: true }),
     ).not.toBeNull(),
   );
-  view.getByRole("menuitem", { name: "2 changes for this session", hidden: true }).click();
+  view.getByRole("menuitem", { name: "2 changes in this session", hidden: true }).click();
   await waitForSolid(() => {
     expect(patch).toHaveBeenLastCalledWith(null);
     expect(overrides()).toBeNull();
     expect(
-      view.queryByRole("menuitem", { name: /changes for this session/, hidden: true }),
+      view.queryByRole("menuitem", { name: /changes in this session/, hidden: true }),
     ).toBeNull();
   });
 });

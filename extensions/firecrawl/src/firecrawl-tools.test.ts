@@ -509,7 +509,10 @@ describe("firecrawl tools", () => {
     vi.stubEnv("FIRECRAWL_API_KEY", "firecrawl-env-fallback");
     vi.stubEnv("UNRELATED_SECRET", "should-not-be-read");
     const cfg = firecrawlConfig(
-      { webSearch: { apiKey } },
+      {
+        webSearch: { apiKey, baseUrl: "http://127.0.0.1:8787" },
+        webFetch: { apiKey: "sibling-fixture", baseUrl: "http://127.0.0.1:8788" },
+      },
       providers ? { secrets: { providers } } : {},
     );
 
@@ -517,6 +520,40 @@ describe("firecrawl tools", () => {
     await expect(search({ cfg })).rejects.toThrow("needs a Firecrawl API key");
     expect(fetchSpy).not.toHaveBeenCalled();
   });
+
+  it.each(["search", "scrape"] as const)(
+    "does not mix partial %s connection settings with its sibling",
+    async (operation) => {
+      vi.stubEnv("FIRECRAWL_API_KEY", "env-fixture");
+      vi.stubEnv("FIRECRAWL_BASE_URL", "http://127.0.0.1:8789");
+      pinLocalhost();
+      const scope = operation === "search" ? "webSearch" : "webFetch";
+      const sibling = operation === "search" ? "webFetch" : "webSearch";
+      for (const [connection, expectedPort, expectedKey] of [
+        [{ baseUrl: "http://127.0.0.1:8787" }, 8787, "env-fixture"],
+        [{ apiKey: "own-fixture" }, 8789, "own-fixture"],
+        [undefined, 8788, "sibling-fixture"],
+      ] as const) {
+        const { fetchSpy, headers } = mockJsonResponse({
+          success: true,
+          data: operation === "search" ? [] : scrapeData("scoped content"),
+        });
+        const cfg = firecrawlConfig(
+          {
+            [scope]: connection,
+            [sibling]: { apiKey: "sibling-fixture", baseUrl: "http://127.0.0.1:8788" },
+          },
+          { tools: { web: { search: { cacheTtlMinutes: 0 } } } },
+        );
+        await standalone(operation, { query: "partial scope", url: "https://example.com" }, cfg);
+        expect(fetchSpy).toHaveBeenCalledExactlyOnceWith(
+          `http://127.0.0.1:${expectedPort}/v2/${operation}`,
+          expect.anything(),
+        );
+        expect(headers().get("authorization")).toBe(`Bearer ${expectedKey}`);
+      }
+    },
+  );
 
   it.each([
     ["http://api.firecrawl.dev", "Firecrawl HTTP baseUrl must target a private or internal"],

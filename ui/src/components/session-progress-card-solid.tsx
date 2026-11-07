@@ -2,7 +2,8 @@ import type { ProgressCard, SessionRunStatus } from "@openclaw/gateway-protocol"
 import { createMemo, createUniqueId, onSettled, Show } from "solid-js";
 import { i18nRevision, t } from "../lib/reactive/i18n.ts";
 import type { SessionProgressCardRuntime } from "../lib/session-progress-runtime.ts";
-import { animateDetailsSection, DETAILS_SECTION_MOTION } from "./details-section-motion.ts";
+import { DETAILS_SECTION_MOTION } from "./details-section-motion-options.ts";
+import { animateDetailsSection } from "./details-section-motion.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import {
   CardActivity,
@@ -42,6 +43,7 @@ export type SessionProgressCardProps = {
   collapseComposerByDefault?: boolean;
   composerDisclosureContext?: ComposerProgressDisclosureContext;
   refreshAction?: SessionProgressCardRefreshAction;
+  reserveRefresh?: boolean;
   onClearSaved?: (card: ProgressCard) => void;
   menuOptions?: Pick<MenuProps, "items" | "onSelect" | "disabled" | "class">;
   menuRef?: (menu: MenuHandle) => void;
@@ -54,7 +56,7 @@ function CardAction(props: { card: ProgressCard; onAction?: (card: ProgressCard)
   return (
     <Show when={props.onAction}>
       <button
-        class="rail-header__action session-progress-card__dismiss"
+        class="oc-icon-button oc-icon-button--28 rail-header__action session-progress-card__dismiss"
         type="button"
         aria-label={label()}
         title={label()}
@@ -290,10 +292,11 @@ export function ProgressDetailsRefresh(props: {
   disabled?: boolean;
   desktopDetails?: boolean;
   hideTooltip?: boolean;
+  reserved?: boolean;
 }) {
   const pending = () => props.action?.state === "pending";
   return (
-    <Show when={props.action}>
+    <Show when={props.action || props.reserved}>
       <openclaw-tooltip
         prop:placement="top"
         prop:disabled={props.disabled || props.hideTooltip || false}
@@ -305,6 +308,8 @@ export function ProgressDetailsRefresh(props: {
             pending() ? "sessionProgressCard.refresh.pending" : "sessionProgressCard.refresh.label",
           )}
           aria-busy={pending() ? "true" : "false"}
+          aria-disabled={!props.action ? "true" : undefined}
+          aria-description={!props.action ? t("sessionProgressCard.widgetLoading") : undefined}
           disabled={props.disabled || pending()}
           data-pending={pending() ? "true" : "false"}
           onClick={(event) => {
@@ -517,6 +522,7 @@ function DetailsCard(props: CardProps) {
             <ProgressDetailsRefresh
               card={props.card}
               action={props.refreshAction}
+              reserved={props.reserveRefresh}
               disabled={props.menuOptions?.disabled}
               desktopDetails={props.desktopDetails}
             />

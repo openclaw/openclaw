@@ -73,7 +73,7 @@ export async function findDeliveryIntentOwner(
 }
 
 /** Resolve one ordered batch without reopening the store for each intent. */
-export async function findDeliveryIntentOwners(
+async function findDeliveryIntentOwners(
   ids: readonly string[],
   stateDir?: string,
   context?: DeliveryQueueStateContext,

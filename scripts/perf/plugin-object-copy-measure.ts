@@ -14,6 +14,7 @@ import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { mergeSlackSendResults } from "../../extensions/slack/src/send-results.js";
 import { buildTelegramThreadReplyParams } from "../../extensions/telegram/src/reply-parameters.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const mode = process.argv[2] ?? "timing";
 const iterations = Number(process.argv[3] ?? 3000);
@@ -56,12 +57,7 @@ for (const workload of workloads) {
   global.gc?.();
   const inspector = new Session();
   if (mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const hostLoad = loadavg();
   const start = process.threadCpuUsage();

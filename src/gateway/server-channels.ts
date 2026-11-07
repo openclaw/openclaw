@@ -148,7 +148,6 @@ export type ChannelManager = ChannelAccountLifecycle & {
   isAmbientAutostartSuppressed: (channelId: string) => boolean;
   markChannelLoggedOut: (channelId: ChannelId, cleared: boolean, accountId?: string) => void;
   isAutoRestartScheduled: (channelId: ChannelId, accountId: string) => boolean;
-  resetRestartAttempts: (channelId: ChannelId, accountId: string) => void;
   isHealthMonitorEnabled: (channelId: ChannelId, accountId: string) => boolean;
 };
 
@@ -705,8 +704,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             reconnectAttempts: preserveRestartAttempts ? (restarts.get(rKey)?.attempts ?? 0) : 0,
           });
           const task = Promise.resolve().then(async () => {
-            if (optsValue.deferAccountStartUntil) {
-              await waitForDeferredAccountStart(optsValue.deferAccountStartUntil, abort.signal);
+            if (opts.deferStartupAccountStartsUntil) {
+              await waitForDeferredAccountStart(opts.deferStartupAccountStartsUntil, abort.signal);
             } else if (startupTrace) {
               await waitForChannelStartupHandoff();
             }
@@ -1255,15 +1254,14 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     withRegistry((registry) => stopChannelInRegistry(registry, ...args));
 
   const startChannelsWithOptions = async (startOptions: StartChannelOptions = {}) => {
-    const deferAccountStartUntil = opts.deferStartupAccountStartsUntil;
     await Promise.all(
       listLoadedChannelPluginsForRegistry(getPluginRegistry()).map(async (plugin) => {
         try {
           await measureStartup(`channels.${plugin.id}.start`, () =>
             startChannelInternal(plugin.id, undefined, {
               reason: "startup",
+              preserveManualStop: opts.deferStartupAccountStartsUntil !== undefined,
               ...startOptions,
-              ...(deferAccountStartUntil ? { deferAccountStartUntil } : {}),
             }),
           );
         } catch (err) {
@@ -1470,12 +1468,13 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     startChannels: () => startChannelsWithOptions(),
     startChannel: startChannelInternal,
     stopChannel,
-    captureAccountRestart: (channelId, accountId, reason) =>
+    captureAccountRestart: (channelId, accountId, reason, options) =>
       captureChannelAccountRestart({
         store: channelStores.get(channelId),
         channelId,
         accountId,
         reason,
+        ...options,
         manager,
         log: ensureChannelLog(channelId),
       }),

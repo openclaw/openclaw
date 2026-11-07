@@ -24,6 +24,7 @@ import {
   type RouteId,
 } from "./app-route-paths.ts";
 import type { SolidRouteProps } from "./app-route-types.tsx";
+import { retireBootComposer } from "./app/boot-composer.ts";
 import type { ApplicationContext } from "./app/context.ts";
 import { gatewayPresentationScope } from "./app/gateway-presentation-scope.ts";
 import { retryControlUiImport } from "./app/stale-chunk-reload.ts";
@@ -36,8 +37,8 @@ import { page as appsPage } from "./pages/apps/route.tsx";
 import { page as channelsPage } from "./pages/channels/route.ts";
 import { pages as chatPages } from "./pages/chat/route.ts";
 import type { ChatRouteData } from "./pages/chat/session-route-data.ts";
-import { page as clawsPage } from "./pages/claws/route.ts";
 import { page as cloudWorkersPage } from "./pages/cloud-workers/route.tsx";
+import { canonicalGeneralSettingsLocation } from "./pages/config/route-data.ts";
 import { pages as configPages } from "./pages/config/route.ts";
 import { page as connectionPage } from "./pages/connection/route.ts";
 import { page as cronPage } from "./pages/cron/route.tsx";
@@ -68,6 +69,7 @@ import { page as sessionsPage } from "./pages/sessions/route.ts";
 import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
 import { pages as skillsPages } from "./pages/skills/route.ts";
 import { page as systemsPage } from "./pages/systems/route.ts";
+import { page as clawsPage } from "./pages/templates/route.ts";
 import { page as terminalPage } from "./pages/terminal/route.tsx";
 import { page as usagePage } from "./pages/usage/route.tsx";
 import { resolveWorkboardRouteLocation } from "./pages/workboard/route-location.ts";
@@ -168,13 +170,15 @@ function canonicalRouteLocation(
   location: RouteLocation,
   basePath: string,
 ): RouteLocation {
-  return routeId === "workboard"
-    ? (resolveWorkboardRouteLocation(location, basePath).canonicalLocation ?? location)
-    : routeId === "plugin"
-      ? canonicalPluginTabLocation(location, basePath)
-      : routeId === "plugins" || routeId === "plugin-settings"
-        ? (canonicalPluginsRouteLocation(location, basePath) ?? location)
-        : location;
+  return routeId === "config"
+    ? canonicalGeneralSettingsLocation(location, basePath)
+    : routeId === "workboard"
+      ? (resolveWorkboardRouteLocation(location, basePath).canonicalLocation ?? location)
+      : routeId === "plugin"
+        ? canonicalPluginTabLocation(location, basePath)
+        : routeId === "plugins" || routeId === "plugin-settings"
+          ? (canonicalPluginsRouteLocation(location, basePath) ?? location)
+          : location;
 }
 
 export function createApplicationRouter(): ApplicationRouter {
@@ -185,17 +189,27 @@ export function createApplicationRouter(): ApplicationRouter {
   // ids, hub tabs, and session refs are runtime data, so the app owns those paths.
   return {
     ...router,
-    navigate: (routeId, context, options, location) =>
-      context.nativeConversation?.interceptNavigation(
-        location ?? locationForRoute(routeId, context.basePath),
-      )
-        ? Promise.resolve()
-        : router.navigate(
-            routeId,
-            context,
-            options,
-            location ? canonicalRouteLocation(routeId, location, context.basePath) : undefined,
-          ),
+    navigate: (routeId, context, options, location) => {
+      const requested = location ?? locationForRoute(routeId, context.basePath);
+      if (context.nativeConversation?.interceptNavigation(requested)) {
+        return Promise.resolve();
+      }
+      const canonical =
+        location || routeId === "config"
+          ? canonicalRouteLocation(routeId, requested, context.basePath)
+          : undefined;
+      // General is a retired URL, not a page to mount between two live destinations.
+      return router.navigate(
+        routeId === "config"
+          ? (routeIdFromPath(canonical!.pathname, context.basePath) ?? routeId)
+          : routeId,
+        context,
+        routeId === "config"
+          ? { ...options, history: options?.history === "push" ? "push" : "replace" }
+          : options,
+        canonical,
+      );
+    },
     routeIdFromPath,
   };
 }
@@ -272,7 +286,11 @@ export async function startApplicationRouter(
   const initialDynamicRoute = dynamicRouteFromPath(location.pathname, basePath);
   const applicationHistory: RouterHistory = {
     location: () => routerHistoryLocation(history.location(), basePath),
-    push: (next) => history.push(next),
+    push: (next) => {
+      // A pushed destination is not the linked session the boot composer was typed for.
+      retireBootComposer();
+      history.push(next);
+    },
     replace: (next) => history.replace(next),
     listen: (listener) => {
       let listening = true;
@@ -470,7 +488,11 @@ export async function startApplicationRouter(
     },
   };
   await tolerateRouteNotFound(router.start(applicationHistory, basePath, context));
-  if (initialDynamicRoute && sameRouteLocation(history.location(), location)) {
+  if (
+    initialDynamicRoute &&
+    !context.lifecycleAbortSignal?.aborted &&
+    sameRouteLocation(history.location(), location)
+  ) {
     // Replace the synthetic exact-match location with the real browser path
     // before the shell renders. A loader-visible redirect wins if it already
     // moved history while startup was still resolving.

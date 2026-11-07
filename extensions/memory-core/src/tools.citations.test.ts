@@ -245,16 +245,18 @@ describe("memory tools", () => {
   });
 
   it.each(["memory", "wiki"] as const)(
-    "isolates results and cooldown when %s stalls",
+    "isolates results and allows retry when %s stalls",
     async (stalled) => {
       vi.useFakeTimers();
       const search = vi.fn(async () =>
         stalled === "memory" ? await new Promise<never>(() => {}) : [memoryHit()],
       );
       setMemorySearchImpl(search);
+      const wikiSearch = vi.fn(async () =>
+        stalled === "wiki" ? await new Promise<never>(() => {}) : [wikiHit("entities/alpha.md")],
+      );
       registerMemoryCorpusSupplement("memory-wiki", {
-        search: async () =>
-          stalled === "wiki" ? await new Promise<never>(() => {}) : [wikiHit("entities/alpha.md")],
+        search: wikiSearch,
         get: async () => null,
       });
       const tool = createMemorySearchToolOrThrow();
@@ -276,22 +278,24 @@ describe("memory tools", () => {
             stalled === "memory" ? "Memory corpus unavailable" : "Wiki corpus unavailable",
           ),
         });
+        search.mockResolvedValue([memoryHit()]);
+        wikiSearch.mockResolvedValue([wikiHit("entities/alpha.md")]);
         const retry = await tool.execute("after-stall", {
           query: "alpha",
-          ...(stalled === "memory" ? { corpus: "all" } : {}),
+          corpus: "all",
         });
-        expect(retry.details).toMatchObject({ results: [{ corpus: healthy, path }] });
-        if (stalled === "memory") {
-          expect(retry.details).toMatchObject({
-            corpora,
-            warning: expect.stringContaining("Memory corpus unavailable"),
-          });
-          expect(retry.details).toHaveProperty(
-            "warning",
-            expect.stringContaining("memory_search timed out after 30s"),
-          );
-        }
-        expect(search).toHaveBeenCalledTimes(stalled === "memory" ? 1 : 2);
+        expect(retry.details).toMatchObject({
+          results: [
+            { corpus: "wiki", path: "entities/alpha.md" },
+            { corpus: "memory", path: "MEMORY.md" },
+          ],
+          corpora: [
+            { corpus: "memory", outcome: "ok" },
+            { corpus: "wiki", outcome: "ok" },
+          ],
+        });
+        expect(search).toHaveBeenCalledTimes(2);
+        expect(wikiSearch).toHaveBeenCalledTimes(2);
       } finally {
         vi.useRealTimers();
       }

@@ -1,6 +1,13 @@
 import { readFile } from "node:fs/promises";
-import type { ServerResponse } from "node:http";
+import {
+  get as httpGet,
+  type IncomingHttpHeaders,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
 import path from "node:path";
+import { buffer } from "node:stream/consumers";
+import { gunzipSync } from "node:zlib";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
@@ -69,7 +76,7 @@ const proxyHeaders = {
 
 const roleOptions = { onCommitted: invalidateOperatorRolePolicy };
 
-type HttpResult = { status: number; headers: Record<string, string>; body: string };
+type HttpResult = { status: number; headers: IncomingHttpHeaders; body: string };
 
 function expectNoApp(response: HttpResult) {
   for (const privateContent of ["<openclaw-app", 'type="module"', privateTitle, privateMessage]) {
@@ -113,15 +120,24 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
   ) {
     const headers =
       typeof identity === "string" ? { ...proxyHeaders, "x-forwarded-user": identity } : identity;
-    const response = await fetch("http://127.0.0.1:" + targetPort + route, {
-      signal,
-      redirect: "manual",
-      headers: { ...(headers ?? proxyHeaders), "accept-encoding": "gzip", connection: "close" },
+    // Native fetch replaces Host with the URL authority; these ingress cases need the wire header.
+    const response = await new Promise<IncomingMessage>((resolve, reject) => {
+      httpGet(
+        "http://127.0.0.1:" + targetPort + route,
+        {
+          signal,
+          headers: { ...(headers ?? proxyHeaders), "accept-encoding": "gzip", connection: "close" },
+        },
+        resolve,
+      ).once("error", reject);
     });
+    const body = await buffer(response);
     return {
-      status: response.status,
-      headers: Object.fromEntries(response.headers),
-      body: await response.text(),
+      status: response.statusCode ?? 0,
+      headers: response.headers,
+      body: (response.headers["content-encoding"] === "gzip" ? gunzipSync(body) : body).toString(
+        "utf8",
+      ),
     };
   }
   beforeEach((context) => {

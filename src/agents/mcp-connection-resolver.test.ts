@@ -10,6 +10,7 @@ import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { createGatewayCronReconciliation } from "../gateway/server-cron-reconciled.js";
 import {
   createDefaultGatewayReloadState,
+  createHotReloadHandlerTestParams,
   createTestCronState,
 } from "../gateway/server-reload-handlers.config.test-support.js";
 import { createGatewayReloadHandlers } from "../gateway/server-reload-hot.js";
@@ -272,42 +273,40 @@ describe("mcp connection resolver helpers", () => {
         pluginIds: ["active-drive", "startup-mail"],
         sourceDigests: {},
       };
-      const gatewayReload = createGatewayReloadHandlers({
-        scheduler,
-        deps: {},
-        broadcast() {},
-        getState: () => gatewayState,
-        getPluginRegistry: () => attachedRegistry,
-        setState(nextState) {
-          gatewayState = nextState;
-        },
-        async startChannel() {
-          return new Map();
-        },
-        async stopChannel() {},
-        releaseChannelRouteHandoffs() {},
-        pruneInactiveChannelAccountState() {},
-        async reloadPlugins({ commitRuntime }) {
-          await commitRuntime({
-            publish() {
-              attachedRegistry = replacement.registry;
-              setActivePluginRegistry(replacement.registry);
-            },
-          });
-          return { restartChannels: new Set(), activeChannels: new Set(), runtime };
-        },
-        logHooks: reloadLog,
-        logChannels: reloadLog,
-        logCron: reloadLog,
-        logReload: reloadLog,
-        cronReconciliation: createGatewayCronReconciliation({
-          port: 0,
-          workspaceDir: process.cwd(),
-          isClosing: () => false,
-          async runHook() {},
+      const gatewayReload = createGatewayReloadHandlers(
+        createHotReloadHandlerTestParams({
+          scheduler,
+          deps: {},
+          getState: () => gatewayState,
+          getPluginRegistry: () => attachedRegistry,
+          setState(nextState) {
+            gatewayState = nextState;
+          },
+          async reloadPlugins({ commitRuntime }) {
+            await commitRuntime({
+              publish() {
+                attachedRegistry = replacement.registry;
+                setActivePluginRegistry(replacement.registry);
+              },
+            });
+            return { restartChannels: new Set(), activeChannels: new Set(), runtime };
+          },
+          logHooks: reloadLog,
+          logChannels: reloadLog,
+          logCron: reloadLog,
+          logReload: reloadLog,
+          cronReconciliation: createGatewayCronReconciliation({
+            port: 0,
+            workspaceDir: process.cwd(),
+            isClosing: () => false,
+            getConfig: () => nextConfig,
+            getPluginRegistry: () => attachedRegistry,
+            logger: reloadLog,
+            async runHook() {},
+          }),
+          requestRecoveryRestart,
         }),
-        requestRecoveryRestart,
-      });
+      );
 
       await expect(gatewayReload.applyHotReload(reloadPlan, nextConfig)).resolves.toEqual({
         status: "applied",

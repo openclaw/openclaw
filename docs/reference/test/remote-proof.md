@@ -26,15 +26,15 @@ refs and rejects an explicit `--blacksmith-ref` other than `main`. Choose the
 source revision in your local checkout; its source capsule and frozen dependency
 install preserve that selection independently of the workflow ref. Explicit
 workflow and job selection support explicit focused, routine, and high-memory
-profiles. The default stays 16-class until real smaller-machine qualification
-passes; neither `--class` nor `--type` sizes delegated Testbox leases.
+profiles. The default uses 4 vCPUs, preserving the observed CPU and RAM of the
+pre-November 3 16-class allocation; neither `--class` nor `--type` sizes delegated Testbox leases.
 
 | Workload                                     | Workflow                           | Runner tier | Default job deadline | Maximum explicit deadline |
 | -------------------------------------------- | ---------------------------------- | ----------- | -------------------- | ------------------------- |
-| Focused tests and narrow checks              | `ci-check-focused-testbox.yml`     | 4-class     | 60 minutes           | 60 minutes                |
-| Bounded routine proof                        | `ci-check-routine-testbox.yml`     | 8-class     | 60 minutes           | 120 minutes               |
-| Broad compiler/lint graphs (current default) | `ci-check-testbox.yml`             | 16-class    | 60 minutes           | 240 minutes               |
-| Measured memory-heavy proof                  | `ci-check-high-memory-testbox.yml` | 32-class    | 240 minutes          | 240 minutes               |
+| Focused tests and narrow checks              | `ci-check-focused-testbox.yml`     | 2-class     | 60 minutes           | 60 minutes                |
+| Bounded routine proof                        | `ci-check-routine-testbox.yml`     | 2-class     | 60 minutes           | 120 minutes               |
+| Broad compiler/lint graphs (current default) | `ci-check-testbox.yml`             | 4-class     | 60 minutes           | 240 minutes               |
+| Measured memory-heavy proof                  | `ci-check-high-memory-testbox.yml` | 8-class     | 240 minutes          | 240 minutes               |
 
 Deadlines include hydration. The larger maximum requires an explicit workflow
 `timeout_minutes` input; Crabbox does not forward that input, and `--ttl` does
@@ -65,7 +65,7 @@ path; it does not permit raw native callers or untrusted proof to reuse a
 lease across revisions.
 Older or missing receipts require stopping the owned lease and allocating a
 fresh one through the wrapper. `OPENCLAW_TESTBOX_ALLOW_STALE` cannot bypass
-these checks. All providers require Crabbox 0.79.2 or newer.
+these checks. All providers require Crabbox 0.80.0 or newer.
 
 For direct and coordinator-managed leases, TTL is total lifetime from creation, including hydration; idle timeout is the inactivity window, and the earlier deadline wins. Crabbox defaults both to 30 minutes and the maximum to four hours; coordinator owner or organization overrides and trusted direct-provider configuration can allow up to 24 hours. Read effective policy and clamp notices rather than assuming the requested duration was granted. `--keep` skips normal command cleanup but does not prevent expiry. Plain heartbeats and manual desktop use do not extend total TTL; `run` requests bounded auto-extension only while the command executes. Creation-fixed providers need enough TTL at allocation. Extension refusals and budget exhaustion do not authorize another provider or an unlimited chain of leases.
 
@@ -174,8 +174,8 @@ Linux ARM cannot provide this proof with Google's x86_64 AAPT2 artifact.
 
 ## Testbox runner sizing
 
-Use the default 16-class workflow for routine remote proof, with a 60-minute
-total-job deadline including hydration. Keep the 32-class
+Use the default 4-class workflow for routine remote proof, with a 60-minute
+total-job deadline including hydration. Keep the 8-class
 rare: record the command and its measured memory need, a smaller-runner OOM,
 or a controlled comparison showing lower total billed cost before selecting it.
 Existing memory-heavy full-suite Testbox PR gates use this exception. A generic

@@ -762,7 +762,7 @@ suite.define(() => {
           expectedRevision: initialCard.revision,
         });
         await expect.poll(() => card.count()).toBe(0);
-        await progress.getByText("No saved progress", { exact: true }).waitFor();
+        await progress.getByText("No saved progress yet.", { exact: true }).waitFor();
         await gateway.setMethodResponse("progressCard.get", { card: null });
         await page.reload();
         await gateway.waitForRequest("progressCard.get");

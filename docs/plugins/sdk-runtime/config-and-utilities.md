@@ -110,6 +110,11 @@ Metadata discovery still does not execute plugin code. See
 
 ### Process and network utilities
 
+`getAsyncWorkSignal()` from `openclaw/plugin-sdk/concurrency-runtime` returns the
+active host work scope's cancellation signal, or `undefined` outside a managed
+scope. Pass it to cancellable reads and check it before publishing their results.
+Already-accepted mutations retain their owner's settlement policy.
+
 `runInDetachedAsyncContext` from `openclaw/plugin-sdk/concurrency-runtime` starts
 work in the host's context-free async root. Use it at an independently admitted
 service request boundary when a long-lived listener can retain its startup
@@ -432,6 +437,13 @@ two-party event loops that do not go through the shared inbound reply runner.
 
 ### Bounded waits
 
+Use `performance.now()` for process-local elapsed measurements and budgets.
+Remaining time may be fractional; retain the operation's expiration, timeout
+normalization, and integer rounding policy. Never persist monotonic readings or
+send them as epoch timestamps. Persisted times, user-facing dates, and
+cross-process deadlines stay wall-clock values; translate an incoming epoch
+deadline into a local budget once when admitting the work.
+
 `openclaw/plugin-sdk/time-runtime` exports
 `raceWithTimeout(operation, timeoutMs, onTimeout, { ref?, signal?, onAbort? })`. Pass an existing
 promise, or a function returning a promise when the timer must start before the
@@ -498,6 +510,10 @@ function diagnosticsEnabled() {
 Recheck the gates when emitting a delayed summary. Keep fields bounded and
 content-free, and preserve the operation's result if the diagnostic sink fails.
 This predicate does not enable or authorize [audit identity collection](/gateway/audit).
+
+`normalizeDiagnosticTraceContext(value)` validates unknown trace fields and returns only the
+recognized context fields, or `undefined` when any supplied field is invalid. It does not
+generate IDs, change casing, or establish that an event is trusted.
 
 `onInternalDiagnosticEvent(listener, interest?)` filters events before copying
 their payload for the listener. `include` and `exclude` apply to every event;

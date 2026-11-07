@@ -46,13 +46,16 @@ export default defineControlUiPlugin({
           agent: s.viewing,
           defaultAgent: s.storesSnapshot?.defaultAgent,
         }));
-        const root = el("section", undefined, "knowledge-page"),
+        // Agent-dependent copy stays hidden, with its space reserved, until the first scope check.
+        const root = el("section", undefined, "knowledge-page knowledge-copy-pending"),
           header = el("header", undefined, "knowledge-header"),
           title = el("div"),
           actions = el("div", undefined, "knowledge-actions");
-        const subtitle = el("p");
+        const subtitle = el("p", undefined, "knowledge-subtitle");
         title.append(el("h1", "Knowledge"), subtitle);
-        const status = el("span", "Connecting…", "knowledge-status");
+        // Silent until there is something to report: loading placeholders already say so.
+        const status = el("span", "", "knowledge-status");
+        status.hidden = true;
         status.setAttribute("role", "status");
         status.setAttribute("aria-live", "polite");
         const settingsButton = button("", () => openSettings("stores"), "knowledge-icon-button");
@@ -83,6 +86,12 @@ export default defineControlUiPlugin({
         const recentTab = button("Recent", () => navigate("recent"), "knowledge-tab"),
           browseTab = button("Browse", () => navigate("browse"), "knowledge-tab"),
           scribesTab = button("Scribes", () => navigate("scribes"), "knowledge-tab");
+        // Count slots are reserved so the centered tabs barely move when the counts arrive.
+        for (const tab of [browseTab, scribesTab]) {
+          const pending = el("span", undefined, "knowledge-tab-count knowledge-tab-count-pending");
+          pending.setAttribute("aria-hidden", "true");
+          tab.append(pending);
+        }
         nav.append(recentTab, browseTab, scribesTab);
         const banner = el("p", "", "knowledge-notice"),
           toolbar = el("div", undefined, "knowledge-toolbar"),
@@ -252,6 +261,7 @@ export default defineControlUiPlugin({
             s.vocabulary = undefined;
             s.viewReady = false;
             s.mountedScreen = "";
+            s.retainedViews.clear();
             content.replaceChildren();
           }
           renderToolbar();
@@ -372,6 +382,7 @@ export default defineControlUiPlugin({
           s.viewReady = false;
           s.vocabulary = undefined;
           s.browseBack = [];
+          s.retainedViews.clear();
           root.querySelector(".knowledge-chat-handoff")?.remove();
           content.replaceChildren();
           const entry = s.storesSnapshot && storeOf(s.storesSnapshot, agent);

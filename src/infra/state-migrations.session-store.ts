@@ -13,10 +13,10 @@ import { assertSupportedSessionStoreEntry } from "../config/sessions/supported-s
 import { listConfiguredSessionStoreAgentIds } from "../config/sessions/targets.js";
 import type { SessionScope } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePluginDoctorSessionStoreAgentIds } from "../plugins/doctor-contract-preparation.js";
 import {
   collectRelevantDoctorPluginIds,
   isPluginDoctorMigrationDeferred,
-  listPluginDoctorSessionStoreAgentIds,
 } from "../plugins/doctor-contract-registry.js";
 import {
   LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID,
@@ -399,11 +399,11 @@ export async function migrateOrphanedSessionKeys(params: {
       : undefined;
   const pluginAgentIds =
     params.additionalAgentIds ??
-    listPluginDoctorSessionStoreAgentIds({
+    (await preparePluginDoctorSessionStoreAgentIds({
       config: params.cfg,
       env,
       pluginIds: collectRelevantDoctorPluginIds(params.cfg),
-    });
+    }));
   const pluginAgentIdSet = new Set(pluginAgentIds.map((id) => normalizeAgentId(id)));
 
   // Fixed session.store paths can be shared by several agent owners.
@@ -622,11 +622,11 @@ export async function migrateLegacyAcpSessionMetadata(params: {
   const storeConfig = params.cfg.session?.store;
   const pluginAgentIds =
     params.pluginSessionStoreAgentIds ??
-    listPluginDoctorSessionStoreAgentIds({
+    (await preparePluginDoctorSessionStoreAgentIds({
       config: params.cfg,
       env,
       pluginIds: collectRelevantDoctorPluginIds(params.cfg),
-    });
+    }));
   const normalizedPluginAgentIds = new Set(pluginAgentIds.map((id) => normalizeAgentId(id)));
   const declaredAgentIds = new Set([
     ...listConfiguredSessionStoreAgentIds(params.cfg).map((id) => normalizeAgentId(id)),

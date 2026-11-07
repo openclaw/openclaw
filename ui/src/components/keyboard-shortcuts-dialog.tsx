@@ -217,7 +217,7 @@ export const KeyboardShortcutsDialog = defineSolidBridge<DialogProps, DialogMeth
                             <For each={entry.combos}>
                               {(combo) => (
                                 <span class="combo">
-                                  <KeyboardShortcut combo={combo} separateKeys />
+                                  <KeyboardShortcut combo={combo} separateKeys always />
                                 </span>
                               )}
                             </For>
