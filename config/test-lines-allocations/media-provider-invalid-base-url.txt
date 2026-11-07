@@ -1,0 +1,3 @@
+# Regressions for fal, Qwen and Vydra media providers rejecting an invalid configured
+# or environment baseUrl instead of sending the request to the hosted default.
+39
