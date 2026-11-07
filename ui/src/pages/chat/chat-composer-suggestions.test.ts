@@ -137,7 +137,9 @@ describe("chat composer suggestion accessibility", () => {
               .map((selector) => text(activeOption, selector))
               .filter(Boolean)
               .join(" ");
-      expect(announcementText).toBe(expectedAnnouncement);
+      expect(announcementText).toBe(
+        draft === "/" ? `${expectedAnnouncement}.` : expectedAnnouncement,
+      );
 
       inputDraft(container, "plain message");
 
