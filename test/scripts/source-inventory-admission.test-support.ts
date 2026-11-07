@@ -44,10 +44,10 @@ export function prepareSourceInventoryAdmission(
   };
   const waiver = version === "2026.9.37" ? qualificationExemptionFixture(options) : undefined;
   const proof = waiver?.f ?? qualificationFixture(false, options);
-  let archive = proof.archive();
+  const archive = waiver
+    ? makeStoredZip({ "qualification-admission.json": JSON.stringify(waiver.produce()) })
+    : proof.archive();
   if (waiver) {
-    const receipt = waiver.produce();
-    archive = makeStoredZip({ "qualification-admission.json": JSON.stringify(receipt) });
     proof.metadata.digest = "sha256:" + createHash("sha256").update(archive).digest("hex");
     proof.metadata.size_in_bytes = archive.length;
     proof.descriptor.artifactDigest = proof.metadata.digest;
