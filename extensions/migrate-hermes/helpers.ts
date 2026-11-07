@@ -71,10 +71,16 @@ export async function readJsonObject(
   filePath: string | undefined,
 ): Promise<Record<string, unknown>> {
   const raw = await readUtf8Text(filePath);
-  try {
-    return raw ? asNonArrayRecord(JSON.parse(raw)) : {};
-  } catch {
+  if (!raw?.trim()) {
     return {};
+  }
+  try {
+    return asNonArrayRecord(JSON.parse(raw));
+  } catch {
+    // JSON parser errors can include credential values from the source text.
+    throw new Error(
+      `Failed to parse JSON source at ${filePath}. Correct the JSON and retry migration.`,
+    );
   }
 }
 

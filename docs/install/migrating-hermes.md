@@ -163,6 +163,10 @@ If source directory inspection or skill listing fails, preview stops with the fi
 
 Hermes config, dotenv, and credential files must be valid UTF-8. Migration refuses malformed encoding before importing settings or credentials and names the source file. Re-save or re-encode that file as UTF-8, then rerun the migration; the original source remains unchanged.
 
+Nonempty credential JSON files must also contain valid JSON. If preview reports a
+JSON error, repair the named source file and rerun the preview before applying.
+The error does not include credential contents, and the source file is left unchanged.
+
 Text inputs and existing memory append targets must be ordinary files. Migration
 does not wait for a writer on a named pipe or read a device as a text stream.
 Replace an unexpected special file with an ordinary file, then rerun the preview
