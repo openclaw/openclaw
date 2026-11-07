@@ -1,0 +1,2 @@
+75
+# Prove explicit resume restores automatic recovery without replaying an accepted provider start.

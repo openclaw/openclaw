@@ -107,6 +107,22 @@ describe("ModelProvidersPage agent scope", () => {
     expect(context.navigate).toHaveBeenCalledExactlyOnceWith("usage");
   });
 
+  it("opens a requested connection after an empty preload stops pending", async () => {
+    const { context } = createHarness("main");
+    const page = createPage(context);
+    page.routeData = { ...createEmptyModelProvidersRouteData(context), connect: true };
+    page.loaderPending = true;
+    mountPage(page);
+    await page.updateComplete;
+    expect(page.querySelector("[data-models-login-discover]")).toBeNull();
+
+    page.loaderPending = false;
+
+    await waitForSolid(() =>
+      expect(page.querySelector("[data-models-login-discover]")).not.toBeNull(),
+    );
+  });
+
   it("does not readopt an old route snapshot when only loader pending changes", async () => {
     const { context, request } = createHarness("main");
     const page = appendPage(context);

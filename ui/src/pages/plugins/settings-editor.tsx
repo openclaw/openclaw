@@ -17,16 +17,17 @@ import {
   schemaType,
 } from "../../components/config-form.shared.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
 import { SettingsEmpty, SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import type { JSX as SolidJSX } from "../../types/solid-elements.d.ts";
-import { PluginCredentialEditor, type PluginCredentialEditorProps } from "./credential-editor.tsx";
 import "./custom-elements.ts";
-import { renderPluginDetailBreadcrumb } from "./detail-shell.tsx";
+import { PluginCredentialEditor, type PluginCredentialEditorProps } from "./credential-editor.tsx";
 import "./settings-editor.css";
+import { renderPluginDetailBreadcrumb } from "./detail-shell.tsx";
 import { pluginEntryValue, type PluginSettingsEditorModel } from "./settings-model.ts";
 import { PluginSettingsReadStatus } from "./settings-read-status.tsx";
 
@@ -104,7 +105,7 @@ function PluginSettingsRow(props: FieldProps) {
           id={configFieldId(props.field.path, "actions")}
           placement="bottom-start"
           label={t("pluginsPage.editor.actions", { name: props.field.label })}
-          triggerClass="btn btn--icon btn--ghost"
+          triggerClass="oc-icon-button oc-icon-button--28"
           trigger={<Icon name="moreHorizontal" />}
           items={[
             {
@@ -413,12 +414,12 @@ export function PluginSettingsEditor(props: PluginSettingsEditorProps) {
             loading={props.model.configSchemaLoading || !props.model.configValue}
             rows={2}
             renderError={(error, retry) => (
-              <div class="callout danger" role="alert">
+              <InlineAlert tone="danger" role="alert">
                 {error}
                 <button class="btn btn--sm" onClick={() => retry()}>
                   {t("common.retry")}
                 </button>
-              </div>
+              </InlineAlert>
             )}
           />
           {!props.model.configSchemaLoading && props.model.configValue && params() ? (

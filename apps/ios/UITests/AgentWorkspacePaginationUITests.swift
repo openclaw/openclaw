@@ -56,6 +56,8 @@ final class AgentWorkspacePaginationUITests: XCTestCase {
             more.tap()
             let failed = try await self.state(fixture, minimumReads: initial.reads.count + attempt)
             self.assertTailReads(failed, failed: Array(repeating: true, count: attempt))
+            // Error feedback can move this virtualized footer outside the visible list.
+            _ = self.revealLoadMore(in: app)
             self.expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: more)
             self.waitForExpectations(timeout: 5)
             self.scrollToTop(in: app)

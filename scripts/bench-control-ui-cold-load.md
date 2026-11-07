@@ -1,5 +1,56 @@
 # Team-scale Control UI cold-load benchmark
 
+## Firefox census
+
+The engines harness also accepts `--engines chromium,firefox`. Install the exact
+Firefox revision from the repository's Playwright dependency with
+`pnpm --dir ui exec playwright install firefox`. Use `PLAYWRIGHT_BROWSERS_PATH`
+for an existing approved browser-cache location. Do not substitute system Firefox.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --engines chromium,firefox --pages --page-phases visit --viewport both \
+  --output .artifacts/firefox/routes
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --engines chromium,firefox --viewport both \
+  --steps cold-boot,warm-boot,chat-typing,sidebar-toggle,sidebar-open,sidebar-close,session-switch,model-picker-first-open-search,cron-menu-open,sessions-search,streaming-645-deltas,large-transcript-open,large-transcript-fast-scroll,transcript-scroll-top \
+  --output .artifacts/firefox/interactions
+```
+
+These one-pair runs are screens, not performance evidence. Confirm any failure
+or engine/Chromium ratio above 1.3 with `--pairs 10 --configurations default,control`
+on the affected steps. The identical `control` configuration supplies the A/A
+check; positions and directions rotate. Split compound actions before attributing
+a gap. Fix validation requires 20 rotated pairs plus A/A and unchanged engines
+within the campaign's acceptance band.
+
+For the chat model picker, select `model-picker-first-open`, `model-picker-open`,
+`model-picker-search`, and `model-picker-search-paste` separately. Opening ends
+with mounted choices and focused search; paste uses one native edit, while search
+types the same query character by character. The compound
+`model-picker-first-open-search` retains the driver gaps between those phases.
+Use a separate WebKit `--trace` run to attribute layout and the first content
+paint; application time is not a paint timestamp. `sidebar-open` and
+`sidebar-close` split one activation on desktop and mobile and await the relevant
+navigation animations.
+
+Firefox retains the same browser-local application elapsed clock and boot/route
+readiness milestones. These measure neither CPU nor paint. CPU counters, native
+traces, throttling, forced GC, and heap snapshots are unavailable in this harness;
+their options fail explicitly rather than falling back to a different clock.
+The page observer detects Layout Instability and Long Tasks support at runtime
+and records unavailable metrics as `null`, never zero. Mobile Firefox cells use
+the same narrow viewport and touch settings, but omit Playwright's unsupported
+`isMobile` emulation. Hidden-tab scenarios are skipped where native visibility
+cannot be controlled.
+
+Desktop `transcript-scroll-top` uses repeated sub-page native wheel gestures and
+reports `wheelEvents` with its result. Firefox deliberately caps a single wheel
+event to one page, so an arbitrarily large delta is not a portable jump-to-top.
+The measured journey includes the driver gaps between gestures; it is not
+single-wheel latency. Mobile retains the programmatic scrollport jump because
+Playwright's mobile WebKit driver does not support wheel input.
+
 ## Native browser work and composited layers
 
 Use the same production route and interaction scenarios with `--native-audit`
@@ -41,6 +92,28 @@ not prove no repaint. Trace `Paint` clips are recording bounds, not raster
 invalidations or proof that every pixel in that rectangle changed.
 
 ## Cross-flow CPU census
+
+The opt-in `provider-model-picker-artwork-cycles` engines scenario checks the
+custom provider artwork path omitted by the ordinary model fixtures. It opens,
+filters and reopens a 1,000-model picker whose rows share one synthetic image,
+checks that the images decode and selection stays unchanged, and reports image
+requests, blob reads and object URL lifetimes. Run it against a build supporting
+custom provider artwork; its instrumented timings are not performance evidence.
+The `-12` variant uses twelve models sharing the same image, separating a small
+local-provider catalog from the 1,000-model stress case. Counts describe actual
+rendered images and distinct assets, not a thousand simultaneously visible rows.
+The `provider-model-picker-artwork-open-12` and
+`provider-model-picker-artwork-reopen-12` scenarios measure decoded-image
+readiness without the blob/object-URL probe; omit `-12` for the stress catalog.
+Compare complete base/head builds with `--compare-bundle-dir`,
+`--control-bundle-dir`, and `--pairs 20` for rotated timing and A/A controls.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --steps provider-model-picker-artwork-cycles,provider-model-picker-artwork-cycles-12 \
+  --engines chromium,webkit,firefox \
+  --viewport both --output .artifacts/provider-artwork
+```
 
 Use the cross-engine harness's Chromium-only `--cpu-profile` mode to find small
 costs shared across its existing route and interaction workloads. It uses V8
@@ -960,6 +1033,32 @@ composer input, and excludes reload and report serialization. These are sampled
 allocation estimates, not retained heap sizes or exact array counts. Collect
 timings in separate runs without allocation sampling.
 
+The cross-engine harness also accepts `--allocations --engines chromium` for any
+of its existing scenarios. It writes a source-mapped `*.heapprofile` and
+`observations.json` includes estimated bytes ranked by allocating function, file,
+and owner. `functions` counts each sample at its leaf once;
+`sourceFunctions`, file, and owner tables attribute native leaves to their nearest
+source-bearing caller without double-counting. Missing stack nodes retain an
+explicit unattributed byte count. Automation and unmapped
+frames remain visible. This samples the main isolate, not other renderer threads
+or native allocations, and includes objects collected by both kinds of GC.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --engines chromium --viewport desktop --allocations \
+  --steps chat-typing,streaming-645-deltas,session-switch,settings-sections,sidebar-toggle,model-picker-search,transcript-scroll-top \
+  --output .artifacts/allocations
+```
+
+`chat-typing` enters 26 characters, `streaming-645-deltas` delivers 645 deltas
+while periodically typing, `session-switch` and `sidebar-toggle` each make a
+round trip, and `settings-sections` visits three warm routes. Normalize allocated
+bytes by those action counts; streaming bytes per delta include concurrent
+typing and fixture delivery. Run `--native-audit` separately at 1× and 6× to
+investigate GC: allocation sampling changes allocation/GC behavior and cannot
+establish a timing improvement. These synthetic flows measure renderer work,
+not live Gateway/provider latency.
+
 For concurrent paired comparisons, use separate processes and bundle directories
 with the same `--fixture-now-ms` and a future `--live-start-at-ms`, `--runs 1`, and
 distinct `--port` / `--sandbox-port` values. The start barrier supports either
@@ -991,7 +1090,28 @@ node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
   --output .artifacts/streaming-profile
 ```
 
-This workload delivers the 645-delta Markdown reply at 150 deltas/s in bursts
+To isolate the first answer token, select `--steps streaming-onset` in that
+companion. It starts from a settled active run over 2,000 rich history messages;
+`streaming-onset-short` uses 400. Onset delivers one nonempty answer delta.
+`streaming-working-preparation` instead starts from the same settled history
+without an active run, then delivers an empty first delta and ends at the new
+working-indicator mutation. This measures preparation before the answer token,
+including adoption of the run, separately from onset. It does not measure sending
+a user message. Both phases retain the pre-action transcript rows for comparison.
+The browser-local `applicationMs` ends at the matching transcript mutation;
+`eventToFrameMs` includes two subsequent animation frames, not paint. Chromium
+thread CPU includes the complete action and settlement. Use separate traced
+runs for native task attribution and untraced rotated comparisons with an
+unchanged bundle control for timing claims.
+
+For qualification, select
+`--steps streaming-onset,streaming-working-preparation,streaming-mixed-fast,session-switch,chat-typing`
+with `--compare-bundle-dir <head> --control-bundle-dir <base> --pairs 20
+--engines chromium,webkit --viewport desktop`. The control repeats the base in
+each rotated triplet. `session-switch` shows both retained 400-message transcripts
+in turn; `chat-typing` checks 26 native typed characters without sending a message.
+
+`streaming-mixed-fast` delivers the 645-delta Markdown reply at 150 deltas/s in bursts
 of five, with reasoning, 24 tool calls and results, and an image arriving midway.
 It requires `--viewport desktop`: mobile's modal navigation drawer prevents
 simultaneous composer and sidebar input.

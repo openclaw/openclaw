@@ -28,7 +28,7 @@ export async function installChatActionObservation(
       const initialPane = document.querySelector(".chat-pane-cache__pane--active");
       const transcript = initialPane?.querySelector(".chat-thread");
       const observationRoot = trackPaneChanges
-        ? initialPane?.closest(".chat-pane-cache")
+        ? initialPane?.closest(".chat-split-view")
         : transcript;
       if (!transcript || !observationRoot || !initialPane) {
         throw new Error("Chat action observation requires the prepared transcript");
@@ -120,7 +120,7 @@ export async function installChatActionObservation(
           data.removedRows += rows(record.removedNodes);
         }
       });
-      // Fork mounts its destination in another retained pane under this cache.
+      // Fork and split mount their destinations in other panes or cells.
       mutations.observe(observationRoot, {
         childList: true,
         subtree: true,
