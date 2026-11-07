@@ -11,6 +11,10 @@ import {
 import { FailoverError } from "../agents/failover-error.js";
 import { agentCommandFromGatewayIngress } from "../commands/agent.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  SessionWorkStartChangedError,
+  SessionWorkStartInvalidatedError,
+} from "../config/sessions/work-start-error.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import * as profileReader from "../state/user-profile-list.js";
@@ -601,5 +605,26 @@ describe("OpenAI-compatible agent error envelopes", () => {
       status,
       error: { message, type: "api_error" },
     });
+  });
+
+  it.each([
+    {
+      name: "a retriable work-start conflict",
+      error: () => new SessionWorkStartChangedError('Session "main" changed while starting work.'),
+      status: 409,
+      code: "SESSION_WORK_START_CHANGED",
+    },
+    {
+      name: "an invalidated work-start baseline",
+      error: () => new SessionWorkStartInvalidatedError("session changed before baseline capture"),
+      status: 409,
+      code: "SESSION_WORK_START_INVALIDATED",
+    },
+  ])("reports $name as a conflict instead of an internal error", ({ error, status, code }) => {
+    const mapped = resolveOpenAiCompatibleAgentError(error());
+    expect(mapped.status).toBe(status);
+    expect(mapped.error.type).toBe("invalid_request_error");
+    expect(mapped.error.code).toBe(code);
+    expect(mapped.error.message).toMatch(/changed/i);
   });
 });
