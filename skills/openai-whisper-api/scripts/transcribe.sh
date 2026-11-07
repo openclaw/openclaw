@@ -105,7 +105,7 @@ if [[ "$json_output" == "0" && ( "$request_format" == "json" || "$request_format
 fi
 
 curl_args=(
-  -sS "${api_base}/audio/transcriptions"
+  -fsS "${api_base}/audio/transcriptions"
   -H "Authorization: Bearer $OPENAI_API_KEY"
   -H "Accept: application/json"
   -F "file=@${in}"

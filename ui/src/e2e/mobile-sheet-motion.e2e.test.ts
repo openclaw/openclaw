@@ -353,6 +353,18 @@ suite.define(() => {
         page
           .locator(".chat-mobile-host__segments")
           .evaluate((segments) => getComputedStyle(segments, "::before").insetInlineStart);
+      const surface = await page.locator(".chat-mobile-host__segments").evaluate((segments) => {
+        const reference = document.createElement("span");
+        reference.style.background = "var(--surface-selected)";
+        segments.append(reference);
+        const selectedSurface = getComputedStyle(reference).backgroundColor;
+        reference.remove();
+        return {
+          thumb: getComputedStyle(segments, "::before").backgroundColor,
+          selectedSurface,
+        };
+      });
+      expect(surface.thumb).toBe(surface.selectedSurface);
       const panelsThumb = await thumb();
       await page.getByRole("button", { name: "Details", exact: true }).click();
       await expect

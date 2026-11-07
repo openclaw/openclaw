@@ -262,7 +262,7 @@ function createFleet(
 
 const recoveredMessage = "agent database recovered after background inspection and preparation";
 const progressMessage = "agent database startup preparation still running";
-const supersededRetryMessage = "agent database startup preparation was superseded; retrying";
+const supersededRetryMessage = "agent database startup publication interrupted; retrying";
 
 function expectLog(log: typeof mocks.info, message: string, fields: Record<string, unknown>) {
   expect(log).toHaveBeenCalledWith(message, expect.objectContaining(fields));
