@@ -5,6 +5,7 @@ import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
 import { buildSessionsListQuery } from "./list-query.ts";
 
 export type SessionsRouteData = {
+  folder?: string | null;
   expandedSessionKey: string | null;
   statusFilter: SessionArchivedFilter;
 };
@@ -17,7 +18,11 @@ function routeOptions(location: RouteLocation) {
   const requestedStatus = search.get("status");
   const statusFilter: SessionArchivedFilter =
     requestedStatus === "archived" ? "archived" : requestedStatus === "all" ? "all" : "active";
-  return { expandedSessionKey, statusFilter };
+  return {
+    expandedSessionKey,
+    statusFilter,
+    folder: search.has("folder") ? (search.get("folder") ?? "") : null,
+  };
 }
 
 export const page = defineSolidPage<"sessions", ApplicationContext, SessionsRouteData>(
@@ -26,7 +31,7 @@ export const page = defineSolidPage<"sessions", ApplicationContext, SessionsRout
   {
     loaderDeps: (context: ApplicationContext, location: RouteLocation) => {
       const options = routeOptions(location);
-      return `${options.expandedSessionKey ?? ""}\u0000${options.statusFilter}\u0000${context.agentSelection.state.scopeId ?? "all"}`;
+      return `${options.expandedSessionKey ?? ""}\u0000${options.folder ?? "list"}\u0000${options.statusFilter}\u0000${context.agentSelection.state.scopeId ?? "all"}`;
     },
     loader: (context: ApplicationContext, { location, cause }): SessionsRouteData => {
       const options = routeOptions(location);

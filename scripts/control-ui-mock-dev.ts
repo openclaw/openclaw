@@ -4026,6 +4026,13 @@ async function waitForShutdown(): Promise<void> {
 
 const options = parseArgs(process.argv.slice(2));
 const scenario = await createChatPickerScenario(options.fixture);
+// Optional private replay input stays outside the source tree and published fixtures.
+if (process.env.OPENCLAW_UI_SCENARIO_FILE) {
+  Object.assign(
+    scenario,
+    JSON.parse(fs.readFileSync(process.env.OPENCLAW_UI_SCENARIO_FILE, "utf8")),
+  );
+}
 if (options.operatorScopes) {
   scenario.operatorScopes = options.operatorScopes;
 }

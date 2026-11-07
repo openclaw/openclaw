@@ -75,6 +75,7 @@ import { registerProfileEnglish } from "../../ui/src/i18n/locales/en-profile.ts"
 import { registerProviderUsageEnglish } from "../../ui/src/i18n/locales/en-provider-usage.ts";
 import { registerRouteSubtitlesEnglish } from "../../ui/src/i18n/locales/en-route-subtitles.ts";
 import { registerSecretsStoreEnglish } from "../../ui/src/i18n/locales/en-secrets-store.ts";
+import { registerSessionFoldersEnglish } from "../../ui/src/i18n/locales/en-session-folders.ts";
 import { registerSessionMachineEnglish } from "../../ui/src/i18n/locales/en-session-machine.ts";
 import { registerSessionMenuEnglish } from "../../ui/src/i18n/locales/en-session-menu.ts";
 import { registerSessionNavigationEnglish } from "../../ui/src/i18n/locales/en-session-navigation.ts";
@@ -189,6 +190,7 @@ const sourceFiles = [
   "en-session-navigation.ts",
   "en-session-organization-shared.ts",
   "en-session-organization.ts",
+  "en-session-folders.ts",
   "en-session-people.ts",
   "en-session-placement.ts",
   "en-new-session-runtime.ts",
@@ -523,6 +525,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       onboarding: registerMemoryImportEnglish.catalog.onboarding,
       execApproval: registerApprovalsEnglish.catalog.execApproval,
       browser: mergeControlUiTranslationMaps(en.browser, registerBrowserEnglish.catalog.browser),
+      sessionFolders: registerSessionFoldersEnglish.catalog.sessionFolders,
       sessionProgressCard: registerSessionProgressEnglish.catalog.sessionProgressCard,
       assistantPanel: registerAssistantContextEnglish.catalog.assistantPanel,
       outputs: registerChatOutputsEnglish.catalog.outputs,
