@@ -140,11 +140,23 @@ export class SettingsManager {
     return this.settings.compaction?.keepRecentTokens ?? 20000;
   }
 
-  getCompactionSettings(): { enabled: boolean; reserveTokens: number; keepRecentTokens: number } {
+  getCompactionSummaryChars(): number | undefined {
+    return this.settings.compaction?.maxSummaryChars;
+  }
+
+  getCompactionSettings(): {
+    enabled: boolean;
+    reserveTokens: number;
+    keepRecentTokens: number;
+    maxSummaryChars?: number;
+  } {
     return {
       enabled: this.getCompactionEnabled(),
       reserveTokens: this.getCompactionReserveTokens(),
       keepRecentTokens: this.getCompactionKeepRecentTokens(),
+      ...(this.getCompactionSummaryChars() !== undefined
+        ? { maxSummaryChars: this.getCompactionSummaryChars() }
+        : {}),
     };
   }
 

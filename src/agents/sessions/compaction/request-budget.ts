@@ -178,6 +178,7 @@ export function assertCompactionRequestCanFit(
 export function resolveCompactionRetentionBudget(
   budget: CompactionRequestBudget,
   messages: AgentMessage[],
+  maxSummaryChars = MAX_COMPACTION_SUMMARY_CHARS,
 ) {
   const preferredTokens =
     budget.contextWindow - budget.reserveTokens - budget.fixedTokens - budget.pendingTokens;
@@ -188,7 +189,7 @@ export function resolveCompactionRetentionBudget(
   const summaryTokens = estimateCompactionHistoryTokens([
     {
       role: "compactionSummary",
-      summary: "x".repeat(MAX_COMPACTION_SUMMARY_CHARS),
+      summary: "x".repeat(maxSummaryChars),
       tokensBefore: 0,
       timestamp: 0,
     },

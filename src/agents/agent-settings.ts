@@ -40,12 +40,20 @@ export function applyAgentCompactionSettingsFromConfig(params: {
         });
   const targetKeepRecentTokens = configuredKeepRecentTokens ?? currentKeepRecentTokens;
 
-  const overrides: { reserveTokens?: number; keepRecentTokens?: number } = {};
+  const configuredMaxSummaryChars = compactionCfg?.maxSummaryChars;
+  const overrides: {
+    reserveTokens?: number;
+    keepRecentTokens?: number;
+    maxSummaryChars?: number;
+  } = {};
   if (targetReserveTokens !== currentReserveTokens) {
     overrides.reserveTokens = targetReserveTokens;
   }
   if (targetKeepRecentTokens !== currentKeepRecentTokens) {
     overrides.keepRecentTokens = targetKeepRecentTokens;
+  }
+  if (configuredMaxSummaryChars !== undefined) {
+    overrides.maxSummaryChars = configuredMaxSummaryChars;
   }
 
   const shouldApplyEnabled =

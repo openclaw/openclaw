@@ -150,6 +150,11 @@ export const AgentDefaultsBaseSchema = z.strictObject({
       identifierPolicy: z.union([z.literal("strict"), z.literal("off")]).optional(),
       /** Preserve this many most-recent user/assistant turns verbatim in compaction summary context. */
       recentTurnsPreserve: z.number().int().min(0).max(12).optional(),
+      /**
+       * Maximum characters for a persisted compaction summary (and the derived
+       * preserved-turns/split-turn budgets). Default: 16000.
+       */
+      maxSummaryChars: z.number().int().min(2000).max(200_000).optional(),
       /** Optional quality-audit retries for safeguard compaction summaries. */
       qualityGuard: z
         .strictObject({

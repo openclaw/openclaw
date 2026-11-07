@@ -6,6 +6,7 @@ interface CompactionSettings {
   enabled?: boolean; // default: true
   reserveTokens?: number; // default: 16384
   keepRecentTokens?: number; // default: 20000
+  maxSummaryChars?: number; // default: 16000 - persisted-summary character cap
 }
 
 interface BranchSummarySettings {

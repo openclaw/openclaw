@@ -16,6 +16,7 @@ type CompactionSafeguardRuntimeValue = {
    */
   model?: Model;
   recentTurnsPreserve?: number;
+  maxSummaryChars?: number;
   workspaceDir?: string;
   postCompactionSections?: string[];
   qualityGuardEnabled?: boolean;
