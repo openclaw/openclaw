@@ -20,6 +20,7 @@ const MANAGED_DOCUMENT_MIME_TYPES = new Set([
   "application/json",
   "application/msword",
   "application/pdf",
+  "application/sql",
   "application/vnd.ms-excel",
   "application/vnd.ms-powerpoint",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -32,6 +33,7 @@ const MANAGED_DOCUMENT_MIME_TYPES = new Set([
   "text/html",
   "text/markdown",
   "text/plain",
+  "text/x-sql",
 ]);
 
 export function resolveManagedMediaKind(contentType: string | undefined): ManagedMediaKind | null {

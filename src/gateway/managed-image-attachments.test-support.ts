@@ -7,6 +7,10 @@ import { deserialize } from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -23,6 +27,7 @@ import {
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
   readManagedImageRecord,
 } from "./managed-image-record-store.js";
+import type { GatewayClient } from "./server-methods/types.js";
 
 type RequestResult = {
   statusCode: number;
@@ -289,4 +294,73 @@ export async function createFixture(
     stateDir,
   );
   return { attachmentId, sessionKey, originalPath };
+}
+
+export async function requestManagedImageWithHandler(params: {
+  handleRequest: (typeof import("./managed-image-attachments.js"))["handleManagedOutgoingMediaHttpRequest"];
+  stateDir: string;
+  pathName: string;
+  method?: string;
+  headers?: http.ClientRequestArgs["headers"];
+  clients?: ReadonlySet<GatewayClient>;
+}) {
+  const auth = { mode: "test" } as never;
+  const server = http.createServer((req, res) => {
+    void (async () => {
+      const handled = await params.handleRequest(req, res, {
+        auth,
+        trustedProxies: ["127.0.0.1/32"],
+        allowRealIpFallback: false,
+        stateDir: params.stateDir,
+        clients: params.clients,
+      });
+      if (!handled) {
+        res.statusCode = 404;
+        res.end("unhandled");
+      }
+    })();
+  });
+
+  const origin = await listenLoopback(server);
+  try {
+    const result = await requestManagedImageHttp(
+      origin,
+      params.pathName,
+      params.method,
+      params.headers,
+    );
+    return { result, auth };
+  } finally {
+    await closeHttpServer(server);
+  }
+}
+
+export function assistantMessage(content: unknown) {
+  return { role: "assistant", content, __openclaw: { id: "msg-1" } };
+}
+
+export function mediaPath(fixture: { sessionKey: string; attachmentId: string }) {
+  return `/api/chat/media/outgoing/${encodeURIComponent(fixture.sessionKey)}/${fixture.attachmentId}/full`;
+}
+
+export function mediaMessage(fixture: Parameters<typeof mediaPath>[0], type = "image") {
+  const url = mediaPath(fixture);
+  return assistantMessage([{ type, url, openUrl: url }]);
+}
+
+export function expectManagedImageBlock(
+  blocks: Record<string, unknown>[],
+  alt: string,
+  secrets: string[],
+) {
+  expect(blocks).toHaveLength(1);
+  const block = requireBlock(blocks);
+  expect(block).toMatchObject({ type: "image", alt });
+  expect(block.url).toContain("/api/chat/media/outgoing/agent%3Amain%3Amain/");
+  expect(block.openUrl).toContain("/full");
+  expect(block.url).toBe(block.openUrl);
+  for (const secret of secrets) {
+    expect(JSON.stringify(block)).not.toContain(secret);
+  }
+  return requireAttachmentIdFromUrl(block.url);
 }

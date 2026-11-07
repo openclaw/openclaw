@@ -1,0 +1,3 @@
+# SQL format validation, managed WebChat attachment classification and fetch/send policy controls.
+# This PR adds 112 net test lines; inherited upstream ceiling differences are not allocated here.
+112
