@@ -152,10 +152,8 @@ export async function beginGatewayBootLifecycle(
             runtime: process.versions.bun
               ? `Bun ${process.versions.bun}`
               : `Node ${process.versions.node}`,
-            ...(supervisor ? { supervisor } : {}),
-            ...(supervisor?.kind === "systemd" && env.INVOCATION_ID
-              ? { systemdInvocationId: env.INVOCATION_ID }
-              : {}),
+            supervisor: supervisor ?? undefined,
+            systemdInvocationId: supervisor?.kind === "systemd" ? env.INVOCATION_ID : undefined,
           },
         },
       }),

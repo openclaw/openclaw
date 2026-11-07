@@ -29,7 +29,7 @@ export type GatewayCrashRecord = GatewayRunMetadata &
 
 export type GatewayCrashState = {
   // Metadata augments the boot receipt; only gateway_boot_lifecycle decides whether it closed.
-  active?: GatewayRunMetadata & { bootId: string; pid: number; lastHeartbeatAtMs?: number };
+  active?: GatewayRunMetadata & { bootId: string };
   recent: GatewayCrashRecord[];
 };
 

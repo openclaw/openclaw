@@ -74,37 +74,34 @@ export const gatewayBootOperations = {
         let window: GatewayRestartResumeWindow | undefined;
         const crashState = readGatewayCrashStateInDatabase(db);
         let previousCrash: GatewayCrashRecord | undefined;
-        // Forced exit can interrupt marker persistence just like a process crash.
-        if (
-          predecessor &&
-          (predecessor.outcome === null || predecessor.outcome === "forced_stop")
-        ) {
-          let previous: NonNullable<typeof predecessor> = predecessor;
-          // A safe-mode recovery splits one incarnation; a real restart can reuse its PID.
-          while (previous.startup_reason === GATEWAY_CRASH_LOOP_RECOVERED_REASON) {
-            const parent = executeSqliteQueryTakeFirstSync(
-              db,
-              boots
-                .where("pid", "=", previous.pid)
-                .where("outcome", "=", "safe_mode_stable")
-                .where("completed_at_ms", "=", previous.started_at_ms)
-                .where("started_at_ms", "<", previous.started_at_ms)
-                .orderBy("started_at_ms", "desc")
-                .limit(1),
-            );
-            if (!parent) {
-              break;
-            }
-            previous = parent;
-          }
-          window = { startedAt: previous.started_at_ms, endedAt: nowMs };
-        }
         if (
           predecessor &&
           (predecessor.outcome === null ||
             predecessor.outcome === "forced_stop" ||
             predecessor.outcome === "startup_failed")
         ) {
+          // Forced exit can interrupt restart markers; startup failures have no resumable run.
+          if (predecessor.outcome !== "startup_failed") {
+            let previous: NonNullable<typeof predecessor> = predecessor;
+            // A safe-mode recovery splits one incarnation; a real restart can reuse its PID.
+            while (previous.startup_reason === GATEWAY_CRASH_LOOP_RECOVERED_REASON) {
+              const parent = executeSqliteQueryTakeFirstSync(
+                db,
+                boots
+                  .where("pid", "=", previous.pid)
+                  .where("outcome", "=", "safe_mode_stable")
+                  .where("completed_at_ms", "=", previous.started_at_ms)
+                  .where("started_at_ms", "<", previous.started_at_ms)
+                  .orderBy("started_at_ms", "desc")
+                  .limit(1),
+              );
+              if (!parent) {
+                break;
+              }
+              previous = parent;
+            }
+            window = { startedAt: previous.started_at_ms, endedAt: nowMs };
+          }
           const run =
             crashState.active?.bootId === predecessor.boot_id ? crashState.active : undefined;
           const heartbeat =
@@ -116,15 +113,16 @@ export const gatewayBootOperations = {
             startedAtMs: window?.startedAt ?? predecessor.started_at_ms,
             detectedAtMs: nowMs,
             ...(predecessor.reason ? { reason: predecessor.reason } : {}),
-            ...(heartbeat !== undefined &&
-            heartbeat >= (window?.startedAt ?? predecessor.started_at_ms) &&
-            heartbeat <= nowMs
-              ? { lastHeartbeatAtMs: heartbeat }
-              : {}),
+            lastHeartbeatAtMs:
+              heartbeat !== undefined &&
+              heartbeat >= (window?.startedAt ?? predecessor.started_at_ms) &&
+              heartbeat <= nowMs
+                ? heartbeat
+                : undefined,
           };
           crashState.recent = [previousCrash, ...crashState.recent].slice(0, 10);
         }
-        crashState.active = { ...metadata, bootId: id, pid: process.pid };
+        crashState.active = { ...metadata, bootId: id };
         writeConfigMachineStateInDatabase(db, GATEWAY_CRASH_STATE_KEY, crashState);
         // Read the predecessor before pruning: a long-running boot can exceed retention.
         executeSqliteQuerySync(

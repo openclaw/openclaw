@@ -247,17 +247,12 @@ async function gatherDaemonStatusImpl(
     opts.deep && shouldInspectLocalGateway
       ? await readGatewayLastShutdownAsync(mergedDaemonEnv).catch(() => undefined)
       : undefined;
-  const crashHistory:
-    | {
-        recentCrashes?: Awaited<ReturnType<typeof readGatewayRecentCrashesAsync>>;
-        crashHistoryError?: string;
-      }
-    | undefined = shouldInspectLocalGateway
+  const crashHistory = shouldInspectLocalGateway
     ? await readGatewayRecentCrashesAsync(mergedDaemonEnv).then(
-        (recentCrashes) => ({ recentCrashes }),
-        (error: unknown) => ({ crashHistoryError: String(error) }),
+        (recentCrashes) => ({ recentCrashes, crashHistoryError: undefined }),
+        (error: unknown) => ({ recentCrashes: undefined, crashHistoryError: String(error) }),
       )
-    : undefined;
+    : { recentCrashes: undefined };
   let duelingScopesWarning: string | null = null;
   if (opts.deep && serviceTargetsProbe && process.platform === "linux") {
     const { findSystemdGatewayInstallation, formatDuelingScopesWarning } =

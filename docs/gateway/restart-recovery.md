@@ -76,9 +76,10 @@ successor remains ready. An unauthenticated remote readiness probe does not disc
 
 Records include the previous PID, start time, and available version, build,
 runtime, and heartbeat facts. After startup, the Gateway performs bounded
-supervisor inspection for exit evidence. On systemd one query reads structured exit records
-for the previous service run and recognizes the exact self-recovery journal
-marker when a stalled main thread killed itself. On launchd it records the
+supervisor inspection for exit evidence. On systemd an indexed query reads structured
+exit records for the previous service run. A second query, limited to the final
+30 seconds and the previous PID and unit, checks for the exact self-recovery
+marker when a stalled main thread killed itself. Both queries share a one-second budget. On launchd it records the
 daemon's explicit last exit status and reason; an integer status is not treated
 as evidence of a signal. Missing evidence stays `cause unknown`;
 an ordinary fresh start is not evidence of a clean previous exit. The shared
