@@ -151,6 +151,7 @@ export type NormalizedControlUiMockGatewayScenario = Required<
   Pick<ControlUiMockGatewayScenario, "bootstrapPreferences" | "profileActivityViewerId"> & {
     operatorRolePolicy: ReturnType<typeof normalizeControlUiMockAuth>["operatorRolePolicy"];
     controlUiPluginHello: ControlUiPluginHello;
+    securitySnapshot: ReturnType<typeof normalizeControlUiMockAuth>["securitySnapshot"];
     /** Running-Gateway identity in hello; unset commit and build time are omitted. */
     serverRelease: { version: string; commit?: string; builtAt?: string };
   };

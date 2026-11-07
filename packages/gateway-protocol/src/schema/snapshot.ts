@@ -248,6 +248,24 @@ export const SnapshotSchema = closedObject({
   bindHost: Type.Optional(NonEmptyString),
   /** Tailscale exposure of the running Gateway, which keeps a loopback bind. */
   tailscaleMode: Type.Optional(stringLiteralUnion(["off", "serve", "funnel"])),
+  tailscaleExposure: Type.Optional(
+    Type.Object(
+      {
+        requestedMode: stringLiteralUnion(["off", "serve", "funnel"]),
+        activeMode: stringLiteralUnion(["off", "serve", "funnel"]),
+        status: stringLiteralUnion([
+          "off",
+          "starting",
+          "active",
+          "failed",
+          "recovering",
+          "preserved",
+        ]),
+        reason: Type.Optional(Type.String()),
+      },
+      { additionalProperties: false },
+    ),
+  ),
   updateAvailable: Type.Optional(UpdateAvailableSchema),
   updateSchedule: Type.Optional(UpdateScheduleStateSchema),
 });

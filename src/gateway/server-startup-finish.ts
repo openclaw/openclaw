@@ -46,6 +46,7 @@ const [POST_READY_MAINTENANCE_DELAY_MS, RETAINED_PLUGIN_CLEANUP_DELAY_MS] = [250
 type GatewayStartedRuntime = GatewayKernelRuntime & GatewayHttpTransport;
 
 export async function finishGatewayStartup(params: {
+  tailscaleExposure: import("./server-tailscale.js").GatewayTailscaleExposure;
   kernelRuntime: GatewayStartedRuntime;
   port: number;
   bootId: string;
@@ -146,7 +147,13 @@ export async function finishGatewayStartup(params: {
       pluginSurfaceScheme: gatewayTls.enabled ? "https" : "http",
       getPluginNodeCapabilities,
       getResolvedAuth,
-      gatewayExposure: { bindHost, tailscaleMode: runtime.tailscaleMode },
+      gatewayExposure: {
+        bindHost,
+        get tailscaleMode() {
+          return params.tailscaleExposure.activeMode;
+        },
+        tailscaleExposure: params.tailscaleExposure,
+      },
       getRequiredSharedGatewaySessionGeneration: sharedGatewaySessionGenerationState.reader,
       rateLimiter: authRateLimiter,
       browserRateLimiter: browserAuthRateLimiter,

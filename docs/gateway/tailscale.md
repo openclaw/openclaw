@@ -141,6 +141,15 @@ This compatibility path does not grant managed Tailscale semantics. `gateway.aut
 - `gateway.bind: "auto"` uses `0.0.0.0` in detected containers and prefers loopback otherwise. Use `tailnet` to limit direct network exposure to the Tailnet while retaining same-host loopback access.
 - The main Serve/Funnel route exposes the **Gateway Control UI + WS**. Nodes connect over that same WS endpoint. [Portals](/gateway/portals#managed-private-tailscale-serve) allocate separate private Serve HTTPS ports; they never inherit Funnel exposure. Tailnet grants or ACLs must allow the portal ports as well as the Gateway port. Externally managed routes do not automatically allocate portal ingress.
 
+### Exposure reporting
+
+**Settings → Privacy & Security** shows active Tailscale exposure and explains when
+it differs from the requested mode. A disabled Serve policy shows inactive
+exposure with a recovery step, rather than claiming tailnet access. A preserved
+external Funnel is labeled separately and remains limited to plugin-authenticated
+webhooks; it does not make Gateway-authenticated routes publicly accessible.
+These are connection-time facts, not continuous monitoring of external Tailscale changes.
+
 ### Tailscale prerequisites and limits
 
 - Serve requires HTTPS enabled for your tailnet. The CLI prompts if it is missing.

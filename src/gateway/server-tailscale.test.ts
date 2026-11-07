@@ -28,6 +28,7 @@ vi.mock("../infra/tailscale.js", () => ({
 
 import { createDeferred } from "../../test/helpers/promise.js";
 import { TailscaleRouteOwnershipConflictError } from "../infra/tailscale-route-ownership-error.js";
+import { TailscaleServeDisabledError } from "../infra/tailscale-serve-disabled-error.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { resolveControlUiIdentity } from "./control-ui-identity.js";
 import { startGatewayTailscaleExposure as startGatewayTailscaleExposureBase } from "./server-tailscale.js";
@@ -38,6 +39,19 @@ import {
 
 const MANAGED_BACKEND_PORT = 19_000;
 const logTailscale = { info: vi.fn(), warn: vi.fn() };
+it("reports disabled Serve as requested but inactive", async () => {
+  const exposure: NonNullable<Parameters<typeof startGatewayTailscaleExposureBase>[0]["exposure"]> =
+    { requestedMode: "serve", activeMode: "off", status: "starting" };
+  mocks.claimTailscaleRoute.mockRejectedValue(new TailscaleServeDisabledError());
+  await expect(startGatewayTailscaleExposure({ exposure })).resolves.toBeNull();
+  expect(exposure).toEqual({
+    requestedMode: "serve",
+    activeMode: "off",
+    status: "failed",
+    reason: "Tailscale Serve is disabled on this tailnet. Enable Serve and restart the Gateway.",
+  });
+});
+
 function startGatewayTailscaleExposure(
   params: Partial<Omit<Parameters<typeof startGatewayTailscaleExposureBase>[0], "backend">> = {},
 ) {
@@ -158,7 +172,15 @@ describe("startGatewayTailscaleExposure", () => {
     mocks.getTailnetHostname.mockResolvedValue("node.tailnet.ts.net");
     mocks.hasTailscaleFunnelRouteForPort.mockResolvedValue(true);
 
-    const cleanup = await startGatewayTailscaleExposure({ preserveFunnel: true });
+    const exposure: NonNullable<
+      Parameters<typeof startGatewayTailscaleExposureBase>[0]["exposure"]
+    > = { requestedMode: "serve", activeMode: "off", status: "starting" };
+    const cleanup = await startGatewayTailscaleExposure({ preserveFunnel: true, exposure });
+    expect(exposure).toMatchObject({
+      requestedMode: "serve",
+      activeMode: "funnel",
+      status: "preserved",
+    });
 
     expect(cleanup).toBeNull();
     expect(getTailscalePublishedOrigin()).toBeUndefined();

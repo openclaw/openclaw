@@ -1,3 +1,4 @@
+import type { Snapshot } from "@openclaw/gateway-protocol";
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
@@ -36,6 +37,7 @@ export type SecurityLiveFacts = {
   /** Older Gateways report neither of these. */
   bindHost?: string | null;
   tailscaleMode?: string | null;
+  tailscaleExposure?: Snapshot["tailscaleExposure"];
   execApprovalDefaults?: ExecApprovalDefaults | null;
 };
 
@@ -200,6 +202,7 @@ export function extractQuickSettingsSecurity(
     // Gateways that report their exposure also report the auth connections are checked against.
     gatewayAuthReported: Boolean(live.authMode && live.bindHost && live.tailscaleMode),
     networkAccess: resolveNetworkAccess(root, live),
+    ...(live.tailscaleExposure ? { tailscaleExposure: live.tailscaleExposure } : {}),
     execPolicy: resolveExecPolicy(root, live),
     browserEnabled: browser?.enabled !== false,
     toolProfile: typeof profile === "string" ? profile.trim() : "",
