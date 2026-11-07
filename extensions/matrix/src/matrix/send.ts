@@ -13,7 +13,7 @@ import {
   resolveMatrixDurableDeliveryIdentity,
   type MatrixPreparedEvent,
 } from "./delivery-plan.js";
-import { buildPollStartContent, M_POLL_START } from "./poll-types.js";
+import { buildPollStartContent, ORG_POLL_START } from "./poll-types.js";
 import { buildMatrixReactionContent } from "./reaction-common.js";
 import { buildMatrixMessageRelation, resolveMatrixReplyToEventId } from "./relations.js";
 import type { MatrixClient, MatrixRawEvent } from "./sdk.js";
@@ -420,7 +420,7 @@ export async function sendPollMatrix(
         ? { ...pollContent, "m.relates_to": buildMatrixMessageRelation({ threadId }) }
         : { ...pollContent };
       pollPayload["m.mentions"] = mentions;
-      const eventId = await client.sendEvent(roomId, M_POLL_START, pollPayload);
+      const eventId = await client.sendEvent(roomId, ORG_POLL_START, pollPayload);
 
       return {
         eventId: eventId ?? "unknown",

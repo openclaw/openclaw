@@ -979,8 +979,10 @@ describe("sendPollMatrix mentions", () => {
     );
 
     expect(mockCallArg(sendEvent, "sendEvent", 0)).toBe("!room:example");
-    expect(mockCallArg(sendEvent, "sendEvent", 1)).toBe("m.poll.start");
+    expect(mockCallArg(sendEvent, "sendEvent", 1)).toBe("org.matrix.msc3381.poll.start");
     const content = requireRecord(mockCallArg(sendEvent, "sendEvent", 2), "poll start content");
+    const poll = requireRecord(content["org.matrix.msc3381.poll.start"], "poll start");
+    expect(poll.kind).toBe("org.matrix.msc3381.poll.disclosed");
     expect(content["m.mentions"]).toEqual({ room: true, user_ids: ["@alice:example.org"] });
   });
 });
@@ -1007,13 +1009,10 @@ describe("voteMatrixPoll", () => {
       optionIndex: 2,
     });
 
-    expect(sendEvent).toHaveBeenCalledWith("!room:example", "m.poll.response", {
+    expect(sendEvent).toHaveBeenCalledWith("!room:example", "org.matrix.msc3381.poll.response", {
       "m.poll.response": { answers: ["a2"] },
       "org.matrix.msc3381.poll.response": { answers: ["a2"] },
-      "m.relates_to": {
-        rel_type: "m.reference",
-        event_id: "$poll",
-      },
+      "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
     });
     expect(result.eventId).toBe("evt-poll-vote");
     expect(result.roomId).toBe("!room:example");
