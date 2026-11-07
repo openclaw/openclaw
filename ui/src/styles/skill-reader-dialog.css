@@ -1,37 +1,3 @@
-/* Use the same card and ghost close control as Connect machine and confirmations. */
-.exec-approval-card.skill-reader-dialog {
-  --skill-reader-inset: var(--space-5);
-
-  height: fit-content;
-  min-height: 0;
-  max-height: var(--openclaw-modal-height-limit);
-  padding: 0;
-  overflow: hidden;
-}
-
-.skill-reader-dialog .exec-approval-header {
-  flex-shrink: 0;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--skill-reader-inset);
-}
-
-.skill-reader-dialog .exec-approval-header > .btn--icon {
-  min-width: var(--space-7);
-  height: var(--space-7);
-  padding: 0;
-}
-
-.skill-reader-dialog .exec-approval-header .clawhub-skill-icon {
-  width: var(--space-7);
-  height: var(--space-7);
-  flex-basis: var(--space-7);
-}
-
-.skill-reader-dialog .exec-approval-header > :first-child {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
 .skill-reader-dialog .btn--icon,
 .skill-reader-dialog .statusDot {
   flex-shrink: 0;
@@ -80,12 +46,6 @@
 .skill-reader-dialog__error svg {
   width: var(--space-5);
   height: var(--space-5);
-}
-
-@media (max-width: 768px) {
-  .exec-approval-card.skill-reader-dialog {
-    --skill-reader-inset: var(--space-4);
-  }
 }
 
 .skill-library-dialog__source {

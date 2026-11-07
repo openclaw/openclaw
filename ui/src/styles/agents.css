@@ -409,10 +409,6 @@
   overflow: hidden;
 }
 
-.oc-dialog__header.md-preview-dialog__header {
-  grid-template-columns: minmax(0, 1fr) auto;
-}
-
 .md-preview-dialog__title {
   overflow-wrap: anywhere;
 }

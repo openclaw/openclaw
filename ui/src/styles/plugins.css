@@ -7,10 +7,6 @@
   font-size: 26px;
 }
 
-.plugins-hub-header .hub-tabs--sub .hub-tab {
-  padding-block: var(--space-2);
-}
-
 .plugins-hub-header__secondary {
   flex: 0 0 auto;
 }

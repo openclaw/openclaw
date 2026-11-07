@@ -116,11 +116,6 @@
   min-width: 0;
 }
 
-/* The dialog is the surface: what sits in it is rows, not a card in a card. */
-.channels-detail__body {
-  align-content: start;
-}
-
 .channels-detail__issue + .channels-detail__issue {
   margin-block-start: var(--space-2);
 }

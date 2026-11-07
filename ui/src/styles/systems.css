@@ -416,7 +416,6 @@ openclaw-systems-page {
 /* Outranks the shared select's display so the picker stays phone-only. */
 .systems-workspace .systems-toolbar > select.systems-mobile-picker {
   display: none;
-  min-width: 0;
   max-width: 230px;
 }
 .systems-sidebar {
@@ -651,7 +650,6 @@ openclaw-systems-page {
     display: -webkit-inline-box;
     flex: 1;
     max-width: none;
-    height: 32px;
     min-height: 32px;
     border-color: var(--border);
   }
@@ -765,16 +763,12 @@ openclaw-systems-page {
   }
   /* Safari's native control ignores height, so the picker draws its own chevron to match its 32px neighbors. */
   .systems-toolbar > .systems-mobile-picker {
-    height: 32px;
-    padding-block: 0;
     padding-inline-end: 28px;
     appearance: none;
     background-image: var(--select-chevron);
-    background-repeat: no-repeat;
     background-position:
       right 16px center,
       right 12px center;
-    background-size: 5px 5px;
     text-overflow: ellipsis;
   }
 }

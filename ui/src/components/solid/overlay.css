@@ -487,14 +487,6 @@ a.oc-menu-item[href] {
   min-width: 0;
 }
 
-/* An icon-only trigger centers its glyph instead of sitting it on a text baseline. */
-@media (max-width: 640px) {
-  :where(.oc-menu-trigger) > .oc-menu-item__label:where(:has(> svg:only-child)) {
-    display: flex;
-    justify-content: center;
-  }
-}
-
 .oc-menu-item__label > :where(.session-menu__text) {
   display: block;
   overflow: hidden;
