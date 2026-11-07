@@ -101,6 +101,7 @@ import { recordAdmittedModelRoutingDecision } from "../model-routing-decision.js
 import { resolveRuntimeChannelPromptContext } from "../runtime-capabilities.js";
 import { createUnrecordedScheduledAccountRefusal } from "../scheduled-unrecorded-account.js";
 import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
+import { resolveStableCliSkillAuthoring } from "../stable-skill-authoring.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
 import { assertNativeCronCreatorCapabilities } from "../tools/cron-tool-creator-cap.js";
@@ -169,7 +170,6 @@ import {
   loadCliSessionPromptContext,
   resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
-import { resolveStableCliSkillAuthoring } from "./stable-skill-authoring.js";
 import { captureCliRunToolAuthority } from "./tool-authority.js";
 import {
   captureCliRunStartTime,
