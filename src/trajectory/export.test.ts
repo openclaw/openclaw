@@ -17,6 +17,8 @@ import {
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { assertNoOpenClawAgentDatabaseLeasesReadOnly } from "../state/openclaw-agent-db-lease-inspection.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
@@ -27,11 +29,16 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { captureEnv } from "../test-utils/env.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";
 import {
   assistantMessage,
   assistantText,
   createLargeTrajectoryUsage,
+  createRuntimeEvent,
+  readEvents,
+  runtimeAttemptEvents,
+  runtimeSeries,
   messageEntry,
   sessionHeader,
   writeEntries,
@@ -55,8 +62,7 @@ function makeTempDir(): string {
   return dir;
 }
 
-function exportPaths() {
-  const tmpDir = makeTempDir();
+function exportPaths(tmpDir = makeTempDir()) {
   return {
     tmpDir,
     sessionFile: path.join(tmpDir, "session.jsonl"),
@@ -78,60 +84,8 @@ function readText(outputDir: string, file: string): string {
   return fs.readFileSync(path.join(outputDir, file), "utf8");
 }
 
-function readEvents(outputDir: string): TrajectoryEvent[] {
-  return fs
-    .readFileSync(path.join(outputDir, "events.jsonl"), "utf8")
-    .trim()
-    .split(/\r?\n/u)
-    .map((line) => JSON.parse(line) as TrajectoryEvent);
-}
-
 function eventTypes(events: readonly Pick<TrajectoryEvent, "type">[]): string[] {
   return events.map((event) => event.type);
-}
-
-function createRuntimeEvent(
-  type: string,
-  overrides: Partial<TrajectoryEvent> = {},
-): TrajectoryEvent {
-  return {
-    traceSchema: "openclaw-trajectory",
-    schemaVersion: 1,
-    traceId: "session-1",
-    source: "runtime",
-    type,
-    ts: "2026-04-22T08:00:00.000Z",
-    seq: 1,
-    sessionId: "session-1",
-    ...overrides,
-  };
-}
-
-function runtimeAttemptEvents(
-  rows: ReadonlyArray<readonly [type: string, runId: string, data?: Record<string, unknown>]>,
-): TrajectoryEvent[] {
-  return rows.map(([type, runId, data], index) =>
-    createRuntimeEvent(type, {
-      seq: index + 1,
-      sourceSeq: index + 1,
-      runId,
-      ...(data ? { data } : {}),
-    }),
-  );
-}
-
-function runtimeSeries(
-  rows: Array<[string, Record<string, unknown>, number?, Partial<TrajectoryEvent>?]>,
-) {
-  return rows.map(([type, data, seconds, overrides], index) =>
-    createRuntimeEvent(type, {
-      data,
-      ts: new Date(Date.parse("2026-04-22T08:00:00Z") + (seconds ?? index) * 1000).toISOString(),
-      seq: index + 1,
-      sourceSeq: index + 1,
-      ...overrides,
-    }),
-  );
 }
 
 function leaf(id: string, parentId: string, targetId: string | null, extra = {}) {
@@ -178,6 +132,7 @@ async function exportRuntimeArtifacts(
 }
 
 afterAll(async () => {
+  resetSecretRedactionRegistryForTest();
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
@@ -624,108 +579,142 @@ describe("exportTrajectoryBundle", () => {
     );
   });
 
-  it("redacts broad secret patterns from every exported bundle file", async () => {
-    const { tmpDir, sessionTarget, outputDir } = exportPaths();
-    const rawSecrets = [
-      "sk-exported-session-secret",
-      "ghp_123456789012345678901234",
-      "xoxb-1234567890-abcdefghijkl",
-      "ya29.exported-access-token-with-enough-length",
-      "ADMIN_PASSWORD=plain-text-password",
-      "sk-top-level-export-secret",
-    ];
-    sessionTarget.sessionKey = expectDefined(rawSecrets[5], "synthetic session key");
-    await replaceTranscriptEvents(sessionTarget, [
-      sessionHeader(tmpDir),
-      messageEntry(
-        "entry-user",
-        null,
-        userMessage(`user pasted ${rawSecrets[0]} keep-visible-marker`),
-        40,
-      ),
-      messageEntry(
-        "entry-assistant",
-        "entry-user",
-        assistantMessage([
+  it("preserves bundle JSON and contextual secret masks", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      const { tmpDir, sessionTarget, outputDir } = exportPaths(state.root);
+      const registered = "FIXTURE-LOOKUP-OPAQ-7422";
+      const quotedSecret = 'sk-synthetic-export-"quoted-secret';
+      registerSecretValueForRedaction(registered);
+      const pattern = String.raw`"projectNote"\s*:\s*"(project-note-opaque)"\s*,\s*"publicNote"\s*:\s*"project-note-opaque"`;
+      await state.writeConfig({ logging: { redactPatterns: [pattern] } });
+      const values = {
+        padding: "x".repeat(40_000),
+        projectNote: "project-note-opaque",
+        publicNote: "project-note-opaque",
+        lookupTag: registered,
+        apiKey: quotedSecret,
+        quotedCommands: ['echo "=== deploy token ==="', 'echo "=== deploy target ==="'],
+      };
+      const rawSecrets = [
+        "sk-exported-session-secret",
+        "ghp_123456789012345678901234",
+        "xoxb-1234567890-abcdefghijkl",
+        "ya29.exported-access-token-with-enough-length",
+        "ADMIN_PASSWORD=plain-text-password",
+        "sk-top-level-export-secret",
+        quotedSecret,
+        registered,
+      ];
+      sessionTarget.sessionKey = expectDefined(rawSecrets[5], "synthetic session key");
+      await replaceTranscriptEvents(sessionTarget, [
+        sessionHeader(tmpDir),
+        messageEntry(
+          "entry-user",
+          null,
+          userMessage(`user pasted ${rawSecrets[0]} keep-visible-marker`),
+          40,
+        ),
+        messageEntry(
+          "entry-assistant",
+          "entry-user",
+          assistantMessage([
+            {
+              type: "toolCall",
+              id: "call_1",
+              name: "read",
+              arguments: {
+                [expectDefined(rawSecrets[5], "rawSecrets[5] test invariant")]:
+                  "secret-looking tool argument key",
+                command: `curl -H 'Authorization: Bearer ${rawSecrets[1]}'`,
+                ...values,
+              },
+            },
+          ]),
+        ),
+        {
+          type: "compaction",
+          id: "entry-compaction",
+          parentId: "entry-assistant",
+          timestamp: "2026-04-01T05:46:42.000Z",
+          summary: `compaction summary saw ${rawSecrets[2]}`,
+          firstKeptEntryId: "entry-assistant",
+          tokensBefore: 1024,
+          details: { note: rawSecrets[3] },
+        },
+        {
+          type: "branch_summary",
+          id: "entry-branch-summary",
+          parentId: "entry-compaction",
+          timestamp: "2026-04-01T05:46:43.000Z",
+          fromId: "entry-assistant",
+          summary: `branch summary saw ${rawSecrets[4]}`,
+          details: { token: rawSecrets[0] },
+        },
+      ]);
+      const runtimeEvents = runtimeSeries([
+        [
+          "context.compiled",
           {
-            type: "toolCall",
-            id: "call_1",
-            name: "read",
-            arguments: {
-              [expectDefined(rawSecrets[5], "rawSecrets[5] test invariant")]:
-                "secret-looking tool argument key",
-              command: `curl -H 'Authorization: Bearer ${rawSecrets[1]}'`,
+            systemPrompt: `system includes ${rawSecrets[1]}`,
+            tools: [{ name: "danger", description: `tool mentions ${rawSecrets[2]}`, ...values }],
+          },
+        ],
+        [
+          "trace.metadata",
+          {
+            harness: { type: "openclaw", token: rawSecrets[3] },
+            metadata: {
+              [`https://example.test/callback?token=${rawSecrets[1]}`]:
+                "secret-looking metadata key",
+            },
+            prompting: {
+              skillsPrompt: `skills ${rawSecrets[4]}`,
+              userPromptPrefixText: `prefix ${rawSecrets[0]}`,
             },
           },
-        ]),
-      ),
-      {
-        type: "compaction",
-        id: "entry-compaction",
-        parentId: "entry-assistant",
-        timestamp: "2026-04-01T05:46:42.000Z",
-        summary: `compaction summary saw ${rawSecrets[2]}`,
-        firstKeptEntryId: "entry-assistant",
-        tokensBefore: 1024,
-        details: { note: rawSecrets[3] },
-      },
-      {
-        type: "branch_summary",
-        id: "entry-branch-summary",
-        parentId: "entry-compaction",
-        timestamp: "2026-04-01T05:46:43.000Z",
-        fromId: "entry-assistant",
-        summary: `branch summary saw ${rawSecrets[4]}`,
-        details: { token: rawSecrets[0] },
-      },
-    ]);
-    const runtimeEvents = runtimeSeries([
-      [
-        "context.compiled",
-        {
-          systemPrompt: `system includes ${rawSecrets[1]}`,
-          tools: [{ name: "danger", description: `tool mentions ${rawSecrets[2]}` }],
-        },
-      ],
-      [
-        "trace.metadata",
-        {
-          harness: { type: "openclaw", token: rawSecrets[3] },
-          metadata: {
-            [`https://example.test/callback?token=${rawSecrets[1]}`]: "secret-looking metadata key",
+        ],
+        ["prompt.submitted", { prompt: `submitted ${rawSecrets[1]}` }],
+        [
+          "trace.artifacts",
+          {
+            assistantTexts: [`assistant ${rawSecrets[2]}`],
+            finalPromptText: `final ${rawSecrets[3]}`,
           },
-          prompting: {
-            skillsPrompt: `skills ${rawSecrets[4]}`,
-            userPromptPrefixText: `prefix ${rawSecrets[0]}`,
-          },
-        },
-      ],
-      ["prompt.submitted", { prompt: `submitted ${rawSecrets[1]}` }],
-      [
-        "trace.artifacts",
-        {
-          assistantTexts: [`assistant ${rawSecrets[2]}`],
-          finalPromptText: `final ${rawSecrets[3]}`,
-        },
-        3,
-        { runId: rawSecrets[5] },
-      ],
-    ]);
-    Object.assign(expectDefined(runtimeEvents[0], "context event"), { apiKey: rawSecrets[5] });
-    appendSqliteTrajectoryRuntimeEvents(sessionTarget, runtimeEvents);
+          3,
+          { runId: rawSecrets[5] },
+        ],
+      ]);
+      Object.assign(expectDefined(runtimeEvents[0], "context event"), { apiKey: rawSecrets[5] });
+      appendSqliteTrajectoryRuntimeEvents(sessionTarget, runtimeEvents);
 
-    const bundle = await exportFrom(tmpDir, { sessionTarget, sessionKey: rawSecrets[5] });
+      const bundle = await exportFrom(tmpDir, { sessionTarget, sessionKey: rawSecrets[5] });
 
-    const exportedBundleText = fs
-      .readdirSync(outputDir)
-      .map((file) => fs.readFileSync(path.join(outputDir, file), "utf8"))
-      .join("\n");
-    expect(exportedBundleText).toContain("keep-visible-marker");
-    for (const secret of rawSecrets) {
-      expect(exportedBundleText).not.toContain(secret);
-    }
-    expect(JSON.stringify(bundle.events)).not.toContain(rawSecrets[5]);
-    expect(JSON.stringify(bundle.manifest)).not.toContain(rawSecrets[5]);
+      const exportedBundleText = fs
+        .readdirSync(outputDir)
+        .map((file) => {
+          if (file.endsWith(".json")) {
+            readJson(outputDir, file);
+          }
+          return readText(outputDir, file);
+        })
+        .join("\n");
+      readEvents(outputDir);
+      expect(exportedBundleText).toContain("keep-visible-marker");
+      expect(exportedBundleText).toContain("deploy target");
+      expect(exportedBundleText).not.toContain("quoted-secret");
+      const protectedValues = { projectNote: "projec…aque", publicNote: "project-note-opaque" };
+      expect(readJson(outputDir, "tools.json")).toEqual([expect.objectContaining(protectedValues)]);
+      expect(readJson(outputDir, "session-branch.json")).toHaveProperty(
+        ["entries", 1, "message", "content", 0, "arguments"],
+        expect.objectContaining(protectedValues),
+      );
+      expect(fs.statSync(path.join(outputDir, "tools.json")).size).toBeGreaterThan(32_768);
+      for (const secret of rawSecrets) {
+        expect(exportedBundleText).not.toContain(secret);
+      }
+      expect(JSON.stringify(bundle.events)).not.toContain(rawSecrets[5]);
+      expect(JSON.stringify(bundle.manifest)).not.toContain(rawSecrets[5]);
+    });
   });
 
   it("rejects oversized session transcript files before export", async () => {

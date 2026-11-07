@@ -19,6 +19,8 @@ import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 const suite = createControlUiE2eSuite({
   name: "Control UI pasted text chips",
   startServerBeforeBrowser: true,
+  // Native clipboard contents are shared across contexts in the same browser.
+  browserLaunchOptions: { headless: true },
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 

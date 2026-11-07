@@ -135,17 +135,17 @@ async function alignMentions(page: Page, viewport: { scale: number; font: string
     references.evaluateAll((elements) =>
       elements.map((element) => {
         const avatar = element.querySelector(".markdown-person-reference__avatar")!;
-        const name = [...element.childNodes].find(
-          (node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim(),
-        )!;
-        const range = document.createRange();
-        range.selectNodeContents(name);
-        const textBox = range.getClientRects()[0]!;
+        // A Range uses font ascent/descent, but avatars align to the capitals.
+        const capProbe = document.createElement("span");
+        capProbe.style.cssText = "display:inline-block;width:0;height:1cap;vertical-align:baseline";
+        avatar.after(capProbe);
+        const capBox = capProbe.getBoundingClientRect();
+        capProbe.remove();
         const box = avatar.getBoundingClientRect();
         const css = getComputedStyle(element);
         const size = Number.parseFloat(css.fontSize) + 2;
         const checks = {
-          aligned: Math.abs(box.top + box.height / 2 - (textBox.top + textBox.height / 2)) <= 1,
+          aligned: Math.abs(box.top + box.height / 2 - (capBox.top + capBox.height / 2)) <= 1,
           sized: box.width > 0 && box.width === size && box.height === size,
           fitsLine: box.height <= Number.parseFloat(css.lineHeight),
           borderless: css.borderWidth === "0px",
