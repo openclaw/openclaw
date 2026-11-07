@@ -125,6 +125,15 @@ export async function dispatchSessionsSendFollowup(
       ? requesterTurn
       : undefined;
   const completionTurn = isCronRequester ? undefined : registryTurn;
+  // A peer's result outlives its physical run when it yields to nested work.
+  const peerCompletion =
+    replyContext.replyMode === "peer" &&
+    options.nativeChild &&
+    !params.expectedSessionId &&
+    params.mode !== "steer" &&
+    options.requesterSessionKey !== params.sessionStoreTarget.canonicalKey &&
+    replyContext.requesterSession !== undefined &&
+    getInProcessGatewayToolContext()?.lifecycleRuntime !== undefined;
   // A queued self-send has no separate recipient to observe it with operator.write.
   // Keep the original run's result, without registering the session as its own child.
   const ownSessionCompletion =
@@ -135,6 +144,7 @@ export async function dispatchSessionsSendFollowup(
   const request =
     !("ok" in active) &&
     (registryTurn ||
+      peerCompletion ||
       ownSessionCompletion ||
       (replyContext.replyMode === "one-way" && options.ownChild)) &&
     sameRequester
