@@ -67,25 +67,28 @@ function searchConfigFields(
 }
 
 function SearchConfigField(props: { field: ConfigLeafField; nested?: boolean }) {
-  const params = createMemo(() => ({
-    ...props.field,
-    showLabel: false,
-    // The control's accessible name carries the full nested label, like its row title.
-    hints: {
-      ...props.field.hints,
-      [pathKey(props.field.path)]: {
-        ...hintForPath(props.field.path, props.field.hints),
-        label: props.field.label,
-      },
-    },
-  }));
   return (
     <SettingsRow
       title={props.field.label}
       description={props.field.help}
       stackedOnNarrow
       nested={props.nested}
-      control={<ConfigNode params={params()} />}
+      control={
+        <ConfigNode
+          params={{
+            ...props.field,
+            showLabel: false,
+            // The control's accessible name carries the full nested label, like its row title.
+            hints: {
+              ...props.field.hints,
+              [pathKey(props.field.path)]: {
+                ...hintForPath(props.field.path, props.field.hints),
+                label: props.field.label,
+              },
+            },
+          }}
+        />
+      }
     />
   );
 }
