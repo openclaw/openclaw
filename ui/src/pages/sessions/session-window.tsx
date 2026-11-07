@@ -116,6 +116,7 @@ export function SessionWindow(props: SessionsProps & { entries: SessionEntry[] }
     },
     scrollToFn: elementScroll,
     overscan: 3,
+    useAnimationFrameWithResizeObserver: true,
     onChange: publish,
   });
   const pinFocus = (pinnedExpandedKey: string | null, pinnedMenuKey: string | undefined) => {
@@ -323,7 +324,28 @@ export function SessionWindow(props: SessionsProps & { entries: SessionEntry[] }
     return (
       <tbody
         ref={(node) => (element = node)}
-        onFocusIn={() => {
+        onFocusIn={(event) => {
+          if (windowed() && expanded()) {
+            const target = event.target;
+            // WebKit can reveal only the caret in tall details.
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => {
+                if (target !== document.activeElement || !scroller) {
+                  return;
+                }
+                const field = target.getBoundingClientRect();
+                const viewport = scroller.getBoundingClientRect();
+                // A newer scroll that hides the control wins over this queued reveal.
+                if (
+                  field.bottom > viewport.top &&
+                  field.top < viewport.bottom &&
+                  (field.top < viewport.top || field.bottom > viewport.bottom)
+                ) {
+                  target.scrollIntoView({ block: "nearest", inline: "nearest" });
+                }
+              });
+            });
+          }
           if (focusedKey === item.entry.key) {
             return;
           }
