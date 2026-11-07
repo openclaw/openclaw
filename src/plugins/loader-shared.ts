@@ -1,4 +1,3 @@
-import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -39,7 +38,6 @@ import {
 } from "./manifest-install-owner.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { shippedNativeSessionCatalogs } from "./native-session-catalog-config.js";
-import type { PluginOrigin } from "./plugin-origin.types.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
@@ -49,7 +47,7 @@ import {
   rollbackStagedPluginRegistry,
   stageActivePluginRegistry,
 } from "./runtime.js";
-import { validatePluginSchemaValue } from "./schema-validator.js";
+import { validatePluginConfig } from "./schema-validator.js";
 import { hasKind } from "./slots.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 
@@ -208,79 +206,6 @@ export class PluginLoadFailureError extends Error {
     this.name = "PluginLoadFailureError";
     this.registry = registry;
   }
-}
-
-export function validatePluginConfig(params: {
-  origin: PluginOrigin;
-  schema?: Record<string, unknown>;
-  cacheKey?: string;
-  value?: unknown;
-  sourceValue?: unknown;
-}): Result<Record<string, unknown> | undefined, string[]> {
-  const { schema, value } = params;
-  if (!schema) {
-    return ok(value as Record<string, unknown> | undefined);
-  }
-  if (params.sourceValue === undefined && isEmptyPluginConfigJsonSchema(schema)) {
-    if (
-      value === undefined ||
-      (value &&
-        typeof value === "object" &&
-        !Array.isArray(value) &&
-        Object.keys(value).length === 0)
-    ) {
-      return ok({});
-    }
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      return resultError(["<root>: must be object"]);
-    }
-    return resultError(["<root>: config must be empty"]);
-  }
-  const result = validatePluginSchemaValue({
-    origin: params.origin,
-    schema,
-    cacheKey: params.cacheKey,
-    value: value ?? {},
-    sourceValue: params.sourceValue,
-    applyDefaults: true,
-  });
-  return result.ok
-    ? ok(result.value as Record<string, unknown> | undefined)
-    : resultError(result.errors.map((error) => error.text));
-}
-
-// The empty-config shortcut answers without compiling the schema, so it is only sound for
-// schemas built purely from keywords it accounts for. An allowlist holds that invariant where
-// a denylist leaked every new keyword: an extra constraint, an unresolvable `$ref`, or an
-// unknown keyword now falls through to validatePluginSchemaValue, which owns the diagnostic.
-const EMPTY_PLUGIN_CONFIG_SHORTCUT_KEYWORDS = new Set([
-  "type",
-  "additionalProperties",
-  "properties",
-  "title",
-  "description",
-  "$schema",
-  "$id",
-  "$comment",
-  "deprecated",
-  "readOnly",
-  "writeOnly",
-]);
-
-function isEmptyPluginConfigJsonSchema(schema: Record<string, unknown>): boolean {
-  if (schema.type !== "object" || schema.additionalProperties !== false) {
-    return false;
-  }
-  const properties = schema.properties;
-  if (
-    !properties ||
-    typeof properties !== "object" ||
-    Array.isArray(properties) ||
-    Object.keys(properties).length > 0
-  ) {
-    return false;
-  }
-  return Object.keys(schema).every((keyword) => EMPTY_PLUGIN_CONFIG_SHORTCUT_KEYWORDS.has(keyword));
 }
 
 /** Builds the common manifest-backed record shape used by runtime and CLI loaders. */
