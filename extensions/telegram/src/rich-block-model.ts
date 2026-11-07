@@ -98,6 +98,7 @@ export type InputRichBlock =
       cells: RichBlockTableCell[][];
       is_bordered?: true;
       is_striped?: true;
+      is_compact?: true;
       caption?: RichText;
     }
   | { type: "divider" }
