@@ -32,6 +32,27 @@ function linkInfo(input: string) {
   }));
 }
 
+it("does not turn ambiguous repository names into file links in prose or code spans", () => {
+  const source = "See openclaw/openclaw.ai and `openclaw/openclaw.ai` for the website repo.";
+  const fragment = render(source);
+  expect(fileLinks(fragment)).toHaveLength(0);
+  expect(fragment.textContent?.trim()).toBe(source.replaceAll("`", ""));
+});
+
+it("preserves explicit uncommon-extension paths and authored file links", () => {
+  const fragment = render(
+    "src/index.TS ./assets/logo.ai `../assets/logo.ai` /tmp/logo.ai " +
+      "[website repository](openclaw/openclaw.ai)",
+  );
+  expect(fileLinks(fragment).map((link) => link.dataset.filePath)).toEqual([
+    "src/index.TS",
+    "./assets/logo.ai",
+    "../assets/logo.ai",
+    "/tmp/logo.ai",
+    "openclaw/openclaw.ai",
+  ]);
+});
+
 it.each([
   ["see src/lib/foo.ts for details", "src/lib/foo.ts"],
   ["[x](/Users/a/b.ts)", "/Users/a/b.ts"],
