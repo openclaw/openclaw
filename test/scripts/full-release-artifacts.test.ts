@@ -136,6 +136,19 @@ process.stdout.write(JSON.stringify(response));
     preloadPath,
     `import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 const { responses, downloads } = JSON.parse(readFileSync(process.env.FIXTURE_RESPONSES, "utf8"));
+if (process.env.FIXTURE_COMPLETE_PREPARATION_ON_WAIT) {
+  globalThis.setTimeout = (callback, delay) => {
+    if (delay !== 15_000) throw new Error("Unexpected wait");
+    const current = JSON.parse(readFileSync(process.env.FIXTURE_RESPONSES, "utf8"));
+    const prefix = "repos/" + process.env.GITHUB_REPOSITORY + "/actions/";
+    const job = current.responses[prefix + "jobs/901"];
+    job.status = "completed";
+    job.conclusion = process.env.FIXTURE_COMPLETE_PREPARATION_ON_WAIT;
+    current.responses[prefix + "runs/81/attempts/1/jobs?per_page=100&page=1"].jobs[0] = job;
+    writeFileSync(process.env.FIXTURE_RESPONSES, JSON.stringify(current));
+    callback();
+  };
+}
 globalThis.fetch = async (input) => {
   const url = new URL(input instanceof Request ? input.url : String(input));
   if (url.origin !== "https://api.github.com") throw new Error("Unexpected fetch origin");
@@ -511,6 +524,33 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
     expect(result.stderr).toContain(`https://github.com/${REPOSITORY}/actions/runs/81/job/901`);
     expect(result.stderr).toContain("Other producer jobs continue running");
   });
+
+  it.each(["success", "failure"])(
+    "waits for an uploaded raw bundle producer to finish with %s",
+    async (conclusion) => {
+      const test = fixture();
+      test.jobs[0]!.status = "in_progress";
+      test.jobs[0]!.conclusion = null;
+      test.jobs[1]!.status = "in_progress";
+      test.jobs[1]!.conclusion = null;
+      await test.artifact(
+        "openclaw-npm-package-descriptor-81-1",
+        "prepared-npm-bundle.json",
+        test.raw,
+      );
+      const result = test.run("wait", {
+        ARTIFACT_OUTPUT: "raw",
+        FIXTURE_COMPLETE_PREPARATION_ON_WAIT: conclusion,
+      });
+      expect(result.stderr).toContain("Waiting for npm package:");
+      if (conclusion === "success") {
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.outputs).toEqual({ prepared_bundle_json: JSON.stringify(test.raw) });
+      } else {
+        expectRejected(result, "unique exact completed producer job");
+      }
+    },
+  );
 
   it.each([
     "successful raw job",

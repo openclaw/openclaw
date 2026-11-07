@@ -478,6 +478,7 @@ describe("retained publication admission", () => {
         encoding: "utf8",
         env: {
           ...Object.fromEntries(Object.keys(writer.env).map((key) => [key, ""])),
+          RELEASE_STATE_SCRIPT: resolve("scripts/full-release-validation-state.mjs"),
           ...selectedEnv,
           PATH: process.env.PATH,
           RUNNER_TEMP: directory,
@@ -878,6 +879,7 @@ describe("retained publication admission", () => {
       encoding: "utf8",
       env: {
         ...Object.fromEntries(Object.keys(writer.env).map((key) => [key, ""])),
+        RELEASE_STATE_SCRIPT: resolve("scripts/full-release-validation-state.mjs"),
         PATH: process.env.PATH,
         RUNNER_TEMP: directory,
         GITHUB_RUN_ID: context.runId,
@@ -1065,9 +1067,7 @@ describe("retained publication admission", () => {
         (value: { id?: string }) => value.id === "find",
       );
       const command = step.run.trim().split("\n").at(-1);
-      expect(command).toBe(
-        "node workflow/scripts/full-release-validation-state.mjs reuse-publication",
-      );
+      expect(command).toBe('node "$RELEASE_STATE_SCRIPT" reuse-publication');
       const result = spawnSync(
         process.execPath,
         [resolve("scripts/full-release-validation-state.mjs"), "reuse-publication"],
@@ -1512,6 +1512,7 @@ describe("full release artifact contract", () => {
         encoding: "utf8",
         env: {
           ...Object.fromEntries(Object.keys(writer.env).map((key) => [key, ""])),
+          RELEASE_STATE_SCRIPT: resolve("scripts/full-release-validation-state.mjs"),
           EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: "[]",
           PATH: process.env.PATH,
           RUNNER_TEMP: dir,

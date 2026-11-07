@@ -433,9 +433,10 @@ async function waitForArtifact(request, env) {
           receipt.producer.runId === String(runId) && receipt.producer.runAttempt === rawAttempt,
           "Raw npm producer identity changed.",
         );
-        assertNpmPreparationExecutionPreserved(request, runId, runAttempt, receipt.producer);
         const job = api(request.repository, `actions/jobs/${receipt.producer.jobId}`);
         if (job.status === "completed") {
+          // The descriptor upload can become visible before its producer finishes.
+          assertNpmPreparationExecutionPreserved(request, runId, runAttempt, receipt.producer);
           verifyNpmBundleProducer({
             producer: receipt.producer,
             repository: request.repository,
