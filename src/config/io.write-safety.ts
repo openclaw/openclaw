@@ -7,7 +7,6 @@ import {
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { isMissingPathError } from "../infra/errors.js";
-import { allowDrvfsRenameRecovery } from "../infra/fs-safe-drvfs.js";
 import { stateRootDirectoryMode } from "../infra/private-dir-mode.js";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { isPathInside } from "../security/scan-paths.js";
@@ -511,7 +510,6 @@ export async function rollbackConfigFileWriteIfUnchanged(params: {
       replaceFileAtomicSync({
         filePath: params.configPath,
         content: previousRaw,
-        allowDrvfsRenameRecovery: allowDrvfsRenameRecovery(path.dirname(params.configPath)),
         dirMode: params.stateDirectory
           ? (stateRootDirectoryMode(path.dirname(params.configPath), params.stateDirectory.path) ??
             0o700)
