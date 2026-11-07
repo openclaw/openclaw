@@ -316,6 +316,46 @@ function installJobResponses(reader: Awaited<ReturnType<typeof createFixture>>) 
 
 // The plugin, admitted tool, Gateway routing and managed identity are real; only GitHub I/O is fixed.
 describe("GitHub agent reader", () => {
+  it("reads protected diagnostics through the managed account and preserves upstream denial", async () => {
+    fixture = await createFixture();
+    const upstream = expectDefined(fixture.fetcher.getMockImplementation(), "GitHub I/O fixture");
+    const url = "https://api.github.com/repos/octocat/reader/code-scanning/analyses/7";
+    let denied = false;
+    fixture.fetcher.mockImplementation((input, init) => {
+      if (requestUrl(input) !== url) {
+        return upstream(input, init);
+      }
+      expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${token}`);
+      return Promise.resolve(
+        denied
+          ? Response.json(
+              { message: "Code scanning alerts read permission required" },
+              { status: 403 },
+            )
+          : Response.json({ id: 7, commit_sha: "a".repeat(40), error: "Upload failed" }),
+      );
+    });
+    const result = await fixture.read({ url });
+    expect(result.details).toMatchObject({
+      title: "GitHub Code Scanning diagnostics",
+      metadata: [
+        { label: "Reader account ID", value: "42" },
+        { label: "Reader source", value: "agent-override" },
+      ],
+    });
+    expect(JSON.stringify(result)).not.toContain(token);
+    expect(result.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT") }),
+      ]),
+    );
+    denied = true;
+    await expect(fixture.read({ url })).rejects.toThrow("HTTP 403");
+    expect(fixture.fetcher.mock.calls.filter(([input]) => requestUrl(input) === url)).toHaveLength(
+      2,
+    );
+  });
+
   it.each([false, true])(
     "reads a public job through the admitted reader (search dispatch=%s)",
     async (throughSearch) => {
