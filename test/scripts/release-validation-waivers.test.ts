@@ -353,36 +353,29 @@ if (endpoint === "repos/openclaw/openclaw/actions/jobs/2/logs") {
     },
   );
 
-  it("grants the Kova leaf only for the operator-named version", () => {
-    const failed = (key: string) =>
-      child(key, {
-        conclusion: "failure",
-        jobs: [job("Kova mock provider performance", 1)],
-        status: "completed",
-      });
-    expect(terminalPolicyPass(failed("productPerformance"), "2026.11.1")).toBe(true);
-    expect(terminalPolicyPass(failed("productPerformance"), "2026.11.2")).toBe(true);
-    expect(terminalPolicyPass(failed("productPerformance"), "2026.11.3")).toBe(false);
-    expect(terminalPolicyPass(failed("releaseChecksCandidate"), "2026.11.2")).toBe(false);
-  });
-
-  it("keeps unrelated failures and incomplete Kova jobs blocking for 2026.11.2", () => {
-    for (const conclusion of ["cancelled", "timed_out"]) {
-      const observed = child("productPerformance", {
+  it.each<[string, string, string, boolean, boolean]>([
+    ["2026.11.1", "productPerformance", "failure", false, true],
+    ["2026.11.2", "productPerformance", "failure", false, true],
+    ["2026.11.3", "productPerformance", "failure", false, false],
+    ["2026.11.2", "releaseChecksCandidate", "failure", false, false],
+    ["2026.11.2", "productPerformance", "cancelled", false, false],
+    ["2026.11.2", "productPerformance", "timed_out", false, false],
+    ["2026.11.2", "productPerformance", "failure", true, false],
+  ])(
+    "Kova waiver: %s / %s / %s / extra failure %s / expected pass %s",
+    (version, role, conclusion, extraFailure, expectedPass) => {
+      const observed = child(role, {
         conclusion,
         status: "completed",
-        jobs: [job("Kova mock provider performance", 1, { conclusion })],
+        jobs: [
+          job("Kova mock provider performance", 1, { conclusion }),
+          ...(extraFailure ? [job("Correctness integrity", 2)] : []),
+        ],
       });
-      expect(terminalPolicyPass(observed, "2026.11.2")).toBe(false);
-    }
-    const observed = child("productPerformance", {
-      conclusion: "failure",
-      status: "completed",
-      jobs: [job("Kova mock provider performance", 1), job("Correctness integrity", 2)],
-    });
-    expect(terminalPolicyPass(observed, "2026.11.2")).toBe(false);
-    expect(observed.jobs[0].conclusion).toBe("failure");
-  });
+      expect(terminalPolicyPass(observed, version)).toBe(expectedPass);
+      expect(observed.jobs[0]).toMatchObject({ conclusion });
+    },
+  );
 
   it("does not accept a waived leaf without its required aggregate", async () => {
     grant();
