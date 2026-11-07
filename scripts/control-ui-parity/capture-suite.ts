@@ -198,10 +198,24 @@ suite.define(() => {
                 }
                 await scene.prepare?.(page, gateway);
                 if (scene.route === "new-session") {
-                  await page.evaluate(() => {
-                    // Finish the typed New Session placeholder at a fixed animation sample.
-                    window.dispatchEvent(new CustomEvent("parity-frame-time", { detail: 3_000 }));
-                  });
+                  // The typed placeholder starts on its composer's first frame, which can follow
+                  // readiness. Advance the sample until a full animation fits after that start.
+                  let typed: string | null = null;
+                  for (let sample = 3_000; ; sample += 3_000) {
+                    const text = await page.evaluate(async (detail) => {
+                      window.dispatchEvent(new CustomEvent("parity-frame-time", { detail }));
+                      await new Promise(requestAnimationFrame);
+                      return document.querySelector(".agent-chat__composer-placeholder")
+                        ?.textContent;
+                    }, sample);
+                    if (text && text === typed) {
+                      break;
+                    }
+                    expect(sample, "New Session placeholder must finish typing").toBeLessThan(
+                      30_000,
+                    );
+                    typed = text ?? null;
+                  }
                 }
                 if (!scene.loading) {
                   await expect
@@ -214,6 +228,51 @@ suite.define(() => {
                     )
                     .toBe(0);
                 }
+                // Routes paint before their independent sources (config editor, presence,
+                // catalogs) arrive, and focus and smooth scrolling land after interaction.
+                // Capture once the page has been quiet for a window of real frame time.
+                await page.evaluate(async () => {
+                  const now = () => Number(document.timeline.currentTime);
+                  let changedAt = now();
+                  const changed = () => {
+                    changedAt = now();
+                  };
+                  const activeElement = () => {
+                    let active = document.activeElement;
+                    while (active?.shadowRoot?.activeElement) {
+                      active = active.shadowRoot.activeElement;
+                    }
+                    return active;
+                  };
+                  const observer = new MutationObserver(changed);
+                  observer.observe(document, {
+                    attributes: true,
+                    characterData: true,
+                    childList: true,
+                    subtree: true,
+                  });
+                  document.addEventListener("scroll", changed, true);
+                  try {
+                    let focused = activeElement();
+                    // Frames as well as time: work queued behind a long task lands between frames.
+                    let quietFrames = 0;
+                    for (const start = now(); quietFrames < 10 || now() - changedAt < 200;) {
+                      if (now() - start > 10_000) {
+                        throw new Error("The page kept changing for 10 s before capture");
+                      }
+                      const before = changedAt;
+                      await new Promise(requestAnimationFrame);
+                      if (activeElement() !== focused) {
+                        focused = activeElement();
+                        changed();
+                      }
+                      quietFrames = changedAt === before ? quietFrames + 1 : 0;
+                    }
+                  } finally {
+                    observer.disconnect();
+                    document.removeEventListener("scroll", changed, true);
+                  }
+                });
                 expect(pageErrors, "Synthetic scene must render without uncaught errors").toEqual(
                   [],
                 );

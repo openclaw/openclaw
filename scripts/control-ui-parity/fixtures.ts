@@ -350,7 +350,22 @@ export const parityBaseScenario: NativeControlUiMockGatewayScenario = {
         message: "Round-trip measurement is unavailable in this deterministic fixture.",
       },
     },
-    "system-presence": [],
+    // Mirrors the hello roster so presence settles the same whichever source lands last.
+    "system-presence": [
+      {
+        instanceId: "parity-webchat",
+        mode: "webchat",
+        reason: "connect",
+        ts: fixedTime,
+        user: {
+          id: profiles[0]!.id,
+          identity: { type: "profile", id: profiles[0]!.id },
+          name: profiles[0]!.displayName,
+          email: profiles[0]!.emails[0],
+        },
+        watchedSessions: [],
+      },
+    ],
     "channels.status": {
       ts: fixedTime,
       channelOrder: [],

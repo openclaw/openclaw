@@ -5,6 +5,7 @@ import {
   scrollChatThreadToTop,
   waitForChatScrollIdle,
 } from "../../ui/src/e2e/chat-flow.test-support.ts";
+import { waitForLayoutSettled } from "../../ui/src/pages/chat/chat-layout.browser.test-support.ts";
 import { CONFIG_PAGE_IDS } from "../../ui/src/pages/config/config-sections.ts";
 import type { MockGatewayControls } from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import type { NativeControlUiMockGatewayScenario } from "../../ui/src/test-helpers/control-ui-plugin-e2e.ts";
@@ -72,6 +73,13 @@ async function openSessionRow(page: Page) {
   const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
   await row.waitFor({ state: "visible" });
   return row;
+}
+// Menus position against the header once; open them after its layout settles.
+async function settleChatHeader(page: Page) {
+  await waitForLayoutSettled(
+    page,
+    "openclaw-chat-pane :is(.agent-chat__header--mobile, .sidebar-region__header, [data-region-header])",
+  );
 }
 // The resting mobile composer reveals its controls only while editing.
 async function openComposerControl(page: Page, selector: string) {
@@ -544,6 +552,7 @@ export const scenes: Scene[] = [
     id: "session-menu",
     label: "Session menu: icons and actions",
     prepare: async (page) => {
+      await settleChatHeader(page);
       await page.locator(".chat-header-session-menu__trigger").click();
       await page.getByRole("menu", { name: "Actions for Visual parity" }).waitFor();
     },
@@ -553,6 +562,7 @@ export const scenes: Scene[] = [
     id: "session-submenu",
     label: "Session menu: appearance submenu and selected color",
     prepare: async (page) => {
+      await settleChatHeader(page);
       await page.locator(".chat-header-session-menu__trigger").focus();
       await page.keyboard.press("Enter");
       // Compact menus drill into sheet pages of buttons; wide menus retain nested popovers.
@@ -572,6 +582,7 @@ export const scenes: Scene[] = [
     id: "session-modal",
     label: "New group modal form",
     prepare: async (page) => {
+      await settleChatHeader(page);
       await page.locator(".chat-header-session-menu__trigger").click();
       const groups = page.getByRole("menuitem", { name: "Move to group", exact: true });
       if (isCompact(page)) {
@@ -595,6 +606,9 @@ export const scenes: Scene[] = [
       const more = picker.locator("[data-chat-model-more-toggle]");
       if (await more.isVisible()) {
         await more.click();
+        // Expanding moves focus off search and leaves the pointer over a later row.
+        await picker.locator('[data-chat-model-search="true"]').focus();
+        await page.mouse.move(0, 0);
       }
       const list = picker.locator("[data-chat-model-window]");
       await expect
