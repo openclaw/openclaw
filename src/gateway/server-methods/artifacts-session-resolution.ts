@@ -148,6 +148,13 @@ export async function prepareArtifactSessionResolution(
       access.retain(facts.release);
       const initialTarget = facts.readCurrent(cfg).target;
       const original = initialTarget?.readSource && structuredClone(initialTarget.entry);
+      const prepareRead = () => {
+        try {
+          return facts.prepareRead()?.catch(throwArtifactSessionReadError);
+        } catch (error) {
+          return throwArtifactSessionReadError(error);
+        }
+      };
       const readCurrent = () => {
         try {
           const currentConfig = access.getRuntimeConfig();
@@ -197,6 +204,7 @@ export async function prepareArtifactSessionResolution(
         sessionKey: facts.storageTarget.canonicalKey,
         agentId: facts.storageTarget.agentId,
         ...readCurrent(),
+        prepareRead,
         readCurrent,
         release: facts.release,
       };
