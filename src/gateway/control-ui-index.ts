@@ -52,8 +52,19 @@ function rewriteControlUiIndexHtmlAssetHrefs(
     replacements.set(`href="${buildControlUiRootAssetPath(normalized, asset)}"`, assetHref);
   }
   // Copy the document once instead of once per matching asset.
-  const pattern = new RegExp(Array.from(replacements.keys(), escapeRegExp).join("|"), "g");
-  return html.replace(pattern, (match) => replacements.get(match) ?? match);
+  const pattern = new RegExp(
+    [
+      '<script\\b[^>]*\\btype="importmap"[^>]*>[\\s\\S]*?</script>',
+      ...Array.from(replacements.keys(), escapeRegExp),
+    ].join("|"),
+    "g",
+  );
+  return html.replace(pattern, (match) =>
+    match.startsWith("<script")
+      ? // Root both map keys and targets before the document's CSP hashes are computed.
+        match.replaceAll('"./assets/', JSON.stringify(`${normalized}/assets/`).slice(0, -1))
+      : (replacements.get(match) ?? match),
+  );
 }
 
 export async function serveControlUiIndexHtml(

@@ -1,7 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 
-export type GestureInput =
+type GestureInput =
   | "pointermove"
   | "mousemove"
   | "wheel"
@@ -10,7 +10,7 @@ export type GestureInput =
   | "resize"
   | "orientationchange";
 
-export type GestureCounters = {
+type GestureCounters = {
   inputs: Record<GestureInput, number>;
   trustedInputs: number;
   coalescedPointerEvents: number;
@@ -19,16 +19,16 @@ export type GestureCounters = {
   geometryReadAttempts: number;
 };
 
-export type GestureFrame = GestureCounters & {
+type GestureFrame = GestureCounters & {
   /** Native rAF timestamp; counters cover the preceding callback interval. */
   at: number;
   /** The first callback is partial and has no complete frame interval. */
   intervalMs: number | null;
 };
 
-export type GestureGeometryRead = { at: number; api: string; stack: string };
+type GestureGeometryRead = { at: number; api: string; stack: string };
 
-export type GestureFrameSummary = {
+type GestureFrameSummary = {
   count: number;
   medianMs: number | null;
   p95Ms: number | null;
@@ -76,7 +76,7 @@ type GestureProbeApi = {
 };
 
 /** Serialized into a fresh benchmark page before app code creates its observers. */
-export function installControlUiGestureProbe(options: GestureProbeOptions = {}) {
+function installControlUiGestureProbe(options: GestureProbeOptions = {}) {
   const key = "__openclawGestureProbe";
   if (Reflect.has(window, key)) {
     throw new Error("The continuous gesture probe is already installed");
