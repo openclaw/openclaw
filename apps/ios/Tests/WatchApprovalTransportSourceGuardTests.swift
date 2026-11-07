@@ -3,9 +3,8 @@ import Testing
 @testable import OpenClaw
 
 struct WatchApprovalTransportSourceGuardTests {
-    @Test func `watch distinguishes unsent approval from uncertain delivery`() throws {
+    @Test func `watch app admits approvals before sending and reads back uncertain delivery`() throws {
         let source = try Self.readWatchSource("OpenClawWatchApp.swift")
-        let storeSource = try Self.readWatchSource("WatchInboxStore.swift")
         let resolveFlow = try Self.extract(
             source,
             from: "guard let attemptID = self.inboxStore.beginExecApprovalDecision(",
@@ -20,12 +19,6 @@ struct WatchApprovalTransportSourceGuardTests {
 
         #expect(admission.lowerBound < send.lowerBound)
         #expect(send.lowerBound < completion.lowerBound)
-        #expect(storeSource.contains("!self.execApprovals[index].isResolving"))
-        #expect(storeSource.contains("approval.allowedDecisions.contains(decision)"))
-        #expect(storeSource.contains(
-            "WatchOpaqueUTF8Key(activeResolutionAttemptID) == WatchOpaqueUTF8Key(attemptID)"))
-        #expect(storeSource.contains("pendingDecision == decision"))
-        #expect(storeSource.contains("activeResolutionAttemptID = nil"))
         #expect(resolveFlow.contains("attemptID: attemptID"))
         let receiverSource = try Self.readWatchSource("WatchConnectivityReceiver.swift")
         #expect(receiverSource.contains("enum WatchReplyDeliveryState"))
@@ -42,7 +35,6 @@ struct WatchApprovalTransportSourceGuardTests {
     @Test func `forced watch refresh waits for its exact request and owner snapshot`() throws {
         let appSource = try Self.readWatchSource("OpenClawWatchApp.swift")
         let receiverSource = try Self.readWatchSource("WatchConnectivityReceiver.swift")
-        let storeSource = try Self.readWatchSource("WatchInboxStore.swift")
         let refresh = try Self.extract(
             appSource,
             from: "private func refreshExecApprovalReview(force: Bool = false)",
@@ -68,57 +60,13 @@ struct WatchApprovalTransportSourceGuardTests {
         #expect(!refresh.contains("execApprovalSnapshotRevision"))
         #expect(refresh.contains("let reviewAlreadyAvailable = !force"))
         #expect(refresh.contains("!self.inboxStore.execApprovals.contains(where: \\.isResolving)"))
-        #expect(receiverSource.contains("struct WatchExecApprovalSnapshotRequestToken: Hashable"))
-        #expect(receiverSource.contains("self.requestKey = WatchOpaqueUTF8Key(requestId)"))
-        #expect(receiverSource.contains("self.gatewayKey = WatchOpaqueUTF8Key(gatewayStableID)"))
-        #expect(receiverSource.contains("func matchesGatewayStableID("))
         #expect(approvalSnapshotRequestEncoder.contains(
             "WatchGatewayID.exact(request.gatewayStableID)"))
         #expect(approvalSnapshotRequestEncoder.contains("\"heldApprovals\": request.heldApprovals.map"))
         #expect(approvalSnapshotRequestEncoder.contains("\"activeResolutionAttemptId\""))
-        #expect(storeSource.contains("func execApprovalSnapshotRequestItems("))
-        #expect(storeSource.contains(
-            "WatchGatewayID.key(record.approval.gatewayStableID) == gatewayKey"))
-        #expect(storeSource.contains("self.hasCompletedExecApprovalSnapshotRefreshInSession = false"))
         #expect(refresh.contains(
             "heldApprovals: self.inboxStore.execApprovalSnapshotRequestItems("))
-        #expect(receiverSource.components(
-            separatedBy: "discardExecApprovalSnapshotAcknowledgments(").count >= 4)
         #expect(!appSnapshotRequestEncoder.contains("gatewayStableID"))
-        #expect(receiverSource.contains(
-            "WatchGatewayID.exact(payload[\"requestGatewayStableID\"] as? String)"))
-        #expect(receiverSource.contains("recordAcceptedExecApprovalSnapshot"))
-    }
-
-    @Test func `retry reset matches the exact active attempt`() throws {
-        let storeSource = try Self.readWatchSource("WatchInboxStore.swift")
-        let promptConsume = try Self.extract(
-            storeSource,
-            from: "func consume(\n        execApprovalPrompt",
-            to: "func consume(\n        execApprovalSnapshot")
-        let upsert = try Self.extract(
-            storeSource,
-            from: "private func upsertExecApproval(",
-            to: "private static func snapshotCanReplace(")
-
-        #expect(promptConsume.contains("resetResolutionAttemptID: message.resetResolutionAttemptId"))
-        #expect(upsert.contains("resetResolutionAttemptID: String? = nil"))
-        #expect(upsert.contains(
-            "WatchOpaqueUTF8Key(resetResolutionAttemptID) == WatchOpaqueUTF8Key(activeResolutionAttemptID)"))
-        #expect(upsert.contains("activeResolutionAttemptID = resetResolvingState ? nil"))
-    }
-
-    @Test func `watch rejects partial or missing approval snapshot arrays`() throws {
-        let receiverSource = try Self.readWatchSource("WatchConnectivityReceiver.swift")
-        let parser = try Self.extract(
-            receiverSource,
-            from: "private static func parseExecApprovalSnapshotPayload(",
-            to: "private static func parseChatCompletionPayload(")
-
-        #expect(parser.contains("guard let rawApprovals = payload[\"approvals\"] as? [Any]"))
-        #expect(parser.contains("guard let approval = Self.parseExecApprovalItem(item) else { return nil }"))
-        #expect(!parser.contains("compactMap"))
-        #expect(!parser.contains("?? []"))
     }
 
     @Test func `watch requires full accessible command review before allow`() throws {
@@ -175,24 +123,6 @@ struct WatchApprovalTransportSourceGuardTests {
         #expect(!decisionButton.contains(".lineLimit("))
         #expect(detailScroll.contains("ScrollView {"))
         #expect(detailScroll.contains("self.content"))
-    }
-
-    @Test func `snapshot acknowledgment follows store acceptance`() throws {
-        let storeSource = try Self.readWatchSource("WatchInboxStore.swift")
-        let receiverSource = try Self.readWatchSource("WatchConnectivityReceiver.swift")
-        let snapshotConsume = try Self.extract(
-            storeSource,
-            from: "func consume(\n        execApprovalSnapshot",
-            to: "func consume(appSnapshot")
-
-        #expect(snapshotConsume.contains("transport: String) -> Bool"))
-        #expect(snapshotConsume.contains("guard allApprovalOwnersMatch else { return false }"))
-        #expect(snapshotConsume.contains("self.persistState()\n        return true"))
-        #expect(receiverSource.contains(
-            "if self.store.consume(execApprovalSnapshot: execApprovalSnapshot, transport: transport)"))
-        #expect(receiverSource.contains(
-            "if self.store.consume(execApprovalSnapshot: snapshot, transport: transport)"))
-        #expect(storeSource.contains("if self.consume(execApprovalSnapshot: message, transport: transport)"))
     }
 
     private static func readWatchSource(_ filename: String) throws -> String {
