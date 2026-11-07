@@ -17,3 +17,17 @@ it("advertises pending native commands even when the application modules have no
     page.window.close();
   }
 });
+
+it("opts the Control UI shell out of browser auto-translate", async () => {
+  const html = await readFile(new URL("../../index.html", import.meta.url), "utf8");
+  const page = new JSDOM(html);
+  try {
+    const { document } = page.window;
+    expect(document.documentElement.getAttribute("translate")).toBe("no");
+    expect(document.querySelector('meta[name="google"]')?.getAttribute("content")).toBe(
+      "notranslate",
+    );
+  } finally {
+    page.window.close();
+  }
+});
