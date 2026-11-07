@@ -12,6 +12,7 @@ import {
   buildReconciledSidebarZone,
   collectSidebarSessionRowsByKey,
   createSidebarSessionRowsComparator,
+  resolveActiveSidebarAgent,
   resolveSidebarMainSessionKey,
 } from "./app-sidebar-session-navigation-logic.ts";
 import { projectSidebarSession } from "./app-sidebar-session-navigation.test-support.ts";
@@ -692,4 +693,34 @@ it("hides a main-session alias draft only while viewing that conversation", () =
   expect(project()).toBe(false);
   expect(project({ routeSessionKey: "agent:main:other" })).toBe(true);
   expect(project({ highlightCurrentSession: false })).toBe(true);
+});
+
+describe("resolveActiveSidebarAgent picker visibility", () => {
+  it("excludes picker-hidden agents from the switcher while keeping them resolvable", () => {
+    const roster = [
+      { id: "main" },
+      { id: "worker", hidden: true },
+      { id: "system", kind: "system" as const },
+    ];
+    const projection = resolveActiveSidebarAgent({
+      activeId: "main",
+      roster: roster as never,
+      identities: [],
+    });
+
+    expect(projection.agents.map((agent) => agent.id)).toEqual(["main"]);
+    expect(projection.agent?.id).toBe("main");
+  });
+
+  it("keeps a hidden agent resolvable by id for existing sessions", () => {
+    const roster = [{ id: "main" }, { id: "worker", hidden: true }];
+    const projection = resolveActiveSidebarAgent({
+      activeId: "worker",
+      roster: roster as never,
+      identities: [],
+    });
+
+    expect(projection.agent?.id).toBe("worker");
+    expect(projection.agents.map((agent) => agent.id)).toEqual(["main"]);
+  });
 });

@@ -248,3 +248,8 @@ it("publishes only resolved provider presentation metadata", () => {
     },
   );
 });
+
+it("AgentSummarySchema: accepts picker-hidden agents and rejects a non-boolean flag", () => {
+  accepts(S.AgentSummarySchema, { id: "worker", hidden: true });
+  rejects(S.AgentSummarySchema, { id: "worker", hidden: "yes" });
+});

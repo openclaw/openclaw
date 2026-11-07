@@ -9,7 +9,7 @@ import {
   resolveUiConversationIdentity,
   resolveUiSessionRowAgentId,
 } from "../sessions/session-key.ts";
-import { normalizeAgentLabel, resolveAgentTextAvatar, selectableAgentsList } from "./display.ts";
+import { chatAgentsList, normalizeAgentLabel, resolveAgentTextAvatar } from "./display.ts";
 
 /** Shared identity and activity in configured roster order. */
 export function agentRosterCards(
@@ -20,7 +20,7 @@ export function agentRosterCards(
   if (!roster) {
     return [];
   }
-  const agents = selectableAgentsList(roster).agents;
+  const agents = chatAgentsList(roster).agents;
   if (agents.length === 0) {
     return [];
   }

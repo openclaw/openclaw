@@ -4,7 +4,7 @@ import { isSessionRouteId, type RouteId } from "../app-route-paths.ts";
 import type { AssistantDockOwner } from "../app/assistant-dock.ts";
 import { chatInputOwnerForContext } from "../app/chat-input-owner.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { listSelectableAgents } from "../lib/agents/display.ts";
+import { listChatAgents } from "../lib/agents/display.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import {
   prepareSessionNavigationHandoff,
@@ -284,7 +284,7 @@ export function createAssistantPanel(
 
   function homeTarget() {
     const defaults = homeDefaults;
-    const agents = listSelectableAgents(defaults.agentsList?.agents ?? []);
+    const agents = listChatAgents(defaults.agentsList?.agents ?? []);
     const defaultId = resolveUiDefaultAgentId(defaults);
     // The sidebar switcher (agentSelection) is the only agent chooser; the dock
     // shows the selected agent's Home and never grows a second switcher.

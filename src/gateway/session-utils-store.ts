@@ -501,6 +501,7 @@ export async function listAgentsForGateway(
       utility ? { utilityModel: `${utility.provider}/${utility.model}` } : {},
       defaultPermissionMode ? { defaultPermissionMode } : {},
       newSessionPermissionMode ? { newSessionPermissionMode } : {},
+      agentConfig?.picker?.hidden === true ? { hidden: true } : {},
     );
     const provenance = provenanceById.get(id);
     return provenance
