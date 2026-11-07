@@ -184,10 +184,12 @@ it("does not let an unavailable required agent hide a newer required database", 
   const config = agentConfig("openclaw", "worker", "worker");
   const unavailablePath = openAgentDb({ agentId: "openclaw", env }).path;
   const newerPath = openAgentDb({ agentId: "worker", env }).path;
-  closeDatabases();
+  await closeAgentDbs();
+  closeStateDbForTest();
   // The registered path exists but cannot be opened as a database; no schema fact is available.
   fs.unlinkSync(unavailablePath);
   fs.mkdirSync(unavailablePath);
+  revokeSqliteDatabaseAdmissionsForPath(newerPath);
   mutateDatabase(newerPath, `PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`);
   await withStartupAdmission(
     async () => {

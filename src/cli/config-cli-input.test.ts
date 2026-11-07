@@ -14,6 +14,30 @@ import { parseConfigSetPath } from "./config-cli-path.js";
 
 const DEEP_CONFIG_DEPTH = 20_000;
 
+it.each(["env", "store", "exec"])("still trims %s reference ids", (source) => {
+  const operations = buildConfigSetOperations({
+    path: "gateway.auth.token",
+    opts: { refSource: source, refProvider: "vault", refId: " TOKEN \t" },
+  });
+  expect(operations).toMatchObject([{ value: { source, provider: "vault", id: "TOKEN" } }]);
+});
+
+it.each(["flags", "batch", "patch"])("preserves file pointer bytes in %s input", async (mode) => {
+  const ref = { source: "file", provider: "vault", id: "/token \t" };
+  const operations =
+    mode === "patch"
+      ? await readPatch(JSON.stringify({ gateway: { auth: { token: ref } } }))
+      : buildConfigSetOperations(
+          mode === "batch"
+            ? { opts: { batchJson: JSON.stringify([{ path: "gateway.auth.token", ref }]) } }
+            : {
+                path: "gateway.auth.token",
+                opts: { refSource: ref.source, refProvider: ref.provider, refId: ref.id },
+              },
+        );
+  expect(operations).toMatchObject([{ value: ref }]);
+});
+
 async function readPatch(contents: string, options: Omit<ConfigPatchOptions, "file"> = {}) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-cli-input-"));
   const patchPath = path.join(tempDir, "patch.json5");

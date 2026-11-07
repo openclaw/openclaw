@@ -18,6 +18,7 @@ import {
   isValidExecSecretRefId,
   isValidFileSecretRefId,
   isValidSecretProviderAlias,
+  normalizeSecretRefId,
 } from "../secrets/ref-contract.js";
 import { resolveConfigSecretTargetByPath } from "../secrets/target-registry.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
@@ -110,7 +111,7 @@ function parseSecretRefBuilder(params: {
   }
 
   const source = parseSecretRefSource(params.source, `${params.fieldPrefix}.source`);
-  const id = params.id.trim();
+  const id = normalizeSecretRefId(source, params.id);
   if (!id) {
     throw new Error(`${params.fieldPrefix}.id is required.`);
   }
