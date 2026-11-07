@@ -48,7 +48,7 @@ function readLinuxProcessBirths(): ProcessBirth[] {
   return births;
 }
 
-/** Parses `ps -o pid=,ppid=,uid=,stat=,lstart=`; accounts such as nobody print a negative uid. */
+/** Parses `ps -o pid=,ppid=,uid=,stat=,lstart=`; ps prints high uids such as nobody as signed. */
 export function parseDarwinProcessBirths(stdout: string): ProcessBirth[] {
   const uid = process.getuid?.();
   return stdout.split("\n").flatMap((line) => {
@@ -59,7 +59,7 @@ export function parseDarwinProcessBirths(stdout: string): ProcessBirth[] {
       }
       return [];
     }
-    if (Number(row[3]) !== uid) {
+    if (Number(row[3]) >>> 0 !== uid) {
       return [];
     }
     const bornAtMs = Date.parse(`${row[5]} UTC`);

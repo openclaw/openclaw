@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   findCommandReservationCandidates,
   parseDarwinProcessBirths,
@@ -48,6 +48,16 @@ describe.skipIf(process.platform === "win32")("command reservation census", () =
         `  600     1    -2 S    Sun Oct 25 19:58:03 2026    \n  700   600 ${uid} Z+   Sun Oct 25 19:58:03 2026\n`,
       ),
     ).toEqual([{ pid: 700, ppid: 600, bornAtMs: Date.UTC(2026, 9, 25, 19, 58, 3), zombie: true }]);
+
+    // Running as nobody itself: Node reports the unsigned uid.
+    const getuid = vi.spyOn(process, "getuid").mockReturnValue(4_294_967_294);
+    try {
+      expect(
+        parseDarwinProcessBirths("  600     1    -2 S    Sun Oct 25 19:58:03 2026\n"),
+      ).toMatchObject([{ pid: 600 }]);
+    } finally {
+      getuid.mockRestore();
+    }
   });
 
   it("keeps orphans a settling init adopted", async () => {
