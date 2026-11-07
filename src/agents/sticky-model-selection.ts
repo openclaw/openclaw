@@ -15,10 +15,9 @@ const log = createSubsystemLogger("agents/sticky-model-selection");
 let warnedImmutableConfig = false;
 
 export type StickyModelSelectionDispatchOutcome = "requested" | "skipped-immutable";
-export type StickyModelSelectionTarget = ModelSelectionScope;
 export type StickyModelSelectionPolicy = {
   scope: ModelSelectionScope;
-  target: StickyModelSelectionTarget;
+  target: ModelSelectionScope;
 };
 
 /** Resolve preference only; callers must separately authorize config writes. */
