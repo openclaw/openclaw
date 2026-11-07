@@ -153,7 +153,6 @@ export function assertControlUiE2eOwnership(
     });
   }
   expect(projects[0]?.test.exclude).toEqual(expect.arrayContaining(uiE2eSerialTestFiles));
-
   const realGateway = new Set(uiE2eRealGatewayTestFiles);
   const ordinary = trackedUiE2eFiles.filter((file) => !realGateway.has(file));
   const serial = new Set(uiE2eSerialTestFiles);
@@ -173,6 +172,7 @@ export function assertControlUiE2eOwnership(
     "ui/src/e2e/boot-module-boundaries.e2e.test.ts",
     "ui/src/e2e/control-ui-build-publication.e2e.test.ts",
     "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts",
+    "ui/src/e2e/gateway-fresh-visit.http.e2e.test.ts",
     "ui/src/e2e/phone-stale-build-recovery.e2e.test.ts",
     "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
     "ui/src/e2e/service-worker-update.e2e.test.ts",

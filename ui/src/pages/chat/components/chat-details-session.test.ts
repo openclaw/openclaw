@@ -419,10 +419,10 @@ it("groups every direct subagent with counts, live activity first, and a bounded
       (segment) => segment.dataset.state,
     ),
   ).toEqual(["done", "failed", "stopped", "running", "queued"]);
-  await waitForSolid(() =>
-    expect(lane.querySelector("openclaw-chat-subagent-activity")).not.toBeNull(),
-  );
+  // Load the lazy live activity first: a cold CI import can outlast a polling budget.
+  await vi.dynamicImportSettled();
   const live = lane.querySelector<ChatSubagentActivityLive>("openclaw-chat-subagent-activity")!;
+  expect(live).not.toBeNull();
   await live.updateComplete;
   expect(live.rows[0]?.session).toBe(active);
   expect(live.querySelector(".chat-details__agent-avatar")?.getAttribute("style")).toContain(
