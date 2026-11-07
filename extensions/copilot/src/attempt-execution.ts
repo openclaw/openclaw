@@ -50,6 +50,7 @@ import { attachEventBridge, type SessionLike } from "./event-bridge.js";
 import { createPromptError } from "./prompt-error.js";
 import { isMissingCopilotSessionError } from "./replay-shim.js";
 import type { PooledClient } from "./runtime.js";
+import { denyCopilotIsolatedSessionRemote } from "./session-restrictions.js";
 import { createCopilotToolBridge } from "./tool-bridge.js";
 import type { CopilotUserInputBridge } from "./user-input-bridge.js";
 export async function runCopilotExecution(context: {
@@ -395,6 +396,9 @@ export async function runCopilotExecution(context: {
       nativeSessionHistoryValidated = true;
     }
     sessionRef.current = session;
+    if (settledToolFinalization) {
+      await denyCopilotIsolatedSessionRemote(session, params.abortSignal);
+    }
     sdkSessionId =
       readNonEmptyString(session.sessionId) ??
       readNonEmptyString(session.id) ??
