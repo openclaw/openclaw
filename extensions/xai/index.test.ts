@@ -37,7 +37,8 @@ type XaiBilledToolName = "code_execution" | "x_search";
 
 function billedToolFactory(name: XaiBilledToolName) {
   const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
-  plugin.register(createTestPluginApi({ registerTool }));
+  const api = createTestPluginApi({ registerTool });
+  plugin.register(api);
   const factory = registerTool.mock.calls.find(([, opts]) => opts?.name === name)?.[0];
   assert(typeof factory === "function", `Expected ${name} to register a tool factory`);
   return factory;
@@ -78,10 +79,10 @@ function xaiToolContext(
 ) {
   return {
     config: createXaiBilledToolConfig(name, enabled),
-    activeModel: provider === undefined ? {} : { provider },
+    ...(provider === undefined ? {} : { activeModel: { provider } }),
     hasAuthForProvider: (id: string) => hasAuth && id === "xai",
-    resolveApiKeyForProvider: async (id: string) =>
-      hasAuth && id === "xai" ? "xai-test-key" : undefined,
+    resolveAuthForProvider: async (id: string) =>
+      hasAuth && id === "xai" ? { apiKey: "xai-test-key", mode: "api-key" as const } : undefined,
   };
 }
 
@@ -453,10 +454,14 @@ describe("xai provider plugin", () => {
 
   describe.each(["code_execution", "x_search"] as const)("%s exposure", (toolName) => {
     it.each([
+      ["xAI default", "xai", true, true, undefined, undefined],
       ["explicitly disabled", "xai", true, false, false, undefined],
       ["non-xAI default", "openai", true, false, undefined, undefined],
       ["non-xAI explicit consent", "openai", true, true, true, undefined],
-      ["missing provider", undefined, true, false, true, undefined],
+      ["no model explicit consent", undefined, true, true, true, undefined],
+      ["no model default", undefined, true, false, undefined, undefined],
+      ["no model explicitly disabled", undefined, true, false, false, undefined],
+      ["no model consent without auth", undefined, false, false, true, undefined],
       ["missing auth", "xai", false, false, undefined, undefined],
       ["runtime disable overrides source", "xai", true, false, true, false],
       ["runtime consent overrides source", "openai", true, true, false, true],

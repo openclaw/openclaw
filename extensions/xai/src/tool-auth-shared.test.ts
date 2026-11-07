@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import {
   isXaiToolEnabled,
   resolveFallbackXaiAuth,
-  resolveXaiToolApiKeyWithAuth,
+  resolveXaiToolAuth,
 } from "./tool-auth-shared.js";
 
 function config(apiKey: unknown, secrets?: OpenClawConfig["secrets"]): OpenClawConfig {
@@ -26,8 +26,10 @@ function secretRefConfig(
 function profileAuth() {
   return {
     hasAuthForProvider: vi.fn((providerId: string) => providerId === "xai"),
-    resolveApiKeyForProvider: vi.fn(async (providerId: string) =>
-      providerId === "xai" ? "profile-key" : undefined,
+    resolveAuthForProvider: vi.fn(async (providerId: string) =>
+      providerId === "xai"
+        ? { apiKey: "profile-key", mode: "oauth" as const, profileId: "xai:test" }
+        : undefined,
     ),
   };
 }
@@ -52,11 +54,15 @@ it("falls back to runtime, then source config, then env for tool auth", async ()
   vi.stubEnv("XAI_API_KEY", "env-key");
   const runtimeConfig = config("runtime-key");
   const sourceConfig = config("source-key");
-  await expect(resolveXaiToolApiKeyWithAuth({ runtimeConfig, sourceConfig })).resolves.toBe(
-    "runtime-key",
-  );
-  await expect(resolveXaiToolApiKeyWithAuth({ sourceConfig })).resolves.toBe("source-key");
-  await expect(resolveXaiToolApiKeyWithAuth({})).resolves.toBe("env-key");
+  await expect(resolveXaiToolAuth({ runtimeConfig, sourceConfig })).resolves.toEqual({
+    apiKey: "runtime-key",
+    mode: "api-key",
+  });
+  await expect(resolveXaiToolAuth({ sourceConfig })).resolves.toEqual({
+    apiKey: "source-key",
+    mode: "api-key",
+  });
+  await expect(resolveXaiToolAuth({})).resolves.toEqual({ apiKey: "env-key", mode: "api-key" });
 });
 
 it("honors explicit disabled flags before auth fallback", () => {
@@ -69,7 +75,11 @@ it("uses xAI auth profiles when tool config and env are absent", async () => {
   const auth = profileAuth();
 
   expect(isXaiToolEnabled({ auth })).toBe(true);
-  await expect(resolveXaiToolApiKeyWithAuth({ auth })).resolves.toBe("profile-key");
+  await expect(resolveXaiToolAuth({ auth })).resolves.toEqual({
+    apiKey: "profile-key",
+    mode: "oauth",
+    profileId: "xai:test",
+  });
 });
 
 it.each([
@@ -86,9 +96,9 @@ it.each([
   vi.stubEnv("XAI_API_KEY", env);
   const auth = profileAuth();
   expect(isXaiToolEnabled({ sourceConfig, auth })).toBe(false);
-  await expect(resolveXaiToolApiKeyWithAuth({ sourceConfig, auth })).resolves.toBeUndefined();
+  await expect(resolveXaiToolAuth({ sourceConfig, auth })).resolves.toBeUndefined();
   expect(auth.hasAuthForProvider).not.toHaveBeenCalled();
-  expect(auth.resolveApiKeyForProvider).not.toHaveBeenCalled();
+  expect(auth.resolveAuthForProvider).not.toHaveBeenCalled();
 });
 
 it.each([
@@ -108,5 +118,5 @@ it.each([
 ] as const)("rejects env SecretRefs with %s", async (_kind, sourceConfig) => {
   vi.stubEnv("UNRELATED_SECRET", "should-not-be-read");
   vi.stubEnv("XAI_API_KEY", "xai-secretref-key");
-  await expect(resolveXaiToolApiKeyWithAuth({ sourceConfig })).resolves.toBeUndefined();
+  await expect(resolveXaiToolAuth({ sourceConfig })).resolves.toBeUndefined();
 });

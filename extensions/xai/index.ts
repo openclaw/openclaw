@@ -258,12 +258,12 @@ function shouldExposeXaiBilledTool(params: {
   enabled?: unknown;
 }): boolean {
   const activeProvider = params.activeProvider?.trim();
-  if (!activeProvider || params.enabled === false) {
+  if (params.enabled === false) {
     return false;
   }
-  // Cross-provider billing requires explicit consent; xAI models retain the
-  // credential-backed default. Unknown providers fail closed.
-  return isXaiProviderId(activeProvider) || params.enabled === true;
+  // Explicit consent also covers callers without an active model. Only xAI
+  // models retain the credential-backed default.
+  return params.enabled === true || Boolean(activeProvider && isXaiProviderId(activeProvider));
 }
 
 function canExposeXaiBilledTool(
@@ -325,7 +325,7 @@ export default defineSingleProviderPluginEntry({
   id: "xai",
   name: "xAI Plugin",
   description: "Bundled xAI plugin",
-  provider: (pluginApi) => ({
+  provider: () => ({
     label: "xAI",
     aliases: ["x-ai"],
     docsPath: "/providers/xai",
@@ -418,10 +418,7 @@ export default defineSingleProviderPluginEntry({
     },
     ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
     prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),
-    wrapStreamFn: (ctx) =>
-      wrapXaiProviderStream(ctx, {
-        clientVersion: pluginApi.runtime.version,
-      }),
+    wrapStreamFn: (ctx) => wrapXaiProviderStream(ctx),
     // Provider-specific fallback auth stays owned by the xAI plugin so core
     // auth/discovery code can consume it generically without parsing xAI's
     // private config layout. Callers may receive a real key from the active

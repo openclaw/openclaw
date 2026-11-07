@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveProviderWebSearchPluginConfig } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 import {
   coerceSecretRef,
@@ -18,10 +19,14 @@ type XaiFallbackAuth = {
 const XAI_API_KEY_ENV_VAR = "XAI_API_KEY";
 const XAI_PROVIDER_ID = "xai";
 
-export type XaiToolAuthContext = {
-  hasAuthForProvider?: (providerId: string) => boolean;
-  resolveApiKeyForProvider?: (providerId: string) => Promise<string | undefined>;
-};
+export type XaiToolAuthContext = Pick<
+  OpenClawPluginToolContext,
+  "hasAuthForProvider" | "resolveAuthForProvider" | "resolveApiKeyForProvider"
+>;
+
+export type XaiToolAuth = NonNullable<
+  Awaited<ReturnType<NonNullable<XaiToolAuthContext["resolveAuthForProvider"]>>>
+>;
 
 function readConfiguredOrManagedApiKey(value: unknown): string | undefined {
   const literal = normalizeSecretInputString(value);
@@ -53,11 +58,6 @@ function resolveConfiguredXaiToolApiKeyResult(params: {
     : runtimePlugin;
 }
 
-async function resolveXaiAuthProfileApiKey(auth?: XaiToolAuthContext): Promise<string | undefined> {
-  const value = await auth?.resolveApiKeyForProvider?.(XAI_PROVIDER_ID);
-  return normalizeSecretInputString(value);
-}
-
 export function resolveFallbackXaiAuth(cfg?: OpenClawConfig): XaiFallbackAuth | undefined {
   const pluginApiKey = readConfiguredOrManagedApiKey(
     resolveProviderWebSearchPluginConfig(cfg as Record<string, unknown> | undefined, "xai")?.apiKey,
@@ -71,21 +71,24 @@ export function resolveFallbackXaiAuth(cfg?: OpenClawConfig): XaiFallbackAuth | 
   return undefined;
 }
 
-export async function resolveXaiToolApiKeyWithAuth(params: {
+export async function resolveXaiToolAuth(params: {
   runtimeConfig?: OpenClawConfig;
   sourceConfig?: OpenClawConfig;
   auth?: XaiToolAuthContext;
-}): Promise<string | undefined> {
+}): Promise<XaiToolAuth | undefined> {
   const configured = resolveConfiguredXaiToolApiKeyResult(params);
   if (configured.status === "available") {
-    return configured.value;
+    return { apiKey: configured.value, mode: "api-key" };
   }
   if (configured.status === "blocked") {
     return undefined;
   }
-  return (
-    (await resolveXaiAuthProfileApiKey(params.auth)) ?? readProviderEnvValue([XAI_API_KEY_ENV_VAR])
-  );
+  const selected = await params.auth?.resolveAuthForProvider?.(XAI_PROVIDER_ID);
+  if (selected) {
+    return selected;
+  }
+  const apiKey = readProviderEnvValue([XAI_API_KEY_ENV_VAR]);
+  return apiKey ? { apiKey, mode: "api-key" } : undefined;
 }
 
 export function isXaiToolEnabled(params: {

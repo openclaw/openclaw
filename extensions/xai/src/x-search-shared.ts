@@ -4,6 +4,7 @@ import {
   resolveXaiToolDefaultReasoningEffort,
   requireXaiResponseTextCitationsAndInline,
 } from "./responses-tool-shared.js";
+import type { XaiToolAuth } from "./tool-auth-shared.js";
 import { buildXaiWebSearchPayload, type XaiWebSearchResponse } from "./web-search-shared.js";
 
 export const XAI_DEFAULT_X_SEARCH_MODEL = XAI_DEFAULT_MODEL_ID;
@@ -58,6 +59,7 @@ export function buildXaiXSearchPayload(params: {
 
 export async function requestXaiXSearch(params: {
   apiKey: string;
+  authMode?: XaiToolAuth["mode"];
   endpoint: string;
   model: string;
   timeoutSeconds: number;

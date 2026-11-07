@@ -14,7 +14,7 @@ import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-sna
 import { resolveXaiResponsesEndpoint } from "./src/responses-tool-shared.js";
 import {
   isXaiToolEnabled,
-  resolveXaiToolApiKeyWithAuth,
+  resolveXaiToolAuth,
   type XaiToolAuthContext,
 } from "./src/tool-auth-shared.js";
 import {
@@ -88,12 +88,13 @@ export function createXSearchTool(options?: {
 
   return createXSearchToolDefinition(async (_toolCallId, args, signal) => {
     signal?.throwIfAborted();
-    const apiKey = await resolveXaiToolApiKeyWithAuth({
+    const auth = await resolveXaiToolAuth({
       sourceConfig: options?.config as never,
       runtimeConfig: (runtimeConfig ?? undefined) as never,
       auth: options?.auth,
     });
-    if (!apiKey) {
+    signal?.throwIfAborted();
+    if (!auth) {
       return jsonResult(buildMissingXSearchApiKeyPayload());
     }
 
@@ -134,12 +135,14 @@ export function createXSearchTool(options?: {
       config: xSearchConfig,
       defaultModel: XAI_DEFAULT_X_SEARCH_MODEL,
     });
-    const endpoint = resolveXaiResponsesEndpoint(xSearchConfig?.baseUrl);
+    const endpoint = resolveXaiResponsesEndpoint(xSearchConfig?.baseUrl, auth.mode);
     const inlineCitations = xSearchConfig?.inlineCitations === true;
     const maxTurns = resolvePositiveIntegerToolConfig(xSearchConfig, "maxTurns");
     const cacheKey = JSON.stringify([
       "x_search",
-      sha256Hex(apiKey),
+      sha256Hex(auth.apiKey),
+      auth.mode,
+      auth.profileId,
       model,
       endpoint,
       query,
@@ -160,7 +163,8 @@ export function createXSearchTool(options?: {
 
     const startedAt = Date.now();
     const result = await requestXaiXSearch({
-      apiKey,
+      apiKey: auth.apiKey,
+      authMode: auth.mode,
       endpoint,
       model,
       timeoutSeconds: resolveTimeoutSeconds(xSearchConfig?.timeoutSeconds, 30),

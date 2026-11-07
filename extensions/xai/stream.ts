@@ -14,36 +14,27 @@ import {
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveXaiFastModelId } from "./fast-mode.js";
 import { XAI_BASE_URL } from "./model-definitions.js";
-import { isXaiGrokProxyBaseUrl } from "./provider-catalog.js";
 import { isXaiProviderId } from "./provider-id.js";
+import { buildXaiGrokSubscriptionHeaders } from "./src/grok-subscription.js";
 
 function isXaiEndpoint(model: Parameters<StreamFn>[0], endpoint: string): boolean {
   return isXaiProviderId(model.provider) && model.baseUrl?.trim().replace(/\/+$/u, "") === endpoint;
 }
 
-function createXaiGrokOAuthHeadersWrapper(
-  baseStreamFn: StreamFn | undefined,
-  clientVersion: string | undefined,
-): StreamFn {
+function createXaiGrokOAuthHeadersWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
-  const normalizedClientVersion = clientVersion?.trim();
   return (model, context, options) => {
-    if (
-      !normalizedClientVersion ||
-      !isXaiProviderId(model.provider) ||
-      !isXaiGrokProxyBaseUrl(model.baseUrl)
-    ) {
+    const headers = isXaiProviderId(model.provider)
+      ? buildXaiGrokSubscriptionHeaders(model.baseUrl, model.id)
+      : undefined;
+    if (!headers) {
       return underlying(model, context, options);
     }
     // The Grok OAuth proxy requires its CLI identity and a concrete catalog model.
     // Keep these proxy-only so ordinary xAI API-key traffic retains its public contract.
     return underlying(model, context, {
       ...options,
-      headers: mergeTransportHeaders(options?.headers, {
-        "X-XAI-Token-Auth": "xai-grok-cli",
-        "x-grok-client-version": normalizedClientVersion,
-        "x-grok-model-override": model.id,
-      }),
+      headers: mergeTransportHeaders(options?.headers, headers),
     });
   };
 }
@@ -261,15 +252,12 @@ function createXaiGifCompatibilityWrapper(baseStreamFn: StreamFn | undefined): S
   };
 }
 
-export function wrapXaiProviderStream(
-  ctx: ProviderWrapStreamFnContext,
-  runtime?: { clientVersion?: string },
-): StreamFn | undefined {
+export function wrapXaiProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
   const extraParams = ctx.extraParams;
   const toolStreamEnabled = extraParams?.tool_stream !== false;
   return composeProviderStreamWrappers(
     ctx.streamFn,
-    (streamFn) => createXaiGrokOAuthHeadersWrapper(streamFn, runtime?.clientVersion),
+    createXaiGrokOAuthHeadersWrapper,
     (streamFn) => xaiReasoning.wrapStreamFn?.({ ...ctx, streamFn }) ?? streamFn ?? streamSimple,
     createXaiToolPayloadCompatibilityWrapper,
     createXaiGifCompatibilityWrapper,

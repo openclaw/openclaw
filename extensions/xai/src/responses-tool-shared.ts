@@ -8,7 +8,10 @@ import {
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveXaiCatalogEntry } from "../model-definitions.js";
 import { isXaiGrokReleaseAtLeast } from "../model-id.js";
+import { XAI_GROK_OAUTH_BASE_URL } from "../provider-catalog.js";
 import { applyXaiRuntimeModelCompat } from "../runtime-model-compat.js";
+import { buildXaiGrokSubscriptionHeaders } from "./grok-subscription.js";
+import type { XaiToolAuth } from "./tool-auth-shared.js";
 import type { XaiWebSearchResponse } from "./web-search-response.types.js";
 
 const XAI_CITATION_MAX_COUNT = 20;
@@ -52,8 +55,12 @@ function collectUrlCitations(annotations: unknown, citations: Set<string>): void
 const XAI_RESPONSES_BASE_URL = "https://api.x.ai/v1";
 export const XAI_RESPONSES_ENDPOINT = `${XAI_RESPONSES_BASE_URL}/responses`;
 
-export function resolveXaiResponsesEndpoint(baseUrl?: unknown): string {
-  return `${(trimString(baseUrl) ?? XAI_RESPONSES_BASE_URL).replace(/\/+$/, "")}/responses`;
+export function resolveXaiResponsesEndpoint(
+  baseUrl?: unknown,
+  authMode?: XaiToolAuth["mode"],
+): string {
+  const fallback = authMode === "oauth" ? XAI_GROK_OAUTH_BASE_URL : XAI_RESPONSES_BASE_URL;
+  return `${(trimString(baseUrl) ?? fallback).replace(/\/+$/, "")}/responses`;
 }
 
 export function resolveXaiToolDefaultReasoningEffort(
@@ -93,6 +100,7 @@ function buildXaiResponsesToolBody(params: {
 export async function requestXaiResponsesTool<T>(
   params: Parameters<typeof buildXaiResponsesToolBody>[0] & {
     apiKey: string;
+    authMode?: XaiToolAuth["mode"];
     endpoint: string;
     timeoutSeconds: number;
     errorLabel: string;
@@ -105,6 +113,13 @@ export async function requestXaiResponsesTool<T>(
       url: params.endpoint,
       timeoutSeconds: params.timeoutSeconds,
       apiKey: params.apiKey,
+      extraHeaders:
+        params.authMode === "oauth" || params.authMode === "token"
+          ? buildXaiGrokSubscriptionHeaders(
+              params.endpoint.replace(/\/responses$/, ""),
+              params.model,
+            )
+          : undefined,
       ...(params.signal ? { signal: params.signal } : {}),
       body: buildXaiResponsesToolBody(params),
       errorLabel: "xAI",

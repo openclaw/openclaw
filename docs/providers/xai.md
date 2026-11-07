@@ -287,9 +287,9 @@ An explicit tool model remains selected; the Grok 4.3 examples below are overrid
   `x_search` and `code_execution` run on xAI's servers. xAI bills $5 per 1,000
   tool calls, plus the model's input and output tokens. With each tool's
   `enabled` setting omitted, OpenClaw exposes it only for an active xAI model.
-  A known non-xAI model provider requires an explicit per-tool `enabled: true`;
-  a missing or unresolved provider blocks the request. xAI auth is always required,
-  and `enabled: false` disables the tool for every provider.
+  An explicit per-tool `enabled: true` also exposes the tool with a non-xAI model
+  or no active model, including MCP callers. xAI auth is always required, and
+  `enabled: false` disables the tool for every provider.
 </Warning>
 
 <AccordionGroup>
