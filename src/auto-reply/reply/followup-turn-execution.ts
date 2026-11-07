@@ -19,6 +19,7 @@ import { executeAgentTurn } from "./agent-runner-execution.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import { resolveFollowupCurrentMessageId } from "./agent-runner-utils.js";
+import { stateUserStop } from "./body.js";
 import { resolveTurnCommentaryProgressOwner } from "./commentary-progress-owner.js";
 import { requiresDurableToolResultDelivery } from "./dispatch-from-config.payloads.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
@@ -386,7 +387,7 @@ export async function executeFollowupTurn(params: {
         executeAgentTurn({
           recoveryMemoryFlushAttempted: turn.memoryFlushAttempted,
           completionSource: gatewayOwnsCompletion ? "reply-dispatch" : undefined,
-          commandBody: turn.queued.prompt,
+          commandBody: stateUserStop(turn.queued.prompt, turn.queued.stoppedByUser),
           transcriptCommandBody: turn.queued.transcriptPrompt,
           followupRun: turn.queued,
           sessionCtx,

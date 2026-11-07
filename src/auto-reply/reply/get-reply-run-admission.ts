@@ -579,7 +579,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     sessionKey,
     storePath,
   });
-  const promptBodies = await rebuildPromptBodies(stopClaimed);
+  const promptBodies = await rebuildPromptBodies(stopClaimed || context.stoppedWithoutRow);
 
   return {
     kind: "ready",

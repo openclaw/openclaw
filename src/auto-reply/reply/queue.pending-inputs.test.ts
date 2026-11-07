@@ -328,6 +328,8 @@ describe("followup queue durable input consumption", () => {
       const [first, second] = await pair();
       first.run.prompt = "first private source";
       second.run.prompt = "second private source";
+      // A claimed Stop rides on its source; the batch states it once, outside the transcript.
+      first.run.stoppedByUser = true;
       enqueue(first.run, second.run);
       const calls: FollowupRun[] = [];
       const failures: unknown[] = [];
@@ -400,6 +402,10 @@ describe("followup queue durable input consumption", () => {
       expect(executeAgentTurn).toHaveBeenCalledTimes(abortDuringPreparation ? 0 : 1);
       const expected = collected("first approved", "second approved");
       expect(calls[0]).toMatchObject({ prompt: expected, transcriptPrompt: expected });
+      const commandBody = vi.mocked(executeAgentTurn).mock.calls[0]?.[0].commandBody;
+      expect(commandBody?.split("The user stopped the previous agent run").length).toBe(
+        abortDuringPreparation ? undefined : 2,
+      );
       expect(calls[0]?.currentInboundContext?.text).toBe(
         "Queued #1 context:\nfirst runtime context\n\nQueued #2 context:\nsecond runtime context",
       );

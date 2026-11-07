@@ -102,6 +102,7 @@ export async function executePreparedReplyRun(
   const {
     prefixedCommandBody,
     queuedBody,
+    stoppedByUser,
     transcriptBody,
     transcriptCommandBody,
     media: promptMedia,
@@ -438,6 +439,7 @@ export async function executePreparedReplyRun(
   const followupRun = {
     createChannelCronAuthority,
     prompt: queuedBody,
+    ...(stoppedByUser ? { stoppedByUser } : {}),
     readAdmissionConfig,
     sourceTurnId: resolveReplySourceTurnId({
       sourceTurnId,

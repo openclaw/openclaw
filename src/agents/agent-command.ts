@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { addAbortListener } from "node:events";
-import { applySessionHints } from "../auto-reply/reply/body.js";
+import { stateUserStop } from "../auto-reply/reply/body.js";
 import { clearCommittedSessionResetRuntimeState } from "../auto-reply/reply/session-reset-cleanup.js";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -412,27 +412,6 @@ async function agentCommandInternalOwned(
         });
       }
 
-      // A user's Stop is told to the first embedded turn admitted after it, as reply admission
-      // does; raw, internal and ACP turns leave it recorded for a turn that will say it.
-      if (sessionKey && !isRawModelRun && !suppressVisibleSessionEffects) {
-        const { claimUserStopInSessionRuntime } =
-          await import("../auto-reply/reply/abort-cutoff.runtime.js");
-        const stopClaimed = await claimUserStopInSessionRuntime({
-          agentId: sessionAgentId,
-          sessionEntry,
-          sessionStore,
-          sessionKey,
-          storePath,
-        });
-        if (stopClaimed) {
-          preparedContext.body = applySessionHints({
-            baseBody: preparedContext.body,
-            abortedLastRun: false,
-            stoppedByUser: true,
-          });
-        }
-      }
-
       const embeddedSessionState = await measureAgentStartup(
         "session-state",
         () =>
@@ -471,6 +450,36 @@ async function agentCommandInternalOwned(
         { config: cfg },
       );
       sessionEntry = modelSelection.sessionEntry;
+      // A user's Stop is told to the first embedded turn admitted after it, as reply admission
+      // does: past model selection, which can still refuse the turn, and before foreground
+      // compaction can move the row to a successor. Raw, internal and ACP turns leave it recorded.
+      if (sessionKey && !isRawModelRun && !suppressVisibleSessionEffects) {
+        const { claimUserStopInSessionRuntime } =
+          await import("../auto-reply/reply/abort-cutoff.runtime.js");
+        const stopClaimed = await claimUserStopInSessionRuntime({
+          agentId: sessionAgentId,
+          sessionEntry,
+          sessionStore,
+          sessionKey,
+          storePath,
+        });
+        const body = stateUserStop(preparedContext.body, stopClaimed);
+        const offset = body.length - preparedContext.body.length;
+        const range = opts.execApprovalContinuationPromptRange;
+        if (range && offset > 0) {
+          // The continuation range indexes the prompt, which the note now leads.
+          opts = {
+            ...opts,
+            execApprovalContinuationPromptRange: {
+              start: range.start + offset,
+              end: range.end + offset,
+            },
+            execApprovalContinuationTranscriptPromptRange:
+              opts.execApprovalContinuationTranscriptPromptRange ?? range,
+          };
+        }
+        preparedContext.body = body;
+      }
       const { prepared: attemptPrepared, admission } = await prepareCommandForegroundRun({
         prepared: preparedContext,
         opts,

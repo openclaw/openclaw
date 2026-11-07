@@ -56,6 +56,8 @@ export type FollowupRunPayload = {
   /** External-turn eligibility; queued execution refreshes the session-selected profile. */
   personalBootstrapEligible?: boolean;
   prompt: string;
+  /** This turn claimed a user's Stop: the prompt that runs states it (`stateUserStop`). */
+  stoppedByUser?: boolean;
   /** Original admitted source; queued execution must not replace it with a backend run ID. */
   sourceTurnId?: string;
   /** Fresh channel ingress only; queued execution supplies its admitted owner check. */

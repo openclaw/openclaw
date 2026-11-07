@@ -1,6 +1,6 @@
 import "./get-reply-run.runtime-mocks.test-support.js";
 import path from "node:path";
-import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
@@ -12,8 +12,6 @@ import {
   createSessionBody,
   nonReasoningModelState,
 } from "./get-reply-run.test-support.js";
-import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
-import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import { writeSessionStore } from "./test/session.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -54,6 +52,10 @@ it.each([
   });
   expect(prompt?.includes(STOPPED)).toBe(stop);
   expect(prompt?.includes("continue the unfinished work")).toBe(!stop);
+  // Queued, the turn keeps the user's text and carries the Stop for the prompt that runs.
+  const { followupRun } = vi.mocked(runReplyAgent).mock.calls[0]?.[0] ?? {};
+  expect(followupRun?.stoppedByUser === true).toBe(stop);
+  expect(followupRun?.prompt).not.toContain(STOPPED);
 });
 
 it.each([
@@ -107,23 +109,6 @@ it.each([
   expect(bodies.filter((body) => body.includes(STOPPED))).toHaveLength(saying);
 });
 
-it.each(["followup", "collect"] as const)(
-  "states a claimed Stop once when the turn waits in the %s queue",
-  async (mode) => {
-    await runPreparedReply(baseParams({ sessionEntry: { updatedAt: 1, ...stopOf("stopped", 5) } }));
-    const { followupRun, queueKey } = vi.mocked(runReplyAgent).mock.calls[0]?.[0] ?? {};
-    assert(followupRun && queueKey, "the admitted turn reached the reply runner");
-    // A busy session queues the admitted turn as it is; the drain runs its stored prompt.
-    expect(enqueueFollowupRun(queueKey, followupRun, { mode, debounceMs: 0 })).toBe(true);
-    const drained: string[] = [];
-    scheduleFollowupDrain(queueKey, async (run) => void drained.push(run.prompt));
-    await vi.waitFor(() => expect(getExistingFollowupQueue(queueKey)).toBeUndefined());
-    clearFollowupQueue(queueKey);
-    expect(drained).toHaveLength(1);
-    expect(drained[0]?.split(STOPPED)).toHaveLength(2);
-  },
-);
-
 it("keeps a recorded Stop for the next turn when one is refused before any model", async () => {
   const storePath = storeOf();
   const scope = { agentId: "main", storePath, sessionKey: "agent:main:main" };
@@ -154,14 +139,17 @@ it("keeps a recorded Stop for the next turn when one is refused before any model
   expect(loadSessionEntry(scope)?.userStoppedAt).toBeUndefined();
 });
 
-it("reads the think hint ahead of a recorded Stop's note", async () => {
+it.each([
+  { name: "a recorded Stop", stop: { sessionEntry: { updatedAt: 1, ...stopOf("stopped", 5) } } },
+  { name: "a Stop with no session row", stop: { sessionEntry: undefined, abortedLastRun: true } },
+])("reads the think hint ahead of $name's note", async ({ stop }) => {
   // The note joins the body only at admission, after the hint was read and removed.
   await runPreparedReply(
     baseParams({
       ctx: createInboundBody("low Run this"),
       sessionCtx: createSessionBody("low Run this"),
       resolvedThinkLevel: undefined,
-      sessionEntry: { updatedAt: 1, ...stopOf("stopped", 5) },
+      ...stop,
     }),
   );
   const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
