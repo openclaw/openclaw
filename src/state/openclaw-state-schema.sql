@@ -1407,6 +1407,11 @@ CREATE TABLE IF NOT EXISTS durable_background_processes (
   record_json TEXT NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS gateway_questions (
+  id TEXT NOT NULL PRIMARY KEY,
+  record_json TEXT NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS sandbox_persistent_execs (
   owner_key TEXT NOT NULL PRIMARY KEY,
   source_identity TEXT NOT NULL,

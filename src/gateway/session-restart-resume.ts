@@ -622,6 +622,20 @@ async function resumeRestartStore(
           );
           continue;
         }
+        if (context.questionManager?.hasPendingResumable(agentId, sessionKey)) {
+          // The restored question's answer or expiry continues this session.
+          summary.record(agentId, sessionKey, "awaiting-question");
+          await continueSessionQueuedInputs(
+            context,
+            { ...target, agentId, sessionKey, sessionId: entry.sessionId },
+            {
+              signal,
+              queuedInputIds: marker.queuedInputIds,
+              assertCurrent: () => signal.throwIfAborted(),
+            },
+          );
+          continue;
+        }
         try {
           authority = await prepareSessionSystemTurnAuthority({
             context,

@@ -10,6 +10,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { log } from "../embedded-agent-runner/logger.js";
 import { reserveMcpFormQuestion } from "../mcp-form-resource-context.js";
+import { isAgentRunRestartAbortReason } from "../run-termination.js";
 import {
   getGatewayToolCallerIdentity,
   captureGatewayToolCallerAssertion,
@@ -588,6 +589,10 @@ async function runScopedAgentHarnessQuestion(
   claim.attachRegistration(registration);
   const cancel = async (resolvedBy: string): Promise<QuestionWaitAnswerResult | undefined> => {
     prompt.close();
+    // A Gateway restart keeps the question answerable; cancelling it would end it for everyone.
+    if (isAgentRunRestartAbortReason(params.signal?.reason)) {
+      return undefined;
+    }
     try {
       return (await gatewayCall(
         "question.resolve",
