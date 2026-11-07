@@ -109,9 +109,10 @@ struct ChatMarkdownRenderer: View {
 
     #if os(iOS)
     @Environment(\.openClawReaderAnchor) private var readerAnchor
+    #endif
 
-    /// Same key for live and final text of one block: whitespace-free prefix ("P9" == "P 9").
-    private static func readerBlockKey(_ block: ChatMarkdownRenderedBlock) -> String? {
+    /// Block position distinguishes repeated prefixes; the prefix tolerates live/final whitespace changes.
+    static func readerBlockKey(_ block: ChatMarkdownRenderedBlock, index: Int) -> String? {
         let prose: ChatMarkdownProse
         switch block {
         case let .prose(value): prose = value
@@ -119,9 +120,8 @@ struct ChatMarkdownRenderer: View {
         default: return nil
         }
         let key = String(String(prose.attributed.characters).filter { !$0.isWhitespace }.prefix(48))
-        return key.isEmpty ? nil : key
+        return key.isEmpty ? nil : "\(index):\(key)"
     }
-    #endif
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -130,7 +130,7 @@ struct ChatMarkdownRenderer: View {
                     #if os(iOS)
                         .chatReaderBlockAnchor(
                             self.readerAnchor,
-                            key: self.readerAnchor == nil ? nil : Self.readerBlockKey(entry.element))
+                            key: self.readerAnchor == nil ? nil : Self.readerBlockKey(entry.element, index: entry.offset))
                     #endif
             }
 

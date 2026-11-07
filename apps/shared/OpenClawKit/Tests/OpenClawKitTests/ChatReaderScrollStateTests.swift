@@ -71,13 +71,11 @@ struct ChatReaderScrollStateTests {
             hasTransientContent: true))
     }
 
-    @Test func `drags release follow and system scrolls respect the platform policy`() {
+    @Test func `reader system navigation releases follow but keyboard animation does not`() {
         #expect(chatReaderScrollReleasesFollow(.interacting))
-        #if os(iOS)
-        #expect(!chatReaderScrollReleasesFollow(.animating))
-        #else
         #expect(chatReaderScrollReleasesFollow(.animating))
-        #endif
+        #expect(!chatReaderScrollReleasesFollow(.animating, keyboardTransition: true))
+        #expect(chatReaderScrollReleasesFollow(.interacting, keyboardTransition: true))
     }
 
     @Test func `idle, touch-down, and deceleration phases keep the follow target`() {

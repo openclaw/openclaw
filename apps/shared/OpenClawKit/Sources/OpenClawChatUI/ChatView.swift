@@ -541,6 +541,12 @@ extension OpenClawChatView {
             self.handleTimelineChange()
         }
         #if canImport(UIKit) && !os(macOS)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { _ in
+            self.scroll.isKeyboardTransitioning = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidChangeFrameNotification)) { _ in
+            self.scroll.isKeyboardTransitioning = false
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
             self.isKeyboardVisible = true
         }
@@ -553,6 +559,7 @@ extension OpenClawChatView {
     private func resetTranscriptSession() {
         #if os(iOS)
         self.readerHistorySnapshot = nil
+        self.scroll.isKeyboardTransitioning = false
         #endif
         self.speech?.stop()
         self.scrollCommand.cancel()
@@ -566,7 +573,12 @@ extension OpenClawChatView {
 
     private func handleTranscriptScrollPhase(_ phase: ScrollPhase) {
         guard self.hasPerformedInitialScroll else { return }
-        if chatReaderScrollReleasesFollow(phase) {
+        #if os(iOS)
+        let keyboardTransition = self.scroll.isKeyboardTransitioning
+        #else
+        let keyboardTransition = false
+        #endif
+        if chatReaderScrollReleasesFollow(phase, keyboardTransition: keyboardTransition) {
             #if os(iOS)
             if self.readerHistorySnapshot == nil {
                 self.readerHistorySnapshot = ChatReaderHistorySnapshot(
@@ -588,34 +600,12 @@ extension OpenClawChatView {
         }
     }
 
-    /// iOS uses stable List cells; macOS splits lazy history from the eager live tail.
-    @ViewBuilder
+    /// Keep one grouping owner per platform so new turns do not recreate disclosure state.
     private func transcriptGroups(transcript: TranscriptPresentation, hasVisibleContent: Bool) -> some View {
-        #if os(iOS)
         self.messageListRows(
             transcript: transcript,
             groups: self.runGroups(transcript)[...],
-            hasVisibleContent: hasVisibleContent,
-            tail: true)
-        #else
-        let split = ChatAssistantRunGroup.splitLiveTail(self.runGroups(transcript))
-        if !split.history.isEmpty || self.visibleEmptyAssistantIntro != nil ||
-            self.showsCleanLoadingPlaceholder(hasVisibleContent: hasVisibleContent)
-        {
-            LazyVStack(spacing: self.isDesktopLayout ? 16 : Layout.messageSpacing) {
-                self.messageListRows(
-                    transcript: transcript,
-                    groups: split.history,
-                    hasVisibleContent: hasVisibleContent,
-                    tail: false)
-            }
-        }
-        self.messageListRows(
-            transcript: transcript,
-            groups: split.tail,
-            hasVisibleContent: hasVisibleContent,
-            tail: true)
-        #endif
+            hasVisibleContent: hasVisibleContent)
     }
 
     private func runGroups(_ transcript: TranscriptPresentation) -> [ChatAssistantRunGroup] {
@@ -632,19 +622,10 @@ extension OpenClawChatView {
     private func messageListRows(
         transcript: TranscriptPresentation,
         groups shownGroups: ArraySlice<ChatAssistantRunGroup>,
-        hasVisibleContent: Bool,
-        tail: Bool) -> some View
+        hasVisibleContent: Bool) -> some View
     {
         let contextWindowTokens = self.viewModel.contextUsage?.contextWindowTokens
-        // iOS renders the whole transcript in one List call (tail: true), which must still
-        // carry the leading empty-chat intro and loading placeholder.
-        #if os(iOS)
-        let leading = true
-        #else
-        let leading = !tail
-        #endif
-
-        if leading, let introText = visibleEmptyAssistantIntro {
+        if let introText = visibleEmptyAssistantIntro {
             ChatAssistantIntroCard(
                 text: introText,
                 prompts: self.emptyAssistantPrompts,
@@ -660,7 +641,7 @@ extension OpenClawChatView {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
 
-        if leading, self.showsCleanLoadingPlaceholder(hasVisibleContent: hasVisibleContent) {
+        if self.showsCleanLoadingPlaceholder(hasVisibleContent: hasVisibleContent) {
             ChatLoadingBubble()
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -714,7 +695,7 @@ extension OpenClawChatView {
             }
         }
         #endif
-        if tail { OpenClawQuestionCards(viewModel: self.viewModel) }
+        OpenClawQuestionCards(viewModel: self.viewModel)
     }
 
     #if os(iOS)

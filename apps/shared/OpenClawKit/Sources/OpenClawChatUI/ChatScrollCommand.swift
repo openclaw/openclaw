@@ -1,27 +1,17 @@
 import SwiftUI
 
-/// Only the reader's own drag leaves the live edge. System scrolls (keyboard avoidance) and
-/// content height changes must not drop the pin.
-func chatReaderScrollReleasesFollow(_ phase: ScrollPhase) -> Bool {
-    #if os(iOS)
+/// Reader navigation releases following; keyboard avoidance alone keeps the live-edge pin.
+func chatReaderScrollReleasesFollow(_ phase: ScrollPhase, keyboardTransition: Bool = false) -> Bool {
     switch phase {
     case .interacting:
         true
-    case .idle, .tracking, .decelerating, .animating:
-        false
-    @unknown default:
-        false
-    }
-    #else
-    switch phase {
-    case .interacting, .animating:
-        true
+    case .animating:
+        !keyboardTransition
     case .idle, .tracking, .decelerating:
         false
     @unknown default:
         false
     }
-    #endif
 }
 
 enum ScrollFollowTarget: Equatable {
@@ -39,6 +29,7 @@ final class ChatScrollFollowState {
     var isUserScrolling = false
     var hasNewerContentBelow = false
     #if os(iOS)
+    var isKeyboardTransitioning = false
     let readerAnchor = ChatReaderRunAnchor()
     #endif
 }

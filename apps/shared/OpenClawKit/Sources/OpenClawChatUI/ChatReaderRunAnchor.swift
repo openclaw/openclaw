@@ -165,17 +165,17 @@ final class ChatReaderRunAnchor {
     /// one block. When the live and final cells briefly coexist, the final one wins.
     private func marker(in scroll: UIScrollView, key: String?) -> UIView? {
         guard let run = self.run else { return nil }
-        var live: UIView?
+        var live: [UIView] = []
+        var final: [UIView] = []
         for entry in self.markers.values where entry.run == run && entry.key == key {
             guard let view = entry.view, view.window != nil, view.bounds.height > 0,
-                  view.isDescendant(of: scroll) else { continue }
-            guard Self.isPositioned(view, in: scroll) else {
-                continue
-            }
-            if !entry.isLive { return view }
-            live = live ?? view
+                  view.isDescendant(of: scroll), Self.isPositioned(view, in: scroll) else { continue }
+            if entry.isLive { live.append(view) } else { final.append(view) }
         }
-        return live
+        // A run can contain more than one markdown renderer. Never guess between duplicate
+        // block keys, even if they are at the same block position in different renderers.
+        let candidates = final.isEmpty ? live : final
+        return candidates.count == 1 ? candidates.first : nil
     }
 
     private func offsetY(_ marker: UIView, in scroll: UIScrollView) -> CGFloat {
