@@ -1,0 +1,2 @@
+# Reset preserves the sidebar color alongside the other presentation fields.
+1
