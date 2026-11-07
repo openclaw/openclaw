@@ -328,12 +328,19 @@ export function SidebarAttentionPanel(
       : []),
   ]);
   const mentionsTab = createMemo(() => props.selectedTab === "mentions");
-  const showMentionStatus = createMemo(
+  const mentionsShown = createMemo(
     () =>
       gateway.read().snapshot.phase === "connected" &&
-      (mentionsTab() || props.selectedTab === "all") &&
+      (mentionsTab() || props.selectedTab === "all"),
+  );
+  // Loading stands in only for an empty list; loaded rows stay put while mentions refresh.
+  const mentionsLoading = createMemo(
+    () => mentionsShown() && mentions.read().phase === "loading" && visibleEntries().length === 0,
+  );
+  const showMentionStatus = createMemo(
+    () =>
+      mentionsShown() &&
       (mentions.read().error !== null ||
-        mentions.read().phase === "loading" ||
         (mentionsTab() && mentions.read().phase === "unavailable")),
   );
   const tabCounts = createMemo(() => sidebarInboxTabCounts(props.entries));
@@ -460,9 +467,7 @@ export function SidebarAttentionPanel(
                     {t(
                       mentions.read().error !== null
                         ? "attention.mentions.error"
-                        : mentions.read().phase === "loading"
-                          ? "attention.mentions.loading"
-                          : "attention.mentions.unavailable",
+                        : "attention.mentions.unavailable",
                     )}
                   </span>
                   <Show when={mentions.read().error !== null}>
@@ -479,7 +484,15 @@ export function SidebarAttentionPanel(
                   </Show>
                 </div>
               </Show>
-              <Show when={visibleEntries().length === 0 && !showMentionStatus()}>
+              <Show when={mentionsLoading()}>
+                <div class="sidebar-issues-panel__loading" role="status">
+                  <Icon name="loaderCircle" />
+                  <span class="sr-only">{t("attention.mentions.loading")}</span>
+                </div>
+              </Show>
+              <Show
+                when={visibleEntries().length === 0 && !mentionsLoading() && !showMentionStatus()}
+              >
                 <div class="sidebar-issues-panel__empty">
                   <strong>
                     {t(mentionsTab() ? "attention.mentions.emptyTitle" : "attention.emptyTitle")}
