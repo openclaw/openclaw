@@ -150,8 +150,18 @@ export async function runBatchSessionAction(
     return;
   }
   await organizer.runOperation(
-    (operations, scope) =>
-      operations.runBatchSessionAction(organizer.deps, action, rows, allUnread, scope),
+    async (operations, scope) => {
+      const moved = await operations.runBatchSessionAction(
+        organizer.deps,
+        action,
+        rows,
+        allUnread,
+        scope,
+      );
+      if (action.kind === "move-to-group" && moved?.length) {
+        organizer.revealSessionGroup(action.category, scope);
+      }
+    },
     action.kind === "toggle-archived" || action.kind === "delete",
   );
 }
