@@ -219,6 +219,107 @@ describe("prompt presence check (offline fixtures, design-example acceptance)", 
     expect(check.results[0]?.outcome).toBe("checked_missing");
   });
 
+  it("completions standard {type:'text'} parts with the full body yield full_hit", () => {
+    // Defect 1 counterexample: the host cache path emits standard text parts.
+    const collected = collectCompletionsRegions({
+      messages: [
+        {
+          role: "system",
+          content: [
+            { type: "text", text: "policy " },
+            { type: "text", text: BODY },
+          ],
+        },
+        { role: "user", content: [{ type: "text", text: "hi" }] },
+      ],
+    });
+    const check = runPromptPresenceCheck({
+      collected,
+      expectations: [expectation()],
+      attemptIndex: 0,
+    });
+    expect(check.results[0]).toMatchObject({
+      outcome: "full_hit",
+      hitMessageIndex: 0,
+      hitRole: "system",
+    });
+  });
+
+  it("completions mixed parts: text parts scanned, non-text parts ignored", () => {
+    const collected = collectCompletionsRegions({
+      messages: [
+        {
+          role: "system",
+          content: [
+            { type: "text", text: BODY },
+            { type: "image_url", image_url: { url: "data:..." } },
+            { type: "unknown_future_part", payload: BODY },
+          ],
+        },
+      ],
+    });
+    const check = runPromptPresenceCheck({
+      collected,
+      expectations: [expectation()],
+      attemptIndex: 0,
+    });
+    expect(check.results[0]?.outcome).toBe("full_hit");
+  });
+
+  it("responses input_text parts keep working (per-API contract, no cross-API acceptance)", () => {
+    const collected = collectCompletionsRegions({
+      messages: [{ role: "system", content: [{ type: "input_text", text: BODY }] }],
+    });
+    const check = runPromptPresenceCheck({
+      collected,
+      expectations: [expectation()],
+      attemptIndex: 0,
+    });
+    // input_text is NOT a completions text part: the legal-role content is
+    // unreadable under the completions contract and the target cannot be ruled
+    // out, so the check degrades to unknown instead of a silent skip.
+    expect(check.results[0]).toMatchObject({
+      outcome: "unknown",
+      reason: "unparseable_content",
+    });
+  });
+
+  it("empty bodyText is invalid: unknown, never a vacuous full_hit", () => {
+    const collected = collectResponsesRegions({ instructions: "anything at all", input: [] });
+    const check = runPromptPresenceCheck({
+      collected,
+      expectations: [expectation({ bodyText: "", bodyChars: 0 })],
+      attemptIndex: 0,
+    });
+    expect(check.results[0]).toMatchObject({ outcome: "unknown", reason: "invalid_body" });
+  });
+
+  it("whitespace-only bodyText is invalid too", () => {
+    const collected = collectResponsesRegions({ instructions: "anything", input: [] });
+    const check = runPromptPresenceCheck({
+      collected,
+      expectations: [expectation({ bodyText: "  \n\t ", bodyChars: 5 })],
+      attemptIndex: 0,
+    });
+    expect(check.results[0]).toMatchObject({ outcome: "unknown", reason: "invalid_body" });
+  });
+
+  it("legal-role message with unreadable structured content degrades the whole check to unknown", () => {
+    const collected = collectCompletionsRegions({
+      messages: [
+        { role: "system", content: "readable without the body" },
+        { role: "system", content: { opaque: "structured" } },
+        { role: "user", content: BODY },
+      ],
+    });
+    const check = runPromptPresenceCheck({
+      collected,
+      expectations: [expectation()],
+      attemptIndex: 0,
+    });
+    expect(check.results[0]).toMatchObject({ outcome: "unknown", reason: "unparseable_content" });
+  });
+
   it("body over the per-body limit is unknown, not a truncated match", () => {
     const collected = collectResponsesRegions({ instructions: "x".repeat(4096), input: [] });
     const big = expectation({

@@ -35,6 +35,7 @@ export type PromptPresenceResult = {
     | "scan_region_over_limit"
     | "cumulative_scan_over_limit"
     | "unparseable_content"
+    | "invalid_body"
     | "check_failed"
     | "missing_expectations";
   /** Set on full_hit: index of the legal-role message that contained the body. */
@@ -59,6 +60,8 @@ export type PromptPresenceCheck = {
     scanBytes?: number;
     messages?: number;
   };
+  /** Producer-side collection overflow (entries dropped before this check). */
+  expectationsOverflow?: number;
   checkFailedReason?: string;
 };
 
@@ -80,20 +83,44 @@ export const DEFAULT_PROMPT_PRESENCE_LIMITS: PromptPresenceLimits = {
 };
 
 const PRESENCE_EXPECTATIONS = Symbol("openclaw.promptPresenceExpectations");
+const PRESENCE_REQUEST_TOKEN = Symbol("openclaw.promptPresenceRequestToken");
+
+export type PromptPresenceCarrierValue = {
+  expectations: readonly PromptPresenceExpectation[];
+  /** Entries the producer dropped because its own collection cap was hit. */
+  overflowCount?: number;
+};
 
 /** Options-keyed carrier for the frozen expectation set of this request. */
 export const promptPresenceExpectations = {
-  set(options: object, expectations: readonly PromptPresenceExpectation[]): void {
-    Reflect.set(options, PRESENCE_EXPECTATIONS, expectations);
+  set(options: object, value: PromptPresenceCarrierValue): void {
+    Reflect.set(options, PRESENCE_EXPECTATIONS, value);
   },
-  get(options: object | undefined): readonly PromptPresenceExpectation[] | undefined {
+  get(options: object | undefined): PromptPresenceCarrierValue | undefined {
     if (!options) {
       return undefined;
     }
     // SAFETY: Only set() can install this private symbol, with the typed shape above.
-    return Reflect.get(options, PRESENCE_EXPECTATIONS) as
-      | readonly PromptPresenceExpectation[]
-      | undefined;
+    return Reflect.get(options, PRESENCE_EXPECTATIONS) as PromptPresenceCarrierValue | undefined;
+  },
+};
+
+export type PromptPresenceRequestToken = { requestIndex: number };
+
+/**
+ * Options-keyed logical-request token. The outermost wrapper layer creates it
+ * fresh per streamFn invocation; inner layers observe it on the incoming
+ * options and propagate instead of re-counting.
+ */
+export const promptPresenceRequestToken = {
+  set(options: object, token: PromptPresenceRequestToken): void {
+    Reflect.set(options, PRESENCE_REQUEST_TOKEN, token);
+  },
+  get(options: object | undefined): PromptPresenceRequestToken | undefined {
+    if (!options) {
+      return undefined;
+    }
+    return Reflect.get(options, PRESENCE_REQUEST_TOKEN) as PromptPresenceRequestToken | undefined;
   },
 };
 
@@ -110,7 +137,10 @@ type CollectedText = {
   unparseable: boolean;
 };
 
-function flattenTextParts(content: unknown): string | undefined {
+function flattenTextParts(
+  content: unknown,
+  textPartType: "input_text" | "text",
+): string | undefined {
   if (typeof content === "string") {
     return content;
   }
@@ -120,14 +150,16 @@ function flattenTextParts(content: unknown): string | undefined {
   let text = "";
   let sawPart = false;
   for (const part of content) {
-    if (isRecord(part) && part.type === "input_text" && typeof part.text === "string") {
+    // Each API has its own text-part contract: responses uses input_text,
+    // chat completions uses text. Unknown/other parts contribute nothing
+    // scannable and cannot manufacture a hit.
+    if (isRecord(part) && part.type === textPartType && typeof part.text === "string") {
       text += part.text;
       sawPart = true;
     } else if (typeof part === "string") {
       text += part;
       sawPart = true;
     }
-    // Non-text parts (images, files, tool calls) contribute nothing scannable.
   }
   return sawPart ? text : undefined;
 }
@@ -148,14 +180,18 @@ export function collectResponsesRegions(request: unknown): CollectedText {
     if (!isRecord(item) || typeof item.role !== "string") {
       return;
     }
-    const text = flattenTextParts(item.content);
+    const isLegalRole = item.role === "system" || item.role === "developer";
+    const text = flattenTextParts(item.content, "input_text");
     if (text === undefined) {
-      if (item.content !== undefined && !Array.isArray(item.content)) {
+      // A legal-role message whose content cannot be read as text must NOT be
+      // skipped silently: the target could be hiding there, so the whole check
+      // degrades to unknown. Non-legal roles are scanned only opportunistically.
+      if (isLegalRole) {
         unparseable = true;
       }
       return;
     }
-    if (item.role === "system" || item.role === "developer") {
+    if (isLegalRole) {
       legal.push({ messageIndex: index, role: item.role, text });
     } else {
       other.push({ messageIndex: index, role: item.role, text });
@@ -176,14 +212,15 @@ export function collectCompletionsRegions(params: unknown): CollectedText {
     if (!isRecord(item) || typeof item.role !== "string") {
       return;
     }
-    const text = flattenTextParts(item.content);
+    const isLegalRole = item.role === "system" || item.role === "developer";
+    const text = flattenTextParts(item.content, "text");
     if (text === undefined) {
-      if (item.content !== undefined && !Array.isArray(item.content)) {
+      if (isLegalRole) {
         unparseable = true;
       }
       return;
     }
-    if (item.role === "system" || item.role === "developer") {
+    if (isLegalRole) {
       legal.push({ messageIndex: index, role: item.role, text });
     } else {
       other.push({ messageIndex: index, role: item.role, text });
@@ -293,6 +330,17 @@ export function runPromptPresenceCheck(input: {
           revision: expectation.revision,
           outcome: "unknown" as const,
           reason: "assembly_truncated" as const,
+          actualBodyChars: expectation.bodyChars,
+        };
+      }
+      // Invalid (empty/whitespace/non-string after normalize) bodies can never
+      // match anything meaningful: degraded to unknown, never full_hit.
+      if (typeof expectation.bodyText !== "string" || expectation.bodyText.trim().length === 0) {
+        return {
+          activationId: expectation.activationId,
+          revision: expectation.revision,
+          outcome: "unknown" as const,
+          reason: "invalid_body" as const,
           actualBodyChars: expectation.bodyChars,
         };
       }

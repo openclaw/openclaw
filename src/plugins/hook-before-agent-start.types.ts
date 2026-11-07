@@ -66,4 +66,6 @@ export type PluginHookBeforePromptBuildResult = {
     bodyChars: number;
     bodyComplete: boolean;
   }[];
+  /** Entries dropped by the producer's own collection cap; visibility fact. */
+  injectedExpectationsOverflow?: number;
 };

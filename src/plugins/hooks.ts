@@ -342,6 +342,9 @@ export function createHookRunner(
         [...(acc?.injectedExpectations ?? []), ...(next.injectedExpectations ?? [])].length > 0
           ? [...(acc?.injectedExpectations ?? []), ...(next.injectedExpectations ?? [])]
           : undefined,
+      injectedExpectationsOverflow:
+        (acc?.injectedExpectationsOverflow ?? 0) + (next.injectedExpectationsOverflow ?? 0) ||
+        undefined,
     };
   };
 

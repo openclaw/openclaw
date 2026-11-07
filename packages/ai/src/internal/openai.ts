@@ -28,6 +28,7 @@ export {
 } from "../transports/openai-responses-contracts.js";
 export {
   promptPresenceExpectations,
+  promptPresenceRequestToken,
   runPromptPresenceCheck,
   collectResponsesRegions,
   collectCompletionsRegions,
@@ -35,6 +36,8 @@ export {
   DEFAULT_PROMPT_PRESENCE_LIMITS,
   type PromptPresenceExpectation,
   type PromptPresenceCheck,
+  type PromptPresenceCarrierValue,
+  type PromptPresenceRequestToken,
   type PromptPresenceResult,
   type PromptPresenceOutcome,
   type PromptPresenceLimits,
