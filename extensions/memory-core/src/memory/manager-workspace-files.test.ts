@@ -70,6 +70,35 @@ describe("Gateway index over Harness workspace files", () => {
     release = undefined;
   });
 
+  it("drops generated Dream reports once excluded and keeps curated edits fresh", async () => {
+    const dreamingDir = path.join(fixture.paths.memory, "dreaming", "light");
+    const current = path.join(fixture.paths.memory, "current.md");
+    await fs.mkdir(dreamingDir, { recursive: true });
+    await fs.writeFile(path.join(dreamingDir, "report.md"), "generatedmarker only in dream");
+    await fs.writeFile(current, "canonicalmarker in memory");
+    const { manager: unscoped } = await createIndexedManager();
+    expect(await search(unscoped, "generatedmarker")).not.toEqual([]);
+
+    // Each step mirrors one unforced `openclaw memory index` run.
+    const cfg = createConfig({ excludePaths: ["memory/dreaming/**"] });
+    const index = async () => {
+      const manager = await fixture.getFreshManager(cfg, "cli", true);
+      await manager.sync({ reason: "cli" });
+      return manager;
+    };
+    const excluded = await index();
+    expect(await search(excluded, "generatedmarker")).toEqual([]);
+    expect((await search(excluded, "canonicalmarker")).map((hit) => hit.path)).toContain(
+      "memory/current.md",
+    );
+
+    await fs.writeFile(current, "refreshedmarker in memory");
+    const edited = await index();
+    expect((await search(edited, "refreshedmarker")).map((hit) => hit.path)).toContain(
+      "memory/current.md",
+    );
+  });
+
   async function registerHarness() {
     const gateway = fixture.paths.workspace;
     const harness = path.join(fixture.paths.root, "harness");
@@ -82,8 +111,10 @@ describe("Gateway index over Harness workspace files", () => {
     };
     const files: MemoryWorkspaceFiles = {
       assertCurrent() {},
-      async listFiles(_workspace, extraPaths, multimodal, skipped) {
-        return (await listMemoryFiles(harness, extraPaths, multimodal, skipped)).map(local);
+      async listFiles(_workspace, extraPaths, multimodal, skipped, excludePaths) {
+        return (await listMemoryFiles(harness, extraPaths, multimodal, skipped, excludePaths)).map(
+          local,
+        );
       },
       async inspectFile(file, _workspace, multimodal) {
         const entry = await buildFileEntry(remote(file), harness, multimodal);
@@ -291,6 +322,7 @@ describe("Gateway index over Harness workspace files", () => {
       await manager.sync({ reason: "initial", force: true });
       expect(changed).toBeTypeOf("function");
       expect(Object.keys(watchRequest!.settings).toSorted()).toEqual([
+        "excludePaths",
         "extraPaths",
         "multimodal",
         "sync",
