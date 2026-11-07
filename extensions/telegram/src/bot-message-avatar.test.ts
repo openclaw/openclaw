@@ -60,7 +60,7 @@ afterEach(() => {
 });
 
 it("coalesces portrait requests, applies media policy, and refreshes expired cache entries", async () => {
-  const clock = vi.spyOn(Date, "now").mockReturnValue(0);
+  const clock = vi.spyOn(performance, "now");
   const { api, resolve } = account();
   const pending = Promise.withResolvers<typeof profilePhotos>();
   api.getUserProfilePhotos.mockReturnValueOnce(pending.promise);
@@ -104,6 +104,23 @@ it.each([false, true])("removes the abort bridge (failure=%s)", async (fails) =>
     expect(resolveMedia).not.toHaveBeenCalled();
   }
   expect(removeListener).toHaveBeenCalledWith("abort", expect.any(Function));
+});
+
+it("expires cached portraits on elapsed time when the wall clock steps backwards", async () => {
+  const { api, resolve } = account();
+  const portrait = "/media/inbound/portrait.png";
+  expect(await load(resolve)).toBe(portrait);
+  expect(resolve(context(), {})).toBe(portrait);
+  expect(api.getUserProfilePhotos).toHaveBeenCalledOnce();
+
+  // A backwards wall-clock step must not keep the portrait past its TTL.
+  vi.setSystemTime(Date.now() - 60 * 60 * 1000);
+  await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 1);
+
+  // The portrait expired on elapsed time even though the wall clock went back an hour.
+  api.getUserProfilePhotos.mockResolvedValueOnce({ total_count: 0, photos: [] });
+  expect(await load(resolve, context(), portrait)).toBe("");
+  expect(api.getUserProfilePhotos).toHaveBeenCalledTimes(2);
 });
 
 it("forwards native account cancellation to the grammY request", async () => {
