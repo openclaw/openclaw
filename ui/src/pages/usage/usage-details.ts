@@ -6,15 +6,13 @@ import {
   completePanelRefresh,
   createPanelRefreshStatus,
   failPanelRefresh,
-} from "../../components/panel-refresh-status.ts";
+} from "../../components/panel-refresh-status-state.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
-import {
-  formatMissingOperatorReadScopeMessage,
-  isMissingOperatorReadScopeError,
-} from "../../lib/gateway-errors.ts";
+import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { createPageRequest } from "../../lib/page-request.ts";
+import { formatMissingOperatorReadScopeMessage } from "../../lib/permission-error.ts";
 import {
   requestSessionUsage,
   type SessionUsageQuery,
@@ -104,8 +102,8 @@ function createUsageDetailRequest<T>(
     get status() {
       return status;
     },
-    get loading() {
-      return pending !== null;
+    get read() {
+      return task.read;
     },
     async recover(sessionKey: string, loadInitial = false): Promise<void> {
       const target = resolveTarget(sessionKey);

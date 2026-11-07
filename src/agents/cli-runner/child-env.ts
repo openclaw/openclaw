@@ -22,27 +22,26 @@ export type CliChildEnv = {
   claudeTranscriptRoot?: string;
 };
 
-type CliChildEnvParams = {
+type CliChildEnvParams = NonNullable<Parameters<typeof resolveCliChildEnv>[1]> & {
   provider: string;
   preparedBackend: Parameters<typeof resolveCliChildEnv>[0];
   /** Late execution-only overlays; preparation composes the same child env without them. */
   overlays?: readonly (Record<string, string> | undefined)[];
-  /** Pure skill snapshot overlay used before execution applies its scoped process env. */
-  skillEnv?: Readonly<Record<string, string>>;
   remote: boolean;
   cwd: string;
 };
 
 function composeCliChildEnv(
-  params: Pick<CliChildEnvParams, "preparedBackend" | "overlays" | "skillEnv">,
+  params: Pick<
+    CliChildEnvParams,
+    "preparedBackend" | "overlays" | "skillEnv" | "config" | "workspaceDir" | "nativeAuthOnly"
+  >,
 ): CliChildEnv {
-  const { env, selectedClaudeClearEnv } = resolveCliChildEnv(params.preparedBackend, {
-    skillEnv: params.skillEnv,
-  });
-  Object.assign(env, ...(params.overlays ?? []));
-  // Never mark Claude CLI as host-managed. That marker routes runs into
-  // Anthropic's separate host-managed usage tier instead of normal CLI use.
-  delete env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST;
+  const { env, selectedClaudeClearEnv } = resolveCliChildEnv(
+    params.preparedBackend,
+    params,
+    Object.assign({}, ...(params.overlays ?? [])),
+  );
   return { env, ...(selectedClaudeClearEnv ? { selectedClaudeClearEnv } : {}) };
 }
 

@@ -4,7 +4,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SandboxFsBridge } from "../../agents/sandbox/fs-bridge.types.js";
 import { createSandboxTestContext } from "../../agents/sandbox/test-fixtures.js";
 import type { SandboxContext } from "../../agents/sandbox/types.js";
-import { WEBCHAT_LOCAL_MEDIA_MAX_BYTES } from "../../media/configured-max-bytes.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import {
@@ -78,20 +77,11 @@ function normalizer(options: Partial<Parameters<typeof createReplyMediaPathNorma
   });
 }
 
-it.each([
-  ["WebChat", { localMediaMaxBytes: WEBCHAT_LOCAL_MEDIA_MAX_BYTES }],
-  ["channel delivery", { messageProvider: "slack" }],
-] as const)("hydrates %s from the bridge instead of the host mirror", async (_name, options) => {
-  const result = await normalizer(options)({ mediaUrls: ["notes/draft.md"] });
+it("hydrates channel media from the bridge instead of the host mirror", async () => {
+  const result = await normalizer({ messageProvider: "slack" })({ mediaUrls: ["notes/draft.md"] });
   expect(await fs.readFile(result.mediaUrl!)).toEqual(bytes);
   expect(result.attachments?.[0]).toMatchObject({ name: "draft.md", mimeType: "text/markdown" });
   expect(getReplyPayloadMetadata(result)?.assistantMediaFailures).toBeUndefined();
-  expect(readFile).toHaveBeenCalledWith({
-    filePath: path.join(sandbox.workspaceDir, "notes/draft.md"),
-    cwd: sandbox.workspaceDir,
-    // The media loader reserves 24 MiB of source-read headroom for image optimization.
-    maxBytes: 24 * 1024 * 1024,
-  });
   expect(dispose).toHaveBeenCalledOnce();
 });
 

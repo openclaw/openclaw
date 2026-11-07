@@ -4,6 +4,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { t } from "../i18n/index.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
+import { requestCheckoutSnapshot } from "../lib/checkout-snapshot.ts";
 import type {
   SidebarRecentSession,
   SidebarSessionMutationScope,
@@ -11,18 +12,6 @@ import type {
 import type { SessionOrganizerDependencies } from "./session-organizer-types.ts";
 
 registerSessionOrganizationEnglish();
-
-async function loadDialog<T>(deps: SessionOrganizerDependencies, load: Promise<T>) {
-  try {
-    return await load;
-  } catch (error) {
-    const scope = deps.sessionData.beginSessionMutation();
-    if (scope) {
-      deps.sessionData.publishSessionMutationError(scope, error);
-    }
-    return null;
-  }
-}
 
 async function loadOperations(
   deps: SessionOrganizerDependencies,
@@ -43,8 +32,8 @@ export async function createSessionGroupDialog(
   sessions: readonly SidebarRecentSession[],
   notify: () => void,
 ) {
-  const dialog = await loadDialog(deps, import("./input-dialog.ts"));
-  await dialog?.showInputDialog({
+  const dialog = await import("./input-dialog.tsx");
+  await dialog.showInputDialog({
     signal,
     gateway: scope.gateway,
     title: t("sessionsView.newGroupTitle"),
@@ -81,8 +70,8 @@ export async function renameSessionGroupDialog(
   group: string,
   onRenamed: (next: string) => void,
 ) {
-  const dialog = await loadDialog(deps, import("./input-dialog.ts"));
-  await dialog?.showInputDialog({
+  const dialog = await import("./input-dialog.tsx");
+  await dialog.showInputDialog({
     signal,
     gateway: scope.gateway,
     title: t("sessionsView.renameGroupTitle", { group }),
@@ -113,8 +102,8 @@ export async function editSessionGroupDefaultsDialog(
   scope: SidebarSessionMutationScope,
   group: string,
 ) {
-  const dialog = await loadDialog(deps, import("./session-group-defaults-dialog.tsx"));
-  if (!dialog || !deps.sessionData.isSessionMutationScopeCurrent(scope)) {
+  const dialog = await import("./session-group-defaults-dialog.tsx");
+  if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
   const readDefaults = () => {
@@ -150,11 +139,15 @@ export async function editSessionGroupDefaultsDialog(
         if (!repoRoot) {
           return "unavailable";
         }
-        const result = await scope.client.request<WorktreesBranchesResult>("worktrees.branches", {
-          repoRoot,
-          includeRepositoryStatus: true,
-        });
-        requireCurrent();
+        const result = await requestCheckoutSnapshot<WorktreesBranchesResult>(
+          scope.gateway,
+          "worktrees.branches",
+          {
+            repoRoot,
+            includeRepositoryStatus: true,
+          },
+          { signal: scope.signal },
+        ).finally(requireCurrent);
         return result.repositoryStatus === "git" || result.repositoryStatus === "not_git"
           ? result.repositoryStatus
           : "unavailable";

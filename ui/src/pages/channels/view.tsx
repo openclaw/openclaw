@@ -8,35 +8,30 @@ import {
   SettingsEmpty,
   SettingsPage,
   SettingsSection,
-  SettingsStatus,
 } from "../../components/solid/settings-ui.tsx";
-import "../../components/openclaw-mascot.ts";
+import "../../components/openclaw-mascot.tsx";
 import { WizardBusyButton, WizardStepControls } from "../../components/wizard-step-controls.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import {
   channelSnapshotEntryIsActive,
-  resolveChannelAccounts,
   type ChannelRead,
   type ChannelsState,
 } from "../../lib/channels/index.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
-import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { channelDocsUrl } from "./hub-meta.ts";
 import { renderChannelDetail as ChannelDetail } from "./view.detail.tsx";
 import { renderChannelPairingPrompt, renderChannelPairingQueue } from "./view.pairing.tsx";
-import { ChannelRefresh, resolveChannelDisplayState } from "./view.shared.tsx";
+import {
+  ChannelHealthStatus,
+  channelLastActivity,
+  ChannelRefresh,
+  resolveChannelHealth,
+} from "./view.shared.tsx";
 import type { ChannelsProps } from "./view.types.ts";
 import type { ChannelWizardState } from "./wizard-runner.ts";
 registerEnglishCatalog(registerSettingsEnglish);
-
-const CHANNEL_CARD_STATES = {
-  running: { kind: "ok", labelKey: "channels.hub.stateRunning" },
-  configured: { kind: "muted", labelKey: "channels.hub.stateConfigured" },
-  attention: { kind: "danger", labelKey: "channels.hub.stateAttention" },
-} as const;
-type ChannelCardState = keyof typeof CHANNEL_CARD_STATES;
 
 const RECOMMENDED_CHANNEL_ORDER: string[] = [
   "whatsapp",
@@ -67,12 +62,13 @@ function ChannelStatusNotices(props: { channels: ChannelsState; error: string | 
   return (
     <>
       {showingStaleSnapshot() ? (
-        <div class="callout info">{t("channels.refreshingStaleSnapshot")}</div>
+        <span class="settings-control__sr-label" role="status">
+          {t("channels.refreshingStaleSnapshot")}
+        </span>
       ) : undefined}
       {props.channels.channelsSnapshot?.partial ? (
         <div class="callout warn">
-          {t("channels.hub.partialSnapshot")}
-          {partialWarnings()}
+          {t("channels.hub.partialSnapshot")} {partialWarnings()}
         </div>
       ) : undefined}
       {props.error ? (
@@ -135,16 +131,19 @@ export function ChannelsView(props: ChannelsProps) {
     <>
       <SettingsPage>
         <ChannelStatusFeedback channels={props.channels} />
-        {props.wizardHost.blockedByDirtyConfig() && props.config.configFormDirty ? (
+        {/* An open channel shows this above its own footer instead. */}
+        {props.wizardHost.blockedByDirtyConfig() &&
+        !props.selectedChannel &&
+        (props.config.configFormDirty || Object.keys(props.configEdits).length > 0) ? (
           <div class="callout warn">{t("channels.hub.saveBeforeSetup")}</div>
         ) : undefined}
         <SettingsSection
           title={t("channels.hub.connectedTitle")}
-          count={connected().length > 0 ? connected().length : undefined}
           actions={
             <ChannelRefresh
               updatedAt={props.channels.channelsLastSuccess}
-              disabled={!props.channels.connected || props.channels.channelsLoading}
+              busy={props.channels.channelsLoading}
+              disabled={!props.channels.connected}
               onRefresh={() => props.onRefresh(true)}
             />
           }
@@ -207,7 +206,7 @@ function resolveChannelPlugin(props: ChannelsProps, key: string) {
   return props.presentation.pluginCatalog?.plugins.find((plugin) => plugin.id === key);
 }
 
-function resolveChannelLabel(props: ChannelsProps, key: string): string {
+export function resolveChannelLabel(props: ChannelsProps, key: string): string {
   const snapshot = props.channels.channelsSnapshot;
   const labels = snapshot?.channelLabels;
   return (
@@ -227,39 +226,6 @@ function resolveChannelDetailLabel(props: ChannelsProps, key: string): string | 
   return detail && detail !== resolveChannelLabel(props, key) ? detail : null;
 }
 
-function resolveRowState(key: string, props: ChannelsProps): ChannelCardState {
-  const displayState = resolveChannelDisplayState(key, props);
-  const lastError =
-    typeof displayState.status?.lastError === "string" && displayState.status.lastError.trim()
-      ? displayState.status.lastError
-      : resolveChannelAccounts(props.channels.channelsSnapshot?.channelAccounts, key).find(
-          (account) => account.lastError,
-        )?.lastError;
-  if (lastError) {
-    return "attention";
-  }
-  if (displayState.running === true || displayState.connected === true) {
-    return "running";
-  }
-  return "configured";
-}
-
-function rowStatus(state: ChannelCardState) {
-  const { kind, labelKey } = CHANNEL_CARD_STATES[state];
-  return <SettingsStatus kind={kind} label={t(labelKey)} />;
-}
-
-function lastActivityLine(key: string, props: ChannelsProps): string | null {
-  const lastInbound = resolveChannelAccounts(
-    props.channels.channelsSnapshot?.channelAccounts,
-    key,
-  ).reduce((latest, account) => Math.max(latest, account.lastInboundAt ?? 0), 0);
-  if (!lastInbound) {
-    return null;
-  }
-  return t("channels.hub.lastMessageAgo", { ago: formatRelativeTimestamp(lastInbound) });
-}
-
 function ConnectedRow(params: { channelId: string; props: ChannelsProps }) {
   const label = createMemo(() => resolveChannelLabel(params.props, params.channelId));
   const statusIssue = createMemo(() =>
@@ -267,13 +233,21 @@ function ConnectedRow(params: { channelId: string; props: ChannelsProps }) {
       (issue) => issue.channel === params.channelId,
     ),
   );
-  const description = createMemo(() =>
-    statusIssue()
-      ? formatUiExternalText(statusIssue()?.message)
-      : (lastActivityLine(params.channelId, params.props) ??
-        resolveChannelDetailLabel(params.props, params.channelId) ??
-        t("channels.hub.openDetails")),
-  );
+  const description = createMemo(() => {
+    const issue = statusIssue() ? formatUiExternalText(statusIssue()?.message) : null;
+    if (params.props.configEdits[params.channelId]) {
+      // Unsaved edits never hide what is wrong with the channel.
+      return issue
+        ? t("channels.config.unsavedWithDetail", { detail: issue })
+        : t("channels.config.unsaved");
+    }
+    return (
+      issue ??
+      channelLastActivity(params.channelId, params.props) ??
+      resolveChannelDetailLabel(params.props, params.channelId) ??
+      t("channels.hub.openDetails")
+    );
+  });
   return (
     <button
       type="button"
@@ -291,7 +265,7 @@ function ConnectedRow(params: { channelId: string; props: ChannelsProps }) {
         <span class="settings-row__desc">{description()}</span>
       </div>
       <div class="settings-row__control">
-        {rowStatus(statusIssue() ? "attention" : resolveRowState(params.channelId, params.props))}
+        <ChannelHealthStatus health={resolveChannelHealth(params.channelId, params.props)} />
         <span class="settings-row__chevron">
           <Icon name="chevronRight" />
         </span>
@@ -303,11 +277,12 @@ function ConnectedRow(params: { channelId: string; props: ChannelsProps }) {
 function AvailableRow(params: { channelId: string; props: ChannelsProps }) {
   const plugin = createMemo(() => resolveChannelPlugin(params.props, params.channelId));
   const label = createMemo(() => resolveChannelLabel(params.props, params.channelId));
-  const description = createMemo(
-    () =>
-      plugin()?.description ??
-      resolveChannelDetailLabel(params.props, params.channelId) ??
-      t("channels.hub.guidedSetup"),
+  const description = createMemo(() =>
+    params.props.configEdits[params.channelId]
+      ? t("channels.config.unsaved")
+      : (plugin()?.description ??
+        resolveChannelDetailLabel(params.props, params.channelId) ??
+        t("channels.hub.guidedSetup")),
   );
   return (
     <div class="settings-row channels-item">
@@ -404,7 +379,7 @@ function WizardStepBody(props: {
                 ? props.controls.wizardHost.draft.textValue
                 : props.wizard.step.initialValue
           }
-          busy={props.wizard.busy}
+          busy={props.controls.mutationBusy?.wizard || props.wizard.busy}
           inputId="channel-wizard-text-input"
           validationErrorId={
             props.wizard.validationError ? "channel-wizard-validation-error" : undefined
@@ -431,7 +406,7 @@ function WizardStepBody(props: {
       {message() ? <div class={outputClass()}>{message()}</div> : undefined}
       <openclaw-modal-actions class="channels-wizard__footer">
         {gatewayOwned() ? renderCloseButton(props.controls, "common.cancel") : undefined}
-        {gatewayOwned() || props.wizard.busy ? (
+        {gatewayOwned() || props.controls.mutationBusy?.wizard || props.wizard.busy ? (
           <WizardBusyButton
             statusLabel={(gatewayOwned() && message()) || t("channels.setup.working")}
           />
@@ -451,6 +426,7 @@ function WizardStepBody(props: {
 
 function renderWhatsAppLinking(props: ChannelsProps) {
   const connected = () => props.channels.whatsappLoginConnected === true;
+  const busy = () => props.mutationBusy?.whatsapp || props.channels.whatsappBusy;
   return (
     <>
       <div class="channels-wizard__message" role="status">
@@ -469,7 +445,7 @@ function renderWhatsAppLinking(props: ChannelsProps) {
                 src={props.channels.whatsappLoginQrDataUrl}
                 alt={t("channels.setup.whatsappQrAlt")}
               />
-            ) : props.channels.whatsappBusy ? undefined : (
+            ) : busy() ? undefined : (
               <div class="channels-wizard__spinner">{t("channels.setup.whatsappQrHint")}</div>
             )}
           </div>
@@ -482,17 +458,21 @@ function renderWhatsAppLinking(props: ChannelsProps) {
         ) : (
           <>
             {renderCloseButton(props, "channels.setup.linkLater")}
-            {props.channels.whatsappBusy ? (
+            {busy() ? (
               <WizardBusyButton statusLabel={t("channels.setup.whatsappQrLoading")} />
             ) : (
               <>
-                <button type="button" class="btn" onClick={() => props.onWhatsAppStart(true)}>
+                <button type="button" class="btn" onClick={() => void props.onWhatsAppStart(true)}>
                   {props.channels.whatsappLoginQrDataUrl
                     ? t("channels.setup.regenerateQr")
                     : t("common.showQr")}
                 </button>
                 {props.channels.whatsappLoginQrDataUrl ? (
-                  <button type="button" class="btn primary" onClick={() => props.onWhatsAppWait()}>
+                  <button
+                    type="button"
+                    class="btn primary"
+                    onClick={() => void props.onWhatsAppWait()}
+                  >
                     {t("common.waitForScan")}
                   </button>
                 ) : undefined}
@@ -526,64 +506,87 @@ function renderDoneBody(channels: readonly string[], props: ChannelsProps) {
 }
 
 function ChannelWizard(props: ChannelsProps): JSX.Element {
-  const activeWizard = () => {
-    const wizard = props.wizardHost.state();
-    return wizard.phase === "idle" ? undefined : wizard;
-  };
   return (
-    <Show when={activeWizard()}>
-      {(wizard) => <WizardDialog wizard={wizard()} controls={props} />}
+    <Show when={props.wizardHost.state().phase !== "idle"}>
+      <WizardDialog controls={props} />
     </Show>
   );
 }
 
-function WizardDialog(props: {
-  wizard: Exclude<ChannelWizardState, { phase: "idle" }>;
-  controls: ChannelsProps;
-}) {
-  const label = createMemo(() =>
-    props.wizard.channel
-      ? resolveChannelLabel(props.controls, props.wizard.channel)
-      : t("channels.setup.genericTitle"),
-  );
-  const step = () => (props.wizard.phase === "step" ? props.wizard : undefined);
-  const error = () => (props.wizard.phase === "error" ? props.wizard : undefined);
-  const done = () => (props.wizard.phase === "done" ? props.wizard : undefined);
+function WizardDialog(props: { controls: ChannelsProps }) {
+  const wizard = () => props.controls.wizardHost.state();
+  const channel = () => {
+    const current = wizard();
+    return current.phase === "idle" ? null : current.channel;
+  };
+  const label = createMemo(() => {
+    const current = channel();
+    return current
+      ? resolveChannelLabel(props.controls, current)
+      : t("channels.setup.genericTitle");
+  });
+  const step = () => {
+    const current = wizard();
+    return current.phase === "step" ? current : undefined;
+  };
+  // Keep same-ID controls through action settlement and fresh validation replies.
+  const steps = createMemo(() => {
+    const current = step();
+    return current ? [current] : [];
+  });
+  const error = () => {
+    const current = wizard();
+    return current.phase === "error" ? current : undefined;
+  };
+  const done = () => {
+    const current = wizard();
+    return current.phase === "done" ? current : undefined;
+  };
   return (
     <openclaw-modal-dialog
       label={t("channels.setup.dialogLabel", { channel: label() })}
       onModal-cancel={() => props.controls.wizardHost.close()}
     >
-      <div class="channels-wizard">
-        <div class="channels-wizard__header">
-          <Show when={props.wizard.channel}>
-            {(channel) => (
-              <ChannelIcon
-                channelId={channel()}
-                label={label()}
-                variant="tile"
-                pluginIconUrl={props.controls.presentation.pluginIconUrls[channel()]}
-              />
-            )}
-          </Show>
-          <div class="channels-wizard__heading">
-            <h2>{t("channels.setup.title", { channel: label() })}</h2>
-            <div class="muted channels-wizard__subtitle">
+      <div class="oc-dialog channels-wizard">
+        <div class="oc-dialog__header">
+          <h2 class="oc-dialog__title">
+            <Show when={channel()}>
+              {(channelId) => (
+                <ChannelIcon
+                  channelId={channelId()}
+                  label={label()}
+                  variant="picker"
+                  pluginIconUrl={props.controls.presentation.pluginIconUrls[channelId()]}
+                />
+              )}
+            </Show>
+            {t("channels.setup.title", { channel: label() })}
+          </h2>
+          <button
+            type="button"
+            class="oc-dialog__close"
+            aria-label={t("common.close")}
+            onClick={() => props.controls.wizardHost.close()}
+          >
+            <Icon name="x" />
+          </button>
+          <div class="oc-dialog__description">
+            <p class="channels-wizard__subtitle">
               <span>{t("channels.setup.subtitle")}</span>{" "}
-              {props.wizard.channel ? (
+              {channel() ? (
                 <a
                   class="channels-wizard__link"
-                  href={channelDocsUrl(props.wizard.channel)}
+                  href={channelDocsUrl(channel()!)}
                   target="_blank"
                   rel="noreferrer noopener"
                 >
                   {t("channels.setup.viewDocs")}
                 </a>
               ) : undefined}
-            </div>
+            </p>
           </div>
         </div>
-        <div class="channels-wizard__body">
+        <div class="oc-dialog__body channels-wizard__body">
           <Show when={step()?.step.externalUrl}>
             {(url) => (
               <div class="channels-wizard__links">
@@ -598,33 +601,28 @@ function WizardDialog(props: {
               </div>
             )}
           </Show>
-          <Show when={props.wizard.phase === "starting"}>
+          <Show when={wizard().phase === "starting"}>
             <openclaw-modal-actions class="channels-wizard__footer">
               <WizardBusyButton statusLabel={t("channels.setup.starting")} />
             </openclaw-modal-actions>
           </Show>
           <Show when={error()}>
             {(failure) => (
-              <>
-                <div class="channels-wizard__error" role="alert">
-                  {failure().message}
-                </div>
-                <openclaw-modal-actions class="channels-wizard__footer">
-                  {renderCloseButton(props.controls, "common.close")}
-                </openclaw-modal-actions>
-              </>
+              <div class="callout danger channels-wizard__error" role="alert">
+                {failure().message}
+              </div>
             )}
           </Show>
           <Show when={done()}>
             {(completed) => <>{renderDoneBody(completed().channels, props.controls)}</>}
           </Show>
-          <Show when={step()}>
+          <For each={steps()} keyed={(current) => current.step.id}>
             {(current) => (
               <>
                 {current().validationError ? (
                   <div
                     id="channel-wizard-validation-error"
-                    class="channels-wizard__error"
+                    class="callout danger channels-wizard__error"
                     role="alert"
                   >
                     {current().validationError}
@@ -633,7 +631,7 @@ function WizardDialog(props: {
                 <WizardStepBody wizard={current()} controls={props.controls} />
               </>
             )}
-          </Show>
+          </For>
         </div>
       </div>
     </openclaw-modal-dialog>

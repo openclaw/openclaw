@@ -4,6 +4,7 @@
  * full strict patch parser.
  */
 import path from "node:path";
+import { relativePathEscapesRoot } from "../infra/path-guards.js";
 import { preserveAtPrefixedRelativePath, resolvePathFromInput } from "./path-policy.js";
 import { normalizeFileReferencePrefix, resolveSandboxInputPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
@@ -90,15 +91,6 @@ function extractApplyPatchTargets(input: unknown): ApplyPatchTarget[] {
     index = lookahead - 1;
   }
   return targets;
-}
-
-function relativePathEscapesRoot(relativePath: string): boolean {
-  return (
-    relativePath === ".." ||
-    relativePath.startsWith("../") ||
-    relativePath.startsWith("..\\") ||
-    path.isAbsolute(relativePath)
-  );
 }
 
 export function toDisplayPath(resolved: string, cwd: string): string {

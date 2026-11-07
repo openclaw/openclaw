@@ -9,8 +9,6 @@ export type {
   BeforeToolCallPolicyDiagnosticState,
   DeferredPluginToolApproval,
   HookContext,
-  ToolOutcomeObservation,
-  ToolOutcomeObserver,
 } from "./agent-tools.before-tool-call.types.js";
 export {
   consumeAdjustedParamsForToolCall,
@@ -35,7 +33,6 @@ export {
 export {
   buildBlockedToolResult,
   getBeforeToolCallFailureDisposition,
-  isPreExecutionBlockedToolResult,
   recordStructuredReplayTrustForToolCall,
   rewrapToolWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,

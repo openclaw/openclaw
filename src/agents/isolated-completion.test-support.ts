@@ -199,6 +199,7 @@ export function registerIsolatedRuntime(
 
 export const nativeAuthPlan = {
   providerForAuth: "openai",
+  authProfileProviderForAuth: "openai",
   modelId: "gpt-test",
   harnessAuthProvider: "openai",
   modelRoute: {
@@ -226,6 +227,7 @@ export function resetIsolatedCompletionTestState(): void {
   releaseRuntimeLease = vi.fn(async () => {});
   mocks.acquireAgentRunPreparedModelRuntime.mockResolvedValue({
     snapshot: preparedModelRuntime,
+    run: <T>(run: () => T): T => run(),
     [Symbol.asyncDispose]: releaseRuntimeLease,
   });
   mocks.isCliRuntimeAliasForProvider.mockReturnValue(false);

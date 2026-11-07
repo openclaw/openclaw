@@ -25,6 +25,8 @@ const NODE_SERVICE_ENV_KEYS = new Set([
   ...Object.keys(resolveNodeServiceIdentityEnvironment()),
   "OPENCLAW_GATEWAY_SERVICE_PID",
 ]);
+// The profile selects child CLI config and state too; it is not node daemon identity.
+NODE_SERVICE_ENV_KEYS.delete("OPENCLAW_PROFILE");
 const CARGO_TARGET_EXECUTABLE_OVERRIDE_ENV_KEY = /^CARGO_TARGET_[A-Z0-9_]+_(?:LINKER|RUNNER)$/;
 const GIT_ALLOW_PROTOCOL_ENV_KEY = "GIT_ALLOW_PROTOCOL";
 const GIT_PROTOCOL_FROM_USER_ENV_KEY = "GIT_PROTOCOL_FROM_USER";
@@ -52,7 +54,7 @@ export function setGatewayCredentialEnvKeys(owner: string, keys: Iterable<string
   }
 }
 
-function isGatewayCredentialEnvVarName(key: string): boolean {
+export function isGatewayCredentialEnvVarName(key: string): boolean {
   const upper = key.toUpperCase();
   for (const keys of gatewayCredentialEnvKeysByOwner.values()) {
     if (keys.has(upper)) {

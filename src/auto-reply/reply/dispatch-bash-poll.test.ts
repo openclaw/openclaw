@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import {
   addSession,
+  appendOutput,
   deleteSession,
   markExited,
   recordNotifyOnExitRemoval,
@@ -23,6 +24,7 @@ import {
   createDispatcher,
   hookMocks,
   mocks,
+  mockSessionStorePath,
   resetPluginTtsAndThreadMocks,
   sessionStoreMocks,
   setDiscordTestRegistry,
@@ -46,7 +48,7 @@ beforeEach(() => {
   mocks.routeReply.mockReset().mockResolvedValue({ ok: true, delivered: true });
   sessionStoreMocks.currentEntry = undefined;
   sessionStoreMocks.loadSessionStoreEntry.mockImplementation(() => undefined);
-  sessionStoreMocks.resolveSessionStorePathCore.mockReturnValue("/tmp/mock-sessions.json");
+  sessionStoreMocks.resolveSessionStorePathCore.mockReturnValue(mockSessionStorePath);
 });
 
 afterEach(() => {
@@ -63,7 +65,7 @@ function fixture(alias = "!poll") {
   const process = createProcessSessionFixture({ id, backgrounded: true });
   process.scopeKey = "chat:bash";
   process.sessionKey = sessionKey;
-  process.aggregated = "Completed synthetic work";
+  appendOutput(process, "stdout", "Completed synthetic work");
   addSession(process);
   markExited(process, 0, null, "completed");
   const eventOptions = { sessionKey, contextKey: `exec:${id}` };

@@ -9,8 +9,8 @@ import {
 import type {
   VideoGenerationProvider,
   VideoGenerationProviderConfiguredContext,
-  VideoGenerationResult,
-} from "../video-generation/types.js";
+} from "../video-generation/provider-types.js";
+import type { VideoGenerationResult } from "../video-generation/types.js";
 import { resolveApiKeyForProvider } from "./provider-auth-runtime.js";
 import { isProviderApiKeyConfigured, isProviderApiKeyConfiguredAsync } from "./provider-auth.js";
 import {
@@ -24,18 +24,20 @@ export {
 } from "../video-generation/duration-support.js";
 
 export type {
+  VideoGenerationProviderConfiguredContext,
+  VideoGenerationModelCapabilitiesContext,
+  VideoGenerationRequest,
+  VideoGenerationProvider,
+} from "../video-generation/provider-types.js";
+export type {
   GeneratedVideoAsset,
   VideoGenerationResolution,
   VideoGenerationAssetRole,
   VideoGenerationSourceAsset,
-  VideoGenerationProviderConfiguredContext,
-  VideoGenerationModelCapabilitiesContext,
-  VideoGenerationRequest,
   VideoGenerationResult,
   VideoGenerationModeCapabilities,
   VideoGenerationProviderCapabilities,
   VideoGenerationCatalogModelEntry,
-  VideoGenerationProvider,
 } from "../video-generation/types.js";
 
 export type DashscopeVideoGenerationProviderOptions = {

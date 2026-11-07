@@ -6,17 +6,15 @@ import { evaluateWorkflowExpression, readCiWorkflow } from "./ci-workflow.test-s
 describe("Control UI WebKit selection", () => {
   it.each([
     ["ui/vitest.config.ts", true],
-    ["ui/src/components/modal-dialog.ts", true],
+    ["ui/src/components/modal-dialog.tsx", true],
     ["ui/src/components/session-hovercard-automations.tsx", true],
     ["ui/src/components/solid/session-hovercard-automations.browser.test.tsx", true],
     ["ui/src/components/session-hovercard.css", true],
     ["ui/src/components/solid/menu.tsx", true],
-    ["ui/src/components/solid/menu-shortcut-alignment.browser.test.tsx", true],
     ["ui/src/components/solid/overlay.css", true],
     ["ui/src/pages/chat/components/chat-composer.tsx", true],
     ["ui/src/pages/chat/chat-pane-header.ts", true],
     ["ui/src/pages/chat/components/chat-pane-header.tsx", true],
-    ["ui/src/pages/chat/components/chat-pane-versions-menu.tsx", true],
     ["ui/src/lib/solid-bridge.ts", true],
     ["ui/src/lib/solid-bridge-view.tsx", true],
     ["ui/src/lib/presentation.ts", true],
@@ -68,6 +66,7 @@ describe("Control UI WebKit selection", () => {
       for (const [shard, selected, expected] of [
         [1, "true", true],
         [2, "true", false],
+        [3, "true", false],
         [1, "false", false],
       ] as const) {
         expect(

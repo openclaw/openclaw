@@ -1,7 +1,7 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { appendTranscriptMessage } from "../../config/sessions/session-accessor.js";
+import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import {
-  acquireSessionActorStorage,
   captureSessionActorStorageOwner,
   runWithSessionActorStorage,
 } from "../../config/sessions/session-actor-storage-binding.js";

@@ -9,32 +9,11 @@ import {
   startQaMockOpenAiServer,
 } from "../../../../extensions/qa-lab/api.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { otelTraceConfig, settleOtelCleanup } from "./otel-runtime.test-support.js";
 import { type CapturedSpan, startLocalOtlpReceiver } from "./otel-test-support.js";
 
 const CODE_MODE_RECONCILIATION_NEEDLE =
   "The previous Code Mode mutation may have partially applied.";
-
-async function settleCleanup(
-  cleanups: Record<string, () => Promise<void>>,
-  pending: Set<string>,
-): Promise<void> {
-  const results = await Promise.allSettled(
-    Object.entries(cleanups).map(async ([name, cleanup]) => {
-      pending.add(name);
-      try {
-        await cleanup();
-      } finally {
-        pending.delete(name);
-      }
-    }),
-  );
-  const failures = results.flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : [],
-  );
-  if (failures.length > 0) {
-    throw new AggregateError(failures, "diagnostics-otel gateway cleanup failed");
-  }
-}
 
 async function waitFor<T>(
   read: () => T | undefined,
@@ -101,24 +80,10 @@ test("exports linked success and failed-read recovery spans from a real qa-chann
   let receiver: ReturnType<typeof startLocalOtlpReceiver> | undefined;
   let mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
   const gatewayOwner = createQaGatewayChild();
-  const startedAt = performance.now();
-  let phase = "fixture setup";
-  let cleanupStartedAfterMs: number | undefined;
-  const pendingCleanupOwners = new Set<string>();
   let gatewayLogs: (() => string) | undefined;
   onTestFailed(() => {
-    process.stderr.write(
-      JSON.stringify({
-        phase,
-        elapsedMs: Math.round(performance.now() - startedAt),
-        cleanupStartedAfterMs,
-        pendingCleanupOwners: [...pendingCleanupOwners],
-        capturedSpanCount: receiver?.capturedSpans.length,
-      }) + "\n",
-    );
-    if (gatewayLogs) {
-      process.stderr.write(gatewayLogs().slice(-12_000) + "\n");
-    }
+    process.stderr.write(`${gatewayLogs?.().slice(-12_000) ?? ""}\n`);
+    process.stderr.write(`${JSON.stringify(receiver?.recentTraceSummary())}\n`);
   });
 
   try {
@@ -129,10 +94,10 @@ test("exports linked success and failed-read recovery spans from a real qa-chann
     mock = await startQaMockOpenAiServer();
     const readDebug = async <T>(route: string): Promise<T> =>
       (await fetch(`${mock!.baseUrl}/debug/${route}`)).json();
-    phase = "gateway startup";
     const gateway = await gatewayOwner.start({
       repoRoot: path.resolve(import.meta.dirname, "../../../.."),
       useRepoCli: true,
+      initializeCurrentRuntimeState: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
       providerMode: "mock-openai",
       transport,
@@ -150,26 +115,12 @@ test("exports linked success and failed-read recovery spans from a real qa-chann
             enabled: true,
           },
         },
-        diagnostics: {
-          enabled: true,
-          otel: {
-            enabled: true,
-            endpoint: `http://127.0.0.1:${receiverPort}`,
-            protocol: "http/protobuf",
-            traces: true,
-            metrics: false,
-            logs: false,
-            sampleRate: 1,
-            flushIntervalMs: 1000,
-            captureContent: false,
-          },
-        },
+        diagnostics: otelTraceConfig({ endpoint: `http://127.0.0.1:${receiverPort}` }, 1, 1000),
       }),
     });
     gatewayLogs = gateway.logs;
     const conversation = { id: "qa-operator", kind: "direct" as const };
     const send = async (text: string, expectedText: string, targetConversation = conversation) => {
-      phase = `send ${expectedText}`;
       const cursor = state.getSnapshot().messages.length;
       state.addInboundMessage({
         conversation: targetConversation,
@@ -209,7 +160,6 @@ test("exports linked success and failed-read recovery spans from a real qa-chann
     );
     expect(recovered.text).toContain("The requested file could not be read: ENOENT.");
 
-    phase = "failed-read provider transcript";
     type ProviderRequest = {
       allInputText?: string;
       body?: { input?: Array<Record<string, unknown>>; tools?: Array<{ name?: string }> };
@@ -242,7 +192,6 @@ test("exports linked success and failed-read recovery spans from a real qa-chann
         ),
       ).toHaveLength(1);
     }
-    phase = "failed-read spans";
     const failureEvidence = await waitFor(
       () => {
         const toolError = activeReceiver.capturedSpans.find(
@@ -270,7 +219,6 @@ test("exports linked success and failed-read recovery spans from a real qa-chann
       }),
     );
 
-    phase = "failed-read span assertions";
     expectTraceParents(failureEvidence.sameTrace, failureEvidence.toolError, [1, 1, 2]);
 
     const successEvidence = activeReceiver.capturedSpans.find(
@@ -294,7 +242,6 @@ test("exports linked success and failed-read recovery spans from a real qa-chann
       { id: "qa-plugin-usage", kind: "direct" },
     );
 
-    phase = "plugin provider transcript";
     const llmTaskRequests = await readDebug<ProviderRequest[]>(
       `requests?after=${llmTaskCursor.cursor}`,
     );
@@ -307,7 +254,6 @@ test("exports linked success and failed-read recovery spans from a real qa-chann
       ),
     ).toBe(true);
 
-    phase = "plugin usage spans";
     const llmTaskUsage = await waitFor(
       () =>
         activeReceiver.capturedSpans.find(
@@ -318,7 +264,6 @@ test("exports linked success and failed-read recovery spans from a real qa-chann
       45_000,
       () => activeReceiver.capturedSpans,
     );
-    phase = "plugin usage assertions";
     expect(llmTaskUsage.attributes).toMatchObject({
       "openclaw.tokens.input": 64,
       "openclaw.tokens.output": 24,
@@ -346,23 +291,18 @@ test("exports linked success and failed-read recovery spans from a real qa-chann
 
     const exportedBodies = Object.values(activeReceiver.capturedBodyText).flat().join("\n");
     expect(exportedBodies).not.toContain("qa-plugin-usage-secret-sentinel");
-    phase = "fixture cleanup";
   } finally {
-    cleanupStartedAfterMs = Math.round(performance.now() - startedAt);
-    await settleCleanup(
-      {
-        gateway: () => stopQaGatewayFixture(gatewayOwner),
-        provider: async () => {
-          await mock?.stop();
-        },
-        receiver: async () => {
-          await receiver?.close();
-        },
-        bus: async () => {
-          await bus?.stop();
-        },
+    await settleOtelCleanup(
+      () => stopQaGatewayFixture(gatewayOwner),
+      async () => {
+        await mock?.stop();
       },
-      pendingCleanupOwners,
+      async () => {
+        await receiver?.close();
+      },
+      async () => {
+        await bus?.stop();
+      },
     );
   }
 }, 120_000);

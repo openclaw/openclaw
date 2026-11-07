@@ -4,6 +4,7 @@ import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
 } from "../plugins/types.js";
+import { getPath } from "./path-utils.js";
 
 export type ProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "duckduckgo";
 type Surface = "webSearch" | "webFetch";
@@ -26,11 +27,9 @@ export function providerPluginId(provider: ProviderUnderTest): string {
   return aliases[provider] ?? provider;
 }
 
-function configuredKey(config: OpenClawConfig | undefined, pluginId: string, surface: Surface) {
-  const entry = config?.plugins?.entries?.[pluginId]?.config;
-  return entry && typeof entry === "object"
-    ? (entry as Partial<Record<Surface, { apiKey?: unknown }>>)[surface]?.apiKey
-    : undefined;
+function fallback(config: OpenClawConfig | undefined, path: string[]) {
+  const value = getPath(config, path);
+  return value === undefined ? undefined : { path: path.join("."), value };
 }
 
 function baseProvider(id: string, pluginId: string, order: number, surface: Surface) {
@@ -51,7 +50,7 @@ function baseProvider(id: string, pluginId: string, order: number, surface: Surf
       config.apiKey = value;
     },
     getConfiguredCredentialValue: (config?: OpenClawConfig) =>
-      configuredKey(config, pluginId, surface),
+      getPath(config, ["plugins", "entries", pluginId, "config", surface, "apiKey"]),
     setConfiguredCredentialValue: (config: OpenClawConfig, value: unknown) => {
       const plugins = ensureRecord(config as Record<string, unknown>, "plugins");
       const entries = ensureRecord(plugins, "entries");
@@ -80,15 +79,10 @@ export function createTestProvider(params: {
           getCredentialValue: () => "duckduckgo-no-key-needed",
         }
       : { requiresCredential: undefined }),
-    getConfiguredCredentialFallback: (config) => {
-      if (provider !== "gemini") {
-        return undefined;
-      }
-      const google = config?.models?.providers?.google;
-      return google && typeof google === "object" && "apiKey" in google
-        ? { path: "models.providers.google.apiKey", value: (google as { apiKey?: unknown }).apiKey }
-        : undefined;
-    },
+    getConfiguredCredentialFallback: (config) =>
+      provider === "gemini"
+        ? fallback(config, ["models", "providers", "google", "apiKey"])
+        : undefined,
     resolveRuntimeMetadata:
       provider === "perplexity"
         ? () => ({ perplexityTransport: "search_api" as const })
@@ -113,15 +107,8 @@ export function buildTestWebFetchProviders(): PluginWebFetchProviderEntry[] {
       ...baseProvider("firecrawl", "firecrawl", 50, "webFetch"),
       requiresCredential: false,
       placeholder: "fc-...",
-      getConfiguredCredentialFallback: (config) => {
-        const apiKey = configuredKey(config, "firecrawl", "webSearch");
-        return apiKey === undefined
-          ? undefined
-          : {
-              path: "plugins.entries.firecrawl.config.webSearch.apiKey",
-              value: apiKey,
-            };
-      },
+      getConfiguredCredentialFallback: (config) =>
+        fallback(config, ["plugins", "entries", "firecrawl", "config", "webSearch", "apiKey"]),
     },
   ];
 }

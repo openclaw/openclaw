@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import {
   loadStoredCollapsedSessionSections,
@@ -35,11 +36,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  if (originalLocalStorage) {
-    Object.defineProperty(globalThis, "localStorage", originalLocalStorage);
-  } else {
-    Reflect.deleteProperty(globalThis, "localStorage");
-  }
+  restorePropertyDescriptor(globalThis, "localStorage", originalLocalStorage);
 });
 
 describe("sidebar session preferences", () => {

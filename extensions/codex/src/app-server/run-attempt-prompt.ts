@@ -23,21 +23,17 @@ import {
   projectContextEngineAssemblyForCodex,
   resolveProjectionPromptBudgetTokens,
   type CodexProjectedImageGroup,
-  type CodexProjectedContextRange,
 } from "./context-engine-projection.js";
 import { joinPresentSections } from "./developer-instruction-sections.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import type { CodexAttemptContext } from "./run-attempt-context.js";
 import { estimateCodexAppServerProjectedTurnTokens } from "./run-attempt-lifecycle.js";
+import { resolveCodexShiftedPromptRanges } from "./run-attempt-prompt-ranges.js";
 import { prependCurrentInboundContext } from "./run-attempt-state.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
+import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle-types.js";
 import { resolveCodexProjectionStartupBinding } from "./thread-restricted-resume.js";
-import { hasCodexMirrorOrigin } from "./transcript-mirror-attestation.js";
-import {
-  buildCodexHistoryProvenancePrefix,
-  buildCodexParentLocalInstructions,
-  buildTurnCollaborationMode,
-} from "./turn-params.js";
+import { buildCodexHistoryProvenancePrefix, buildTurnCollaborationMode } from "./turn-params.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 
 export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
@@ -49,6 +45,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     workspaceBootstrapContext,
     buildActiveContextEngineRuntimeContext,
     baseDeveloperInstructions,
+    openClawBaseInstructions,
     buildOpenClawPromptContext,
     skillsInstructions,
     refreshableInstructions,
@@ -78,6 +75,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     sandbox,
   } = connection;
   const { toolBridge } = attemptTools;
+  const isTelegram = (params.messageChannel ?? params.messageProvider) === "telegram";
   const usesSelectedHistory = Boolean(
     activeContextEngine ||
     (!usesSupervisionConnection && params.hostCapabilities.prepareBoundedSeed),
@@ -143,6 +141,19 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   const currentUserTurnIdempotencyKey = params.pluginRuntimeRefreshMessages
     ? undefined
     : admittedMessage?.idempotencyKey;
+  const currentMedia =
+    isTelegram && currentUserTurnIdempotencyKey && admittedMessage && !params.images?.length
+      ? await params.hostCapabilities.prepareContextMedia?.({
+          message: (await params.userTurnTranscriptRecorder?.resolveMessage()) ?? admittedMessage,
+          maxChars: 0,
+        })
+      : undefined;
+  assertProjectionCurrent();
+  const imageHistory = isTelegram
+    ? params.images?.length || currentMedia?.hasImageAttachments
+      ? "none"
+      : "latest-turn"
+    : undefined;
   const prepareFileContext: NonNullable<
     Parameters<typeof projectContextEngineAssemblyForCodex>[0]["prepareFileContext"]
   > = async (message, maxChars) => {
@@ -176,6 +187,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       prepareFileContext,
       currentUserTurnIdempotencyKey,
       currentUserMessage: admittedMessage,
+      imageHistory,
     });
     assertProjectionCurrent();
     contextImageGroups = projection.imageGroups ?? [];
@@ -187,6 +199,9 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     | (() => ReturnType<typeof projectContextEngineAssemblyForCodex>)
     | undefined;
   let contextEngineBootstrapPromptApplied = false;
+  // A before_prompt_build `systemPrompt` replaces OpenClaw's base and developer policy,
+  // so once one is known, configured history budgets reserve it instead.
+  let replacedSystemPromptForBudget: string | undefined;
   const applySelectedHistoryProjection = async (
     decisionStartupBinding: typeof mutable.startupBinding,
   ) => {
@@ -198,7 +213,9 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
             resolveProjectionPromptBudgetTokens({ contextTokenBudget: configuredContextBudget }),
           inputTokens: (params.images?.length ?? 0) * IMAGE_BLOCK_TOKENS,
           systemPrompt: joinPresentSections(
-            baseDeveloperInstructions,
+            ...(replacedSystemPromptForBudget !== undefined
+              ? [replacedSystemPromptForBudget]
+              : [openClawBaseInstructions, baseDeveloperInstructions]),
             refreshableInstructions,
             buildTurnCollaborationMode(params).settings.developer_instructions ?? undefined,
             JSON.stringify(toolBridge.specs),
@@ -257,6 +274,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
           prepareFileContext,
           currentUserTurnIdempotencyKey,
           currentUserMessage: admittedMessage,
+          imageHistory,
         },
         historyTokenBudget: historyBudget?.tokenBudget,
         baseDeveloperInstructions,
@@ -302,14 +320,25 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       });
     }
   };
-  if (usesSelectedHistory) {
-    await applySelectedHistoryProjection(
-      resolveCodexProjectionStartupBinding({
+  const projectionStartupBinding = usesSelectedHistory
+    ? resolveCodexProjectionStartupBinding({
         params,
         binding: mutable.startupBinding,
         nativeToolSurfaceEnabled: runtime.nativeToolSurfaceEnabled,
-      }),
-    );
+      })
+    : undefined;
+  let deferredHistoryRejection: CodexContextAttachmentError | undefined;
+  if (usesSelectedHistory) {
+    try {
+      await applySelectedHistoryProjection(projectionStartupBinding);
+    } catch (error) {
+      // A configured allowance may reject history only because it still reserves the
+      // base. The prompt hook below may replace that base, so it settles the rejection.
+      if (!configuredContextBudget || !(error instanceof CodexContextAttachmentError)) {
+        throw error;
+      }
+      deferredHistoryRejection = error;
+    }
   }
   // Refresh changes the transport prompt, but retains the admitted request's recorder.
   const buildPromptFromCurrentInputs = () =>
@@ -337,54 +366,6 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         assertActive: connection.assertLegacyCurrent,
       },
     });
-  const resolveShiftedPromptRanges = (
-    prompt: string,
-    promptInputRange: { start: number; end: number } | undefined,
-    turnPromptText: string,
-  ): {
-    inputRange?: CodexProjectedContextRange;
-    contextRange?: CodexProjectedContextRange;
-    requestRange?: CodexProjectedContextRange;
-  } => {
-    if (
-      !promptInputRange ||
-      promptInputRange.start < 0 ||
-      promptInputRange.end < promptInputRange.start ||
-      promptInputRange.end > prompt.length ||
-      !turnPromptText.endsWith(prompt)
-    ) {
-      return {};
-    }
-    const turnPromptOffset = turnPromptText.length - prompt.length;
-    const inputRange = {
-      start: turnPromptOffset + promptInputRange.start,
-      end: turnPromptOffset + promptInputRange.end,
-    };
-    const promptTextInputOffset = promptInputRange.end - promptState.promptText.length;
-    if (
-      !promptState.promptContextRange ||
-      promptTextInputOffset < promptInputRange.start ||
-      prompt.slice(promptTextInputOffset, promptInputRange.end) !== promptState.promptText
-    ) {
-      return { inputRange };
-    }
-    const promptTextOffset = prompt.endsWith(promptState.promptText)
-      ? prompt.length - promptState.promptText.length
-      : promptTextInputOffset;
-    const contextOffset = turnPromptOffset + promptTextOffset;
-    const contextRange = {
-      start: contextOffset + promptState.promptContextRange.start,
-      end: contextOffset + promptState.promptContextRange.end,
-    };
-    return {
-      inputRange,
-      contextRange,
-      requestRange: {
-        start: contextRange.end,
-        end: contextOffset + promptState.promptText.length,
-      },
-    };
-  };
   const decorateCodexTurnPromptText = (
     promptBuildResult: {
       prompt: string;
@@ -401,11 +382,13 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
           params.bootstrapContextRunKind === "cron",
       },
     );
-    const projectedRanges = resolveShiftedPromptRanges(
-      promptBuildResult.prompt,
-      promptBuildResult.promptInputRange,
+    const projectedRanges = resolveCodexShiftedPromptRanges({
+      prompt: promptBuildResult.prompt,
+      promptInputRange: promptBuildResult.promptInputRange,
       turnPromptText,
-    );
+      promptText: promptState.promptText,
+      promptContextRange: promptState.promptContextRange,
+    });
     const preservedRange =
       projectedRanges.inputRange ??
       resolveCodexDeliveryHintPreservedInputRange({
@@ -453,20 +436,33 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     codexTurnPromptText: decorateCodexTurnPromptText(firstPromptBuild),
   };
   let parentLocalEgress = false;
-  const parentLocalContext = {
-    personaInstructions: workspaceBootstrapContext.personaInstructions,
-    memoryInstructions: workspaceBootstrapContext.memoryInstructions,
-  };
-  // Observability view of the whole developer surface the model sees (reports,
-  // trajectory, size estimates). The lifecycle receives the generic policy and the
-  // refreshable instructions separately; joining them here must never feed thread requests.
+  let inferenceInstructions: string | undefined;
+  // Observability view of OpenClaw-managed developer instructions; not the complete
+  // native/provider prompt. Reuse registered relay text so diagnostics include every
+  // relay component. Hook context is already in that text, so only native policy
+  // precedes it. These projections must never feed native thread requests.
   const buildRenderedCodexDeveloperInstructions = () =>
+    inferenceInstructions !== undefined
+      ? joinPresentSections(
+          turnState.promptBuild.threadDeveloperInstructions ??
+            turnState.promptBuild.developerInstructions,
+          inferenceInstructions,
+        )
+      : joinPresentSections(
+          turnState.promptBuild.developerInstructions,
+          refreshableInstructions,
+          buildTurnCollaborationMode(params).settings.developer_instructions ?? undefined,
+        );
+  // Reports, hooks, trajectory, and history budgets also count the pinned base. The
+  // rotation fuse does not: native token counts already include it. Until the thread
+  // lifecycle reports the base it placed, this is the pre-startup estimate.
+  let reportedOpenClawBaseInstructions = firstPromptBuild.systemPromptReplaced
+    ? undefined
+    : openClawBaseInstructions;
+  const buildRenderedCodexInstructions = () =>
     joinPresentSections(
-      turnState.promptBuild.developerInstructions,
-      parentLocalEgress ? undefined : refreshableInstructions,
-      (parentLocalEgress
-        ? buildCodexParentLocalInstructions(params, { ...parentLocalContext, skillsInstructions })
-        : buildTurnCollaborationMode(params).settings.developer_instructions) ?? undefined,
+      reportedOpenClawBaseInstructions,
+      buildRenderedCodexDeveloperInstructions(),
     );
   const rebuildCodexPromptBuildFromCurrentProjection = async (preserveInstructions = false) => {
     const nextPromptBuild = await buildPromptFromCurrentInputs();
@@ -479,10 +475,24 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       : nextPromptBuild;
     turnState.codexTurnPromptText = decorateCodexTurnPromptText(nextPromptBuild);
   };
+  if (configuredContextBudget && firstPromptBuild.systemPromptReplaced) {
+    // Selection ran before the hook replaced the base. Reselect against the replacement;
+    // configured selection never renders history into the prompt, so the hook only runs
+    // again when a deferred rejection left it an unprojected prompt.
+    const hookPromptText = promptState.promptText;
+    replacedSystemPromptForBudget = firstPromptBuild.developerInstructions;
+    await applySelectedHistoryProjection(projectionStartupBinding);
+    if (promptState.promptText !== hookPromptText) {
+      await rebuildCodexPromptBuildFromCurrentProjection();
+    }
+  } else if (deferredHistoryRejection) {
+    throw deferredHistoryRejection;
+  }
   const applyResumeStaleBindingContinuityProjection = async (
     binding: NonNullable<typeof mutable.startupBinding>,
   ) => {
     const cutoff = Date.parse(binding.historyCoveredThrough ?? "");
+    const nativeThreadPrefix = `codex-app-server:${binding.threadId}:`;
     const newerVisibleMessages = historyState.messages.filter((message) => {
       if (
         message.role !== "user" &&
@@ -502,10 +512,11 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         !(
           "idempotencyKey" in message &&
           typeof message.idempotencyKey === "string" &&
-          message.idempotencyKey.startsWith("codex-app-server:")
+          message.idempotencyKey.startsWith(nativeThreadPrefix)
         ) &&
-        !hasCodexMirrorOrigin(message) &&
-        !mirrorIdentity?.startsWith("codex-app-server:") &&
+        // Origin alone does not imply coverage: temporary threads and host-admitted
+        // user rows belong in the unseen delta. Unqualified rows rely on the cutoff.
+        !mirrorIdentity?.startsWith(nativeThreadPrefix) &&
         Number.isFinite(timestamp) &&
         timestamp > (Number.isFinite(cutoff) ? cutoff : 0)
       );
@@ -657,7 +668,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       attempt: params,
       sessionKey: contextSessionKey,
       workspaceDir: effectiveWorkspace,
-      developerInstructions: buildRenderedCodexDeveloperInstructions(),
+      developerInstructions: buildRenderedCodexInstructions(),
       workspaceBootstrapContext,
       omitWorkspaceReferences,
       parentLocalEgress,
@@ -681,11 +692,17 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         workspaceReferencesIncluded = include;
       }
     },
-    setParentLocalEgress: () => {
-      parentLocalEgress = true;
+    setInferenceInstructions: (instructions: string) => {
+      inferenceInstructions = instructions;
+      parentLocalEgress = !usesSupervisionConnection;
       Object.assign(systemPromptReport, buildSystemPromptReport(!workspaceReferencesIncluded));
     },
-    buildRenderedCodexDeveloperInstructions,
+    /** Pending supervision probes its native model during startup, after the estimate. */
+    adoptThreadBaseInstructions: (thread: CodexAppServerThreadLifecycleBinding) => {
+      reportedOpenClawBaseInstructions = thread.preparedOpenClawBaseInstructions;
+      Object.assign(systemPromptReport, buildSystemPromptReport(!workspaceReferencesIncluded));
+    },
+    buildRenderedCodexInstructions,
     rebuildCodexTurnPromptTextFromCurrentProjection: () =>
       rebuildCodexPromptBuildFromCurrentProjection(true),
     applyNoContextEngineContinuityProjection,

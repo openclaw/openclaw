@@ -79,7 +79,7 @@ const TOOLCALL_REPAIR_JSON_STRING_ESCAPES: Record<string, string> = {
   t: "\t",
 };
 
-function shouldAttemptMalformedToolCallRepair(partialJson: string, delta: string): boolean {
+function shouldAttemptMalformedToolCallRepair(sawCloser: boolean, delta: string): boolean {
   if (/[}\]]/.test(delta)) {
     return true;
   }
@@ -87,7 +87,7 @@ function shouldAttemptMalformedToolCallRepair(partialJson: string, delta: string
   return (
     trimmedDelta.length > 0 &&
     trimmedDelta.length <= MAX_TOOLCALL_REPAIR_TRAILING_CHARS &&
-    /[}\]]/.test(partialJson)
+    sawCloser
   );
 }
 
@@ -424,11 +424,25 @@ function tryExtractSmartQuotedToolCallArguments(
   );
 }
 
+// Every accepted buffer, preserved or repaired, ends with the object's `}` plus at most an
+// allowed suffix (see finishToolCallArgumentRepair), so other streamed buffers skip the parse.
+function endsWithRepairableObjectClose(raw: string): boolean {
+  const tail = raw.trimEnd();
+  let end = tail.length;
+  while (
+    end > tail.length - MAX_TOOLCALL_REPAIR_TRAILING_CHARS &&
+    TOOLCALL_REPAIR_ALLOWED_TRAILING_RE.test(tail[end - 1] ?? "")
+  ) {
+    end -= 1;
+  }
+  return tail.slice(0, end).trimEnd().endsWith("}");
+}
+
 function tryExtractUsableToolCallArguments(
   raw: string,
   toolNameFromContext?: string,
 ): ToolCallArgumentRepair | undefined {
-  if (!raw.trim()) {
+  if (!endsWithRepairableObjectClose(raw)) {
     return undefined;
   }
   const parsedRaw = safeParseJsonRecord(raw);
@@ -455,6 +469,7 @@ function readToolCallBlock(message: unknown, contentIndex: number) {
 
 type ToolCallRepairState = {
   partialJson: string;
+  sawCloser?: boolean;
   repairedArgs?: Record<string, unknown>;
   hadPreexistingArgs?: boolean;
   disabled?: boolean;
@@ -496,11 +511,9 @@ function wrapStreamRepairMalformedToolCallArguments(
         state.disabled = true;
         return;
       }
+      state.sawCloser ||= /[}\]]/.test(event.delta);
       const hadRepairState = state.repairedArgs !== undefined;
-      if (
-        !shouldAttemptMalformedToolCallRepair(state.partialJson, event.delta) &&
-        !hadRepairState
-      ) {
+      if (!shouldAttemptMalformedToolCallRepair(state.sawCloser, event.delta) && !hadRepairState) {
         return;
       }
       const blocks = [

@@ -13,6 +13,7 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   name: "",
   description: "",
   agentId: "",
+  ownerProfileId: "",
   sessionKey: "",
   clearAgent: false,
   enabled: true,
@@ -65,8 +66,20 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   failureAlertTo: "",
   failureAlertDeliveryMode: "",
   failureAlertAccountId: "",
+  failureAlertThreadId: undefined,
   timeoutSeconds: "",
 };
+
+export const DEFAULT_CRON_JOBS_FILTERS = {
+  cronJobsLimit: 50,
+  cronJobsQuery: "",
+  cronJobsEnabledFilter: "all",
+  cronJobsScheduleKindFilter: "all",
+  cronJobsLastStatusFilter: "all",
+  cronJobsTriggerFilter: "all",
+  cronJobsSortBy: "nextRunAtMs",
+  cronJobsSortDir: "asc",
+} as const;
 
 export function createInitialCronState<Row = CronJob>(
   snapshot: Partial<Pick<CronState, "client" | "connected">> = {},
@@ -85,19 +98,13 @@ export function createInitialCronState<Row = CronJob>(
     cronJobsTotal: 0,
     cronJobsHasMore: false,
     cronJobsNextOffset: null,
-    cronJobsLimit: 50,
-    cronJobsQuery: "",
-    cronJobsEnabledFilter: "all",
-    cronJobsScheduleKindFilter: "all",
-    cronJobsLastStatusFilter: "all",
-    cronJobsTriggerFilter: "all",
-    cronJobsSortBy: "nextRunAtMs",
-    cronJobsSortDir: "asc",
+    ...DEFAULT_CRON_JOBS_FILTERS,
     cronAgentId: null,
     cronStatus: null,
     cronScopedTotal: null,
     cronScopedNextWakeAtMs: null,
     cronError: null,
+    cronNotice: null,
     cronForm: { ...DEFAULT_CRON_FORM },
     cronCreateOpen: false,
     cronFieldErrors: {},
@@ -203,8 +210,15 @@ export async function loadCronStatus(
       return;
     }
     if (isMissingOperatorReadScopeError(err)) {
+      const message = await formatMissingOperatorReadScopeMessage(
+        "cron status",
+        formatUiError(err),
+      );
+      if (!isCurrent() || !request.reportErrors || (opts?.coalesce && request.queued)) {
+        return;
+      }
       state.cronStatus = null;
-      state.cronError = formatMissingOperatorReadScopeMessage("cron status");
+      state.cronError = message;
     } else {
       state.cronError = formatUiError(err);
     }

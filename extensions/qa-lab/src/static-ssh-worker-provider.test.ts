@@ -3,18 +3,9 @@ import { describe, expect, it } from "vitest";
 import { createStaticSshWorkerProvider } from "./static-ssh-worker-provider.js";
 
 const provider = createStaticSshWorkerProvider();
-const KEY_REF = {
-  source: "file" as const,
-  provider: "default",
-  id: "/cloud-workers/development/private-key",
-};
+const KEY_REF = { source: "file" as const, provider: "default", id: "/private-key" };
 const HOST_KEY = ["ssh-ed25519", "AAAA"].join(" ");
-const PROFILE = {
-  host: "worker.example.test",
-  user: "openclaw",
-  hostKey: HOST_KEY,
-  keyRef: KEY_REF,
-};
+const PROFILE = { host: "worker.test", user: "openclaw", hostKey: HOST_KEY, keyRef: KEY_REF };
 const authority = { assertCurrent: () => {} };
 const invalid = (label: string, overrides: WorkerProfile) => ({
   label,
@@ -25,34 +16,24 @@ describe("QA Lab static-SSH worker provider", () => {
   it("provisions a deterministic logical lease with the default SSH port", async () => {
     const profile = {
       ...PROFILE,
-      host: " worker.example.test ",
+      host: ` ${PROFILE.host} `,
       user: " openclaw ",
       hostKey: ` ${HOST_KEY} `,
     };
 
-    const first = await provider.provision(profile, "operation-123", authority);
-    const replay = await provider.provision(profile, "operation-123", authority);
-
-    expect(provider.id).toBe("static-ssh");
-    expect(provider.supportedExecutionModes).toEqual(["remote-exec"]);
+    const provision = () => provider.provision(profile, "operation-123", authority);
+    const first = await provision();
     expect(first).toStrictEqual({
       leaseId: "static-ssh:operation-123",
       sharedHost: true,
-      ssh: {
-        host: "worker.example.test",
-        port: 22,
-        user: "openclaw",
-        hostKey: HOST_KEY,
-        keyRef: KEY_REF,
-      },
+      ssh: { ...PROFILE, port: 22 },
     });
-    expect(replay).toStrictEqual(first);
-    // Cleanup needs only the logical operation identity, even without usable SSH settings.
+    expect(await provision()).toStrictEqual(first);
     const allocation = await provider.resolveAllocation({}, "operation-123");
     expect(allocation).toEqual({ leaseId: first.leaseId, sharedHost: true });
-    await expect(
-      provider.destroy({ leaseId: allocation.leaseId, profile: {} }),
-    ).resolves.toBeUndefined();
+    const release = () => provider.destroy({ leaseId: allocation.leaseId, profile: {} });
+    await expect(release()).resolves.toBeUndefined();
+    await expect(release()).resolves.toBeUndefined();
   });
 
   it("preserves an explicit positive SSH port", async () => {
@@ -96,23 +77,14 @@ describe("QA Lab static-SSH worker provider", () => {
   });
 
   it("reports only its deterministic lease ids as active", async () => {
-    await expect(
-      provider.inspect({ leaseId: "static-ssh:operation-123", profile: PROFILE }),
-    ).resolves.toStrictEqual({
-      status: "active",
-      sharedHost: true,
-    });
-    await expect(
-      provider.inspect({ leaseId: "static-ssh:", profile: PROFILE }),
-    ).resolves.toStrictEqual({ status: "unknown" });
-    await expect(
-      provider.inspect({ leaseId: "other:operation-123", profile: PROFILE }),
-    ).resolves.toStrictEqual({ status: "unknown" });
-  });
-
-  it("destroys logical leases idempotently", async () => {
-    const lease = { leaseId: "static-ssh:operation-123", profile: PROFILE };
-    await expect(provider.destroy(lease)).resolves.toBeUndefined();
-    await expect(provider.destroy(lease)).resolves.toBeUndefined();
+    for (const [leaseId, expected] of [
+      ["static-ssh:operation-123", { status: "active", sharedHost: true }],
+      ["static-ssh:", { status: "unknown" }],
+      ["other:operation-123", { status: "unknown" }],
+    ] as const) {
+      await expect(provider.inspect({ leaseId, profile: PROFILE })).resolves.toStrictEqual(
+        expected,
+      );
+    }
   });
 });

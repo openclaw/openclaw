@@ -22,12 +22,6 @@ export type NodeOnlyGatewayInfo = {
   connectionDetails: string;
 };
 
-function resolveNodeGatewayTarget(gateway?: { host?: string; port?: number }): string {
-  return gateway?.host
-    ? `${gateway.host}:${gateway.port ?? DEFAULT_GATEWAY_PORT}`
-    : "(gateway address unknown)";
-}
-
 function isNodeServiceActive(node: NodeOnlyServiceLike): boolean {
   if (node.installed !== true) {
     return false;
@@ -51,7 +45,10 @@ export async function resolveNodeOnlyGatewayInfo(params: {
     return null;
   }
 
-  const gatewayTarget = resolveNodeGatewayTarget((await loadNodeHostConfig())?.gateway);
+  const gateway = (await loadNodeHostConfig())?.gateway;
+  const gatewayTarget = gateway?.host
+    ? `${gateway.host}:${gateway.port ?? DEFAULT_GATEWAY_PORT}`
+    : "(gateway address unknown)";
   return {
     gatewayTarget,
     gatewayValue: `node → ${gatewayTarget} · no local gateway`,

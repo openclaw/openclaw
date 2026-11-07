@@ -6,45 +6,15 @@ import type {
   ChatHistoryMessageParams,
   ChatHistoryDisplayRequest,
   ChatHistoryDisplayResult,
-  NativeHistoryAuthorizationRequest,
-  SessionHistorySubagentFacts,
 } from "../config/sessions/session-history-types.js";
-import {
-  NATIVE_HISTORY_AUTHORIZATION_REQUEST,
-  isNativeHistoryAuthorizationRequest,
-} from "../config/sessions/session-history-types.js";
-import type { WorkerTaskChannel } from "../infra/worker-task-server.js";
+import { isNativeHistoryAuthorizationRequest } from "../config/sessions/session-history-types.js";
 import { createChatHistoryRecoveryProjection } from "./chat-display-projection.core.js";
-import type { CliHistoryReaders } from "./cli-session-history.js";
-import { projectChatHistoryWithReplies } from "./server-methods/chat-history-reply-messages.js";
-import {
-  createPreparedSessionHistorySubagentProjection,
-  prepareSessionHistorySubagentFacts,
-} from "./session-history-delta-visibility.js";
+import { projectChatHistoryWithReplies } from "./chat-history-reply-messages.js";
+import type { ProcessHeldCliHistoryRequest } from "./cli-session-history.process-held.worker.js";
+import { prepareSessionHistorySubagentFacts } from "./session-history-delta-visibility.js";
 import { createSessionActorTranscriptReader } from "./session-transcript-memory-reader.js";
-import type {
-  SessionTranscriptPageOptions,
-  SessionTranscriptPageReader,
-} from "./session-transcript-read.types.js";
 
 type MemoryHistoryRead = NonNullable<ReturnType<typeof captureSessionActorTranscriptRead>>;
-
-type Request =
-  | NativeHistoryAuthorizationRequest
-  | {
-      kind: "by-id";
-      messageId: string;
-      options: Parameters<SessionTranscriptPageReader["readSessionMessageByIdAsync"]>[2];
-    }
-  | { kind: "page"; options: SessionTranscriptPageOptions }
-  | {
-      kind: "around";
-      options: Parameters<
-        SessionTranscriptPageReader["readSessionMessagesAroundIdWithStatsAsync"]
-      >[1];
-    };
-
-type ReadRequest = Exclude<Request, NativeHistoryAuthorizationRequest>;
 
 type NativeHistoryAuthorityAssertion = () => Promise<void>;
 
@@ -198,85 +168,20 @@ async function readProcessHeldCliHistoryQuery(
   return { kind: "rpc", page };
 }
 
-export async function readProcessHeldCliHistoryInWorker(
-  history: ChatHistoryDisplayRequest,
-  channel: WorkerTaskChannel,
-): Promise<ChatHistoryDisplayResult> {
-  const params = history.params;
-  const facts: SessionHistorySubagentFacts = { sessions: [], runMessages: [] };
-  let subagents = createPreparedSessionHistorySubagentProjection(facts, () => {});
-  const request = async <T>(value: ReadRequest): Promise<T> => {
-    const response = await channel.request(value);
-    try {
-      // SAFETY: The paired host owns this typed response and validates the retained source before disclosure.
-      const reply = response.input as { result: T; facts: SessionHistorySubagentFacts };
-      facts.sessions.push(...reply.facts.sessions);
-      facts.runMessages.push(...reply.facts.runMessages);
-      subagents = createPreparedSessionHistorySubagentProjection(facts, () => {});
-      return reply.result;
-    } finally {
-      response.consumed();
-    }
-  };
-  const readers: CliHistoryReaders = {
-    assertNativeHistoryAuthorized: async () => {
-      // The host answers without a payload; a denied read rejects this request instead.
-      const response = await channel.request(NATIVE_HISTORY_AUTHORIZATION_REQUEST);
-      response.consumed();
-    },
-    subagentCoordination: {
-      isSubagentSession: (key) => subagents.isSubagentSession(key),
-      isSubagentRunMessage: (runId, seq) => subagents.isSubagentRunMessage(runId, seq),
-    },
-    readSessionMessageByIdAsync: (_scope, messageId, options) =>
-      request({ kind: "by-id", messageId, options }),
-    readRecentSessionMessagesWithStatsAsync: (_scope, options) =>
-      request({ kind: "page", options: { ...options, offset: 0 } }),
-    readSessionMessagesPageWithStatsAsync: (_scope, options) => request({ kind: "page", options }),
-    readSessionMessagesAroundIdWithStatsAsync: (_scope, options) =>
-      request({ kind: "around", options }),
-  };
-  const [
-    { prepareCliSessionHistoryReader, readChatHistoryMessageFromReaders },
-    { readChatHistoryPageKernel },
-  ] = await Promise.all([
-    import("./cli-session-history.js"),
-    import("./server-methods/chat-history-page-kernel.js"),
-  ]);
-  if (history.kind === "rpc-message") {
-    return {
-      kind: "rpc-message",
-      result: await readChatHistoryMessageFromReaders(history.params, readers),
-    };
-  }
-  const cli = await prepareCliSessionHistoryReader(params, readers);
-  try {
-    const page = await readChatHistoryPageKernel(params, {
-      readers: cli?.readers ?? readers,
-      deferProfileDisplay: true,
-      // The host refreshes forwarded labels after the complete page returns.
-      resolveCronJobName: () => undefined,
-      readMessageSequence: cli?.sequence,
-    });
-    cli?.applyPagination(page);
-    return { kind: "rpc", page };
-  } finally {
-    cli?.dispose();
-  }
-}
-
-function decodeProcessHeldHistoryRequest(value: unknown): ReadRequest {
+/** The host fixes the source target; the worker only chooses one of the closed read variants. */
+function decodeProcessHeldHistoryRequest(value: unknown): ProcessHeldCliHistoryRequest {
   const record = asOptionalRecord(value);
-  if (!record || !asOptionalRecord(record.options)) {
+  if (
+    !record ||
+    !asOptionalRecord(record.options) ||
+    !(
+      record.kind === "page" ||
+      record.kind === "around" ||
+      (record.kind === "by-id" && typeof record.messageId === "string")
+    )
+  ) {
     throw new Error("Unsupported process-held history request");
   }
-  if (record.kind === "by-id" && typeof record.messageId === "string") {
-    // SAFETY: the closed worker request has validated this variant and its required fields.
-    return record as ReadRequest;
-  }
-  if (record.kind === "page" || record.kind === "around") {
-    // SAFETY: the closed worker request has validated this variant and its options record.
-    return record as ReadRequest;
-  }
-  throw new Error("Unsupported process-held history request");
+  // SAFETY: The closed variant tag, required id and options record were validated above.
+  return record as ProcessHeldCliHistoryRequest;
 }

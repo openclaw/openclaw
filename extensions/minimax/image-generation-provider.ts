@@ -25,21 +25,6 @@ const MINIMAX_SUPPORTED_ASPECT_RATIOS = [
   "21:9",
 ] as const;
 
-type MinimaxImageApiResponse = {
-  data?: {
-    image_base64?: string[];
-  };
-  metadata?: {
-    success_count?: number;
-    failed_count?: number;
-  };
-  id?: string;
-  base_resp?: {
-    status_code?: number;
-    status_msg?: string;
-  };
-};
-
 function isMinimaxCnHost(value: string | undefined): boolean {
   const trimmed = value?.trim();
   if (!trimmed) {
@@ -130,7 +115,20 @@ export function buildMinimaxImageGenerationProvider(
         const dataUrl = `data:${mime};base64,${ref.buffer.toString("base64")}`;
         body.subject_reference = [{ type: "character", image_file: dataUrl }];
       }
-      const data = await postJsonResponse<MinimaxImageApiResponse>({
+      const data = await postJsonResponse<{
+        data?: {
+          image_base64?: string[];
+        };
+        metadata?: {
+          success_count?: number;
+          failed_count?: number;
+        };
+        id?: string;
+        base_resp?: {
+          status_code?: number;
+          status_msg?: string;
+        };
+      }>({
         url: `${resolvedBaseUrl}/v1/image_generation`,
         headers,
         body,

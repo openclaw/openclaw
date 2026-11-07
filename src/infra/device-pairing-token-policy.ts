@@ -12,12 +12,6 @@ export type DeviceTokenVerification = {
   reason?: string;
   issuer?: DeviceAuthToken["issuer"];
 };
-export type DeviceTokenRequest = {
-  role: string;
-  scopes: string[];
-  issuer?: DeviceAuthToken["issuer"];
-};
-
 const SHARED_GATEWAY_AUTH_ISSUER_KIND = "shared-gateway-auth";
 const BROWSER_DEVICE_CLIENT_IDS = new Set(["openclaw-control-ui", "webchat-ui"]);
 const BROWSER_DEVICE_CLIENT_MODE = "webchat";
@@ -114,7 +108,11 @@ export function verifyPairedDeviceToken(
 
 export function reusablePairedDeviceToken(
   device: PairedDevice | null,
-  params: DeviceTokenRequest,
+  params: {
+    role: string;
+    scopes: string[];
+    issuer?: DeviceAuthToken["issuer"];
+  },
 ): DeviceAuthToken | null {
   const role = params.role.trim();
   const existing = device?.tokens?.[role];

@@ -1,4 +1,4 @@
-import { RefreshingAuthProvider, StaticAuthProvider } from "@twurple/auth";
+import { StaticAuthProvider, type AuthProvider } from "@twurple/auth";
 import { ChatClient, LogLevel } from "@twurple/chat";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-resolution";
 import {
@@ -11,6 +11,7 @@ import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import { TWITCH_CHAT_MESSAGE_LIMIT } from "./constants.js";
+import { createManagedTwitchAuthProvider } from "./oauth-owner.js";
 import { resolveTwitchToken } from "./token.js";
 import type {
   ChannelAccountSnapshot,
@@ -19,8 +20,6 @@ import type {
   TwitchChatMessage,
 } from "./types.js";
 import { normalizeToken } from "./utils/twitch.js";
-
-const TWITCH_CHAT_AUTH_INTENTS = ["chat"];
 
 export class TwitchClientManager {
   // The registry gives each account its own manager and transport lifetime.
@@ -46,46 +45,6 @@ export class TwitchClientManager {
 
   private publishRecovering(lastError: string): void {
     this.statusSink?.({ connected: false, lifecycle: "recovering", lastError });
-  }
-
-  private async createAuthProvider(
-    account: TwitchAccountConfig,
-    normalizedToken: string,
-    clientId: string,
-  ): Promise<StaticAuthProvider | RefreshingAuthProvider> {
-    if (account.clientSecret) {
-      const authProvider = new RefreshingAuthProvider({
-        clientId,
-        clientSecret: account.clientSecret,
-      });
-
-      try {
-        await authProvider.addUserForToken(
-          {
-            accessToken: normalizedToken,
-            refreshToken: account.refreshToken ?? null,
-            expiresIn: account.expiresIn ?? null,
-            obtainmentTimestamp: account.obtainmentTimestamp ?? Date.now(),
-          },
-          TWITCH_CHAT_AUTH_INTENTS,
-        );
-      } catch (err) {
-        throw new Error(
-          `Failed to add user to RefreshingAuthProvider: ${formatErrorMessage(err)}`,
-          {
-            cause: err,
-          },
-        );
-      }
-
-      authProvider.onRefreshFailure((userId, error) => {
-        this.logger.error(`Failed to refresh access token for user ${userId}: ${error.message}`);
-      });
-
-      return authProvider;
-    }
-
-    return new StaticAuthProvider(clientId, normalizedToken);
   }
 
   async getClient(
@@ -140,7 +99,10 @@ export class TwitchClientManager {
 
     const normalizedToken = normalizeToken(tokenResolution.token);
 
-    const authProvider = await this.createAuthProvider(account, normalizedToken, account.clientId);
+    const clientId = account.clientId;
+    const authProvider: AuthProvider = await (account.clientSecret && account.refreshToken
+      ? createManagedTwitchAuthProvider(account, normalizedToken, accountId)
+      : new StaticAuthProvider(clientId, normalizedToken));
     if (!ownsConnection()) {
       throw new Error(`Twitch connection cancelled for ${account.username}`);
     }
@@ -182,7 +144,73 @@ export class TwitchClientManager {
 
     this.pendingClient = client;
     try {
-      await this.connectClient(client, account);
+      const connectTimeoutMs = 15000;
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        let authRetryPending = false;
+        const listeners: Array<{ unbind: () => void }> = [];
+        const finish = (error?: Error) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          clearTimeout(timeout);
+          for (const listener of listeners) {
+            listener.unbind();
+          }
+          if (error) {
+            try {
+              client.quit();
+            } catch {
+              // Best effort: connection setup already failed.
+            }
+            reject(error);
+            return;
+          }
+          resolve();
+        };
+        listeners.push(
+          client.onAuthenticationSuccess(() => {
+            this.publishReady();
+            finish();
+          }),
+          client.onAuthenticationFailure((text) => {
+            authRetryPending = true;
+            this.publishRecovering(text);
+            this.logger.warn(
+              `Twitch authentication failed for ${account.username}; waiting for retry, disconnect, or timeout: ${text}`,
+            );
+          }),
+          client.onDisconnect((manual, reason) => {
+            if (!manual) {
+              this.publishRecovering(
+                reason ? formatErrorMessage(reason) : "Twitch connection lost",
+              );
+            }
+            if (authRetryPending && !manual) {
+              return;
+            }
+            finish(
+              reason ??
+                new Error(
+                  manual
+                    ? `Twitch connection cancelled for ${account.username}`
+                    : `Twitch disconnected before ready for ${account.username}`,
+                ),
+            );
+          }),
+        );
+        const timeout = setTimeout(
+          () => finish(new Error(`Timed out connecting to Twitch as ${account.username}`)),
+          connectTimeoutMs,
+        );
+        timeout.unref?.();
+        try {
+          client.connect();
+        } catch (error) {
+          finish(error instanceof Error ? error : new Error(String(error)));
+        }
+      });
       if (this.pendingClient !== client) {
         client.quit();
         throw new Error(`Twitch connection cancelled for ${account.username}`);
@@ -193,82 +221,6 @@ export class TwitchClientManager {
       }
     }
 
-    this.setupClientHandlers(client);
-    this.client = client;
-    this.logger.info(`Connected to Twitch as ${account.username}`);
-
-    return client;
-  }
-
-  private async connectClient(client: ChatClient, account: TwitchAccountConfig): Promise<void> {
-    const connectTimeoutMs = 15000;
-    await new Promise<void>((resolve, reject) => {
-      let settled = false;
-      let authRetryPending = false;
-      const listeners: Array<{ unbind: () => void }> = [];
-      const finish = (error?: Error) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timeout);
-        for (const listener of listeners) {
-          listener.unbind();
-        }
-        if (error) {
-          try {
-            client.quit();
-          } catch {
-            // Best effort: connection setup already failed.
-          }
-          reject(error);
-          return;
-        }
-        resolve();
-      };
-      listeners.push(
-        client.onAuthenticationSuccess(() => {
-          this.publishReady();
-          finish();
-        }),
-        client.onAuthenticationFailure((text) => {
-          authRetryPending = true;
-          this.publishRecovering(text);
-          this.logger.warn(
-            `Twitch authentication failed for ${account.username}; waiting for retry, disconnect, or timeout: ${text}`,
-          );
-        }),
-        client.onDisconnect((manual, reason) => {
-          if (!manual) {
-            this.publishRecovering(reason ? formatErrorMessage(reason) : "Twitch connection lost");
-          }
-          if (authRetryPending && !manual) {
-            return;
-          }
-          finish(
-            reason ??
-              new Error(
-                manual
-                  ? `Twitch connection cancelled for ${account.username}`
-                  : `Twitch disconnected before ready for ${account.username}`,
-              ),
-          );
-        }),
-      );
-      const timeout = setTimeout(
-        () => finish(new Error(`Timed out connecting to Twitch as ${account.username}`)),
-        connectTimeoutMs,
-      );
-      timeout.unref?.();
-      try {
-        client.connect();
-      } catch (error) {
-        finish(error instanceof Error ? error : new Error(String(error)));
-      }
-    });
-  }
-
-  private setupClientHandlers(client: ChatClient): void {
     client.onMessage((channelName, _user, messageText, msg) => {
       const handler = this.messageHandler?.handler;
       if (handler) {
@@ -298,6 +250,10 @@ export class TwitchClientManager {
         this.publishRecovering(reason ? formatErrorMessage(reason) : "Twitch connection lost");
       }
     });
+    this.client = client;
+    this.logger.info(`Connected to Twitch as ${account.username}`);
+
+    return client;
   }
 
   onMessage(handler: (message: TwitchChatMessage) => void): () => void {

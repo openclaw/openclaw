@@ -7,6 +7,7 @@ import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import { navigateWithRouteTransition } from "./route-transition.ts";
 
 const location = (pathname: string, search = "") => ({ pathname, search, hash: "" });
+const chatReady = () => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT));
 
 function testDocumentWithOutlet(animate = vi.fn()) {
   const router = createRouter<RouteId>({
@@ -24,8 +25,6 @@ function testDocumentWithOutlet(animate = vi.fn()) {
   document.body.append(outlet);
   return {
     animate,
-    document,
-    outlet,
     router,
     transition: (
       navigate: () => Promise<void>,
@@ -57,7 +56,7 @@ it("animates the rendered chat pane without freezing the outgoing document", asy
   expect(navigate).toHaveBeenCalledOnce();
   expect(animate).not.toHaveBeenCalled();
   navigation.resolve();
-  document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT));
+  chatReady();
   await transition;
 
   expect(navigate).toHaveBeenCalledOnce();
@@ -81,13 +80,13 @@ it("propagates navigation failure without animating", async () => {
 });
 
 it.each([
-  { from: "about" as const, to: "chat" as const, prefersReducedMotion: false },
-  { from: "new-session" as const, to: "about" as const, prefersReducedMotion: false },
-])("navigates directly for $from to $to", async ({ from, to, prefersReducedMotion }) => {
+  { from: "about", to: "chat" },
+  { from: "new-session", to: "about" },
+] as const)("navigates directly for $from to $to", async (options) => {
   const test = testDocumentWithOutlet();
   const navigate = vi.fn(async () => undefined);
 
-  await test.transition(navigate, { from, to, prefersReducedMotion });
+  await test.transition(navigate, options);
 
   expect(navigate).toHaveBeenCalledOnce();
   expect(test.animate).not.toHaveBeenCalled();
@@ -99,7 +98,7 @@ it("cancels a running entrance when another route takes over", async () => {
   const animate = vi.fn(() => running as Animation);
   const test = testDocumentWithOutlet(animate);
   const transition = test.transition(async () => undefined);
-  document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT));
+  chatReady();
   await vi.waitFor(() => expect(animate).toHaveBeenCalledOnce());
 
   await test.router.navigate("about", undefined);
@@ -114,7 +113,7 @@ it("waits for the chat route without animating when motion is reduced", async ()
   const transition = test.transition(navigate, { prefersReducedMotion: true });
 
   await vi.waitFor(() => expect(navigate).toHaveBeenCalledOnce());
-  document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT));
+  chatReady();
   await transition;
 
   expect(test.animate).not.toHaveBeenCalled();
@@ -144,6 +143,6 @@ it("keeps waiting through same-path focus cleanup but retires a different Chat d
   expect(settled).toBe(false);
   await test.router.navigate("chat", undefined, {}, location("/chat/main/second"));
   await transition;
-  document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT));
+  chatReady();
   expect(test.animate).not.toHaveBeenCalled();
 });

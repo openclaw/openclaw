@@ -88,7 +88,6 @@ beforeEach(async () => {
         enqueueSessionEvent() {
           if (mode === "manual-postcommit-crash") process.kill(process.pid, "SIGKILL");
         },
-        requestHeartbeat() {},
         runIsolatedAgentJob: async () => ({ status: "ok" }),
         runCommandJob: async ({ job }) => {
           if (mode === "manual-postcommit-crash") {
@@ -167,7 +166,6 @@ function makeParentService(storePath: string, runCommandJob = vi.fn()) {
     cronEnabled: true,
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     runCommandJob,
   });

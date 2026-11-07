@@ -303,6 +303,10 @@ describe("reference source candidate preparation", () => {
           }
           return { code: 0, stdout: argv[1] === "--version" ? "12.0.0" : "", stderr: "" };
         }
+        if (argv[0] === "node" && exposed) {
+          assert(options.cwd);
+          expect(argv).toEqual(["node", path.join(options.cwd, script)]);
+        }
         return runCommandWithTimeout(argv, options);
       };
       const result = await prepare(runCommand, {

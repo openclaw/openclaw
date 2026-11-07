@@ -1,9 +1,6 @@
 import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import { assertContextEngineHostSupport } from "../../context-engine/host-compat.js";
-import {
-  joinDiagnosticContent,
-  truncateDiagnosticContent,
-} from "../../infra/diagnostic-content.js";
+import { truncateDiagnosticContent } from "../../infra/diagnostic-content.js";
 import {
   diagnosticErrorCategory,
   diagnosticErrorMessage,
@@ -66,7 +63,7 @@ function agentRunMessageContent(
 ): AgentRunMessageContent | undefined {
   const policy = resolveDiagnosticModelContentCapturePolicy(getRuntimeConfigSnapshot());
   const finalText = policy.outputMessages ? resolveFinalMessageRawText(assistant) : undefined;
-  const finalResponse = finalText ? joinDiagnosticContent([finalText]) : undefined;
+  const finalResponse = finalText ? truncateDiagnosticContent(finalText) : undefined;
   const userPrompt = policy.inputMessages && prompt ? truncateDiagnosticContent(prompt) : undefined;
   return userPrompt || finalResponse
     ? { ...(userPrompt ? { userPrompt } : {}), ...(finalResponse ? { finalResponse } : {}) }

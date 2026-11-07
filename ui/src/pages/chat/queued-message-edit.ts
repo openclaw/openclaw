@@ -4,6 +4,7 @@ import { chatQueueOrderKey, isMovableChatQueueItem } from "../../lib/chat/chat-q
 import type { ChatAttachment, ChatQueueItem, HumanMention } from "../../lib/chat/chat-types.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
+import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store-scope.ts";
 import { storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import {
@@ -16,7 +17,6 @@ import {
   readQueuedMessageById,
   type ChatQueueScopedSessionHost,
 } from "./chat-queue.ts";
-import { storedChatOutboxScopeKey } from "./composer-persistence.ts";
 
 /** The queued row retains its position and payloads while this token owns the draft. */
 export type QueuedMessageEdit = {

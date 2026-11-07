@@ -102,32 +102,51 @@ it("routes root memory before budgeting and keeps nested memory as context", asy
   expect(context.memoryToolRoutedBootstrapFiles).toEqual([rootMemory]);
   expect(context.promptContextFiles).toEqual([contextFile(nestedMemory)]);
   expect(context.instructionSnapshot.files).toEqual([contextFile(instructions)]);
-  expect(context.instructionSnapshot.instructions).toContain("Keep the bounded operating rules.");
 });
 
+it.each(["full", "instructions-only"] as const)(
+  "keeps only root instructions in the projected %s snapshot",
+  async (scope) => {
+    const context = await prepare(
+      [
+        bootstrapFile("AGENTS.md", "Root operating rules."),
+        bootstrapFile("AGENTS.md", "Nested project rules.", "pkg/AGENTS.md"),
+      ],
+      {
+        scope,
+        projectPath: (filePath) => path.join("/sandbox", path.relative(workspaceDir, filePath)),
+      },
+    );
+    expect(context.instructionSnapshot.files).toEqual([
+      { path: path.join("/sandbox", "AGENTS.md"), content: "Root operating rules." },
+    ]);
+    expect(context.instructionSnapshot.instructions).toContain("Root operating rules.");
+    expect(context.instructionSnapshot.instructions).not.toContain("Nested project rules.");
+    expect(context.promptContextFiles).toEqual(
+      scope === "full"
+        ? [{ path: path.join("/sandbox", "pkg", "AGENTS.md"), content: "Nested project rules." }]
+        : [],
+    );
+  },
+);
+
 it("passes agent context to memory guidance without MEMORY.md", async () => {
-  let observedContext:
-    | { agentId?: string; agentSessionKey?: string; sandboxed?: boolean }
-    | undefined;
-  registerMemoryCapability("memory-core", {
-    promptBuilder: (context) => {
-      observedContext = context;
-      return ["## Agent Memory", `agent=${context.agentId} session=${context.agentSessionKey}`, ""];
-    },
-  });
+  const promptBuilder = (context: {
+    agentId?: string;
+    agentSessionKey?: string;
+    sandboxed?: boolean;
+  }) => [
+    `agent=${context.agentId} session=${context.agentSessionKey} sandboxed=${context.sandboxed}`,
+  ];
+  registerMemoryCapability("memory-core", { promptBuilder });
   const context = await prepare([], {
     agentId: "marketing-agent",
     sessionKey: "agent:marketing-agent:session-1",
     memoryToolRouted: true,
     memoryTools: { toolNames: ["memory_search", "memory_get"], sandboxed: true },
   });
-  expect(observedContext).toMatchObject({
-    agentId: "marketing-agent",
-    agentSessionKey: "agent:marketing-agent:session-1",
-    sandboxed: true,
-  });
   expect(context.memoryRecallInstructions).toContain(
-    "agent=marketing-agent session=agent:marketing-agent:session-1",
+    "agent=marketing-agent session=agent:marketing-agent:session-1 sandboxed=true",
   );
 });
 

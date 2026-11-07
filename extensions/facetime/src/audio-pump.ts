@@ -209,8 +209,7 @@ function createAudioReadiness() {
       if (settled || timer) {
         return;
       }
-      timer = setTimeout(onTimeout, timeoutMs);
-      timer.unref?.();
+      timer = setTimeout(onTimeout, timeoutMs).unref();
     },
     settle(error?: Error) {
       if (settled) {
@@ -269,10 +268,8 @@ export function startFaceTimeAudioPump(params: {
     });
   };
   const cancelDrainTimer = () => {
-    if (drainTimer) {
-      clearTimeout(drainTimer);
-      drainTimer = undefined;
-    }
+    clearTimeout(drainTimer);
+    drainTimer = undefined;
   };
   const spawnOutput = () => {
     // Playback stays out of the capture helper: an in-process AVAudioEngine can
@@ -426,8 +423,7 @@ export function startFaceTimeAudioPump(params: {
         }
         const delayMs = Math.ceil(playbackClock.millisecondsUntilDrained());
         if (delayMs > 0) {
-          drainTimer = setTimeout(notifyWhenDrained, Math.max(1, delayMs));
-          drainTimer.unref?.();
+          drainTimer = setTimeout(notifyWhenDrained, Math.max(1, delayMs)).unref();
           return;
         }
         drainTimer = undefined;

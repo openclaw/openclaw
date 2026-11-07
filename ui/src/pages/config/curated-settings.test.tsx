@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { getQueriesForElement } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
+import { configSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
@@ -81,12 +82,8 @@ const selectedSegment = (container: HTMLElement) =>
 
 it("defaults phases on unless explicitly disabled", () => {
   const container = renderInto({ enabled: true, phases: { deep: { enabled: false } } });
-  const queries = getQueriesForElement(container);
   const checked = (title: string) =>
-    queries
-      .getByText(title, { selector: ".settings-section__heading" })
-      .closest(".settings-section")
-      ?.querySelector<HTMLInputElement>(".settings-toggle__input")?.checked;
+    rowFor(container, title).querySelector<HTMLInputElement>(".settings-toggle__input")?.checked;
   expect(["Light phase", "Deep phase", "REM phase"].map(checked)).toEqual([true, false, true]);
 });
 
@@ -95,7 +92,7 @@ it("renders the runtime storage-mode default when the config omits it", () => {
   expect(selectedSegment(defaultPanel)).toBe("separate");
   expect(rowFor(defaultPanel, "Storage mode").textContent).not.toContain("Default:");
   const inline = renderInto({ storage: { mode: "inline" } });
-  expect(rowFor(inline, "Storage mode").textContent).toContain("Default: Separate");
+  expect(rowFor(inline, "Storage mode").textContent).not.toContain("Default:");
   expect(selectedSegment(inline)).toBe("inline");
   expect(selectedSegment(renderInto({ storage: { mode: "both" } }))).toBe("both");
   expect(selectedSegment(renderInto({ storage: { mode: "nonsense" } }))).toBe("separate");
@@ -108,12 +105,14 @@ it("shows the advanced execution model as the inherited model default", async ()
   const row = rowFor(container, "Dreaming model");
   await openPicker(row.querySelector("openclaw-select-picker")!);
 
-  expect(row.textContent).toContain("Default: openai/gpt-5.6");
-  expect(row.querySelector('[role="option"][data-value="anthropic/claude-sonnet"]')).not.toBeNull();
-  const custom = expectDefined(
-    row.querySelector<HTMLInputElement>(".model-picker__custom"),
-    "Missing custom model input",
+  expect(row.querySelector('[role="option"][data-value=""]')?.textContent).toContain(
+    "openai/gpt-5.6",
   );
+  expect(
+    row.querySelector('[role="option"][data-value="__openclaw_custom_model__"]')?.textContent,
+  ).toContain("Custom model…");
+  expect(row.querySelector('[role="option"][data-value="anthropic/claude-sonnet"]')).not.toBeNull();
+  const custom = getQueriesForElement(row).getByLabelText<HTMLInputElement>("Custom model…");
   expect(custom.hidden).toBe(false);
   editNumber(custom, "vendor/model with spaces", true);
   expect(onPatch).toHaveBeenCalledWith(["model"], "vendor/model with spaces");
@@ -131,47 +130,63 @@ it("locks every global dreaming control when config mutation is unavailable", ()
   const container = renderInto(null, vi.fn(), true);
 
   expect(
-    [...container.querySelectorAll<HTMLInputElement>("input")].every((input) => input.disabled),
+    [...container.querySelectorAll<HTMLInputElement>("input")].every((input) =>
+      input.matches(":disabled"),
+    ),
   ).toBe(true);
 });
 
-it("keeps the edited field mounted when the owner publishes updated config", () => {
-  const [dreaming, setDreaming] = createSignal<Record<string, unknown>>({ frequency: "0 3 * * *" });
+it("preserves drafts and numeric admission across config refreshes", () => {
+  const onPatch = vi.fn();
+  const draft = (frequency: string, lookbackDays: number, extra = {}) =>
+    dreamingConfig({ frequency, phases: { light: { lookbackDays } }, ...extra });
+  const [config, setConfig] = createSignal(draft("0 3 * * *", 7));
   const view = mountSolid(() => (
     <CuratedSettingsPanel
       {...panelDefaults}
-      config={dreamingConfig(dreaming())}
-      onPatch={(_, _path, value) => setDreaming({ frequency: value })}
+      config={config()}
+      onPatch={(_, path, value) => onPatch(path, value)}
     />
   ));
   flush();
-  const input = numberInput(view.container, "Dreaming frequency");
-  editNumber(input, "0 4 * * *");
+  const frequency = numberInput(view.container, "Schedule (cron)");
+  const lookback = numberInput(view.container, "Lookback days");
+  frequency.value = "0 4 * * *";
+  lookback.value = "14";
+  setConfig(draft("0 3 * * *", 7, { verboseLogging: true }));
   flush();
+  expect(numberInput(view.container, "Schedule (cron)")).toBe(frequency);
+  expect(frequency.value).toBe("0 4 * * *");
+  expect(lookback.value).toBe("14");
+  expect(onPatch).not.toHaveBeenCalled();
+  frequency.dispatchEvent(new Event("change", { bubbles: true }));
+  lookback.dispatchEvent(new Event("change", { bubbles: true }));
+  expect(onPatch).toHaveBeenNthCalledWith(1, ["frequency"], "0 4 * * *");
+  expect(onPatch).toHaveBeenNthCalledWith(2, ["phases", "light", "lookbackDays"], 14);
+  setConfig(draft("0 5 * * *", 21));
+  flush();
+  expect(frequency.value).toBe("0 5 * * *");
+  expect(lookback.value).toBe("21");
 
-  expect(numberInput(view.container, "Dreaming frequency")).toBe(input);
-  expect(input.value).toBe("0 4 * * *");
-});
-
-it("rejects invalid numbers, accepts valid edits, and clears emptied values", () => {
-  const onPatch = vi.fn();
-  const container = renderInto({ enabled: true, phases: { light: { lookbackDays: 7 } } }, onPatch);
-
-  editNumber(numberInput(container, "Lookback days"), "-1");
-  expect(numberInput(container, "Lookback days").value).toBe("7");
-  editNumber(numberInput(container, "Limit"), "2.5");
-  editNumber(numberInput(container, "Dedupe similarity"), "1.4");
-  editNumber(numberInput(container, "Maximum age (days)"), "0");
+  onPatch.mockClear();
+  const badInput = vi.spyOn(lookback.validity, "badInput", "get").mockReturnValueOnce(true);
+  for (const value of ["", "-1"]) {
+    editNumber(lookback, value);
+    expect(lookback.value).toBe("21");
+  }
+  badInput.mockRestore();
+  editNumber(numberInput(view.container, "Limit"), "2.5");
+  editNumber(numberInput(view.container, "Dedupe similarity"), "1.4");
+  editNumber(numberInput(view.container, "Maximum age (days)"), "0");
   expect(onPatch).not.toHaveBeenCalled();
 
-  editNumber(numberInput(container, "Lookback days"), "7");
-  editNumber(numberInput(container, "Dedupe similarity"), "0.82");
+  editNumber(lookback, "7");
+  editNumber(numberInput(view.container, "Dedupe similarity"), "0.82");
   expect(onPatch).toHaveBeenNthCalledWith(1, ["phases", "light", "lookbackDays"], 7);
   expect(onPatch).toHaveBeenNthCalledWith(2, ["phases", "light", "dedupeSimilarity"], 0.82);
-  editNumber(numberInput(container, "Lookback days"), "");
+  editNumber(lookback, "");
   expect(onPatch).toHaveBeenNthCalledWith(3, ["phases", "light", "lookbackDays"], undefined);
 });
-
 it("submits edited values and removals through the shared config owner without materializing display defaults", async () => {
   vi.useFakeTimers();
   let config: Record<string, unknown> = persistedConfig({
@@ -180,7 +195,7 @@ it("submits edited values and removals through the shared config owner without m
   });
   const request = vi.fn(async (method: string, params?: unknown) => {
     if (method === "config.get") {
-      return { config, raw: JSON.stringify(config), hash: "current", valid: true, issues: [] };
+      return configSnapshot(config, "current", JSON.stringify(config));
     }
     if (method === "config.set") {
       config = JSON.parse((params as { raw: string }).raw);
@@ -220,7 +235,11 @@ it("submits edited values and removals through the shared config owner without m
     );
     toggle.checked = false;
     toggle.dispatchEvent(new Event("change", { bubbles: true }));
-    editNumber(numberInput(view.container, "Dreaming frequency"), "");
+    const frequency = numberInput(view.container, "Schedule (cron)");
+    editNumber(frequency, "");
+    flush();
+    expect(numberInput(view.container, "Schedule (cron)")).toBe(frequency);
+    expect(frequency.value).toBe("");
     runtimeConfig.patchForm(["agents", "defaults", "userTimezone"], "Etc/UTC");
     await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
     await runtimeConfig.waitForPendingWrites();

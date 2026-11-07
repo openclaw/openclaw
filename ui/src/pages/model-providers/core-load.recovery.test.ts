@@ -55,7 +55,7 @@ it.each(["providers", "discovery"] as const)(
   },
 );
 
-it("publishes receipts only for admitted reads and retires a replaced read immediately", async () => {
+it("only publishes the current read after replacing an active read", async () => {
   const first = createDeferred();
   const next = createDeferred();
   let calls = 0;
@@ -77,21 +77,53 @@ it("publishes receipts only for admitted reads and retires a replaced read immed
   });
   const client = createTestGatewayClient(request);
   const original = loader.refresh(client, "main", "replacement");
-  const retired = loader.receipt!;
   await loader.refresh(client, "main", "publication");
-  expect(loader.receipt).toBe(retired);
   const replacement = loader.refresh(client, "main", "replacement");
-  const current = loader.receipt!;
-  expect(current).not.toBe(retired);
-  expect(await retired.promise).toBeUndefined();
   first.resolve();
   await original;
   expect(completed).not.toHaveBeenCalled();
   next.resolve();
   await replacement;
-  expect(await current.promise).toBeUndefined();
   expect(completed).toHaveBeenCalledOnce();
-  expect(loader.receipt).toBe(current);
-  loader.invalidate();
-  expect(loader.receipt).toBeNull();
+});
+
+it("turns a burst of catalog publications into one reload", async () => {
+  vi.useFakeTimers();
+  try {
+    const request = createGatewayRequestMock(async (method) => {
+      if (method === "models.authStatus") {
+        return { ts: 1, providers: [] };
+      }
+      if (method === "models.list") {
+        return { models: [] };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = createTestGatewayClient(request);
+    const loader = new ModelProviderCoreLoader(() => {}, {
+      onStart: () => {},
+      onComplete: () => {},
+      onCatalogComplete: () => {},
+    });
+    const lists = () => request.mock.calls.filter(([method]) => method === "models.list").length;
+    // One credential save publishes several changes a few milliseconds apart.
+    const burst = [0, 1, 2].map(() => {
+      invalidateModelCatalogCache(client, { agentId: "main" });
+      return loader.refresh(client, "main", "publication");
+    });
+    expect(lists()).toBe(0);
+    await vi.runOnlyPendingTimersAsync();
+    await Promise.all(burst);
+    expect(lists()).toBe(1);
+
+    // An explicit reload reads everything a pending publication would.
+    invalidateModelCatalogCache(client, { agentId: "main" });
+    const pending = loader.refresh(client, "main", "publication");
+    await loader.refresh(client, "main", "replacement");
+    await pending;
+    await vi.runOnlyPendingTimersAsync();
+    expect(lists()).toBe(2);
+  } finally {
+    vi.useRealTimers();
+  }
 });

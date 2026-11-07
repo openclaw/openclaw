@@ -13,7 +13,7 @@ export function createMemoryCliHarness(
     statsSource?: MemoryStatsSource;
   } = {},
 ) {
-  const program = new Command();
+  const program = new Command().exitOverride().configureOutput({ writeErr: () => {} });
   const registerCli = (register: (context: { program: Command }) => void) => register({ program });
   const embed = vi.fn(async () => [0.1, 0.2]);
   const close = vi.fn(async () => {});
@@ -24,13 +24,23 @@ export function createMemoryCliHarness(
     close.mockRejectedValue(params.closeError);
   }
   const search = vi.fn(async () => []);
+  const list = vi.fn(async () => []);
   const query = vi.fn(async () => params.queryRows ?? []);
+  const dbClose = vi.fn(async () => {});
+  const optimize = vi.fn(async () => ({
+    before: { rows: 6, fragments: 6 },
+    after: { rows: 6, fragments: 1 },
+  }));
   const count = () => {
     throw new Error("in-process native count must not run");
   };
   registerMemoryCli(
     { registerCli } as unknown as OpenClawPluginApi,
-    (params.statsSource ? { count } : { search, query }) as unknown as MemoryDB,
+    {
+      ...(params.statsSource ? { count } : { search, query, list }),
+      close: dbClose,
+      optimize,
+    } as unknown as MemoryDB,
     { embed, close },
     (agent) => (typeof agent === "string" ? agent : "main"),
     () => ({
@@ -41,5 +51,5 @@ export function createMemoryCliHarness(
     params.statsSource ?? { dbPath: "/fixture/memory" },
   );
   const run = (...args: string[]) => program.parseAsync(["node", "openclaw", "ltm", ...args]);
-  return { close, embed, run, query, search };
+  return { close, dbClose, embed, optimize, run, query, search, list };
 }

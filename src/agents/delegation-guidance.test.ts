@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildDelegationGuidanceSection,
+  buildSubagentPromptGuidance,
   resolveMainSessionDelegationMode,
 } from "./delegation-guidance.js";
 
@@ -38,13 +39,37 @@ describe("resolveMainSessionDelegationMode", () => {
   ] satisfies [string, "prefer" | "suggest", OpenClawConfig?, string?][])(
     "resolves %s to %s",
     (sessionKey, expected, config = {}, agentId = "main") => {
-      expect(
-        resolveMainSessionDelegationMode({
-          config,
-          agentId,
-          sessionKey,
-        }),
-      ).toBe(expected);
+      expect(resolveMainSessionDelegationMode({ config, agentId, sessionKey })).toBe(expected);
+    },
+  );
+});
+
+describe("buildSubagentPromptGuidance", () => {
+  it.each([true, false])(
+    "preserves automation collection guidance with yield available (collection=%s)",
+    (canCollect) => {
+      const guidance = buildSubagentPromptGuidance({
+        mode: "prefer",
+        isMinimal: false,
+        availableTools: new Set([
+          "sessions_spawn",
+          "sessions_yield",
+          ...(canCollect ? ["agents_wait"] : []),
+        ]),
+        sessionKey: "agent:main:cron:nightly-job:run:run-1",
+        resolveToolName: (name) => name,
+      });
+
+      expect(guidance.inTurnCollectionGuidance).toContain(
+        canCollect ? "collect=true` and wait with `agents_wait`" : "complete that work directly",
+      );
+      expect(guidance.inTurnCollectionGuidance).toContain(
+        "`sessions_yield` ends this turn; the scheduler delivers that output",
+      );
+      const section = guidance.delegationSection.join("\n");
+      expect(section).toContain(guidance.inTurnCollectionGuidance);
+      expect(section).not.toContain("Need announced results before reply");
+      expect(section).not.toContain("Announcing spawns notify when the run ends");
     },
   );
 });
@@ -71,30 +96,27 @@ describe("buildDelegationGuidanceSection", () => {
   });
 
   it.each([
-    { flag: "hasVisibleSessionSpawn", marker: "`sessions_spawn` with `visible=true`" },
-    { flag: "hasSessionsSend", marker: "`sessions_send`" },
-    { flag: "hasSessionsYield", marker: "`sessions_yield`" },
-    { flag: "hasSubagentsList", marker: "`subagents(action=list)`" },
-  ] as const)("mentions $marker only when $flag", ({ flag, marker }) => {
+    ["hasVisibleSessionSpawn", "`sessions_spawn` with `visible=true`"],
+    ["hasSessionsSend", "`sessions_send`"],
+    ["hasSessionsYield", "`sessions_yield`"],
+    ["hasSubagentsList", "`subagents(action=list)`"],
+  ] as const)("mentions %s only when enabled", (flag, marker) => {
     expect(buildSection().join("\n")).toContain(marker);
     expect(buildSection({ [flag]: false }).join("\n")).not.toContain(marker);
   });
 
   it.each([
-    {
-      name: "minimal prompts, even with session creation",
-      overrides: {
+    [
+      "minimal prompts, even with session creation",
+      {
         isMinimal: true,
         sessionsCreateToolName: "sessions_create",
         suggestTaskToolName: "suggest_task",
       },
-    },
-    { name: "suggest mode without session routing tools", overrides: { mode: "suggest" as const } },
-    {
-      name: "no usable delegation tool",
-      overrides: { hiddenDelegationTool: "", hasVisibleSessionSpawn: false },
-    },
-  ])("omits the section for $name", ({ overrides }) => {
+    ],
+    ["suggest mode without session routing tools", { mode: "suggest" }],
+    ["no usable delegation tool", { hiddenDelegationTool: "", hasVisibleSessionSpawn: false }],
+  ] as const)("omits the section for %s", (_name, overrides) => {
     expect(buildSection(overrides)).toEqual([]);
   });
 });

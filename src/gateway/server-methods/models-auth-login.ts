@@ -3,10 +3,6 @@ import {
   errorShape,
   validateSystemAgentSetupAuthStartParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  completeProviderModelAccess,
-  type PreparedProviderModelAccess,
-} from "../../commands/models/auth-model-policy.js";
 import { runModelsAuthLoginFlowForGateway } from "../../commands/models/auth.js";
 import { resolveManifestDeclaredProviderAuthChoices } from "../../plugins/provider-auth-choices.js";
 import {
@@ -15,10 +11,7 @@ import {
   isProviderLoginChoiceStartable,
 } from "../../plugins/provider-login-options.js";
 import { createNonExitingRuntime } from "../../runtime.js";
-import {
-  ProviderAuthConfigApplyError,
-  ProviderCredentialsSavedError,
-} from "../../shared/provider-auth-result.js";
+import { ProviderCredentialsSavedError } from "../../shared/provider-auth-result.js";
 import { WizardSession } from "../../wizard/session.js";
 import { refreshModelAuthStateAfterMutation } from "../model-auth-refresh.js";
 import { createProviderBrowserAuthSession } from "../provider-browser-auth.js";
@@ -26,14 +19,11 @@ import {
   captureLocalStateMutationGuard,
   localStateOwnerChangedError,
 } from "./local-state-owner.js";
+import { startGatewayWizard } from "./setup-admission.js";
 import { resolveSystemAgentSessionOwnerKey } from "./system-agent-session-owner.js";
-import {
-  rejectExistingSetupWizardSession,
-  startSetupActivationWizard,
-} from "./system-agent-setup-wizard.js";
+import { startSetupActivationWizard } from "./system-agent-setup-wizard.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
-import { startWizardLogin } from "./wizard-login.js";
 
 export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
   "models.authLogin": defineValidatedGatewayHandler(
@@ -65,9 +55,6 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
           return;
         }
       }
-      if (rejectExistingSetupWizardSession({ sessionId: params.sessionId, context, respond })) {
-        return;
-      }
       const resolveChoice = () => {
         const matches = resolveManifestDeclaredProviderAuthChoices({
           config: context.getRuntimeConfig(),
@@ -91,9 +78,8 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      const assertCurrent = () => {
+      const assertLoginCurrent = () => {
         assertOwner?.();
-        client.connectionSignal?.throwIfAborted();
         if (client.invalidated || !client.connect.scopes?.includes("operator.admin")) {
           throw new Error("Provider login authority is no longer active.");
         }
@@ -110,10 +96,12 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
       };
       if (choice.appGuidedAuth && choice.credentialOnly !== true) {
         await startSetupActivationWizard({
+          request: options,
           sessionId: params.sessionId,
-          client,
           ownerKey: resolveSystemAgentSessionOwnerKey({ client }),
-          assertCurrent,
+          connectionBound: true,
+          isLocalClient: client.internal?.isLocalClient === true,
+          assertCurrent: assertLoginCurrent,
           activation: {
             kind: "provider-auth",
             authChoice: choice.choiceId,
@@ -121,23 +109,18 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
             selectModel: params.selectModel === true,
           },
           timeoutMs: 25 * 60_000,
-          context,
-          respond,
-          isLocalClient: client.internal?.isLocalClient === true,
         });
         return;
       }
-      await startWizardLogin({
-        client,
-        context,
+      await startGatewayWizard({
+        request: options,
         sessionId: params.sessionId,
-        respond,
-        assertCurrent,
-        createSession: () =>
+        connectionBound: true,
+        assertCurrent: assertLoginCurrent,
+        createSession: (assertCurrent) =>
           new WizardSession(
             async (prompter, signal, runner) => {
               const runtime = createNonExitingRuntime();
-              let modelAccess: PreparedProviderModelAccess | undefined;
               const openUrl = async (url: string) => {
                 assertFlowCurrent();
                 await prompter.openUrl?.(url);
@@ -162,9 +145,6 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
                   method: choice.methodId,
                   ownerPluginId: choice.pluginId,
                   credentialOnly: true,
-                  onModelAccessRequested: (request) => {
-                    modelAccess = request;
-                  },
                   agent: params.agentId,
                   config: context.getRuntimeConfig(),
                   runtime,
@@ -187,29 +167,7 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
               } finally {
                 browser?.close();
               }
-              const assertModelAccessCurrent = () => {
-                signal.throwIfAborted();
-                assertCurrent();
-              };
-              let modelAccessOutcome: Awaited<ReturnType<typeof completeProviderModelAccess>>;
-              try {
-                modelAccessOutcome = await completeProviderModelAccess({
-                  prepared: modelAccess,
-                  prompter,
-                  runtime,
-                  assertCurrent: assertModelAccessCurrent,
-                  beforeCommit: () => {
-                    assertModelAccessCurrent();
-                    runner.lockCancellation();
-                  },
-                });
-              } catch (error) {
-                throw new ProviderAuthConfigApplyError(error);
-              }
-              if (
-                modelAccessOutcome.kind === "saved" &&
-                modelAccessOutcome.application !== "applied"
-              ) {
+              if (result.modelAccess && !result.modelAccess.applied) {
                 throw new ProviderCredentialsSavedError(
                   "Your sign-in and model access were saved, but OpenClaw has not confirmed that model access is active. Close this dialog. Open Settings and select Apply changes, then send /models.",
                 );

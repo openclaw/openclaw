@@ -1,5 +1,5 @@
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { describe, expect, it } from "vitest";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import { CLAUDE_CLI_CLEAR_ENV } from "./cli-constants.js";
 import {
@@ -7,11 +7,6 @@ import {
   resolveClaudeCliExecutionArgs,
   supportsClaudeDynamicSystemPromptSections,
 } from "./cli-shared.js";
-import { registerAnthropicPlugin } from "./register.runtime.js";
-
-vi.mock("./session-catalog-executable.js", () => ({
-  resolveClaudeTerminalExecutable: () => ({ executable: "claude" }),
-}));
 
 type ClaudePreparedExecutionWithSecret = {
   env?: Record<string, string>;
@@ -188,18 +183,48 @@ it.each([
 });
 
 describe("resolveClaudeCliExecutionArgs", () => {
-  it.each([
-    [undefined, true],
-    [{ mode: "full" }, true],
-    [{ mode: "ask" }, false],
-    [{ security: "allowlist", ask: "always" }, false],
-  ] as const)(
-    "derives permission mode from global exec policy %j for normal runs",
-    (exec, bypass) => {
-      const args = executionArgs({ config: { tools: { exec } } });
-      expect(args.includes("bypassPermissions")).toBe(bypass);
-    },
-  );
+  it.each([false, true])("layers exec policy before selecting bypass (resume=%s)", (useResume) => {
+    type Exec = NonNullable<NonNullable<OpenClawConfig["tools"]>["exec"]>;
+    const cases: [Exec | undefined, Exec | undefined, boolean][] = [
+      [undefined, undefined, true],
+      [undefined, {}, true],
+      [undefined, { ask: "always" }, false],
+      [undefined, { mode: "full" }, true],
+      [undefined, { mode: "deny" }, false],
+      [{ mode: "full" }, undefined, true],
+      [{ mode: "full" }, {}, true],
+      [{ mode: "full" }, { ask: "always" }, false],
+      [{ mode: "full" }, { security: "deny" }, false],
+      [{ mode: "full" }, { mode: "deny" }, false],
+      [{ mode: "deny" }, { ask: "off" }, false],
+      [{ mode: "deny" }, undefined, false],
+      [{ mode: "deny" }, {}, false],
+      [{ mode: "deny" }, { mode: "full" }, true],
+      [{ mode: "deny" }, { security: "full", ask: "off" }, true],
+      [{ security: "deny", ask: "off" }, undefined, false],
+      [{ security: "deny", ask: "off" }, { host: "gateway" }, false],
+      [{ security: "deny", ask: "off" }, { ask: "off" }, false],
+      [{ security: "deny", ask: "off" }, { mode: "full" }, true],
+      [{ security: "deny", ask: "off" }, { security: "full", ask: "off" }, true],
+      [{ security: "full", ask: "always" }, { security: "full" }, false],
+      [{ mode: "ask" }, { ask: "off" }, false],
+      [{ security: "allowlist", ask: "always" }, undefined, false],
+    ];
+    for (const [globalExec, agentExec, bypass] of cases) {
+      const args = executionArgs({
+        agentId: "worker",
+        useResume,
+        baseArgs: (useResume ? backend.config.resumeArgs : backend.config.args) ?? [],
+        config: {
+          tools: { exec: globalExec },
+          agents: { entries: { worker: { tools: { exec: agentExec } } } },
+        },
+      });
+      expect
+        .soft(args.includes("bypassPermissions"), JSON.stringify({ globalExec, agentExec }))
+        .toBe(bypass);
+    }
+  });
 
   it("keeps per-agent exec policy for normal runs and omits only the injected mode for compaction", () => {
     const forAgent = (
@@ -345,29 +370,6 @@ describe("resolveClaudeCliExecutionArgs", () => {
   });
 });
 
-function registeredBackend(
-  readRuntime: () => {
-    system: {
-      runCommandWithTimeout: () => Promise<{ code: number; stdout: string; stderr: string }>;
-    };
-  },
-) {
-  const registerCliBackend = vi.fn();
-  const registerHook = vi.fn();
-  registerAnthropicPlugin({
-    pluginConfig: { sessionCatalog: { enabled: false } },
-    get runtime() {
-      return readRuntime();
-    },
-    registerCliBackend,
-    registerHook,
-    registerProvider: vi.fn(),
-    registerMediaUnderstandingProvider: vi.fn(),
-    registerNodeInvokePolicy: vi.fn(),
-  } as unknown as Parameters<typeof registerAnthropicPlugin>[0]);
-  return { backend: registerCliBackend.mock.calls[0]?.[0] as Backend, registerHook };
-}
-
 describe("normalizeClaudeBackendConfig", () => {
   it("normalizes I/O defaults while deferring argument normalization until execution", () => {
     const streamArgs = argv("-p --output-format stream-json --verbose");
@@ -403,42 +405,6 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(unsupported.config.args).not.toContain(CLAUDE_CACHE_FLAG);
     expect(backendArgs(unsupported)).not.toContain(CLAUDE_CACHE_FLAG);
     expect(backendArgs(supported)).toContain(CLAUDE_CACHE_FLAG);
-  });
-
-  it("defers one shared Claude version probe until execution and awaits it before preparing argv", async () => {
-    const version = createDeferred<{ code: number; stdout: string; stderr: string }>();
-    const runCommandWithTimeout = vi.fn(() => version.promise);
-    const readRuntime = vi.fn(() => ({ system: { runCommandWithTimeout } }));
-    const { backend: adapter, registerHook } = registeredBackend(readRuntime);
-    expect(readRuntime).not.toHaveBeenCalled();
-    expect(runCommandWithTimeout).not.toHaveBeenCalled();
-    const prepared = vi.fn();
-    const executions = [
-      Promise.resolve(prepare(adapter)).then(prepared),
-      Promise.resolve(prepare(adapter)).then(prepared),
-    ];
-    await Promise.resolve();
-    expect(runCommandWithTimeout).toHaveBeenCalledOnce();
-    expect(runCommandWithTimeout).toHaveBeenCalledWith(
-      ["claude", "--version"],
-      expect.objectContaining({ timeoutMs: 1_500 }),
-    );
-    expect(registerHook).not.toHaveBeenCalled();
-    expect(prepared).not.toHaveBeenCalled();
-    version.resolve({ code: 0, stdout: "2.1.98 (Claude Code)", stderr: "" });
-    await Promise.all(executions);
-    expect(prepared).toHaveBeenCalledTimes(2);
-    expect(backendArgs(adapter)).toContain(CLAUDE_CACHE_FLAG);
-    await prepare(adapter);
-    expect(runCommandWithTimeout).toHaveBeenCalledOnce();
-  });
-
-  it("keeps the established argv when the version probe fails", async () => {
-    const runCommandWithTimeout = vi.fn().mockRejectedValue(new Error("claude is unavailable"));
-    const { backend: adapter } = registeredBackend(() => ({ system: { runCommandWithTimeout } }));
-    await prepare(adapter);
-    expect(runCommandWithTimeout).toHaveBeenCalledOnce();
-    expect(backendArgs(adapter)).not.toContain(CLAUDE_CACHE_FLAG);
   });
 
   it("leaves claude cli subscription-managed, restricts setting sources, and clears inherited env overrides", () => {

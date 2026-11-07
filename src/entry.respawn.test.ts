@@ -117,6 +117,7 @@ it.each([
     },
     {
       argv: ["--import", CLI_PARENT_BOUND_PRELOAD, "--stack-size=8192", ...windowsTail],
+      detachForProcessTree: false,
     },
   ],
   [

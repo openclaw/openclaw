@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
 import { inflateSync } from "node:zlib";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { Client } from "pg";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -26,12 +27,14 @@ import { stateEngineSchema } from "../state/openclaw-state-db-engine.js";
 import { withLegacyStateHeadLayout } from "../state/openclaw-state-db-schema-v26-layout.js";
 import { withLegacyStateWriteIndexes } from "../state/openclaw-state-db-schema-v27-indexes.js";
 import { withLegacyPublicationDraft } from "../state/openclaw-state-db-schema-v28-publication.js";
+import { withLegacyTemplateStateSchema } from "../state/openclaw-state-db-schema-v36-template-names.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   prepareOpenClawStateDatabaseSchema,
 } from "../state/openclaw-state-db.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { resolveSchemaMigrationBackupTables } from "../state/schema-migration-backup-scope.js";
 import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import { readClientCredentialReceipt } from "./client-credential-readiness.js";
@@ -48,6 +51,7 @@ import { getPostgresPhysicalFacts } from "./database-engine/physical-facts.js";
 import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
 import { generateStoredDeviceIdentity } from "./device-identity-material.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { createNpmTarget } from "./package-update-steps.test-support.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { isPostgresSqlConnection, type EngineConnection } from "./sql-connection.js";
 import { inspectScopedMigrationSnapshot } from "./sqlite-migration-scoped-snapshot.js";
@@ -151,13 +155,13 @@ async function fixture(
   engine: "sqlite" | "postgres",
   native = false,
   sourceVersion: 25 | 26 | 27 | 28 = 25,
-  legacyStatistics = false,
+  initialState: "seeded" | "legacy-statistics" | "empty" = "seeded",
 ) {
   const root = fs.realpathSync(directories.make("client-update-"));
   const stateDir = path.join(root, "state-root");
   const pathname = path.join(stateDir, "state", "openclaw.sqlite");
   fs.mkdirSync(path.dirname(pathname), { recursive: true });
-  if (legacyStatistics) {
+  if (initialState === "legacy-statistics") {
     // Empty SQLite database produced by ANALYZE sqlite_schema with ENABLE_STAT4.
     fs.writeFileSync(
       pathname,
@@ -226,7 +230,7 @@ async function fixture(
         source.close();
       }
     });
-  } else {
+  } else if (initialState !== "empty") {
     using db = openNodeSqliteDatabase(pathname);
     if (native) {
       db.exec(
@@ -236,10 +240,9 @@ async function fixture(
         ),
       );
     } else {
+      const templateSchema = withLegacyTemplateStateSchema(OPENCLAW_STATE_SCHEMA_SQL);
       const publicationSchema =
-        sourceVersion < 28
-          ? withLegacyPublicationDraft(OPENCLAW_STATE_SCHEMA_SQL)
-          : OPENCLAW_STATE_SCHEMA_SQL;
+        sourceVersion < 28 ? withLegacyPublicationDraft(templateSchema) : templateSchema;
       const indexedSchema =
         sourceVersion < 27 ? withLegacyStateWriteIndexes(publicationSchema) : publicationSchema;
       db.exec(sourceVersion < 26 ? withLegacyStateHeadLayout(indexedSchema) : indexedSchema);
@@ -313,6 +316,7 @@ async function capture(f: Fixture, fresh = false) {
     root: f.root,
     installKind: "package",
     updateInstallKind: "package",
+    packageInstallTarget: { ...createNpmTarget(path.dirname(f.root)), packageRoot: f.root },
     switchToGit: false,
     timeoutMs: undefined,
     updateStepTimeoutMs: 30_000,
@@ -477,9 +481,7 @@ async function rollback(f: Fixture, captured: Awaited<ReturnType<typeof capture>
 
 describe("client credential public update custody", () => {
   it("preserves a fresh installation through public capture, Doctor, and rollback", async () => {
-    const f = await fixture("sqlite");
-    await closeOpenClawStateDatabaseAsync();
-    fs.unlinkSync(f.pathname);
+    const f = await fixture("sqlite", false, 25, "empty");
     const captured = await capture(f, true);
     expect(captured.backup.sourceGenerations[resolveClientCredentialStorePath(f.env)]).toEqual(
       expect.any(String),
@@ -644,10 +646,9 @@ describe("client credential public update custody", () => {
     await migrate(f, captured);
     {
       using shared = openNodeSqliteDatabase(f.pathname, { readOnly: true });
+      const findTable = shared.prepare("SELECT name FROM sqlite_schema WHERE name=?");
       for (const table of credentialTables) {
-        expect(
-          shared.prepare("SELECT name FROM sqlite_schema WHERE name=?").get(table),
-        ).toBeUndefined();
+        expect(findTable.get(table)).toBeUndefined();
       }
       expect(
         JSON.parse(
@@ -712,21 +713,20 @@ describe("client credential public update custody", () => {
     )!;
     expect(versionBackup.inspection).toMatchObject({ sourcePath: f.pathname, userVersion: 28 });
     expect(versionBackup.inspection.tables.map((table) => table.name)).toEqual(
-      [
-        ...sourceTables,
-        "config_machine_state",
-        "schema_meta",
-        "sqlite_stat1",
-        "sqlite_stat4",
-      ].toSorted(),
+      expectDefined(
+        resolveSchemaMigrationBackupTables({
+          kind: "state",
+          foundVersion: 28,
+          supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+        }),
+        "Every executed credential migration step must declare its bounded scope",
+      ),
     );
     const retirementBackup = archives.find((archive) => archive !== versionBackup)!;
     expect(retirementBackup.inspection).toMatchObject({ sourcePath: f.pathname, userVersion: 28 });
-    expect(retirementBackup.inspection.tables.map((table) => table.name)).toEqual([
-      ...sourceTables,
-      "sqlite_stat1",
-      "sqlite_stat4",
-    ]);
+    expect(retirementBackup.inspection.tables.map((table) => table.name)).toEqual(
+      sourceTables.concat("sqlite_stat1", "sqlite_stat4"),
+    );
     {
       using shared = openNodeSqliteDatabase(f.pathname);
       shared.exec(
@@ -764,7 +764,7 @@ describe("client credential public update custody", () => {
   it.each([25, 28] as const)(
     "migrates legacy STAT4 credentials from v%s while retaining their original rollback image",
     async (version) => {
-      const f = await fixture("sqlite", false, version, true);
+      const f = await fixture("sqlite", false, version, "legacy-statistics");
       await migrate(f);
       const archives = fs
         .readdirSync(path.dirname(f.pathname))
@@ -791,7 +791,7 @@ describe("client credential public update custody", () => {
   it.skipIf(stat4Enabled).each([false, true])(
     "reuses a legacy STAT4 retry image only while credentials match (changed=%s)",
     async (changed) => {
-      const f = await fixture("sqlite", false, 28, true);
+      const f = await fixture("sqlite", false, 28, "legacy-statistics");
       const maintenance = await beginDoctorMaintenance({
         root: null,
         options: { repair: true, nonInteractive: true },

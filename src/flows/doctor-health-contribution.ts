@@ -1,4 +1,5 @@
 import { normalizeUpdatePostInstallDoctorWarnings } from "../infra/update-doctor-result.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type {
   DoctorContributionHealthCheck,
   DoctorHealthCheckContext,
@@ -93,8 +94,8 @@ export function createDoctorHealthContribution(
           progress: ctx.options.json !== true,
         });
         ctx.cfg = result.config;
-        renderStructuredHealthFindings(ctx, result.findings);
-        // Display retains original findings; finalization records only unresolved warnings.
+        renderStructuredHealthFindings(ctx, dryRun ? result.findings : result.remainingFindings);
+        // Repaired findings are absent from both the summary and updater warnings.
         recordDoctorHealthWarnings(
           ctx,
           dryRun ? result.findings : result.remainingFindings,
@@ -118,7 +119,7 @@ export function createDoctorHealthContribution(
 }
 
 export function recordDoctorHealthWarnings(
-  ctx: DoctorHealthFlowContext,
+  ctx: Pick<DoctorHealthFlowContext, "updateWarnings">,
   findings: readonly HealthFinding[],
   warnings: readonly string[] = [],
   options?: { prepend?: boolean },
@@ -138,17 +139,92 @@ export function recordDoctorHealthWarnings(
   );
 }
 
+export function reportDoctorHealthFinding(
+  ctx: Pick<DoctorHealthFlowContext, "runtime" | "healthFindings" | "updateWarnings">,
+  finding: HealthFinding,
+): void {
+  recordDoctorHealthWarnings(
+    ctx,
+    [finding],
+    finding.severity === "error" ? [`${finding.checkId}: ${finding.message}`] : [],
+  );
+  renderStructuredHealthFindings(ctx, [finding]);
+}
+
 export function renderStructuredHealthFindings(
-  ctx: DoctorHealthFlowContext,
+  ctx: Pick<DoctorHealthFlowContext, "runtime" | "healthFindings">,
   findings: readonly HealthFinding[],
 ): void {
+  ctx.healthFindings ??= [];
+  ctx.healthFindings.push(...findings);
+}
+
+export function showDoctorHealthSummary(
+  ctx: Pick<DoctorHealthFlowContext, "runtime" | "healthFindings">,
+): void {
+  const findings = ctx.healthFindings?.splice(0) ?? [];
+  const log = createSubsystemLogger("doctor");
   for (const finding of findings) {
-    const write = finding.severity === "error" ? ctx.runtime.error : ctx.runtime.log;
-    const where = finding.path !== undefined ? ` ${finding.path}` : "";
-    const line = finding.line !== undefined ? `:${finding.line}` : "";
-    write(`[${finding.severity}] ${finding.checkId}${where}${line} - ${finding.message}`);
-    if (finding.fixHint !== undefined) {
-      ctx.runtime.log(`  fix: ${finding.fixHint}`);
-    }
+    // Debug console lines do not automatically print structured metadata.
+    log.debug("Doctor finding", { ...finding, consoleMessage: JSON.stringify(finding) });
   }
+  const selected = findings.filter(
+    (finding) =>
+      finding.severity === "error" ||
+      (finding.severity === "warning" && (finding.category ?? "fix-now") === "fix-now"),
+  );
+  if (selected.length === 0) {
+    return;
+  }
+  ctx.runtime.log("Fix now:");
+  for (const finding of selected) {
+    const write = finding.severity === "error" ? ctx.runtime.error : ctx.runtime.log;
+    write(`- ${finding.message}`);
+    if (finding.path !== undefined) {
+      const line = finding.line !== undefined ? `:${finding.line}` : "";
+      ctx.runtime.log(`  Location: ${finding.path}${line}`);
+    }
+    if (finding.fixHint !== undefined) {
+      ctx.runtime.log(`  Next step: ${finding.fixHint}`);
+    }
+    ctx.runtime.log(
+      `  Docs: ${finding.docsUrl ?? "https://docs.openclaw.ai/cli/doctor/running#understanding-findings"}`,
+    );
+  }
+}
+
+/** Preserve priority order in the updater receipt independently of summary rendering. */
+export function collectDoctorHealthResultWarnings(params: {
+  healthContext?: Pick<DoctorHealthFlowContext, "updateWarnings" | "updateBudget">;
+  startupWarnings?: readonly string[];
+  resultWarnings?: readonly string[];
+  maintenanceWarnings?: readonly string[];
+}): string[] {
+  const contributionWarnings = [
+    ...(params.healthContext?.updateWarnings ?? []),
+    ...(params.startupWarnings ?? []),
+  ];
+  const deferredCount = params.healthContext?.updateBudget?.deferred.size ?? 0;
+  return normalizeUpdatePostInstallDoctorWarnings([
+    ...contributionWarnings.slice(0, deferredCount),
+    ...(params.resultWarnings ?? []),
+    ...(params.maintenanceWarnings ?? []).filter(
+      (warning) => !params.resultWarnings?.includes(warning),
+    ),
+    ...contributionWarnings.slice(deferredCount),
+  ]);
+}
+
+/** Startup repairs may report before the full health context exists. */
+export function createDoctorHealthFindingBuffer(runtime: DoctorHealthFlowContext["runtime"]) {
+  const buffer: Pick<DoctorHealthFlowContext, "runtime" | "healthFindings" | "updateWarnings"> & {
+    healthFindings: HealthFinding[];
+  } = { runtime, healthFindings: [] };
+  return {
+    buffer,
+    reportFindings(this: void, findings: readonly HealthFinding[], warnings?: readonly string[]) {
+      buffer.healthFindings.push(...findings);
+      recordDoctorHealthWarnings(buffer, warnings ? [] : findings, warnings);
+    },
+  };
 }

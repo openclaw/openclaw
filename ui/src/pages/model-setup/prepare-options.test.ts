@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
+import { candidate, detection as emptyDetection } from "./model-setup-first-run.test-support.ts";
 import {
   findPreparedModelCandidate,
   listModelSetupPrepareOptions,
@@ -7,28 +7,10 @@ import {
 } from "./prepare-options.ts";
 
 function detection(
-  candidates: SystemAgentSetupDetectResult["candidates"],
-  prepareOptions: SystemAgentSetupDetectResult["prepareOptions"],
-): SystemAgentSetupDetectResult {
-  return {
-    candidates,
-    manualProviders: [],
-    prepareOptions,
-    workspace: "/tmp/workspace",
-    setupComplete: false,
-  };
-}
-
-type Candidate = SystemAgentSetupDetectResult["candidates"][number];
-function candidate(kind: Candidate["kind"], modelRef: string, credentials = true): Candidate {
-  return {
-    kind,
-    modelRef,
-    credentials,
-    label: "Local Provider",
-    detail: "available locally",
-    recommended: false,
-  };
+  candidates: typeof emptyDetection.candidates,
+  prepareOptions: typeof emptyDetection.prepareOptions,
+) {
+  return { ...emptyDetection, candidates, prepareOptions };
 }
 
 describe("model setup prepare options", () => {
@@ -51,7 +33,7 @@ describe("model setup prepare options", () => {
           ? { kind, modelRef: "vendor/model", modelTarget: "utility" }
           : { kind, modelRef: "vendor/model" },
       );
-      const prepared = candidate(kind, "vendor/model");
+      const prepared = candidate(kind, "vendor/model", true);
       const result = detection([prepared], [option]);
 
       expect(listModelSetupPrepareOptions(result)).toEqual([]);

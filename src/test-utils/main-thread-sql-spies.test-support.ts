@@ -8,15 +8,14 @@ type SqlObservationOptions = {
   onStatement?: (sql: string) => void;
 };
 
-function mainThreadSqlSpies(options: SqlObservationOptions = {}) {
+function mainThreadSqlSpies({ includeClose, onStatement }: SqlObservationOptions = {}) {
   return [
     vi.spyOn(DatabaseSync.prototype, "prepare"),
     vi.spyOn(DatabaseSync.prototype, "exec"),
-    ...(options.includeClose ? [vi.spyOn(DatabaseSync.prototype, "close")] : []),
+    ...(includeClose ? [vi.spyOn(DatabaseSync.prototype, "close")] : []),
     ...(["get", "all", "run", "iterate"] as const).map((method) => {
       const original = StatementSync.prototype[method];
       const spy = vi.spyOn(StatementSync.prototype, method);
-      const onStatement = options.onStatement;
       if (onStatement) {
         spy.mockImplementation(
           new Proxy(original, {
@@ -38,18 +37,46 @@ export function observeMainThreadSql(options: SqlObservationOptions = {}) {
   return observeSqlCalls(mainThreadSqlSpies(options));
 }
 
-export function observeMainThreadReads() {
+export function expectNoMainThreadSql(run: () => Promise<void>) {
+  return withoutMainThreadSql(run);
+}
+
+export async function withoutMainThreadSql<T>(run: () => Promise<T>): Promise<T> {
+  const sql = observeMainThreadSql();
+  try {
+    const result = await run();
+    sql.expectIdle();
+    return result;
+  } finally {
+    sql.restore();
+  }
+}
+
+export function observeMainThreadReads(
+  onRead?: (sql: string, bindings: readonly unknown[]) => void,
+) {
   return observeSqlCalls(
-    (["all", "get", "iterate"] as const).map((method) => vi.spyOn(StatementSync.prototype, method)),
+    (["all", "get", "iterate"] as const).map((method) => {
+      const original = StatementSync.prototype[method];
+      const spy = vi.spyOn(StatementSync.prototype, method);
+      if (onRead) {
+        spy.mockImplementation(
+          new Proxy(original, {
+            apply(target, receiver: StatementSync, args) {
+              // Capture before control returns to the statement's disposal owner.
+              onRead(receiver.sourceSQL, args);
+              return Reflect.apply(target, receiver, args);
+            },
+          }),
+        );
+      }
+      return spy;
+    }),
   );
 }
 
 function observeSqlCalls(calls: ReturnType<typeof mainThreadSqlSpies>) {
-  const clear = () => {
-    for (const call of calls) {
-      call.mockClear();
-    }
-  };
+  const clear = () => calls.forEach((call) => call.mockClear());
   return {
     calls,
     count: () => calls.reduce((total, call) => total + call.mock.calls.length, 0),
@@ -67,23 +94,13 @@ function observeSqlCalls(calls: ReturnType<typeof mainThreadSqlSpies>) {
         } finally {
           database.close();
         }
-        for (const call of calls) {
-          expect(call).toHaveBeenCalled();
-        }
+        calls.forEach((call) => expect(call).toHaveBeenCalled());
       } finally {
         clear();
       }
     },
-    expectIdle() {
-      for (const call of calls) {
-        expect(call).not.toHaveBeenCalled();
-      }
-    },
-    restore() {
-      for (const call of calls) {
-        call.mockRestore();
-      }
-    },
+    expectIdle: () => calls.forEach((call) => expect(call).not.toHaveBeenCalled()),
+    restore: () => calls.forEach((call) => call.mockRestore()),
   };
 }
 
@@ -96,10 +113,6 @@ export function forbidMainThreadSql(message: string) {
     });
   }
   return {
-    restore() {
-      for (const call of calls) {
-        call.mockRestore();
-      }
-    },
+    restore: () => calls.forEach((call) => call.mockRestore()),
   };
 }

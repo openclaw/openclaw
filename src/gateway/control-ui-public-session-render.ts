@@ -15,7 +15,10 @@ import {
   getPublicSessionEntryId,
 } from "./control-ui-public-session-attachments.js";
 import { PUBLIC_SESSION_LOCALES } from "./control-ui-public-session-locales.js";
-import { projectPublicSessionItems } from "./control-ui-public-session-project.js";
+import {
+  projectPublicSessionItems,
+  publicSessionLinkHref,
+} from "./control-ui-public-session-project.js";
 
 type CopyKey = keyof typeof PUBLIC_SESSION_COPY;
 function copyText(key: CopyKey, count?: number): string {
@@ -252,15 +255,7 @@ const MAX_MESSAGE_CHARS = 32_768;
 const MAX_DOCUMENT_CHARS = 262_144;
 
 const markdown = new MarkdownIt({ html: false, linkify: false, breaks: true });
-markdown.validateLink = (value) => {
-  const url = URL.parse(value);
-  return Boolean(
-    url &&
-    (url.protocol === "https:" || url.protocol === "http:") &&
-    !url.username &&
-    !url.password,
-  );
-};
+markdown.validateLink = (value) => Boolean(publicSessionLinkHref(value));
 // Images must not contact third parties or load authenticated session media.
 markdown.renderer.rules.image = () =>
   '<span class="omitted">' + copyMarkup("imageOmitted") + "</span>";
@@ -389,13 +384,16 @@ export function renderPublicSessionDocument(params: {
       remaining -= html.length;
       media.push(html);
     }
-    for (const widget of item.widgets) {
-      const widgetUrl = params.widgetUrls?.get(widget.docId);
-      if (!widgetUrl) {
+    for (const embed of item.embeds) {
+      const widgetUrl = embed.kind === "widget" ? params.widgetUrls?.get(embed.docId) : undefined;
+      let html: string;
+      if (embed.kind === "link") {
+        html = `<p><a href="${escapeHtml(embed.href)}" rel="noreferrer noopener nofollow">${escapeHtml(embed.title ?? embed.href)}</a></p>`;
+      } else if (widgetUrl) {
+        html = `<iframe class="widget" src="${escapeHtml(widgetUrl)}" title="${embed.title ? escapeHtml(embed.title) : title}" sandbox="allow-scripts" referrerpolicy="no-referrer" loading="lazy" data-public-widget="${escapeHtml(embed.docId)}" style="height:${embed.height ?? 420}px"></iframe>`;
+      } else {
         continue;
       }
-      const url = escapeHtml(widgetUrl);
-      const html = `<iframe class="widget" src="${url}" title="${widget.title ? escapeHtml(widget.title) : title}" sandbox="allow-scripts" referrerpolicy="no-referrer" loading="lazy" data-public-widget="${escapeHtml(widget.docId)}" style="height:${widget.height ?? 420}px"></iframe>`;
       if (html.length > remaining) {
         truncated = true;
         break;

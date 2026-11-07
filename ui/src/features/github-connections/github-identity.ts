@@ -24,8 +24,6 @@ import {
   type SharedRequestOwner,
 } from "./github-identity-shared.ts";
 
-export type GitHubIdentity = ReturnType<typeof createGitHubIdentity>;
-
 export function createGitHubIdentity(deps: GitHubIdentityDependencies = {}) {
   let status: ToolsGitHubStatusResult | null = null;
   let personal: PersonalGitHubStatus | null = null;
@@ -99,6 +97,13 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies = {}) {
   const connectionReady = () => connected && client !== null;
   const readDraft = () =>
     readScope() === "personal" ? readGitHubIdentityDraft(undefined) : selectedDraft;
+
+  const canConfigureSharedIdentity = () =>
+    target?.kind === "shared" &&
+    configurable &&
+    !busy() &&
+    !deviceAuthorization.active() &&
+    !confirmationPending;
 
   function queueVerification() {
     if (
@@ -469,13 +474,7 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies = {}) {
   }
 
   async function configure() {
-    if (
-      target?.kind !== "shared" ||
-      !configurable ||
-      busy() ||
-      deviceAuthorization.active() ||
-      confirmationPending
-    ) {
+    if (!canConfigureSharedIdentity()) {
       return;
     }
     const draft = { ...readDraft() };
@@ -537,13 +536,7 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies = {}) {
   }
 
   async function inherit() {
-    if (
-      target?.kind !== "shared" ||
-      !configurable ||
-      busy() ||
-      deviceAuthorization.active() ||
-      confirmationPending
-    ) {
+    if (!canConfigureSharedIdentity()) {
       return;
     }
     const captured = captureRequest();

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
   isOfficialCatalogLookupPluginIdReplacement as isReplacement,
+  isThirdPartyNpmInstallRecord as isThirdParty,
   isTrustedOfficialCatalogLookupDuplicate as isDuplicate,
   isTrustedOfficialPluginInstallRecord as isTrusted,
   resolveTrustedSourceLinkedOfficialClawHubInstall as resolveClawHub,
@@ -69,9 +70,12 @@ describe("official plugin install trust", () => {
     { sourcePath: "/tmp/official" },
     { source: "path" },
   ] satisfies Partial<PluginInstallRecord>[])(
-    "rejects unsupported npm provenance %j",
+    "rejects invalid official and third-party npm provenance %j",
     (override) => {
       expect(trusts({ ...npmRecord, ...override })).toBe(false);
+      expect(
+        isThirdParty("demo", "@vendor/demo", npmInstall("@vendor/demo", "1.0.0", override)),
+      ).toBe(false);
     },
   );
 
@@ -97,6 +101,8 @@ describe("trusted official npm install records", () => {
   it("preserves canonical official updates for resolved-spec-only evidence", () => {
     const record: PluginInstallRecord = { source: "npm", resolvedSpec: "@openclaw/acpx@2026.7.2" };
     expect(resolveNpm({ pluginId: "acpx", record })?.npmSpec).toBe("@openclaw/acpx");
+    record.resolvedSpec = "@synthetic/unrelated@1.0.0";
+    expect(resolveNpm({ pluginId: "acpx", record })).toBeUndefined();
   });
 
   it("returns a replacement only for a catalog-declared legacy id", () => {

@@ -21,7 +21,7 @@ const greeting = {
   optionalWelcome: true,
   question: QUICK_ACTIONS_QUESTION,
 };
-const selection = { installed: true, overview: true };
+const selection = { installed: true };
 const prompt = "What does Example Plugin do?";
 const reply = (text: string) => ({ sessionId: greeting.sessionId, reply: text, action: "none" });
 const requestWithAnswer = (text: string) =>

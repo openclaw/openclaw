@@ -789,49 +789,26 @@ test("sessions.create sends selected global initial tasks to the requested agent
   ws.close();
 });
 
-const parentTargetDefaults: {
-  explicit: boolean;
-  defaultAgent: boolean;
-  agentId?: string;
-  key?: string;
-  expectedAgent: string;
-  fork: boolean;
-} = {
-  explicit: false,
-  defaultAgent: false,
-  agentId: undefined,
-  key: undefined,
-  expectedAgent: "main",
-  fork: true,
-};
-test.each([
-  { ...parentTargetDefaults, name: "legacy explicit target", agentId: "main" },
-  { ...parentTargetDefaults, name: "legacy ambient target" },
-  {
-    ...parentTargetDefaults,
-    name: "explicit fleet without default",
-    fork: false,
-    explicit: true,
-    expectedAgent: "work",
-  },
-  {
-    ...parentTargetDefaults,
-    name: "explicit fleet with another default",
-    fork: false,
-    explicit: true,
-    defaultAgent: true,
-    expectedAgent: "work",
-  },
-  { ...parentTargetDefaults, name: "explicit cross-agent target", explicit: true, agentId: "main" },
-  {
-    ...parentTargetDefaults,
-    name: "explicit child key",
-    explicit: true,
-    key: "agent:main:dashboard:child-target",
-  },
+test.each<
+  [
+    name: string,
+    explicit: boolean,
+    defaultAgent: boolean,
+    agentId: string | undefined,
+    key: string | undefined,
+    expectedAgent: string,
+    fork: boolean,
+  ]
+>([
+  ["legacy explicit target", false, false, "main", undefined, "main", true],
+  ["legacy ambient target", false, false, undefined, undefined, "main", true],
+  ["explicit fleet without default", true, false, undefined, undefined, "work", false],
+  ["explicit fleet with another default", true, true, undefined, undefined, "work", false],
+  ["explicit cross-agent target", true, false, "main", undefined, "main", true],
+  ["explicit child key", true, false, undefined, "agent:main:dashboard:child-target", "main", true],
 ])(
-  "sessions.create resolves an agent-qualified parent from its own store: $name",
-  async ({ explicit, defaultAgent, agentId, key, expectedAgent, fork }) => {
+  "sessions.create resolves an agent-qualified parent from its own store: %s",
+  async (_name, explicit, defaultAgent, agentId, key, expectedAgent, fork) => {
     const { dir } = await createSessionStoreDir();
     const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
     const mainStorePath = storeTemplate.replace("{agentId}", "main");

@@ -6,6 +6,7 @@ import { buildTestCtx } from "../../../auto-reply/reply/test-ctx.js";
 import {
   listSessionEntryKeysReadOnly,
   loadSessionEntry,
+  upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import {
   initializeGlobalHookRunner,
@@ -21,20 +22,21 @@ import { normalizeAcceptedSessionSpawnResult } from "../../accepted-session-spaw
 import { resolveAgentWorkspaceDir } from "../../agent-scope.js";
 import { finalizeAgentTools } from "../../agent-tools.finalize.js";
 import type { AnyAgentTool } from "../../agent-tools.types.js";
-import type { NativeSubagentRequestSource } from "../../plugin-native-subagent.js";
+import type { NativeSubagentRequestSource } from "../../plugin-native-subagent.types.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { activateSubagentRegistry } from "../registry/subagent-registry.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
 } from "../swarm/swarm-code-mode.js";
-import { enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
 import { visibleResult } from "./subagent-spawn.fixtures.test-support.js";
 import {
   createSpawnBoundaryParent,
   createSpawnOperatorSource,
+  holdSpawnCapacity,
   recordSpawnBoundaryFinal,
   type NativePluginSpawnTestOptions,
 } from "./subagent-spawn.production-boundary.test-support.js";
@@ -80,19 +82,11 @@ export function nativeRequestSource(
 }
 
 export async function holdNativeCapacity(bound: BoundParent, runId: string) {
-  const started = createDeferred();
   const { parentSessionKey, parentRunId } = bound;
-  enqueueSwarmRun({
-    groupId: JSON.stringify(["main", parentSessionKey, `swarm:${parentSessionKey}:${parentRunId}`]),
+  await holdSpawnCapacity(
+    JSON.stringify(["main", parentSessionKey, `swarm:${parentSessionKey}:${parentRunId}`]),
     runId,
-    maxConcurrent: 1,
-    activeRunIds: [],
-    start: async () => {
-      started.resolve();
-    },
-    onStartFailure: () => true,
-  });
-  await started.promise;
+  );
 }
 
 export function nativeReplyFixture(
@@ -156,6 +150,7 @@ export function registerNativePluginRewriteCases(options: NativePluginSpawnTestO
       native: NativeSubagentRuntime;
       ordinary: AnyAgentTool;
       bound: BoundParent;
+      runtime: Awaited<ReturnType<NativePluginSpawnTestOptions["createBoundGateway"]>>["runtime"];
       modelsStarted: Promise<void>;
       makeNative: (
         parent: BoundParent,
@@ -217,6 +212,7 @@ export function registerNativePluginRewriteCases(options: NativePluginSpawnTestO
             makeNative,
             ordinary: expectDefined(ordinary, "ordinary spawn"),
             bound,
+            runtime,
             modelsStarted: modelsStarted.promise,
           });
         },
@@ -360,7 +356,10 @@ export function registerNativePluginRewriteCases(options: NativePluginSpawnTestO
       name: "fingerprint replaced",
       rewrite: { [SWARM_CODE_MODE_REQUEST_FINGERPRINT]: "different" },
     },
-  ])("native plugin rejects incompatible finalized rewrite: $name", async ({ rewrite }) => {
+    // A hook must not quietly unblind a child the plugin asked to keep blind.
+    { name: "blind cleared", rewrite: { blind: undefined }, blind: true },
+    { name: "blind disabled", rewrite: { blind: false }, blind: true },
+  ])("native plugin rejects incompatible finalized rewrite: $name", async ({ rewrite, blind }) => {
     await withRewriteFixture(async ({ native, bound }) => {
       const keys = () => listSessionEntryKeysReadOnly({ storePath: bound.storePath });
       const before = await keys();
@@ -369,7 +368,12 @@ export function registerNativePluginRewriteCases(options: NativePluginSpawnTestO
       );
       installNativeToolHook("native-rewrite-test", hook);
       await expect(
-        native.spawn({ requestId: "rewrite", task: "original", context: "isolated" }),
+        native.spawn({
+          requestId: "rewrite",
+          task: "original",
+          context: "isolated",
+          ...(blind ? { blind } : {}),
+        }),
       ).rejects.toThrow("Native subagent hooks must preserve collector mode and replay identity.");
       expect(hook).toHaveBeenCalledTimes(1);
       expect(await keys()).toEqual(before);
@@ -379,8 +383,47 @@ export function registerNativePluginRewriteCases(options: NativePluginSpawnTestO
     });
   });
 
+  it("native plugin keeps a blind requester's children blind and never forks its transcript", async () => {
+    await withRewriteFixture(async ({ native, bound }) => {
+      await upsertSessionEntryCore(
+        { storePath: bound.storePath, sessionKey: bound.parentSessionKey },
+        { blindPrompt: true },
+      );
+      const keys = () => listSessionEntryKeysReadOnly({ storePath: bound.storePath });
+      const before = await keys();
+      // The child would inherit blinding, and a fork would copy the requester's own transcript.
+      await expect(
+        native.spawn({ requestId: "inherited-fork", task: "forked", context: "fork" }),
+      ).rejects.toThrow('Blind spawns require context="isolated"');
+      expect(await keys()).toEqual(before);
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+
+      const accepted = await native.spawn({
+        requestId: "inherited",
+        task: "inherited blind task",
+        context: "isolated",
+      });
+      expect(
+        loadSessionEntry({ storePath: bound.storePath, sessionKey: accepted.childSessionKey }),
+      ).toMatchObject({ blindPrompt: true });
+      await native.collect({ ids: [accepted.runId], awaitResults: true });
+      const [run] = expectDefined(
+        runEmbeddedAgent.mock.calls.find(
+          ([params]) => params.sessionKey === accepted.childSessionKey,
+        ),
+        "inherited blind child run",
+      );
+      expect(run.blindPrompt).toBe(true);
+      expect(run.prompt).toContain("inherited blind task");
+      expect(run.prompt).not.toContain("Your session:");
+      expect(run.prompt).not.toContain(bound.parentSessionKey);
+    });
+  });
+
   it("native plugin permits task rewrites and nested ordinary noncollector calls", async () => {
-    await withRewriteFixture(async ({ native, ordinary, bound, modelsStarted }) => {
+    await withRewriteFixture(async ({ native, ordinary, bound, runtime, modelsStarted }) => {
+      vi.mocked(runtime.lifecycle.waitForAgent).mockRestore();
+      await activateSubagentRegistry(bound.resolveGatewayContext);
       let ordinaryRunId: string | undefined;
       const hook = vi.fn(async (event: { toolName: string; params: Record<string, unknown> }) => {
         if (event.toolName !== "sessions_spawn") {
@@ -441,6 +484,7 @@ export function registerNativePluginRewriteCases(options: NativePluginSpawnTestO
         completed: [{ runId: accepted.runId, status: "done", result: "rewrite child complete" }],
         pending: [],
       });
+      await bound.execution.runWhenIdle(() => {});
       await settleRootWork(true);
       expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
     });

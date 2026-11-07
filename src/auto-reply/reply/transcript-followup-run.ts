@@ -1,3 +1,9 @@
+import {
+  resolveRequesterPrincipalKey,
+  requesterCreatorProfileId,
+} from "../../agents/requester-origin.js";
+import { isCronSessionKey } from "../../routing/session-key.js";
+import { isCronExecutionInputProvenance } from "../../sessions/input-provenance.js";
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import { SkillLibraryError } from "../../skills/skill-library-error.js";
 import type { FollowupRun } from "./queue/types.js";
@@ -10,6 +16,13 @@ export function buildTranscriptFollowupRun(
   const source = base.queuedFollowupReplyDisposition;
   return {
     ...base,
+    sessionPrincipalTurn:
+      base.sessionPrincipalTurn ??
+      (!base.run.scheduledAutomation &&
+        !isCronSessionKey(base.run.sessionKey ?? "") &&
+        !isCronExecutionInputProvenance(base.run.inputProvenance) &&
+        !resolveRequesterPrincipalKey({ requesterOrigin: base.run.requesterOrigin }) &&
+        !requesterCreatorProfileId(base.run.requesterOrigin)),
     prompt: formatSystemTurnPrompt(params.prompt),
     disableCollectBatching: true,
     enqueuedAt: Date.now(),
@@ -33,17 +46,31 @@ export function buildTranscriptFollowupRun(
       ...base.run,
       inputProvenance: { kind: "internal_system", sourceTool: params.sourceTool },
       suppressNextUserMessagePersistence: true,
-      // The source grant cannot authorize a replacement turn. Keep a personal-only
-      // expired grant so Workshop cannot fall back to wider workspace authoring.
-      skillLibraryAuthoring: base.run.skillLibraryAuthoring && {
-        target: "personal",
-        defaultTarget: "personal",
-        multipleProfiles: base.run.skillLibraryAuthoring.multipleProfiles,
-        bind: () => {},
-        invoke: async () => {
-          throw new SkillLibraryError("AUTHORITY_EXPIRED", params.expiredSkillAuthoringMessage);
-        },
-      },
+      skillLibraryAuthoring: expireSkillLibraryAuthoring(
+        base.run.skillLibraryAuthoring,
+        params.expiredSkillAuthoringMessage,
+      ),
     },
   };
+}
+
+/**
+ * The source grant cannot authorize a replacement turn. Keep a personal-only
+ * expired grant so Workshop cannot fall back to wider workspace authoring.
+ */
+export function expireSkillLibraryAuthoring(
+  grant: FollowupRun["run"]["skillLibraryAuthoring"],
+  message: string,
+): FollowupRun["run"]["skillLibraryAuthoring"] {
+  return (
+    grant && {
+      target: "personal",
+      defaultTarget: "personal",
+      multipleProfiles: grant.multipleProfiles,
+      bind: () => {},
+      invoke: async () => {
+        throw new SkillLibraryError("AUTHORITY_EXPIRED", message);
+      },
+    }
+  );
 }

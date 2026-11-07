@@ -1,17 +1,20 @@
 import { basename, dirname } from "node:path";
 import { isResponsesOutputLimitToolCallError } from "@openclaw/ai/diagnostics";
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
+import { setInternalBeforeRequest } from "../../../packages/agent-core/src/internal-hooks.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import { isRetryableAssistantError } from "../../llm/utils/retry.js";
 import { sleep } from "../../utils/sleep.js";
 import { classifyRateLimitWindow } from "../failover/retry-evidence.js";
 import { AgentSessionCompaction } from "./agent-session-compaction.js";
 import type { AgentSessionConfig, ExtensionBindings } from "./agent-session-types.js";
-import { ExtensionRunner, type ToolDefinition, wrapRegisteredTools } from "./extensions/index.js";
+import { createBackgroundResultPlacement } from "./background-result-placement.js";
+import { ExtensionRunner, type ToolDefinition } from "./extensions/index.js";
 import { emitSessionShutdownEvent } from "./extensions/runner.js";
 import type { ResourceExtensionPaths } from "./resource-loader.js";
 import type { SlashCommandInfo } from "./slash-commands.js";
 import { createSyntheticSourceInfo } from "./source-info.js";
+import { wrapToolDefinition } from "./tools/tool-definition-wrapper.js";
 
 function describeCommands<T extends Pick<SlashCommandInfo, "description" | "sourceInfo">>(
   commands: readonly T[],
@@ -35,6 +38,8 @@ export * from "./agent-session-types.js";
  * this class while the feature layers below own session behavior.
  */
 export class AgentSession extends AgentSessionCompaction {
+  protected readonly disposeBackgroundResultPlacement: () => void;
+
   constructor(config: AgentSessionConfig) {
     super(config);
     this.unsubscribeAgent = this.agent.subscribe(this.handleAgentEvent);
@@ -42,6 +47,9 @@ export class AgentSession extends AgentSessionCompaction {
     this.buildRuntime({
       activeToolNames: [...this.allowedToolNames],
     });
+    const placement = createBackgroundResultPlacement(this.sessionManager);
+    setInternalBeforeRequest(this.agent, placement.beforeRequest);
+    this.disposeBackgroundResultPlacement = placement.dispose;
   }
 
   get extensionRunner(): ExtensionRunner {
@@ -266,12 +274,11 @@ export class AgentSession extends AgentSessionCompaction {
       })),
     ].filter((tool) => this.allowedToolNames.has(tool.definition.name));
     this.toolDefinitions = new Map(allCustomTools.map((tool) => [tool.definition.name, tool]));
-    this.toolRegistry = new Map(
-      wrapRegisteredTools(allCustomTools, this.currentExtensionRunner).map((tool) => [
-        tool.name,
-        tool,
-      ]),
+    const runner = this.currentExtensionRunner;
+    const wrappedTools = allCustomTools.map((tool) =>
+      wrapToolDefinition(tool.definition, () => runner.createContext()),
     );
+    this.toolRegistry = new Map(wrappedTools.map((tool) => [tool.name, tool]));
     this.setActiveToolsByName([...new Set([...activeToolNames, ...this.toolRegistry.keys()])]);
   }
 

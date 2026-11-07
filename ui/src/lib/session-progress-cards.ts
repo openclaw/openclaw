@@ -9,7 +9,7 @@ import type {
 } from "@openclaw/gateway-protocol";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { createGatewayRetryOwner } from "./gateway-retry.ts";
@@ -72,6 +72,7 @@ export type SessionProgressCardStore = {
   refresh: (target: ProgressCardGetParams, card: ProgressCard) => void;
   getRefreshState: (target: ProgressCardGetParams) => SessionProgressCardRefreshState | undefined;
   get: (target: ProgressCardGetParams) => ProgressCard | null | undefined;
+  getReadCompletion: (target: ProgressCardGetParams) => Promise<ProgressCard | null> | undefined;
   getLifetime: (target: ProgressCardGetParams) => object | undefined;
   getError: (target: ProgressCardGetParams) => SessionProgressCardLoadError | undefined;
   subscribe: (listener: () => void) => () => void;
@@ -85,6 +86,7 @@ export function readSessionProgressCard(
   return {
     card,
     loading: card === undefined,
+    completion: target ? store?.getReadCompletion(target) : undefined,
     lifetime: target ? store?.getLifetime(target) : undefined,
     error: target ? store?.getError(target) : undefined,
     refreshState: target ? store?.getRefreshState(target) : undefined,
@@ -318,11 +320,13 @@ export function sessionProgressCardsForGateway(
                 }
               });
             }
+            notify();
           }
         }
       });
     entry.load = request;
     remember(resolved.key, entry);
+    notify();
     return request;
   };
   const refreshWatched = () => {
@@ -637,6 +641,7 @@ export function sessionProgressCardsForGateway(
       syncLifetimeScope();
       return lifetimes.get(resolveTarget(target).key)?.token;
     },
+    getReadCompletion: (target) => entries.get(resolveTarget(target).key)?.load,
     getError: (target) => entries.get(resolveTarget(target).key)?.error,
     subscribe: (listener) => {
       listeners.add(listener);

@@ -10,7 +10,11 @@ import {
   SUMMARY_TRUNCATED_MARKER,
 } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import {
+  clearCompactionPendingAskSection,
   computeFileLists,
+  extractCurrentCompactionUserRequest,
+  extractCompactionMessageText as extractMessageText,
+  formatCompactionUserLabel,
   formatFileOperations,
 } from "../../../packages/agent-core/src/harness/compaction/utils.js";
 import { classifyToolUseResultPairing } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
@@ -21,6 +25,7 @@ import {
   type CompactionProvider,
 } from "../../plugins/compaction-provider.js";
 import { isRealConversationMessage } from "../compaction-real-conversation.js";
+import { recoverCompactionSafeguardFailure } from "../compaction-summary-refusal.js";
 import { summarizeCompactionHistory } from "../compaction.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "../copilot-dynamic-headers.js";
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
@@ -162,61 +167,11 @@ type CompactionSuffix = {
 
 type SummaryQualityRetention = Parameters<typeof createSummaryQualityRetentionPlan>[2];
 
-function assembleSuffix(
-  parts: {
-    splitTurnSection?: ContextSection;
-    generatedSplitTurnSection?: string;
-    preservedTurnsSection?: ContextSection;
-    toolFailureSection?: string;
-    fileOpsSummary?: string;
-    workspaceContext?: string;
-  },
-  reserveSplitTurn = false,
-): CompactionSuffix {
-  let text = "";
-  let reservedChars = 0;
-  const contextRanges: CompactionSuffix["contextRanges"] = [];
-  for (const [name, part] of Object.entries(parts)) {
-    const section = typeof part === "string" ? part : part?.text;
-    if (!section) {
-      continue;
-    }
-    const leadingTrim = text ? 0 : section.length - section.trimStart().length;
-    const appended = leadingTrim > 0 ? section.slice(leadingTrim) : section;
-    const start = text.length;
-    text = appendSummarySection(text, section);
-    if (reserveSplitTurn && name === "generatedSplitTurnSection") {
-      reservedChars = text.length;
-    }
-    if (typeof part !== "string") {
-      contextRanges.push({
-        start,
-        end: start + appended.length,
-        segmentStarts: part.segmentStarts
-          .filter((segmentStart) => segmentStart >= leadingTrim)
-          .map((segmentStart) => start + segmentStart - leadingTrim),
-      });
-    }
-  }
-  // Ensure leading separator so suffix does not merge with body (e.g. when body
-  // ends without newline: "...## Exact identifiers## Tool Failures").
-  if (text && !/^\s/.test(text)) {
-    text = `\n\n${text}`;
-    reservedChars += reservedChars > 0 ? 2 : 0;
-    for (const range of contextRanges) {
-      range.start += 2;
-      range.end += 2;
-      range.segmentStarts = range.segmentStarts.map((segmentStart) => segmentStart + 2);
-    }
-  }
-  return { text, contextRanges, ...(reservedChars > 0 ? { reservedChars } : {}) };
-}
-
 async function resolveModelAuth(
   ctx: ExtensionContext,
   model: NonNullable<ExtensionContext["model"]>,
 ): Promise<
-  { ok: true; apiKey?: string; headers?: Record<string, string> } | { ok: false; reason: string }
+  { ok: true; apiKey?: string; headers?: typeof model.headers } | { ok: false; reason: string }
 > {
   let requestAuth: Awaited<ReturnType<ExtensionContext["modelRegistry"]["getApiKeyAndHeaders"]>>;
   try {
@@ -250,8 +205,8 @@ async function resolveModelAuth(
 function buildCompactionSummaryHeaders(params: {
   model: NonNullable<ExtensionContext["model"]>;
   messages: AgentMessage[];
-  headers?: Record<string, string>;
-}): Record<string, string> | undefined {
+  headers?: NonNullable<ExtensionContext["model"]>["headers"];
+}): typeof params.headers {
   if (params.model.provider !== "github-copilot") {
     return params.headers;
   }
@@ -383,22 +338,6 @@ function budgetCompactionSummary(
   };
 }
 
-function extractMessageText(message: AgentMessage): string {
-  const content = (message as { content?: unknown }).content;
-  if (typeof content === "string") {
-    return content.trim();
-  }
-  return Array.isArray(content)
-    ? content
-        .flatMap((block) => {
-          const text =
-            block && typeof block === "object" ? (block as { text?: unknown }).text : undefined;
-          return typeof text === "string" && text.trim() ? [text.trim()] : [];
-        })
-        .join("\n")
-    : "";
-}
-
 function formatNonTextPlaceholder(content: unknown): string | null {
   if (content == null || typeof content === "string") {
     return null;
@@ -497,7 +436,7 @@ function formatContextMessage(message: AgentMessage): string | null {
   if (message.role === "assistant") {
     roleLabel = "Assistant";
   } else if (message.role === "user") {
-    roleLabel = "User";
+    roleLabel = formatCompactionUserLabel(message);
   } else if (message.role === "toolResult") {
     const toolName = (message as { toolName?: unknown }).toolName;
     const safeToolName = typeof toolName === "string" && toolName.trim() ? toolName : "tool";
@@ -617,18 +556,6 @@ function formatGeneratedSplitTurnSection(summary: string, onTruncated: () => voi
   return `${heading}${cappedSummary}`;
 }
 
-function extractLatestUserAsk(messages: AgentMessage[]): string | null {
-  for (const message of messages.toReversed()) {
-    if (message.role === "user") {
-      const ask = extractMessageText(message);
-      if (ask) {
-        return ask;
-      }
-    }
-  }
-  return null;
-}
-
 /** Registers compaction hooks that summarize, preserve recent turns, and audit output quality. */
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
@@ -646,7 +573,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     let baseTurnPrefixMessages = stripRuntimeContextCustomMessages(
       preparation.turnPrefixMessages ?? [],
     );
-    const latestUnresolvedUserRequest = preparation.latestUnresolvedUserRequest;
+    const { requestSelection, latestUnresolvedUserRequest } = preparation;
+    const reconcileRequestSelection = (summary: string) =>
+      requestSelection?.state === "none" ? clearCompactionPendingAskSection(summary) : summary;
     setCompactionSafeguardCancellation(ctx.sessionManager, undefined);
     const cancelCompaction = (reason: string, error?: unknown) => {
       setCompactionSafeguardCancellation(ctx.sessionManager, reason, error);
@@ -748,17 +677,58 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         runtime?.postCompactionSections,
         runtime?.workspaceDir,
       );
-      const suffix = assembleSuffix(
-        {
-          splitTurnSection: sections.splitTurnSection,
-          generatedSplitTurnSection: sections.generatedSplitTurnSection,
-          preservedTurnsSection: sections.preservedTurnsSection,
-          toolFailureSection,
-          fileOpsSummary,
-          workspaceContext: await workspaceContextPromise,
-        },
-        degraded,
-      );
+      const parts = {
+        splitTurnSection: sections.splitTurnSection,
+        generatedSplitTurnSection: sections.generatedSplitTurnSection,
+        preservedTurnsSection: sections.preservedTurnsSection,
+        toolFailureSection,
+        fileOpsSummary,
+        workspaceContext: await workspaceContextPromise,
+      };
+      let text = "";
+      let reservedChars = 0;
+      const contextRanges: CompactionSuffix["contextRanges"] = [];
+      for (const [name, part] of Object.entries(parts)) {
+        if (!part) {
+          continue;
+        }
+        const section = typeof part === "string" ? part : part.text;
+        if (!section) {
+          continue;
+        }
+        const leadingTrim = text ? 0 : section.length - section.trimStart().length;
+        const appended = leadingTrim > 0 ? section.slice(leadingTrim) : section;
+        const start = text.length;
+        text = appendSummarySection(text, section);
+        if (degraded && name === "generatedSplitTurnSection") {
+          reservedChars = text.length;
+        }
+        if (typeof part !== "string") {
+          contextRanges.push({
+            start,
+            end: start + appended.length,
+            segmentStarts: part.segmentStarts
+              .filter((segmentStart) => segmentStart >= leadingTrim)
+              .map((segmentStart) => start + segmentStart - leadingTrim),
+          });
+        }
+      }
+      // Ensure leading separator so suffix does not merge with body (e.g. when body
+      // ends without newline: "...## Exact identifiers## Tool Failures").
+      if (text && !/^\s/.test(text)) {
+        text = `\n\n${text}`;
+        reservedChars += reservedChars > 0 ? 2 : 0;
+        for (const range of contextRanges) {
+          range.start += 2;
+          range.end += 2;
+          range.segmentStarts = range.segmentStarts.map((segmentStart) => segmentStart + 2);
+        }
+      }
+      const suffix: CompactionSuffix = {
+        text,
+        contextRanges,
+        ...(reservedChars > 0 ? { reservedChars } : {}),
+      };
       const fit = (retention?: SummaryQualityRetention) =>
         fitCompactionSummary(preparation.summaryTokenBudget, (maxChars) =>
           budgetCompactionSummary(body, suffix, maxChars, retention),
@@ -835,7 +805,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               messages: baseMessagesToSummarize,
               recentTurnsPreserve,
             });
-            const finalized = await finalizeSummaryText(providerResult, {
+            const finalized = await finalizeSummaryText(reconcileRequestSelection(providerResult), {
               splitTurnSection: preparation.isSplitTurn
                 ? buildSplitTurnContextSection(turnPrefixMessages)
                 : undefined,
@@ -901,9 +871,14 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
       const oracleMessages = [...baseMessagesToSummarize, ...turnPrefixMessages];
       const splitUserAsk = preparation.isSplitTurn
-        ? extractLatestUserAsk(turnPrefixMessages)
+        ? extractCurrentCompactionUserRequest(turnPrefixMessages, extractMessageText)
         : null;
-      const latestUserAsk = splitUserAsk ?? extractLatestUserAsk(baseMessagesToSummarize);
+      const latestUserAsk = requestSelection
+        ? requestSelection.state === "unresolved"
+          ? requestSelection.request
+          : null
+        : extractCurrentCompactionUserRequest(oracleMessages, extractMessageText);
+      const latestAskInRetainedTurn = splitUserAsk !== null && splitUserAsk === latestUserAsk;
       const identifiers = extractOpaqueIdentifiers(
         oracleMessages.slice(-10).map(extractMessageText).filter(Boolean).join("\n"),
       );
@@ -915,7 +890,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         recentTurnsPreserve,
       });
       const preservedTurnsSectionLocal = buildPreservedTurnsSection(preservedRecentMessages);
-      const latestPreparedAsk = extractLatestUserAsk(baseMessagesToSummarize);
+      const latestPreparedAsk = extractCurrentCompactionUserRequest(
+        baseMessagesToSummarize,
+        extractMessageText,
+      );
       const requiredAskContext = formatRequiredAskContext(latestUserAsk ?? "");
       const includePreservedContext =
         !latestUnresolvedUserRequest &&
@@ -960,6 +938,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   previousSummary,
                 })
               : buildStructuredFallbackSummary(previousSummary);
+
+          historySummary = reconcileRequestSelection(historySummary);
 
           if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
             const splitTurnFocusLabel = "Additional context from /compact";
@@ -1013,7 +993,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                 auditSummary: unbudgetedSummary,
                 identifiers,
                 latestAsk: latestUserAsk,
-                latestAskInRetainedTurn: splitUserAsk !== null,
+                latestAskInRetainedTurn,
                 latestUnresolvedUserRequest,
                 requiredAskContext,
                 identifierPolicy,
@@ -1031,7 +1011,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           identifiers,
           latestAsk: latestUserAsk,
           latestUnresolvedUserRequest,
-          retainedTurnSummary: splitUserAsk !== null ? splitTurnSummaryLocal : undefined,
+          retainedTurnSummary: latestAskInRetainedTurn ? splitTurnSummaryLocal : undefined,
           identifierPolicy,
         });
         if (quality.ok && !finalized.qualityRetentionInfeasible) {
@@ -1053,7 +1033,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             {
               identifiers,
               latestAsk: latestUserAsk,
-              latestAskInRetainedTurn: splitUserAsk !== null,
+              latestAskInRetainedTurn,
               latestUnresolvedUserRequest,
               requiredAskContext,
               identifierPolicy,
@@ -1095,17 +1075,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
       throw new Error("Compaction safeguard exhausted summary attempts without a decision.");
     } catch (error) {
-      // Caller cancellation is terminal, not a safeguard failure. Preserve the
-      // original abort so the runner can classify it without a false data-loss warning.
-      if (signal?.aborted) {
-        signal.throwIfAborted();
-      }
-      const message = formatErrorMessage(error);
-      log.warn("Compaction summarization failed; cancelling compaction to preserve history.");
-      return cancelCompaction(
-        `Compaction safeguard could not summarize the session: ${message}`,
-        error,
-      );
+      return recoverCompactionSafeguardFailure(error, preparation, signal, ctx.sessionManager);
     }
   });
 }

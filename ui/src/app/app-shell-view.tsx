@@ -1,8 +1,11 @@
 import "../lib/toast-host.tsx";
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createMemo, createSignal, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, lazy, onSettled, Show } from "solid-js";
 import { registerModalSurface } from "../components/overlay-registry.ts";
-import { LazySettingsSidebar } from "../components/settings-sidebar-lazy.tsx";
+import {
+  LazySettingsSaveStatus,
+  LazySettingsSidebar,
+} from "../components/settings-sidebar-lazy.tsx";
 import { GatewayStatus, gatewayStatusLabel } from "../components/solid/gateway-status.tsx";
 import { Icon } from "../components/solid/icon.tsx";
 import { ShortcutHint } from "../components/solid/kbd.tsx";
@@ -11,29 +14,57 @@ import {
   ContextNewSessionAction,
   renderNewSessionLink as NewSessionLink,
 } from "../components/solid/new-session-link.tsx";
+import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import { resolveUiSelectedSessionAgentId } from "../lib/sessions/session-key.ts";
 import { registerToastContainer } from "../lib/toast.ts";
 import { PluginSurface } from "../plugins/control-ui-view.solid.tsx";
+import {
+  ShellComponentBoundary,
+  ShellRequestedComponent,
+} from "./app-shell-component-boundary.tsx";
+import type { ShellOwnedElements } from "./app-shell-components.ts";
 import { DevicePairSetup } from "./app-shell-device-pair-setup.tsx";
 import { ShellDocks } from "./app-shell-docks.tsx";
-import {
-  ShellLazyOverlays,
-  type ShellElementAttributes,
-  type ShellOwnedElements,
-} from "./app-shell-lazy-view.tsx";
-import { readShellView, type ShellViewHost } from "./app-shell-view-state.ts";
-import { isOptionalElementDefined, APP_SIDEBAR_ELEMENT } from "./lazy-custom-element.ts";
+import { ShellLazyOverlays, type ShellElementAttributes } from "./app-shell-lazy-view.tsx";
+import { readShellView, type ShellView, type ShellViewHost } from "./app-shell-view-state.ts";
 import { beginNativeWindowDrag, beginNativeWindowDragFromTopInset } from "./native-window-drag.ts";
 import { FloatingUpdateCard } from "./navigation-surface-view.tsx";
 import { floatingSidebarAttentionVisible } from "./navigation-surface.ts";
 import { RouterOutlet } from "./router-outlet.tsx";
-import { NAV_WIDTH_MAX, NAV_WIDTH_MIN } from "./settings.ts";
+import { NAV_WIDTH_MAX, NAV_WIDTH_MIN, patchSettings } from "./settings.ts";
 import { CollapsedHomeToggle } from "./shell-assistant-toggles.tsx";
 import { ShellLayoutProvider } from "./shell-layout-traits-solid.tsx";
 
 export type { ShellViewHost } from "./app-shell-view-state.ts";
+
+const NavigationSidebar = lazy(async () => {
+  await import("../components/app-sidebar.tsx");
+  // Keep the native host that callers assign before registration and move between layouts.
+  return {
+    default: (props: { host: ShellViewHost }) => {
+      onSettled(() => props.host.shellComponentMounted(props.host.navigationSidebar));
+      return <>{props.host.navigationSidebar}</>;
+    },
+  };
+});
+
+const MacosTitlebarControls = lazy(
+  () => import("../components/macos-titlebar-controls.runtime-solid.tsx"),
+  { export: "MacosTitlebarControls" },
+);
+const TerminalPanel = lazy(() => import("../components/terminal/terminal-panel-registration.tsx"), {
+  export: "TerminalPanelHost",
+});
+const ExecApproval = lazy(() => import("../components/exec-approval-solid.tsx"), {
+  export: "ExecApproval",
+});
+const OnboardingMemoryImport = lazy(
+  () => import("../components/onboarding-memory-import-solid.tsx"),
+  { export: "OnboardingMemoryImport" },
+);
 
 declare module "@solidjs/web" {
   namespace JSX {
@@ -49,7 +80,9 @@ declare module "@solidjs/web" {
   }
 }
 
-export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
+export function ApplicationShell(props: {
+  host: ShellViewHost & { commitRenderedPresentation(view: ShellView): void };
+}): SolidJSX.Element {
   let content!: HTMLElement;
   let releaseNavDrawer: (() => void) | undefined;
   onSettled(() => {
@@ -67,10 +100,28 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
     props.host.shellRevision();
     return readShellView(props.host);
   });
+  const sessionOwner = createMemo(() => view().context.sessions);
+  const sessionRows = createMemo(() =>
+    projectOwner(sessionOwner(), (sessions) => sessions.state.result?.sessions),
+  );
   const shellConnectionStatus = createMemo(() => view().shellConnectionStatus);
   const footerStatus = createMemo(() =>
     shellConnectionStatus() || view().connectionRecovery ? view().gatewayStatus : null,
   );
+  function NavigationFallback() {
+    return (
+      <Show when={footerStatus()}>
+        <aside class="sidebar">
+          <div class="sidebar-shell">
+            <div class="sidebar-shell__content" />
+            <div class="sidebar-shell__footer">
+              <GatewayStatus {...footerStatus()!} row />
+            </div>
+          </div>
+        </aside>
+      </Show>
+    );
+  }
   const connectionAnnouncement = createMemo(() => {
     const kind = shellConnectionStatus();
     return kind
@@ -99,9 +150,11 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
           {
             "shell--navigation-rail": view().railAvailable,
             "shell--chat": view().chatLikeRoute,
+            "shell--session": view().sessionRoute,
             "shell--nav-collapsed": view().navCollapsed,
             "shell--mobile-nav": view().mobileNavLayout,
             "shell--merged-chat-chrome": view().mergedChatChrome,
+            "shell--floating-header": view().floatingHeader,
             "shell--nav-drawer-open": view().navDrawerOpen,
             "shell--onboarding": view().onboarding,
             "shell--embed": view().nativeEmbed,
@@ -125,12 +178,14 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
           {t("common.skipToMainContent")}
         </a>
         <Show when={view().nativeWebChrome && !view().onboarding}>
-          <openclaw-macos-titlebar-controls
-            inert={view().navDrawerOpen}
-            prop:historyOnly={view().settingsTakeover}
-            prop:canGoBack={props.host.nativeHistoryState().canGoBack}
-            prop:canGoForward={props.host.nativeHistoryState().canGoForward}
-          />
+          <ShellComponentBoundary label="openclaw-macos-titlebar-controls">
+            <MacosTitlebarControls
+              inert={view().navDrawerOpen}
+              historyOnly={view().settingsTakeover}
+              canGoBack={props.host.nativeHistoryState().canGoBack}
+              canGoForward={props.host.nativeHistoryState().canGoForward}
+            />
+          </ShellComponentBoundary>
         </Show>
         <Show when={!view().nativeEmbed}>
           <openclaw-app-topbar
@@ -139,12 +194,21 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
             prop:environment={view().config.environment}
             prop:navDrawerOpen={view().navDrawerOpen}
             prop:gatewayStatus={view().mobileGatewayStatus}
+            prop:floating={view().floatingHeader}
+            prop:onBack={view().floatingBack}
+            prop:pageTitle={view().pageTitle}
+            prop:registerPageActions={props.host.shellLayout.registerHeaderActions}
             prop:newSessionAction={() => (
               <Show
                 when={
                   view().mobileNavLayout &&
                   !view().mergedChatChrome &&
-                  !view().navDrawerOpen &&
+                  // New Session is already the destination of this action.
+                  view().activeRoute !== "new-session" &&
+                  // Settings starts no session; the phone pill keeps its shape on every page.
+                  (view().floatingHeader || !view().settingsTakeover) &&
+                  // The floating pill keeps its shape behind the drawer's backdrop.
+                  (view().floatingHeader || !view().navDrawerOpen) &&
                   !view().onboarding &&
                   !view().nativeWebChrome &&
                   !document.documentElement.classList.contains("openclaw-native-nav")
@@ -154,6 +218,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
                   context={view().context}
                   class="header-new-session"
                   agentId={view().selectedAgentId}
+                  icon={view().floatingHeader ? "sessionNew" : undefined}
                 />
               </Show>
             )}
@@ -248,33 +313,32 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
             tabindex={view().mobileNavLayout ? -1 : undefined}
             inert={view().navigationSurfaceHidden}
           >
-            <Show when={view().settingsTakeover} fallback={props.host.navigationSidebar}>
+            <Show
+              when={view().settingsTakeover}
+              fallback={
+                <Show when={view().workspaceChromeVisible}>
+                  <Show
+                    when={(props.host.shellRevision(), !props.host.navigationSidebar.isConnected)}
+                  >
+                    <NavigationFallback />
+                  </Show>
+                  <ShellComponentBoundary label={t("palette.categories.navigation")}>
+                    <NavigationSidebar host={props.host} />
+                  </ShellComponentBoundary>
+                </Show>
+              }
+            >
               <LazySettingsSidebar
                 host={props.host}
                 sidebarProps={{ ...view().settingsSidebarProps, footerStatus: footerStatus() }}
               />
-            </Show>
-            <Show
-              when={
-                !view().settingsTakeover &&
-                !isOptionalElementDefined(APP_SIDEBAR_ELEMENT) &&
-                footerStatus()
-              }
-            >
-              <aside class="sidebar">
-                <div class="sidebar-shell">
-                  <div class="sidebar-shell__content" />
-                  <div class="sidebar-shell__footer">
-                    <GatewayStatus {...footerStatus()!} row />
-                  </div>
-                </div>
-              </aside>
             </Show>
           </div>
         </Show>
         <Show
           when={
             !view().nativeEmbed &&
+            !view().mobileNavLayout &&
             !view().navCollapsed &&
             !view().onboarding &&
             !view().settingsTakeover
@@ -287,13 +351,58 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
             prop:minRatio={(NAV_WIDTH_MIN + view().railWidth) / view().shellWidth}
             prop:maxRatio={(NAV_WIDTH_MAX + view().railWidth) / view().shellWidth}
             aria-valuetext={`${view().expandedNavWidth} pixels`}
-            title={t("nav.resize")}
             onResize-start={() => setNavResizing(true)}
             onResize-end={() => setNavResizing(false)}
             onResize={(event: CustomEvent<{ splitRatio: number }>) =>
               props.host.resizeNavigation(event.detail.splitRatio)
             }
           />
+        </Show>
+        <Show
+          when={
+            view().runtime.readOnlyConfig &&
+            view().uiSettings.dismissedReadOnlyConfigNotice !==
+              JSON.stringify(view().runtime.readOnlyConfig)
+              ? view().runtime.readOnlyConfig
+              : undefined
+          }
+          keyed
+        >
+          {(notice) => (
+            <p
+              class="shell-config-read-only callout info callout--dismissible"
+              inert={view().mobileNavLayout && view().navDrawerOpen}
+            >
+              <span class="callout__content">
+                <strong>{t("nav.gateway.configReadOnly")}</strong>{" "}
+                {notice.message || t("nav.gateway.configReadOnlyHint")}
+                <Show when={notice.docsUrl}>
+                  {" "}
+                  <a
+                    href={notice.docsUrl}
+                    target={EXTERNAL_LINK_TARGET}
+                    rel={buildExternalLinkRel()}
+                    data-link-reader-external
+                  >
+                    {t("common.learnMore")}
+                  </a>
+                </Show>
+              </span>
+              <button
+                class="callout__dismiss"
+                type="button"
+                aria-label={t("common.dismiss")}
+                onClick={() =>
+                  patchSettings({
+                    gatewayUrl: view().context.gateway.connection.gatewayUrl,
+                    dismissedReadOnlyConfigNotice: JSON.stringify(notice),
+                  })
+                }
+              >
+                <Icon name="x" />
+              </button>
+            </p>
+          )}
         </Show>
         <main
           id="control-ui-main"
@@ -303,8 +412,9 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
               "content--chat": view().chatLikeRoute,
               "content--workbench": view().workbenchRoute,
               "content--new-session": view().activeRoute === "new-session",
+              "content--systems": view().activeRoute === "systems",
               "content--custodian": view().activeRoute === "custodian",
-              "content--workboard": view().activeRoute === "workboard",
+              "content--workboard": view().workboardLayout,
             },
           ]}
           ref={(element) => {
@@ -345,29 +455,45 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
               retryContext={view().context}
               retryEnabled={view().gatewayConnected}
               retentionScope={view().presentationScope}
-              onNotFound={props.host.recoverNotFoundRoute}
+              onNotFound={() => props.host.shellNavigation.recoverNotFoundRoute()}
               notFoundRecoveryReady={view().gatewayConnected}
             />
           </ShellLayoutProvider>
         </main>
+        <Show when={view().settingsTakeover}>
+          <div class="settings-save-status" inert={view().mobileNavLayout && view().navDrawerOpen}>
+            <LazySettingsSaveStatus host={props.host} />
+          </div>
+        </Show>
         <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
           {connectionAnnouncement()}
         </span>
-        <openclaw-terminal-panel
-          ref={(element) => (props.host.terminalPanel = element)}
-          inert={view().navDrawerOpen}
-          prop:mobile={view().mobileNavLayout}
-          prop:client={view().gatewaySnapshot.client}
-          prop:gatewayConnected={view().gatewayConnected}
-          prop:available={view().terminalAvailable}
-          prop:agentId={view().selectedAgentId}
-          prop:sessionKey={view().sessionRoute ? props.host.activeSessionKey : null}
-          prop:suppressed={view().settingsTakeover || view().nativeEmbed}
-          prop:themeMode={view().context.theme.resolvedMode}
-          prop:basePath={view().context.basePath}
-        />
+        <ShellRequestedComponent
+          host={props.host}
+          component="terminal"
+          revision={props.host.shellRevision()}
+          label="terminal panel"
+        >
+          <TerminalPanel
+            ref={(element) => {
+              props.host.terminalPanel = element;
+              props.host.shellComponentMounted(element);
+            }}
+            inert={view().navDrawerOpen}
+            mobile={view().mobileNavLayout}
+            client={view().gatewaySnapshot.client}
+            gatewayConnected={view().gatewayConnected}
+            available={view().terminalAvailable}
+            agentId={view().selectedAgentId}
+            sessionKey={view().sessionRoute ? props.host.activeSessionKey : null}
+            suppressed={view().settingsTakeover || view().nativeEmbed}
+            themeMode={view().context.theme.resolvedMode}
+            basePath={view().context.basePath}
+          />
+        </ShellRequestedComponent>
         <Show when={!view().sessionRoute}>
           <ShellDocks
+            host={props.host}
             elements={props.host.elements}
             context={view().context}
             revision={props.host.shellRevision()}
@@ -394,19 +520,26 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
             (props.host.shellRevision(), props.host.custodianMinimizeRequestId)
           }
         />
-        <Show
-          when={
-            (props.host.shellRevision(), isOptionalElementDefined(props.host.execApprovalElement))
-          }
+        <ShellRequestedComponent
+          host={props.host}
+          component="approvals"
+          revision={props.host.shellRevision()}
+          label={t("tabs.approvals")}
         >
-          <openclaw-exec-approval
-            ref={(element) => (props.host.elements.approvalOverlay = element)}
-            prop:props={{
+          <ExecApproval
+            ref={(element) => {
+              props.host.elements.approvalOverlay = element;
+              props.host.shellComponentMounted(element);
+            }}
+            props={{
               queue: view().overlaySnapshot.approvalQueue,
               busy: view().overlaySnapshot.approvalBusy,
               connected: view().gatewayConnected,
               canGrant: view().overlaySnapshot.approvalCanGrant,
               errors: view().overlaySnapshot.approvalErrors,
+              nodeNames: view().overlaySnapshot.approvalNodeNames,
+              sessions: sessionRows().read(),
+              currentSessionKey: view().sessionRoute ? props.host.activeSessionKey : undefined,
               onDecision: (
                 approvalId: string,
                 decision: Parameters<
@@ -415,61 +548,65 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
               ) => view().context.overlays.decideApproval(decision, approvalId),
             }}
           />
-        </Show>
+        </ShellRequestedComponent>
         <DevicePairSetup
           props={{
             open: view().overlaySnapshot.devicePairSetupOpen,
             lifecycle: view().overlaySnapshot.devicePairSetupLifecycle,
             nowMs: view().nowMs,
             pendingCount: view().overlaySnapshot.devicePairPendingCount,
-            onRefresh: () => void view().context.overlays.refreshDevicePairSetup(),
+            onRefresh: () => view().context.overlays.refreshDevicePairSetup(),
             onAccessChange: (access) =>
               void view().context.overlays.setDevicePairSetupAccess(access),
             onClose: () => view().context.overlays.closeDevicePairSetup(),
             onManageDevices: () => {
               view().context.overlays.closeDevicePairSetup();
-              props.host.navigate("devices");
+              props.host.shellNavigation.navigate("devices");
             },
             onGetApps: () => {
               view().context.overlays.closeDevicePairSetup();
-              props.host.navigate("apps");
+              props.host.shellNavigation.navigate("apps");
             },
           }}
         />
-        <Show
-          when={
-            view().memoryImportActive &&
-            (props.host.shellRevision(),
-            isOptionalElementDefined(props.host.onboardingMemoryImportElement))
-          }
-        >
-          <openclaw-onboarding-memory-import prop:active={true} prop:context={view().context} />
+        <Show when={view().memoryImportActive}>
+          <ShellComponentBoundary label={t("onboarding.memoryImport.title")} showLoading>
+            <OnboardingMemoryImport active={true} context={view().context} />
+          </ShellComponentBoundary>
         </Show>
         <openclaw-toast-host ref={(element) => (props.host.toastElement = element)} />
       </div>
     </div>
   );
   return (
-    <Show when={view().routeReady} fallback={<ConnectingSplash />}>
-      <PluginSurface
-        surface="workspace"
-        enabled={view().workspacePluginsEnabled}
-        props={{
-          sessionKey: (props.host.shellRevision(), props.host.activeSessionKey),
-          agentId: resolveUiSelectedSessionAgentId(
-            {
-              assistantAgentId:
-                view().context.agentSelection.state.selectedId ??
-                view().gatewaySnapshot.assistantAgentId,
-              agentsList: view().context.agents.state.agentsList,
-              hello: view().gatewaySnapshot.hello,
-            },
-            props.host.activeSessionKey,
-          ),
-          routeId: view().activeRoute,
+    <>
+      <Show when={(props.host.navigationRevision(), view(), {})} keyed>
+        {(_view) => {
+          onSettled(() => props.host.commitRenderedPresentation(view()));
+          return null;
         }}
-        renderDefault={() => workspace}
-      />
-    </Show>
+      </Show>
+      <Show when={view().routeReady} fallback={<ConnectingSplash />}>
+        <PluginSurface
+          surface="workspace"
+          enabled={view().workspacePluginsEnabled}
+          props={{
+            sessionKey: (props.host.shellRevision(), props.host.activeSessionKey),
+            agentId: resolveUiSelectedSessionAgentId(
+              {
+                assistantAgentId:
+                  view().context.agentSelection.state.selectedId ??
+                  view().gatewaySnapshot.assistantAgentId,
+                agentsList: view().context.agents.state.agentsList,
+                hello: view().gatewaySnapshot.hello,
+              },
+              props.host.activeSessionKey,
+            ),
+            routeId: view().activeRoute,
+          }}
+          renderDefault={() => workspace}
+        />
+      </Show>
+    </>
   );
 }

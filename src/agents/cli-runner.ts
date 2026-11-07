@@ -14,6 +14,7 @@ import {
   hasCompletionMessageSessionSpawn,
 } from "./accepted-session-spawn.js";
 import { bindOperatorModelExecution, readRunOperatorAuthority } from "./admitted-run-context.js";
+import type { CliOutput } from "./cli-output-contracts.js";
 import { runCliBeforeAgentReply } from "./cli-runner/before-agent-reply.js";
 import { isCliBindingFlushed } from "./cli-runner/binding-flush.js";
 import { acceptsCliLiveSession } from "./cli-runner/cli-live-session-registry.js";
@@ -25,11 +26,12 @@ import {
 import {
   buildBlockedCliRunResult,
   buildCliDeliveredFailure,
+  buildCliReseedReceipt,
   buildCliRunResult,
+  buildCliSessionBinding,
   formatCliTerminalInterruption,
   isClaudeCliBackend,
   settleCliPreparationError,
-  settlePreparedCliRun,
 } from "./cli-runner/cli-run-settlement.js";
 import {
   buildCliHookAssistantMessage,
@@ -53,6 +55,7 @@ import {
   loadCliSessionHistoryMessages,
 } from "./cli-runner/session-history.js";
 import { prepareCliRunTerminalReply } from "./cli-runner/terminal-reply.js";
+import { settlePreparedCliRunWithTrajectory } from "./cli-runner/trajectory.js";
 import { runWithCliTurn } from "./cli-runner/turn-admission.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner.js";
@@ -67,6 +70,7 @@ import {
   runAgentHarnessLlmOutputHook,
 } from "./harness/lifecycle-hook-helpers.js";
 import { isRequiredReplyExpectation, resolveReplyExpectation } from "./reply-completion.js";
+import { isAgentRunDirectAbortReason } from "./run-termination.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -89,12 +93,16 @@ async function runCliAgentInternal(
   // backend resources released only by runPreparedCliAgent's try…finally.
   await params.onExecutionStarted?.();
   assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration!);
-  params.abortSignal?.throwIfAborted();
-  params.assertCurrent?.();
   let modelExecution: ReturnType<typeof bindOperatorModelExecution>;
-  const assertCallerCurrent = params.assertCurrent;
   const generationAbortController = new AbortController();
   let generation: Awaited<ReturnType<typeof prepareCronRootSessionGeneration>>;
+  const assertCurrent = () => {
+    params.abortSignal?.throwIfAborted();
+    params.assertCurrent?.();
+    modelExecution?.assertCurrent();
+    generation?.assertCurrent();
+  };
+  assertCurrent();
   try {
     const target = params.sessionTarget;
     generation =
@@ -110,7 +118,7 @@ async function runCliAgentInternal(
             (reason) => generationAbortController.abort(reason),
           )
         : undefined;
-    const hookResult = await runCliBeforeAgentReply(params, generation?.assertCurrent);
+    const hookResult = await runCliBeforeAgentReply(params, assertCurrent);
     if (hookResult) {
       return hookResult;
     }
@@ -129,13 +137,9 @@ async function runCliAgentInternal(
         ? {
             ...params,
             abortSignal: abortSignals.length > 1 ? AbortSignal.any(abortSignals) : abortSignals[0],
-            assertCurrent: () => {
-              assertCallerCurrent?.();
-              modelExecution?.assertCurrent();
-              generation?.assertCurrent();
-            },
+            assertCurrent,
           }
-        : params;
+        : { ...params, assertCurrent };
     const { prepareCliRunContext } = await import("./cli-runner/prepare.runtime.js");
     let context: PreparedCliRunContext;
     try {
@@ -178,14 +182,11 @@ export async function runPreparedCliAgent(
       watchdogAttempt: context.params.diagnosticOwner?.watchdogAttempt,
     },
     () =>
-      settlePreparedCliRun({
-        context,
-        diagnosticLifecycle,
-        run: (complete) =>
-          runWithCliHistoryWriter(context.cliHistoryWriter, () =>
-            runPreparedCliAgentOwned(context, complete, diagnosticLifecycle),
-          ),
-      }),
+      settlePreparedCliRunWithTrajectory(context, diagnosticLifecycle, (complete) =>
+        runWithCliHistoryWriter(context.cliHistoryWriter, () =>
+          runPreparedCliAgentOwned(context, complete, diagnosticLifecycle),
+        ),
+      ),
   );
 }
 
@@ -244,12 +245,7 @@ async function runPreparedCliAgentOwned(
     ...(params.config ? { config: params.config } : {}),
     ...contextWindowFields(),
     ...buildAgentHookContextChannelFields(params),
-    ...buildAgentHookContextIdentityFields({
-      trigger: params.trigger,
-      senderId: params.senderId,
-      chatId: params.chatId,
-      channelContext: params.channelContext,
-    }),
+    ...buildAgentHookContextIdentityFields(params),
   } as const;
 
   const buildAgentEndMessages = (lastAssistant?: unknown): unknown[] =>
@@ -288,6 +284,49 @@ async function runPreparedCliAgentOwned(
   };
 
   let userTurnHandled = false;
+  // A directly stopped first turn rethrows its abort unsettled: no transcript, hooks,
+  // or replay. Its flushed native session is the chat's only continuity, so bind
+  // it into the still-empty binding. Superseded, restarted, resumed, and forked
+  // runs keep the abort guards from #147139 and bind nothing here.
+  const persistStoppedFirstCliSession = async (
+    error: unknown,
+    output: CliOutput,
+    cliSessionIdToUse: string | undefined,
+  ) => {
+    const sessionId = output.sessionId;
+    if (
+      !params.persistStoppedFirstCliSession ||
+      !output.terminalInterruption ||
+      !sessionId ||
+      cliSessionIdToUse ||
+      resolveCliSessionId(context.reusableCliSession) ||
+      sessionBindingDisabled ||
+      !isAgentRunDirectAbortReason(error) ||
+      !isClaudeCliBackend(params.provider) ||
+      !(await isCliBindingFlushed(sessionId, params.provider, context.cwd ?? context.workspaceDir, {
+        skipTranscriptProbe: acceptsCliLiveSession(context),
+        projectsRoot: context.claudeTranscriptRoot,
+      }))
+    ) {
+      return;
+    }
+    try {
+      const reseedReceipt = buildCliReseedReceipt({
+        runParams: params,
+        output,
+        usedHistoryPrompt: context.openClawHistoryPrompt !== undefined,
+        userTurnHandled,
+      });
+      await params.persistStoppedFirstCliSession(
+        buildCliSessionBinding(context, sessionId, output, reseedReceipt),
+      );
+    } catch (persistError) {
+      log.warn(
+        `CLI run ${params.runId} could not keep its stopped first session: ${formatErrorMessage(persistError)}`,
+      );
+    }
+  };
+
   const executeCliAttempt = async (cliSessionIdToUse?: string, options?: CliRecoveryOptions) => {
     const timeoutMs = options?.timeoutMs ?? params.timeoutMs;
     const forkCliSessionOnResume =
@@ -340,7 +379,12 @@ async function runPreparedCliAgentOwned(
       context.claudeTranscriptRoot =
         attemptContext.claudeTranscriptRoot ?? context.claudeTranscriptRoot;
     }
-    params.assertCurrent?.();
+    try {
+      params.assertCurrent?.();
+    } catch (error) {
+      await persistStoppedFirstCliSession(error, output, cliSessionIdToUse);
+      throw error;
+    }
     // Test facades and non-instrumented executors may not signal the boundary.
     diagnosticLifecycle?.setPhase("resolve");
     const preparedReply = prepareCliRunTerminalReply(context, output);
@@ -520,11 +564,28 @@ async function runPreparedCliAgentOwned(
                 projectsRoot: context.claudeTranscriptRoot,
               },
             );
+        // Claude saves each narration and the final answer as its own native row. Keep only the
+        // final message here, keyed to its native row, so imported history shows each row once.
+        const nativeFinal =
+          !output.yielded &&
+          !output.terminalInterruption &&
+          output.resumeCheckpointId &&
+          effectiveCliSessionId &&
+          preparedReply.finalMessageText
+            ? {
+                text: preparedReply.finalMessageText,
+                identity: {
+                  cliSessionId: effectiveCliSessionId,
+                  externalId: output.resumeCheckpointId,
+                },
+              }
+            : undefined;
         const assistantTranscript = await persistCliAssistantTranscript({
           runParams: params,
           // Dispatch owns source-reply transcript mirrors and their idempotency keys.
           // Persisting them here would duplicate the same visible assistant reply.
-          text: sourceReplyWasDelivered ? "" : output.text,
+          text: sourceReplyWasDelivered ? "" : (nativeFinal?.text ?? output.text),
+          ...(nativeFinal ? { nativeIdentity: nativeFinal.identity } : {}),
           modelId: context.modelId,
           usage: output.usage,
           turnUsage: output.diagnosticUsage,

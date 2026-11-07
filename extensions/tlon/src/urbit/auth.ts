@@ -4,15 +4,10 @@ import { urbitFetch } from "./fetch.js";
 
 const MAX_AUTH_BODY_DRAIN_BYTES = 64 * 1024;
 
-type UrbitAuthenticateOptions = Pick<
-  Parameters<typeof urbitFetch>[0],
-  "ssrfPolicy" | "beforeRequest"
->;
-
 export async function authenticate(
   url: string,
   code: string,
-  options: UrbitAuthenticateOptions = {},
+  options: Pick<Parameters<typeof urbitFetch>[0], "ssrfPolicy" | "beforeRequest"> = {},
 ): Promise<string> {
   const { response, release } = await urbitFetch({
     baseUrl: url,

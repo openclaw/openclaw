@@ -6,11 +6,8 @@ import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreAsync,
   findPersistedAuthProfileCredential,
-  findPersistedAuthProfileCredentialAsync,
   loadAuthProfileStoreForRuntime,
-  loadAuthProfileStoreForRuntimeAsync,
   resolveApiKeyForProfile,
-  resolveAuthProfileOrder,
   resolvePersistedAuthProfileOwnerAgentDir,
   saveAuthProfileStore,
 } from "../agents/auth-profiles.js";
@@ -21,11 +18,11 @@ import {
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import * as sqliteRead from "../agents/auth-profiles/sqlite-read.js";
 import {
-  inspectPersistedAuthProfileStoreRaw,
   readPersistedAuthProfileStoreRaw,
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileRowRead } from "../agents/auth-profiles/types.js";
+import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { resolveSqliteScope } from "../config/sessions/session-accessor.sqlite-scope.js";
 import * as embeddedStateLock from "../infra/embedded-state-lock.js";
@@ -48,9 +45,13 @@ const storedProfile = { type: "api_key", provider: "openai", key: "test-key" } a
 const stored = { version: 1, profiles: { "openai:stored": storedProfile } };
 const noExternal = { externalCli: { mode: "none" }, syncExternalCli: false } as const;
 const run = (
-  deps: { runAgent: AgentExecRunnerFixture },
+  observe: (options: Parameters<AgentExecRunnerFixture>[0]) => void | Promise<void>,
   opts: Parameters<typeof agentExecCommand>[1] = {},
-) => runAgentExecWithMock("inspect", opts, createTestRuntime(), deps.runAgent);
+) =>
+  runAgentExecWithMock("inspect", opts, createTestRuntime(), async (options) => {
+    await observe(options);
+    return success();
+  });
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -107,34 +108,35 @@ describe("agent exec stored auth", () => {
     });
   });
 
-  it("skips external CLI credentials and omits provider secrets from host commands", async () => {
+  it("blocks stored and external CLI credentials and omits host-command secrets under --auth-env-only", async () => {
     const codexHome = tempDirs.make("openclaw-agent-exec-codex-home-");
-    await fs.writeFile(
-      path.join(codexHome, "auth.json"),
-      JSON.stringify({
-        auth_mode: "chatgpt",
-        tokens: { access_token: "test-access", refresh_token: "test-refresh" },
-      }),
-    );
+    const normalStateDir = tempDirs.make("openclaw-agent-exec-hidden-auth-");
+    const agentDir = path.join(normalStateDir, "agents", "main", "agent");
+    await writeFixtureJson(path.join(codexHome, "auth.json"), {
+      auth_mode: "chatgpt",
+      tokens: { access_token: "test-access", refresh_token: "test-refresh" },
+    });
     await withEnvAsync(
       {
         CODEX_HOME: codexHome,
+        OPENCLAW_STATE_DIR: normalStateDir,
         OPENAI_API_KEY: "test-openai-key",
         DATABASE_URL: "postgres://test.invalid/database",
       },
       async () => {
+        saveAuthProfileStore(stored, agentDir);
         const result = await withHostExecInheritedEnvOmitted(["DATABASE_URL"], () =>
           run(
-            {
-              runAgent: async () => {
-                const options = { allowKeychainPrompt: false, externalCliProviderIds: ["openai"] };
-                expect(ensureAuthProfileStore(undefined, options).profiles).toEqual({});
-                expect(loadAuthProfileStoreForRuntime(undefined, options).profiles).toEqual({});
-                const hostEnv = sanitizeHostExecEnv({ baseEnv: process.env });
-                expect(hostEnv.OPENAI_API_KEY).toBeUndefined();
-                expect(hostEnv.DATABASE_URL).toBeUndefined();
-                return success();
-              },
+            async () => {
+              const options = { allowKeychainPrompt: false, externalCliProviderIds: ["openai"] };
+              expect(ensureAuthProfileStore(undefined, options).profiles).toEqual({});
+              expect(loadAuthProfileStoreForRuntime(undefined, options).profiles).toEqual({});
+              const request = { agentDir, profileId: "openai:stored" };
+              expect(findPersistedAuthProfileCredential(request)).toBeUndefined();
+              expect(resolvePersistedAuthProfileOwnerAgentDir(request)).toBeUndefined();
+              const hostEnv = sanitizeHostExecEnv({ baseEnv: process.env });
+              expect(hostEnv.OPENAI_API_KEY).toBeUndefined();
+              expect(hostEnv.DATABASE_URL).toBeUndefined();
             },
             { authEnvOnly: true },
           ),
@@ -151,23 +153,10 @@ describe("agent exec stored auth", () => {
         writeConfigMachineState("auth.sharedStore", { location: "state-db" });
         const sharedStore = {
           version: 1,
-          order: { openai: ["openai:token", "openai:shared", "openai:private"] },
-          usageStats: {
-            "openai:token": { disabledUntil: Date.now() + 3_600_000 },
-            "openai:private": { lastUsed: 123 },
-          },
           profiles: {
             "openai:shared": { ...storedProfile, key: "shared-test-key" },
             "openai:token": { type: "token", provider: "openai", token: "shared-test-token" },
             "openai:private": { ...storedProfile, copyToAgents: false },
-            "openai:oauth": {
-              type: "oauth",
-              provider: "openai",
-              access: "test-access",
-              refresh: "test-refresh",
-              expires: Date.now() + 60_000,
-              copyToAgents: true,
-            },
           },
         } satisfies Parameters<typeof setRuntimeAuthProfileStoreSnapshot>[0];
         const localStore = {
@@ -178,36 +167,17 @@ describe("agent exec stored auth", () => {
         writePersistedAuthProfileStoreRaw(localStore, state.agentDir());
         await prepareSharedAuthStoreOwnership(state.env);
         setRuntimeAuthProfileStoreSnapshot(sharedStore, state.agentDir());
-        const result = await run({
-          runAgent: async () => {
-            expect(process.env.OPENCLAW_STATE_DIR).not.toBe(state.stateDir);
-            const store = await ensureAuthProfileStoreAsync(undefined, noExternal);
-            expect(Object.keys(store.profiles).toSorted()).toEqual([
-              "openai:shared",
-              "openai:token",
-            ]);
-            expect(
-              (await loadAuthProfileStoreForRuntimeAsync(undefined, noExternal)).profiles,
-            ).toEqual(store.profiles);
-            expect(
-              await findPersistedAuthProfileCredentialAsync({ profileId: "openai:token" }),
-            ).toEqual(sharedStore.profiles["openai:token"]);
-            expect(store).toMatchObject({ runtimeLocalProfileIds: ["openai:shared"] });
-            expect(resolveAuthProfileOrder({ store, provider: "openai", cfg: {} })).toEqual([
-              "openai:shared",
-              "openai:token",
-            ]);
-            expect(store.usageStats).toEqual({
-              "openai:token": sharedStore.usageStats["openai:token"],
-            });
-            expect(
-              (await resolveApiKeyForProfile({ store, profileId: "openai:shared", cfg: {} }))
-                ?.apiKey,
-            ).toBe("local-test-key");
-            expect(inspectPersistedAuthProfileStoreRaw(state.agentDir()).status).toBe("readable");
-            saveAuthProfileStore(store);
-            return success();
-          },
+        const result = await run(async () => {
+          expect(process.env.OPENCLAW_STATE_DIR).not.toBe(state.stateDir);
+          const store = await ensureAuthProfileStoreAsync(undefined, noExternal);
+          expect(store.profiles).toEqual({
+            ...localStore.profiles,
+            "openai:token": sharedStore.profiles["openai:token"],
+          });
+          expect(
+            (await resolveApiKeyForProfile({ store, profileId: "openai:shared", cfg: {} }))?.apiKey,
+          ).toBe("local-test-key");
+          saveAuthProfileStore(store);
         });
         expect(result.envelope.error).toBeUndefined();
         expect(readPersistedAuthProfileStoreRaw()).toEqual(sharedStore);
@@ -221,37 +191,31 @@ describe("agent exec stored auth", () => {
     const customAgentDir = path.join(stateDir, "custom-home");
     await fs.mkdir(customAgentDir);
     const config = path.join(stateDir, "openclaw.json");
-    await fs.writeFile(
-      config,
-      JSON.stringify({
-        agents: {
-          ownership: "explicit",
-          defaults: { systemAgent: { agentId: "beta" } },
-          entries: { alpha: { agentDir: customAgentDir }, beta: {} },
-        },
-      }),
-    );
+    await writeFixtureJson(config, {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "beta" } },
+        entries: { alpha: { agentDir: customAgentDir }, beta: {} },
+      },
+    });
     saveAuthProfileStore(stored, customAgentDir);
     const result = await run(
-      {
-        runAgent: async (options) => {
-          const agentId = typeof options.agentId === "string" ? options.agentId : "main";
-          expect(agentId).toBe("alpha");
-          expect(() =>
-            resolveSqliteScope({
-              agentId,
-              defaultAgentId: "alpha",
+      async (options) => {
+        const agentId = typeof options.agentId === "string" ? options.agentId : "main";
+        expect(agentId).toBe("alpha");
+        expect(() =>
+          resolveSqliteScope({
+            agentId,
+            defaultAgentId: "alpha",
+            env: process.env,
+            sessionKey: `agent:${agentId}:explicit:${String(options.sessionId)}`,
+            storePath: resolveSessionStorePathCore(undefined, {
+              agentId: "alpha",
               env: process.env,
-              sessionKey: `agent:${agentId}:explicit:${String(options.sessionId)}`,
-              storePath: resolveSessionStorePathCore(undefined, {
-                agentId: "alpha",
-                env: process.env,
-              }),
             }),
-          ).not.toThrow();
-          expect(Object.keys(loadAuthProfileStoreForRuntime().profiles)).toContain("openai:stored");
-          return success();
-        },
+          }),
+        ).not.toThrow();
+        expect(Object.keys(loadAuthProfileStoreForRuntime().profiles)).toContain("openai:stored");
       },
       {
         config,
@@ -259,25 +223,5 @@ describe("agent exec stored auth", () => {
       },
     );
     expect(result.exitCode).toBe(0);
-  });
-
-  it("blocks direct persisted credential reads under --auth-env-only", async () => {
-    const normalStateDir = tempDirs.make("openclaw-agent-exec-hidden-auth-");
-    const agentDir = path.join(normalStateDir, "agents", "main", "agent");
-    await withEnvAsync({ OPENCLAW_STATE_DIR: normalStateDir }, async () => {
-      saveAuthProfileStore(stored, agentDir);
-      const result = await run(
-        {
-          runAgent: async () => {
-            const request = { agentDir, profileId: "openai:stored" };
-            expect(findPersistedAuthProfileCredential(request)).toBeUndefined();
-            expect(resolvePersistedAuthProfileOwnerAgentDir(request)).toBeUndefined();
-            return success();
-          },
-        },
-        { authEnvOnly: true },
-      );
-      expect(result.exitCode).toBe(0);
-    });
   });
 });

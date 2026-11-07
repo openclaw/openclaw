@@ -25,6 +25,37 @@ interface ResolvedCopilotAuth {
   agentId: string;
 }
 
+type CopilotSessionAuth = Pick<
+  ResolvedCopilotAuth,
+  "authMode" | "authProfileId" | "authProfileVersion"
+>;
+
+export function sessionAuthFields(auth: CopilotSessionAuth): CopilotSessionAuth {
+  return auth.authMode === "gitHubToken" || auth.authMode === "byok"
+    ? {
+        authMode: auth.authMode,
+        authProfileId: auth.authProfileId,
+        authProfileVersion: auth.authProfileVersion,
+      }
+    : { authMode: "useLoggedInUser" };
+}
+
+export function sessionAuthMatches(
+  stored: CopilotSessionAuth,
+  current: CopilotSessionAuth,
+): boolean {
+  if (stored.authMode !== current.authMode) {
+    return false;
+  }
+  if (stored.authMode === "useLoggedInUser") {
+    return true;
+  }
+  return (
+    stored.authProfileId === current.authProfileId &&
+    stored.authProfileVersion === current.authProfileVersion
+  );
+}
+
 export function createCopilotByokAuth(
   input: Pick<ResolveCopilotAuthInput, "agentId" | "agentDir" | "copilotHome" | "authProfileId"> & {
     authProfileVersion?: string;
@@ -63,12 +94,24 @@ interface ResolveCopilotAuthInput {
 }
 
 export function resolveCopilotAuth(input: ResolveCopilotAuthInput): ResolvedCopilotAuth {
-  const agentId = sanitizeAgentId(input.agentId);
-  const copilotHome = resolveCopilotHome({
-    explicit: readNonEmptyString(input.copilotHome),
-    agentDir: readNonEmptyString(input.agentDir),
-    agentId,
-  });
+  // Invalid ids use the harness default rather than entering a filesystem path.
+  const normalizedAgentId = (input.agentId ?? "").trim().toLowerCase();
+  const agentId = /^[a-z0-9][a-z0-9_-]{0,63}$/.test(normalizedAgentId)
+    ? normalizedAgentId
+    : COPILOT_DEFAULT_AGENT_ID;
+  const explicitHome = readNonEmptyString(input.copilotHome);
+  const agentDir = readNonEmptyString(input.agentDir);
+  let copilotHome: string;
+  if (explicitHome) {
+    copilotHome = resolve(explicitHome);
+  } else if (agentDir) {
+    // Keep CLI state separate from the host's files in the same agent directory.
+    copilotHome = resolve(join(agentDir, "copilot"));
+  } else {
+    const openClawHome = readNonEmptyString(process.env.OPENCLAW_HOME);
+    const rootHome = openClawHome ? resolve(openClawHome) : osHomedir();
+    copilotHome = resolve(join(rootHome, ".openclaw", "agents", agentId, "copilot"));
+  }
 
   const explicitToken = readNonEmptyString(input.auth?.gitHubToken);
   const explicitProfileId =
@@ -111,52 +154,6 @@ export function resolveCopilotAuth(input: ResolveCopilotAuthInput): ResolvedCopi
     };
   }
 
-  const envFallback = readEnvTokenFallback();
-  if (envFallback) {
-    return {
-      authMode: "gitHubToken",
-      gitHubToken: envFallback.token,
-      authProfileId: envFallback.profileId,
-      authProfileVersion: envFallback.profileVersion,
-      copilotHome,
-      agentId,
-    };
-  }
-
-  return {
-    authMode: "useLoggedInUser",
-    copilotHome,
-    agentId,
-  };
-}
-
-// Invalid ids use the harness default rather than entering a filesystem path.
-function sanitizeAgentId(value: string | undefined | null): string {
-  const trimmed = (value ?? "").trim().toLowerCase();
-  return /^[a-z0-9][a-z0-9_-]{0,63}$/.test(trimmed) ? trimmed : COPILOT_DEFAULT_AGENT_ID;
-}
-
-function resolveCopilotHome(args: {
-  explicit: string | undefined;
-  agentDir: string | undefined;
-  agentId: string;
-}): string {
-  if (args.explicit) {
-    return resolve(args.explicit);
-  }
-  // Keep CLI state separate from the host's files in the same agent directory.
-  if (args.agentDir) {
-    return resolve(join(args.agentDir, "copilot"));
-  }
-
-  const openClawHome = readNonEmptyString(process.env.OPENCLAW_HOME);
-  const rootHome = openClawHome ? resolve(openClawHome) : osHomedir();
-  return resolve(join(rootHome, ".openclaw", "agents", args.agentId, "copilot"));
-}
-
-function readEnvTokenFallback():
-  | { token: string; profileId: string; profileVersion: string }
-  | undefined {
   const env = process.env;
   const candidates: Array<{ name: string; value: string | undefined }> = [
     { name: "OPENCLAW_GITHUB_TOKEN", value: readNonEmptyString(env.OPENCLAW_GITHUB_TOKEN) },
@@ -167,13 +164,20 @@ function readEnvTokenFallback():
   for (const { name, value } of candidates) {
     if (value) {
       return {
-        token: value,
-        profileId: `env:${name}`,
-        profileVersion: tokenFingerprint(value),
+        authMode: "gitHubToken",
+        gitHubToken: value,
+        authProfileId: `env:${name}`,
+        authProfileVersion: tokenFingerprint(value),
+        copilotHome,
+        agentId,
       };
     }
   }
-  return undefined;
+  return {
+    authMode: "useLoggedInUser",
+    copilotHome,
+    agentId,
+  };
 }
 
 /** Pool invalidation fingerprint; never log it alongside an account id. */

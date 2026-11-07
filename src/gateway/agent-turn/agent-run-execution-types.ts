@@ -1,5 +1,4 @@
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
-import type { MainSessionRecoveryOwnerLease } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -14,10 +13,10 @@ import type { PreparedAgentRunDispatch } from "./agent-run-admission-types.js";
 import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
 export type StartAgentRunExecutionParams = {
-  assertContextCurrent?: () => void;
+  /** Gateway instance lifetime only; execution checks its retained principal itself. */
+  assertGatewayLifetimeCurrent?: () => void;
   executionSource?: SessionSourceAssertion;
   prepared: PreparedAgentRunDispatch;
-  mainRestartRecoveryOwnerLease?: MainSessionRecoveryOwnerLease;
   request: AgentRunRequest;
   cfg: OpenClawConfig;
   cfgForAgent?: OpenClawConfig;
@@ -32,7 +31,6 @@ export type StartAgentRunExecutionParams = {
   freshChild?: boolean;
   isRawModelRun: boolean;
   isOneShotModelRun: boolean;
-  isRestartRecoveryResumeRun: boolean;
   suppressVisibleSessionEffects: boolean;
   images: Array<{ type: "image"; data: string; mimeType: string }>;
   imageOrder: PromptImageOrderEntry[];
@@ -47,12 +45,11 @@ export type StartAgentRunExecutionParams = {
   groupSpace?: string;
   bestEffortDeliver: boolean;
   lifecycleGeneration: string;
-  effectiveBootstrapContextRunKind?: "default" | "heartbeat" | "cron";
+  effectiveBootstrapContextRunKind?: "default" | "cron";
   preserveUserFacingSessionModelState: boolean;
   sessionEffects?: "visible" | "internal";
   skipAgentInitialSessionTouch: boolean;
   restoredCronContinuation?: RestoredCronContinuation;
-  canUseInternalRuntimeHandoff: boolean;
   client: AgentTurnPrincipal | null;
   context: AgentTurnContext;
   io: AgentTurnIo;

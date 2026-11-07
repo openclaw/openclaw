@@ -45,7 +45,6 @@ export function createRealtimePlaybackFixture(
         behaviors: { noSubscriber: voiceSdk.NoSubscriberBehavior.Play, maxMissedFrames: 100 },
       }),
     joinVoiceChannel: () => connection,
-    entersState: voiceSdk.entersState,
   });
   const audio = new DiscordAudioTransport(
     {
@@ -211,9 +210,7 @@ export function createRealtimePlaybackFixture(
     onPlayerError,
     close() {
       roomPlayer.close();
-      for (const lane of lanes) {
-        lane.close();
-      }
+      lanes.forEach((lane) => lane.close());
       void audio.stop();
       player.off("error", onPlayerError);
       stop.mockRestore();

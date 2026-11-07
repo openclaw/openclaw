@@ -2,7 +2,13 @@ import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createStatusHealth, createStatusScanResultFixture } from "../status.test-support.ts";
 import { createTestConfigSnapshot } from "../test-runtime-config-helpers.js";
-import { mocks, runStatusAllReport, setupStatusAllReportTest } from "./report-data.test-support.js";
+import {
+  mocks,
+  runStatusAllReport,
+  reportText,
+  expectReport,
+  setupStatusAllReportTest,
+} from "./report-data.test-support.js";
 
 function availableDiagnostics(value: unknown) {
   return { ok: true as const, value };
@@ -11,7 +17,6 @@ function availableDiagnostics(value: unknown) {
 describe("statusAllCommand diagnosis", () => {
   setupStatusAllReportTest();
 
-  // These contracts run through the command, including local diagnosis collection and rendering.
   it("keeps first config issue locations and exact pairs before applying the display cap", async () => {
     const first = { path: "a", message: "b:c", sourceFile: "legacy.json", line: 7 };
     const repeated = { ...first, sourceFile: "current.json", line: 9 };
@@ -43,15 +48,7 @@ describe("statusAllCommand diagnosis", () => {
       "  - legacy.json:7 — a: b:c",
       "  - a:b: c",
       "  - a: different",
-      "  - field0: invalid",
-      "  - field1: invalid",
-      "  - field2: invalid",
-      "  - field3: invalid",
-      "  - field4: invalid",
-      "  - field5: invalid",
-      "  - field6: invalid",
-      "  - field7: invalid",
-      "  - field8: invalid",
+      ...Array.from({ length: 9 }, (_, index) => `  - field${index}: invalid`),
       "  … +2 more",
     ]);
     expect(snapshot).toEqual(original);
@@ -60,16 +57,6 @@ describe("statusAllCommand diagnosis", () => {
   it("retains queue warnings from a successful gateway health snapshot", async () => {
     mocks.resolveStatusGatewayHealthSafe.mockResolvedValueOnce({
       ...createStatusHealth(),
-      ok: true,
-      ts: 0,
-      durationMs: 42,
-      heartbeatSeconds: 60,
-      defaultAgentId: "main",
-      agents: [],
-      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
       deliveryQueues: {
         failed: [{ queueName: "outbound", count: 2 }],
         ingressPressure: [
@@ -86,14 +73,12 @@ describe("statusAllCommand diagnosis", () => {
       },
     });
 
-    const lines = await runStatusAllReport();
-
-    const output = lines.join("\n");
-    expect(output).toContain("Delivery queue: warning");
-    expect(output).toContain("outbound: 2");
-    expect(output).toContain(
+    const output = await reportText();
+    expectReport(output, [
+      "Delivery queue: warning",
+      "outbound: 2",
       "inbound telegram/ops: 1 pressured lane, 2 pending, 0 claimed, 1 blocked",
-    );
+    ]);
   });
 
   it("keeps a failed health request visible in the complete report", async () => {
@@ -101,95 +86,100 @@ describe("statusAllCommand diagnosis", () => {
       error: "health request timed out",
     });
 
-    const lines = await runStatusAllReport();
+    const output = await reportText();
+    expectReport(output, [
+      "Gateway health:\n  health request timed out",
+      "Pasteable debug report. Auth tokens redacted.",
+    ]);
+  });
+
+  it("strips terminal controls from channel issues in the diagnostic report", async () => {
+    // Hostile channel runtime data must not reach the operator's Diagnosis line.
+    const lines = await runStatusAllReport({
+      overview: {
+        channelsStatus: {},
+        channelIssues: [
+          {
+            channel: "evil\u0007channel",
+            accountId: "acct\u0007",
+            kind: "runtime",
+            message: "gateway\u0007 down",
+            fix: "restart\u0007",
+          },
+        ],
+      },
+    });
 
     const output = lines.join("\n");
-    expect(output).toContain("Gateway health:\n  health request timed out");
-    expect(output).toContain("Pasteable debug report. Auth tokens redacted.");
+    expect(output).toContain("Channel issues (1)");
+    // stripAnsi keeps BEL (0x07), so its absence proves the sanitizer ran.
+    expect(output).not.toContain("\u0007");
+    expect(output).toContain("evilchannel[acct] runtime: gateway down · fix: restart");
   });
 
   it("keeps DNS context while daemon state remains unobserved", async () => {
-    const lines = await runStatusAllReport({ overview: { tailscaleDns: "box.tail.ts.net" } });
-
-    const output = lines.join("\n");
-    expect(output).toContain("✓ Tailscale exposure: off · daemon unknown · box.tail.ts.net");
-    expect(output).not.toContain("Tailscale: off");
+    const output = await reportText({ overview: { tailscaleDns: "box.tail.ts.net" } });
+    expectReport(
+      output,
+      ["✓ Tailscale exposure: off · daemon unknown · box.tail.ts.net"],
+      ["Tailscale: off"],
+    );
   });
 
-  it("does not warn about an unavailable Tailscale daemon when exposure is disabled", async () => {
-    const lines = await runStatusAllReport();
-
-    expect(lines.join("\n")).toContain("✓ Tailscale exposure: off · daemon unknown");
-  });
-
-  it("treats same-process dual-stack loopback listeners as healthy", async () => {
-    mocks.inspectPortUsage.mockResolvedValueOnce({
-      port: 18789,
-      status: "busy",
+  it.each([
+    {
+      name: "same-process dual-stack loopback",
       listeners: [
-        { pid: 5001, commandLine: "openclaw-gateway", address: "127.0.0.1:18789" },
-        { pid: 5001, commandLine: "openclaw-gateway", address: "[::1]:18789" },
+        [5001, "127.0.0.1:18789"],
+        [5001, "[::1]:18789"],
       ],
-      hints: [],
-    });
-
-    const lines = await runStatusAllReport();
-
-    const output = lines.join("\n");
-    expect(output).toContain("✓ Port 18789");
-    expect(output).toContain("Detected dual-stack loopback listeners");
-    expect(output).not.toContain("Port 18789 is already in use.");
-  });
-
-  it("treats a single wildcard Gateway listener as healthy", async () => {
-    mocks.inspectPortUsage.mockResolvedValueOnce({
-      port: 18789,
       status: "busy",
-      listeners: [{ pid: 5001, commandLine: "openclaw-gateway", address: "0.0.0.0:18789" }],
-      hints: [],
-    });
-
-    const lines = await runStatusAllReport();
-
-    const output = lines.join("\n");
-    expect(output).toContain("✓ Port 18789");
-    expect(output).toContain("Detected OpenClaw Gateway listener on the configured port.");
-    expect(output).not.toContain("Port 18789 is already in use.");
-  });
-
-  it("keeps warning for multi-process listener conflicts", async () => {
-    mocks.inspectPortUsage.mockResolvedValueOnce({
-      port: 18789,
+      icon: "✓",
+      contains: ["Detected dual-stack loopback listeners"],
+      excludes: ["Port 18789 is already in use."],
+    },
+    {
+      name: "single wildcard Gateway",
+      listeners: [[5001, "0.0.0.0:18789"]],
       status: "busy",
+      icon: "✓",
+      contains: ["Detected OpenClaw Gateway listener on the configured port."],
+      excludes: ["Port 18789 is already in use."],
+    },
+    {
+      name: "multi-process conflict",
       listeners: [
-        { pid: 5001, commandLine: "openclaw-gateway", address: "127.0.0.1:18789" },
-        { pid: 5002, commandLine: "openclaw-gateway", address: "[::1]:18789" },
+        [5001, "127.0.0.1:18789"],
+        [5002, "[::1]:18789"],
       ],
-      hints: [],
-    });
-
-    const lines = await runStatusAllReport();
-
-    const output = lines.join("\n");
-    expect(output).toContain("! Port 18789");
-    expect(output).toContain("2 OpenClaw gateway processes appear to be listening on port 18789");
-    expect(output).toContain("Port 18789 is already in use.");
-  });
-
-  it("does not let attributed listeners override indeterminate availability", async () => {
-    mocks.inspectPortUsage.mockResolvedValueOnce({
-      port: 18789,
+      status: "busy",
+      icon: "!",
+      contains: [
+        "2 OpenClaw gateway processes appear to be listening on port 18789",
+        "Port 18789 is already in use.",
+      ],
+      excludes: [],
+    },
+    {
+      name: "indeterminate availability despite attributed listener",
+      listeners: [[5001, "127.0.0.1:18789"]],
       status: "unknown",
-      listeners: [{ pid: 5001, commandLine: "openclaw-gateway", address: "127.0.0.1:18789" }],
+      icon: "!",
+      contains: ["Port 18789 availability could not be determined."],
+      excludes: ["Detected OpenClaw Gateway listener"],
+    },
+  ] as const)("diagnoses $name", async ({ listeners, status, icon, contains, excludes }) => {
+    mocks.inspectPortUsage.mockResolvedValueOnce({
+      port: 18789,
+      status,
       hints: [],
+      listeners: listeners.map(([pid, address]) => ({
+        pid,
+        address,
+        commandLine: "openclaw-gateway",
+      })),
     });
-
-    const lines = await runStatusAllReport();
-
-    const output = lines.join("\n");
-    expect(output).toContain("! Port 18789");
-    expect(output).toContain("Port 18789 availability could not be determined.");
-    expect(output).not.toContain("Detected OpenClaw Gateway listener");
+    expectReport(await reportText(), [`${icon} Port 18789`, ...contains], excludes);
   });
 
   it.each([
@@ -216,88 +206,96 @@ describe("statusAllCommand diagnosis", () => {
           stats: { mode: "npm", reason, steps: [] },
         },
       });
-      const lines = await runStatusAllReport();
-      const output = lines.join("\n");
-      expect(output).toContain(`Update restart: ${headline}`);
-      expect(output).toContain(hint);
-      expect(output).not.toContain("run openclaw gateway restart");
+      const output = await reportText();
+      expectReport(output, [`Update restart: ${headline}`, hint], ["run openclaw gateway restart"]);
     },
   );
 
-  it("emits a soft warning when no agent sessions were active in the last 30m", async () => {
-    const agentStatus = {
-      ...createStatusScanResultFixture().agentStatus,
-      totalSessions: 2,
-      agents: [
-        {
-          ...createStatusScanResultFixture().agentStatus.agents[0]!,
-          id: "main",
-          lastActiveAgeMs: 31 * 60_000,
+  it.each([
+    { ages: [31 * 60_000, null], active: 0, icon: "!", warning: true },
+    { ages: [5 * 60_000, 45 * 60_000], active: 1, icon: "✓", warning: false },
+  ])("reports $active active agents", async ({ ages, active, icon, warning }) => {
+    const base = createStatusScanResultFixture().agentStatus;
+    const output = await reportText({
+      overview: {
+        agentStatus: {
+          ...base,
+          totalSessions: 2,
+          agents: ages.map((lastActiveAgeMs, index) => ({
+            ...base.agents[0]!,
+            id: index === 0 ? "main" : "worker",
+            lastActiveAgeMs,
+          })),
         },
-        {
-          ...createStatusScanResultFixture().agentStatus.agents[0]!,
-          id: "worker",
-          lastActiveAgeMs: null,
-        },
-      ],
-    };
-
-    const lines = await runStatusAllReport({ overview: { agentStatus } });
-
-    const output = lines.join("\n");
-    expect(output).toContain("! Agent activity: 0 active in 30m · 2 sessions");
-    expect(output).toContain("verify inbound dispatch and turn creation");
+      },
+    });
+    expect(output).toContain(`${icon} Agent activity: ${active} active in 30m · 2 sessions`);
+    expect(output.includes("verify inbound dispatch and turn creation")).toBe(warning);
   });
 
-  it("keeps agent activity healthy when a session was recently updated", async () => {
-    const agentStatus = {
-      ...createStatusScanResultFixture().agentStatus,
-      totalSessions: 2,
-      agents: [
-        {
-          ...createStatusScanResultFixture().agentStatus.agents[0]!,
-          id: "main",
-          lastActiveAgeMs: 5 * 60_000,
-        },
-        {
-          ...createStatusScanResultFixture().agentStatus.agents[0]!,
-          id: "worker",
-          lastActiveAgeMs: 45 * 60_000,
-        },
+  it.each([
+    [[2, 2, 2, 2, 2], "session.turn.created", 60_000, "✓", ["latest delivery event:"], []],
+    [
+      [1, 0, 0, 0, 1],
+      "message.processed",
+      30_000,
+      "✓",
+      [],
+      ["Messages were received, but no gateway dispatch started"],
+    ],
+    [
+      [1, 1, 1, 0, 1],
+      "message.processed",
+      30_000,
+      "✓",
+      [],
+      ["Gateway dispatch started, but no agent turn was created"],
+    ],
+    [
+      [3, 3, 1, 0, 1],
+      "message.dispatch.started",
+      120_000,
+      "!",
+      [
+        "Gateway dispatch started, but no agent turn was created",
+        "Multiple gateway dispatches have not completed yet",
       ],
-    };
-
-    const lines = await runStatusAllReport({ overview: { agentStatus } });
-
-    const output = lines.join("\n");
-    expect(output).toContain("✓ Agent activity: 1 active in 30m · 2 sessions");
-    expect(output).not.toContain("verify inbound dispatch and turn creation");
-  });
-
-  it("summarizes inbound delivery telemetry proof counters", async () => {
-    mocks.resolveStatusGatewayDiagnosticsSafe.mockResolvedValueOnce(
-      availableDiagnostics({
-        summary: {
-          byType: {
-            "message.received": 2,
-            "message.dispatch.started": 2,
-            "message.dispatch.completed": 2,
-            "session.turn.created": 2,
-            "message.processed": 2,
+      [],
+    ],
+  ] as const)(
+    "reports delivery counters %j",
+    async (
+      [received, started, completed, turns, processed],
+      event,
+      age,
+      icon,
+      contains,
+      excludes,
+    ) => {
+      mocks.resolveStatusGatewayDiagnosticsSafe.mockResolvedValueOnce(
+        availableDiagnostics({
+          summary: {
+            byType: {
+              "message.received": received,
+              "message.dispatch.started": started,
+              "message.dispatch.completed": completed,
+              "session.turn.created": turns,
+              "message.processed": processed,
+            },
           },
-        },
-        events: [{ type: "session.turn.created", ts: Date.now() - 60_000 }],
-      }),
-    );
-
-    const lines = await runStatusAllReport();
-
-    const output = lines.join("\n");
-    expect(output).toContain(
-      "✓ Inbound delivery telemetry: received 2 · dispatch 2/2 · turns 2 · processed 2",
-    );
-    expect(output).toContain("latest delivery event:");
-  });
+          events: [{ type: event, ts: Date.now() - age }],
+        }),
+      );
+      expectReport(
+        await reportText(),
+        [
+          `${icon} Inbound delivery telemetry: received ${received} · dispatch ${started}/${completed} · turns ${turns} · processed ${processed}`,
+          ...contains,
+        ],
+        excludes,
+      );
+    },
+  );
 
   it("renders the shared redacted telemetry exporter summary", async () => {
     mocks.resolveStatusGatewayDiagnosticsSafe.mockResolvedValueOnce({ ok: true, value: {} });
@@ -320,17 +318,14 @@ describe("statusAllCommand diagnosis", () => {
         ],
       }),
     );
-
-    const lines = await runStatusAllReport();
-
-    const output = lines.join("\n");
-    expect(output).toContain("! Telemetry exporters");
-    expect(output).toContain(
-      "diagnostics-otel · traces · failed · OTLP/HTTP protobuf (explicit endpoint) · export failed",
+    expectReport(
+      await reportText(),
+      [
+        "! Telemetry exporters",
+        "diagnostics-otel · traces · failed · OTLP/HTTP protobuf (explicit endpoint) · export failed",
+      ],
+      ["collector.example", "secret", "raw failure"],
     );
-    expect(output).not.toContain("collector.example");
-    expect(output).not.toContain("secret");
-    expect(output).not.toContain("raw failure");
   });
 
   it("renders failed diagnostics as unavailable instead of empty", async () => {
@@ -342,99 +337,24 @@ describe("statusAllCommand diagnosis", () => {
     mocks.resolveStatusGatewayDiagnosticsSafe.mockResolvedValueOnce(failedProbe);
     mocks.resolveStatusGatewayDiagnosticsSafe.mockResolvedValueOnce(failedProbe);
 
-    const lines = await runStatusAllReport();
-
-    const output = lines.join("\n");
-    expect(output).toContain("! Telemetry exporters: unavailable");
-    expect(output).toContain(
-      "Exporter diagnostics failed: Error: diagnostics probe timed out at wss://***:***@gateway.example/socket?token=***",
+    const output = await reportText();
+    expectReport(
+      output,
+      [
+        "! Telemetry exporters: unavailable",
+        "Exporter diagnostics failed: Error: diagnostics probe timed out at wss://***:***@gateway.example/socket?token=***",
+        "Retry: openclaw gateway stability --type telemetry.exporter",
+        "! Inbound delivery telemetry: unavailable",
+        "Delivery diagnostics failed: Error: diagnostics probe timed out at wss://***:***@gateway.example/socket?token=***",
+        "Retry: openclaw gateway stability",
+      ],
+      [
+        "received 0 · dispatch 0/0 · turns 0 · processed 0",
+        "probe-user",
+        "probe-pass",
+        "probe-secret",
+      ],
     );
-    expect(output).toContain("Retry: openclaw gateway stability --type telemetry.exporter");
-    expect(output).toContain("! Inbound delivery telemetry: unavailable");
-    expect(output).toContain(
-      "Delivery diagnostics failed: Error: diagnostics probe timed out at wss://***:***@gateway.example/socket?token=***",
-    );
-    expect(output).toContain("Retry: openclaw gateway stability");
-    expect(output).not.toContain("received 0 · dispatch 0/0 · turns 0 · processed 0");
-    expect(output).not.toContain("probe-user");
-    expect(output).not.toContain("probe-pass");
-    expect(output).not.toContain("probe-secret");
-  });
-
-  it("keeps handled terminal delivery paths healthy without dispatch starts", async () => {
-    mocks.resolveStatusGatewayDiagnosticsSafe.mockResolvedValueOnce(
-      availableDiagnostics({
-        summary: {
-          byType: {
-            "message.received": 1,
-            "message.dispatch.started": 0,
-            "message.dispatch.completed": 0,
-            "session.turn.created": 0,
-            "message.processed": 1,
-          },
-        },
-        events: [{ type: "message.processed", ts: Date.now() - 30_000 }],
-      }),
-    );
-
-    const lines = await runStatusAllReport();
-
-    const output = lines.join("\n");
-    expect(output).toContain(
-      "✓ Inbound delivery telemetry: received 1 · dispatch 0/0 · turns 0 · processed 1",
-    );
-    expect(output).not.toContain("Messages were received, but no gateway dispatch started");
-  });
-
-  it("keeps handled terminal dispatches healthy without agent turns", async () => {
-    mocks.resolveStatusGatewayDiagnosticsSafe.mockResolvedValueOnce(
-      availableDiagnostics({
-        summary: {
-          byType: {
-            "message.received": 1,
-            "message.dispatch.started": 1,
-            "message.dispatch.completed": 1,
-            "session.turn.created": 0,
-            "message.processed": 1,
-          },
-        },
-        events: [{ type: "message.processed", ts: Date.now() - 30_000 }],
-      }),
-    );
-
-    const lines = await runStatusAllReport();
-
-    const output = lines.join("\n");
-    expect(output).toContain(
-      "✓ Inbound delivery telemetry: received 1 · dispatch 1/1 · turns 0 · processed 1",
-    );
-    expect(output).not.toContain("Gateway dispatch started, but no agent turn was created");
-  });
-
-  it("warns when received messages never reach agent turn creation", async () => {
-    mocks.resolveStatusGatewayDiagnosticsSafe.mockResolvedValueOnce(
-      availableDiagnostics({
-        summary: {
-          byType: {
-            "message.received": 3,
-            "message.dispatch.started": 3,
-            "message.dispatch.completed": 1,
-            "session.turn.created": 0,
-            "message.processed": 1,
-          },
-        },
-        events: [{ type: "message.dispatch.started", ts: Date.now() - 120_000 }],
-      }),
-    );
-
-    const lines = await runStatusAllReport();
-
-    const output = lines.join("\n");
-    expect(output).toContain(
-      "! Inbound delivery telemetry: received 3 · dispatch 3/1 · turns 0 · processed 1",
-    );
-    expect(output).toContain("Gateway dispatch started, but no agent turn was created");
-    expect(output).toContain("Multiple gateway dispatches have not completed yet");
   });
 
   it("avoids unreachable gateway diagnosis in node-only mode", async () => {
@@ -455,18 +375,21 @@ describe("statusAllCommand diagnosis", () => {
         "Inspect the remote gateway host for live channel and health details.",
       ].join("\n"),
     };
-    const lines = await runStatusAllReport({ nodeOnlyGateway });
-
-    const output = lines.join("\n");
-    expect(output).toContain("Node-only mode detected");
-    expect(output).toContain(
-      "Channel issues skipped (node-only mode; query gateway.example.com:19000)",
+    const output = await reportText({ nodeOnlyGateway });
+    expectReport(
+      output,
+      [
+        "Node-only mode detected",
+        "Channel issues skipped (node-only mode; query gateway.example.com:19000)",
+      ],
+      [
+        "Channel issues skipped (gateway unreachable)",
+        "Gateway health:",
+        "Inbound delivery telemetry: unavailable",
+        "Telemetry exporters: unavailable",
+        "Retry: openclaw gateway stability",
+      ],
     );
-    expect(output).not.toContain("Channel issues skipped (gateway unreachable)");
-    expect(output).not.toContain("Gateway health:");
-    expect(output).not.toContain("Inbound delivery telemetry: unavailable");
-    expect(output).not.toContain("Telemetry exporters: unavailable");
-    expect(output).not.toContain("Retry: openclaw gateway stability");
   });
 
   it.each(["ENOENT", "EACCES"])(
@@ -487,18 +410,21 @@ describe("statusAllCommand diagnosis", () => {
         }),
       );
       try {
-        const output = (await runStatusAllReport()).join("\n");
+        const output = await reportText();
         if (code === "ENOENT") {
           expect(output).not.toContain("Log unavailable");
         } else {
-          expect(output).toContain("# stdout: /synthetic-status-logs/gateway.log");
-          expect(output).toContain(
+          expectReport(output, [
+            "# stdout: /synthetic-status-logs/gateway.log",
             "Log unavailable; check this file's path and permissions, then retry.",
-          );
-          expect(output).toContain("Gateway restart attempts (tail): /tmp/fixture-restart.log");
+            "Gateway restart attempts (tail): /tmp/fixture-restart.log",
+          ]);
         }
-        expect(output).not.toContain("synthetic-private");
-        expect(output).toContain("Pasteable debug report. Auth tokens redacted.");
+        expectReport(
+          output,
+          ["Pasteable debug report. Auth tokens redacted."],
+          ["synthetic-private"],
+        );
       } finally {
         open.mockRestore();
       }
@@ -525,17 +451,16 @@ describe("statusAllCommand diagnosis", () => {
         return [];
       });
 
-      const lines = await runStatusAllReport();
-
-      const output = lines.join("\n");
+      const output = await reportText();
       expect(mocks.readFileTailLines).not.toHaveBeenCalledWith(
         "/Users/test/Library/Logs/openclaw/gateway.err.log",
         40,
       );
-      expect(output).toContain("# stdout: /Users/test/Library/Logs/openclaw/gateway.log");
-      expect(output).toContain("gateway stdout current");
-      expect(output).not.toContain("# stderr:");
-      expect(output).not.toContain("failed to bind gateway socket stale");
+      expectReport(
+        output,
+        ["# stdout: /Users/test/Library/Logs/openclaw/gateway.log", "gateway stdout current"],
+        ["# stderr:", "failed to bind gateway socket stale"],
+      );
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform });
     }

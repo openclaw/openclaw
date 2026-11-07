@@ -73,6 +73,43 @@ describe("Gateway core reload policy", () => {
     ).toBe(true);
   });
 
+  it("hot-applies visitor limits while preserving replacement for resource changes", async () => {
+    const { default: visitor } = await loadBundledPluginFacade<{
+      default: OpenClawPluginDefinition;
+    }>({ pluginId: "visitor-access", artifactBasename: "index.ts" });
+    const registry = createEmptyPluginRegistry();
+    if (visitor.reload) {
+      registry.reloads.push({
+        pluginId: "visitor-access",
+        source: "test",
+        registration: visitor.reload,
+      });
+    }
+    setActivePluginRegistry(registry);
+    const limits = ["maxVisitors", "defaultTtlDays"].map(
+      (key) => `plugins.entries.visitor-access.config.${key}`,
+    );
+    expect(buildGatewayReloadPlan(limits)).toMatchObject({
+      reloadPlugins: false,
+      restartGateway: false,
+    });
+    for (const key of ["accountId", "appId", "apiToken", "policyName"]) {
+      expect(
+        buildGatewayReloadPlan([...limits, `plugins.entries.visitor-access.config.${key}`])
+          .reloadPlugins,
+      ).toBe(true);
+    }
+    expect(
+      buildGatewayReloadPlan(limits, {
+        pluginLifecycle: {
+          pluginIds: ["visitor-access"],
+          reason: "reload",
+          operationId: "code-replacement",
+        },
+      }).reloadPlugins,
+    ).toBe(true);
+  });
+
   it.each(["memory-core", "none"])(
     "reloads the selected memory index service for provider changes (memory slot: %s)",
     async (memorySlot) => {
@@ -222,24 +259,22 @@ describe("Gateway core reload policy", () => {
       "discovery.wideArea.domain",
       "security.unknownPolicy",
       "secrets.egressProxy.enabled",
-    ].map((path) => ({ path, restart: true, heartbeat: false })),
+    ].map((path) => ({ path, restart: true })),
     ...[
       "tools.codeMode.enabled",
       "gateway.controlUi.experimental.customPlugins",
-      "gateway.controlUi.experimental.claws",
+      "gateway.controlUi.experimental.templates",
       "gateway.controlUi.experimental.chatBubbles",
     ].map((path) => ({
       path,
       restart: false,
-      heartbeat: false,
     })),
-    { path: "agents.defaults.model", restart: false, heartbeat: true },
-  ])("classifies reload path: $path", ({ path, restart, heartbeat }) => {
+    { path: "agents.defaults.model", restart: false },
+  ])("classifies reload path: $path", ({ path, restart }) => {
     const plan = buildGatewayReloadPlan([path]);
     expect(plan.restartGateway).toBe(restart);
     expect(plan.restartReasons).toEqual(restart ? [path] : []);
     expect(plan.hotReasons).toEqual(restart ? [] : [path]);
-    expect(plan.restartHeartbeat).toBe(heartbeat);
     expect(resolveConfigReloadMetadata(path).kind).toBe(restart ? "restart" : "hot");
   });
 });

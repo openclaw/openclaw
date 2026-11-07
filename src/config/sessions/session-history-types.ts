@@ -37,13 +37,13 @@ import type {
 } from "./session-transcript-accounting.types.js";
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type {
-  ReadRecentSessionConversationTextOptions,
-  SessionRecentConversationText,
+  ReadRecentSessionConversationTurnOptions,
+  SessionRecentConversationTurn,
 } from "./transcript-recent-text.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
-export type ChatHistoryResponsePage<Messages extends unknown[] | Uint8Array = unknown[]> = {
-  messages: Messages;
+export type ChatHistoryResponsePage = {
+  messages: unknown[];
   activity?: AgentHistoryActivity[];
   messagesBytes: number;
   responseHistoryBytes: number;
@@ -72,7 +72,10 @@ export type ChatHistoryPageAnchor = Pick<ChatHistoryPageCursor, "sessionId" | "s
 };
 
 export type ChatHistoryPage = {
-  encodedResponse?: ChatHistoryResponsePage<Uint8Array<ArrayBuffer>>;
+  encodedResponse?: Omit<ChatHistoryResponsePage, "messages" | "activity"> & {
+    messages: Uint8Array<ArrayBuffer>;
+    activity?: Uint8Array<ArrayBuffer>;
+  };
   encodedMessagesDeflate?: Uint8Array<ArrayBuffer>;
   windowReset?: boolean;
   activeLeafEntryId?: string | null;
@@ -92,6 +95,8 @@ export type ChatHistoryPage = {
 };
 
 export type ChatHistoryPageParams = {
+  /** Keep scoped channel user rows plain until the Gateway's viewer display pass. */
+  deferChannelUserDisplay?: boolean;
   encodeResponse?: boolean;
   deflateResponse?: boolean;
   includePluginSteering?: boolean;
@@ -236,7 +241,7 @@ export type SessionHistoryWorkerRequest =
       kind: "recent-text";
       params: {
         target: SessionTranscriptReadScope;
-        options: ReadRecentSessionConversationTextOptions;
+        options: ReadRecentSessionConversationTurnOptions;
       };
     }
   | {
@@ -332,7 +337,7 @@ export type SessionHistoryWorkerRequest =
 export type SessionHistoryWorkerResult =
   | { kind: "recent-usage"; result: SessionTranscriptUsageSnapshot | null }
   | { kind: "history-event-page"; result: SessionTranscriptMessageEventPage }
-  | { kind: "recent-text"; result: SessionRecentConversationText[] }
+  | { kind: "recent-text"; result: SessionRecentConversationTurn[] }
   | { kind: "active-accounting"; result: SessionTranscriptAccountingSnapshot }
   | { kind: "bounded-tail"; result: SessionTranscriptBoundedMessageTailPage }
   | { kind: "inline-visibility"; subagentCoordination: SessionHistorySubagentFacts }

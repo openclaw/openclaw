@@ -29,6 +29,7 @@ it("keeps the focused folder input and retained rows through a failed refresh an
       if (pending) {
         browser.readCompletion = null;
       }
+      setRevision((value) => value + 1);
       setRegisteringProject(pending);
     };
     onSettled(() => () => browser.reset());
@@ -39,14 +40,13 @@ it("keeps the focused folder input and retained rows through a failed refresh an
         id: "folder-browser-test",
         label: "Folder",
         registerProjectPath: null,
-        registeringProject: registeringProject(),
         onBack: vi.fn(),
         onRegisterProject: vi.fn(),
         onClose: vi.fn(),
         onApplyFolder: vi.fn(),
       };
     });
-    return <PlaceBrowser params={params()} />;
+    return <PlaceBrowser params={params()} registeringProject={registeringProject()} />;
   });
   await browser.navigate(workspace.path);
   await waitForSolid(() => expect(mounted.getByRole("option").textContent).toContain("packages"));
@@ -69,7 +69,9 @@ it("keeps the focused folder input and retained rows through a failed refresh an
   refresh.reject(new Error("Unavailable"));
   await navigating;
   await waitForSolid(() =>
-    expect(mounted.getByRole("alert").textContent).toContain("Couldn't list that folder."),
+    expect(mounted.getByRole("alert").textContent).toContain(
+      "Couldn’t list that folder. Try again.",
+    ),
   );
   expect(mounted.queryByRole("status")).toBeNull();
   expect(document.activeElement).toBe(input);
@@ -85,7 +87,9 @@ it("keeps the focused folder input and retained rows through a failed refresh an
   concurrentRead.reject(new Error("Unavailable"));
   await browsingWhileRegistering;
   await waitForSolid(() =>
-    expect(mounted.getByRole("alert").textContent).toContain("Couldn't list that folder."),
+    expect(mounted.getByRole("alert").textContent).toContain(
+      "Couldn’t list that folder. Try again.",
+    ),
   );
   expect(mounted.queryByRole("status")).toBeNull();
   expect(document.activeElement).toBe(input);

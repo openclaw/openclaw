@@ -4,8 +4,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   decodeChatHistoryPageCursor,
   resolveChatHistoryPageCursors,
-} from "../../gateway/server-methods/chat-history-page-cursor.js";
-import { prepareChatHistoryResponsePage } from "../../gateway/server-methods/chat-history-response-page.js";
+} from "../../gateway/chat-history-page-cursor.js";
+import { prepareChatHistoryResponsePage } from "../../gateway/chat-history-response-page.js";
 import type { SessionRowProjection } from "../../gateway/session-row-projection.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -43,6 +43,7 @@ const runtime = vi.hoisted(() => ({
     async (
       _params?: unknown,
       _signal?: AbortSignal,
+      _displayProjector?: unknown,
       _retainNativeHistoryAuthorization?: (isCurrent: () => boolean) => void,
     ): Promise<ChatHistoryPage> => ({
       messages: [] as unknown[],
@@ -313,6 +314,7 @@ it.each([undefined, 1])("preserves visible history and offset metadata: %s", asy
     expect(runtime.readChatHistoryPage).toHaveBeenCalledWith(
       expect.objectContaining({ offset, max: 1 }),
       undefined,
+      undefined,
       expect.any(Function),
     );
     expect(result).toMatchObject({ offset, nextOffset: 81, hasMore: true, totalMessages: 82 });
@@ -396,6 +398,7 @@ it("continues a retained anchored page through its original transcript source", 
       pageCursor: cursor,
     }),
     undefined,
+    undefined,
     expect.any(Function),
   );
 });
@@ -406,6 +409,7 @@ it("normalizes string history limits before calling the shared owner", async () 
   expect(runtime.readChatHistoryPage).toHaveBeenCalledWith(
     expect.objectContaining({ max: 2 }),
     undefined,
+    undefined,
     expect.any(Function),
   );
 });
@@ -415,10 +419,12 @@ it.each([true, false])(
   async (current) => {
     const messages = [{ role: "assistant", content: "prepared history" }];
     const isCurrent = vi.fn(() => current);
-    runtime.readChatHistoryPage.mockImplementationOnce(async (_params, _signal, retain) => {
-      retain?.(isCurrent);
-      return { messages, pagination: { offset: 0, totalMessages: 1, rawPageMessages: 1 } };
-    });
+    runtime.readChatHistoryPage.mockImplementationOnce(
+      async (_params, _signal, _projector, retain) => {
+        retain?.(isCurrent);
+        return { messages, pagination: { offset: 0, totalMessages: 1, rawPageMessages: 1 } };
+      },
+    );
     const result = history({});
     if (current) {
       await expect(result).resolves.toMatchObject({ messages });

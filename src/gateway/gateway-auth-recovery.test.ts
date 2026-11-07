@@ -268,7 +268,9 @@ it(
         };
         const rateStats = await failTurn("rate");
         signal.throwIfAborted();
-        expect(rateStats?.cooldownReason).toBe("rate_limit");
+        // The synthetic 429 carries no provider timing: record it without a local cooldown.
+        expect(rateStats?.lastRateLimitAt).toEqual(expect.any(Number));
+        expect(rateStats?.cooldownUntil).toBeUndefined();
         expect(requests.rate).toBe(2);
 
         phase = "auth";

@@ -3,19 +3,35 @@
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
+import * as toast from "../../lib/toast.ts";
+import {
+  expectAbsent,
+  expectContent,
+  profile as makeProfile,
+} from "../../test-helpers/model-providers.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { ModelProviderCard } from "./data.ts";
 import {
   ProviderAccountSummary,
   ProviderProfiles,
+  showProfileLogoutSuccess,
   type ProviderProfilesViewProps,
 } from "./profiles-view.tsx";
-import { card as viewCard, props as makeViewProps } from "./view.test-support.tsx";
+import { ProviderRow } from "./provider-row.tsx";
+import { card as viewCard, props } from "./view.test-support.tsx";
 
-function makeProfile(profileId: string): ModelProviderCard["profiles"][number] {
-  return { profileId, type: "oauth", status: "ok" };
-}
+it("keeps visible sign-out success quiet and preserves warnings", () => {
+  const toastSpy = vi.spyOn(toast, "showToast").mockReturnValue(true);
+  showProfileLogoutSuccess();
+  expect(toastSpy).not.toHaveBeenCalled();
+  showProfileLogoutSuccess("A shared account is still in use.");
+  expect(toastSpy).toHaveBeenCalledWith({
+    message: "A shared account is still in use.",
+    severity: "warning",
+  });
+});
+
 function card(overrides: Partial<ModelProviderCard> = {}) {
   return viewCard({ apiKey: undefined, ...overrides });
 }
@@ -38,16 +54,7 @@ function rowFor(container: ParentNode, id: string) {
   return container.querySelector<HTMLElement>(`[data-profile-id="${id}"]`)!;
 }
 
-function props(overrides: Partial<ProviderProfilesViewProps> = {}): ProviderProfilesViewProps {
-  return {
-    ...makeViewProps(),
-    onAddAccount: () => undefined,
-    addAccountDisabled: false,
-    ...overrides,
-  };
-}
-
-function mount(providerCard: ModelProviderCard, viewProps = props()) {
+function mount(providerCard: ModelProviderCard, viewProps: ProviderProfilesViewProps = props()) {
   const [current, setCurrent] = createSignal({ card: providerCard, props: viewProps });
   const view = mountSolid(() => <ProviderProfiles {...current().props} card={current().card} />);
   const update = (nextCard: ModelProviderCard, nextProps = viewProps) => {
@@ -59,18 +66,13 @@ function mount(providerCard: ModelProviderCard, viewProps = props()) {
 }
 
 function reorderCard() {
-  const result = orderedCard(
+  return orderedCard(
     {
       "credential-owner": ["account:one", "account:two", "account:three"],
       "other-owner": ["account:other"],
     },
     { id: "route-one" },
   );
-  result.profiles = result.profiles.map((profile) => ({
-    ...profile,
-    email: `${profile.profileId.split(":")[1]}@example.com`,
-  }));
-  return result;
 }
 
 function pointer(target: Element, type: string, coordinates = { x: 20, y: 75 }) {
@@ -85,12 +87,16 @@ function pointer(target: Element, type: string, coordinates = { x: 20, y: 75 }) 
   target.dispatchEvent(event);
 }
 
+function movePointer(grip: Element) {
+  pointer(grip, "pointerdown");
+  pointer(grip, "pointermove", { x: 40, y: 285 });
+}
+
 function pointerFixture(viewProps: ProviderProfilesViewProps) {
   const providerCard = reorderCard();
   const { container, update } = mount(providerCard, viewProps);
   const grip = container.querySelector<HTMLButtonElement>(gripSelector)!;
   const target = rowFor(container, "account:three");
-  // Different row heights occur when account metadata wraps on narrow screens.
   let top = 0;
   const rows = [...container.querySelectorAll<HTMLElement>(rowSelector)];
   for (const [index, row] of rows.entries()) {
@@ -118,19 +124,14 @@ afterEach(() => {
 
 it("retains account summary focus while refreshed snapshots update account data and recovery", () => {
   const profileId = "account:shared";
-  const cards = [
+  const cards = ["one", "two"].map((name) =>
     card({
-      id: "route-one",
-      profiles: [{ ...makeProfile(profileId), source: "saved", email: "one@example.invalid" }],
-      profileProviderIds: { [profileId]: "owner-one" },
-      apiKey: { source: "env", envVar: "EXAMPLE_API_KEY" },
+      id: `route-${name}`,
+      profiles: [makeProfile(profileId, { source: "saved", email: `${name}@example.invalid` })],
+      profileProviderIds: { [profileId]: `owner-${name}` },
     }),
-    card({
-      id: "route-two",
-      profiles: [{ ...makeProfile(profileId), source: "saved", email: "two@example.invalid" }],
-      profileProviderIds: { [profileId]: "owner-two" },
-    }),
-  ];
+  );
+  cards[0]!.apiKey = { source: "env", envVar: "EXAMPLE_API_KEY" };
   const originalUse = vi.fn();
   const [current, setCurrent] = createSignal({
     cards,
@@ -141,7 +142,7 @@ it("retains account summary focus while refreshed snapshots update account data 
   const rows = [...container.querySelectorAll(".model-provider-login__account")];
   expect(rows).toHaveLength(2);
   const button = rows[0]!.querySelector<HTMLButtonElement>("[data-models-use-account]")!;
-  expect(rows[1]!.querySelector("[data-models-use-account]")).toBeNull();
+  expectAbsent(rows[1]!, "[data-models-use-account]");
   button.focus();
 
   const refreshed = structuredClone(cards);
@@ -159,11 +160,11 @@ it("retains account summary focus while refreshed snapshots update account data 
   const updatedRows = [...container.querySelectorAll(".model-provider-login__account")];
   expect(updatedRows[0]).toBe(rows[0]);
   expect(updatedRows[1]).toBe(rows[1]);
-  expect(rows[0]!.textContent).toContain("updated-one@example.invalid");
-  expect(rows[0]!.textContent).toContain("Credentials configured");
-  expect(rows[1]!.textContent).toContain("updated-two@example.invalid");
+  expectContent(rows[0]!, ["updated-one@example.invalid"]);
+  expectContent(rows[0]!, ["Account added"]);
+  expectContent(rows[1]!, ["updated-two@example.invalid"]);
   expect(container.querySelector("p.muted")?.textContent).toBe("API key set in config");
-  expect(container.textContent).not.toContain("EXAMPLE_API_KEY");
+  expectContent(container, [], ["EXAMPLE_API_KEY"]);
   expect(rows[0]!.querySelector("[data-models-use-account]")).toBe(button);
   expect(document.activeElement).toBe(button);
   button.click();
@@ -172,7 +173,6 @@ it("retains account summary focus while refreshed snapshots update account data 
 });
 
 it("shows account provenance and removes drag handles for config-locked priority", () => {
-  const onProfileOrderChange = vi.fn();
   const providerCard = orderedCard(
     {
       "openai-config": ["openai:configured", "openai:codex"],
@@ -187,22 +187,21 @@ it("shows account provenance and removes drag handles for config-locked priority
   providerCard.profiles[1]!.displayName = "Codex import";
   providerCard.profileOrders["openai-config"] = ["openai:configured"];
 
-  mount(providerCard, props({ onProfileOrderChange }));
+  mount(providerCard);
 
   expect(document.querySelectorAll(gripSelector)).toHaveLength(2);
   for (const id of ["openai:configured", "openai:codex"]) {
-    expect(rowFor(document, id).querySelector(gripSelector)).toBeNull();
+    expectAbsent(rowFor(document, id), gripSelector);
   }
-  expect(document.querySelector(".model-providers__profile-logout")).toBeNull();
-  expect(document.body.textContent).not.toContain("Saved in OpenClaw");
-  expect(document.body.textContent).toContain("Provider config");
-  expect(document.body.textContent).toContain("Codex import");
-  expect(document.body.textContent).toContain("Shared credential");
-  expect(document.body.textContent).toContain("Priority is managed by provider configuration");
+  expectAbsent(document, ".model-providers__profile-logout");
+  expectContent(document.body, [], ["Saved in OpenClaw"]);
+  expectContent(document.body, ["Provider config"]);
+  expectContent(document.body, ["Codex import"]);
+  expectContent(document.body, ["Shared account"]);
+  expectContent(document.body, ["Priority is managed by provider configuration"]);
   expect(
     [...document.querySelectorAll("button")].map((button) => button.textContent),
   ).not.toContain("Clear custom order");
-  expect(onProfileOrderChange).not.toHaveBeenCalled();
 });
 
 it.each<[string, ModelProviderCard, string?, number?]>([
@@ -242,12 +241,21 @@ it.each<[string, ModelProviderCard, string?, number?]>([
   ],
 ])("shows %s and blocks reordering", (message, providerCard, excluded, count = 0) => {
   const onProfileOrderChange = vi.fn();
-  const { container } = mount(providerCard, props({ onProfileOrderChange }));
+  const { container } = providerCard.apiKey
+    ? mountSolid(() => <ProviderRow {...props({ onProfileOrderChange })} card={providerCard} />)
+    : mount(providerCard, props({ onProfileOrderChange }));
+  if (providerCard.apiKey) {
+    container.querySelector<HTMLButtonElement>(".provider-row__summary")!.click();
+    flush();
+  }
   const grips = [...container.querySelectorAll<HTMLButtonElement>(gripSelector)];
   expect(grips).toHaveLength(count);
-  expect(container.textContent).toContain(message);
+  expectContent(
+    container,
+    providerCard.apiKey ? ["API key", "From environment (OPENAI_API_KEY)"] : [message],
+  );
   if (excluded) {
-    expect(container.textContent).not.toContain(excluded);
+    expectContent(container, [], [excluded]);
   }
   if (count) {
     expect(grips.every((grip) => grip.disabled)).toBe(true);
@@ -267,8 +275,7 @@ it.each(["Escape", "pointercancel", "lostpointercapture", "outside-section", "ot
     const exitSettings = vi.fn();
     const settingsShortcut = (event: KeyboardEvent) => event.defaultPrevented || exitSettings();
     document.addEventListener("keydown", settingsShortcut);
-    pointer(grip, "pointerdown");
-    pointer(grip, "pointermove", { x: 40, y: 285 });
+    movePointer(grip);
     expect(row.style.translate).toBe("20px 210px");
     if (ending === "Escape") {
       document.dispatchEvent(
@@ -296,8 +303,7 @@ it.each(["Escape", "pointercancel", "lostpointercapture", "outside-section", "ot
     expect(rows.every((candidate) => candidate.style.translate === "")).toBe(true);
 
     hitTest.mockReturnValue(target);
-    pointer(grip, "pointerdown");
-    pointer(grip, "pointermove", { x: 40, y: 285 });
+    movePointer(grip);
     pointer(grip, "pointerup", { x: 40, y: 285 });
     expect(onProfileOrderChange).toHaveBeenCalledExactlyOnceWith("route-one", "credential-owner", [
       "account:two",
@@ -307,54 +313,25 @@ it.each(["Escape", "pointercancel", "lostpointercapture", "outside-section", "ot
   },
 );
 
-it("releases each account usage element while retaining its profile row", () => {
-  const releaseFirstUsage = vi.fn();
-  const releaseSecondUsage = vi.fn();
-  const registerAccountUsage = vi
-    .fn(() => releaseFirstUsage)
-    .mockReturnValueOnce(releaseFirstUsage)
-    .mockReturnValueOnce(releaseSecondUsage);
-  const providerCard = orderedCard(pair);
-  for (const profile of providerCard.profiles) {
-    profile.type = "api_key";
-  }
-  const { container, update } = mount(providerCard, props({ registerAccountUsage }));
-  const retainedRow = rowFor(container, "openai:one");
-  expect(registerAccountUsage).not.toHaveBeenCalled();
-
-  const oauthCard = {
-    ...providerCard,
-    profiles: [makeProfile("openai:one")],
-    profileOrders: { openai: ["openai:one"] },
-  };
-  update(oauthCard);
-  const firstUsage = container.querySelector("openclaw-model-account-usage");
-  expect(rowFor(container, "openai:one")).toBe(retainedRow);
-  expect(firstUsage).not.toBeNull();
-  expect(registerAccountUsage).toHaveBeenCalledExactlyOnceWith(firstUsage);
-  expect(releaseFirstUsage).not.toHaveBeenCalled();
-
-  update({
-    ...oauthCard,
-    profiles: [{ ...makeProfile("openai:one"), type: "api_key" }],
-  });
-  expect(rowFor(container, "openai:one")).toBe(retainedRow);
-  expect(container.querySelector("openclaw-model-account-usage")).toBeNull();
-  expect(releaseFirstUsage).toHaveBeenCalledTimes(1);
-
-  update(oauthCard);
-  const secondUsage = container.querySelector("openclaw-model-account-usage");
-  expect(rowFor(container, "openai:one")).toBe(retainedRow);
-  expect(secondUsage).not.toBeNull();
-  expect(secondUsage).not.toBe(firstUsage);
-  expect(registerAccountUsage).toHaveBeenCalledTimes(2);
-  expect(registerAccountUsage).toHaveBeenLastCalledWith(secondUsage);
-  expect(releaseSecondUsage).not.toHaveBeenCalled();
-
-  update({ ...providerCard, profiles: [], profileOrders: {} });
-  expect(container.querySelector("openclaw-model-account-usage")).toBeNull();
-  expect(releaseFirstUsage).toHaveBeenCalledTimes(1);
-  expect(releaseSecondUsage).toHaveBeenCalledTimes(1);
+it("names hidden identities by credential kind, numbering only repeated kinds", () => {
+  const { container } = mount(
+    card({
+      profiles: [
+        makeProfile("openai:token-a", { type: "token", status: "static" }),
+        makeProfile("openai:oauth"),
+        makeProfile("openai:token-b", { type: "token", status: "static" }),
+        makeProfile("openai:named", { type: "token", status: "static", email: "ops@example.com" }),
+      ],
+      profileOrders: {
+        openai: ["openai:token-a", "openai:oauth", "openai:token-b", "openai:named"],
+      },
+    }),
+  );
+  expect(
+    [...container.querySelectorAll(".model-providers__profile-copy strong")].map(
+      (identity) => identity.textContent,
+    ),
+  ).toEqual(["Access token 1", "Signed-in account", "Access token 2", "ops@example.com"]);
 });
 
 it("releases a removed row's drag without handling the next Escape", () => {
@@ -362,8 +339,7 @@ it("releases a removed row's drag without handling the next Escape", () => {
   const { container, update, grip, row, rows, hitTest, providerCard } = pointerFixture(
     props({ onProfileOrderChange }),
   );
-  pointer(grip, "pointerdown");
-  pointer(grip, "pointermove", { x: 40, y: 285 });
+  movePointer(grip);
   expect(row.style.translate).toBe("20px 210px");
 
   update({
@@ -376,7 +352,7 @@ it("releases a removed row's drag without handling the next Escape", () => {
   });
   expect(row.isConnected).toBe(false);
   expect(rows.every((candidate) => candidate.style.translate === "")).toBe(true);
-  expect(container.querySelector(".model-providers__profiles--sorting")).toBeNull();
+  expectAbsent(container, ".model-providers__profiles--sorting");
   hitTest.mockClear();
   const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
   const stopPropagation = vi.spyOn(escape, "stopPropagation");
@@ -413,8 +389,7 @@ it("keeps focus on the drag handle through repeated keyboard moves", async () =>
   const { container, update } = mount(providerCard, viewProps);
   const grip = container.querySelector<HTMLButtonElement>(gripSelector)!;
   grip.focus();
-  const details = grip.closest(rowSelector)!.querySelector("details")!;
-  details.open = true;
+  const movedRow = grip.closest(rowSelector)!;
   expect(container.querySelectorAll(".model-providers__profile-position")).toHaveLength(0);
   expect(grip.getAttribute("aria-keyshortcuts")).toBe("ArrowUp ArrowDown");
 
@@ -430,8 +405,7 @@ it("keeps focus on the drag handle through repeated keyboard moves", async () =>
         ),
       ).toEqual(order);
       expect(document.activeElement).toBe(grip);
-      expect(grip.closest(rowSelector)!.querySelector("details")).toBe(details);
-      expect(details).toMatchObject({ open: true });
+      expect(grip.closest(rowSelector)).toBe(movedRow);
       expect(container.querySelectorAll(".model-providers__profile-position")).toHaveLength(3);
     });
   }
@@ -439,3 +413,60 @@ it("keeps focus on the drag handle through repeated keyboard moves", async () =>
   expect(onProfileOrderChange).toHaveBeenCalledTimes(2);
   expect(document.activeElement).toBe(grip);
 });
+
+it.each([undefined, "auth-rejected"] as const)(
+  "keeps account-level recovery independent of provider outcome %s in both account surfaces",
+  (catalogStatus) => {
+    const expiring = makeProfile("example:short", {
+      status: "expiring",
+      expiry: { at: 4_000_000, remainingMs: 3_600_000, label: "1h" },
+    });
+    const expired = makeProfile("example:elapsed", {
+      status: "expired",
+      expiry: { at: 1, remainingMs: -1, label: "0m" },
+    });
+    const fenced = makeProfile("example:reconnect", { status: "expired", reasonCode: "expired" });
+    const missing = makeProfile("example:missing", {
+      status: "missing",
+      reasonCode: "missing_credential",
+    });
+    const external = makeProfile("example:external", {
+      ...expired,
+      profileId: "example:external",
+      externallyManaged: true,
+      source: "external",
+    });
+    const staticToken = makeProfile("example:static", {
+      type: "token",
+      status: "expired",
+      reasonCode: "expired",
+    });
+    const providerCard = card({
+      id: "example",
+      catalogStatus,
+      profiles: [expiring, expired, fenced, missing, external, staticToken],
+    });
+    const { container } = mount(providerCard);
+    const summary = mountSolid(() => <ProviderAccountSummary cards={[providerCard]} />).container;
+    flush();
+    for (const root of [container, summary]) {
+      expectContent(rowFor(root, expiring.profileId), [
+        "Access token expires in 1h",
+        "Access-token expiry alone does not mean you need to sign in again.",
+      ]);
+      expectContent(rowFor(root, expired.profileId), ["Access token expired"], ["Sign in again"]);
+      expectContent(rowFor(root, fenced.profileId), ["Sign-in unavailable"], ["Sign in again"]);
+      expectContent(rowFor(root, missing.profileId), ["Sign in again"]);
+      expectContent(
+        rowFor(root, external.profileId),
+        [root === container ? "External CLI" : "Managed externally"],
+        ["Signed in"],
+      );
+      expectContent(
+        rowFor(root, staticToken.profileId),
+        ["Expired"],
+        ["Access-token expiry alone"],
+      );
+    }
+  },
+);

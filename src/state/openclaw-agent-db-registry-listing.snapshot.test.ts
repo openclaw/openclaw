@@ -1,6 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { assert, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
@@ -8,20 +10,25 @@ import type { OpenClawAgentDatabaseRegistryReadResult } from "./openclaw-agent-d
 
 const mocks = vi.hoisted(() => ({
   assertCurrent: vi.fn<() => void>(),
-  capture: vi.fn<(options: { path?: string; env?: NodeJS.ProcessEnv }) => unknown>(),
-  read: vi.fn<() => Promise<OpenClawAgentDatabaseRegistryReadResult | undefined>>(),
+  capture: vi.fn<(pathname: string) => unknown>(),
+  read: vi.fn<
+    (options: {
+      path?: string;
+      env?: NodeJS.ProcessEnv;
+    }) => Promise<OpenClawAgentDatabaseRegistryReadResult | undefined>
+  >(),
 }));
 // mock-isolation: Exercise snapshot admission with controlled receipts, not a live worker context.
 vi.mock("./openclaw-state-worker-context.js", () => ({
-  captureOpenClawStateWorkerContext: (options: { path?: string; env?: NodeJS.ProcessEnv }) => {
-    mocks.capture(options);
+  captureOpenClawStateReadContext: (pathname: string) => {
+    mocks.capture(pathname);
     return { admission: { assertCurrent: mocks.assertCurrent } };
   },
 }));
 vi.mock("./openclaw-state-db-readonly.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./openclaw-state-db-readonly.js")>()),
-  executeExistingOpenClawStateRead: async () => {
-    const result = await mocks.read();
+  executeExistingOpenClawStateRead: async (options: { path?: string; env?: NodeJS.ProcessEnv }) => {
+    const result = await mocks.read(options);
     return result === undefined
       ? undefined
       : { ok: true, type: "agentDatabaseRegistry.read", result };
@@ -63,7 +70,7 @@ it("lazily reads in its captured scope and publishes complete rows to the canoni
   const scope = new AsyncLocalStorage<string>();
   const prepared = scope.run("captured", () => prepareRead({ ...options, env }));
   env.OPENCLAW_STATE_DIR = "/fixture/changed";
-  expect(mocks.capture.mock.calls[0]?.[0]).toMatchObject({ env: options.env });
+  expect(mocks.capture.mock.calls[0]?.[0]).toBe(options.path);
   expect(readToken(other)).toBe(token);
   expect(mocks.read).not.toHaveBeenCalled();
   const incompatible = {
@@ -71,7 +78,8 @@ it("lazily reads in its captured scope and publishes complete rows to the canoni
     agentId: "future",
     schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
   };
-  mocks.read.mockImplementationOnce(async () => {
+  mocks.read.mockImplementationOnce(async (source) => {
+    expect(source).toMatchObject({ path: options.path, env: options.env });
     expect(scope.getStore()).toBe("captured");
     return { status: "available", entries: [...entries, incompatible] };
   });
@@ -193,5 +201,37 @@ it("reads separate registries without retrying against another database's memo",
     firstReply.resolve({ status: "available", entries });
     secondReply.resolve({ status: "available", entries: [] });
     await Promise.allSettled([first, second]);
+  }
+});
+
+it("retains registration authority without retaining the discovery async context", async () => {
+  const scope = new AsyncLocalStorage<object>();
+  function capture() {
+    const payload = { sessions: [{ sessionId: "synthetic-completed-run" }] };
+    const prepared = scope.run(payload, () => prepareRead(options, () => true));
+    return {
+      followRegistration: prepared.followRegistration,
+      assertCurrent: prepared.assertCurrent,
+      payload: new WeakRef(payload),
+      control: new WeakRef({}),
+    };
+  }
+  const retained = capture();
+  try {
+    await setImmediate();
+    queryObjects(WeakRef);
+    expect(retained.control.deref()).toBeUndefined();
+    expect(retained.payload.deref()).toBeUndefined();
+    const owned = invalidateMemo(options);
+    assert(owned);
+    retained.followRegistration(owned);
+    retained.assertCurrent();
+    mocks.assertCurrent.mockImplementation(() => {
+      throw new Error("admission revoked");
+    });
+    expect(() => retained.followRegistration(owned)).toThrow("admission revoked");
+    expect(retained.assertCurrent).toThrow("admission revoked");
+  } finally {
+    scope.disable();
   }
 });

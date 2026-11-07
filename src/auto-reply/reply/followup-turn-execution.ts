@@ -18,7 +18,6 @@ import type { ReplyPayload } from "../types.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
-import { createReplyAgentRestartRecoveryController } from "./agent-runner-restart-recovery.js";
 import { resolveFollowupCurrentMessageId } from "./agent-runner-utils.js";
 import { resolveTurnCommentaryProgressOwner } from "./commentary-progress-owner.js";
 import { requiresDurableToolResultDelivery } from "./dispatch-from-config.payloads.js";
@@ -26,8 +25,9 @@ import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { admitFollowupRunLifecycle } from "./queue/lifecycle.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
+import { createReplyInputAdmission } from "./reply-input-admission.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
-import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
+import { prepareReplyRunToolAuthority } from "./reply-tool-authority.js";
 import { resolveFollowupReplyExpectation } from "./source-reply-delivery-mode.js";
 import { resolveReplySourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createTypingSignaler, type TypingSignaler } from "./typing-mode.js";
@@ -88,8 +88,6 @@ export async function executeFollowupTurn(params: {
   const sourceOpts = defaults.opts;
   const terminalReplyExpectation = resolveFollowupReplyExpectation(turn.queued, turn.config);
   turn.queued.run.terminalReplyExpectation = terminalReplyExpectation;
-  // Queued turns are never heartbeats; heartbeat runs never supply the drain callback.
-  const isHeartbeat = false;
   const roomEvent = turn.queued.currentInboundEventKind === "room_event";
   const deliveryAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
   const progressAllowed = () =>
@@ -190,7 +188,6 @@ export async function executeFollowupTurn(params: {
   const baseTypingSignals = createTypingSignaler({
     typing: defaults.typing,
     mode: progressAllowed() ? defaults.typingMode : "never",
-    isHeartbeat,
   });
   const typingSignals: TypingSignaler = {
     ...baseTypingSignals,
@@ -208,7 +205,6 @@ export async function executeFollowupTurn(params: {
     ...sourceOpts,
     // Derived follow-ups take execution capabilities from their queued input.
     cronCreatorAuthorityCapability: undefined,
-    isHeartbeat,
     sourceReplyDeliveryMode: turn.queued.run.sourceReplyDeliveryMode,
     bootstrapContextMode: turn.queued.run.bootstrapContextMode,
     cleanupBundleMcpOnRunEnd: undefined,
@@ -220,8 +216,6 @@ export async function executeFollowupTurn(params: {
     abortSignal: turn.operation.abortSignal,
     toolsAllow: turn.queued.toolsAllow,
     disableTools: turn.queued.disableTools,
-    forceRestartSafeTools: turn.queued.forceRestartSafeTools,
-    forceCodeModeTools: turn.queued.forceCodeModeTools,
     awaitSessionDiffBaseline: turn.queued.runObservers?.awaitSessionDiffBaseline,
     onAgentRunStart: turn.queued.runObservers?.onAgentRunStart,
     onPreparedAgentRunStart: turn.queued.runObservers?.onPreparedAgentRunStart,
@@ -341,22 +335,15 @@ export async function executeFollowupTurn(params: {
         ? undefined
         : turn.queued.messageId,
     ingressProvider: turn.queued.run.messageProvider,
-    entry: turn.session.current(),
   });
-  const recovery = (turn.restartRecovery = createReplyAgentRestartRecoveryController({
-    activeSessionStore: turn.sessionStore,
-    cfg: turn.config,
+  const inputAdmission = createReplyInputAdmission({
     followupRun: turn.queued,
-    getActiveSessionEntry: turn.session.current,
-    opts: progressOpts,
     replyOperation: turn.operation,
-    restartRecoverySourceTurnId: sourceTurnId,
-    runtimePolicySessionKey: turn.queued.run.runtimePolicySessionKey,
-    sessionCtx,
+    sourceTurnId,
     sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
-    setActiveSessionEntry: (entry) => turn.session.publish(entry),
+    setEntry: (entry) => turn.session.publish(entry),
     storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
-  }));
+  });
   let accepted = false;
   let execution: AgentTurnExecutionResult;
   const runStartedAt = Date.now();
@@ -364,14 +351,12 @@ export async function executeFollowupTurn(params: {
     // A session event rejected for stale policy is re-admitted by its owner under the
     // same durable source id; reject it before admission records that source claim.
     turn.queued.run.internalEventExecution?.assertCurrent?.();
-    const admission = await recovery.admitUserTurn(recorder);
+    await inputAdmission.admitUserTurn(recorder);
     accepted = true;
     await admitFollowupRunLifecycle(turn.queued);
     turn.operation.abortSignal.throwIfAborted();
     setChannelSourceTurnId(sessionCtx, sourceTurnId);
-    if (admission === "duplicate-source") {
-      execution = { runId: turn.runId, outcome: { kind: "aborted", reason: "superseded" } };
-    } else if (turn.preflightFailurePayload) {
+    if (turn.preflightFailurePayload) {
       turn.operation.fail("run_failed", turn.preflightError);
       execution = {
         runId: turn.runId,
@@ -382,9 +367,9 @@ export async function executeFollowupTurn(params: {
         ? sessionPersonalProfileId(turn.session.current())
         : undefined;
       await turn.operation.bindToolAuthoritySnapshotAsync(
-        prepareReplyToolAuthority(
+        prepareReplyRunToolAuthority(
           turn.queued,
-          undefined,
+          turn.session.current(),
           captureReplyOperationSessionReader(turn.operation),
         ),
       );
@@ -399,6 +384,7 @@ export async function executeFollowupTurn(params: {
       }
       const execute = () =>
         executeAgentTurn({
+          recoveryMemoryFlushAttempted: turn.memoryFlushAttempted,
           completionSource: gatewayOwnsCompletion ? "reply-dispatch" : undefined,
           commandBody: turn.queued.prompt,
           transcriptCommandBody: turn.queued.transcriptPrompt,
@@ -418,13 +404,11 @@ export async function executeFollowupTurn(params: {
           shouldEmitToolResult,
           shouldEmitToolOutput,
           pendingToolTasks,
-          isHeartbeat,
           sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
           runtimePolicySessionKey: turn.queued.run.runtimePolicySessionKey,
           getActiveSessionEntry: turn.session.current,
           activeSessionStore: turn.sessionStore,
           storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
-          isRestartRecoveryArmed: recovery.isArmed,
           resolvedVerboseLevel: currentVerboseLevel(),
           toolProgressDetail: defaults.toolProgressDetail,
           onCompactionNoticePayload: async (payload) => {
@@ -448,7 +432,6 @@ export async function executeFollowupTurn(params: {
         isFreshChannelCronAuthorityTurn({
           messageProvider: run.messageProvider,
           senderId: run.senderId,
-          isHeartbeat,
           isRoomEvent: roomEvent,
           inputProvenance: run.inputProvenance,
           spawnedBy: run.spawnedBy,
@@ -486,7 +469,6 @@ export async function executeFollowupTurn(params: {
       outcome: {
         kind: "rejected",
         payload: buildTerminalAgentRunFailureReplyPayload({
-          isHeartbeat,
           replyExpectation: terminalReplyExpectation,
           visibleReplyDelivered,
         }),

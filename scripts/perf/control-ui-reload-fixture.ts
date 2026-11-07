@@ -29,6 +29,9 @@ const { values } = parseArgs({
     "runtime-entry": { type: "string", default: "dist/index.js" },
     "skip-seed": { type: "boolean", default: false },
     "service-tier-port": { type: "string" },
+    "service-tier-responses": { type: "string", default: "fast" },
+    "stream-delay-ms": { type: "string", default: "0" },
+    "subagent-seed": { type: "boolean", default: false },
     port: { type: "string", default: "41514" },
     "proxy-port": { type: "string", default: "41516" },
     prepare: { type: "boolean", default: false },
@@ -37,6 +40,9 @@ const { values } = parseArgs({
 });
 if (!values["state-dir"] || !values["ui-root"]) {
   throw new Error("Expected --state-dir <synthetic-fixture> --ui-root <built-ui> [--prepare]");
+}
+if (values["subagent-seed"] && !values["service-tier-port"]) {
+  throw new Error("--subagent-seed requires --service-tier-port <unused-loopback-port>");
 }
 const root = path.resolve(values["state-dir"]);
 const port = parseStrictIntegerOption({
@@ -170,6 +176,16 @@ if (
   throw new Error("The synthetic provider needs a separate loopback port >= 40000");
 }
 let providerRequests = 0;
+const responseTiers = values["service-tier-responses"].split(",").map((tier) => tier.trim());
+if (responseTiers.some((tier) => !["fast", "default", "flex", "priority"].includes(tier))) {
+  throw new Error("--service-tier-responses expects comma-separated fast/default/flex/priority");
+}
+const streamDelayMs = parseStrictIntegerOption({
+  raw: values["stream-delay-ms"],
+  label: "stream-delay-ms",
+  min: 0,
+  fallback: 0,
+});
 const provider = serviceTierPort
   ? createHttpServer((request, response) => {
       if (request.url === "/v1/models") {
@@ -187,17 +203,81 @@ const provider = serviceTierPort
         for await (const chunk of request) {
           body += chunk;
         }
-        const requestedTier = asOptionalRecord(JSON.parse(body))?.service_tier;
+        const payload = asOptionalRecord(JSON.parse(body));
+        const requestedTier = payload?.service_tier;
+        const input = Array.isArray(payload?.input) ? payload.input.map(asOptionalRecord) : [];
+        const seed = input
+          .filter((item) => item?.role === "user")
+          .map((item) =>
+            JSON.stringify(item?.content ?? "").match(
+              /Synthetic subagent seed ([a-z0-9_-]+) ([0-9a-f-]{36})/,
+            ),
+          )
+          .findLast((match) => match);
+        const callId = seed ? `call_${seed[2]}` : undefined;
+        const tools = Array.isArray(payload?.tools) ? payload.tools : [];
         providerRequests++;
+        const responseTier = responseTiers[(providerRequests - 1) % responseTiers.length];
         // Only tier observations enter the proof log; request content remains private.
         console.log(
           JSON.stringify({
             providerRequest: providerRequests,
             atEpochMs: Date.now(),
             requestedTier,
-            responseTier: "fast",
+            responseTier,
           }),
         );
+        if (
+          seed &&
+          !input.some((item) => item?.call_id === callId) &&
+          tools.some((tool) => asOptionalRecord(tool)?.name === "sessions_spawn")
+        ) {
+          const item = {
+            type: "function_call",
+            id: `fc_${seed[2]}`,
+            call_id: callId,
+            name: "sessions_spawn",
+            arguments: JSON.stringify({
+              task: "Reply with one short synthetic child response.",
+              agentId: seed[1],
+              label: `perf-child-${seed[2]}`,
+              runtime: "subagent",
+              mode: "run",
+              context: "isolated",
+              cleanup: "keep",
+              runTimeoutSeconds: 120,
+            }),
+          };
+          response.writeHead(200, { "content-type": "text/event-stream" });
+          for (const event of [
+            {
+              type: "response.output_item.added",
+              output_index: 0,
+              item: { ...item, arguments: "" },
+            },
+            {
+              type: "response.function_call_arguments.delta",
+              item_id: item.id,
+              output_index: 0,
+              delta: item.arguments,
+            },
+            { type: "response.output_item.done", output_index: 0, item },
+            {
+              type: "response.completed",
+              response: {
+                id: `resp_${providerRequests}`,
+                status: "completed",
+                service_tier: responseTier,
+                output: [item],
+                usage: { input_tokens: 11, output_tokens: 10, total_tokens: 21 },
+              },
+            },
+          ]) {
+            response.write(`data: ${JSON.stringify(event)}\n\n`);
+          }
+          response.end("data: [DONE]\n\n");
+          return;
+        }
         const item = {
           type: "message",
           id: `msg_${providerRequests}`,
@@ -212,26 +292,32 @@ const provider = serviceTierPort
             output_index: 0,
             item: { ...item, status: "in_progress", content: [] },
           },
-          {
+          ...(streamDelayMs
+            ? ["Synthetic ", "tier ", "response."]
+            : ["Synthetic tier response."]
+          ).map((delta) => ({
             type: "response.output_text.delta",
             item_id: item.id,
             output_index: 0,
             content_index: 0,
-            delta: "Synthetic tier response.",
-          },
+            delta,
+          })),
           { type: "response.output_item.done", output_index: 0, item },
           {
             type: "response.completed",
             response: {
               id: `resp_${providerRequests}`,
               status: "completed",
-              service_tier: "fast",
+              service_tier: responseTier,
               output: [item],
               usage: { input_tokens: 11, output_tokens: 4, total_tokens: 15 },
             },
           },
         ]) {
           response.write(`data: ${JSON.stringify(event)}\n\n`);
+          if (streamDelayMs && event.type === "response.output_text.delta") {
+            await delay(streamDelayMs);
+          }
         }
         response.end("data: [DONE]\n\n");
       })().catch(() => response.destroy());
@@ -240,6 +326,9 @@ const provider = serviceTierPort
 if (provider) {
   const config = JSON.parse(await readFile(configPath, "utf8"));
   applyMockOpenAiModelConfig(config, { mockPort: serviceTierPort, modelRef: "openai/gpt-5" });
+  if (values["subagent-seed"]) {
+    config.tools = { codeMode: false, toolSearch: false, allow: ["read", "sessions_spawn"] };
+  }
   config.plugins.allow = [...new Set([...config.plugins.allow, "openai"])];
   config.plugins.load.paths = [
     ...new Set([

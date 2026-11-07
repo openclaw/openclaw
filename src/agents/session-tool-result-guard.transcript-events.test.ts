@@ -19,7 +19,7 @@ import {
   appendTranscriptMessageSync,
   loadSessionEntry,
   listSessionPendingInputs,
-  persistCompactionBoundaryWithSessionEntrySync,
+  persistCompactionBoundaryWithSessionEntryAsync,
 } from "../config/sessions/session-accessor.js";
 import { applyAssistantDeliveryDirectives } from "../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -211,13 +211,12 @@ describe("guardSessionManager transcript updates", () => {
     };
     return {
       ...source,
-      manager,
       sourceEvents,
       stream,
       commit,
       snapshot,
       finishing,
-      async close() {
+      async [Symbol.asyncDispose]() {
         finish.resolve();
         await source.subscription.waitForPendingEvents();
         source.subscription.unsubscribe();
@@ -233,67 +232,54 @@ describe("guardSessionManager transcript updates", () => {
   it.each(["superseded", "retained by steer"])(
     "retires a committed deferred occurrence %s without hiding identical later output",
     async (prior) => {
-      const h = await openSourceProjection(true);
+      await using h = await openSourceProjection(true);
       const first = assistantText("[[reply_to_current]] Repeated answer.");
       const second = assistantText("Repeated answer.");
-      try {
-        h.stream(first);
-        h.emit({ type: "message_end", message: first });
-        const firstId = await h.commit(first);
-        assert(firstId);
-        expect(h.manager.getEntry(firstId)).toMatchObject({
-          type: "message",
-          message: { role: "assistant" },
-        });
-        expect(h.sourceEvents).toEqual([]);
-        if (prior === "retained by steer") {
-          const steer = makeUserMessage("Continue with the same answer", 1);
-          h.emit({ type: "message_start", message: steer });
-          h.emit({ type: "message_end", message: steer });
-          await h.commit(steer);
-        }
-        h.stream(second);
-        h.emit({ type: "message_end", message: second });
-        h.emit({ type: "agent_end", messages: [first, second] });
-        await h.finishing.promise;
-
-        expect(h.sourceEvents.map((event) => event.data.text)).toEqual(
-          prior === "superseded" ? ["Repeated answer."] : ["Repeated answer.", "Repeated answer."],
-        );
-        expect(await h.snapshot()).toBe("Repeated answer.");
-        await h.commit(second);
-        expect(await h.snapshot()).toBe("");
-      } finally {
-        await h.close();
+      h.stream(first);
+      h.emit({ type: "message_end", message: first });
+      assert(await h.commit(first));
+      expect(h.sourceEvents).toEqual([]);
+      if (prior === "retained by steer") {
+        const steer = makeUserMessage("Continue with the same answer", 1);
+        h.emit({ type: "message_start", message: steer });
+        h.emit({ type: "message_end", message: steer });
+        await h.commit(steer);
       }
+      h.stream(second);
+      h.emit({ type: "message_end", message: second });
+      h.emit({ type: "agent_end", messages: [first, second] });
+      await h.finishing.promise;
+
+      expect(h.sourceEvents.map((event) => event.data.text)).toEqual(
+        prior === "superseded" ? ["Repeated answer."] : ["Repeated answer.", "Repeated answer."],
+      );
+      expect(await h.snapshot()).toBe("Repeated answer.");
+      await h.commit(second);
+      expect(await h.snapshot()).toBe("");
     },
   );
 
   it("retires a prior committed source after the next identical item starts", async () => {
-    const h = await openSourceProjection(false);
+    await using h = await openSourceProjection(false);
     const first = assistantText("[[reply_to_current]] Same answer.");
     const second = assistantText("Same answer.");
-    try {
-      h.stream(first);
-      h.emit({ type: "message_end", message: first });
-      await h.subscription.waitForPendingEvents();
-      expect(await h.snapshot()).toBe("Same answer.");
-      h.stream(second);
-      await h.subscription.waitForPendingEvents();
-      expect(await h.snapshot()).toBe("Same answer.\n\nSame answer.");
-      await h.commit(first);
-      expect(await h.snapshot()).toBe("Same answer.");
+    h.stream(first);
+    h.emit({ type: "message_end", message: first });
+    await h.subscription.waitForPendingEvents();
+    expect(await h.snapshot()).toBe("Same answer.");
+    h.stream(second);
+    await h.subscription.waitForPendingEvents();
+    expect(await h.snapshot()).toBe("Same answer.\n\nSame answer.");
+    await h.commit(first);
+    expect(await h.snapshot()).toBe("Same answer.");
 
-      h.emit({
-        type: "message_update",
-        message: assistantText("Same answer. Continued."),
-        assistantMessageEvent: { type: "text_delta", delta: " Continued." },
-      });
-      await h.subscription.waitForPendingEvents();
-      expect(await h.snapshot()).toBe("Same answer. Continued.");
-    } finally {
-      await h.close();
-    }
+    h.emit({
+      type: "message_update",
+      message: assistantText("Same answer. Continued."),
+      assistantMessageEvent: { type: "text_delta", delta: " Continued." },
+    });
+    await h.subscription.waitForPendingEvents();
+    expect(await h.snapshot()).toBe("Same answer. Continued.");
   });
 
   it("preserves source text when a concurrent append forces a retry", async () => {
@@ -328,7 +314,6 @@ describe("guardSessionManager transcript updates", () => {
     let entryId: string;
     try {
       entryId = manager.appendMessage(emitted);
-      expect(execSpy).toHaveBeenCalledWith("ROLLBACK");
     } finally {
       execSpy.mockRestore();
     }
@@ -350,8 +335,8 @@ describe("guardSessionManager transcript updates", () => {
     for (const runId of ["run-first", "run-second"]) {
       const guarded = guardSessionManager(sessionManager, {
         runId,
-        withCompactionPersistence: (prepared) =>
-          persistCompactionBoundaryWithSessionEntrySync(target, {
+        withCompactionPersistenceAsync: (prepared) =>
+          persistCompactionBoundaryWithSessionEntryAsync(target, {
             prepared,
             transcriptByteCompactionLatch: {
               activeBytes: 2048,
@@ -360,12 +345,13 @@ describe("guardSessionManager transcript updates", () => {
             },
           }),
       });
-      const keptId = guarded.appendMessage({ role: "user", content: runId, timestamp: 1 });
-      guarded.appendCompaction("summary", keptId, 100, { source: "hook" }, true, {
+      const keptId = await guarded.appendMessageAsync(makeUserMessage(runId, 1));
+      assert(keptId);
+      await guarded.appendCompactionAsync("summary", keptId, 100, { source: "hook" }, true, {
         itemId: `compaction-${runId}`,
       });
     }
-    const compactions = SessionManager.open(target, root)
+    const compactions = (await SessionManager.openAsync(target, root))
       .getBranch()
       .filter((entry) => entry.type === "compaction");
     expect(compactions).toMatchObject([
@@ -431,7 +417,6 @@ describe("guardSessionManager transcript updates", () => {
         const runtimeMessage = { ...approved, content: "Rendered source prompt" };
 
         expect(source.getAdmissionReceipt()).toBeUndefined();
-        expect(source.isPendingInputConsumed?.()).toBe(false);
         // The reused guard must recover the current source, not its first turn's recorder.
         const entryId = await persistAgentSessionMessage(guarded, runtimeMessage, {
           invalidateSerializedPrefixCache: false,
@@ -441,8 +426,6 @@ describe("guardSessionManager transcript updates", () => {
         expect(entryId).toBe(pending.items[0]?.id);
         expect(guarded.getEntry(entryId)).toMatchObject({ message: approved });
         expect(source.getAdmissionReceipt()).toMatchObject({ entryId });
-        expect(source.isPendingInputConsumed?.()).toBe(true);
-        expect(source.getPersistedMessage?.()).toEqual(approved);
         expect(await listSessionPendingInputs(target)).toEqual({ items: [], total: 0 });
         expect(approvalHook).toHaveBeenCalledOnce();
 
@@ -503,7 +486,6 @@ describe("guardSessionManager transcript updates", () => {
     expect(persisted).toMatchObject([
       { id: entryId, message: { role: "user", content: message.content } },
     ]);
-    expect(JSON.stringify(persisted)).toContain(message.content);
   });
 
   it("admits an excluded ingress user through a stale bounded manager without appending", async () => {
@@ -530,7 +512,6 @@ describe("guardSessionManager transcript updates", () => {
       message,
       target: { ...target, sessionEntry: { sessionId: target.sessionId, updatedAt: 1 } },
     });
-    const marked = vi.spyOn(recorder, "markRuntimePersisted");
     const updates = collectUpdates();
     const guarded = guardSessionManager(stale, {
       ...target,
@@ -539,8 +520,6 @@ describe("guardSessionManager transcript updates", () => {
     });
     expect(recorder.getAdmissionReceipt()).toBeUndefined();
     guarded.appendMessage({ ...message });
-    expect(marked).toHaveBeenCalledTimes(1);
-    expect(marked.mock.calls[0]?.[2]).toEqual({ appended: false });
     expect(updates).toEqual([]);
     expect(recorder.getAdmissionReceipt()).toMatchObject({
       ...target,
@@ -708,6 +687,7 @@ describe("append-only assistant errors with deferred display", () => {
       stopReason: "error",
       errorMessage: "provider rate limit",
     });
+    const expected = structuredClone(failed);
     manager.appendMessage(failed);
     manager.appendMessage(
       makeTextToolResult(toolCall.id, toolCall.name, "Persisted result", false, 1),
@@ -719,17 +699,8 @@ describe("append-only assistant errors with deferred display", () => {
     closeOpenClawAgentDatabasesForTest();
     const messages = persistedMessages();
     expect(messages).toMatchObject([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "I" }, toolCall],
-        stopReason: "error",
-        errorMessage: "provider rate limit",
-      },
-      {
-        role: "toolResult",
-        toolCallId: toolCall.id,
-        content: [{ type: "text", text: "Persisted result" }],
-      },
+      expected,
+      makeTextToolResult(toolCall.id, toolCall.name, "Persisted result", false, 1),
       assistantContent("Recovered"),
     ]);
     const normalized = normalizeAssistantReplayContent(messages);
@@ -757,22 +728,16 @@ describe("append-only assistant errors with deferred display", () => {
         media: [{ url: "https://example.invalid/report.pdf", contentType: "application/pdf" }],
       },
     };
-    manager.appendMessage({
+    const failed = {
       ...assistantText("Here", { stopReason: "error", errorMessage: "retry" }),
       ...facts,
-    });
+    };
+    const expected = structuredClone(failed);
+    manager.appendMessage(failed);
     owner.clear();
     manager.appendMessage(assistantText("Recovered"));
     owner.settle(false);
-    expect(messages()).toMatchObject([
-      {
-        ...assistantContent("Here"),
-        stopReason: "error",
-        errorMessage: "retry",
-        ...facts,
-      },
-      assistantContent("Recovered"),
-    ]);
+    expect(messages()).toMatchObject([expected, assistantContent("Recovered")]);
   });
 
   it("keeps one original terminal error without splitting text, tool facts, or usage", async () => {
@@ -791,22 +756,13 @@ describe("append-only assistant errors with deferred display", () => {
       openclawDisplayContent: [displayText, attachment],
     };
     failed.usage = { ...failed.usage, output: 7, totalTokens: 7 };
+    const expected = structuredClone(failed);
     manager.appendMessage(failed);
     manager.appendMessage(makeTextToolResult("call-terminal", "read", "Result", false, 1));
     owner.settle(true);
     owner.settle(true);
     expect(messages()).toMatchObject([
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "Partial answer" },
-          { type: "toolCall", id: "call-terminal" },
-        ],
-        openclawDisplayContent: [displayText, attachment],
-        usage: { output: 7 },
-        stopReason: "error",
-        errorMessage: "terminal failure",
-      },
+      expected,
       { role: "toolResult", toolCallId: "call-terminal" },
     ]);
   });

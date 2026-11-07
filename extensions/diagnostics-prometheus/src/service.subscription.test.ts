@@ -8,6 +8,8 @@ import { expect, it, vi } from "vitest";
 import type { DiagnosticEventPayload } from "../api.js";
 import { createDiagnosticsPrometheusExporter } from "./service.js";
 import {
+  expectMetrics,
+  expectExcludes,
   baseEvent,
   createMetricsHarness,
   scrapeMetrics,
@@ -21,263 +23,326 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
   }),
 }));
 
-it("exports trusted WebSocket event totals and the current operator socket count", () => {
-  const metrics = createMetricsHarness();
-  try {
-    metrics.record({ type: "gateway.ws.connections", operators: 2 });
-    metrics.record({ type: "gateway.ws.event", event: "chat", count: 2, bytes: 256 });
-    metrics.record({ type: "gateway.ws.event", event: "chat", count: 1, bytes: 128 });
-    metrics.record({ type: "gateway.ws.event", event: "other", count: 1, bytes: 64 });
-    metrics.record({ type: "gateway.ws.connections", operators: 0 });
-    for (const metadata of [untrusted, { trusted: false, internal: true }]) {
-      metrics.record(
-        { type: "gateway.ws.event", event: "private-untrusted", count: 99, bytes: 999 },
-        metadata,
-      );
-      metrics.record({ type: "gateway.ws.connections", operators: 99 }, metadata);
-    }
+function phaseEvent(
+  name: string,
+  durationMs: number,
+  details?: Extract<DiagnosticEventPayload, { type: "diagnostic.phase.completed" }>["details"],
+) {
+  return { type: "diagnostic.phase.completed" as const, name, startedAt: 10, durationMs, details };
+}
 
+function frameBuckets(first = 1, second = first, rest = second, overflow = rest) {
+  return {
+    "256": first,
+    "512": second,
+    "1024": rest,
+    "2048": rest,
+    "4096": rest,
+    "8192": rest,
+    "16384": rest,
+    "65536": rest,
+    "+Inf": overflow,
+  };
+}
+
+function invalidDurations(event: ReturnType<typeof phaseEvent>) {
+  return [undefined, -1, Number.NaN, Number.POSITIVE_INFINITY].map((durationMs) =>
+    Object.assign({}, event, { durationMs }),
+  );
+}
+
+const document = phaseEvent("control-ui.document.total", 125, { route: "synthetic-private" });
+const catalog = phaseEvent("sessions.catalog.list.planning", 10, {
+  threadCpuMs: 2.5,
+  privateText: "synthetic-private",
+});
+const startup = phaseEvent("chat.startup.pending_inputs", 1_250, {
+  privateText: "synthetic-private",
+  threadCpuMs: 999,
+});
+const send = phaseEvent("chat.send.snapshot", 10, {
+  stage: "request",
+  privateText: "synthetic-private",
+});
+const preparation = phaseEvent("worktree.preparation", 1200, {
+  kind: "sandbox",
+  template: "warm",
+  outcome: "returned",
+  allocate: 100,
+  setup: 0,
+  sessionKey: "synthetic-private",
+});
+const diff = phaseEvent("sessions.diff", 160, {
+  outcome: "cache-miss",
+  missReason: "cold",
+  "cache-validate": 150,
+  "git-wall": 0,
+  revision: "synthetic-private",
+});
+
+it.each([
+  {
+    name: "Control UI document",
+    events: [document, { ...document, durationMs: 0 }],
+    samples: `openclaw_control_ui_document_duration_seconds_sum{stage="total"} 0.125
+openclaw_control_ui_document_duration_seconds_count{stage="total"} 2
+openclaw_control_ui_document_duration_seconds_bucket{le="0.1",stage="total"} 1
+openclaw_control_ui_document_duration_seconds_bucket{le="0.25",stage="total"} 2`,
+    ignored: [
+      ...invalidDurations(document),
+      { ...document, name: "control-ui.document.private-session" },
+      { ...document, name: "other.total" },
+    ],
+    absent: [],
+  },
+  {
+    name: "catalog elapsed and synchronous CPU",
+    events: [
+      catalog,
+      { ...catalog, durationMs: 0, details: undefined },
+      { ...catalog, name: "sessions.catalog.list.provider" },
+      { ...catalog, name: "sessions.catalog.list.delivery" },
+      { ...catalog, name: "sessions.catalog.list.delivery", details: { threadCpuMs: "2.5" } },
+    ],
+    samples: `openclaw_gateway_rpc_stage_seconds_count{method="sessions.catalog.list",phase="planning"} 2
+openclaw_gateway_rpc_stage_seconds_sum{method="sessions.catalog.list",phase="planning"} 0.01
+openclaw_gateway_rpc_stage_thread_cpu_seconds_count{method="sessions.catalog.list",phase="planning"} 1
+openclaw_gateway_rpc_stage_thread_cpu_seconds_sum{method="sessions.catalog.list",phase="planning"} 0.0025
+openclaw_gateway_rpc_stage_seconds_count{method="sessions.catalog.list",phase="delivery"} 2
+openclaw_gateway_rpc_stage_thread_cpu_seconds_count{method="sessions.catalog.list",phase="delivery"} 1`,
+    ignored: [
+      ...invalidDurations(catalog),
+      { ...catalog, name: "sessions.catalog.list.private-session" },
+      { ...catalog, name: "startup.fixture" },
+    ],
+    absent: [
+      'openclaw_gateway_rpc_stage_thread_cpu_seconds_count{method="sessions.catalog.list",phase="provider"}',
+    ],
+  },
+  {
+    name: "chat startup phases without asynchronous CPU attribution",
+    events: [startup, { ...startup, name: "chat.startup.projection_final", durationMs: 0 }],
+    samples: `openclaw_gateway_rpc_stage_seconds_count{method="chat.startup",phase="pending_inputs"} 1
+openclaw_gateway_rpc_stage_seconds_sum{method="chat.startup",phase="pending_inputs"} 1.25
+openclaw_gateway_rpc_stage_seconds_count{method="chat.startup",phase="projection_final"} 1`,
+    ignored: [
+      ...invalidDurations(startup),
+      { ...startup, name: "chat.startup.private-session" },
+      { ...startup, name: "chat.history.pending_inputs" },
+    ],
+    absent: ["thread_cpu", "privateText"],
+  },
+  {
+    name: "chat.send request, startup and deferred delivery",
+    events: [
+      send,
+      { ...send, durationMs: 0 },
+      { ...send, durationMs: 3000, details: { stage: "startup" } },
+      ...["steer", "queued"].map((stage) => phaseEvent("chat.send.dispatch", 120001, { stage })),
+    ],
+    samples: `openclaw_chat_send_phase_seconds_count{phase="snapshot",stage="request"} 2
+openclaw_chat_send_phase_seconds_sum{phase="snapshot",stage="request"} 0.01
+openclaw_chat_send_phase_seconds_sum{phase="snapshot",stage="startup"} 3
+openclaw_chat_send_phase_seconds_sum{phase="dispatch",stage="steer"} 120.001
+openclaw_chat_send_phase_seconds_sum{phase="dispatch",stage="queued"} 120.001`,
+    ignored: [
+      ...invalidDurations(send),
+      { ...send, name: "chat.send.private-session" },
+      { ...send, details: { stage: "private-session" } },
+      { ...send, details: undefined },
+    ],
+    absent: [],
+  },
+  {
+    name: "warm and cold worktree preparation",
+    events: [
+      preparation,
+      { ...preparation, details: { ...preparation.details, template: "cold", setup: 10000 } },
+    ],
+    samples: `openclaw_worktree_preparation_seconds_sum{kind="sandbox",outcome="returned",phase="total",template="warm"} 1.2
+openclaw_worktree_preparation_seconds_sum{kind="sandbox",outcome="returned",phase="allocate",template="warm"} 0.1
+openclaw_worktree_preparation_seconds_sum{kind="sandbox",outcome="returned",phase="setup",template="warm"} 0
+openclaw_worktree_preparation_seconds_sum{kind="sandbox",outcome="returned",phase="setup",template="cold"} 10`,
+    ignored: [{ ...preparation, details: { ...preparation.details, template: "private-key" } }],
+    absent: ['phase="checkout"'],
+  },
+  {
+    name: "diff elapsed stages and bounded cache miss reasons",
+    events: [
+      diff,
+      { ...diff, name: "checkout.diff", details: { ...diff.details, outcome: "cache-hit" } },
+    ],
+    samples: `openclaw_diff_stage_seconds_sum{method="sessions.diff",outcome="cache-miss",stage="cache-validate"} 0.15
+openclaw_diff_stage_seconds_sum{method="checkout.diff",outcome="cache-hit",stage="git-wall"} 0
+openclaw_diff_cache_misses_total{method="sessions.diff",reason="cold"} 1`,
+    ignored: [
+      { ...diff, name: "sessions.diff.private" },
+      { ...diff, details: { outcome: "private" } },
+      ...[-1, Number.NaN, Number.POSITIVE_INFINITY, "150"].map((elapsed) =>
+        Object.assign({}, diff, { details: { outcome: "cache-hit", "cache-validate": elapsed } }),
+      ),
+      ...["private-revision", "revision-changed-/private/path", 1, true].map((missReason) =>
+        Object.assign({}, diff, { details: { outcome: "cache-miss", missReason } }),
+      ),
+    ],
+    absent: [],
+  },
+])(
+  "exports trusted $name without private or malformed series",
+  ({ events, samples, ignored, absent }) => {
+    using metrics = createMetricsHarness();
+    for (const event of events) {
+      metrics.record(event);
+    }
     const rendered = metrics.render();
-    expect(rendered).toContain("# TYPE openclaw_gateway_ws_events_total counter\n");
-    expect(rendered).toContain("# TYPE openclaw_gateway_ws_event_bytes_total counter\n");
-    expect(rendered).toContain("# TYPE openclaw_gateway_ws_operator_connections gauge\n");
-    expect(rendered.split("\n").filter((line) => line.startsWith("openclaw_gateway_ws_"))).toEqual([
-      'openclaw_gateway_ws_event_bytes_total{event="chat"} 384',
-      'openclaw_gateway_ws_event_bytes_total{event="other"} 64',
-      'openclaw_gateway_ws_events_total{event="chat"} 3',
-      'openclaw_gateway_ws_events_total{event="other"} 1',
-      "openclaw_gateway_ws_operator_connections 0",
-    ]);
-  } finally {
-    metrics.stop();
+    expectMetrics(rendered)(samples);
+    expectExcludes(rendered, "synthetic-private", ...absent);
+    for (const event of events) {
+      metrics.record(event, untrusted);
+      metrics.record(event, { trusted: false, internal: true });
+    }
+    for (const event of ignored) {
+      metrics.record(event);
+    }
+    expect(metrics.render()).toBe(rendered);
+  },
+);
+
+it("exports the current operator socket count and rejects untrusted updates", () => {
+  using metrics = createMetricsHarness();
+  metrics.record({ type: "gateway.ws.connections", operators: 2 });
+  expectMetrics(metrics.render())("openclaw_gateway_ws_operator_connections 2");
+  metrics.record({ type: "gateway.ws.connections", operators: 0 });
+  for (const metadata of [untrusted, { trusted: false, internal: true }]) {
+    metrics.record({ type: "gateway.ws.connections", operators: 99 }, metadata);
   }
+  expectMetrics(metrics.render())(`# TYPE openclaw_gateway_ws_operator_connections gauge
+openclaw_gateway_ws_operator_connections 0`);
 });
 
 it("exports codec bytes separately and cumulative raw frame-size buckets", () => {
-  const metrics = createMetricsHarness();
+  using metrics = createMetricsHarness();
   const observation = {
     type: "gateway.ws.event",
     event: "chat",
     count: 3,
     bytes: 1_536,
-    frameBytes: {
-      "256": 0,
-      "512": 2,
-      "1024": 3,
-      "2048": 3,
-      "4096": 3,
-      "8192": 3,
-      "16384": 3,
-      "65536": 3,
-      "+Inf": 3,
-    },
+    frameBytes: frameBuckets(0, 2, 3),
   } as const;
-  try {
-    metrics.record(observation);
-    metrics.record({ type: "gateway.ws.event", event: "chat", count: 0, bytes: 0, wireBytes: 600 });
-    metrics.record({
-      type: "gateway.ws.event",
-      event: "chat",
-      count: 0,
-      bytes: 0,
-      frameBytes: { "512": 0 },
-    });
-    metrics.record({
-      type: "gateway.ws.event",
-      event: "chat",
-      count: 1,
-      bytes: 70_000,
-      wireBytes: 700,
-      frameBytes: { "+Inf": 1 },
-    });
-    metrics.record({ type: "gateway.ws.event", event: "other", count: 1, bytes: 64 });
-    metrics.record({ ...observation, wireBytes: 999 }, untrusted);
-    const rendered = metrics.render();
-    expect(rendered).toContain('openclaw_gateway_ws_events_total{event="chat"} 4');
-    expect(rendered).toContain('openclaw_gateway_ws_event_bytes_total{event="chat"} 71536');
-    expect(rendered).toContain('openclaw_gateway_ws_event_wire_bytes_total{event="chat"} 1300');
-    expect(rendered).not.toContain('openclaw_gateway_ws_event_wire_bytes_total{event="other"}');
-    expect(rendered).not.toContain('openclaw_gateway_ws_event_frame_bytes{event="other"');
-    for (const [le, count] of [
-      ["256", 0],
-      ["512", 2],
-      ["1024", 3],
-      ["2048", 3],
-      ["4096", 3],
-      ["8192", 3],
-      ["16384", 3],
-      ["65536", 3],
-      ["+Inf", 4],
-    ]) {
-      expect(rendered).toContain(
-        `openclaw_gateway_ws_event_frame_bytes{event="chat",le="${le}"} ${count}`,
-      );
-    }
-  } finally {
-    metrics.stop();
+  metrics.record(observation);
+  metrics.record({ type: "gateway.ws.event", event: "chat", count: 0, bytes: 0, wireBytes: 600 });
+  metrics.record({
+    type: "gateway.ws.event",
+    event: "chat",
+    count: 0,
+    bytes: 0,
+    frameBytes: { "512": 0 },
+  });
+  metrics.record({
+    type: "gateway.ws.event",
+    event: "chat",
+    count: 1,
+    bytes: 70_000,
+    wireBytes: 700,
+    frameBytes: { "+Inf": 1 },
+  });
+  metrics.record({ type: "gateway.ws.event", event: "other", count: 1, bytes: 64 });
+  for (const metadata of [untrusted, { trusted: false, internal: true }]) {
+    metrics.record({ ...observation, event: "private-untrusted", wireBytes: 999 }, metadata);
+  }
+  const rendered = metrics.render();
+  expectMetrics(rendered)(`# TYPE openclaw_gateway_ws_events_total counter
+# TYPE openclaw_gateway_ws_event_bytes_total counter
+openclaw_gateway_ws_events_total{event="chat"} 4
+openclaw_gateway_ws_event_bytes_total{event="chat"} 71536
+openclaw_gateway_ws_event_wire_bytes_total{event="chat"} 1300`);
+  expectExcludes(
+    rendered,
+    "private-untrusted",
+    'openclaw_gateway_ws_event_wire_bytes_total{event="other"}',
+    'openclaw_gateway_ws_event_frame_bytes{event="other"',
+  );
+  for (const [le, count] of Object.entries(frameBuckets(0, 2, 3, 4))) {
+    expect(rendered).toContain(
+      `openclaw_gateway_ws_event_frame_bytes{event="chat",le="${le}"} ${count}`,
+    );
   }
 });
 
-it("exports session traffic attribution while keeping aggregate event labels unchanged", () => {
-  const metrics = createMetricsHarness();
-  try {
-    for (const [event, reason] of [
-      ["sessions.changed", "agent.run.started"],
-      ["session.message", "assistant"],
-    ] as const) {
-      for (const delivery of ["subscribed", "roster"] as const) {
-        const observation = {
-          type: "gateway.ws.event",
-          event,
-          count: 2,
-          bytes: 256,
-          sessionEvent: { reason, delivery },
-        } as const;
-        metrics.record(observation);
-        metrics.record({ ...observation, count: 1, bytes: 128 });
-        metrics.record(observation, untrusted);
-      }
-    }
-    const rendered = metrics.render();
-    for (const [event, reason] of [
-      ["sessions.changed", "agent.run.started"],
-      ["session.message", "assistant"],
-    ]) {
-      expect(rendered).toContain(`openclaw_gateway_ws_events_total{event="${event}"} 6`);
-      expect(rendered).toContain(`openclaw_gateway_ws_event_bytes_total{event="${event}"} 768`);
-      for (const delivery of ["subscribed", "roster"]) {
-        const labels = `delivery="${delivery}",event="${event}",reason="${reason}"`;
-        expect(rendered).toContain(`openclaw_gateway_ws_session_event_frames_total{${labels}} 3`);
-        expect(rendered).toContain(`openclaw_gateway_ws_session_event_bytes_total{${labels}} 384`);
-      }
-    }
-  } finally {
-    metrics.stop();
+it.each([
+  {
+    event: "session.message",
+    sessionEvent: { reason: "assistant", delivery: "subscribed" },
+    family: "session_event",
+    labels: 'delivery="subscribed",event="session.message",reason="assistant"',
+  },
+  { event: "presence", presenceMode: "delta", family: "presence", labels: 'mode="delta"' },
+] as const)(
+  "attributes $event frames without changing aggregate labels",
+  ({ family, labels, ...attributes }) => {
+    using metrics = createMetricsHarness();
+    const event = { type: "gateway.ws.event", count: 2, bytes: 256, ...attributes } as const;
+    metrics.record(event);
+    metrics.record({ ...event, count: 1, bytes: 128 });
+    metrics.record(event, untrusted);
+    expectMetrics(metrics.render())(`openclaw_gateway_ws_events_total{event="${event.event}"} 3
+openclaw_gateway_ws_event_bytes_total{event="${event.event}"} 384
+openclaw_gateway_ws_${family}_frames_total{${labels}} 3
+openclaw_gateway_ws_${family}_bytes_total{${labels}} 384`);
+  },
+);
+
+it("replaces trusted retention gauges and clears them on retirement", () => {
+  using metrics = createMetricsHarness();
+  const list = {
+    type: "sessions.list.retention",
+    views: 3,
+    refs: 17,
+    estimatedBytes: 3504,
+  } as const;
+  const rows = {
+    type: "sessions.event.retention",
+    entries: 25600,
+    estimatedBytes: 24985600,
+  } as const;
+  metrics.record(list);
+  metrics.record(rows);
+  const retained = metrics.render();
+  expectMetrics(retained)(`openclaw_session_event_rows_retained_bytes 24985600
+openclaw_session_event_rows_retained_entries 25600
+openclaw_sessions_list_retained_bytes 3504
+openclaw_sessions_list_retained_refs 17
+openclaw_sessions_list_retained_views 3`);
+  for (const metadata of [untrusted, { trusted: false, internal: true }]) {
+    metrics.record({ ...list, views: 99 }, metadata);
+    metrics.record({ ...rows, entries: 99 }, metadata);
   }
+  expect(metrics.render()).toBe(retained);
+  metrics.record({ ...list, views: 0, refs: 0, estimatedBytes: 0 });
+  metrics.record({ ...rows, entries: 0, estimatedBytes: 0 });
+  expectMetrics(metrics.render())(`openclaw_session_event_rows_retained_bytes 0
+openclaw_session_event_rows_retained_entries 0
+openclaw_sessions_list_retained_bytes 0
+openclaw_sessions_list_retained_refs 0
+openclaw_sessions_list_retained_views 0`);
 });
 
-it("exports presence frame counts and bytes by delivery mode", () => {
-  const metrics = createMetricsHarness();
-  try {
-    for (const presenceMode of ["delta", "reset", "legacy"] as const) {
-      const observation = {
-        type: "gateway.ws.event",
-        event: "presence",
-        count: 2,
-        bytes: 256,
-        presenceMode,
-      } as const;
-      metrics.record(observation);
-      metrics.record({ ...observation, count: 1, bytes: 128 });
-      metrics.record(observation, untrusted);
-    }
-    const rendered = metrics.render();
-    expect(rendered).toContain('openclaw_gateway_ws_events_total{event="presence"} 9');
-    expect(rendered).toContain('openclaw_gateway_ws_event_bytes_total{event="presence"} 1152');
-    for (const mode of ["delta", "reset", "legacy"]) {
-      expect(rendered).toContain(`openclaw_gateway_ws_presence_frames_total{mode="${mode}"} 3`);
-      expect(rendered).toContain(`openclaw_gateway_ws_presence_bytes_total{mode="${mode}"} 384`);
-    }
-  } finally {
-    metrics.stop();
+it("counts trusted wire-baseline retirements", () => {
+  using metrics = createMetricsHarness();
+  const event = { type: "sessions.event.rows.reset", cause: "close", count: 3 } as const;
+  metrics.record(event);
+  metrics.record({ ...event, count: 2 });
+  for (const metadata of [untrusted, { trusted: false, internal: true }]) {
+    metrics.record({ ...event, count: 99 }, metadata);
   }
-});
-
-it("exports trusted session retention gauges and clears them on retirement", () => {
-  const metrics = createMetricsHarness();
-  const retentionLines = () =>
-    metrics
-      .render()
-      .split("\n")
-      .filter(
-        (line) =>
-          line.startsWith("openclaw_sessions_list_retained_") ||
-          line.startsWith("openclaw_session_event_rows_retained_"),
-      );
-  try {
-    metrics.record({ type: "sessions.list.retention", views: 3, refs: 17, estimatedBytes: 3_504 });
-    metrics.record({
-      type: "sessions.event.retention",
-      entries: 25_600,
-      estimatedBytes: 24_985_600,
-    });
-    for (const metadata of [untrusted, { trusted: false, internal: true }]) {
-      metrics.record(
-        { type: "sessions.list.retention", views: 99, refs: 999, estimatedBytes: 99_999 },
-        metadata,
-      );
-      metrics.record(
-        { type: "sessions.event.retention", entries: 99_999, estimatedBytes: 99_999 },
-        metadata,
-      );
-    }
-    for (const suffix of ["views", "refs", "bytes"]) {
-      expect(metrics.render()).toContain(
-        `# TYPE openclaw_sessions_list_retained_${suffix} gauge\n`,
-      );
-    }
-    for (const suffix of ["entries", "bytes"]) {
-      expect(metrics.render()).toContain(
-        `# TYPE openclaw_session_event_rows_retained_${suffix} gauge\n`,
-      );
-    }
-    expect(retentionLines()).toEqual([
-      "openclaw_session_event_rows_retained_bytes 24985600",
-      "openclaw_session_event_rows_retained_entries 25600",
-      "openclaw_sessions_list_retained_bytes 3504",
-      "openclaw_sessions_list_retained_refs 17",
-      "openclaw_sessions_list_retained_views 3",
-    ]);
-    metrics.record({ type: "sessions.list.retention", views: 0, refs: 0, estimatedBytes: 0 });
-    metrics.record({ type: "sessions.event.retention", entries: 0, estimatedBytes: 0 });
-    expect(retentionLines()).toEqual([
-      "openclaw_session_event_rows_retained_bytes 0",
-      "openclaw_session_event_rows_retained_entries 0",
-      "openclaw_sessions_list_retained_bytes 0",
-      "openclaw_sessions_list_retained_refs 0",
-      "openclaw_sessions_list_retained_views 0",
-    ]);
-  } finally {
-    metrics.stop();
-  }
-});
-
-it("counts retired wire baselines by cause without accepting untrusted resets", () => {
-  const metrics = createMetricsHarness();
-  try {
-    for (const cause of [
-      "close",
-      "delivery-lost",
-      "generation",
-      "evicted",
-      "projection",
-    ] as const) {
-      metrics.record({ type: "sessions.event.rows.reset", cause, count: 3 });
-      metrics.record({ type: "sessions.event.rows.reset", cause, count: 2 });
-      for (const metadata of [untrusted, { trusted: false, internal: true }]) {
-        metrics.record({ type: "sessions.event.rows.reset", cause, count: 99 }, metadata);
-      }
-    }
-    const rendered = metrics.render();
-    expect(rendered).toContain("# TYPE openclaw_session_event_rows_reset_total counter\n");
-    expect(
-      rendered.split("\n").filter((line) => line.startsWith("openclaw_session_event_rows_reset_")),
-    ).toEqual([
-      'openclaw_session_event_rows_reset_total{cause="close"} 5',
-      'openclaw_session_event_rows_reset_total{cause="delivery-lost"} 5',
-      'openclaw_session_event_rows_reset_total{cause="evicted"} 5',
-      'openclaw_session_event_rows_reset_total{cause="generation"} 5',
-      'openclaw_session_event_rows_reset_total{cause="projection"} 5',
-    ]);
-  } finally {
-    metrics.stop();
-  }
+  expectMetrics(metrics.render())('openclaw_session_event_rows_reset_total{cause="close"} 5');
 });
 
 it("records terminal metrics without reading logs or private diagnostic content", async () => {
   const exporter = createDiagnosticsPrometheusExporter();
   const readPrivateContent = vi.fn(() => ({ toolInput: { text: "private tool input" } }));
   const readLogAttribute = vi.fn(() => "synthetic log attribute");
+  const readWsBuckets = vi.fn(() => frameBuckets());
   const emitLog = () =>
     emitDiagnosticEvent({
       type: "log.record",
@@ -293,18 +358,22 @@ it("records terminal metrics without reading logs or private diagnostic content"
     config: {},
     stateDir: "/tmp/openclaw-prometheus-test",
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    internalDiagnostics: {
-      emit() {},
-      onEvent: onTrustedInternalDiagnosticEvent,
-    },
+    internalDiagnostics: { emit() {}, onEvent: onTrustedInternalDiagnosticEvent },
   });
   try {
     emitLog();
+    emitTrustedDiagnosticEventWithPrivateData({
+      type: "gateway.ws.event",
+      event: "chat",
+      count: 1,
+      bytes: 256,
+      get frameBytes() {
+        return readWsBuckets();
+      },
+    });
     emitTrustedDiagnosticEventWithPrivateData(
       {
         type: "tool.execution.completed",
-        runId: "run-1",
-        toolCallId: "call-1",
         toolName: "synthetic",
         toolSource: "core",
         durationMs: 3,
@@ -321,17 +390,7 @@ it("records terminal metrics without reading logs or private diagnostic content"
     );
     expect(readPrivateContent).not.toHaveBeenCalled();
     expect(readLogAttribute).not.toHaveBeenCalled();
-    const logs = vi.fn();
-    const stopLogs = onTrustedInternalDiagnosticEvent(logs, { include: ["log.record"] });
-    try {
-      emitLog();
-      await waitForDiagnosticEventsDrained();
-      expect(logs).toHaveBeenCalledOnce();
-      expect(logs.mock.calls[0]?.[0].attributes).toEqual({ detail: "synthetic log attribute" });
-      expect(readLogAttribute).toHaveBeenCalledOnce();
-    } finally {
-      stopLogs();
-    }
+    expect(readWsBuckets).not.toHaveBeenCalled();
   } finally {
     exporter.service.stop?.();
     await waitForDiagnosticEventsDrained();
@@ -339,17 +398,9 @@ it("records terminal metrics without reading logs or private diagnostic content"
   expect(scrapeMetrics(exporter.handler)).toBe("");
 });
 
-it("preserves worker phases, frame sizes, and core metrics after shared capacity saturates", () => {
-  const metrics = createMetricsHarness();
+it("exports production-shaped worker, WebSocket, and late RPC populations without drops", () => {
+  using metrics = createMetricsHarness();
   expect(metrics.render()).not.toContain("openclaw_gc_duration_seconds");
-  const queue = {
-    ...baseEvent(),
-    type: "queue.lane.dequeue" as const,
-    lane: "main",
-    queueSize: 1,
-    waitMs: 10,
-  };
-  metrics.record(queue);
   // Worker/RPC startup traffic precedes the first completed run and memory sample.
   for (let index = 0; index < 400; index++) {
     metrics.record({
@@ -362,10 +413,50 @@ it("preserves worker phases, frame sizes, and core metrics after shared capacity
       durationMs: 7,
     });
   }
-  for (let index = 0; index < 426; index += 1) {
-    const base = { ...baseEvent(), type: "gateway.rpc" as const, method: `core.method.${index}` };
+  for (let index = 0; index < 58; index++) {
+    metrics.record({
+      type: "worker.request",
+      kind: "sqlite_writer",
+      requestClass: `request.${index}`,
+      phase: "completed",
+      queueDepth: 0,
+      timing: {
+        dispatched: 0,
+        posted: 1,
+        ...(index < 57
+          ? {
+              received: 2,
+              inputReady: 3,
+              executeStarted: 4,
+              executeFinished: 5,
+              replied: 6,
+              replyReceived: 7,
+            }
+          : {}),
+      },
+    });
+  }
+  for (let index = 0; index < 200; index++) {
+    metrics.record({
+      type: "gateway.ws.event",
+      event: `event.${index}`,
+      count: 1,
+      bytes: 256,
+      wireBytes: 128,
+      sessionEvent: { reason: "assistant", delivery: "subscribed" },
+      frameBytes: frameBuckets(),
+    });
+  }
+  // RPC arrives after worker and WebSocket traffic; sessions.list is the last method.
+  for (let index = 0; index < 170; index += 1) {
+    const base = {
+      ...baseEvent(),
+      type: "gateway.rpc" as const,
+      method: index === 169 ? "sessions.list" : `core.method.${index}`,
+    };
     for (const event of [
-      { ...base, phase: "received" },
+      { ...base, phase: "received", clientKind: "control-ui" },
+      { ...base, phase: "received", clientKind: "cli" },
       { ...base, phase: "response", outcome: "ok", durationMs: 10, responseBytes: 1024 },
       {
         ...base,
@@ -387,101 +478,18 @@ it("preserves worker phases, frame sizes, and core metrics after shared capacity
       metrics.record(event);
     }
   }
-  expect(metrics.render()).toMatch(/openclaw_prometheus_series_dropped_total [1-9][0-9]*/);
-  // Observed deployment shape: 47 complete phase sets plus three partial phases,
-  // and 19 event types with nine cumulative frame-size bounds apiece.
-  for (let index = 0; index < 48; index++) {
-    metrics.record({
-      type: "worker.request",
-      kind: "sqlite_writer",
-      requestClass: `request.${index}`,
-      phase: "completed",
-      queueDepth: 0,
-      timing: {
-        dispatched: 0,
-        posted: 1,
-        received: 2,
-        inputReady: 3,
-        ...(index < 47
-          ? { executeStarted: 4, executeFinished: 5, replied: 6, replyReceived: 7 }
-          : {}),
-      },
-    });
-  }
-  for (let index = 0; index < 19; index++) {
-    metrics.record({
-      type: "gateway.ws.event",
-      event: `event.${index}`,
-      count: 1,
-      bytes: 256,
-      frameBytes: {
-        "256": 1,
-        "512": 1,
-        "1024": 1,
-        "2048": 1,
-        "4096": 1,
-        "8192": 1,
-        "16384": 1,
-        "65536": 1,
-        "+Inf": 1,
-      },
-    });
-  }
-  metrics.record({ ...queue, queueSize: 2 });
-  const existing = metrics.render();
-  expect(existing).toContain('openclaw_queue_lane_size{lane="main"} 2');
-  expect(existing).toContain('openclaw_queue_lane_wait_seconds_count{lane="main"} 2');
-
-  metrics.record({ ...queue, lane: "later" });
-
-  for (let index = 0; index < 4; index++) {
-    const model = `model-${index}`;
-    metrics.record({
-      type: "run.completed",
-      runId: `run-${index}`,
-      model,
-      outcome: "completed",
-      durationMs: 10,
-    });
-    metrics.record({
-      type: "harness.run.completed",
-      runId: `run-${index}`,
-      harnessId: "synthetic",
-      model,
-      outcome: "completed",
-      durationMs: 10,
-    });
-    metrics.record({
-      type: "model.call.completed",
-      callId: `call-${index}`,
-      provider: "synthetic",
-      runId: `run-${index}`,
-      model,
-      durationMs: 10,
-    });
-    metrics.record({
-      type: "model.usage",
-      model,
-      usage: { input: 10, output: 20 },
-      durationMs: 10,
-    });
-    metrics.record({
-      type: "tool.execution.completed",
-      runId: `run-${index}`,
-      toolCallId: `call-${index}`,
-      toolName: `tool-${index}`,
-      durationMs: 10,
-    });
-  }
-  metrics.record({
-    type: "diagnostic.phase.completed",
-    name: "worktree.preparation",
-    startedAt: 0,
-    durationMs: 10,
-    details: { kind: "managed", template: "warm", outcome: "returned" },
-  });
   metrics.record({ type: "secret.egress", outcome: "forwarded", substituted: true });
-  metrics.record({ type: "gateway.http.cancelled", source: "client" });
+  metrics.record({ type: "secret.egress", outcome: "forwarded", substituted: true }, untrusted);
+  metrics.record({ type: "tool.catalog", source: "client", mode: "code-mode", toolCount: 10 });
+  metrics.record({ type: "tool.catalog", source: "client", mode: "code-mode", toolCount: 12 });
+  metrics.record(
+    { type: "tool.catalog", source: "client", mode: "code-mode", toolCount: 99 },
+    untrusted,
+  );
+  for (const source of ["client", "client", "shutdown"] as const) {
+    metrics.record({ type: "gateway.http.cancelled", source }, { trusted: false, internal: true });
+  }
+  metrics.record({ type: "gateway.http.cancelled", source: "client" }, untrusted);
   const sample = {
     type: "diagnostic.memory.sample" as const,
     memory: {
@@ -491,20 +499,17 @@ it("preserves worker phases, frame sizes, and core metrics after shared capacity
       heapSizeLimitBytes: 1000,
       externalBytes: 20,
       arrayBuffersBytes: 10,
-      workerCount: 12,
-      workerHeaps: Array.from({ length: 12 }, (_, index) => ({
-        script: `worker-${index % 8}.js`,
+      workerCount: 39,
+      workerHeaps: Array.from({ length: 39 }, (_, index) => ({
+        script: `worker-${index}.js`,
         workerSlot: index + 1,
         heapUsed: 100,
         heapTotal: 200,
         heapSizeLimitBytes: 1000,
-      })),
-      workerTaskMetrics: Array.from({ length: 100 }, (_, index) => ({
-        workerClass: "compute" as const,
-        script: `worker-${index}.js`,
-        tasksCompleted: 3,
-        heapUsedHighWaterBytes: 100,
-        gc: [{ kind: "scavenge" as const, count: 7, durationMs: 15, reclaimedBytes: 9000 }],
+        heapSpaces: Array.from({ length: 10 }, (_value, space) => ({
+          space_name: `space_${space}`,
+          space_used_size: 10,
+        })),
       })),
     },
   };
@@ -517,96 +522,62 @@ it("preserves worker phases, frame sizes, and core metrics after shared capacity
     "incremental",
     "weak_processing",
   ] as const) {
-    metrics.record({
-      type: "diagnostic.gc",
-      kind,
-      reason: "other",
-      thread: "main",
-      durationMs: 20,
-    });
-    metrics.record({
-      type: "diagnostic.gc",
-      kind,
-      reason: "other",
-      thread: "main",
-      durationMs: 30,
-    });
+    for (let workerSlot = 1; workerSlot <= 61; workerSlot++) {
+      metrics.record({
+        type: "diagnostic.gc",
+        kind,
+        reason: "other",
+        thread: "code-mode-node.worker.js",
+        workerSlot,
+        durationMs: 10,
+      });
+    }
+    for (const durationMs of [20, 30]) {
+      metrics.record({
+        type: "diagnostic.gc",
+        kind,
+        reason: "other",
+        thread: "main",
+        durationMs,
+      });
+    }
     const labels = `kind="${kind}",reason="other",thread="main"`;
     const rendered = metrics.render();
-    expect(rendered).toContain(`openclaw_gc_duration_seconds_count{${labels}} 2\n`);
-    expect(rendered).toContain(`openclaw_gc_duration_seconds_sum{${labels}} 0.05\n`);
-    expect(rendered).toContain(
-      `openclaw_gc_duration_seconds_bucket{kind="${kind}",le="0.025",reason="other",thread="main"} 1\n`,
-    );
+    expectMetrics(rendered)(`openclaw_gc_duration_seconds_count{${labels}} 2
+openclaw_gc_duration_seconds_sum{${labels}} 0.05
+openclaw_gc_duration_seconds_bucket{kind="${kind}",le="0.025",reason="other",thread="main"} 1`);
   }
-  for (const phase of [
-    "authority",
-    "admission",
-    "preparation",
-    "attachments",
-    "replyContext",
-    "authoring",
-    "persist",
-    "runAdmission",
-    "replyInitialization",
-    "snapshot",
-    "worktree",
-    "effects",
-    "response",
-    "dispatch",
-  ]) {
+  for (const reason of ["forced", "none"] as const) {
     metrics.record({
-      type: "diagnostic.phase.completed",
-      name: `chat.send.${phase}`,
-      startedAt: 0,
-      durationMs: 1,
-      details: { stage: "request" },
+      type: "diagnostic.gc",
+      kind: "scavenge",
+      reason,
+      thread: "main",
+      durationMs: 10,
     });
   }
   const core = metrics.render();
-  const expectedFamilies = {
-    worker_request_phase_seconds_count: 332,
-    gateway_ws_event_frame_bytes: 171,
-    run_completed_total: 4,
-    run_duration_seconds_count: 4,
-    harness_run_total: 4,
-    harness_run_duration_seconds_count: 4,
-    model_call_total: 4,
-    model_call_duration_seconds_count: 4,
-    model_usage_duration_seconds_count: 4,
-    tool_execution_total: 4,
-    tool_execution_duration_seconds_count: 4,
-    gen_ai_client_token_usage_count: 8,
-    worktree_preparation_seconds_count: 1,
-    secret_egress_requests_total: 1,
-    gateway_http_cancelled_total: 1,
-    heap_used_ratio: 9,
-    worker_count: 9,
-    code_mode_worker_heap_bytes: 24,
-    chat_send_phase_seconds_count: 14,
-    gc_duration_seconds_count: 4,
-  };
-  const actualFamilies = Object.fromEntries(
-    Object.keys(expectedFamilies).map((name) => [
-      name,
-      core
-        .split("\n")
-        .filter(
-          (line) => line.startsWith(`openclaw_${name}{`) || line.startsWith(`openclaw_${name} `),
-        ).length,
-    ]),
-  );
-  expect(actualFamilies).toEqual(expectedFamilies);
-  for (const family of ["worker_request_phase_seconds", "gateway_ws_event_frame_bytes"]) {
-    expect(core).not.toContain(
-      `openclaw_prometheus_family_series_dropped_total{family="openclaw_${family}"}`,
+  for (const [name, count] of [
+    ["worker_request_seconds_count", 400],
+    ["worker_request_phase_seconds_count", 400],
+    ["gateway_ws_event_frame_bytes", 1800],
+    ["gateway_rpc_handler_seconds_count", 170],
+    ["worker_heap_space_used_bytes", 390],
+    ["gc_duration_seconds_count", 250],
+  ] as const) {
+    expect(core.split("\n").filter((line) => line.startsWith(`openclaw_${name}{`))).toHaveLength(
+      count,
     );
   }
-  expect(core).toContain(
-    'openclaw_worker_gc_collections_total{kind="scavenge",script="worker-0.js",worker_class="compute"} 7',
-  );
-  expect(core).toContain('openclaw_queue_lane_size{lane="later"} 1');
-  metrics.stop();
+  expect(core).not.toContain("openclaw_prometheus_series_dropped_total");
+  expectMetrics(core)(`openclaw_gateway_rpc_handler_seconds_count{method="sessions.list"} 1
+openclaw_gc_duration_seconds_count{kind="weak_processing",reason="other",slot="61",thread="code-mode-node.worker.js"} 1
+openclaw_gc_duration_seconds_count{kind="scavenge",reason="forced",thread="main"} 1
+openclaw_secret_egress_requests_total{outcome="forwarded",substituted="true"} 1
+openclaw_tool_catalog_total{mode="code-mode",source="client"} 2
+openclaw_tool_catalog_tools_total{mode="code-mode",source="client"} 22
+openclaw_gateway_http_cancelled_total{source="client"} 2
+openclaw_gateway_http_cancelled_total{source="shutdown"} 1`);
 });
 
 it("exports bounded family drop counts and warns once per process across exporter restarts", () => {
@@ -615,6 +586,9 @@ it("exports bounded family drop counts and warns once per process across exporte
       metrics.record({
         type: "skill.used",
         skillName: `synthetic-${index}`,
+        agentId: "main",
+        runId: "private-run",
+        sessionKey: "private-session",
         skillSource: "bundled",
         activation: "read",
       });
@@ -634,6 +608,10 @@ it("exports bounded family drop counts and warns once per process across exporte
     'openclaw_prometheus_family_series_dropped_total{family="openclaw_skill_used_total"} 3\n',
   );
   expect(first.render()).toContain("openclaw_prometheus_series_dropped_total 3\n");
+  expectMetrics(first.render())(
+    'openclaw_skill_used_total{activation="read",agent="main",skill="synthetic-0",source="bundled"} 1',
+  );
+  expectExcludes(first.render(), "private-run", "private-session");
   expect(warn).toHaveBeenCalledOnce();
   expect(warn.mock.calls[0]?.[0]).toContain("openclaw_skill_used_total");
   expect(warn.mock.calls[0]?.[0]).not.toContain("synthetic-");

@@ -30,6 +30,18 @@ async function seedMain(sessionId: string, entry: Partial<SessionEntry>, primary
 const resetMain = () =>
   directSessionReq<{ entry: SessionEntry }>("sessions.reset", { key: "main" });
 
+test("sessions.reset preserves a person-linked model account", async () => {
+  const selection = {
+    authProfileOverride: "openai:linked-person",
+    authProfileOverrideSource: "user-link",
+  } satisfies Partial<SessionEntry>;
+  const read = await seedMain("linked-account", selection);
+  const reset = await resetMain();
+  expect(reset.ok).toBe(true);
+  expect(reset.payload?.entry).toMatchObject(selection);
+  expect(read()).toMatchObject(selection);
+});
+
 test("sessions.reset stamps the creator's required sandbox only when materializing a new row", async () => {
   const { storePath } = await createSessionStoreDir();
   const profile = ensureProfileForEmail("sandboxed-reset-creator@example.test");

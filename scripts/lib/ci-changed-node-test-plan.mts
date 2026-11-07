@@ -41,13 +41,14 @@ import {
   listWholeConfigFiles,
 } from "./ci-node-test-inventory.mts";
 import {
-  createUiRealGatewayTestShards,
+  UI_REAL_GATEWAY_TEST_CONFIG,
   hasSharedUiE2eInput,
   createSelectedNodeTestShardBundles,
   packNodeTestGroups,
   normalizeSingletonNodeTestJob,
   nodeTestConfigRequiresCanonicalMetadata,
   resolveCanonicalNodeTestConfig,
+  resolveCompleteCanonicalNodeTestConfig,
   isCanonicalNodeTestConfig,
   isRuntimeTestFileIncluded,
   SOURCE_CHANNEL_TEST_POLICY,
@@ -98,6 +99,7 @@ type ChangedTargetValidation = {
   baseRef?: string;
   onFallback?: PlanDiagnostic;
   selectionMode?: "full" | "aggressive";
+  adaptiveMarkdown?: boolean;
   onSelection?: (selection: { rule: string; input: string; targets: string[] }) => void;
 };
 const CHANGED_FILE_SECONDS_HINTS = new Map<string, number>([
@@ -110,18 +112,13 @@ const CHANGED_FILE_SECONDS_HINTS = new Map<string, number>([
   ["test/e2e/qa-lab/runtime/gateway-node-control-plane.e2e.test.ts", 144],
   ["test/e2e/qa-lab/runtime/gateway-node-mcp.stress.e2e.test.ts", 133],
   ["test/e2e/qa-lab/runtime/telegram-recovered-artifact.e2e.test.ts", 127],
-  ["test/e2e/qa-lab/runtime/gateway-node-mcp.e2e.test.ts", 121],
   ["test/e2e/qa-lab/runtime/gateway-node-exec-routing.e2e.test.ts", 119],
   ["test/e2e/qa-lab/runtime/gateway-node-pending-work.e2e.test.ts", 111],
   ["test/e2e/qa-lab/runtime/node-worker-launch-wire.e2e.test.ts", 104],
   ["test/e2e/qa-lab/plugins/workspace-node-files.e2e.test.ts", 91],
   ["test/e2e/gateway-transcripts-discord-capture.e2e.test.ts", 61],
-  ["test/gateway-session-resume-restart.e2e.test.ts", 196],
-  ["test/gateway-background-process-restart.e2e.test.ts", 120],
-  ["test/gateway-subagent-restart.e2e.test.ts", 118],
   // Same runs: serial case sums are relative file costs, not wrapper walls.
   ["src/infra/update-managed-service-handoff-lifecycle.test.ts", 92],
-  ["src/agents/agent-command.harness-compaction-custody.test.ts", 52],
   ["src/cli/update-cli/update-command-migrated.test.ts", 67],
   ["src/flows/doctor-health.managed-settlement.test.ts", 296],
   ["src/cli/update-cli.already-current.test.ts", 130],
@@ -184,14 +181,7 @@ export function hasUiE2eAffectingChange(
       ) ||
       hasImportGraphImpactOnTargets(
         relevantPaths,
-        [
-          ...uiE2eRealGatewayTestFiles,
-          ...new Set(
-            createUiRealGatewayTestShards([]).flatMap((shard) =>
-              shard.groups.flatMap((group) => group.configs),
-            ),
-          ),
-        ],
+        [...uiE2eRealGatewayTestFiles, UI_REAL_GATEWAY_TEST_CONFIG],
         cwd,
         { tooling: true, resolveAliases: true },
       )
@@ -262,6 +252,7 @@ const BUILT_ARTIFACT_TEST_INPUTS = new Set([
   "extensions/browser/chrome-extension/relay-key.test-support.ts",
   "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
   "extensions/browser/src/browser/extension-install.test-support.ts",
+  "scripts/test-built-source-verifiers.mts",
 ]);
 
 /**
@@ -416,6 +407,23 @@ const AGGRESSIVE_PR_SMOKE_TEST_FILES = [
   "src/plugins/loader.runtime-registry.test.ts",
 ];
 const protectedRuntimeTestFiles = new Set(PR_PROTECTED_RUNTIME_TEST_FILES);
+// Roots whose tests have ordinary PR Vitest owners. Tests elsewhere, such as the
+// opt-in scripts/control-ui-retention census, keep their own config and command.
+const CHANGED_TEST_ROOTS = ["src", "test", "extensions", "packages", "ui"];
+
+function isIndependentMarkdownCompanion(file: string, cwd: string): boolean {
+  // Canonical inventories resolve against the process root, even for explicit targets.
+  if (
+    path.resolve(cwd) !== process.cwd() ||
+    !isTestFileTarget(file) ||
+    !lstatSync(path.resolve(cwd, file), { throwIfNoEntry: false })?.isFile()
+  ) {
+    return false;
+  }
+  const config = resolveCompleteCanonicalNodeTestConfig(file, buildVitestRunPlans([file], cwd));
+  // Companions must execute outside the Markdown worker.
+  return config !== undefined && config !== "test/vitest/vitest.markdown.config.ts";
+}
 
 /** Resolve owner areas and transitive consumers once, before projecting platform jobs. */
 export function resolveChangedNodeTestTargets(
@@ -424,6 +432,7 @@ export function resolveChangedNodeTestTargets(
 ): string[] {
   const cwd = options.cwd ?? process.cwd();
   const paths = changedPaths.filter((file) => !isIndependentlyCheckedDocumentation(file, cwd));
+  const policyTargets = resolvePolicyTestTargets(changedPaths, { cwd, baseRef: options.baseRef });
   const aggressive = options.selectionMode === "aggressive";
   const smoke = aggressive ? AGGRESSIVE_PR_SMOKE_TEST_FILES : PR_SMOKE_TEST_FILES;
   const selections: { rule: string; input: string; targets: string[] }[] = [];
@@ -434,6 +443,9 @@ export function resolveChangedNodeTestTargets(
     boundedOwners: true,
     baseRef: options.baseRef,
     aggressive: aggressive ? { maxDirectImporters: 20, maxDirectoryTests: 30 } : undefined,
+    adaptiveMarkdown: options.adaptiveMarkdown
+      ? { isIndependentCompanion: (file) => isIndependentMarkdownCompanion(file, cwd) }
+      : undefined,
     combineSiblingWithImportGraph: true,
     resolveAliases: true,
     runtimeOnly: true,
@@ -467,8 +479,8 @@ export function resolveChangedNodeTestTargets(
   recordSelection({ rule: "protected-owner", input: paths.join(", "), targets: ownerOptIns });
   recordSelection({
     rule: "policy-watch",
-    input: paths.join(", "),
-    targets: resolvePolicyTestTargets(paths),
+    input: changedPaths.join(", "),
+    targets: policyTargets,
   });
   recordSelection({ rule: "fixed-smoke", input: "PR", targets: smoke });
   const owners = [
@@ -487,15 +499,11 @@ export function resolveChangedNodeTestTargets(
       ...(paths.some((file) => listRunnableVitestConfigTargets().includes(file))
         ? ["test/vitest-projects-config.test.ts"]
         : []),
-      ...resolvePolicyTestTargets(paths),
+      ...policyTargets,
     ]),
   ];
   let inventory: string[] | undefined;
-  const allFiles = () =>
-    (inventory ??= listExtensionTestFilesForRoots(
-      ["src", "test", "extensions", "packages", "ui"],
-      cwd,
-    ));
+  const allFiles = () => (inventory ??= listExtensionTestFilesForRoots(CHANGED_TEST_ROOTS, cwd));
   const optInTargets = new Set([...paths, ...smoke, ...ownerOptIns]);
   const expandTarget = (target: string): string[] => {
     if (isTestFileTarget(target)) {
@@ -537,6 +545,7 @@ export function resolveChangedNodeTestTargets(
       (file) =>
         isTestFileTarget(file) &&
         !file.endsWith(".live.test.ts") &&
+        CHANGED_TEST_ROOTS.some((root) => file.startsWith(`${root}/`)) &&
         (optInTargets.has(file) ||
           ((options.includePrExemptRuntimeTests !== false || !isPrExemptRuntimeTestFile(file)) &&
             (options.includeReleaseOnlyRuntimeTests !== false ||
@@ -548,6 +557,13 @@ export function resolveChangedNodeTestTargets(
     const selectedSet = new Set(selected);
     const explained = new Set<string>();
     for (const selection of selections) {
+      if (selection.rule === "adaptive-qualified-unchanged") {
+        const targets = selection.targets.filter((file) => !selectedSet.has(file));
+        if (targets.length > 0) {
+          options.onSelection({ ...selection, targets });
+        }
+        continue;
+      }
       const targets = [
         ...new Set(selection.targets.flatMap((target) => expanded.get(target) ?? [target])),
       ].filter((file) => selectedSet.has(file));
@@ -986,6 +1002,85 @@ function boundChangedNodeRows(
     });
 }
 
+/** Share setup without changing the mandatory boundary suite or any child process. */
+export function packChangedNodeBoundary(shards: ChangedNodeTestShard[]): ChangedNodeTestShard[] {
+  const boundary = shards.find(
+    (shard) =>
+      shard.checkName === "checks-node-changed-boundary" &&
+      shard.configs.length === 1 &&
+      shard.configs[0] === BOUNDARY_NODE_TEST_CONFIG &&
+      !shard.groups &&
+      !shard.targets &&
+      !shard.includePatterns &&
+      !shard.requiresDist &&
+      !shard.pretestBuildMode,
+  );
+  if (!boundary) {
+    return shards;
+  }
+  // All 97 observed boundary test steps fit 73s, including both runtimes.
+  // Reserve 90s and retain the ordinary 150s selected-row budget.
+  const boundarySeconds = 90;
+  const recipient = shards
+    .filter(
+      (shard) =>
+        shard !== boundary &&
+        shard.runner === boundary.runner &&
+        shard.planConcurrency === 1 &&
+        !shard.requiresDist &&
+        !shard.pretestBuildMode &&
+        !shard.targets &&
+        Object.entries(shard.env ?? {}).every(
+          ([key, value]) => key === "OPENCLAW_VITEST_MAX_WORKERS" && value === "2",
+        ) &&
+        !shard.timeoutMinutes &&
+        shard.groups?.length &&
+        shard.groups.length < 10 &&
+        shard.groups.every(
+          (group) =>
+            !group.requiresDist &&
+            !group.pretestBuildMode &&
+            group.configs.length === 1 &&
+            group.configs[0] === "test/vitest/vitest.tooling.config.ts",
+        ) &&
+        (shard.predictedTestSeconds ?? shard.predictedSeconds ?? Infinity) + boundarySeconds <=
+          PR_NODE_TEST_SECONDS,
+    )
+    .toSorted(
+      (a, b) =>
+        (a.predictedTestSeconds ?? a.predictedSeconds!) -
+        (b.predictedTestSeconds ?? b.predictedSeconds!),
+    )[0];
+  if (!recipient) {
+    return shards;
+  }
+  const predictedTestSeconds =
+    (recipient.predictedTestSeconds ?? recipient.predictedSeconds!) + boundarySeconds;
+  return shards.flatMap((shard) =>
+    shard === boundary
+      ? []
+      : shard === recipient
+        ? [
+            {
+              ...recipient,
+              // Run the fixed gate first; each config still gets its own process.
+              groups: [
+                {
+                  configs: boundary.configs,
+                  requiresDist: false,
+                  runner: boundary.runner,
+                  shard_name: boundary.shardName,
+                },
+                ...recipient.groups!,
+              ],
+              predictedSeconds: predictedTestSeconds,
+              predictedTestSeconds,
+            },
+          ]
+        : [shard],
+  );
+}
+
 /**
  * Builds bounded PR jobs from precise changed-test targets.
  * Missing input is an error for the caller; changed inputs never widen to a full suite.
@@ -1030,7 +1125,7 @@ export function createChangedNodeTestShards(
   const selectedTargets =
     options.selectedTestTargets ?? resolveChangedNodeTestTargets(changedPaths, options);
   const livePaths = changedPaths.filter((file) => existsSync(path.join(cwd, file)));
-  const policyTargets = new Set(resolvePolicyTestTargets(changedPaths));
+  const policyTargets = new Set(resolvePolicyTestTargets(changedPaths, { cwd }));
   const resolvedTargetPlans = resolvePreciseChangedTargets(selectedTargets, cwd);
   if (resolvedTargetPlans.some(({ plans }) => plans.length === 0)) {
     return fallback("selected test lacks an executable owner");
@@ -1234,7 +1329,9 @@ export function createChangedNodeTestShards(
     ...boundaryShards,
   ];
   // Covered source targets keep build-artifacts ownership even with no Node rows.
-  const bounded = boundChangedNodeRows(shards, selectedTargets, options.runnerBackend, cwd);
+  const bounded = packChangedNodeBoundary(
+    boundChangedNodeRows(shards, selectedTargets, options.runnerBackend, cwd),
+  );
   // Time-based splitting must not make an admitted owner plan exceed the matrix
   // budget. Retain its compact rows, including plugin work, without widening scope.
   const cap = options.compactNodeJobCap;

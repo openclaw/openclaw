@@ -5,21 +5,17 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
-import type { StoredConversationReference as Reference } from "./conversation-store.js";
+import type {
+  MSTeamsConversationStoreEntry,
+  StoredConversationReference as Reference,
+} from "./conversation-store.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
+import { useMSTeamsStateTempDirs } from "./test-support/state.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterAll(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
-    cleanup();
-  }),
-);
+const tempDirs = useMSTeamsStateTempDirs();
 
 function reference(id: string, overrides: Reference = {}): Reference {
   return {
@@ -59,6 +55,78 @@ describe("msteams conversation store (plugin state)", () => {
         ...fields,
       });
   }
+
+  const older = "2026-03-25T20:00:00.000Z";
+  const newer = "2026-03-25T21:00:00.000Z";
+
+  function dmEntry(
+    conversationId: string,
+    params: {
+      aadObjectId?: string;
+      conversationType?: string;
+      lastSeenAt?: string;
+    } = {},
+  ): MSTeamsConversationStoreEntry {
+    return {
+      conversationId,
+      reference: {
+        user: { id: "user-1", aadObjectId: params.aadObjectId ?? "aad-target" },
+        conversation: {
+          id: conversationId,
+          ...(params.conversationType ? { conversationType: params.conversationType } : {}),
+        },
+        ...(params.lastSeenAt ? { lastSeenAt: params.lastSeenAt } : {}),
+      },
+    };
+  }
+
+  async function findPreferredDmForEntries(entries: MSTeamsConversationStoreEntry[], id: string) {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse(newer));
+    onTestFinished(() => clock.mockRestore());
+    const seed = createSeeder();
+    for (const entry of entries) {
+      await seed(entry.conversationId, entry.reference);
+    }
+    return await createMSTeamsConversationStoreState().findPreferredDmByUserId(id);
+  }
+
+  it("returns null when no entries match", async () => {
+    const entries = [dmEntry("conv-1", { aadObjectId: "other-user" })];
+    expect(await findPreferredDmForEntries(entries, "aad-1")).toBeNull();
+  });
+
+  it("prefers personal DM over channel even when channel is more recent (#54520)", async () => {
+    const entries = [
+      dmEntry("dm-conv", { conversationType: "personal", lastSeenAt: older }),
+      dmEntry("19:channel@thread.tacv2", { conversationType: "channel", lastSeenAt: newer }),
+    ];
+    const result = await findPreferredDmForEntries(entries, "aad-target");
+    expect(result?.conversationId).toBe("dm-conv");
+  });
+
+  it("falls back to unknown-type entries when no personal conversations exist", async () => {
+    const entries = [dmEntry("legacy-conv")];
+    const result = await findPreferredDmForEntries(entries, "aad-target");
+    expect(result?.conversationId).toBe("legacy-conv");
+  });
+
+  it("prefers personal over unknown-type entries", async () => {
+    const entries = [
+      dmEntry("legacy-conv", { lastSeenAt: newer }),
+      dmEntry("dm-conv", { conversationType: "personal", lastSeenAt: older }),
+    ];
+    const result = await findPreferredDmForEntries(entries, "aad-target");
+    expect(result?.conversationId).toBe("dm-conv");
+  });
+
+  it("does NOT fall back to channel/group when no personal or unknown entries exist", async () => {
+    const entries = [
+      dmEntry("19:channel@thread.tacv2", { conversationType: "channel", lastSeenAt: newer }),
+      dmEntry("19:group@thread.tacv2", { conversationType: "groupChat", lastSeenAt: older }),
+    ];
+    const result = await findPreferredDmForEntries(entries, "aad-target");
+    expect(result).toBeNull();
+  });
 
   it("filters expired SQLite entries while preserving entries without lastSeenAt", async () => {
     const user = { id: "u1", aadObjectId: "aad1" };

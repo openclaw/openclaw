@@ -10,33 +10,37 @@ export type CuratedSettingsDefault =
       fallbackKey: string;
     };
 
-type CuratedSettingsFieldBase = {
+export type CuratedSettingsField = {
   path: readonly string[];
   labelKey: string;
   helpKey: string;
-};
+} & (
+  | { kind: "text"; displayDefault: CuratedSettingsDefault }
+  | {
+      kind: "model";
+      displayDefault: CuratedSettingsDefault;
+      placeholderKey: string;
+      customLabelKey: string;
+    }
+  | {
+      kind: "number";
+      displayDefault: number;
+      bounds: { integer: boolean; min: number; max?: number };
+    }
+  | { kind: "toggle"; displayDefault: boolean }
+  | {
+      kind: "segmented";
+      displayDefault: string;
+      options: readonly { value: string; labelKey: string }[];
+    }
+);
 
-export type CuratedSettingsField = CuratedSettingsFieldBase &
-  (
-    | { kind: "text"; displayDefault: CuratedSettingsDefault }
-    | {
-        kind: "model";
-        displayDefault: CuratedSettingsDefault;
-        placeholderKey: string;
-        customLabelKey: string;
-      }
-    | {
-        kind: "number";
-        displayDefault: number;
-        bounds: { integer: boolean; min: number; max?: number };
-      }
-    | { kind: "toggle"; displayDefault: boolean }
-    | {
-        kind: "segmented";
-        displayDefault: string;
-        options: readonly { value: string; labelKey: string }[];
-      }
-  );
+export type CuratedSettingsDisclosure = {
+  titleKey: string;
+  descriptionKey: string;
+  /** The first field is the row's switch. */
+  fields: readonly CuratedSettingsField[];
+};
 
 export type CuratedSettingsPresentation = {
   id: string;
@@ -47,8 +51,10 @@ export type CuratedSettingsPresentation = {
   unsupported: { titleKey: string; rowTitleKey: string; descriptionKey: string };
   sections: readonly {
     titleKey: string;
-    descriptionKey: string;
-    fields: readonly CuratedSettingsField[];
+    descriptionKey?: string;
+    fields?: readonly CuratedSettingsField[];
+    /** One switch per row; each row's remaining fields open on demand. */
+    disclosures?: readonly CuratedSettingsDisclosure[];
   }[];
 };
 

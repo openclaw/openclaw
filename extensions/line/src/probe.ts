@@ -64,9 +64,8 @@ async function readLineMessageQuota(
     const { totalUsage } = await read<messagingApi.QuotaConsumptionResponse>(
       "message/quota/consumption",
     );
-    return typeof totalUsage === "number" && Number.isSafeInteger(totalUsage) && totalUsage >= 0
-      ? { kind: "limited", limit, used: totalUsage }
-      : undefined;
+    const used = asSafeIntegerInRange(totalUsage, { min: 0 });
+    return used === undefined ? undefined : { kind: "limited", limit, used };
   } catch {
     return undefined;
   }

@@ -4,9 +4,11 @@ import * as hostEnv from "../infra/host-env-security.js";
 import * as logger from "../logger.js";
 import * as windowsSpawn from "../plugin-sdk/windows-spawn.js";
 import type { WindowsSpawnProgram } from "../plugin-sdk/windows-spawn.js";
+import * as bundleLspConfig from "../plugins/bundle-lsp.js";
 import * as ownedStdio from "../process/owned-stdio.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
-import { spawnLspServerProcess } from "./agent-bundle-lsp-process.js";
+import { createBundleLspToolRuntime } from "./agent-bundle-lsp-runtime.js";
+import type { StdioMcpServerLaunchConfig } from "./mcp-stdio.js";
 
 const realSanitize = hostEnv.sanitizeHostExecEnv;
 const resolve = vi.fn<typeof windowsSpawn.resolveWindowsSpawnProgram>();
@@ -37,6 +39,29 @@ function program(shell: boolean): WindowsSpawnProgram {
     windowsHide: true,
   };
 }
+
+async function expectFailedRuntime(
+  config: StdioMcpServerLaunchConfig,
+  options: { abortSignal?: AbortSignal; serverName?: string } = {},
+  failure = "stop after spawn",
+) {
+  vi.spyOn(bundleLspConfig, "loadEnabledBundleLspConfig").mockReturnValue({
+    config: { lspServers: { [options.serverName ?? "test-server"]: config } },
+    diagnostics: [],
+  });
+  const warn = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+  const runtime = await createBundleLspToolRuntime({
+    workspaceDir: "/tmp/lsp-workspace",
+    abortSignal: options.abortSignal,
+  });
+  try {
+    expect(runtime.sessions).toEqual([]);
+    expect(runtime.tools).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(failure));
+  } finally {
+    await runtime.dispose();
+  }
+}
 const overrides = { MY_TOKEN: "secret", TOOL_PATH: "/custom" };
 it.each([
   { shell: false, env: overrides, argv: ["typescript-language-server", "--stdio"] },
@@ -54,12 +79,10 @@ it.each([
     sanitize.mockReturnValue(sanitized);
     resolve.mockReturnValue(program(shell));
     const abortSignal = new AbortController().signal;
-    await expect(
-      spawnLspServerProcess(
-        { command: "typescript-language-server", args: ["--stdio"], ...(env ? { env } : {}) },
-        { abortSignal },
-      ),
-    ).rejects.toThrow("stop after spawn");
+    await expectFailedRuntime(
+      { command: "typescript-language-server", args: ["--stdio"], ...(env ? { env } : {}) },
+      { abortSignal },
+    );
 
     const sanitation = sanitize.mock.calls[0]?.[0];
     expect(sanitation?.baseEnv).not.toBe(process.env);
@@ -85,9 +108,9 @@ it("preserves Windows shell arguments through the real owned adapter", async () 
   const command = "C:\\Program Files\\language-server.cmd";
   const args = ["--stdio", "two words", "%LSP_ARGUMENT%", "echo ready & exit /b"];
   sanitize.mockReturnValue(env);
-  await expect(
-    withMockedWindowsPlatform(() => spawnLspServerProcess({ command, args })),
-  ).rejects.toThrow("captured Windows spawn");
+  await withMockedWindowsPlatform(() =>
+    expectFailedRuntime({ command, args }, {}, "captured Windows spawn"),
+  );
   expect(spawnAndWait).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({
       argv: [command, ...args],
@@ -99,16 +122,14 @@ it("preserves Windows shell arguments through the real owned adapter", async () 
 async function capturedChildEnv(env?: Record<string, string>, serverName?: string) {
   sanitize.mockImplementation(realSanitize);
   vi.spyOn(ownedStdio, "createOwnedStdioProcess").mockImplementation(spawn);
-  await expect(
-    spawnLspServerProcess(
-      {
-        command: "typescript-language-server",
-        args: ["--stdio"],
-        ...(env ? { env } : {}),
-      },
-      serverName === undefined ? {} : { serverName },
-    ),
-  ).rejects.toThrow("stop after spawn");
+  await expectFailedRuntime(
+    {
+      command: "typescript-language-server",
+      args: ["--stdio"],
+      ...(env ? { env } : {}),
+    },
+    serverName === undefined ? {} : { serverName },
+  );
   return spawn.mock.calls.at(-1)?.[0]?.env ?? {};
 }
 
@@ -190,7 +211,11 @@ describe.skipIf(process.platform === "win32")("bundle LSP child environment", ()
     await capturedChildEnv(undefined, "env-warn-probe");
 
     const messages = warn.mock.calls.map(([message]) => message);
-    const ours = messages.filter((message) => message.includes('"env-warn-probe"'));
+    const ours = messages.filter(
+      (message) =>
+        message.includes('"env-warn-probe"') &&
+        message.includes("starts without these Gateway environment variables."),
+    );
     expect(ours).toHaveLength(1);
     const [message] = ours;
     expect(message).toMatch(/ANDROID_HOME[^:]*: add to the server's "env"/);

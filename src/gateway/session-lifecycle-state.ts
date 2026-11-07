@@ -2,9 +2,6 @@ import { normalizeOptionalString as normalizeLifecycleRunId } from "@openclaw/no
 import { getRuntimeConfig } from "../config/io.js";
 import { applySessionEntryTargetOperation } from "../config/sessions/session-accessor.sqlite-entry.js";
 import {
-  deriveSessionLifecycleSnapshot,
-  resolveSessionLifecycleTerminal,
-  derivePersistedSessionLifecyclePatch,
   matchesProviderReviewWriter,
   resolveLifecyclePhase,
   type LifecycleEventLike,
@@ -14,7 +11,7 @@ import {
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { readAgentRunProviderReview } from "../sessions/provider-review-terminal.js";
 import {
   AgentDeletionPendingError,
@@ -22,50 +19,11 @@ import {
 } from "../sessions/session-agent-work-admission.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
-import {
-  recordGatewaySessionRunFailure,
-  resolveSessionRunError,
-} from "../sessions/session-run-error.js";
+import { recordGatewaySessionRunFailure } from "../sessions/session-run-error.js";
 import { runOutsideAsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
+import { resolveLifecycleFailureSummary } from "./session-lifecycle-projection.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
-
-export { isStaleLifecycleEventForSession } from "../config/sessions/session-run-lifecycle-projection.js";
-
-const restartRecoveryLog = createSubsystemLogger("main-session-restart-recovery");
-
-function resolveLifecycleFailureSummary(event: LifecycleEventLike): string | undefined {
-  const { terminal, status } = resolveSessionLifecycleTerminal(event);
-  return terminal && status
-    ? resolveSessionRunError({ ...terminal, errorKind: event.data?.errorKind }, status)
-    : undefined;
-}
-
-export function deriveGatewaySessionLifecycleSnapshot(
-  params: Omit<Parameters<typeof deriveSessionLifecycleSnapshot>[0], "lastRunError">,
-) {
-  return deriveSessionLifecycleSnapshot({
-    ...params,
-    lastRunError: resolveLifecycleFailureSummary(params.event),
-  });
-}
-
-export function deriveGatewaySessionLifecycleProjectionPatch(params: {
-  entry?: Parameters<typeof derivePersistedSessionLifecyclePatch>[0]["entry"];
-  event: LifecycleEventLike;
-}): ReturnType<typeof deriveGatewaySessionLifecycleSnapshot> {
-  const {
-    restartRecoveryRuns: _restartRecoveryRuns,
-    restartRecoveryForceSafeTools: _restartRecoveryForceSafeTools,
-    lifecycleRunId: _lifecycleRunId,
-    ...patch
-  } = derivePersistedSessionLifecyclePatch({
-    ...params,
-    currentLifecycleGeneration: getAgentEventLifecycleGeneration(),
-    lastRunError: resolveLifecycleFailureSummary(params.event),
-  });
-  return patch;
-}
 
 type GatewaySessionLifecycleEventParams = {
   sessionKey: string;
@@ -74,6 +32,7 @@ type GatewaySessionLifecycleEventParams = {
   event: LifecycleEventLike;
   assertCommitAllowed?: () => void;
   expectedWriter?: {
+    allowUnstartedFailure?: true;
     requireYielded?: true;
     runId: string;
     sessionId: string;
@@ -93,6 +52,7 @@ export function prepareGatewaySessionLifecycleEvent(params: GatewaySessionLifecy
   if (!phase) {
     return async () => {};
   }
+  const gatewayShutdown = getGatewayRestartDrainSignal().aborted ? true : undefined;
   const prepared = loadGatewaySessionEntryReadOnlyInWorker({
     cfg: getRuntimeConfig(),
     key: params.sessionKey,
@@ -104,7 +64,12 @@ export function prepareGatewaySessionLifecycleEvent(params: GatewaySessionLifecy
   return async () => {
     const sessionEntry = await prepared;
     try {
-      await persistPreparedGatewaySessionLifecycleEvent(params, phase, sessionEntry);
+      await persistPreparedGatewaySessionLifecycleEvent(
+        params,
+        phase,
+        sessionEntry,
+        gatewayShutdown,
+      );
     } catch (error) {
       // Drain settlement transfers the outcome to deletion, not to a successful write.
       if (
@@ -123,6 +88,7 @@ export function prepareGatewaySessionLifecycleEvent(params: GatewaySessionLifecy
                 { ...params, assertCommitAllowed },
                 phase,
                 sessionEntry,
+                gatewayShutdown,
               ),
           },
         )
@@ -137,6 +103,7 @@ async function persistPreparedGatewaySessionLifecycleEvent(
   params: GatewaySessionLifecycleEventParams,
   phase: LifecyclePhase,
   sessionEntry: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>,
+  gatewayShutdown?: true,
 ): Promise<void> {
   if (!sessionEntry.entry) {
     return;
@@ -149,7 +116,7 @@ async function persistPreparedGatewaySessionLifecycleEvent(
     sessionEntry.entry.endedAt === undefined &&
     sessionEntry.entry.abortedLastRun !== true
   ) {
-    // Admission already committed the running marker. Live events carry backend
+    // Fresh plain-input admission already committed the marker. Live events carry backend
     // timing until settlement persists it; yielded runs still need a resume write.
     return;
   }
@@ -196,9 +163,7 @@ async function persistPreparedGatewaySessionLifecycleEvent(
           runId: params.event.runId,
           clientRunId: params.clientRunId ?? params.event.clientRunId,
           lifecycleGeneration: params.event.lifecycleGeneration,
-          mainSessionRestartRecovery: params.event.mainSessionRestartRecovery,
           controlUiVisible: params.event.controlUiVisible,
-          isHeartbeat: params.event.isHeartbeat,
           contextClaimId: params.event.contextClaimId,
           data: params.event.data,
         },
@@ -207,6 +172,7 @@ async function persistPreparedGatewaySessionLifecycleEvent(
         canonicalKey: sessionEntry.canonicalKey,
         lifecycleRevision,
         exactCronRun: parseCronRunScopeSuffix(sessionEntry.canonicalKey).runId !== undefined,
+        gatewayShutdown,
         expectedWriter: params.expectedWriter,
         providerReview: providerReview
           ? {
@@ -241,13 +207,9 @@ async function persistPreparedGatewaySessionLifecycleEvent(
       },
     },
   );
-  const { terminalRecovery, failedRun } = effects ?? {};
-  if (persisted && terminalRecovery) {
-    const message = `main-session restart recovery terminal: session=${sessionEntry.canonicalKey} run=${terminalRecovery.runId} status=${terminalRecovery.outcome.status} reason=${terminalRecovery.outcome.reason}`;
-    restartRecoveryLog[terminalRecovery.outcome.status === "ok" ? "info" : "warn"](message);
-  }
+  const { failedRun } = effects ?? {};
   if (persisted && failedRun) {
-    const { runId, error, errorKind, suppressErrorNotice } = failedRun;
+    const { runId, error, errorKind, suppressErrorNotice, notice, errorObservation } = failedRun;
     // Only accepted errors pay for branch navigation; assistant detection and
     // report deduplication share the appender's authoritative write snapshot.
     const receipt = {
@@ -263,6 +225,8 @@ async function persistPreparedGatewaySessionLifecycleEvent(
       error,
       errorKind,
       suppressErrorNotice,
+      notice,
+      errorObservation,
       assertCommitAllowed: params.assertCommitAllowed,
     };
     // An accepted terminal owns its receipt, independently of an ambient requester turn.

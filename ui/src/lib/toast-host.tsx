@@ -1,4 +1,5 @@
-import { lazy, Loading, onSettled, Show } from "solid-js";
+import { Errored, lazy, Loading, Show } from "solid-js";
+import { t } from "./reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "./solid-bridge.ts";
 import { toastOwnerFor, type ToastProperties, type ToastMethods } from "./toast.ts";
 
@@ -11,35 +12,63 @@ if (typeof customElements !== "undefined") {
     (props, host) => {
       const owner = toastOwnerFor(host);
       return (
-        <Show when={Boolean(props.toast)}>
-          {(_shown) => {
-            onSettled(() => () => {
-              owner.body = undefined;
-              owner.hover(false);
-            });
-            return (
+        <Show when={props.toasts.length > 0}>
+          {(_shown) => (
+            <Errored
+              fallback={(_error, reset) => (
+                <div class="app-toast-lanes">
+                  <div
+                    class="app-toast-lane app-toast-lane--top-center"
+                    onPointerEnter={() => owner.hover("top-center", true)}
+                    onPointerLeave={() => owner.hover("top-center", false)}
+                    onFocusIn={() => owner.focus("top-center", true)}
+                    onFocusOut={(event) =>
+                      owner.focus(
+                        "top-center",
+                        event.relatedTarget instanceof Node &&
+                          event.currentTarget.contains(event.relatedTarget),
+                      )
+                    }
+                  >
+                    <div
+                      class="app-toast app-toast--error app-toast--action"
+                      data-depth="0"
+                      data-active="true"
+                      role="alert"
+                    >
+                      <div class="app-toast__content">
+                        <div class="app-toast__body">
+                          <span class="app-toast__message">{t("lazyView.errorTitle")}</span>
+                        </div>
+                        <button class="app-toast__action" type="button" onClick={() => reset()}>
+                          {t("common.retry")}
+                        </button>
+                      </div>
+                      <button
+                        class="app-toast__dismiss"
+                        type="button"
+                        aria-label={t("common.dismiss")}
+                        onClick={() => owner.dismissAll("dismiss")}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            >
               <Loading>
-                <ToastView
-                  toast={props.toast}
-                  active={props.active}
-                  host={host}
-                  bodyRef={(element) => (owner.body = element)}
-                  ready={() => owner.syncDismissTimer()}
-                  hover={(hovered) => owner.hover(hovered)}
-                  focus={(focused) => owner.syncDismissTimer(focused)}
-                  dismiss={(reason) => owner.dismiss(reason)}
-                  transitionEnd={() => owner.transitionEnd()}
-                />
+                <ToastView toasts={props.toasts} open={props.open} owner={owner} />
               </Loading>
-            );
-          }}
+            </Errored>
+          )}
         </Show>
       );
     },
     {
       properties: {
-        toast: { default: null, attribute: false },
-        active: { default: false, attribute: false },
+        toasts: { default: [], attribute: false },
+        open: { default: [], attribute: false },
       },
       connected: (host) => toastOwnerFor(host).connect(),
       disconnected: (host) => toastOwnerFor(host).disconnect(),

@@ -5,11 +5,123 @@ import * as gatewayFixtures from "../../scripts/lib/code-mode-matrix-gateway-fix
 import {
   collectGatewayMatrixTrace,
   createGatewayMatrixWorkload,
+  evaluateGatewayMatrixActivation,
   evaluateGatewayMatrixInterview,
   evaluateGatewayMatrixTask,
+  parseGatewayMatrixActivationDiagnostic,
   requireGatewayMatrixTools,
   type GatewayMatrixTrace,
 } from "../../scripts/lib/code-mode-matrix-gateway.js";
+
+function activationDiagnostic(overrides: Record<string, unknown> = {}) {
+  return expectDefined(
+    parseGatewayMatrixActivationDiagnostic(
+      `code-mode diagnostic ${JSON.stringify({
+        boundary: "activation",
+        runId: "root-run",
+        active: true,
+        toolsEnabled: true,
+        toolsDisabled: false,
+        rawRun: false,
+        fallbackActive: false,
+        modelProvider: "anthropic",
+        modelId: "fixture-model",
+        modelCodeMode: "preferred",
+        ...overrides,
+      })}`,
+    ),
+    "activation diagnostic",
+  );
+}
+
+it.each([
+  ["preferred", true, true],
+  ["preferred", false, false],
+  ["capable", false, true],
+  ["capable", true, false],
+  ["unflagged", false, true],
+  ["unflagged", true, false],
+] as const)(
+  "checks Gateway auto against selected tier %s, active=%s",
+  (tier, active, engagement) => {
+    expect(
+      evaluateGatewayMatrixActivation({
+        diagnostics: [activationDiagnostic({ modelCodeMode: tier, active })],
+        rootRunId: "root-run",
+        childRunIds: [],
+        expectedEnabled: "auto",
+        expectedModel: "anthropic/fixture-model",
+      }),
+    ).toMatchObject({ activationComplete: true, engagement, actualCodeMode: active });
+  },
+);
+
+it.each([
+  ["preferred", "preferred", true, true],
+  ["preferred", "unflagged", false, false],
+  ["preferred", "capable", false, false],
+  ["preferred", "preferred", false, false],
+  ["capable", "capable", false, true],
+  ["unflagged", "unflagged", false, true],
+] as const)(
+  "binds independent auto expectation %s to observed tier %s, active=%s",
+  (expectedAutoTier, tier, active, engagement) => {
+    expect(
+      evaluateGatewayMatrixActivation({
+        diagnostics: [activationDiagnostic({ modelCodeMode: tier, active })],
+        rootRunId: "root-run",
+        childRunIds: [],
+        expectedEnabled: "auto",
+        expectedModel: "anthropic/fixture-model",
+        expectedAutoTier,
+      }),
+    ).toMatchObject({ activationComplete: true, engagement, actualCodeMode: active });
+  },
+);
+
+it.each([
+  { modelCodeMode: undefined },
+  { modelCodeMode: null },
+  { modelCodeMode: "unknown" },
+  { modelProvider: undefined },
+  { modelId: undefined },
+  { modelId: "different-model" },
+  { fallbackActive: true },
+  { toolsEnabled: false },
+  { toolsDisabled: true },
+  { rawRun: true },
+])("withholds Gateway default proof for incomplete or ineligible activation: %j", (overrides) => {
+  expect(
+    evaluateGatewayMatrixActivation({
+      diagnostics: [activationDiagnostic(overrides)],
+      rootRunId: "root-run",
+      childRunIds: [],
+      expectedEnabled: "auto",
+      expectedModel: "anthropic/fixture-model",
+    }),
+  ).toMatchObject({ activationComplete: false, engagement: false });
+});
+
+it.each([false, true])(
+  "preserves explicit Gateway activation=%s without catalog metadata",
+  (active) => {
+    expect(
+      evaluateGatewayMatrixActivation({
+        diagnostics: [
+          activationDiagnostic({
+            active,
+            modelProvider: undefined,
+            modelId: undefined,
+            modelCodeMode: undefined,
+          }),
+        ],
+        rootRunId: "root-run",
+        childRunIds: [],
+        expectedEnabled: active,
+      }),
+    ).toMatchObject({ activationComplete: true, engagement: true, actualCodeMode: active });
+  },
+);
 
 function evaluate(
   task: Parameters<typeof evaluateGatewayMatrixTask>[0]["task"],
@@ -79,12 +191,16 @@ function activityEvents(
   return [
     assistantCall(id, `return await ${name}(${JSON.stringify(input)});`),
     nestedActivity(id, name, input, result),
-    toolOutcome(id, { status: "completed", value: result }),
+    completed(id, result),
   ];
 }
 
 function completedEvents(id: string, code: string, value: unknown) {
-  return [assistantCall(id, code), toolOutcome(id, { status: "completed", value })];
+  return [assistantCall(id, code), completed(id, value)];
+}
+
+function completed(id: string, value: unknown) {
+  return toolOutcome(id, { status: "completed", value });
 }
 
 function allChecks(checks: Record<string, boolean>, accepted = true) {
@@ -103,14 +219,13 @@ function traceOutcome(trace: GatewayMatrixTrace, id: string) {
 
 function recoveryEvidence() {
   const trace = processEvidence(true);
-  const launch = expectDefined(
-    trace.activities.find((item) => item.name === "exec"),
-    "launch",
-  );
-  const poll = expectDefined(
-    trace.activities.find((item) => item.name === "process"),
-    "poll",
-  );
+  const activity = (name: string) =>
+    expectDefined(
+      trace.activities.find((item) => item.name === name),
+      name,
+    );
+  const launch = activity("exec");
+  const poll = activity("process");
   const wait = traceCall(trace, "wrong-wait");
   return {
     trace,
@@ -180,34 +295,27 @@ function invoiceEvidence() {
         "aggregate",
         'const data = await results.load("result-1"); return {nonce:data.nonce,count:data.invoices.length,totalsCents:data.invoices.reduce((totals,invoice)=>{if(!invoice.paid)totals[invoice.customer]=(totals[invoice.customer]??0)+invoice.amountCents;return totals;},{})};',
       ),
-      toolOutcome("aggregate", { status: "completed", value: INVOICES }),
+      completed("aggregate", INVOICES),
     ],
     receipts: [receipt("call", "matrix_invoice_export")],
   };
 }
 
 it("counts one underlying shell outcome through direct exec with error=true", () => {
-  const isError = true;
   const input = { command: "node ./process-probe.mjs" };
   const result = { status: "failed", exitCode: 1, aggregated: "synthetic process failure" };
-  const name = "exec";
-  const content = [{ type: "toolCall", id: "invoke", name, arguments: input }];
-  const invocation = message("assistant", { content });
   const trace = collectGatewayMatrixTrace([
-    invocation,
-    toolOutcome("invoke", result, isError, name),
+    message("assistant", {
+      content: [{ type: "toolCall", id: "invoke", name: "exec", arguments: input }],
+    }),
+    toolOutcome("invoke", result, true),
   ]);
-  expect(trace.activities).toHaveLength(1);
-  expect(trace.activities[0]).toMatchObject({
-    name: "exec",
-    input,
-    result,
-    isError,
-    eventIndex: 1,
-  });
-  expect(trace.activities[0]?.parentId).toBe(undefined);
-  expect(trace.calls.map((call) => call.name)).toEqual([name]);
-  expect(trace.outcomes.map((outcome) => outcome.name)).toEqual([name]);
+  expect(trace.activities).toEqual([
+    expect.objectContaining({ name: "exec", input, result, isError: true, eventIndex: 1 }),
+  ]);
+  expect(trace.activities[0]?.parentId).toBeUndefined();
+  expect(trace.calls.map((call) => call.name)).toEqual(["exec"]);
+  expect(trace.outcomes.map((outcome) => outcome.name)).toEqual(["exec"]);
 });
 
 it("does not turn missing usage or cost observations into zero-valued measurements", () => {
@@ -245,7 +353,7 @@ it.each([
     ...(known === "before" ? [observed] : []),
     unavailable,
     nestedActivity("unavailable", "matrix_read", {}, { value: 1 }),
-    toolOutcome("unavailable", { status: "completed", value: 1 }),
+    completed("unavailable", 1),
     ...(known === "after" ? [observed] : []),
   ]);
   expect(trace).toMatchObject({
@@ -764,17 +872,14 @@ function javascriptEvidence() {
     }),
     assistantCall("read", 'return await read({path:"facts.txt"});'),
     textRead("read", "facts.txt", `verification_code=${expected.verificationCode}\n`),
-    toolOutcome("read", {
-      status: "completed",
-      value: `verification_code=${expected.verificationCode}`,
-    }),
+    completed("read", `verification_code=${expected.verificationCode}`),
     assistantCall(
       "write",
       `await write({path:"result.txt",content:${JSON.stringify(expected.verificationCode)}}); return await read({path:"result.txt"});`,
     ),
     nestedActivity("write", "write", { path: "result.txt", content: expected.verificationCode }),
     textRead("write", "result.txt", expected.verificationCode),
-    toolOutcome("write", { status: "completed", value: expected.verificationCode }),
+    completed("write", expected.verificationCode),
   ]);
 }
 it.each([
@@ -834,10 +939,10 @@ const previewCases = [
 it.each(previewCases)("uses the actually probed descriptors for $label", ({ descriptors }) => {
   const taskTrace = collectGatewayMatrixTrace([
     assistantCall("saved", "return await results.save({});"),
-    toolOutcome("saved", {
-      status: "completed",
-      value: descriptors.map((descriptor) => ({ bytes: 2, preview: "{}", ...descriptor })),
-    }),
+    completed(
+      "saved",
+      descriptors.map((descriptor) => ({ bytes: 2, preview: "{}", ...descriptor })),
+    ),
   ]);
   const interviewTrace = collectGatewayMatrixTrace(
     descriptors.flatMap(({ id }, index) => [
@@ -845,10 +950,7 @@ it.each(previewCases)("uses the actually probed descriptors for $label", ({ desc
         `probe-${index}`,
         `try { return await results.load(${JSON.stringify(id)}); } catch (error) { return {error:String(error)}; }`,
       ),
-      toolOutcome(`probe-${index}`, {
-        status: "completed",
-        value: { error: `Result reference ${id} is unavailable or expired` },
-      }),
+      completed(`probe-${index}`, { error: `Result reference ${id} is unavailable or expired` }),
     ]),
   );
   const checks = evaluateGatewayMatrixInterview(

@@ -21,9 +21,9 @@ import {
 } from "../../agents/auth-profiles.js";
 import { resolveAuthProfileOrderWithMetadata } from "../../agents/auth-profiles/order.js";
 import { getScopedAuthProfileEnv } from "../../agents/auth-profiles/store.js";
+import { CONNECTION_CHECK_PROMPT } from "../../agents/connection-check.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
 import { FAILOVER_PROBE_STATUS as PROBE_STATUS_BY_FAILOVER_REASON } from "../../agents/failover/probe-status.js";
-import type { FailoverReason } from "../../agents/failover/signal.js";
 import { isNonSecretApiKeyMarker } from "../../agents/model-auth-markers.js";
 import {
   hasSyntheticLocalProviderAuthConfig,
@@ -36,6 +36,7 @@ import {
 import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
 import { readPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { prepareLocalCapabilityAccountSecrets } from "../../cli/capability-cli/local-account-secrets.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveMergedModelProviderEntry } from "../../config/model-provider-config.js";
@@ -54,12 +55,11 @@ import type { EmbeddedStateLockHandle } from "../../infra/embedded-state-lock.js
 import type { GatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { type SecretRefResolveCache, resolveSecretRefString } from "../../secrets/resolve.js";
 import { appendConfigPathSegment } from "../../shared/dot-path.js";
+import { monotonicNow } from "../../shared/monotonic-time.js";
 import { redactStatusSecrets as redactAuthProbeError } from "../status-all/format.js";
 import { createAuthProbeWork, disposeAuthProbeDirectory } from "./list.probe.cleanup.js";
 import { buildProbeCandidateMap, selectProbeModel } from "./list.probe.models.js";
 import { formatMs } from "./shared.js";
-
-const PROBE_PROMPT = "Reply with OK. Do not use tools.";
 
 export { redactAuthProbeError };
 
@@ -128,29 +128,15 @@ function buildNoModelProbeResult(target: AuthProbeTarget): AuthProbeResult {
   });
 }
 
-export type AuthProbeSummary = {
-  startedAt: number;
-  finishedAt: number;
-  durationMs: number;
-  totalTargets: number;
-  options: Omit<AuthProbeOptions, "includeDirectKeys">;
-  results: AuthProbeResult[];
-};
-
 export type AuthProbeOptions = {
   provider?: string;
   profileIds?: string[];
   includeDirectKeys?: boolean;
   timeoutMs: number;
   concurrency: number;
-  maxTokens: number;
+  /** Optional output cap; unset sends no cap, matching chat (see CONNECTION_CHECK_PROMPT). */
+  maxTokens?: number;
 };
-
-export function mapFailoverReasonToProbeStatus(reason?: string | null): AuthProbeStatus {
-  return reason
-    ? (PROBE_STATUS_BY_FAILOVER_REASON[reason as FailoverReason] ?? "unknown")
-    : "unknown";
-}
 
 const ELIGIBILITY_PROBE_ERRORS = {
   expired: "token credentials are expired.",
@@ -639,9 +625,10 @@ export async function runAuthProbes(
     onProgress?: (update: { completed: number; total: number; label?: string }) => void;
     stateOwnership?: AuthProbeStateOwnership;
   },
-): Promise<AuthProbeSummary> {
+) {
   return await withAuthProbeStateOwnership(params.stateOwnership, async (abortSignal) => {
     const startedAt = Date.now();
+    const startedAtMonotonic = monotonicNow();
     const plan = await buildProbeTargets(params);
 
     const totalTargets = plan.targets.length;
@@ -662,6 +649,10 @@ export async function runAuthProbes(
       const agentId = suppliedAgentId ?? resolveDefaultAgentId(cfg);
       const agentDir = suppliedAgentDir ?? resolveAgentDir(cfg, agentId);
       const workspaceDir = suppliedWorkspaceDir ?? resolveAgentWorkspaceDir(cfg, agentId);
+
+      if (params.stateOwnership) {
+        await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
+      }
 
       await fs.mkdir(workspaceDir, { recursive: true });
 
@@ -754,11 +745,11 @@ export async function runAuthProbes(
                   // Preserve the existing raw transport and persistent credential-refresh owner.
                   agentHarnessRuntimeOverride: "openclaw",
                   systemPrompt: "",
-                  prompt: PROBE_PROMPT,
+                  prompt: CONNECTION_CHECK_PROMPT,
                   timeoutMs,
                   abortSignal: probeAbortSignal,
                   thinkLevel: "off",
-                  streamParams: { maxTokens },
+                  ...(maxTokens !== undefined ? { streamParams: { maxTokens } } : {}),
                   outputTextPolicy: "strict-visible",
                   onRequestComplete: (durationMs) => {
                     latencyMs = Math.round(durationMs);
@@ -772,7 +763,9 @@ export async function runAuthProbes(
             } catch (err) {
               const described = describeFailoverError(err);
               return buildResult(
-                mapFailoverReasonToProbeStatus(described.reason),
+                described.reason
+                  ? (PROBE_STATUS_BY_FAILOVER_REASON[described.reason] ?? "unknown")
+                  : "unknown",
                 redactAuthProbeError(described.message),
               );
             } finally {
@@ -795,12 +788,10 @@ export async function runAuthProbes(
       );
     }
 
-    const finishedAt = Date.now();
-
     return {
       startedAt,
-      finishedAt,
-      durationMs: finishedAt - startedAt,
+      finishedAt: Date.now(),
+      durationMs: Math.round(monotonicNow() - startedAtMonotonic),
       totalTargets,
       options: params.options,
       results: [...plan.results, ...results],
@@ -820,7 +811,7 @@ export function sortProbeResults(results: AuthProbeResult[]): AuthProbeResult[] 
   });
 }
 
-export function describeProbeSummary(summary: AuthProbeSummary): string {
+export function describeProbeSummary(summary: Awaited<ReturnType<typeof runAuthProbes>>): string {
   if (summary.totalTargets === 0) {
     return "No check targets.";
   }

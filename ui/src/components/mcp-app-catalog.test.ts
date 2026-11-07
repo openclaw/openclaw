@@ -8,11 +8,13 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
+import { createMcpAppCatalog } from "../lib/mcp-app-catalog.ts";
 import {
   createTestSessionCapability,
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
 import { AppsPage } from "../pages/apps/apps-page.tsx";
+import { createInitializationContext } from "../pages/chat/chat-application-context.test-support.ts";
 import { createApplicationGateway } from "../test-helpers/application-context-fixtures.ts";
 import {
   createGatewayRequestMock,
@@ -25,6 +27,19 @@ import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { McpAppCatalog } from "./mcp-app-catalog.tsx";
 import { MCP_APP_OPEN_EVENT, type McpAppOpenDetail } from "./mcp-app-launch.ts";
 import { McpAppResources } from "./mcp-app-resources.tsx";
+
+// mock-isolation: Exercise the Apps launch boundary without starting the chat runtime.
+vi.mock("../pages/chat/chat-pane.tsx", async () => {
+  const { defineSolidBridge } = await import("../lib/solid-bridge.ts");
+  const { chatPaneProperties } = await import("../pages/chat/chat-pane-inputs.ts");
+  return {
+    ChatPaneView: defineSolidBridge("openclaw-chat-pane", () => null, {
+      properties: chatPaneProperties,
+    }),
+  };
+});
+// mock-isolation: This suite supplies only the catalog and launch capabilities.
+vi.mock("../pages/chat/route-entry.ts", () => ({}));
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -54,6 +69,19 @@ const result: McpAppDiscoverResult = {
     },
   ],
 };
+
+function createDiscoveryGateway(request: Parameters<typeof createTestGatewayClient>[0]) {
+  return {
+    snapshot: {
+      client: { request },
+      phase: "connected",
+      hello: gatewayHelloForMethods(["mcp.app.discover"]),
+    },
+    connectionRevision: 1,
+    subscribe: () => () => {},
+    subscribeEvents: () => () => {},
+  };
+}
 
 function discoveryContext(request: ReturnType<typeof vi.fn>, scopes = ["operator.admin"]) {
   const events = new Set<(event: GatewayEventFrame) => void>();
@@ -117,6 +145,23 @@ function mountCatalog(context: unknown, initial: Parameters<typeof McpAppCatalog
 }
 
 describe("app launch catalog", () => {
+  it("targets the agent named by a session key", async () => {
+    const request = vi.fn(async () => ({ servers: [], onboarding: [] }));
+    const { context } = discoveryContext(request);
+    context.agentSelection.state.selectedId = "claude";
+    const { element } = mountCatalog(context, {
+      sessionKey: "agent:main:main",
+      agentId: "claude",
+    });
+
+    await waitForSolid(() => expect(request).toHaveBeenCalledOnce());
+    expect(request).toHaveBeenCalledWith("mcp.app.discover", {
+      sessionKey: "agent:main:main",
+      agentId: "main",
+    });
+    expect(element.querySelector('[role="alert"]')).toBeNull();
+  });
+
   it("prepares a global catalog again when its session was deleted offline", async () => {
     let sessionExists = true;
     const request = createGatewayRequestMock(() =>
@@ -204,7 +249,7 @@ describe("app launch catalog", () => {
     expect(catalog.textContent).not.toContain("Parts tray");
   });
 
-  it.each(["closed", "agent changed", "conversation changed", "open"] as const)(
+  it.each(["closed", "ignored agent prop", "conversation changed", "open"] as const)(
     "only creates a startup-waiting catalog session while its target remains open (%s)",
     async (lifetime) => {
       vi.useFakeTimers();
@@ -289,7 +334,7 @@ describe("app launch catalog", () => {
 
       if (lifetime === "closed") {
         mounted.unmount();
-      } else if (lifetime === "agent changed") {
+      } else if (lifetime === "ignored agent prop") {
         mounted.update({ agentId: "other" });
       } else if (lifetime === "conversation changed") {
         mounted.update({ sessionKey: "agent:main:two" });
@@ -298,22 +343,19 @@ describe("app launch catalog", () => {
       ready = true;
       await vi.advanceTimersByTimeAsync(GATEWAY_STARTUP_ADMISSION_WAIT_MS);
       expect(writes.map((frame) => frame.params)).toEqual(
-        lifetime === "open" ? [{ key: "agent:main:one", agentId: "main" }] : [],
+        lifetime === "open" || lifetime === "ignored agent prop"
+          ? [{ key: "agent:main:one", agentId: "main" }]
+          : [],
       );
       expect(pending.hasPending).toBe(false);
       expect(sessions.state.error).toBeNull();
-      if (lifetime === "open") {
+      if (lifetime === "open" || lifetime === "ignored agent prop") {
         expect(catalog.textContent).toContain("Library");
       }
     },
   );
 
   it("waits for the new session's discovery before retaining an Apps page launch", async () => {
-    // Observe the page-to-conversation contract without loading the conversation runtime.
-    const lookup = customElements.get.bind(customElements);
-    vi.spyOn(customElements, "get").mockImplementation((name) =>
-      name === "openclaw-chat-pane" ? HTMLElement : lookup(name),
-    );
     const first = createDeferred<McpAppDiscoverResult>();
     const second = createDeferred<McpAppDiscoverResult>();
     const request = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
@@ -371,14 +413,29 @@ describe("app launch catalog", () => {
   });
 
   it.each([
+    { scope: "operator.admin", discover: true },
+    { scope: "operator.write", discover: true },
     { scope: "operator.read", discover: false },
     { scope: "operator.sessions.read", discover: false },
-    { scope: "operator.sessions.write", discover: true },
+    { scope: "operator.sessions.write", discover: false },
   ])("admits discovery according to granted scope $scope", async ({ scope, discover }) => {
     const request = vi.fn(async () => ({ servers: [] }));
-    const { context } = discoveryContext(request, [scope]);
-    mountCatalog(context, { sessionKey: "agent:main:one" });
-    await waitForSolid(() => expect(request.mock.calls).toHaveLength(discover ? 1 : 0));
+    const context = createInitializationContext(createTestGatewayClient(request));
+    context.gateway.snapshot.hello = gatewayHelloForMethods(["mcp.app.discover"], [scope]);
+    vi.spyOn(context.sessions, "describe").mockResolvedValue({
+      session: { key: "agent:main:one", kind: "direct", updatedAt: 1 },
+    });
+    let catalog!: ReturnType<typeof createMcpAppCatalog>;
+    mountSolid(() => {
+      catalog = createMcpAppCatalog(context, () => ({
+        sessionKey: "agent:main:one",
+      }));
+      return null;
+    });
+    await catalog.refresh();
+    expect(catalog.available()).toBe(discover);
+    expect(catalog.visible()).toBe(discover);
+    expect(request).toHaveBeenCalledTimes(discover ? 1 : 0);
   });
 
   it("shares discovery and retains focused entries through refresh before remounting", async () => {
@@ -438,9 +495,13 @@ describe("app launch catalog", () => {
     };
     current.resolve({ servers: [server] });
     await current.promise;
-    await waitForSolid(() => expect(sidebar.textContent).toContain("Library"));
-    expect(thread.querySelector("button")).not.toBeNull();
-    expect(resources.querySelector("button")).not.toBeNull();
+    flush();
+    await vi.dynamicImportSettled();
+    await waitForSolid(() => {
+      expect(sidebar.textContent).toContain("Library");
+      expect(thread.querySelector("button")).not.toBeNull();
+      expect(resources.querySelector("button")).not.toBeNull();
+    });
 
     thread.querySelector<HTMLButtonElement>("button")!.click();
     await waitForSolid(() =>
@@ -698,7 +759,7 @@ describe("app launch catalog", () => {
       expect(request).toHaveBeenCalledTimes(2);
     },
   );
-  it.each(["unchanged", "session changed", "agent changed"] as const)(
+  it.each(["unchanged", "session changed", "ignored agent prop"] as const)(
     "onboards once without crypto.randomUUID and respects the current target (%s)",
     async (target) => {
       vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto) });
@@ -710,16 +771,7 @@ describe("app launch catalog", () => {
       const navigate = vi.fn();
       const mounted = mountCatalog(
         {
-          gateway: {
-            snapshot: {
-              client: { request },
-              phase: "connected",
-              hello: gatewayHelloForMethods(["mcp.app.discover"]),
-            },
-            connectionRevision: 1,
-            subscribe: () => () => {},
-            subscribeEvents: () => () => {},
-          },
+          gateway: createDiscoveryGateway(request),
           agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
           agents: { state: { agentsList: null } },
           sessions: {
@@ -758,12 +810,12 @@ describe("app launch catalog", () => {
       });
       if (target === "session changed") {
         mounted.update({ sessionKey: "agent:main:two" });
-      } else if (target === "agent changed") {
+      } else if (target === "ignored agent prop") {
         mounted.update({ agentId: "other" });
       }
       onboarding.resolve({});
       await waitForSolid(() => expect(onboardingButton()?.disabled).toBe(false));
-      if (target === "unchanged") {
+      if (target === "unchanged" || target === "ignored agent prop") {
         await waitForSolid(() => expect(navigate).toHaveBeenCalledWith("chat", expect.any(Object)));
       } else {
         expect(navigate).not.toHaveBeenCalled();
@@ -771,22 +823,42 @@ describe("app launch catalog", () => {
       expect(element.querySelector('[role="alert"]')).toBeNull();
     },
   );
+  it("keeps onboarding failures beside the catalog and clears them for a replacement target", async () => {
+    const onboarding = createDeferred<unknown>();
+    const discovery = { servers: [], onboarding: [{ pluginId: "parts", title: "Parts plugin" }] };
+    const request = vi.fn((method: string) =>
+      method === "mcp.app.onboard" ? onboarding.promise : Promise.resolve(discovery),
+    );
+    const { context } = discoveryContext(request);
+    const mounted = mountCatalog(context, { sessionKey: "agent:main:one" });
+    const { element } = mounted;
+    const button = await waitForSolid(() => {
+      const control = [...element.querySelectorAll<HTMLButtonElement>("button")].find((candidate) =>
+        candidate.textContent?.includes("Parts plugin"),
+      );
+      expect(control).toBeDefined();
+      return control!;
+    });
+    const entries = element.querySelector(".mcp-app-catalog__entries");
+    button.click();
+    await waitForSolid(() => expect(button.disabled).toBe(true));
+    onboarding.reject(new Error("Onboarding unavailable"));
+    await waitForSolid(() => {
+      expect(element.querySelector('[role="alert"]')?.textContent).toBe("Onboarding unavailable");
+      expect(button.disabled).toBe(false);
+    });
+    expect(element.querySelector(".mcp-app-catalog__entries")).toBe(entries);
+    mounted.update({ sessionKey: "agent:main:two" });
+    await waitForSolid(() => expect(element.querySelector('[role="alert"]')).toBeNull());
+    expect(element.querySelector(".mcp-app-catalog__entries")).toBe(entries);
+  });
   it.each(["file"] as const)(
     "hides unsupported %s controls after empty discovery",
     async (surface) => {
       const read = createDeferred<McpAppDiscoverResult>();
       const { element } = mountCatalog(
         {
-          gateway: {
-            snapshot: {
-              client: { request: () => read.promise },
-              phase: "connected",
-              hello: gatewayHelloForMethods(["mcp.app.discover"]),
-            },
-            connectionRevision: 1,
-            subscribe: () => () => {},
-            subscribeEvents: () => () => {},
-          },
+          gateway: createDiscoveryGateway(() => read.promise),
           agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
         },
         { surface, sessionKey: "agent:main:empty" },
@@ -806,16 +878,7 @@ describe("app launch catalog", () => {
     const request = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
     const mounted = mountCatalog(
       {
-        gateway: {
-          snapshot: {
-            client: { request },
-            phase: "connected",
-            hello: gatewayHelloForMethods(["mcp.app.discover"]),
-          },
-          connectionRevision: 1,
-          subscribe: () => () => {},
-          subscribeEvents: () => () => {},
-        },
+        gateway: createDiscoveryGateway(request),
         agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
       },
       { surface: "sidebar", sessionKey: "agent:main:one" },
@@ -834,7 +897,7 @@ describe("app launch catalog", () => {
     expect(element.textContent).not.toContain("Library");
     expect(request).toHaveBeenCalledTimes(2);
   });
-  it("launches the selected thread app through its conversation owner without sending a prompt", async () => {
+  it("reports an unavailable host, then launches the thread app through its owner without a prompt", async () => {
     const read = createDeferred<McpAppDiscoverResult>();
     const request = vi.fn(() => read.promise);
     const client = { request };
@@ -862,7 +925,6 @@ describe("app launch catalog", () => {
     element.querySelector<HTMLButtonElement>("button")!.click();
     flush();
     const launch = vi.fn((event: Event) => event.preventDefault());
-    element.addEventListener(MCP_APP_OPEN_EVENT, launch);
     const button = await waitForSolid(() => {
       const candidate = [...element.querySelectorAll<HTMLButtonElement>("button")].find((control) =>
         control.textContent?.includes("Parts tray"),
@@ -871,6 +933,15 @@ describe("app launch catalog", () => {
       return candidate!;
     });
     button.click();
+    await waitForSolid(() =>
+      expect(element.querySelector('[role="alert"]')?.textContent).toBe(
+        t("mcpApp.errors.mountUnavailable"),
+      ),
+    );
+    element.addEventListener(MCP_APP_OPEN_EVENT, launch);
+    button.click();
+    await waitForSolid(() => expect(element.querySelector('[role="alert"]')).toBeNull());
+    expect(launch.mock.calls[0]![0].target).toBe(element);
     expect((launch.mock.calls[0]![0] as CustomEvent<McpAppOpenDetail>).detail).toMatchObject({
       sessionKey: "agent:main:one",
       agentId: "main",

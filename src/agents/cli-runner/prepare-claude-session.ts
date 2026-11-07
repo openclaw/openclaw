@@ -14,7 +14,7 @@ import type { CliReusableSession } from "./types.js";
 
 type PreparedBackendForTranscriptRoot = Pick<
   Parameters<typeof resolveClaudeChildTranscriptRoot>[0]["preparedBackend"],
-  "env" | "secretInput"
+  "env" | "resetEnv" | "secretInput"
 >;
 
 export async function prepareClaudeCliSession(params: {
@@ -26,6 +26,7 @@ export async function prepareClaudeCliSession(params: {
   backend: CliBackendConfig;
   preparedBackend: PreparedBackendForTranscriptRoot;
   config: OpenClawConfig;
+  nativeAuthOnly?: true;
   skillsSnapshot?: SkillSnapshot;
   cwd: string;
   agentId: string;
@@ -53,6 +54,7 @@ export async function prepareClaudeCliSession(params: {
         preparedBackend: {
           backend: params.backend,
           env: params.preparedBackend.env,
+          resetEnv: params.preparedBackend.resetEnv,
           secretInput: params.preparedBackend.secretInput,
         },
         skillEnv: resolveSkillEnvOverridesFromSnapshot({
@@ -61,6 +63,9 @@ export async function prepareClaudeCliSession(params: {
         }),
         remote: false,
         cwd: params.cwd,
+        config: params.config,
+        workspaceDir: params.cwd,
+        nativeAuthOnly: params.nativeAuthOnly,
       })
     : undefined;
   const claudeCliTranscriptMissing =

@@ -52,7 +52,8 @@ it("admits a session patch and cross-store cold history between page-reclamation
       expect(
         await runSessionColdStorageMaintenance({ config: maintenanceConfig(cold.scope.storePath) }),
       ).toEqual({ archivedTranscripts: 1, externalizedTranscripts: 0 });
-      expect(readSessionColdTranscript(cold.database(), historicalId)).toBeDefined();
+      const archive = readSessionColdTranscript(cold.database(), historicalId);
+      expect(archive).toBeDefined();
       const firstPass = createDeferred();
       const resumePrune = createDeferred();
       let maintenance: ReturnType<typeof enforceSqliteSessionHistoryDiskBudget> | undefined;
@@ -133,23 +134,19 @@ it("admits a session patch and cross-store cold history between page-reclamation
           offset: undefined,
           messageId: undefined,
         });
-        const pausedHistoryFailure = await withTestTimeout(
+        const page = await withTestTimeout(
           history,
           10_000,
           "Cold history waited for the paused archive sweep",
-        ).then(
-          () => undefined,
-          (error: unknown) => error,
         );
         expect(pageResults).toHaveLength(1);
         resumePrune.resolve();
-        const [page, result] = await Promise.all([history, maintenance]);
+        const result = await maintenance;
         expect(page.messages.map(readChatHistoryMessageId)).toEqual([
           "history-user",
           "history-assistant",
         ]);
-        expect(readSessionColdTranscript(cold.database(), historicalId)).toBeUndefined();
-        expect(cold.snapshot()).toEqual(cold.original);
+        expect(readSessionColdTranscript(cold.database(), historicalId)).toEqual(archive);
         await expect(patch).resolves.toMatchObject(patchedEntry);
         expect(result).toMatchObject({ removedEntries: 0, removedFiles: 0 });
         expect(result?.totalBytesAfter).toBeLessThanOrEqual(highWaterBytes);
@@ -164,7 +161,6 @@ it("admits a session patch and cross-store cold history between page-reclamation
         });
         expect(pageResults[0]?.remainingFreePages).toBeGreaterThan(0);
         expect(pageResults.at(-1)?.remainingFreePages).toBe(0);
-        expect(pausedHistoryFailure).toBeUndefined();
       } finally {
         resumePrune.resolve();
         await Promise.allSettled([maintenance, patch, history]);

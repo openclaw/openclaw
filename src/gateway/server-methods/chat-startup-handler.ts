@@ -3,6 +3,7 @@ import {
   ErrorCodes,
   errorShape,
   validateChatStartupParams,
+  type ChatHistoryParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { withPreparedSessionResolve } from "../sessions-resolve.js";
@@ -11,7 +12,10 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 type ChatStartupHistoryHandler = (
-  options: GatewayRequestHandlerOptions & { method: "chat.startup" },
+  options: Omit<GatewayRequestHandlerOptions, "params"> & {
+    params: ChatHistoryParams;
+    method: "chat.startup";
+  },
 ) => Promise<void>;
 
 /** Resolve a short-id or slug startup request to its session, then serve its history. */
@@ -23,7 +27,7 @@ export async function handleChatStartupRequest(
     return;
   }
   if ("sessionKey" in opts.params) {
-    await handleHistory({ ...opts, method: "chat.startup" });
+    await handleHistory({ ...opts, params: opts.params, method: "chat.startup" });
     return;
   }
   const connId = opts.client?.connId?.trim();

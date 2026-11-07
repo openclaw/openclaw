@@ -23,17 +23,18 @@ import { resolveOAuthApiKeyMarker } from "./model-auth-markers.js";
 import { modelDefinition as configuredModel } from "./model-auth.fixtures.test-support.js";
 import { enrichHarnessRows, modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { row } from "./model-catalog-fixtures.test-support.js";
+import { findModelCatalogEntry, modelSupportsVision } from "./model-catalog-lookup.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import {
   buildPreparedModelCatalogSnapshot,
   type BuildPreparedModelCatalogParams,
-  findModelCatalogEntry,
   loadManifestModelCatalog,
-  modelSupportsVision,
   overlayConfiguredModelCatalog,
 } from "./model-catalog.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
+import { AuthStorage } from "./sessions/auth-storage.js";
+import { ModelRegistry } from "./sessions/model-registry.js";
 
 type AugmentModelCatalogWithProviderPlugins =
   typeof import("../plugins/provider-runtime.js").augmentModelCatalogWithProviderPlugins;
@@ -184,6 +185,58 @@ it.each(["unowned", "disabled"] as const)(
     expect(snapshot.entries).toMatchObject([{ provider: "source", id: "model" }]);
   },
 );
+
+const discoveredRow = (id: string) => ({
+  id,
+  name: id,
+  reasoning: false,
+  input: ["text" as const],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 200_000,
+  maxTokens: 8192,
+});
+
+it("publishes the family a discovered row or its manifest declares, and none otherwise", async () => {
+  const registry = ModelRegistry.inMemory(AuthStorage.inMemory());
+  // A routing provider's discovery names each row's family from its own service metadata.
+  registry.registerProvider("router", {
+    api: "openai-responses",
+    baseUrl: "https://router.example/v1",
+    models: [
+      { ...discoveredRow("anthropic/claude-model"), family: "anthropic" },
+      discoveredRow("acme/claude-model"),
+    ],
+  });
+  const snapshot = await buildPreparedModelCatalogSnapshot({
+    agentDir: "/tmp/model-catalog-test",
+    authCredentials: {},
+    config: { plugins: { enabled: false } },
+    readOnly: true,
+    models: registry.getAll(),
+    metadataSnapshot: createManifestSnapshot("native", {
+      providers: {
+        native: {
+          api: "anthropic-messages",
+          baseUrl: "https://native.example",
+          family: "anthropic",
+          models: [{ id: "native-model", name: "Native" }],
+        },
+      },
+      discovery: { native: "static" },
+    }),
+  });
+  const families = Object.fromEntries(
+    snapshot.entries.map((entry) => [`${entry.provider}/${entry.id}`, entry.family]),
+  );
+  expect(families).toEqual({
+    "native/native-model": "anthropic",
+    "router/anthropic/claude-model": "anthropic",
+    "router/acme/claude-model": undefined,
+  });
+  expect(snapshot.routeVariants.find(({ id }) => id === "anthropic/claude-model")?.family).toBe(
+    "anthropic",
+  );
+});
 
 it("carries manifest capability metadata into the prepared catalog", async () => {
   const snapshot = fableManifest({

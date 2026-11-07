@@ -9,7 +9,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForDead, waitForFile } from "../../test/helpers/process-wait.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { updateExecutorEntrypoints } from "../cli/cli-entrypoint.test-support.js";
+import {
+  cliRecoveryEntrypoints,
+  updateExecutorEntrypoints,
+} from "../cli/cli-entrypoint.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
@@ -18,7 +21,7 @@ import { installDatabaseEngineSelection } from "./database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "./database-engine/context.test-support.js";
 import { getPostgresPhysicalFacts } from "./database-engine/physical-facts.js";
 import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
-import { writeRestartSentinel } from "./restart-sentinel.js";
+import { readRestartSentinelSnapshot, writeRestartSentinel } from "./restart-sentinel.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { readManagedHandoffArtifacts } from "./update-managed-service-handoff-artifacts.test-support.js";
 // Register the real-process fixture before importing its consumers.
@@ -31,11 +34,6 @@ const connection =
   typeof configured === "string" ? configured : process.env.OPENCLAW_HANDOFF_TEST_CONNECTION;
 const { runManagedServiceManagerBoundary, resolvePreferredOpenClawTmpDirMock, spawnMock } =
   useManagedServiceHandoffLifecycleFixture();
-const sentinelRuntimeUrl = resolveRuntimeWorkerUrl({
-  currentModuleUrl: import.meta.url,
-  sourceWorkerName: "update-managed-service-handoff-sentinel",
-  distWorkerPath: "infra/update-managed-service-handoff-sentinel.js",
-});
 const postgresClientPath = createRequire(import.meta.url).resolve("pg");
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => afterEach(cleanup));
 
@@ -44,6 +42,17 @@ afterEach(() => {
 });
 
 const itUnix = it.runIf(process.platform !== "win32");
+const failedUpdate = {
+  status: "error" as const,
+  mode: "npm" as const,
+  reason: "candidate-failed",
+  recovery: { serviceRestartSafe: true, version: "1.0.0" },
+};
+
+function expectNoConnection(contents: string) {
+  expect(contents).not.toContain(connection);
+  expect(contents).not.toMatch(/postgres(?:ql)?:\/\//);
+}
 
 async function writePostgresAnchor(pathname: string) {
   await fs.mkdir(path.dirname(pathname), { recursive: true });
@@ -165,12 +174,7 @@ itUnix("restores a SQLite runtime that has no engine-aware sentinel method", asy
     controlDisconnect: "transferred",
     helperExitCode: 7,
     updaterNotification: "published",
-    updaterResult: {
-      status: "error",
-      mode: "npm",
-      reason: "candidate-failed",
-      recovery: { serviceRestartSafe: true, version: "1.0.0" },
-    },
+    updaterResult: failedUpdate,
     async prepareState({ env, recoveryModulePath, sourceRuntimeImport }) {
       env.OPENCLAW_LOG_LEVEL = "debug";
       env.OPENCLAW_TEST_CONSOLE = "1";
@@ -191,6 +195,51 @@ itUnix("restores a SQLite runtime that has no engine-aware sentinel method", asy
   expect(result.log).not.toContain("could not be recorded");
 });
 
+itUnix.each(["run", "root"] as const)(
+  "does not borrow another %s's SQLite notice during service recovery",
+  async (foreignIdentity) => {
+    let original: unknown;
+    const foreignReason = "unrelated-update-failure";
+    const result = await runManagedServiceManagerBoundary("systemd", {
+      ledger: true,
+      controlDisconnect: "transferred",
+      helperExitCode: 7,
+      updaterResult: failedUpdate,
+      async prepareState({ env }) {
+        await writeRestartSentinel(
+          {
+            kind: "update",
+            status: "error",
+            ts: Date.now(),
+            stats: {
+              handoffId: "systemd-boundary",
+              root:
+                foreignIdentity === "root"
+                  ? path.join(env.OPENCLAW_STATE_DIR!, "other-install")
+                  : env.OPENCLAW_STATE_DIR,
+              ...(foreignIdentity === "run" ? { runId: "another-run" } : {}),
+              reason: foreignReason,
+              steps: [],
+            },
+          },
+          env,
+        );
+        original = readRestartSentinelPayload(env);
+      },
+    });
+
+    expect(result.sentinel).toEqual(original);
+    expect(result.state).toMatchObject({
+      restored: true,
+      triageObservedRestored: true,
+      triageInput: { error: expect.stringContaining("candidate-failed") },
+    });
+    expect(JSON.stringify(result.state.triageInput)).not.toContain(foreignReason);
+    expect(result.run).toMatchObject({ status: "failed", reason: "candidate-failed" });
+    expect(result.sensitiveFilesRemoved).toBe(true);
+  },
+);
+
 describe.skipIf(!connection || process.platform === "win32")(
   "generated handoff on PostgreSQL",
   () => {
@@ -202,21 +251,19 @@ describe.skipIf(!connection || process.platform === "win32")(
         let namespace: string | undefined;
         let anchorPath = "";
         let fixtureEnv: NodeJS.ProcessEnv | undefined;
-        const publishedAt = 1_800_000_000_000;
+        const published = {
+          status: outcome === "completed" ? ("ok" as const) : ("error" as const),
+          ts: 1_800_000_000_000,
+          message: "Published candidate result survives handoff.",
+          stats: { handoffId: outcome === "foreign" ? "another-handoff" : "systemd-boundary" },
+        };
         try {
           const result = await runManagedServiceManagerBoundary("systemd", {
             controlDisconnect: "transferred",
             helperExitCode: outcome === "completed" ? 0 : 7,
-            updaterResult: {
-              status: "error",
-              mode: "npm",
-              reason: "candidate-failed",
-              recovery: { serviceRestartSafe: true, version: "1.0.0" },
-            },
-            ...(outcome === "completed"
-              ? { updaterExitCode: 0, updaterResult: { status: "ok", mode: "npm" } }
-              : {}),
-            async prepareState({ env, recoveryModulePath, sourceRuntimeImport }) {
+            updaterResult: outcome === "completed" ? { status: "ok", mode: "npm" } : failedUpdate,
+            ...(outcome === "completed" ? { updaterExitCode: 0 } : {}),
+            async prepareState({ env, recoveryModulePath }) {
               fixtureEnv = env;
               const root = env.OPENCLAW_STATE_DIR!;
               // The installed child resolves exactly the same canonical local lease store.
@@ -252,26 +299,19 @@ describe.skipIf(!connection || process.platform === "win32")(
                 const db = openOpenClawStateDatabase({ env }).db;
                 return getPostgresPhysicalFacts(db)!.namespace;
               });
-              if (["failure", "completed", "consumed", "foreign"].includes(outcome)) {
+              if (outcome !== "unavailable") {
                 await writeRestartSentinel(
                   {
+                    ...published,
                     kind: "update",
-                    status: outcome === "completed" ? "ok" : "error",
-                    ts: publishedAt,
-                    message: "Published candidate result survives handoff.",
-                    stats: {
-                      handoffId: outcome === "foreign" ? "another-handoff" : "systemd-boundary",
-                      root,
-                      mode: "npm",
-                      reason: "candidate-failed",
-                    },
+                    stats: { ...published.stats, root, mode: "npm", reason: "candidate-failed" },
                   },
                   env,
                 );
               }
               await fs.appendFile(
                 recoveryModulePath,
-                `${sourceRuntimeImport}\nconst sentinelRuntime = await import(${JSON.stringify(sentinelRuntimeUrl.href)});\nexport const runManagedHandoffSentinelChild = sentinelRuntime.executeInstalledHandoffSentinelOperation;\n`,
+                `\nexport { runManagedHandoffSentinelChild } from ${JSON.stringify(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.daemon).href)};\n`,
               );
               if (outcome === "consumed") {
                 // Model the restored Gateway consuming the first failure notice while
@@ -309,36 +349,23 @@ export async function waitForGatewayUpdateRecovery(...args) {
               const { scriptPath, paramsPath } = readManagedHandoffArtifacts(args);
               for (const file of [scriptPath, paramsPath]) {
                 const contents = await fs.readFile(file, "utf8");
-                expect(contents).not.toContain(connection);
-                expect(contents).not.toMatch(/postgres(?:ql)?:\/\//);
+                expectNoConnection(contents);
               }
               expect(JSON.stringify(args)).not.toContain(connection);
             },
-            readSentinel(env) {
-              return withEngineStoreAdmission(() => readRestartSentinelPayload(env));
+            async readSentinel(env) {
+              return (await readRestartSentinelSnapshot(env)).sentinel;
             },
           });
-          expect(result.log).not.toContain(connection);
-          expect(result.log).not.toMatch(/postgres(?:ql)?:\/\//);
-          const anchor = new DatabaseSync(anchorPath, { readOnly: true });
-          try {
+          expectNoConnection(result.log);
+          {
+            using anchor = new DatabaseSync(anchorPath, { readOnly: true });
             expect(
               anchor.prepare("SELECT name FROM sqlite_schema WHERE type = 'table'").all(),
             ).toEqual([{ name: "openclaw_engine_anchor" }]);
-          } finally {
-            anchor.close();
           }
           if (outcome === "completed" || outcome === "foreign") {
-            expect(result.sentinel).toMatchObject({
-              payload: {
-                status: outcome === "completed" ? "ok" : "error",
-                ts: publishedAt,
-                message: "Published candidate result survives handoff.",
-                stats: {
-                  handoffId: outcome === "foreign" ? "another-handoff" : "systemd-boundary",
-                },
-              },
-            });
+            expect(result.sentinel).toMatchObject({ payload: published });
             if (outcome === "foreign") {
               expect(result.log).toContain("belongs to another handoff");
             }
@@ -355,15 +382,11 @@ export async function waitForGatewayUpdateRecovery(...args) {
           }
           // The boundary fixture asserts the local handoff lease is gone before returning.
           for (const entry of await fs.readdir(fixtureEnv!.OPENCLAW_STATE_DIR!)) {
-            if (!entry.endsWith(".json")) {
-              continue;
+            if (entry.endsWith(".json")) {
+              expectNoConnection(
+                await fs.readFile(path.join(fixtureEnv!.OPENCLAW_STATE_DIR!, entry), "utf8"),
+              );
             }
-            const contents = await fs.readFile(
-              path.join(fixtureEnv!.OPENCLAW_STATE_DIR!, entry),
-              "utf8",
-            );
-            expect(contents).not.toContain(connection);
-            expect(contents).not.toMatch(/postgres(?:ql)?:\/\//);
           }
         } finally {
           if (namespace) {

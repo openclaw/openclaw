@@ -102,6 +102,7 @@ async function resolveProvider(config: VoiceCallConfig): Promise<VoiceCallProvid
           accountSid: config.twilio?.accountSid,
           authToken: resolveTwilioAuthToken(config),
           region: config.twilio?.region,
+          record: config.twilio?.record,
         },
         {
           allowNgrokFreeTierLoopbackBypass,
@@ -192,7 +193,6 @@ export async function createVoiceCallRuntime(params: {
   scheduler: PluginServiceSchedulerV1;
   config: VoiceCallConfig;
   coreConfig: OpenClawConfig;
-  fullConfig?: OpenClawConfig;
   agentRuntime: OpenClawPluginApi["runtime"]["agent"];
   stateRuntime?: VoiceCallStateRuntime["state"];
   ttsRuntime?: TelephonyTtsRuntime;
@@ -203,8 +203,7 @@ export async function createVoiceCallRuntime(params: {
   params.scheduler.signal.throwIfAborted();
   const {
     config: rawConfig,
-    coreConfig,
-    fullConfig,
+    coreConfig: cfg,
     agentRuntime,
     stateRuntime,
     ttsRuntime,
@@ -217,7 +216,6 @@ export async function createVoiceCallRuntime(params: {
     debug: console.debug,
   };
 
-  const cfg = fullConfig ?? coreConfig;
   const config = { ...rawConfig, agentId: resolveVoiceCallAgentId(rawConfig, cfg) };
 
   if (config.skipSignatureVerification) {
@@ -239,7 +237,6 @@ export async function createVoiceCallRuntime(params: {
     config,
     manager,
     provider,
-    coreConfig,
     cfg,
     agentRuntime,
     log,
@@ -342,6 +339,8 @@ export async function createVoiceCallRuntime(params: {
             return fastContext.result;
           }
           const { provider: agentProvider, model } = resolveVoiceResponseModel({
+            cfg,
+            agentId,
             voiceConfig: effectiveConfig,
             agentRuntime,
           });

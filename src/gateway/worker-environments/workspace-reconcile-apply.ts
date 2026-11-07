@@ -9,7 +9,7 @@ import {
 } from "../../media/staged-inputs.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import { withWorkspaceHashContext } from "./workspace-hash-memo.js";
-import { prepareWorkspaceReconciliation, sameEntry } from "./workspace-manifest-comparison.js";
+import type { WorkspaceReconciliationPreparation } from "./workspace-manifest-comparison.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import {
   MAX_RECONCILIATION_ENTRIES,
@@ -18,7 +18,6 @@ import {
   type WorkerWorkspaceReconciliationJournal,
   type WorkerWorkspaceReconciliationJournalAdapter,
 } from "./workspace-manifest.js";
-import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import {
   applyWorkspaceDirectoryChanges,
   ConcurrentWorkspacePathError,
@@ -31,7 +30,6 @@ import {
   prepareNonDirectoryTargets,
   reconciliationDirectories,
 } from "./workspace-reconcile-derived-paths.js";
-import { entryMatches } from "./workspace-reconcile-fs.js";
 import {
   applyWorkspacePatch,
   createWorkspacePatch,
@@ -43,7 +41,7 @@ export async function applyStagedWorkerWorkspace(params: {
   stagingRoot: string;
   baseManifestRef: string;
   currentManifestRef: string;
-  base: WorkerWorkspaceManifest;
+  reconciliation: WorkspaceReconciliationPreparation;
   current: WorkerWorkspaceManifest;
   additionalPaths?: ReadonlySet<string>;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
@@ -61,12 +59,10 @@ export async function applyStagedWorkerWorkspace(params: {
 }): Promise<WorkerWorkspaceApplyResult> {
   return await withWorkspaceHashContext(async (): Promise<WorkerWorkspaceApplyResult> => {
     const root = await fs.realpath(params.root);
-    const {
-      baseNodes,
-      currentNodes,
-      changed,
-      preflight: preflightInput,
-    } = prepareWorkspaceReconciliation(params.base, params.current);
+    const { preflight: preflightInput, includePaths: preparedPaths } = params.reconciliation;
+    const baseNodes = new Map(preflightInput.baseNodes);
+    const currentNodes = new Map(preflightInput.currentNodes);
+    const changed = new Set(preflightInput.changedPaths);
     const buildCacheInputs =
       preflightInput.buildCacheInputs === undefined
         ? undefined
@@ -126,10 +122,10 @@ export async function applyStagedWorkerWorkspace(params: {
     );
     // Git workspaces must keep the eligibility boundary established at dispatch.
     // Local-only ignored files are outside both manifests and must never enter the accepted state.
-    const includePaths = params.current.baseCommit
-      ? new Set([...baseNodes.keys(), ...currentNodes.keys()])
-      : undefined;
-    params.additionalPaths?.forEach((entryPath) => includePaths?.add(entryPath));
+    const includePaths =
+      preparedPaths && params.additionalPaths?.size
+        ? new Set([...preparedPaths, ...params.additionalPaths])
+        : preparedPaths;
     const inspectPaths = () => preflightWorkspaceApply({ root, ...preflightInput });
     const preflight = await inspectPaths();
     const acceptReconciled = async (
@@ -175,32 +171,14 @@ export async function applyStagedWorkerWorkspace(params: {
         changed.has(entry.path) &&
         preflight.applyPaths.has(entry.path),
     );
-    const appliedEntries: WorkerWorkspaceManifestEntry[] = [];
-    for (const entry of currentNodes.values()) {
-      if (
-        entry.type === "directory" ||
-        !changed.has(entry.path) ||
-        !preflight.applyPaths.has(entry.path)
-      ) {
-        continue;
-      }
-      const base = baseNodes.get(entry.path);
-      if (
-        (!base || base.type === "directory") &&
-        ![...workspacePathAncestors(entry.path)].some((ancestor) => {
-          const previous = baseNodes.get(ancestor);
-          return (
-            previous &&
-            previous.type !== "directory" &&
-            !sameEntry(previous, currentNodes.get(ancestor))
-          );
-        }) &&
-        (await entryMatches(root, entry))
-      ) {
-        continue;
-      }
-      appliedEntries.push(entry);
-    }
+    // Preflight selects paths still matching base and skips already-applied entries.
+    // The confirming preflight below detects changes during patch preparation.
+    const appliedEntries = [...currentNodes.values()].filter(
+      (entry): entry is WorkerWorkspaceManifestEntry =>
+        entry.type !== "directory" &&
+        changed.has(entry.path) &&
+        preflight.applyPaths.has(entry.path),
+    );
     const baseDirectories = [...preflight.applyPaths]
       .filter((entryPath) => baseNodes.get(entryPath)?.type === "directory")
       .toSorted();

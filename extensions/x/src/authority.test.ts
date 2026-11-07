@@ -6,8 +6,8 @@ import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-s
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerXAllowlistMethods } from "./admin.js";
 import { openXAllowlist } from "./allowlist.js";
-import { createXApiClient } from "./api.js";
 import { xPlugin } from "./channel.js";
+import { createXTestApi as createXApiClient } from "./test-support/api-client.js";
 import {
   client,
   config,

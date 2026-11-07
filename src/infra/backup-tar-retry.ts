@@ -5,12 +5,10 @@ import { hasErrnoCode } from "./errno.js";
 const BACKUP_TAR_MAX_ATTEMPTS = 3;
 const BACKUP_TAR_BACKOFF_MS = [10_000, 20_000];
 
-type BackupTarRetryLogger = (message: string) => void;
-
 export async function writeTarArchiveWithRetry<T>(params: {
   tempArchivePath: string;
   runTar: (tempArchivePath: string) => Promise<T>;
-  log?: BackupTarRetryLogger;
+  log?: (message: string) => void;
 }): Promise<T> {
   for (let attempt = 1; ; attempt += 1) {
     const attemptTempArchivePath =

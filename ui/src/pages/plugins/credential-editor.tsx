@@ -3,13 +3,17 @@ import {
   For,
   Loading,
   Show,
+  action,
+  affects,
   createEffect,
   createMemo,
+  createOptimistic,
   createSignal,
   createStore,
   isPending,
   latest,
   onSettled,
+  refresh,
 } from "solid-js";
 import type {
   PluginCredentialDescriptor,
@@ -22,8 +26,9 @@ import {
   type SecretRef,
 } from "../../../../src/secrets/ref-contract.ts";
 import type { ConfigNodeRenderParams } from "../../components/config-form.node.shared.ts";
+import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { REDACTED_SENTINEL } from "../../lib/config-form-utils.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -42,6 +47,7 @@ export type PluginCredentialEditorContext = {
   baseHash: string | null;
   gateway: Pick<GatewayPageBinding, "capture" | "isCurrent" | "epoch" | "connected" | "client">;
   canInspect: boolean;
+  getPresentationLifetime: () => Promise<void>;
   saveError?: string | null;
   /** Adapter stages through field.onPatch and awaits that exact config-owner write. */
   onCommit: (path: Array<string | number>, value: unknown) => Promise<boolean>;
@@ -77,6 +83,11 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
     { loadingValue: true },
   );
   const loading = () => isPending(inspectionPending) || latest(inspectionPending);
+  const [operationRequest, setOperationRequest] = createSignal<{ promise: Promise<void> }>();
+  const operationComplete = createMemo(() => operationRequest()?.promise.then(() => null) ?? null, {
+    loadingValue: null,
+  });
+  // Revision and unacknowledged-write outcomes are separate from rejected commands.
   const [error, setError] = createSignal("");
   const [dialogOpen, setDialogOpen] = createSignal(false);
   const [reference, setReference] = createStore<SecretRef>({
@@ -86,7 +97,7 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
   });
   const [literal, setLiteral] = createSignal("");
   const [revealed, setRevealed] = createSignal(false);
-  const [operation, setOperation] = createSignal<CredentialOperation>();
+  const [operation, setOperation] = createOptimistic<CredentialOperation | undefined>(undefined);
   const operationKind = () => {
     const value = operation();
     return value?.current() ? value.kind : undefined;
@@ -148,7 +159,7 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
       }
       if (sourceChanged || next.epoch !== previous?.epoch) {
         pending = undefined;
-        setOperation(undefined);
+        setOperationRequest(undefined);
       }
       setInspectionRequest(undefined);
       setInspection((current) =>
@@ -250,7 +261,6 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
     ) {
       return;
     }
-    setError("");
     setInspectionRequest(undefined);
     return commitOrDiscardReference(value);
   }
@@ -267,12 +277,15 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
   }
 
   async function commitOrDiscardReference(value: string | SecretRef | undefined) {
+    setError("");
     const gateway = props.context.gateway;
+    const retired = props.context.getPresentationLifetime();
     const capturedConnection = connection;
     const owner = JSON.stringify([props.context.pluginId, props.field.path]);
     const current = () =>
       pending === admitted &&
       active &&
+      props.context.getPresentationLifetime() === retired &&
       props.context.gateway === gateway &&
       capturedConnection !== null &&
       gateway.isCurrent(capturedConnection) &&
@@ -283,7 +296,6 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
     };
     // Admission is synchronous; Solid publishes the pending presentation after this task.
     pending = admitted;
-    setOperation(admitted);
     if (value !== undefined) {
       referenceSubmitted ||= dialogOpen();
     }
@@ -315,17 +327,37 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
         }
       } catch (cause) {
         if (current()) {
-          setError(formatUiError(cause));
-        }
-      } finally {
-        if (current()) {
-          pending = undefined;
-          setOperation(undefined);
+          throw cause;
         }
       }
     })();
-    return completed;
+    // Publish the completion before the action holds its saving presentation.
+    const result = Promise.resolve().then(() => presentOperation(admitted, completed, retired));
+    setOperationRequest({ promise: result });
+    // Feedback observes rejection; retired event callers only await settlement.
+    return result.catch(() => undefined);
   }
+
+  const presentOperation = action(function* (
+    admitted: CredentialOperation,
+    completed: Promise<void>,
+    retired: Promise<void>,
+  ) {
+    try {
+      if (admitted.current()) {
+        setOperation(admitted);
+        affects(inspectionComplete);
+      }
+      yield Promise.race([completed, retired]);
+      if (admitted.current()) {
+        yield refresh(inspectionComplete);
+      }
+    } finally {
+      if (pending === admitted) {
+        pending = undefined;
+      }
+    }
+  });
 
   const environment = () => {
     const credential = inspection();
@@ -360,23 +392,24 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
     </>
   );
   const Feedback = (feedback: { dialog?: boolean }) => (
-    <Show
-      when={failure()}
-      fallback={
-        <Show when={inspectionRequest()} keyed>
-          {(request) => (
+    <Show when={!saving() && !cancelling()}>
+      <Show
+        when={failure()}
+        fallback={
+          <Loading on={inspectionRequest()}>
             <Errored
               fallback={(cause) => (
                 <Failure message={formatUiError(cause())} dialog={feedback.dialog} />
               )}
             >
-              <Loading on={request}>{inspectionComplete()}</Loading>
+              {operationComplete()}
+              {inspectionComplete()}
             </Errored>
-          )}
-        </Show>
-      }
-    >
-      {(message) => <Failure message={message()} dialog={feedback.dialog} />}
+          </Loading>
+        }
+      >
+        {(message) => <Failure message={message()} dialog={feedback.dialog} />}
+      </Show>
     </Show>
   );
   const configured = () =>
@@ -531,97 +564,109 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
               void cancelReference();
             }}
           >
-            <section class="plugin-credential__dialog">
-              <h2>{t("pluginsPage.credentials.referenceTitle")}</h2>
-              {environment() ? (
-                <p>{t("pluginsPage.credentials.environmentHelp", { name: environment()! })}</p>
-              ) : (
-                <>
-                  <p>{t("pluginsPage.credentials.referenceHelp")}</p>
-                  <label>
-                    {t("pluginsPage.credentials.source")}
-                    <select
-                      ref={(element) => {
-                        referenceSourceSelect = element;
-                      }}
-                      autofocus
-                      class="settings-input"
-                      aria-label={t("pluginsPage.credentials.source")}
-                      value={reference.source}
-                      disabled={blocked()}
-                      onChange={(event) => {
-                        const source = credentialSources.find(
-                          (entry) => entry === event.currentTarget.value,
-                        );
-                        if (source) {
-                          setReference((draft) => {
-                            draft.source = source;
-                          });
-                        }
-                      }}
-                    >
-                      <For each={credentialSources}>
-                        {(source) => (
-                          <option value={source} selected={source === reference.source}>
-                            {t(`pluginsPage.credentials.sources.${source}`)}
-                          </option>
-                        )}
-                      </For>
-                    </select>
-                  </label>
-                  <For each={credentialReferenceParts}>
-                    {(key) => (
-                      <label>
-                        {t(`pluginsPage.credentials.${key === "id" ? "identifier" : key}`)}
-                        <input
-                          class="settings-input"
-                          value={reference[key]}
-                          disabled={blocked()}
-                          onInput={(event) =>
+            <section class="oc-dialog plugin-credential__dialog">
+              <DialogHeader
+                title={t("pluginsPage.credentials.referenceTitle")}
+                description={
+                  <p>
+                    {environment()
+                      ? t("pluginsPage.credentials.environmentHelp", { name: environment()! })
+                      : t("pluginsPage.credentials.referenceHelp")}
+                  </p>
+                }
+                closeDisabled={saving() || cancelling()}
+                onClose={() => void cancelReference()}
+              />
+              <div class="oc-dialog__body">
+                {environment() ? null : (
+                  <>
+                    <label>
+                      {t("pluginsPage.credentials.source")}
+                      <select
+                        ref={(element) => {
+                          referenceSourceSelect = element;
+                        }}
+                        autofocus
+                        class="settings-input"
+                        aria-label={t("pluginsPage.credentials.source")}
+                        value={reference.source}
+                        disabled={blocked()}
+                        onChange={(event) => {
+                          const source = credentialSources.find(
+                            (entry) => entry === event.currentTarget.value,
+                          );
+                          if (source) {
                             setReference((draft) => {
-                              draft[key] = event.currentTarget.value;
-                            })
+                              draft.source = source;
+                            });
                           }
-                        />
-                      </label>
-                    )}
-                  </For>
-                  <p class="muted">{t(`pluginsPage.credentials.help.${reference.source}`)}</p>
-                  {unresolved() ? (
-                    <p class="callout warn">{t("pluginsPage.credentials.unresolved")}</p>
-                  ) : null}
-                </>
-              )}
-              <Feedback dialog />
-              <openclaw-modal-actions>
-                <button
-                  class="btn"
-                  disabled={saving() || cancelling()}
-                  onClick={() => void cancelReference()}
-                >
-                  {t("common.cancel")}
-                </button>
-                {!inspection() && !loading() ? (
-                  <button class="btn" onClick={() => void inspect()}>
-                    {t("common.retry")}
-                  </button>
-                ) : null}
-                {!environment() ? (
+                        }}
+                      >
+                        <For each={credentialSources}>
+                          {(source) => (
+                            <option value={source} selected={source === reference.source}>
+                              {t(`pluginsPage.credentials.sources.${source}`)}
+                            </option>
+                          )}
+                        </For>
+                      </select>
+                    </label>
+                    <For each={credentialReferenceParts}>
+                      {(key) => (
+                        <label>
+                          {t(`pluginsPage.credentials.${key === "id" ? "identifier" : key}`)}
+                          <input
+                            class="settings-input"
+                            value={reference[key]}
+                            disabled={blocked()}
+                            onInput={(event) =>
+                              setReference((draft) => {
+                                draft[key] = event.currentTarget.value;
+                              })
+                            }
+                          />
+                        </label>
+                      )}
+                    </For>
+                    <p class="muted">{t(`pluginsPage.credentials.help.${reference.source}`)}</p>
+                    {unresolved() ? (
+                      <p class="callout warn">{t("pluginsPage.credentials.unresolved")}</p>
+                    ) : null}
+                  </>
+                )}
+                <Feedback dialog />
+              </div>
+              {environment() && (inspection() || loading()) ? null : (
+                <openclaw-modal-actions class="oc-dialog__footer">
                   <button
-                    class="btn primary"
-                    disabled={blocked() || !isValidSecretRef(reference)}
-                    onClick={() =>
-                      void patch({
-                        source: reference.source,
-                        provider: reference.provider,
-                        id: reference.id,
-                      })
-                    }
+                    class="btn"
+                    disabled={saving() || cancelling()}
+                    onClick={() => void cancelReference()}
                   >
-                    {saving() ? t("common.saving") : t("common.save")}
+                    {t("common.cancel")}
                   </button>
-                ) : null}
-              </openclaw-modal-actions>
+                  {!inspection() && !loading() ? (
+                    <button class="btn" onClick={() => void inspect()}>
+                      {t("common.retry")}
+                    </button>
+                  ) : null}
+                  {!environment() ? (
+                    <button
+                      class="btn primary"
+                      disabled={blocked() || !isValidSecretRef(reference)}
+                      onClick={() =>
+                        void patch({
+                          source: reference.source,
+                          provider: reference.provider,
+                          id: reference.id,
+                        })
+                      }
+                    >
+                      {saving() ? t("common.saving") : t("common.save")}
+                    </button>
+                  ) : null}
+                </openclaw-modal-actions>
+              )}
             </section>
           </openclaw-modal-dialog>
         ) : null}

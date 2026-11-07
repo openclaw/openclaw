@@ -25,10 +25,10 @@ export function findChannelPluginInRegistry(
     return undefined;
   }
   return registry.channels.find((entry) => {
-    const plugin = entry?.plugin;
+    const plugin = entry.plugin;
     return (
-      normalizeOptionalLowercaseString(plugin?.id) === normalizedChannel ||
-      plugin?.meta?.aliases?.some(
+      normalizeOptionalLowercaseString(plugin.id) === normalizedChannel ||
+      plugin.meta.aliases?.some(
         (alias) => normalizeOptionalLowercaseString(alias) === normalizedChannel,
       )
     );
@@ -57,8 +57,8 @@ export function listRuntimeVisibleChannelPlugins(): ChannelPlugin[] {
   // process-root entries while retaining unrelated root channels.
   const scopedPlugins = new Map<string, ChannelPlugin>();
   for (const entry of scopedRegistry.channels) {
-    const plugin = entry?.plugin;
-    if (!plugin?.id || scopedPlugins.has(plugin.id)) {
+    const plugin = entry.plugin;
+    if (!plugin.id || scopedPlugins.has(plugin.id)) {
       continue;
     }
     scopedPlugins.set(plugin.id, plugin);

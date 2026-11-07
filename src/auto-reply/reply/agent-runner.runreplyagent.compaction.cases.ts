@@ -7,6 +7,7 @@ import {
   createAuthProfileStoreFixture,
   oauthCred,
 } from "../../agents/auth-profiles/credential-fixtures.test-support.js";
+import { prepareSharedAuthStoreOwnership } from "../../agents/auth-profiles/path-resolve.js";
 import { setRuntimeAuthProfileStoreSnapshot } from "../../agents/auth-profiles/runtime-snapshots.js";
 import {
   clearRuntimeAuthProfileStoreSnapshot,
@@ -26,7 +27,7 @@ import { agentSessionDeferThresholdCompaction } from "../../agents/sessions/agen
 import { withSessionManagerWrite } from "../../agents/sessions/session-manager-write-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { SettingsManager } from "../../agents/sessions/settings-manager.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import type { ReplyPayload } from "../types.js";
@@ -132,7 +133,7 @@ export function registerReplyCompactionCases({
         const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
           totalTokens: 190_000,
           totalTokensFresh: true,
-          totalTokensVersion: 1,
+          totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
           agentRuntimeOverride: "openclaw",
           ...(plannerFails
             ? { authProfileOverride: "openai:missing", authProfileOverrideSource: "user" as const }
@@ -240,7 +241,6 @@ export function registerReplyCompactionCases({
               modelPrompt: "Current request.",
               transcriptPrompt: "Current request.",
               onFinalPromptText: () => {},
-              onSteeringAcknowledged: () => {},
               persistToolResultProjections: async () => {},
               withTranscriptWrite,
               runtimeOnly: false,
@@ -290,6 +290,7 @@ export function registerReplyCompactionCases({
             ],
           },
         });
+        await prepareSharedAuthStoreOwnership();
         setRuntimeAuthProfileStoreSnapshot(
           createAuthProfileStoreFixture({
             [`${provider}:fixture`]:

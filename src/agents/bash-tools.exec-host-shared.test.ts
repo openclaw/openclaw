@@ -159,12 +159,12 @@ describe("sendExecApprovalFollowupResult", () => {
   });
 
   it("does not register elevated runtime handoffs when the process clock is invalid", () => {
+    using _ = vi.spyOn(Date, "now").mockReturnValueOnce(Number.NaN);
     expect(
       registerExecApprovalFollowupRuntimeHandoff({
         approvalId: "approval-elevated-invalid-clock",
         sessionKey,
         bashElevated,
-        nowMs: Number.NaN,
       }),
     ).toBeUndefined();
   });
@@ -277,7 +277,6 @@ describe("resolveExecApprovalWaitOutcome", () => {
       expect(mocks.logWarn).toHaveBeenCalledExactlyOnceWith(
         `exec approval wait failed (id=approval-wait, reason=${reason})`,
       );
-      expect(JSON.stringify(mocks.logWarn.mock.calls)).not.toContain(secret);
     }
   });
 

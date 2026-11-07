@@ -8,16 +8,9 @@ import {
 } from "./app-server/managed-binary.js";
 import { describeCodexSpawnError, findCodexAppServerSpawnError } from "./app-server/spawn-error.js";
 import { CODEX_APP_SERVER_VERSION } from "./app-server/version.js";
-import {
-  resolveCodexDoctorStartOptions,
-  type CodexDoctorStartOptionsDependencies,
-} from "./doctor-start-options.js";
+import { resolveCodexDoctorStartOptions } from "./doctor-start-options.js";
 
 export const CODEX_MANAGED_APP_SERVER_CHECK_ID = "codex/managed-app-server";
-
-type CodexManagedDoctorDependencies = CodexDoctorStartOptionsDependencies & {
-  resolveNativeCommand?: typeof resolveManagedCodexNativeCommand;
-};
 
 type CodexManagedDoctorRegistrationHost = {
   readonly getHealthCheck: (id: string) => HealthCheck | undefined;
@@ -45,13 +38,9 @@ function managedCodexFindings(params: {
   ];
 }
 
-function createCodexManagedAppServerHealthCheck(params: {
-  pluginRoot: string;
-  deps?: CodexManagedDoctorDependencies;
-}): HealthCheck & { readonly defaultEnabled: false } {
-  const resolveNativeCommand =
-    params.deps?.resolveNativeCommand ?? resolveManagedCodexNativeCommand;
-
+function createCodexManagedAppServerHealthCheck(
+  pluginRoot: string,
+): HealthCheck & { readonly defaultEnabled: false } {
   return {
     id: CODEX_MANAGED_APP_SERVER_CHECK_ID,
     kind: "plugin",
@@ -70,14 +59,13 @@ function createCodexManagedAppServerHealthCheck(params: {
         selection = await resolveCodexDoctorStartOptions({
           cfg: ctx.cfg,
           env,
-          pluginRoot: params.pluginRoot,
+          pluginRoot,
           managedOnly: true,
-          deps: params.deps,
         });
       } catch (error) {
         return managedCodexFindings({
           message: `Managed Codex app-server could not be resolved: ${coerceErrorMessage(error)}`,
-          path: params.pluginRoot,
+          path: pluginRoot,
           requirement: `an executable Codex ${CODEX_APP_SERVER_VERSION} managed artifact`,
           fixHint:
             "Reinstall the staged OpenClaw package with its @openai/codex platform dependency, then rerun the candidate check.",
@@ -88,7 +76,7 @@ function createCodexManagedAppServerHealthCheck(params: {
       }
       const resolved = selection.start;
 
-      const nativeCommand = resolveNativeCommand(resolved.command);
+      const nativeCommand = resolveManagedCodexNativeCommand(resolved.command);
       if (!nativeCommand) {
         return managedCodexFindings({
           message: "Managed Codex app-server resolved a launcher without a native artifact.",
@@ -143,13 +131,10 @@ function createCodexManagedAppServerHealthCheck(params: {
 
 export function registerCodexManagedAppServerDoctorChecks(
   host: CodexManagedDoctorRegistrationHost,
-  deps?: CodexManagedDoctorDependencies,
 ): void {
   // Lookup and registration must use the same host registry across artifact loaders.
   if (host.getHealthCheck(CODEX_MANAGED_APP_SERVER_CHECK_ID)) {
     return;
   }
-  host.registerHealthCheck(
-    createCodexManagedAppServerHealthCheck({ pluginRoot: host.pluginRoot, deps }),
-  );
+  host.registerHealthCheck(createCodexManagedAppServerHealthCheck(host.pluginRoot));
 }

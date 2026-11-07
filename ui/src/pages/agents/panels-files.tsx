@@ -1,32 +1,72 @@
-import { createMemo, createSignal, For, Show } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  Errored,
+  For,
+  isPending,
+  latest,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import type { AgentFileEntry } from "../../api/types.ts";
-import type { OpenClawModalDialog } from "../../components/modal-dialog.ts";
+import type { OpenClawModalDialog } from "../../components/modal-dialog.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsEmpty, SettingsSection } from "../../components/solid/settings-ui.tsx";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import "../../components/tooltip.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { AgentFilePreview } from "./agent-file-preview.tsx";
 import type { AgentsPageView } from "./agents-page-state.ts";
-import { hasAgentFileContent, isAgentFileDirty } from "./files.ts";
+import { hasAgentFileContent, isAgentFileDirty, type AgentFileOutcome } from "./files.ts";
 import { AgentPanelAction } from "./panel-ui.tsx";
+import { AgentReadNotice, createAgentReadPending } from "./read-status.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
-function getExtensionLabel(fileName: string) {
-  const ext = fileName.split(".").pop()?.trim().toLowerCase();
-  if (ext === "md" || ext === "markdown") {
-    return t("agents.files.markdownPreview");
-  }
-  return ext
-    ? t("agents.files.extensionPreview", { ext: ext.toUpperCase() })
-    : t("agents.files.preview");
+function AgentFileStatus(props: {
+  request: Promise<AgentFileOutcome> | null;
+  fallback: (message: string) => JSX.Element;
+  children: JSX.Element;
+}) {
+  return (
+    <For each={props.request ? [props.request] : []} fallback={props.children}>
+      {(request) => (
+        <Errored fallback={(error) => props.fallback(formatUiError(error()))}>
+          <Loading>
+            <AgentFileCompletion request={request}>{props.children}</AgentFileCompletion>
+          </Loading>
+        </Errored>
+      )}
+    </For>
+  );
+}
+
+function AgentFileCompletion(props: { request: Promise<AgentFileOutcome>; children: JSX.Element }) {
+  const completion = createMemo(async () => {
+    const outcome = await props.request;
+    if (outcome.error !== undefined) {
+      throw new Error(outcome.error);
+    }
+    return null;
+  });
+  return (
+    <>
+      {completion()}
+      {props.children}
+    </>
+  );
 }
 
 function formatWorkspaceRelativePath(filePath: string, workspace: string | null | undefined) {
@@ -49,22 +89,50 @@ function toDomId(value: string) {
   return normalized.replace(/^-+|-+$/g, "") || "preview";
 }
 
-function renderPreviewFact(value: string | number, label: string, secondary = false) {
+function renderPreviewFact(text: string, secondary = false) {
   return (
-    <div class="md-preview-dialog__chip" data-priority={secondary ? "secondary" : "essential"}>
-      <strong>{value}</strong>
-      <span>{label}</span>
-    </div>
+    <span class="md-preview-dialog__chip" data-priority={secondary ? "secondary" : "essential"}>
+      {text}
+    </span>
   );
 }
 
 export function AgentFiles(
   params: AgentsPageView["agentFiles"] &
-    Pick<AgentsPageView, "readData"> & {
+    Pick<AgentsPageView, "readData" | "presentationRetired"> & {
       agentId: string;
       canWrite: boolean;
     },
 ) {
+  const inventoryPending = createAgentReadPending(() => params.listRead);
+  const contentRequest = createMemo(() => ({ request: params.readData().agentFileRead }), {
+    equals: (previous, next) => previous.request === next.request,
+  });
+  const contentRead = createMemo(() => contentRequest().request ?? undefined, {
+    loadingValue: undefined,
+  });
+  const loading = () =>
+    params.readData().agentFilesLoading ||
+    inventoryPending() ||
+    (params.readData().agentFileRead !== null &&
+      (isPending(contentRead) || latest(contentRead) === undefined));
+  // The owner admits writes synchronously, including overwrite's preceding hash read.
+  const [optimisticSaving, setSaving] = createOptimistic(false);
+  const saving = () => optimisticSaving() || params.readData().agentFileSaving;
+  const savingAction = action(function* (completion: Promise<boolean>, retired: Promise<void>) {
+    setSaving(true);
+    yield Promise.race([completion, retired]);
+  });
+  const save = (name: string, overwrite = false) => {
+    const retired = params.presentationRetired();
+    const completion = overwrite ? params.onFileOverwrite(name) : params.onFileSave(name);
+    if (completion) {
+      // Publish the admitted owner state before opening the optimistic transaction.
+      onSettled(() => {
+        void savingAction(completion, retired);
+      });
+    }
+  };
   const list = () =>
     params.readData().agentFilesList?.agentId === params.agentId
       ? params.readData().agentFilesList
@@ -106,32 +174,40 @@ export function AgentFiles(
       <Show
         when={conflictName()}
         fallback={
-          <Show when={params.agentFilesError}>
-            <div class="callout danger">{params.agentFilesError}</div>
-          </Show>
+          <AgentFileStatus
+            request={params.readData().agentFileOutcome}
+            fallback={(message) => (
+              <div class="callout danger" role="alert">
+                {message}
+              </div>
+            )}
+          >
+            <AgentReadNotice request={params.listRead} />
+          </AgentFileStatus>
         }
       >
         {(name) => (
-          <div class="callout danger">
-            <span>{params.agentFilesError ?? t("agents.files.conflictHint")}</span>
+          <div class="callout danger" role="alert">
+            <AgentFileStatus
+              request={params.readData().agentFileOutcome}
+              fallback={(message) => <span>{message}</span>}
+            >
+              <span>{t("agents.files.conflictHint")}</span>
+            </AgentFileStatus>
             <div class="agent-file-actions">
               <button
                 class="btn btn--sm"
                 type="button"
-                disabled={params.readData().agentFilesLoading || params.readData().agentFileSaving}
-                onClick={() => params.onFileReload(name())}
+                disabled={loading() || saving()}
+                onClick={() => void params.onFileReload(name())}
               >
                 {t("common.reload")}
               </button>
               <button
                 class="btn btn--sm"
                 type="button"
-                disabled={
-                  params.readData().agentFilesLoading ||
-                  params.readData().agentFileSaving ||
-                  !params.canWrite
-                }
-                onClick={() => params.onFileOverwrite(name())}
+                disabled={loading() || saving() || !params.canWrite}
+                onClick={() => save(name(), true)}
               >
                 {t("agents.files.overwrite")}
               </button>
@@ -152,9 +228,9 @@ export function AgentFiles(
           )
         }
         actions={
-          <AgentPanelAction
-            label={params.readData().agentFilesLoading ? t("common.loading") : t("common.refresh")}
-            disabled={params.readData().agentFilesLoading}
+          <RefreshButton
+            label={t("common.refresh")}
+            busy={loading()}
             onClick={() => params.onLoadFiles(params.agentId)}
           />
         }
@@ -179,12 +255,12 @@ export function AgentFiles(
                         : undefined,
                     // File reads are serialized; changing the active tab mid-read would
                     // expose an editor whose content request was never accepted.
-                    disabled: params.readData().agentFilesLoading,
+                    disabled: loading(),
                   })),
                   ariaLabel: t("agents.files.coreFilesTitle"),
                   panelId: "agent-file-panel",
                   variant: "sub",
-                  onSelect: params.onSelectFile,
+                  onSelect: (name) => void params.onSelectFile(name),
                 }}
               />
               {creatableFiles().length === 0 ? undefined : (
@@ -192,13 +268,13 @@ export function AgentFiles(
                   class="agent-tab-add"
                   aria-label={t("agents.files.addFile")}
                   value={""}
-                  disabled={params.readData().agentFilesLoading}
+                  disabled={loading()}
                   onChange={(e) => {
                     const select = e.currentTarget;
                     const name = select.value;
                     select.value = "";
                     if (name) {
-                      params.onSelectFile(name);
+                      void params.onSelectFile(name);
                     }
                   }}
                 >
@@ -218,7 +294,7 @@ export function AgentFiles(
             >
               <Show
                 when={activeEntry()}
-                fallback={<div class="muted">{t("agents.files.selectFile")}</div>}
+                fallback={<SettingsEmpty message={t("agents.files.selectFile")} />}
               >
                 {(entry) => {
                   let previewModal: OpenClawModalDialog | undefined;
@@ -255,17 +331,10 @@ export function AgentFiles(
                           />
                           <button
                             class="btn btn--sm primary"
-                            disabled={
-                              !params.canWrite ||
-                              !hasContent() ||
-                              params.readData().agentFileSaving ||
-                              !isDirty()
-                            }
-                            onClick={() => params.onFileSave(entry().name)}
+                            disabled={!params.canWrite || !hasContent() || saving() || !isDirty()}
+                            onClick={() => save(entry().name)}
                           >
-                            {params.readData().agentFileSaving
-                              ? t("common.saving")
-                              : t("common.save")}
+                            {saving() ? t("common.saving") : t("common.save")}
                           </button>
                         </div>
                       </div>
@@ -285,7 +354,7 @@ export function AgentFiles(
                           placeholder={
                             hasContent()
                               ? undefined
-                              : params.readData().agentFilesLoading
+                              : loading()
                                 ? t("common.loading")
                                 : t("agents.files.loadHint")
                           }
@@ -327,11 +396,11 @@ export function AgentFiles(
                               list()?.workspace,
                             );
                             const previewTitleId = `agent-file-preview-title-${toDomId(entry().name)}`;
-                            const [previewStatusLabel, previewStatusClass] = showMissing()
-                              ? [t("agents.files.willCreateOnSave"), "is-missing"]
+                            const previewStatusLabel = showMissing()
+                              ? t("agents.files.willCreateOnSave")
                               : isDirty() || conflictName()
-                                ? [t("agents.files.liveDraftPreview"), "is-dirty"]
-                                : [t("agents.files.savedPreview"), "is-synced"];
+                                ? t("agents.files.liveDraftPreview")
+                                : t("agents.files.savedPreview");
                             const previewUpdatedLabel = entry()?.updatedAtMs
                               ? t("agents.files.updated", {
                                   time: formatRelativeTimestamp(entry().updatedAtMs),
@@ -348,39 +417,32 @@ export function AgentFiles(
                               activePathLabel,
                               previewTitleId,
                               previewStatusLabel,
-                              previewStatusClass,
                               previewUpdatedLabel,
                               activeName: entry().name,
                             };
                           }}
                         >
                           {(preview) => (
-                            <div class={["md-preview-dialog__panel", { fullscreen: fullscreen() }]}>
-                              <div class="md-preview-dialog__header">
-                                <div class="md-preview-dialog__header-main">
-                                  <div class="md-preview-dialog__eyebrow">
-                                    <Icon name="scrollText" />
-                                    <span>{getExtensionLabel(preview().activeName)}</span>
-                                  </div>
-                                  <div class="md-preview-dialog__title-wrap">
-                                    <div
-                                      id={preview().previewTitleId}
-                                      class="md-preview-dialog__title"
-                                      translate="no"
-                                    >
-                                      {preview().activeName}
-                                    </div>
-                                    <div class="md-preview-dialog__path mono" translate="no">
-                                      {preview().activePathLabel}
-                                    </div>
-                                  </div>
-                                </div>
+                            <div
+                              class={[
+                                "oc-dialog md-preview-dialog__panel",
+                                { fullscreen: fullscreen() },
+                              ]}
+                            >
+                              <div class="oc-dialog__header md-preview-dialog__header">
+                                <h2
+                                  id={preview().previewTitleId}
+                                  class="oc-dialog__title md-preview-dialog__title"
+                                  translate="no"
+                                >
+                                  {preview().activeName}
+                                </h2>
                                 <div class="md-preview-dialog__actions">
                                   <openclaw-tooltip prop:content={fullscreenLabel()}>
                                     <button
                                       type="button"
                                       class={[
-                                        "btn btn--sm md-preview-icon-btn md-preview-expand-btn",
+                                        "oc-dialog__close md-preview-expand-btn",
                                         { "is-fullscreen": fullscreen() },
                                       ]}
                                       aria-label={fullscreenLabel()}
@@ -398,7 +460,7 @@ export function AgentFiles(
                                   <openclaw-tooltip prop:content={t("agents.files.closePreview")}>
                                     <button
                                       type="button"
-                                      class="btn btn--sm md-preview-icon-btn"
+                                      class="oc-dialog__close"
                                       aria-label={t("agents.files.closePreview")}
                                       onClick={() => closePreview()}
                                     >
@@ -408,29 +470,30 @@ export function AgentFiles(
                                     </button>
                                   </openclaw-tooltip>
                                 </div>
-                              </div>
-                              <div class="md-preview-dialog__meta">
-                                <div
-                                  class={["md-preview-dialog__chip", preview().previewStatusClass]}
-                                  data-priority="essential"
-                                >
-                                  <strong>{preview().previewStatusLabel}</strong>
+                                {preview().activePathLabel !== preview().activeName ? (
+                                  <div
+                                    class="oc-dialog__description md-preview-dialog__path mono"
+                                    translate="no"
+                                  >
+                                    {preview().activePathLabel}
+                                  </div>
+                                ) : null}
+                                <div class="md-preview-dialog__meta">
+                                  {renderPreviewFact(preview().previewStatusLabel)}
+                                  {renderPreviewFact(preview().readingTimeLabel)}
+                                  {renderPreviewFact(
+                                    t("agents.files.words", {
+                                      count: String(preview().draftWordCount),
+                                    }),
+                                    true,
+                                  )}
+                                  {renderPreviewFact(
+                                    `${preview().draftLineCount} ${t("agents.files.lines")}`,
+                                    true,
+                                  )}
+                                  {renderPreviewFact(preview().draftByteSize)}
+                                  {renderPreviewFact(preview().previewUpdatedLabel, true)}
                                 </div>
-                                {renderPreviewFact(
-                                  preview().readingTimeLabel,
-                                  t("agents.files.words", {
-                                    count: String(preview().draftWordCount),
-                                  }),
-                                )}
-                                {renderPreviewFact(
-                                  preview().draftLineCount,
-                                  t("agents.files.lines"),
-                                  true,
-                                )}
-                                {renderPreviewFact(
-                                  preview().draftByteSize,
-                                  preview().previewUpdatedLabel,
-                                )}
                               </div>
                               <div class="md-preview-dialog__body">
                                 <MarkdownHtml
@@ -440,7 +503,7 @@ export function AgentFiles(
                                   options={{ codeBlockChrome: "none", mode: "document" }}
                                 />
                               </div>
-                              <openclaw-modal-actions class="md-preview-dialog__footer">
+                              <openclaw-modal-actions class="oc-dialog__footer md-preview-dialog__footer">
                                 <button
                                   type="button"
                                   class="btn btn--sm"

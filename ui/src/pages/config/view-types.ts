@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import type { WebPushSnapshot } from "../../app/web-push.ts";
+import type { ConfigFormProps } from "../../components/config-form.shared.ts";
 import type { createConfigPage } from "./config-page-state.ts";
 import type { SettingsMediaDeviceState } from "./view-state.ts";
 import type { TabIconViewProps } from "./view-tab-icon.tsx";
@@ -8,8 +9,15 @@ type ConfigPageProps = ReturnType<ReturnType<typeof createConfigPage>["configPro
 // Async presenters retain their owners' admitted completions.
 type ConfigData = {
   [Key in keyof ConfigPageProps]: Key extends
+    | "onSave"
+    | "onRawDiscard"
+    | "onOpenFile"
+    | "presentationRetired"
+    | "setSessionObserverEnabled"
+    | "setSessionObserverUtilityModel"
     | "onNativeNotificationsSendTest"
     | "onImportCustomTheme"
+    | "onCameraSelect"
     | "onWebPushSubscribe"
     | "onWebPushUnsubscribe"
     | "onWebPushTest"
@@ -24,6 +32,10 @@ type ConfigData = {
 type ConfigViewOptions = Partial<
   Pick<
     ConfigData,
+    | "schemaRead"
+    | "onRetrySchema"
+    | "appearanceDisplayReady"
+    | "onAppearanceDataNeeded"
     | "mutationAllowed"
     | "openFileAllowed"
     | "rawDraftPending"
@@ -36,6 +48,7 @@ type ConfigViewOptions = Partial<
     | "onRetryThemeCatalog"
     | "customThemeImportExpanded"
     | "onOpenCustomThemeImport"
+    | "onCustomThemeImportFocus"
     | "terminalFontFamily"
     | "forceShowAdvanced"
     | "forceAdvancedSection"
@@ -84,15 +97,22 @@ type ConfigViewOptions = Partial<
   sessionObserverModels?: readonly ConfigPageProps["sessionObserverModels"][number][];
   microphone?: SettingsMediaDeviceState;
   camera?: SettingsMediaDeviceState;
-  onOpenFile?: () => void;
+  onOpenFile?: ConfigPageProps["onOpenFile"];
   webPush?: WebPushSnapshot;
   includeSections?: readonly string[];
   excludeSections?: readonly string[];
   /** Embedded schema editors can provide their own section chrome. */
   embeddedEditor?: boolean;
+  /** A section narrowed by the page is titled for what is left in it. */
+  sectionTitle?: string;
+  /** Append Advanced sections without blocking one browser task. */
+  progressive?: boolean;
   sectionPrelude?: JSX.Element;
   renderSection?: (editor: JSX.Element) => JSX.Element;
-  settingsLayout?: "tabs" | "accordion";
+  /** `stack` shows every included section on one page, with no section navigation. */
+  settingsLayout?: "tabs" | "accordion" | "stack";
+  /** Sections a curated page titles itself; see ConfigFormProps. */
+  curatedSections?: ConfigFormProps["curatedSections"];
 };
 
 export type ConfigProps = Omit<ConfigData, keyof ConfigViewOptions | keyof TabIconViewProps> &

@@ -1,6 +1,10 @@
 /** Model-facing schema and input validation for the cron tool. */
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { Type, type TSchema } from "typebox";
+import {
+  AutomationOutcomeSchema,
+  AutomationResultSummarySchema,
+} from "../../../packages/gateway-protocol/src/schema/cron-automation-result.js";
 import { parseCronPacingBounds } from "../../cron/pacing.js";
 import type { CronPacing } from "../../cron/types.js";
 import { CRON_MANAGEMENT_METHODS } from "../../gateway/cron-creator-authority-grant.js";
@@ -32,12 +36,14 @@ const CRON_ACTIONS = [
   "run",
   "runs",
   "wake",
+  "bind",
+  "scratch_get",
+  "scratch_set",
+  "record_result",
+  "next_check",
 ] as const;
 
 const CRON_SELF_ACTIONS = ["status", "list", "get", "remove", "runs"] as const;
-
-// Scheduler status exposes global metadata; recovery inspects caller-visible records only.
-export const CRON_SCOPED_READ_ACTIONS: readonly string[] = ["list", "get", "runs"];
 
 const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "stream", "event"] as const;
 // When cron.triggers.enabled is explicitly false, the scheduler rejects
@@ -51,7 +57,6 @@ const CRON_DELIVERY_MODES = ["none", "announce", "webhook"] as const;
 const CRON_RUN_MODES = ["due", "force"] as const;
 
 type CronToolSchemaOptions = {
-  readOnly?: boolean;
   agentSessionKey?: string;
   management?: "only" | "also";
   allowCommandJobs?: boolean;
@@ -369,7 +374,6 @@ const cronToolSchemas = createCachedToolSchema({
       options?.management ?? null,
       options?.allowCommandJobs !== false,
       options?.selfRemoveOnly === true,
-      options?.readOnly === true,
       options?.activeRun === true,
       options?.nextCheckEnabled === true,
       Boolean(options?.agentSessionKey?.trim()),
@@ -381,12 +385,9 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
   const triggersEnabled = options?.triggersEnabled !== false;
   const management = Boolean(options?.management);
   const managementOnly = options?.management === "only";
-  const availableActions = managementOnly
+  const actions = managementOnly
     ? CRON_MANAGEMENT_METHODS.map((method) => method.slice(5))
     : CRON_ACTIONS;
-  const actions = options?.readOnly
-    ? availableActions.filter((action) => CRON_SCOPED_READ_ACTIONS.includes(action))
-    : availableActions;
   const job = Type.Optional(
     Type.Object(
       {
@@ -474,7 +475,7 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
               ...actions.filter((action) =>
                 CRON_SELF_ACTIONS.some((allowed) => allowed === action),
               ),
-              ...(!managementOnly && !options.readOnly && options.activeRun
+              ...(!managementOnly && options.activeRun
                 ? [
                     "scratch_get",
                     "scratch_set",
@@ -491,18 +492,25 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
       ),
       limit: optionalPositiveIntegerSchema({
         maximum: CRON_TOOL_LIST_MAX_LIMIT,
-        description: 'Maximum jobs returned by action="list"',
+        description: 'Maximum jobs or runs returned by action="list" or action="runs"',
       }),
       offset: optionalNonNegativeIntegerSchema({
-        description: 'Job offset for action="list"; use nextOffset to load the next page',
+        description:
+          'Offset for action="list" or action="runs"; use nextOffset to load the next page',
       }),
       job: managementOnly ? Type.Optional(Type.Omit(job, ["declarationKey", "owner"])) : job,
+      toolsAllowMode: Type.Optional(
+        Type.Literal("exact", {
+          description:
+            'Add/update: use "exact" to keep the requested toolsAllow without configured default tools. Omitted adds cron.defaultTools before policy checks. An explicit [] always stays tool-less.',
+        }),
+      ),
       jobId: Type.Optional(Type.String()),
       id: Type.Optional(Type.String()),
       content: Type.Optional(Type.Union([Type.String({ maxLength: 262144 }), Type.Null()])),
       expectedRevision: optionalNonNegativeIntegerSchema(),
-      outcome: optionalStringEnum(["no_change", "progress", "done", "blocked", "needs_attention"]),
-      summary: Type.Optional(Type.String({ minLength: 1, maxLength: 2000 })),
+      outcome: Type.Optional(AutomationOutcomeSchema),
+      summary: Type.Optional(AutomationResultSummarySchema),
       in: Type.Optional(
         Type.String({
           description: 'Relative duration for action="next_check" (for example, "15m")',
@@ -524,10 +532,9 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
       ),
       agentId: Type.Optional(
         Type.String({
-          description:
-            managementOnly || options?.readOnly
-              ? 'Agent filter for action="list".'
-              : 'List filter for `action: "list"`; wake target override for `action: "wake"` (defaults to the calling agent when omitted on wake)',
+          description: managementOnly
+            ? 'Agent filter for action="list".'
+            : 'List filter for `action: "list"`; wake target override for `action: "wake"` (defaults to the calling agent when omitted on wake)',
         }),
       ),
       sessionKey: Type.Optional(
@@ -539,18 +546,6 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
     },
     { additionalProperties: true },
   );
-  if (options?.readOnly) {
-    return Type.Pick(schema, [
-      "action",
-      "gatewayUrl",
-      "gatewayToken",
-      "timeoutMs",
-      "includeDisabled",
-      "jobId",
-      "id",
-      ...(!options.selfRemoveOnly ? ["limit", "offset", "agentId"] : []),
-    ]);
-  }
   if (options?.selfRemoveOnly) {
     return Type.Pick(schema, [
       "action",

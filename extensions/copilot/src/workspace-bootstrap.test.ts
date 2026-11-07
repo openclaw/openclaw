@@ -26,6 +26,7 @@ it("returns undefined instructions when workspaceDir is missing", async () => {
 });
 
 it("orders persona context and renders the SOUL hint through the workspace boundary", async () => {
+  await write("AGENTS.md", "Follow AGENTS guidance.");
   await write("USER.md", "USER body");
   await write("SOUL.md", "SOUL body");
   const instructions = (await load(workspaceDir)) ?? "";
@@ -33,21 +34,14 @@ it("orders persona context and renders the SOUL hint through the workspace bound
   expect(instructions.indexOf("SOUL body")).toBeLessThan(instructions.indexOf("USER body"));
   expect(instructions).toContain(`## ${path.join(workspaceDir, "SOUL.md")}`);
   expect(instructions).toContain(`## ${path.join(workspaceDir, "USER.md")}`);
+  expect(instructions).toContain("Copilot SDK loads AGENTS.md natively");
+  expect(instructions).not.toContain("Follow AGENTS guidance.");
 });
 
-it.each([
-  {
-    soul: "Soul voice goes here.",
-    includes: ["Soul voice goes here.", "Copilot SDK loads AGENTS.md natively"],
-  },
-  { soul: undefined, includes: ["[MISSING] Expected at:", "SOUL.md"] },
-])("excludes native AGENTS.md and renders SOUL content: $soul", async ({ soul, includes }) => {
+it("excludes native AGENTS.md and renders missing SOUL context", async () => {
   await write("AGENTS.md", "Follow AGENTS guidance.");
-  if (soul) {
-    await write("SOUL.md", soul);
-  }
   const result = await load(workspaceDir);
-  for (const text of includes) {
+  for (const text of ["[MISSING] Expected at:", "SOUL.md"]) {
     expect(result).toContain(text);
   }
   expect(result).not.toContain("Follow AGENTS guidance.");

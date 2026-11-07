@@ -4,6 +4,22 @@ import { en } from "./en.ts";
 
 // Editor copy stays with the lazy Skills surface; sessions load only their subset.
 const enSkillLibrary = {
+  skillGroups: {
+    workspace: "Workspace skills",
+    learned: "Learned skills",
+    builtIn: "Built-in skills",
+    installed: "Installed skills",
+    extra: "Extra skills",
+    other: "Other skills",
+  },
+  skillStatus: {
+    bundled: "bundled",
+    eligible: "eligible",
+    blocked: "blocked",
+    disabled: "disabled",
+    blockedAllowlist: "blocked by allowlist",
+    blockedAgentFilter: "blocked by agent filter",
+  },
   skillDiscovery: {
     search: "Search skills",
     settings: "Skill settings",
@@ -25,10 +41,11 @@ const enSkillLibrary = {
     addFile: "Add file",
     deleteFile: "Delete file",
     deleteFileConfirm: "Remove {path} from the next saved bundle?",
+    deleteFileBody: "The file stays until you save.",
     fileExists: "That file already exists. Select it to edit its contents.",
     binary: "Binary attachment. Its original bytes are preserved when you save.",
     binaryRead: registerSessionSkillLibraryEnglish.catalog.skillLibrary.binaryRead,
-    readOnly: "You can read this skill. Only its owner or an authorized administrator can edit it.",
+    readOnly: "You can view this skill, but only its owner or an authorized admin can edit it.",
     personalTarget:
       "My skills. Save to your personal library; existing session selections change only when you explicitly attach or refresh.",
     technicalDetails: registerSessionSkillLibraryEnglish.catalog.skillLibrary.technicalDetails,
@@ -39,7 +56,8 @@ const enSkillLibrary = {
     defaultLimit: registerSessionSkillLibraryEnglish.catalog.skillLibrary.defaultLimit,
     session: registerSessionSkillLibraryEnglish.catalog.skillLibrary.session,
     search: "Search names, descriptions, and owners",
-    empty: "No skills in this library. Create one or import a bundle.",
+    empty: "No skills yet. Create or import one.",
+    noMatches: "No skills match your search.",
     you: "You",
     shared: "Shared with team",
     private: "Private",
@@ -53,6 +71,8 @@ const enSkillLibrary = {
     selectRevision: "Select a revision",
     rollback: "Restore revision",
     discard: "Discard your unsaved skill changes?",
+    discardBody: "Your edits since the last save are lost.",
+    discardAction: "Discard",
     conflict:
       "This skill changed since you opened it. Your draft is preserved. Copy your changes, then close and reopen the skill to review the current revision before saving.",
     signIn: "Sign in with a Gateway profile to create personal skills.",
@@ -60,8 +80,7 @@ const enSkillLibrary = {
     bundleLimit: "Use at most 256 files, 1 MiB per file, and 8 MiB per bundle or ZIP.",
     missingSkill:
       "Choose SKILL.md together with its supporting files, or a folder containing SKILL.md at its root.",
-    uploadFailed:
-      "The Gateway did not confirm the upload. Check your library before retrying the import.",
+    uploadFailed: "Couldn’t confirm the upload. Check your library before importing again.",
     importHelp: "Import a skill into your private library.",
     importClawHub: "Import {source} into your private library.",
     files: "Files",
@@ -74,7 +93,11 @@ const enSkillLibrary = {
     clearSelection: "Clear",
     confirm: {
       remove: "Remove {slug} from the library?",
-      transfer: "Transfer {slug} to team ownership? Team administrators will manage it.",
+      transfer: "Transfer {slug} to team ownership?",
+    },
+    confirmBody: {
+      remove: "New sessions can’t attach it.",
+      transfer: "Team admins will manage it.",
     },
     receipt: {
       published: "Saved {slug} to {target} library (owner: {owner}).",
@@ -88,6 +111,8 @@ export const registerSkillLibraryEnglish = Object.assign(
   () => {
     Object.assign((en.skillLibrary ??= enSkillLibrary.skillLibrary), enSkillLibrary.skillLibrary);
     en.skillDiscovery = enSkillLibrary.skillDiscovery;
+    Object.assign(en.skillGroups, enSkillLibrary.skillGroups);
+    Object.assign(en.skillStatus, enSkillLibrary.skillStatus);
   },
   { catalog: enSkillLibrary },
 );

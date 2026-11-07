@@ -83,7 +83,6 @@ export type AgentEventRuntimePayload = AgentEventPayload & {
   readonly mainSessionRestartRecovery?: true;
   readonly projectSessionLifecycle?: boolean;
   readonly projectSessionMessages?: boolean;
-  readonly isHeartbeat?: boolean;
   readonly verboseLevel?: AgentRunContext["verboseLevel"];
   readonly registeredAt?: number;
 };

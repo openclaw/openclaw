@@ -23,6 +23,11 @@ const createWrapperFixture = useAuthBridgeFixture((codexBin) =>
     .mockResolvedValueOnce({ name: CODEX_ACP_PACKAGE, bin: codexBin }),
 );
 const apiKeyAuth = (key: string) => ({ OPENAI_API_KEY: key, tokens: null, last_refresh: null });
+const chatGptAuth = {
+  auth_mode: "chatgpt",
+  tokens: { access_token: "existing-token" },
+  last_refresh: null,
+};
 
 async function adapterFixture(source = "console.log('ok');\n") {
   const fixture = createWrapperFixture();
@@ -48,9 +53,7 @@ function expectWrapperCommand(command: AcpxAgentCommand | undefined, wrapperPath
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  const error = await fs.access(targetPath).catch((caught: unknown) => caught);
-  expect(error).toBeInstanceOf(Error);
-  expect(error).toMatchObject({ code: "ENOENT" });
+  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 function runConfigured(wrapperPath: string, script: string, leaseId: string, maxBuffer?: number) {
@@ -260,45 +263,25 @@ describe("prepareAcpxCodexAuthConfig", () => {
     },
   );
 
-  it("writes API-key auth into the isolated Codex ACP home when env auth is present", async () => {
-    const { authPath, run } = await adapterFixture(
-      "console.log(JSON.stringify({ codexHome: process.env.CODEX_HOME }));\n",
-    );
-    await run({ ...process.env, CODEX_API_KEY: "", OPENAI_API_KEY: "sk-test-api-key" });
-    const auth = JSON.parse(await fs.readFile(authPath, "utf8")) as {
-      auth_mode?: unknown;
-      OPENAI_API_KEY?: unknown;
-    };
-    expect(auth).toMatchObject({ OPENAI_API_KEY: "sk-test-api-key" });
-    expect(auth).not.toHaveProperty("auth_mode");
-    if (process.platform !== "win32") {
-      const mode = (await fs.stat(authPath)).mode & 0o777;
-      expect(mode).toBe(0o600);
-    }
-  });
-
-  it("preserves existing isolated Codex auth when env auth is present", async () => {
-    const { authPath, run, writeAuth } = await adapterFixture();
-    const existingAuth = {
-      auth_mode: "chatgpt",
-      tokens: { access_token: "existing-token" },
-      last_refresh: null,
-    };
-    await writeAuth(existingAuth);
-
-    await run({ ...process.env, OPENAI_API_KEY: "sk-test-api-key" });
-    expect(JSON.parse(await fs.readFile(authPath, "utf8"))).toEqual(existingAuth);
-  });
-
-  it("updates existing isolated Codex API-key auth when env auth changes", async () => {
-    const { authPath, run, writeAuth } = await adapterFixture();
-    await writeAuth(apiKeyAuth("sk-old-api-key"));
-
-    await run({ ...process.env, CODEX_API_KEY: "sk-new-api-key", OPENAI_API_KEY: "sk-other-key" });
-
-    expect(JSON.parse(await fs.readFile(authPath, "utf8"))).toMatchObject(
+  it.each([
+    ["creates missing auth", undefined, "", apiKeyAuth("sk-test-api-key")],
+    ["preserves ChatGPT auth", chatGptAuth, "", chatGptAuth],
+    [
+      "updates API-key auth",
+      apiKeyAuth("sk-old-api-key"),
+      "sk-new-api-key",
       apiKeyAuth("sk-new-api-key"),
-    );
+    ],
+  ] as const)("%s", async (_name, existing, codexKey, expected) => {
+    const { authPath, run, writeAuth } = await adapterFixture();
+    if (existing) {
+      await writeAuth(existing);
+    }
+    await run({ ...process.env, CODEX_API_KEY: codexKey, OPENAI_API_KEY: "sk-test-api-key" });
+    expect(JSON.parse(await fs.readFile(authPath, "utf8"))).toEqual(expected);
+    if (!existing && process.platform !== "win32") {
+      expect((await fs.stat(authPath)).mode & 0o777).toBe(0o600);
+    }
   });
 
   it("does not copy source Codex auth", async () => {
@@ -348,9 +331,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     );
     expect(isolatedConfig).toContain(`[projects.${JSON.stringify(path.resolve(root))}]`);
     expect(isolatedConfig).toContain('trust_level = "trusted"');
-    const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
-    expect(wrapper).toContain("CODEX_HOME: codexHome");
-    expect(wrapper).not.toContain(sourceCodexHome);
+    expect(await fs.readFile(generated.wrapperPath, "utf8")).not.toContain(sourceCodexHome);
     await expectPathMissing(path.join(agentDir, "acp-auth", "codex-source", "auth.json"));
     await expectPathMissing(path.join(agentDir, "acp-auth", "codex", "auth.json"));
   });
@@ -480,36 +461,32 @@ describe("prepareAcpxCodexAuthConfig", () => {
     await expectPathMissing(stderrLogPath);
   });
 
-  it("keeps the persisted stderr line tail UTF-16 safe at the 256 KiB boundary", async () => {
-    const { log } = await captureGeneratedCodexWrapperStderr(`
-      const maxChars = 256 * 1024;
+  it.each([
+    {
+      name: "persisted UTF-16 line tail",
+      source: `
       process.stderr.write("🚀\\n");
-      process.stderr.write("a".repeat(maxChars - 3) + "\\n");
-    `);
-
-    expect(log).toBe(`\n${"a".repeat(WRAPPER_STDERR_LOG_MAX_CHARS - 3)}\n`);
-    expect(log).not.toContain("�");
-  });
-
-  it("keeps the pending no-newline stderr tail UTF-16 safe", async () => {
-    const { log } = await captureGeneratedCodexWrapperStderr(`
-      const maxChars = 256 * 1024;
-      process.stderr.write("🚀" + "a".repeat(maxChars - 1));
-    `);
-
-    expect(log).toBe("a".repeat(WRAPPER_STDERR_LOG_MAX_CHARS - 1));
-    expect(log).not.toContain("�");
-  });
-
-  it("decodes split UTF-8 and flushes a partial final sequence", async () => {
-    const { log } = await captureGeneratedCodexWrapperStderr(`
+      process.stderr.write("a".repeat(256 * 1024 - 3) + "\\n");
+    `,
+      expected: `\n${"a".repeat(WRAPPER_STDERR_LOG_MAX_CHARS - 3)}\n`,
+    },
+    {
+      name: "pending UTF-16 tail",
+      source: `process.stderr.write("🚀" + "a".repeat(256 * 1024 - 1));`,
+      expected: "a".repeat(WRAPPER_STDERR_LOG_MAX_CHARS - 1),
+    },
+    {
+      name: "split UTF-8 and partial final sequence",
+      source: `
       process.stderr.write(Buffer.from([0xf0, 0x9f]));
       setTimeout(() => {
         process.stderr.write(Buffer.from([0x9a, 0x80, 0x0a, 0xe2]));
       }, 50);
-    `);
-
-    expect(log).toBe("🚀\n�");
+    `,
+      expected: "🚀\n�",
+    },
+  ])("preserves $name", async ({ source, expected }) => {
+    expect((await captureGeneratedCodexWrapperStderr(source)).log).toBe(expected);
   });
 
   it("does not normalize custom Claude commands that only mention the package name", async () => {

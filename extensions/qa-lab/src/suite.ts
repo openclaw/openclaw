@@ -228,16 +228,13 @@ export function throwQaSuiteCleanupErrors(params: {
   cleanupFailures: readonly QaSuiteCleanupFailure[];
   runFailed: boolean;
   runError: unknown;
-  result?: QaSuiteResult;
   scenarios?: readonly QaSuiteScenarioResult[];
-  evidenceWritten?: boolean;
 }) {
   if (params.cleanupFailures.length === 0) {
     return;
   }
-  const result = params.result;
-  const scenarios = result?.scenarios ?? params.scenarios ?? [];
-  const scenariosCompleted = result !== undefined || params.scenarios !== undefined;
+  const scenarios = params.scenarios ?? [];
+  const scenariosCompleted = params.scenarios !== undefined;
   const failed = scenarios.filter((scenario) => scenario.status === "fail").length;
   const skipped = scenarios.filter((scenario) => scenario.status === "skip").length;
   const passed = scenarios.length - failed - skipped;
@@ -261,11 +258,6 @@ export function throwQaSuiteCleanupErrors(params: {
           `${sanitizeQaSuiteProgressValue(phase)}: ${sanitizeQaSuiteProgressValue(formatErrorMessage(error))}`,
       )
       .join("; ")}`,
-    ...(result
-      ? [
-          `retained artifacts: output=${sanitizeQaSuiteProgressValue(result.outputDir)} report=${sanitizeQaSuiteProgressValue(result.reportPath)} summary=${sanitizeQaSuiteProgressValue(result.summaryPath)}${params.evidenceWritten ? ` evidence=${sanitizeQaSuiteProgressValue(result.evidencePath)}` : ""}`,
-        ]
-      : []),
   ].join("\n");
   const errors = params.cleanupFailures.map((failure) => failure.error);
   if (params.runFailed) {

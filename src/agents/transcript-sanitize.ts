@@ -7,6 +7,7 @@ import {
   sanitizeInlineImageDataUrlForStorage,
 } from "@openclaw/media-core/inline-image-data-url";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { cloneTranscriptEnvelope } from "../config/sessions/transcript-json.js";
 import type { AgentMessage } from "./runtime/index.js";
 
 const isImageMimeType = (value: unknown): value is string =>
@@ -38,7 +39,7 @@ function sanitizeTranscriptImageRecord(
   if (source.data === sanitized.base64 && hasCanonicalMimeTypes) {
     return source;
   }
-  const next: Record<string, unknown> = { ...source, data: sanitized.base64 };
+  const next = Object.assign(cloneTranscriptEnvelope(source), { data: sanitized.base64 });
   for (const field of mimeTypeFields) {
     next[field] = sanitized.mimeType;
   }
@@ -123,8 +124,9 @@ function isGitHubCopilotResponsesRoute(route: TranscriptAssistantRoute | undefin
   );
 }
 
-function isStructurallyValidOpaqueReplayToken(value: string): boolean {
+function isStructurallyValidOpaqueReplayToken(value: unknown): value is string {
   return (
+    typeof value === "string" &&
     value.length > 0 &&
     value === value.trim() &&
     OPAQUE_REPLAY_TOKEN_RE.test(value) &&
@@ -209,7 +211,6 @@ function sanitizeCompactionReplayState(
     (!isOpenAI && !isAnthropic) ||
     !(isOpenAI ? isOpenAIResponsesRoute(route) : isAnthropicReasoningRoute(route)) ||
     value.v !== 1 ||
-    typeof value.data !== "string" ||
     (value.type === "openai-responses-retained-compaction" && value.replayIndex !== undefined) ||
     (value.replayIndex !== undefined &&
       (isSuppression ||
@@ -235,19 +236,14 @@ function sanitizeCompactionReplayState(
       ? isStructurallyValidOpaqueReplayToken(value.data)
         ? value.data
         : undefined
-      : value.data.length > 0
+      : typeof value.data === "string" && value.data.length > 0
         ? value.data
         : undefined;
   if (data === undefined) {
     return undefined;
   }
   const encryptedContent = !isSuppression && isAnthropic ? value.encryptedContent : undefined;
-  if (
-    encryptedContent !== undefined &&
-    encryptedContent !== null &&
-    (typeof encryptedContent !== "string" ||
-      !isStructurallyValidOpaqueReplayToken(encryptedContent))
-  ) {
+  if (encryptedContent != null && !isStructurallyValidOpaqueReplayToken(encryptedContent)) {
     return undefined;
   }
   const replayId =
@@ -353,12 +349,7 @@ export function sanitizeOpenAIReasoningSignature(
   }
   const encryptedContent = parsed.encrypted_content;
   const hasEncryptedContent = Object.hasOwn(parsed, "encrypted_content");
-  if (
-    encryptedContent !== undefined &&
-    encryptedContent !== null &&
-    (typeof encryptedContent !== "string" ||
-      !isStructurallyValidOpaqueReplayToken(encryptedContent))
-  ) {
+  if (encryptedContent != null && !isStructurallyValidOpaqueReplayToken(encryptedContent)) {
     return undefined;
   }
   if (
@@ -401,7 +392,6 @@ function sanitizeOpenAICompletionsToolSignature(value: string): string | undefin
   if (
     !parsed ||
     parsed.type !== "reasoning.encrypted" ||
-    typeof parsed.data !== "string" ||
     !isStructurallyValidOpaqueReplayToken(parsed.data) ||
     (parsed.id !== undefined &&
       parsed.id !== null &&
@@ -472,21 +462,18 @@ function sanitizeTranscriptStructuredValue(
     location === "root" && source.role === "assistant"
       ? resolveTranscriptAssistantRoute(source)
       : assistantRoute;
-  let next: Record<string, unknown> | null = null;
-  if (source !== value) {
-    next = { ...source };
-  }
+  let next: Record<string, unknown> | null = source !== value ? source : null;
   for (const [key, item] of Object.entries(source)) {
     if (location === "root" && source.role === "assistant" && key === "providerReplay") {
       const sanitizedReplay = sanitizeCompactionReplayState(item, currentAssistantRoute);
       if (sanitizedReplay !== undefined) {
         if (sanitizedReplay !== item) {
-          next ??= { ...source };
+          next ??= cloneTranscriptEnvelope(source);
           next[key] = sanitizedReplay;
         }
         continue;
       }
-      next ??= { ...source };
+      next ??= cloneTranscriptEnvelope(source);
       delete next[key];
       continue;
     }
@@ -534,7 +521,7 @@ function sanitizeTranscriptStructuredValue(
     }
     if (sanitizedField !== undefined) {
       if (sanitizedField !== item) {
-        next ??= { ...source };
+        next ??= cloneTranscriptEnvelope(source);
         next[key] = sanitizedField;
       }
       continue;
@@ -558,7 +545,7 @@ function sanitizeTranscriptStructuredValue(
     if (sanitized === item) {
       continue;
     }
-    next ??= { ...source };
+    next ??= cloneTranscriptEnvelope(source);
     next[key] = sanitized;
   }
   seen.delete(value);

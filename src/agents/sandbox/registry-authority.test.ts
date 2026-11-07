@@ -1,46 +1,44 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
+import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { root as fsSafeRoot } from "@openclaw/fs-safe/root";
+import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
-import { resolveLocalWorkspaceOwner } from "../../gateway/worker-environments/local-workspace-projection.js";
+import {
+  deleteSessionEntryLifecycle,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import { prepareGitHubPublicationSession } from "../../gateway/github-publication-availability.js";
+import { localWorkspaceProjectionPath } from "../../gateway/worker-environments/local-workspace-checkout.js";
+import {
+  resolveLocalWorkspaceOwner,
+  withLocalWorkspaceProjection,
+} from "../../gateway/worker-environments/local-workspace-projection.js";
+import { withLocalWorkspaceStore } from "../../gateway/worker-environments/local-workspace-store.js";
+import { localWorkspaceProjectionFixture } from "../../gateway/worker-environments/local-workspace-store.test-support.js";
 import * as nativeSqlite from "../../infra/node-sqlite.js";
 import type { SqliteWorkerAdmissionRequest } from "../../infra/sqlite-worker-operation-admission.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-} from "../../state/openclaw-agent-db.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
-import { insertRegistryWorktree } from "../worktrees/registry.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import { insertRegistryWorktree, updateRegistryWorktree } from "../worktrees/registry.js";
+import { getRegistryWorktree } from "../worktrees/registry.test-support.js";
 import type { ManagedWorktreeRecord } from "../worktrees/types.js";
 import { readBrowserRegistry, updateBrowserRegistry } from "./registry.js";
+import { useSandboxRegistryState } from "./registry.test-support.js";
 
-const dirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-    await closeStateDatabaseForTest();
-    vi.unstubAllEnvs();
-    cleanup();
-  }),
-);
+const state = useSandboxRegistryState("openclaw-browser-registry-authority-");
 
-it("retains local-workspace authority through browser transaction and commit grants", async () => {
-  const root = dirs.make("openclaw-browser-registry-authority-");
-  vi.stubEnv("OPENCLAW_STATE_DIR", root);
-  const sessionKey = "agent:main:browser-authority";
+async function managedWorkspace(row = localWorkspaceProjectionFixture(randomUUID(), state.root)) {
+  const sessionKey = row.session_key;
   const worktree: ManagedWorktreeRecord = {
-    id: "browser-worktree",
-    name: "browser",
-    repoFingerprint: "synthetic-browser-repo",
-    repoRoot: path.join(root, "repo"),
-    path: path.join(root, "checkout"),
-    branch: "openclaw/browser",
+    id: row.worktree_id,
+    name: "guarded",
+    repoFingerprint: "synthetic-repo",
+    repoRoot: path.join(state.root, "repo"),
+    path: path.join(state.root, "checkout"),
+    branch: "openclaw/guarded",
     baseRef: "main",
     ownerKind: "session",
     ownerId: sessionKey,
@@ -49,20 +47,113 @@ it("retains local-workspace authority through browser transaction and commit gra
   };
   await insertRegistryWorktree(process.env, worktree);
   const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-  const sessionTarget = { agentId: "main", sessionKey, storePath };
+  const scope = { agentId: "main", sessionKey, storePath };
   const session = {
-    sessionId: "browser-session",
+    sessionId: row.session_id,
     updatedAt: 1,
     worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
   };
-  replaceSessionEntrySync(sessionTarget, session);
+  await replaceSessionEntry(scope, session);
+  const cfg = { session: { store: storePath } };
+  return { row, sessionKey, worktree, scope, session, cfg };
+}
+
+it.each([
+  ["retired worktree", "Worktree owner or binding changed"],
+  ["replaced worktree", "Worktree owner or binding changed"],
+  ["deleted session", "Local sandbox workspace authority changed"],
+  ["rotated session", "Local sandbox workspace authority changed"],
+  ["released publication", "GitHub publication session lifecycle changed"],
+])("refuses the next filesystem effect after %s", async (change, refusal) => {
+  const { row, sessionKey, worktree, scope, session, cfg } = await managedWorkspace();
+  using publication =
+    change === "released publication"
+      ? await prepareGitHubPublicationSession(sessionKey, { agentId: "main", cfg })
+      : undefined;
+  const assertCaller = vi.fn(() => {
+    publication?.readCurrent();
+  });
+  using owner = await resolveLocalWorkspaceOwner({
+    ...scope,
+    cfg,
+    assertCurrent: assertCaller,
+  });
+  if (!owner) {
+    throw new Error("Expected a resolved workspace owner");
+  }
+  row.projection_path = localWorkspaceProjectionPath(owner);
+  await fs.mkdir(row.projection_path, { recursive: true });
+  await withLocalWorkspaceStore({ worktreeId: worktree.id }, (store) => store.create(row));
+  let refusedEffect: Promise<void> | undefined;
+  await expect(
+    withLocalWorkspaceProjection(
+      owner,
+      async (projection) => {
+        for (const check of [projection.current, projection.workerAuthority.assertCurrent!]) {
+          assertCaller.mockClear();
+          check();
+          expect(assertCaller).toHaveBeenCalledOnce();
+        }
+        const files = await fsSafeRoot(projection.current().projection_path, {
+          assertBeforeMutation: projection.current,
+        });
+        await files.write("owned.txt", "accepted");
+        if (change === "retired worktree" || change === "replaced worktree") {
+          await updateRegistryWorktree(
+            process.env,
+            worktree.id,
+            change === "retired worktree"
+              ? { removedAt: 2 }
+              : {
+                  repositoryIdentity: {
+                    repoRoot: path.join(state.root, "replacement"),
+                    repoFingerprint: "replacement",
+                  },
+                },
+          );
+          if (change === "replaced worktree") {
+            expect(getRegistryWorktree(process.env, worktree.id)?.repoRoot).toBe(
+              path.join(state.root, "replacement"),
+            );
+          }
+        } else if (change === "deleted session") {
+          await deleteSessionEntryLifecycle({
+            ...scope,
+            archiveTranscript: false,
+            target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+          });
+        } else if (change === "rotated session") {
+          await replaceSessionEntry(scope, {
+            ...session,
+            lifecycleRevision: "replacement",
+            updatedAt: 2,
+          });
+        } else {
+          publication!.release();
+        }
+        refusedEffect = files.write("owned.txt", "must not publish");
+        await refusedEffect;
+      },
+      { provision: true },
+    ),
+  ).rejects.toThrow(refusal);
+  expect(refusedEffect).toBeDefined();
+  expect(await fs.readFile(path.join(row.projection_path, "owned.txt"), "utf8")).toBe("accepted");
+});
+
+it("retains local-workspace authority through browser transaction and commit grants", async () => {
+  const { sessionKey, worktree, scope, session, cfg } = await managedWorkspace({
+    ...localWorkspaceProjectionFixture("browser-worktree", state.root),
+    session_key: "agent:main:browser-authority",
+    session_id: "browser-session",
+  });
 
   class WorkspaceRevokedError extends Error {}
   const refusal = new WorkspaceRevokedError("Browser workspace authority revoked");
   let stage: SqliteWorkerAdmissionRequest["stage"] | undefined;
   let revokeAt: SqliteWorkerAdmissionRequest["stage"] | undefined;
   const ownerParams = {
-    cfg: { session: { store: storePath } },
+    cfg,
     agentId: "main",
     sessionKey,
     workspaceDir: worktree.path,
@@ -117,7 +208,7 @@ it("retains local-workspace authority through browser transaction and commit gra
     expect((await readBrowserRegistry()).entries).toEqual([entry]);
   }
   revokeAt = undefined;
-  await replaceSessionEntry(sessionTarget, {
+  await replaceSessionEntry(scope, {
     ...session,
     lifecycleRevision: "replacement",
     updatedAt: 2,

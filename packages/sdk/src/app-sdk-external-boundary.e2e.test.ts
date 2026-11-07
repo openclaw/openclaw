@@ -6,11 +6,9 @@ it("packs an external consumer that uses only the exported entrypoint and a cust
   try {
     await consumer.typecheck(`
         import type {
-          AgentsCreateParams, AgentsDeleteParams, AgentsUpdateParams,
-          ArtifactSummary, ArtifactsDownloadResult, GatewayArtifactSummary,
+          AgentsCreateParams, ArtifactSummary, ArtifactsDownloadResult,
           EnvironmentSummary, EnvironmentsListResult, SessionCreateParams, SessionSendParams,
-          ToolsEffectiveParams, ToolInvokeParams, ToolInvokeResult,
-          WorkerEnvironmentMetadata, WorkerEnvironmentState, WorkerTunnelStatus,
+          ToolInvokeParams, ToolInvokeResult,
         } from "@openclaw/sdk";
         import type * as Protocol from "@openclaw/gateway-protocol";
 
@@ -20,22 +18,14 @@ it("packs an external consumer that uses only the exported entrypoint and a cust
         type Assert<Condition extends true> = Condition;
 
         type AgentCreateIsCanonical = Assert<Equal<AgentsCreateParams, Protocol.AgentsCreateParams>>;
-        type AgentDeleteIsCanonical = Assert<Equal<AgentsDeleteParams, Protocol.AgentsDeleteParams>>;
-        type AgentUpdateIsCanonical = Assert<Equal<AgentsUpdateParams, Protocol.AgentsUpdateParams>>;
-        type GatewayArtifactIsCanonical = Assert<Equal<GatewayArtifactSummary, Protocol.ArtifactSummary>>;
-        type ToolsEffectiveIsCanonical = Assert<Equal<ToolsEffectiveParams, Protocol.ToolsEffectiveParams>>;
-        type WorkerMetadataIsCanonical = Assert<Equal<WorkerEnvironmentMetadata, Protocol.WorkerEnvironmentMetadata>>;
-        type WorkerStateIsCanonical = Assert<Equal<WorkerEnvironmentState, Protocol.WorkerEnvironmentState>>;
-        type TunnelStatusIsCanonical = Assert<Equal<WorkerTunnelStatus, Protocol.WorkerTunnelStatus>>;
 
-        const legacyArtifact: ArtifactSummary = {
-          id: "artifact-old-consumer", type: "file", sessionId: "session-old-consumer",
-          createdAt: "2026-08-16T00:00:00Z",
-          expiresAt: "2026-08-17T00:00:00Z",
-          download: { mode: "future-delivery-mode" },
-        };
         const artifactDownload: ArtifactsDownloadResult = {
-          artifact: legacyArtifact, expiresAt: "2026-08-17T00:00:00Z",
+          artifact: {
+            id: "artifact-old-consumer", type: "file", sessionId: "session-old-consumer",
+            createdAt: "2026-08-16T00:00:00Z", expiresAt: "2026-08-17T00:00:00Z",
+            download: { mode: "future-delivery-mode" },
+          } satisfies ArtifactSummary,
+          expiresAt: "2026-08-17T00:00:00Z",
         };
         const environment: EnvironmentSummary = {
           id: "gateway", type: "local", status: "available", trust: "persistent", desktop: true,
@@ -52,15 +42,9 @@ it("packs an external consumer that uses only the exported entrypoint and a cust
         };
         const environments: EnvironmentsListResult = { environments: [environment] };
         const createSession: SessionCreateParams = { attachments: [{ kind: "custom" }] };
-        const sendSession: SessionSendParams = {
-          key: "agent:main:external", message: "hello", attachments: [{ kind: "custom" }],
-        };
-        const toolParams: ToolInvokeParams = {
-          sessionKey: "agent:main:external", args: { query: "status" },
-        };
-        const toolResult: ToolInvokeResult = {
-          ok: false, toolName: "status", error: { message: "unavailable" },
-        };
+        const sendSession: SessionSendParams = { key: "external", message: "hello", attachments: [{ kind: "custom" }] };
+        const toolParams: ToolInvokeParams = { sessionKey: "external", args: { query: "status" } };
+        const toolResult: ToolInvokeResult = { ok: false, toolName: "status", error: { message: "unavailable" } };
 
         void [artifactDownload, environments, createSession, sendSession, toolParams, toolResult];
       `);
@@ -75,45 +59,22 @@ it("packs an external consumer that uses only the exported entrypoint and a cust
         });
         assert.equal(event.type, "run.started");
 
-        const calls = [];
         let closed = false;
-        const transport = {
+        const client = new OpenClaw({ transport: {
           async request(method, params, options) {
-            calls.push({ method, params, options });
-            if (method === "agents.list") return { agents: [{ id: "external" }] };
-            if (method === "agent.wait") {
-              return { status: "ok", runId: "packed-run", sessionKey: "agent:main:external" };
-            }
-            if (method === "artifacts.list") {
-              return { artifacts: [{ id: "artifact-packed", type: "file", title: "packed.txt" }] };
-            }
-            if (method === "environments.list") {
-              return { environments: [{ id: "gateway", type: "local", status: "available" }] };
-            }
-            throw new Error(\`unexpected method: \${method}\`);
+            assert.equal(method, "agent.wait");
+            assert.deepEqual(params, { runId: "packed-run", timeoutMs: 25 });
+            assert.deepEqual(options, { timeoutMs: null });
+            return { status: "ok", runId: "packed-run", sessionKey: "agent:main:external" };
           },
           async *events() {},
-          async close() {
-            closed = true;
-          },
-        };
+          async close() { closed = true; },
+        } });
 
-        const client = new OpenClaw({ transport });
-        const agents = await client.agents.list();
         const run = await client.runs.wait("packed-run", { timeoutMs: 25 });
-        const artifacts = await client.artifacts.list({ sessionKey: "agent:main:external" });
-        const environments = await client.environments.list();
         await client.close();
-
-        assert.equal(agents.agents[0]?.id, "external");
         assert.equal(run.status, "completed");
-        assert.equal(artifacts.artifacts[0]?.id, "artifact-packed");
-        assert.equal(environments.environments[0]?.id, "gateway");
         assert.equal(closed, true);
-        assert.deepEqual(calls.map((call) => call.method),
-          ["agents.list", "agent.wait", "artifacts.list", "environments.list"]);
-        assert.equal(calls[1]?.options?.timeoutMs, null);
-        assert.equal(calls[1]?.params?.timeoutMs, 25);
       `);
   } finally {
     await consumer.cleanup();

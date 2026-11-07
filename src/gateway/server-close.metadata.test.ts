@@ -155,6 +155,7 @@ it("refuses a new Gateway until the final shared-state reset finishes", async ()
     () => ({ enabled: true }),
     async (state) => {
       if (state.enabled) {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
         entered.resolve();
         await release.promise;
       }
@@ -164,12 +165,22 @@ it("refuses a new Gateway until the final shared-state reset finishes", async ()
   fixture.onClose.push(() => {
     reset.enabled = false;
   });
-  const closing = fixture.close("hold final shared reset");
+  let settled = false;
+  const closing = fixture.close("hold final shared reset").finally(() => {
+    settled = true;
+  });
+  void closing.catch(() => {});
+  fixture.onClose.unshift(() => {
+    vi.useRealTimers();
+  });
   await awaitGateBeforeSettlement(
     entered.promise,
     closing,
     "Gateway closed without entering the final shared reset",
   );
+  await vi.advanceTimersByTimeAsync(10_001);
+  expect(settled).toBe(false);
+  vi.useRealTimers();
   expect(owner.lifecycle.signal.aborted).toBe(true);
   expect(() => callback()).toThrow("reloaded or disabled");
   const attempted = await fixture.start(await fixture.reservePort()).then(

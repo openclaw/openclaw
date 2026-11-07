@@ -63,6 +63,7 @@ export async function prepareManagedWorkspaceReviewBase(params: {
   sandbox: SandboxContext;
   reviewCommit: string;
   previousBase?: string;
+  stageChanges?: boolean;
   signal?: AbortSignal;
   assertCurrent: () => void;
   reviewPreparationError: string;
@@ -91,7 +92,10 @@ export async function prepareManagedWorkspaceReviewBase(params: {
   if (available.code !== 0) {
     throw new Error(reviewPreparationError);
   }
-  const advertised = available.stdout.toString().trim();
+  const [installed, advertised] = available.stdout.toString().trimEnd().split("\n");
+  if (params.stageChanges === false && installed === reviewCommit) {
+    return { mode: "local", base: reviewCommit };
+  }
   const retainedCommit = candidates.find((candidate) => candidate === advertised);
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-review-base-"));
   try {
@@ -125,7 +129,12 @@ export async function prepareManagedWorkspaceReviewBase(params: {
       const imported = await sandbox.backend!.runShellCommand({
         script: IMPORT_REVIEW_BASE,
         allowFailure: true,
-        args: [sandbox.containerWorkdir, reviewCommit, retained ? "retained" : "full"],
+        args: [
+          sandbox.containerWorkdir,
+          reviewCommit,
+          retained ? "retained" : "full",
+          params.stageChanges === false ? "preserve" : "stage",
+        ],
         stdin: input,
         signal,
       });
@@ -166,6 +175,7 @@ const FIND_REVIEW_BASE =
   REVIEW_BASE_GIT +
   String.raw`
 shift
+printf '%s\n' "$(git rev-parse --verify --quiet refs/openclaw/review-base || true)"
 for candidate do
   if git cat-file -e "$candidate^{commit}" 2>/dev/null; then
     printf '%s\n' "$candidate"
@@ -201,6 +211,7 @@ if "$missing_parent"; then
   fi
 fi
 git update-ref refs/openclaw/review-base "$base"
+if test "$4" = preserve; then exit 0; fi
 filters=$(git config --name-only --get-regexp '^filter\..*\.(clean|smudge|process|required)$' || test "$?" = 1)
 set -- -c core.hooksPath=/dev/null -c core.fsmonitor=false
 for key in $filters; do set -- "$@" -c "$key="; done

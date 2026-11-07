@@ -20,6 +20,7 @@ registerProcessesEnglish();
 
 const REFRESH_INTERVAL_MS = 60_000;
 type ProcessesPanelInput = { sessionKey: string; agentId: string; presented: boolean };
+export type ProcessIdentity = Pick<SessionProcessSummary, "processId" | "instanceId">;
 type ProcessSnapshot = Pick<
   ProcessObservation,
   "rows" | "loading" | "hasResult" | "truncated" | "error" | "readError" | "errorKind" | "stopping"
@@ -42,6 +43,7 @@ export class ProcessesPanelData {
   private readonly entries: Map<string, SharedObservation>;
   private entry: SharedObservation | null = null;
   private key: string | null = null;
+  private lifetime = Promise.withResolvers<void>();
 
   constructor(
     private readonly context: ApplicationContext,
@@ -57,6 +59,18 @@ export class ProcessesPanelData {
 
   get snapshot(): ProcessSnapshot {
     return this.entry?.data ?? EMPTY_PROCESSES;
+  }
+
+  get pendingRead(): Promise<void> | null {
+    return this.entry?.data.pendingRead ?? null;
+  }
+
+  get retired(): Promise<void> {
+    return this.lifetime.promise;
+  }
+
+  get connectionRetired(): Promise<void> | undefined {
+    return this.entry?.data.retired;
   }
 
   sync(input: ProcessesPanelInput): void {
@@ -91,11 +105,18 @@ export class ProcessesPanelData {
     return this.entry?.data.refresh(true) ?? Promise.resolve();
   }
 
-  stop(row: SessionProcessSummary): Promise<void> {
+  stop(row: ProcessIdentity): Promise<void> {
     return this.entry?.data.stop(row) ?? Promise.resolve();
   }
 
+  reportStopError(row: ProcessIdentity, error: unknown): void {
+    this.entry?.data.reportStopError(row, error);
+  }
+
   dispose(): void {
+    // A closed presentation retires independently of other shared consumers.
+    this.lifetime.resolve();
+    this.lifetime = Promise.withResolvers<void>();
     if (this.entry) {
       this.entry.listeners.delete(this.changed);
       if (this.entry.listeners.size === 0) {
@@ -136,6 +157,7 @@ class ProcessObservation {
   private generation = 0;
   private disposed = false;
   private pending: Promise<void> | null = null;
+  private lifetime = Promise.withResolvers<void>();
   private refreshAgain = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private readonly visibilityDocument = globalThis.document;
@@ -143,6 +165,14 @@ class ProcessObservation {
   private readonly unsubscribe: () => void;
   private readonly unsubscribeEvents: () => void;
   private readonly stopVisibility: (() => void) | undefined;
+
+  get pendingRead(): Promise<void> | null {
+    return this.pending;
+  }
+
+  get retired(): Promise<void> | undefined {
+    return this.scope ? this.lifetime.promise : undefined;
+  }
 
   constructor(
     private readonly context: ApplicationContext,
@@ -244,7 +274,6 @@ class ProcessObservation {
     this.refreshAgain = false;
     this.clearTimer();
     this.loading = true;
-    this.changed();
     const pending = scope.client
       .request<SessionsProcessesListResult>("sessions.processes.list", this.target())
       .then((result) => {
@@ -284,7 +313,7 @@ class ProcessObservation {
           this.truncated = false;
         }
         this.readError = formatUiError(error);
-        this.readDenied = accessDenied;
+        this.readDenied ||= accessDenied;
       })
       .finally(() => {
         if (this.pending === pending) {
@@ -306,10 +335,17 @@ class ProcessObservation {
         }
       });
     this.pending = pending;
+    this.changed();
     return pending;
   }
 
-  async stop(row: SessionProcessSummary): Promise<void> {
+  reportStopError(row: ProcessIdentity, error: unknown): void {
+    this.actionError = formatUiError(error);
+    this.actionInstanceId = row.instanceId;
+    this.changed();
+  }
+
+  async stop(row: ProcessIdentity): Promise<void> {
     const scope = this.scope;
     const sessionId = this.sessionId;
     const generation = this.generation;
@@ -395,6 +431,8 @@ class ProcessObservation {
   }
 
   private retire(): void {
+    this.lifetime.resolve();
+    this.lifetime = Promise.withResolvers<void>();
     this.generation += 1;
     this.clearTimer();
     this.scope = null;
@@ -406,8 +444,8 @@ class ProcessObservation {
     this.loading = false;
     this.hasResult = false;
     this.truncated = false;
-    this.readError = null;
-    this.readDenied = false;
+    // A pending reconnect must not restore cached output after access was denied.
+    this.readError = this.readDenied ? this.readError : null;
     this.actionError = null;
     this.actionInstanceId = null;
   }

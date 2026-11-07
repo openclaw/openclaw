@@ -4,7 +4,7 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { failSessionActorMemoryPublication } from "../../config/sessions/session-actor-memory-publication.test-support.js";
-import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
@@ -26,8 +26,8 @@ const entry = {
   incognito: true,
 } satisfies InternalSessionEntry;
 
-it("settles shared ACP metadata before reporting the committed entry publication failure", async () => {
-  await withOpenClawTestState({ label: "acp-memory-publication" }, async (state) => {
+it("settles shared ACP metadata before reporting the committed entry publication failure", () =>
+  withOpenClawTestState({ label: "acp-memory-publication" }, async (state) => {
     const scope = memoryScope(state.env, "agent:main:dashboard:incognito-acp-publication");
     await replaceSessionEntry(scope, { ...entry });
     const meta = createAcpMeta({ agent: "fixture", runtimeSessionName: "saved-runtime" });
@@ -40,11 +40,10 @@ it("settles shared ACP metadata before reporting the committed entry publication
       stop();
     }
     expect((await readAcpSessionEntryAsync(scope))?.acp).toEqual(meta);
-  });
-});
+  }));
 
-it("acquires unbound actor entries and joins shared ACP receipts at the control effect without host SQL", async () => {
-  await withOpenClawTestState({ label: "acp-memory-control" }, async (state) => {
+it("acquires unbound actor entries and joins shared ACP receipts at the control effect without host SQL", () =>
+  withOpenClawTestState({ label: "acp-memory-control" }, async (state) => {
     const scope = memoryScope(state.env, "agent:main:dashboard:incognito-acp");
     const { cfg, sessionKey } = scope;
     const actorPath = resolveIncognitoOpenClawAgentSqlitePath(scope);
@@ -112,5 +111,4 @@ it("acquires unbound actor entries and joins shared ACP receipts at the control 
       await actor.release();
       memorySessionActorOwners.closeDatabase(ownerScope);
     }
-  });
-});
+  }));

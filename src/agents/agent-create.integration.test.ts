@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { expectBytesEqual, expectFilesEqual } from "../../test/helpers/file-snapshots.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -191,7 +192,10 @@ it("restores only the configured held store after explicit creation, never throu
   expect(
     isHeld(resolveSessionStorePathCore(undefined, { agentId: "main", env: state.env }), "main"),
   ).toBeFalsy();
-  expect(await recovery.readBytes()).toEqual(recovery.bytes);
+  expectFilesEqual(
+    (await recovery.readBytes()).map((bytes) => ({ bytes })),
+    recovery.bytes.map((bytes) => ({ bytes })),
+  );
   expect(readAgentDeletionJournal("main", { env: state.env })).toBeUndefined();
   expect(await readAgentDeletionJournalStatusInWorker("main", { env: state.env })).toBe("absent");
   expect(isAgentDeletionBlocked("main", { env: state.env })).toBe(false);
@@ -281,16 +285,13 @@ it("restores a held custom filename only after its session store configuration s
     workspace: state.path("restored-workspace"),
     agentDir: path.dirname(target.path),
   };
-  await expectCreation(params, {
-    ...duplicate,
-    message: expect.stringContaining("session.store"),
-  });
+  await expectCreation(params, { ...duplicate, message: expect.stringContaining("session.store") });
   expect(await state.readConfig()).toBe(originalConfig);
   await expectMissing(path.join(params.agentDir, "openclaw-agent.sqlite"));
   await state.writeConfig({ ...config, session: { store: target.path } });
   await expectCreation(params, { status: "created", agentId: target.agentId });
   expect(recovery.readHolds()).toEqual([]);
-  expect(await fs.readFile(target.path)).toEqual(recovery.bytes[0]);
+  expectBytesEqual(await fs.readFile(target.path), recovery.bytes[0]!, target.path);
 });
 
 it.each(["missing", "un-authored"] as const)(
@@ -315,10 +316,7 @@ it.each(["missing", "un-authored"] as const)(
     await expectCreation(
       { name: "main", workspace, bootstrapMain: true },
       configState === "missing"
-        ? {
-            ...duplicate,
-            message: expect.stringContaining("held databases"),
-          }
+        ? { ...duplicate, message: expect.stringContaining("held databases") }
         : { status: "existing" },
     );
 
@@ -329,7 +327,7 @@ it.each(["missing", "un-authored"] as const)(
     }
     await expectMissing(workspace, state.agentDir());
     expect(recovery.readHolds()).toEqual([target]);
-    expect(await fs.readFile(target.path)).toEqual(recovery.bytes[0]);
+    expectBytesEqual(await fs.readFile(target.path), recovery.bytes[0]!, target.path);
   },
 );
 
@@ -373,7 +371,7 @@ it.each(["bootstrap", "explicit"])(
     expect(commit).not.toHaveBeenCalled();
     await expectMissing(stagedFile, state.agentDir(target.agentId));
     expect(recovery?.readHolds()).toEqual([target]);
-    expect(await fs.readFile(target.path)).toEqual(recovery?.bytes[0]);
+    expectBytesEqual(await fs.readFile(target.path), recovery!.bytes[0]!, target.path);
   },
 );
 
@@ -385,9 +383,7 @@ it.each([
 ])("retains the recovery hold when the preserved database is %s", async (change) => {
   const state = await createState("changed-held-store");
 
-  await state.writeConfig({
-    agents: { entries: { ops: { workspace: state.workspaceDir } } },
-  });
+  await state.writeConfig({ agents: { entries: { ops: { workspace: state.workspaceDir } } } });
   const target = { agentId: "main", path: path.join(state.agentDir(), "openclaw-agent.sqlite") };
   const recovery = await prepareRecoveryHolds(state, target.agentId, [target]);
   const originalConfig = await state.readConfig();
@@ -421,7 +417,7 @@ it.each([
   });
   expect(result).toMatchObject(duplicate);
   expect(recovery.readHolds()).toEqual([target]);
-  expect(await fs.readFile(moved)).toEqual(recovery.bytes[0]);
+  expectBytesEqual(await fs.readFile(moved), recovery.bytes[0]!, moved);
   if (change.endsWith("after publication")) {
     expect(await state.readJsonConfig()).toHaveProperty("agents.entries.main");
     expect(rollback).not.toHaveBeenCalled();
@@ -466,7 +462,10 @@ it("keeps a restored main agent held until its new config entry is published", a
   expect(created).toMatchObject({ status: "created", agentId: "main" });
   expect(await state.readJsonConfig()).toHaveProperty("agents.entries.main");
   expect(recovery.readHolds()).toEqual(recovery.held.slice(1));
-  expect(await recovery.readBytes()).toEqual(recovery.bytes);
+  expectFilesEqual(
+    (await recovery.readBytes()).map((bytes) => ({ bytes })),
+    recovery.bytes.map((bytes) => ({ bytes })),
+  );
 });
 
 it("does not create an agent after delegated authority closes while awaiting the config lock", async () => {
@@ -533,6 +532,10 @@ it.for(["workspace", "workspace-write", "config"] as const)(
       entered.resolve(pausedPhase);
       await resume.promise;
     };
+    if (phase === "workspace-write") {
+      // Bootstrap private state with native ACL inspection before the JS write pause.
+      openOpenClawStateDatabase({ env: state.env });
+    }
     const restoreWorkspacePreparation = installWorkspacePreparationPause(workspace, phase, pause);
     const commit = vi.fn();
     const rollback = vi.fn(async () => await fs.rm(stagedFile));
@@ -831,10 +834,7 @@ it("creates main as an ordinary fresh agent after doctor completes both ownershi
   writeLegacy("agent:main:late", "late-legacy-before-main-reuse", 200);
 
   const blocked = await createAgent({ name: "main", workspace: state.path("workspace-main") });
-  expect(blocked).toMatchObject({
-    status: "error",
-    reason: "legacy-session-migration-required",
-  });
+  expect(blocked).toMatchObject({ status: "error", reason: "legacy-session-migration-required" });
   expect(readSession("agent:main:late", "main", legacyDatabasePath)).toMatchObject({
     sessionId: "late-legacy-before-main-reuse",
   });

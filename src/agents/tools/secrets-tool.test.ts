@@ -20,8 +20,10 @@ import {
 } from "../../infra/embedded-question-broker.js";
 import { isBuiltInDefaultSecretProviderRef } from "../../secrets/ref-contract.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
 import * as questionDispatch from "../harness/gateway-question-dispatch.js";
 import { claimPendingAgentQuestionAnswer } from "../harness/gateway-question.js";
+import { wrapToolDefinition } from "../sessions/tools/tool-definition-wrapper.js";
 import {
   cancelAskUserPromptDelivery,
   reserveAskUserPromptDelivery,
@@ -673,6 +675,60 @@ describe("secrets tool", () => {
         expect(sent[0]?.text).toContain(secretName);
       } else {
         expect(sent).toEqual([]);
+      }
+    },
+  );
+
+  it.each([
+    ["missing origin", {}, undefined],
+    [
+      "disabled Control UI",
+      { gateway: { publicOrigin: "https://ops.example.test", controlUi: { enabled: false } } },
+      undefined,
+    ],
+    ["transport failure", {}, new Error("private transport diagnostic")],
+  ] as const)(
+    "returns safe model-facing guidance after cancelling a request with %s",
+    async (_name, config, deliveryError) => {
+      const scheduler = createTestGatewayScheduler();
+      const manager = new QuestionManager(scheduler);
+      const gateway = questionManagerGateway(manager, (request) => manager.request(request));
+      const sent: { text?: string }[] = [];
+      const tool = secretTool(gateway, {
+        ...promptOptions("agent:main:secret-no-route", (payload) => {
+          sent.push(payload);
+          if (deliveryError) {
+            throw deliveryError;
+          }
+        }),
+        config,
+      });
+
+      try {
+        const [definition] = toToolDefinitions([tool]);
+        assert.ok(definition);
+        const result = await wrapToolDefinition(definition).execute(
+          "call-secret-no-route",
+          secretRequest,
+        );
+
+        expect(sent).toHaveLength(1);
+        expect(sent[0]?.text).toContain("Credential request unavailable here");
+        expect(sent[0]?.text).not.toMatch(/https?:/);
+        expect(manager.get(requestedQuestionId(gateway.mock))).toMatchObject({
+          status: "cancelled",
+          resolvedBy: "prompt-delivery-failed",
+        });
+        expect(result.details).toEqual({
+          status: "error",
+          tool: "secrets",
+          error: deliveryError ? "credential-request prompt delivery failed" : sent[0]?.text,
+        });
+        expect(JSON.stringify(result)).not.toContain("private transport diagnostic");
+      } finally {
+        manager.close();
+        await manager.drain();
+        await scheduler.stop();
       }
     },
   );

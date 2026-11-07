@@ -1,4 +1,5 @@
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import JSON5 from "json5";
 import { normalizeConfigModelSelectionParent } from "../config/model-input-normalization.js";
 import { rejectConfigNonFiniteNumbers } from "../config/value-tree.js";
@@ -10,7 +11,6 @@ import {
 } from "../shared/dot-path.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { formatCliCommand } from "./command-format.js";
-import { formatStrictJsonParseFailure } from "./error-format.js";
 import { quoteCliArg, quotePowerShellArg } from "./quote-cli-arg.js";
 
 export { parseConcreteConfigPath as parseConfigSetPath } from "../shared/dot-path.js";
@@ -73,7 +73,16 @@ export function parseConfigSetValue(raw: string, strictJson: boolean): unknown {
     parsed = strictJson ? JSON.parse(trimmed) : JSON5.parse(trimmed);
   } catch (err) {
     if (strictJson) {
-      throw new Error(formatStrictJsonParseFailure({ value: raw, cause: err }), { cause: err });
+      const rawCause = err instanceof Error ? err.message : String(err);
+      const cause = rawCause.trim().replace(/[.。]+$/u, "");
+      const preview = raw.length > 48 ? `${truncateUtf16Safe(raw, 45).trimEnd()}...` : raw;
+      const message = [
+        `Could not parse ${JSON.stringify(preview)} as JSON for --strict-json.`,
+        `${cause}.`,
+        `Use valid JSON. For structured changes, use a JSON5 config patch object file with \`${formatCliCommand("openclaw config patch --file <path> --dry-run")}\`.`,
+        "For plain strings, omit --strict-json.",
+      ].join(" ");
+      throw new Error(message, { cause: err });
     }
     return raw;
   }
@@ -448,37 +457,6 @@ export function mergeAtPath(
   return merged.suppliedPaths;
 }
 
-function isProtectedMapReplacementPath(path: PathSegment[]): boolean {
-  const joined = path.join(".");
-  return (
-    joined === "agents.defaults.models" ||
-    joined === "models.providers" ||
-    (path.length === 3 && path[0] === "models" && path[1] === "providers") ||
-    joined === "agents.entries" ||
-    joined === "plugins.entries" ||
-    joined === "auth.profiles"
-  );
-}
-
-function formatRemovedEntries(entries: string[]): string {
-  const visible = entries.slice(0, 6);
-  const suffix =
-    entries.length > visible.length ? `, ... ${entries.length - visible.length} more` : "";
-  return `${visible.join(", ")}${suffix}`;
-}
-
-function replacementAdvice(
-  command: ConfigMutationCommand,
-  pathLabel: string,
-  mergeSubject: string,
-): string {
-  // `config patch` has no --merge/--replace; --replace-path is its way out of the guard.
-  if (command === "patch") {
-    return `Use ${replacePathArgument(pathLabel)} to replace intentionally.`;
-  }
-  return `Use --merge to merge ${mergeSubject} or --replace to replace intentionally.`;
-}
-
 export function assertNonDestructiveReplacement(params: {
   root: Record<string, unknown>;
   path: PathSegment[];
@@ -496,7 +474,17 @@ export function assertNonDestructiveReplacement(params: {
   const pathLabel = refusalPathLabel(params.command, params.path);
   let removed: string[];
   let mergeHint: string;
-  if (isProtectedMapReplacementPath(params.path) && isPlainRecord(existing.value)) {
+  const path = params.path;
+  const joined = path.join(".");
+  if (
+    (joined === "agents.defaults.models" ||
+      joined === "models.providers" ||
+      (path.length === 3 && path[0] === "models" && path[1] === "providers") ||
+      joined === "agents.entries" ||
+      joined === "plugins.entries" ||
+      joined === "auth.profiles") &&
+    isPlainRecord(existing.value)
+  ) {
     if (!isPlainRecord(params.value)) {
       return;
     }
@@ -515,8 +503,17 @@ export function assertNonDestructiveReplacement(params: {
     return;
   }
   if (removed.length > 0) {
+    const visible = removed.slice(0, 6);
+    const suffix =
+      removed.length > visible.length ? `, ... ${removed.length - visible.length} more` : "";
+    const removedEntries = `${visible.join(", ")}${suffix}`;
+    // `config patch` has no --merge/--replace; --replace-path is its way out of the guard.
+    const advice =
+      params.command === "patch"
+        ? `Use ${replacePathArgument(pathLabel)} to replace intentionally.`
+        : `Use --merge to merge ${mergeHint} or --replace to replace intentionally.`;
     throw new Error(
-      `Refusing to replace ${pathLabel}; it would remove existing entries: ${formatRemovedEntries(removed)}. ${replacementAdvice(params.command, pathLabel, mergeHint)}`,
+      `Refusing to replace ${pathLabel}; it would remove existing entries: ${removedEntries}. ${advice}`,
     );
   }
 }

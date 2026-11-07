@@ -1,0 +1,2 @@
+# Native component fallback regression: private receipt without source mutation or duplicate dispatch.
+87

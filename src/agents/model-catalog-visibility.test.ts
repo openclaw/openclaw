@@ -14,13 +14,11 @@ import {
 } from "./model-catalog-visibility.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
-import { openAIModelCatalogRoutePolicy } from "./openai-model-routes.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 const entryState = (
   evaluation: ModelAuthAvailabilityEvaluation = { availability: true, routeResolution: null },
-) =>
-  resolveLogicalModelCatalogEntryState({ evaluation, routePolicy: openAIModelCatalogRoutePolicy });
+) => resolveLogicalModelCatalogEntryState({ evaluation });
 type VisibleParams = Parameters<typeof resolveLogicalVisibleModelCatalog>[0];
 const visible = (catalog: ModelCatalogEntry[], params: Partial<VisibleParams> = {}) =>
   resolveLogicalVisibleModelCatalog({
@@ -28,7 +26,6 @@ const visible = (catalog: ModelCatalogEntry[], params: Partial<VisibleParams> = 
     catalog,
     defaultProvider: "fixture",
     view: "all",
-    routePolicy: openAIModelCatalogRoutePolicy,
     evaluateEntry: async () => entryState(),
     ...params,
   });
@@ -195,7 +192,6 @@ describe("resolveLogicalVisibleModelCatalog", () => {
       policy,
       defaultProvider: "fixture",
       view: "all",
-      routePolicy: openAIModelCatalogRoutePolicy,
       prepareEntry: async (entry) => {
         preparedEntries.push(entry);
         if (entry === first) {
@@ -282,7 +278,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
     ]);
   });
 
-  it("keeps deprecated configured primary and alias-key rows visible", async () => {
+  it("keeps a deprecated configured primary visible but not alias-only map rows", async () => {
     const catalog: ModelCatalogEntry[] = [
       { provider: "demo", id: "primary", name: "Primary", status: "deprecated" },
       { provider: "demo", id: "alias-key", name: "Alias Key", status: "deprecated" },
@@ -316,7 +312,8 @@ describe("resolveLogicalVisibleModelCatalog", () => {
       policy,
     });
 
-    expect(result.map((entry) => entry.id).toSorted()).toEqual(["alias-key", "primary"]);
+    // Aliases and per-model params are metadata; only selected models are pinned.
+    expect(result.map((entry) => entry.id).toSorted()).toEqual(["primary"]);
   });
 
   it("dedupes physical routes after selected-route projection in the default view", async () => {

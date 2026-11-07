@@ -134,12 +134,6 @@ export function projectGatewayUrlForDiagnostics(url: string): string {
   return redactSensitiveUrlLikeString(url);
 }
 
-type GatewayConnectionDetailResolvers = {
-  getRuntimeConfig?: () => OpenClawConfig;
-  resolveConfigPath?: (env: NodeJS.ProcessEnv) => string;
-  resolveGatewayPort?: (cfg?: OpenClawConfig, env?: NodeJS.ProcessEnv) => number;
-};
-
 /** Build gateway target details and reject unsafe remote plaintext websocket URLs. */
 export function buildGatewayConnectionDetailsWithResolvers(
   options: {
@@ -151,7 +145,11 @@ export function buildGatewayConnectionDetailsWithResolvers(
     localPortOverride?: number;
     serviceTargetUrl?: string;
   } = {},
-  resolvers: GatewayConnectionDetailResolvers = {},
+  resolvers: {
+    getRuntimeConfig?: () => OpenClawConfig;
+    resolveConfigPath?: (env: NodeJS.ProcessEnv) => string;
+    resolveGatewayPort?: (cfg?: OpenClawConfig, env?: NodeJS.ProcessEnv) => number;
+  } = {},
 ): GatewayConnectionDetails {
   const config = options.config ?? resolvers.getRuntimeConfig?.() ?? {};
   const configPath =

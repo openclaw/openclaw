@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import nodePath from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -7,12 +10,19 @@ import {
   resolveZaloAccount,
 } from "./accounts.js";
 import { zaloPlugin } from "./channel.js";
+import { resolveZaloToken } from "./token.js";
 import type { ZaloConfig } from "./types.js";
 
 const config = (zalo: ZaloConfig): OpenClawConfig => ({ channels: { zalo } });
+const unresolvedRef = {
+  source: "env" as const,
+  provider: "default",
+  id: "OPENCLAW_TEST_MISSING_ZALO_TOKEN",
+};
+
+afterEach(() => vi.unstubAllEnvs());
 
 describe("resolveZaloAccount", () => {
-  afterEach(() => vi.unstubAllEnvs());
   it("keeps the implicit default account when named accounts are added to top-level credentials", () => {
     const cfg = config({
       botToken: "default-token",
@@ -24,40 +34,9 @@ describe("resolveZaloAccount", () => {
     expect(resolveZaloAccount({ cfg, accountId: "default" }).enabled).toBe(true);
   });
 
-  it("carries account-owned unavailable credential diagnostics into the resolved account", () => {
-    const tokenFile = "/private/zalo-resolved-account-token";
-    const resolved = resolveZaloAccount({
-      cfg: config({ botToken: "lower-priority-token", accounts: { work: { tokenFile } } }),
-      accountId: "work",
-    });
-
-    expect(resolved).toMatchObject({
-      token: "",
-      tokenSource: "configFile",
-      tokenStatus: "configured_unavailable",
-      credentialDiagnostics: [
-        {
-          code: "CREDENTIAL_FILE_UNAVAILABLE",
-          path: "channels.zalo.accounts.work.tokenFile",
-          reason: "not-found",
-        },
-      ],
-    });
-    expect(JSON.stringify(resolved.credentialDiagnostics)).not.toContain(tokenFile);
-  });
-  const unresolvedRef = {
-    source: "env" as const,
-    provider: "default",
-    id: "OPENCLAW_TEST_MISSING_ZALO_TOKEN",
-  };
-
   it.each([
     { botToken: "bot-token", webhookUrl: undefined, mode: "polling" },
-    {
-      botToken: unresolvedRef,
-      webhookUrl: "https://bot.example.com/zalo",
-      mode: "webhook",
-    },
+    { botToken: unresolvedRef, webhookUrl: "https://bot.example.com/zalo", mode: "webhook" },
   ])("reports configured $mode inspection", async (entry) => {
     const cfg = config({
       accounts: {
@@ -89,5 +68,87 @@ describe("resolveZaloAccount", () => {
       tokenSource: "config",
       tokenStatus: "configured_unavailable",
     });
+  });
+});
+
+function expectUnavailableFile(
+  result: ReturnType<typeof resolveZaloToken> | ReturnType<typeof resolveZaloAccount>,
+  path: string,
+  reason: string,
+) {
+  expect(result).toMatchObject({
+    token: "",
+    ...("source" in result
+      ? { source: "configFile", status: "configured_unavailable" }
+      : { tokenSource: "configFile", tokenStatus: "configured_unavailable" }),
+    credentialDiagnostics: [{ code: "CREDENTIAL_FILE_UNAVAILABLE", path, reason }],
+  });
+}
+
+describe("resolveZaloToken", () => {
+  it.each([
+    [undefined, "work-token", "config"],
+    ["work", "", "none"],
+  ] as const)("resolves named token with accountId=%s and token=%j", (accountId, token, source) => {
+    const res = resolveZaloToken(
+      {
+        defaultAccount: "work",
+        botToken: "top-level-token",
+        accounts: { work: { botToken: token } },
+      },
+      accountId,
+    );
+    expect(res).toMatchObject({ token, source });
+  });
+
+  it.each([
+    ["default", false],
+    ["work", false],
+    ["work", true],
+  ] as const)(
+    "preserves unavailable file diagnostics for %s (blank token=%s)",
+    (accountId, blank) => {
+      const tokenFile = "/private/zalo-missing-token";
+      vi.stubEnv("ZALO_BOT_TOKEN", "lower-priority-env-token");
+      const result = resolveZaloAccount({
+        cfg: config(
+          accountId === "default"
+            ? { tokenFile }
+            : {
+                botToken: "lower-priority-top-level-token",
+                accounts: { work: { tokenFile, ...(blank ? { botToken: "" } : {}) } },
+              },
+        ),
+        accountId,
+      });
+      expectUnavailableFile(
+        result,
+        accountId === "default"
+          ? "channels.zalo.tokenFile"
+          : "channels.zalo.accounts.work.tokenFile",
+        "not-found",
+      );
+      expect(JSON.stringify(result.credentialDiagnostics)).not.toContain(tokenFile);
+    },
+  );
+
+  it("rejects symlinked token files", ({ skip }) => {
+    const dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), "openclaw-zalo-token-"));
+    try {
+      const tokenFile = nodePath.join(dir, "token.txt");
+      const tokenLink = nodePath.join(dir, "token-link.txt");
+      try {
+        fs.writeFileSync(tokenFile, "file-token\n", "utf8");
+        fs.symlinkSync(tokenFile, tokenLink, "file");
+      } catch {
+        skip("file symlinks are unavailable on this host");
+      }
+
+      const result = resolveZaloToken({ tokenFile: tokenLink });
+      expectUnavailableFile(result, "channels.zalo.tokenFile", "symlink");
+      expect(JSON.stringify(result)).not.toContain(tokenLink);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

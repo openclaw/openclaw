@@ -1,6 +1,6 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createAgentHarnessAttemptDeadlineController } from "./attempt-deadlines.js";
+import { createAgentHarnessAttemptDeadlineController } from "../../plugin-sdk/agent-harness-attempt-runtime.js";
 
 const SETTLEMENT_TIMEOUT_MS = 2 * 60_000;
 
@@ -15,15 +15,18 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function createController(timeoutMs = 60_000, signal = new AbortController().signal) {
+function createController(
+  overrides: Partial<Parameters<typeof createAgentHarnessAttemptDeadlineController>[0]> = {},
+) {
   const callbacks = { onTimeout: vi.fn(), onDeadlineChanged: vi.fn() };
   const controller = createAgentHarnessAttemptDeadlineController({
     startedAtMs: 0,
     startedAtMonotonicMs: 0,
-    timeoutMs,
+    timeoutMs: 60_000,
     settlementTimeoutMs: SETTLEMENT_TIMEOUT_MS,
-    signal,
+    signal: new AbortController().signal,
     ...callbacks,
+    ...overrides,
   });
   return { controller, ...callbacks };
 }
@@ -34,15 +37,17 @@ function expectTimeout(onTimeout: ReturnType<typeof vi.fn>, kind: "execution" | 
 }
 
 it.each([
-  ["timer", 0],
-  ["clock", 0],
-  ["timer", 90_000],
-  ["timer", -90_000],
-] as const)("expires via %s across a %ims clock jump", (expiry, jumpMs) => {
+  ["timer", 0, false],
+  ["timer", 0, true],
+  ["clock", 0, false],
+  ["timer", 90_000, false],
+  ["timer", -90_000, false],
+] as const)("expires via %s across a %ims clock jump (legacy: %s)", (expiry, jumpMs, legacy) => {
   vi.advanceTimersByTime(20_000);
   vi.setSystemTime(20_000 + jumpMs);
-  const { controller, onTimeout, onDeadlineChanged } = createController();
-  expect(controller.ownsExecutionWait()).toBe(true);
+  const { controller, onTimeout, onDeadlineChanged } = createController({
+    startedAtMonotonicMs: legacy ? undefined : 0,
+  });
   expect(onDeadlineChanged).toHaveBeenCalledWith({ kind: "bounded", deadlineAtMs: 60_000 });
 
   if (expiry === "clock") {
@@ -71,13 +76,12 @@ it.each([
   ["blocked projection", 600_000, 90_000, 30_000],
   ["unlimited execution", MAX_TIMER_TIMEOUT_MS, 49 * 60 * 60_000, 49 * 60 * 60_000],
 ] as const)("bounds settlement from the original %s", (_label, timeout, now, receipt) => {
-  const { controller, onTimeout, onDeadlineChanged } = createController(timeout);
+  const { controller, onTimeout, onDeadlineChanged } = createController({ timeoutMs: timeout });
   if (timeout === MAX_TIMER_TIMEOUT_MS) {
     expect(onDeadlineChanged).toHaveBeenCalledExactlyOnceWith({ kind: "unlimited" });
   }
   vi.advanceTimersByTime(now);
   expect(controller.ownsExecutionWait()).toBe(true);
-  expect(onTimeout).not.toHaveBeenCalled();
   controller.beginSettlement(receipt);
   expect(controller.ownsExecutionWait()).toBe(false);
   expect(onDeadlineChanged).toHaveBeenLastCalledWith({
@@ -103,7 +107,7 @@ it.each(["abort", "dispose", "already aborted"] as const)(
     if (closure === "already aborted") {
       abort.abort("cancelled");
     }
-    const { controller, onTimeout, onDeadlineChanged } = createController(60_000, abort.signal);
+    const { controller, onTimeout, onDeadlineChanged } = createController({ signal: abort.signal });
     controller.beginSettlement(0);
     if (closure === "abort") {
       abort.abort("cancelled");

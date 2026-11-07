@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shouldHandleNavigationClick } from "./navigation-click.ts";
+import { handleNavigationClick, shouldHandleNavigationClick } from "./navigation-click.ts";
 
 function clickEvent(overrides: Partial<MouseEvent> = {}): MouseEvent {
   return {
@@ -29,5 +29,24 @@ describe("shouldHandleNavigationClick", () => {
 
   it.each(nativeBehaviorCases)("preserves native behavior for %s", (_, event) => {
     expect(shouldHandleNavigationClick(clickEvent(event))).toBe(false);
+  });
+});
+
+describe("handleNavigationClick", () => {
+  it("prevents native navigation before running the action once", () => {
+    const calls: string[] = [];
+    handleNavigationClick(clickEvent({ preventDefault: () => calls.push("prevent") }), () => {
+      calls.push("navigate");
+    });
+    expect(calls).toEqual(["prevent", "navigate"]);
+  });
+
+  it.each(nativeBehaviorCases)("leaves %s untouched", (_, overrides) => {
+    const calls: string[] = [];
+    handleNavigationClick(
+      clickEvent({ ...overrides, preventDefault: () => calls.push("prevent") }),
+      () => calls.push("navigate"),
+    );
+    expect(calls).toEqual([]);
   });
 });

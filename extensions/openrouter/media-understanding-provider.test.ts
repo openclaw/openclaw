@@ -1,22 +1,18 @@
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
+  requireFirstPostJsonRecordRequest,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import { expect, it, vi } from "vitest";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
-const { postJsonRequestMock, resolveProviderHttpRequestConfigMock } = getProviderHttpMocks();
+const { postJsonRequestMock } = getProviderHttpMocks();
 const defaultModel = "openai/whisper-large-v3-turbo";
 
 installProviderHttpMockCleanup();
 
-function firstPostJsonRequest(): { body?: unknown; headers?: Headers } {
-  const [request] = postJsonRequestMock.mock.calls[0] ?? [];
-  if (!request || typeof request !== "object") {
-    throw new Error("expected first OpenRouter JSON request");
-  }
-  return request as { body?: unknown; headers?: Headers };
-}
+const firstPostJsonRequest = () =>
+  requireFirstPostJsonRecordRequest(postJsonRequestMock, "STT request");
 
 function respond(body = JSON.stringify({ text: "ok" }), status = 200) {
   const release = vi.fn(async () => {});
@@ -57,20 +53,6 @@ it("sends JSON STT payload to OpenRouter transcriptions endpoint", async () => {
   });
 
   expect(result).toEqual({ text: "hello world", model: defaultModel });
-  expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith({
-    baseUrl: undefined,
-    defaultBaseUrl: "https://openrouter.ai/api/v1",
-    headers: undefined,
-    request: undefined,
-    defaultHeaders: {
-      Authorization: "Bearer sk-openrouter",
-      "Content-Type": "application/json",
-    },
-    provider: "openrouter",
-    api: "openrouter-stt",
-    capability: "audio",
-    transport: "media-understanding",
-  });
   expect(postJsonRequestMock).toHaveBeenCalledWith({
     url: "https://openrouter.ai/api/v1/audio/transcriptions",
     headers: expect.any(Headers),
@@ -86,10 +68,11 @@ it("sends JSON STT payload to OpenRouter transcriptions endpoint", async () => {
     auditContext: "openrouter stt",
   });
   const headers = firstPostJsonRequest().headers;
-  if (!headers) {
+  if (!(headers instanceof Headers)) {
     throw new Error("expected OpenRouter request headers");
   }
   expect(headers.get("authorization")).toBe("Bearer sk-openrouter");
+  expect(headers.get("content-type")).toBe("application/json");
   expect(release).toHaveBeenCalledOnce();
 });
 

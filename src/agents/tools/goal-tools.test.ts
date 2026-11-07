@@ -7,7 +7,7 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore as upsertAccessorSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sqliteSchedulerClock } from "../../infra/sqlite-maintenance-fixture.test-support.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
@@ -75,24 +75,14 @@ function makeGoal(overrides: Partial<NonNullable<SessionEntry["goal"]>>) {
 }
 
 describe("goal tools", () => {
-  it("reuses the empty input schema without retaining another session's executor", () => {
-    const first = createGetGoalTool({ agentSessionKey: "agent:one:main" });
-    const next = createGetGoalTool({ agentSessionKey: "agent:two:main" });
-    expect(next.parameters).toBe(first.parameters);
-    expect(next.execute).not.toBe(first.execute);
-  });
-
   it("keeps get_goal read-only when accounting changes are projected", async () => {
     const { options, readGoal } = await createStoreConfig("global", {
       totalTokens: 125,
       totalTokensFresh: true,
-      totalTokensVersion: 1,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
       goal: makeGoal({ tokenStart: 100, tokenBudget: 20 }),
     });
-    const tool = createGetGoalTool(options);
-
-    const result = await tool.execute("call-1", {});
-
+    const result = await createGetGoalTool(options).execute("call-1", {});
     expect(result.details).toMatchObject({ goal: { status: "budget_limited" } });
     expect(readGoal()?.status).toBe("active");
   });
@@ -119,21 +109,15 @@ describe("goal tools", () => {
     },
   );
 
-  it.each(["42.9", 0])(
-    "rejects invalid token budgets before creating a goal: %s",
-    async (tokenBudget) => {
-      const { options, readGoal } = await createStoreConfig();
-      const tool = createCreateGoalTool(options);
-      await expect(
-        tool.execute("call-invalid-budget", {
-          objective: "ship global work",
-          token_budget: tokenBudget,
-        }),
-      ).rejects.toThrow("token_budget must be a positive integer");
+  it.each(["42.9", 0])("rejects invalid token budget %s", async (tokenBudget) => {
+    const { options, readGoal } = await createStoreConfig();
+    const tool = createCreateGoalTool(options);
+    await expect(
+      tool.execute("call-invalid-budget", { objective: "ship", token_budget: tokenBudget }),
+    ).rejects.toThrow("token_budget must be a positive integer");
 
-      expect(readGoal()).toBeUndefined();
-    },
-  );
+    expect(readGoal()).toBeUndefined();
+  });
 
   it("returns actionable guidance when goal is already complete", async () => {
     const { options, readGoal } = await createStoreConfig("global", {

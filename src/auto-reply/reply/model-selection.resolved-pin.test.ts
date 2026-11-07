@@ -18,6 +18,49 @@ vi.mock("../../agents/auth-profiles.runtime.js", () => ({
 
 afterEach(() => resetPluginRuntimeStateForTest());
 
+test.each<[string, string | undefined, string | undefined, boolean, string | undefined]>([
+  ["configured selection", "openai", "gpt-x", false, "openai"],
+  ["trimmed selection", " openai ", " gpt-x ", false, "openai"],
+  ["another provider", "other", "gpt-x", true, "openai"],
+  ["incomplete origin", "openai", undefined, true, "openai"],
+  ["case-distinct model", "openai", "GPT-X", true, "openai"],
+  ["blank override provider", "openai", "gpt-x", true, " "],
+])(
+  "Codex cleanup preserves only complete self-origin selections: %s",
+  async (_name, originProvider, originModel, reset, providerOverride) =>
+    withStateDirEnv("reply-codex-self-origin-", async () => {
+      const entry: SessionEntry = {
+        sessionId: "child",
+        updatedAt: 1,
+        providerOverride,
+        modelOverride: "gpt-x",
+        modelOverrideSource: "auto",
+        modelOverrideRouteResolution: "resolved",
+        modelOverrideFallbackOriginProvider: originProvider,
+        modelOverrideFallbackOriginModel: originModel,
+      };
+      const before = { ...entry };
+      const selection = await selectModel({
+        cfg: {
+          plugins: { enabled: false },
+          agents: { defaults: { models: { "openai/gpt-x": { agentRuntime: { id: "codex" } } } } },
+        },
+        sessionEntry: entry,
+        sessionStore: { child: entry },
+        sessionKey: "child",
+        defaultProvider: "openai",
+        defaultModel: "gpt-x",
+        provider: "openai",
+        model: "gpt-x",
+      });
+      expect(selection.resetModelOverride).toBe(reset);
+      expect(entry.modelOverride).toBe(reset ? undefined : "gpt-x");
+      if (!reset) {
+        expect(entry).toEqual(before);
+      }
+      expect(selection).toMatchObject({ provider: "openai", model: "gpt-x" });
+    }),
+);
 function selectModel(params: Partial<Parameters<typeof createModelSelectionState>[0]>) {
   return createModelSelectionState({
     agentId: "main",
@@ -32,8 +75,8 @@ function selectModel(params: Partial<Parameters<typeof createModelSelectionState
   });
 }
 
-test("keeps thinking defaults separate for distinct literal model IDs", async () => {
-  await withStateDirEnv("reply-thinking-identities-", async () => {
+test("keeps thinking defaults separate for distinct literal model IDs", async () =>
+  withStateDirEnv("reply-thinking-identities-", async () => {
     const selection = await selectModel({
       preparedModelCatalog: {
         routeVariants: [],
@@ -51,52 +94,13 @@ test("keeps thinking defaults separate for distinct literal model IDs", async ()
       });
     expect(await thinking("model")).toBe("off");
     expect(await thinking("custom/model")).toBe("medium");
-  });
-});
-
-test.each(["origin", "notice"])("resets stale heartbeat fallback from %s", async (source) => {
-  await withStateDirEnv("reply-heartbeat-origin-", async () => {
-    const entry: SessionEntry = {
-      sessionId: "heartbeat",
-      updatedAt: 1,
-      providerOverride: "custom",
-      modelOverride: "fallback",
-      modelOverrideSource: "auto",
-      modelOverrideRouteResolution: "resolved",
-    };
-    if (source === "origin") {
-      entry.modelOverrideFallbackOriginProvider = "custom";
-      entry.modelOverrideFallbackOriginModel = "model";
-    } else {
-      entry.fallbackNotice = {
-        kind: "active",
-        selectedModel: "custom/model",
-        activeModel: "custom/fallback",
-      };
-    }
-    const selection = await selectModel({
-      sessionEntry: entry,
-      sessionStore: { heartbeat: entry },
-      sessionKey: "heartbeat",
-      defaultModel: "custom/model",
-      model: "fallback",
-      isHeartbeat: true,
-    });
-    expect(selection).toMatchObject({
-      provider: "custom",
-      model: "custom/model",
-      resetModelOverride: true,
-      resetModelOverrideReason: "stale",
-    });
-    expect(entry.modelOverride).toBeUndefined();
-  });
-});
+  }));
 
 const metadataSnapshot = createPluginMetadataSnapshotFixture({
   plugins: [
     {
       id: "fixture",
-      providers: ["custom", "demo-cli"],
+      providers: ["custom"],
       modelIdNormalization: {
         providers: { custom: { aliases: { latest: "middle", middle: "final" } } },
       },
@@ -111,7 +115,7 @@ type SelectionOptions = {
   inherited?: boolean;
   locked?: boolean;
   configuredProvider?: boolean;
-  heartbeat?: boolean;
+  turnOverride?: boolean;
   operator?: "stored" | "inherited" | "locked";
 };
 
@@ -122,7 +126,7 @@ const literal = "custom/model";
 test.each<[string, string, string, SelectionOptions]>([
   ["resolved alias-like model", "middle", "middle", {}],
   ["legacy normalization once", "latest", "middle", { raw: true }],
-  ["heartbeat override", "middle", "heartbeat", { heartbeat: true }],
+  ["scheduled override", "middle", "scheduled", { turnOverride: true }],
   ["role-denied stored pin", "middle", "default", { operator: "stored" }],
   ["role-denied inherited pin", "middle", "default", { operator: "inherited" }],
   ["role-denied locked pin", "middle", "middle", { operator: "locked" }],
@@ -131,8 +135,8 @@ test.each<[string, string, string, SelectionOptions]>([
   ["locked resolved prefix", literal, literal, { allow: exactAllow, locked: true }],
   ["inherited namespace wildcard", literal, literal, { allow: wildcardAllow, inherited: true }],
   ["exact configured ref", literal, literal, { allow: configuredAllow, configuredProvider: true }],
-])("selects %s through the reply owner", async (_name, pin, expected, fixture) => {
-  await withStateDirEnv("reply-resolved-pin-", async () => {
+])("selects %s through the reply owner", async (_name, pin, expected, fixture) =>
+  withStateDirEnv("reply-resolved-pin-", async () => {
     const allow = fixture.allow;
     const inherited = fixture.inherited || fixture.operator === "inherited";
     const cfg: OpenClawConfig = {
@@ -172,11 +176,9 @@ test.each<[string, string, string, SelectionOptions]>([
       [sessionKey]: entry,
       ...(inherited ? { [parentSessionKey]: pinnedEntry } : {}),
     };
-    const entries = ["default", "model", "custom/model", "middle", "final"].map((id) => ({
-      provider: "custom",
-      id,
-      name: id,
-    }));
+    const entries = ["default", "model", "custom/model", "middle", "final", "scheduled"].map(
+      (id) => ({ provider: "custom", id, name: id }),
+    );
     await withPluginRuntimeGenerationScope(
       { metadataSnapshot, pluginRegistry: registry },
       async () => {
@@ -188,9 +190,8 @@ test.each<[string, string, string, SelectionOptions]>([
           sessionKey,
           parentSessionKey: inherited ? parentSessionKey : undefined,
           defaultModel: "default",
-          model: fixture.heartbeat ? "heartbeat" : inherited ? pin : "default",
-          isHeartbeat: fixture.heartbeat,
-          hasResolvedHeartbeatModelOverride: fixture.heartbeat,
+          model: fixture.turnOverride ? "scheduled" : inherited ? pin : "default",
+          hasResolvedTurnModelOverride: fixture.turnOverride,
           preparedModelCatalog: { entries, routeVariants: entries, authoritative: true },
           operatorAuthority: fixture.operator
             ? createAdmittedRunOperatorAuthority({
@@ -223,5 +224,5 @@ test.each<[string, string, string, SelectionOptions]>([
         }
       },
     );
-  });
-});
+  }),
+);

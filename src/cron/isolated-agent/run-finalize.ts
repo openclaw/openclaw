@@ -15,6 +15,7 @@ import {
 import type { AutomationResult } from "../../infra/agent-run-registry.types.js";
 import { resolveSourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { hasPendingAutomationContinuation } from "../automation-result.js";
 import {
   createCronRunDiagnosticsFromAgentResult,
   createCronRunDiagnosticsFromError,
@@ -55,6 +56,7 @@ export async function finalizeCronRun(params: {
   const { prepared, execution } = params;
   const finalRunResult = execution.runResult;
   const replyDisposition = finalRunResult.meta?.terminalReply?.disposition ?? "empty";
+  const pendingContinuation = hasPendingAutomationContinuation(finalRunResult.meta);
   const includeReasoning = prepared.agentPayload?.includeReasoning === true;
   const payloads = (finalRunResult.payloads ?? []).filter(
     (payload) => !shouldSuppressReasoningPayload(payload),
@@ -146,13 +148,15 @@ export async function finalizeCronRun(params: {
     prepared.cronSession.sessionEntry.contextTokens = contextTokens;
     prepared.cronSession.sessionEntry.contextTokensSource = contextTokensSource;
   }
-  if (hasNonzeroUsage(usage) || hasNonzeroUsage(finalRunResult.meta?.agentMeta?.usage)) {
-    const totalTokens = deriveSessionTotalTokens({
-      usage: lastCallUsage,
-      contextTokens,
-      promptTokens,
-    });
-    if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
+  if (
+    execution.currentContextSnapshot ||
+    hasNonzeroUsage(usage) ||
+    hasNonzeroUsage(finalRunResult.meta?.agentMeta?.usage)
+  ) {
+    const totalTokens = execution.currentContextSnapshot
+      ? execution.currentContextSnapshot.tokens
+      : deriveSessionTotalTokens({ lastCallUsage, contextTokens, promptTokens });
+    if (totalTokens !== undefined) {
       prepared.cronSession.sessionEntry.totalTokens = totalTokens;
       prepared.cronSession.sessionEntry.totalTokensFresh = true;
       prepared.cronSession.sessionEntry.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
@@ -160,6 +164,9 @@ export async function finalizeCronRun(params: {
       prepared.cronSession.sessionEntry.totalTokens = undefined;
       prepared.cronSession.sessionEntry.totalTokensFresh = false;
       prepared.cronSession.sessionEntry.totalTokensVersion = undefined;
+    }
+    if (prepared.runSessionKey === prepared.agentSessionKey) {
+      prepared.cronSession.contextTotalsAccounted = true;
     }
   }
   const telemetry: CronRunTelemetry = {
@@ -183,6 +190,7 @@ export async function finalizeCronRun(params: {
   }
   const cronPayloadOutcome = resolveCronPayloadOutcome({
     payloads,
+    terminalReplyDisposition: replyDisposition,
     runLevelError: finalRunResult.meta?.error,
     failureSignal: finalRunResult.meta?.failureSignal,
     finalAssistantVisibleText:
@@ -254,14 +262,40 @@ export async function finalizeCronRun(params: {
         : { summary, outputText };
     return prepared.withRunSession({
       status: failure || hasFatalErrorPayload ? "error" : "ok",
+      ...(useRunFailure &&
+      !hasTerminalToolFailure &&
+      !pendingPresentationWarningError &&
+      finalRunResult.meta?.aborted !== true
+        ? {
+            agentTerminal: hasFatalStructuredErrorPayload
+              ? cronPayloadOutcome.agentTerminal
+              : finalRunResult.meta?.failureSignal === undefined && finalRunResult.meta?.error
+                ? finalRunResult.meta.agentTerminal
+                : undefined,
+          }
+        : {}),
       ...(failure
         ? { error: failure.error, ...(failure.errorKind ? { errorKind: failure.errorKind } : {}) }
         : hasFatalErrorPayload
           ? { error: runError }
           : {}),
       ...output,
-      ...(params.automationResult && !hasFatalErrorPayload && !failure
-        ? { summary: `${params.automationResult.outcome}: ${params.automationResult.summary}` }
+      result:
+        pendingContinuation || spawnOnlyHandoff || disposition?.kind === "pending"
+          ? undefined
+          : params.automationResult,
+      ...(params.automationResult &&
+      !pendingContinuation &&
+      !spawnOnlyHandoff &&
+      !hasFatalErrorPayload &&
+      !failure &&
+      disposition?.kind !== "pending"
+        ? {
+            summary:
+              params.automationResult.outcome === "no_change"
+                ? undefined
+                : params.automationResult.summary,
+          }
         : {}),
       replyDisposition,
       deliveryState: result?.deliveryState,
@@ -287,26 +321,25 @@ export async function finalizeCronRun(params: {
     });
   };
   const acceptedSessionSpawn = hasAcceptedSessionSpawn(finalRunResult.acceptedSessionSpawns);
-  const heartbeatOnlyResponse = !hasFatalErrorPayload && deliveryDisposition.kind !== "visible";
-  const heartbeatControlOnlyResponse =
-    heartbeatOnlyResponse &&
-    (deliveryDisposition.kind === "empty" ||
-      (deliveryDisposition.kind === "heartbeat" && deliveryDisposition.controlOnly));
+  const quietResponse = !hasFatalErrorPayload && deliveryDisposition.kind !== "visible";
   const spawnOnlyHandoff =
     acceptedSessionSpawn &&
-    (heartbeatControlOnlyResponse ||
+    (quietResponse ||
       (deliveryPayloads.length === 0 && normalizeOptionalString(synthesizedText) === undefined));
-  if (spawnOnlyHandoff && heartbeatControlOnlyResponse) {
-    // Parent heartbeat acknowledgments cannot fulfill child delivery; one-shot
+  if (spawnOnlyHandoff && quietResponse) {
+    // Parent control replies cannot fulfill child delivery; one-shot
     // cleanup must wait for actual descendant output before retiring the job.
     deliveryPayloads = [];
     synthesizedText = undefined;
     summary = undefined;
     outputText = undefined;
   }
-  const skipHeartbeatDelivery =
-    prepared.deliveryRequested && heartbeatOnlyResponse && !spawnOnlyHandoff;
-  const noChange = params.automationResult?.outcome === "no_change" && !hasFatalErrorPayload;
+  const skipQuietDelivery = prepared.deliveryRequested && quietResponse && !spawnOnlyHandoff;
+  const noChange =
+    params.automationResult?.outcome === "no_change" &&
+    !hasFatalErrorPayload &&
+    !pendingContinuation &&
+    !spawnOnlyHandoff;
   const policySuppression = !prepared.resolvedDelivery.ok
     ? prepared.resolvedDelivery.deliverySuppressionReason
     : undefined;
@@ -359,7 +392,7 @@ export async function finalizeCronRun(params: {
       policySuppression ??
       (noChange
         ? "silent"
-        : skipHeartbeatDelivery
+        : skipQuietDelivery
           ? hasIntentionalSilentReply
             ? "silent"
             : deliveryDisposition.kind
@@ -385,6 +418,7 @@ export async function finalizeCronRun(params: {
       deliveryResult.deliveryAttempted &&
       !sourceDeliveryOutcome.satisfiesSourceDelivery,
     delivered: deliveryResult.delivered,
+    receipts: deliveryResult.deliveryReceipts,
   });
   if (!deliveryResult.disposition) {
     summary = deliveryResult.summary;

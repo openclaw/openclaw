@@ -1,11 +1,22 @@
-import { createMemo, createSignal, createStore, onSettled, Show } from "solid-js";
+import {
+  createMemo,
+  createSignal,
+  createStore,
+  Errored,
+  isPending,
+  latest,
+  Loading,
+  onCleanup,
+  onSettled,
+  Show,
+} from "solid-js";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { nativeGatewaysCapability } from "../../../app/native-gateways.runtime.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import "../../../styles/chat/session-diff-mobile.css";
 import "../../../styles/session-panel-rail.css";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import "../../../components/tooltip.ts";
 import {
   expandSessionDiffGap,
@@ -24,8 +35,6 @@ import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { useVisiblePoll } from "../../../lib/reactive/visible-poll.ts";
 import type { DiffPresentation } from "./chat-diff-render.solid.tsx";
 import type { SessionDiffScope, SessionDiffProps } from "./chat-sidebar-content-types.ts";
-import { createSessionDiffChrome } from "./session-diff-chrome.tsx";
-import { createSessionDiffFileView } from "./session-diff-file-view.tsx";
 import {
   SessionDiffMenu,
   type SessionDiffMenuAction,
@@ -39,15 +48,14 @@ import {
   type SessionDiffMode,
 } from "./session-diff-preferences.ts";
 import type { SessionDiffViewBindings } from "./session-diff-presentation.ts";
-import { createSessionDiffResultViews } from "./session-diff-result-view.tsx";
+import { createSessionDiffPanelFrame, SessionDiffNativeGaps } from "./session-diff-result-view.tsx";
 import { SessionDiffSyncMobile } from "./session-diff-sync-mobile.tsx";
 import type { DiffValue, FileSource, FileView } from "./session-diff-types.ts";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
-function shellArgument(value: string) {
-  return /^[A-Za-z0-9_./:@+-]+$/.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`;
-}
+const shellArgument = (value: string) =>
+  /^[A-Za-z0-9_./:@+-]+$/.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`;
 
 export function SessionDiffPanel(props: SessionDiffProps) {
   const desktop = () => props.mobile === false;
@@ -89,7 +97,6 @@ export function SessionDiffPanel(props: SessionDiffProps) {
   const [wrap, setWrap] = createSignal(preferences.wrap);
   // The approved mobile cards start wrapped; desktop keeps its saved preference.
   const [mobileWrap, setMobileWrap] = createSignal(true);
-  const effectiveWrap = () => (mobile() ? mobileWrap() : wrap());
   const [mode, setMode] = createSignal<SessionDiffMode>(preferences.mode ?? "auto");
   const [wordDiffs, setWordDiffs] = createSignal(preferences.wordDiffs !== false);
   const [wide, setWide] = createSignal(false);
@@ -127,13 +134,53 @@ export function SessionDiffPanel(props: SessionDiffProps) {
     target: ReturnType<typeof requestTarget>;
     result?: SessionsDiffResult;
   } | null>(null);
-  const request = createMemo(() => ({ target: requestTarget(), reload: reload() }));
+  const request = createMemo(() => ({
+    target: requestTarget(),
+    reload: reload(),
+    result: Promise.withResolvers<{ error: unknown } | null>(),
+    deferred: false,
+  }));
+  const [computing, setComputing] = createSignal(false);
+  // The queued plain request can start even while its read parks a commit.
+  const readiness = createMemo(() => {
+    const initialRequest = request();
+    let active = true;
+    onCleanup(() => {
+      active = false;
+      initialRequest.result.resolve(null);
+    });
+    queueMicrotask(() => {
+      void loadRequest(
+        initialRequest,
+        () => active,
+        initialRequest.reload?.target === initialRequest.target,
+      );
+    });
+    return initialRequest.result.promise;
+  });
+  const presentationScope = createMemo(
+    () => ({ owner: props.owner, scope: scope(), available: Boolean(props.loader) }),
+    {
+      equals: (before, after) =>
+        before.owner === after.owner &&
+        before.scope === after.scope &&
+        before.available === after.available,
+    },
+  );
+  const awaitingDestination = () => {
+    const destination = latest(presentationScope);
+    // Compare the destination and accepted result in the same transition frame.
+    const current = latest(value);
+    return (
+      destination.available &&
+      (current?.owner !== destination.owner || current.scope !== destination.scope)
+    );
+  };
+  // Observe the same receipt before first paint without suspending the controls.
+  const readStatus = createMemo(() => request().result.promise, { loadingValue: undefined });
   const syncData = createMemo(() => {
     const current = value();
-    if (current?.owner !== props.owner) {
-      return null;
-    }
-    const { root, branch } = current?.result ?? {};
+    const { root, branch } = current?.owner === props.owner ? current.result : {};
     return root && branch
       ? {
           root,
@@ -143,8 +190,6 @@ export function SessionDiffPanel(props: SessionDiffProps) {
       : null;
   });
   const renderMobileSync = () => <SessionDiffSyncMobile data={syncData()} />;
-  const [pending, setPending] = createSignal(false);
-  const [failure, setFailure] = createSignal<{ error: unknown } | null>(null);
   const [gapRevision, setGapRevision] = createSignal(0);
   const pairedRows = createMemo(() => {
     gapRevision();
@@ -170,124 +215,104 @@ export function SessionDiffPanel(props: SessionDiffProps) {
     };
   });
 
-  function RequestLifetime(requestProps: { request: ReturnType<typeof request> }) {
-    const [computing, setComputing] = createSignal(false);
-    let load: ((refresh?: boolean) => Promise<void>) | undefined;
-    useVisiblePoll(500, () => void load?.(), {
-      enabled: () => computing() && props.active !== false,
-    });
-    onSettled(() => {
-      const { target, reload: requestedReload } = requestProps.request;
-      const { loader, owner, scope: requestedScope } = target;
-      setFailure(null);
-      if (!loader) {
-        setValue(null);
-        setPending(false);
-        return undefined;
+  useVisiblePoll(500, () => void loadRequest(latest(request)), {
+    enabled: () => computing() && props.active !== false,
+  });
+  async function loadRequest(
+    initialRequest: ReturnType<typeof request>,
+    isActive: () => boolean = () => true,
+    refresh = false,
+  ) {
+    const isCurrent = () => !disposed && isActive() && initialRequest === latest(request);
+    if (!isCurrent()) {
+      return;
+    }
+    const { target, reload: requestedReload, result: completion } = initialRequest;
+    const { loader, owner, scope: requestedScope } = target;
+    if (!loader) {
+      setComputing(false);
+      setValue(null);
+      completion.resolve(null);
+      return;
+    }
+    if (latest(() => props.active) === false || document.visibilityState === "hidden") {
+      setComputing(true);
+      // Deferred background reads must not hold the visible sibling's transition.
+      initialRequest.deferred = true;
+      completion.resolve(null);
+      return;
+    }
+    if (initialRequest.deferred) {
+      // Activation needs a fresh receipt so its result and errors remain observable.
+      setReload({ target });
+      return;
+    }
+    setComputing(false);
+    let result: SessionsDiffResult | undefined;
+    try {
+      result =
+        (requestedReload?.target === target ? requestedReload.result : undefined) ??
+        (await (refresh ? loader(target.scope, { refresh: true }) : loader(target.scope)));
+      if (!isCurrent()) {
+        return;
       }
-      let active = true;
-      setPending(true);
-      load = async (refresh = false) => {
-        if (props.active === false || document.visibilityState === "hidden") {
-          setComputing(true);
-          return;
-        }
-        setComputing(false);
-        let result: SessionsDiffResult | undefined;
-        try {
-          result =
-            (requestedReload?.target === target ? requestedReload.result : undefined) ??
-            (await (refresh ? loader(target.scope, { refresh: true }) : loader(target.scope)));
-          if (!active) {
-            return;
-          }
-          if (result.computing) {
-            setComputing(true);
-            return;
-          }
-          const previous = value();
-          const reusable =
-            previous?.owner === owner &&
-            JSON.stringify(previous.scope) === JSON.stringify(requestedScope)
-              ? previous.views
-              : [];
-          const views = result.files.map((file) => ({
-            file,
-            // Retain source/presentation identity, never an old metadata snapshot.
-            source: reusable.find(
-              (view) =>
-                view.file.path === file.path &&
-                view.file.oldPath === file.oldPath &&
-                view.file.patch === file.patch &&
-                view.file.binary === file.binary &&
-                view.file.truncated === file.truncated,
-            )?.source ?? {
-              parsed: file.patch
-                ? parseSessionDiffPatch(file.patch, (count) =>
-                    t("chat.sessionDiff.unmodifiedLines", { count: String(count) }),
-                  )
-                : null,
-            },
-          }));
-          setValue({ owner, scope: requestedScope, result, views });
-          props.onResult?.({ owner, scope: requestedScope, result });
-          const currentPaths = new Set(views.map((view) => view.file.path));
-          setCollapsedFiles((paths) => {
-            for (const key of Object.keys(paths)) {
-              if (!currentPaths.has(key.slice("file:".length))) {
-                delete paths[key];
-              }
-            }
-            for (const view of desktop() ? views : []) {
-              if (!reusable.some((old) => old.file.path === view.file.path)) {
-                paths[`file:${view.file.path}`] = true;
-              }
-            }
-          });
-          if (!currentPaths.has(selectedPath() ?? "")) {
-            setSelectedPath(null);
-          }
-        } catch (error) {
-          if (active) {
-            setFailure({ error });
-          }
-        } finally {
-          if (active && !result?.computing) {
-            setPending(false);
+      if (result.computing) {
+        setComputing(true);
+        return;
+      }
+      const previous = value();
+      const reusable =
+        previous?.owner === owner &&
+        JSON.stringify(previous.scope) === JSON.stringify(requestedScope)
+          ? previous.views
+          : [];
+      const views = result.files.map((file) => ({
+        file,
+        // Retain source/presentation identity, never an old metadata snapshot.
+        source: reusable.find(
+          (view) =>
+            view.file.path === file.path &&
+            view.file.oldPath === file.oldPath &&
+            view.file.patch === file.patch &&
+            view.file.binary === file.binary &&
+            view.file.truncated === file.truncated,
+        )?.source ?? {
+          parsed: file.patch
+            ? parseSessionDiffPatch(file.patch, (count) =>
+                t("chat.sessionDiff.unmodifiedLines", { count: String(count) }),
+              )
+            : null,
+        },
+      }));
+      setValue({ owner, scope: requestedScope, result, views });
+      props.onResult?.({ owner, scope: requestedScope, result });
+      const currentPaths = new Set(views.map((view) => view.file.path));
+      setCollapsedFiles((paths) => {
+        for (const key of Object.keys(paths)) {
+          if (!currentPaths.has(key.slice("file:".length))) {
+            delete paths[key];
           }
         }
-      };
-      void load(requestedReload?.target === target);
-      return () => {
-        active = false;
-      };
-    });
-    return null;
-  }
-  function loadDiff() {
-    setReload({ target: requestTarget() });
-  }
-  const loading = () => props.loader !== null && pending();
-  function NativeGapLifetime() {
-    onSettled(() => {
-      let changed = false;
-      for (const { source } of value()?.views ?? []) {
-        const { parsed, expandedGaps } = source;
-        if (!parsed || !expandedGaps?.size) {
-          continue;
+        for (const view of desktop() ? views : []) {
+          if (!reusable.some((old) => old.file.path === view.file.path)) {
+            paths[`file:${view.file.path}`] = true;
+          }
         }
-        // Native fully expanded gaps keep their context without a disclosure
-        // marker. Retaining the desktop marker would insert that context twice.
-        parsed.lines = parsed.lines.filter((line) => !expandedGaps.has(line));
-        expandedGaps.clear();
-        changed = true;
+      });
+      if (!currentPaths.has(selectedPath() ?? "")) {
+        setSelectedPath(null);
       }
-      if (changed) {
-        setGapRevision((revision) => revision + 1);
+    } catch (error) {
+      if (isCurrent()) {
+        completion.resolve({ error });
       }
-    });
-    return null;
+    } finally {
+      if (isCurrent() && !result?.computing) {
+        completion.resolve(null);
+      }
+    }
   }
+  const loadDiff = () => setReload({ target: requestTarget() });
   function jumpToFile(path: string) {
     setMotionInstant(true);
     setSelectedPath(path);
@@ -323,13 +348,12 @@ export function SessionDiffPanel(props: SessionDiffProps) {
       });
     }
   }
-  function collapseAll() {
+  const collapseAll = () =>
     setCollapsedFiles(() =>
       Object.fromEntries<true>(
         (value()?.views ?? []).map(({ file }) => [`file:${file.path}`, true]),
       ),
     );
-  }
   function toggleTree() {
     const next = !treeOpen();
     setTreeOpen(next);
@@ -341,9 +365,7 @@ export function SessionDiffPanel(props: SessionDiffProps) {
   function searchTree() {
     setTreeOpen(true);
     setTreeSearchOpen(true);
-    onSettled(() => {
-      treeSearch?.focus();
-    });
+    onSettled(() => treeSearch?.focus());
   }
   function openAnchoredMenu(
     event: Event,
@@ -562,6 +584,11 @@ export function SessionDiffPanel(props: SessionDiffProps) {
     };
   }
   const viewBindings: SessionDiffViewBindings = {
+    loading: () =>
+      isPending(readStatus) ||
+      (latest(readStatus) === undefined
+        ? Boolean(props.loader)
+        : latest(readStatus) === null && awaitingDestination()),
     props,
     desktop,
     mobile,
@@ -580,7 +607,6 @@ export function SessionDiffPanel(props: SessionDiffProps) {
     motionInstant,
     value,
     syncData,
-    loading,
     gapRevision,
     pairedRows,
     effectiveSplit,
@@ -621,94 +647,69 @@ export function SessionDiffPanel(props: SessionDiffProps) {
     },
     renderMobileSync,
   };
-  const { MobileRail, MobileSummary, DesktopSummary, Summary } =
-    createSessionDiffChrome(viewBindings);
-  const File = createSessionDiffFileView(viewBindings);
-  const { MobileResultBody, ResultBody } = createSessionDiffResultViews(viewBindings, {
-    File,
-    MobileSummary,
-    DesktopSummary,
-    Summary,
-  });
+  const { Panel, Result } = createSessionDiffPanelFrame(
+    viewBindings,
+    setMotionInstant,
+    awaitingDestination,
+  );
+  const raiseReadFailure = (error: unknown): never => {
+    throw error;
+  };
   return (
     <openclaw-session-diff>
-      <div
-        class={[
-          "session-diff",
-          {
-            "session-diff--wrap": effectiveWrap(),
-            "session-diff--desktop": desktop(),
-            "session-diff--mobile": mobile(),
-          },
-        ]}
-        aria-busy={loading() ? "true" : "false"}
-        data-instant={desktop() && motionInstant() ? "true" : undefined}
-        onPointerDown={() => {
-          if (desktop()) {
-            setMotionInstant(false);
-          }
-        }}
-        onKeyDown={() => {
-          if (desktop()) {
-            setMotionInstant(true);
-          }
-        }}
-      >
-        <Show when={!desktop()}>
-          <NativeGapLifetime />
-        </Show>
-        <Show when={request()} keyed>
-          {(current) => <RequestLifetime request={current} />}
-        </Show>
-        <Show when={mobile()}>
-          <MobileRail />
-        </Show>
-        <Show
-          when={failure()}
+      <Show when={!desktop()}>
+        <SessionDiffNativeGaps
+          value={value}
+          refresh={() => setGapRevision((revision) => revision + 1)}
+        />
+      </Show>
+      <Panel>
+        <Loading
+          on={latest(presentationScope)}
           fallback={
-            <Show
-              when={loading() && (value()?.owner !== props.owner || value()?.scope !== scope())}
-              fallback={
-                <Show when={value()}>
-                  {(current) => (
-                    <Show when={mobile()} fallback={<ResultBody value={current()} />}>
-                      <MobileResultBody value={current()} />
-                    </Show>
-                  )}
-                </Show>
-              }
-            >
+            <Show when={props.loader}>
               <PanelLoadingSkeleton variant="review" label={t("chat.sessionDiff.loading")} />
             </Show>
           }
         >
-          {(failed) => (
-            <div class="callout danger">
-              {formatUiError(failed().error)}
-              <Show when={mobile()}>
-                <button
-                  class="btn btn--ghost"
-                  type="button"
-                  disabled={loading() || !props.loader}
-                  onClick={() => loadDiff()}
-                >
-                  <Icon name="refresh" />
-                  {t("common.retry")}
-                </button>
-              </Show>
-            </div>
-          )}
-        </Show>
-        <Show when={menu()} keyed>
-          {(current) => (
-            <SessionDiffMenu
-              menu={current}
-              onAction={handleMenuAction}
-              onClose={() => setMenu(null)}
-            />
-          )}
-        </Show>
-      </div>
+          <Show when={isPending(readiness) ? null : latest(readiness)} fallback={<Result />}>
+            {(failed) => (
+              <Errored
+                fallback={(error, reset) => (
+                  <div class="callout danger">
+                    {formatUiError(error())}
+                    <Show when={mobile()}>
+                      <button
+                        class="btn btn--ghost"
+                        type="button"
+                        disabled={!props.loader}
+                        onClick={() => {
+                          loadDiff();
+                          reset();
+                        }}
+                      >
+                        <Icon name="refresh" />
+                        {t("common.retry")}
+                      </button>
+                    </Show>
+                  </div>
+                )}
+              >
+                {raiseReadFailure(failed().error)}
+              </Errored>
+            )}
+          </Show>
+        </Loading>
+      </Panel>
+      <Show when={menu()} keyed>
+        {(current) => (
+          <SessionDiffMenu
+            menu={current}
+            onAction={handleMenuAction}
+            onClose={() => setMenu(null)}
+          />
+        )}
+      </Show>
     </openclaw-session-diff>
   );
 }

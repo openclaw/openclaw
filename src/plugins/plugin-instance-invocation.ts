@@ -1,11 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { runWithAsyncStore } from "../shared/async-store.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { PluginInstanceUnavailableError } from "./plugin-instance-error.js";
 import type {
   PluginExecutionFrame,
   PluginExecutionScopes,
   PluginInstanceInvocation,
 } from "./plugin-instance-invocation.types.js";
+import type { PluginInstanceCallLease, PluginInvocationInstance } from "./plugin-instance.types.js";
 
 export class InvocationFrame implements PluginExecutionFrame {
   readonly retentionOwner: PluginExecutionScopes["retentionOwner"];
@@ -85,3 +87,28 @@ const pluginExecutionContext = resolveGlobalSingleton(
 export const pluginInstanceInvocation = pluginExecutionContext.invocation;
 export const getPluginExecutionFrame = pluginExecutionContext.getFrame;
 export const runWithPluginExecutionFrame = pluginExecutionContext.runFrame;
+
+/** Retain admission independently; each operation still owns its physical call settlement. */
+export function retainPluginOwnerWork(owner: {
+  instance: PluginInvocationInstance;
+  lease(options: { joinDisposal: false; ownerLifetime?: true }): PluginInstanceCallLease;
+  invoke<T>(run: () => T, lease: PluginInstanceCallLease): T;
+  hasToken(token: object): boolean;
+}) {
+  const held = pluginInstanceInvocation.exit(() =>
+    owner.lease({ joinDisposal: false, ownerLifetime: true }),
+  );
+  return {
+    run: <T>(run: () => T): T => {
+      if (!owner.hasToken(held.token)) {
+        throw new PluginInstanceUnavailableError(owner.instance.pluginId);
+      }
+      return pluginInstanceInvocation.run({ instance: owner.instance, token: held.token }, () =>
+        owner.invoke(run, owner.lease({ joinDisposal: false })),
+      );
+    },
+    release: () => {
+      void held.release();
+    },
+  };
+}

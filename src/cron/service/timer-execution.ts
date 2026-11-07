@@ -2,21 +2,21 @@ import { resolveAgentRunAbortLifecycleFields } from "../../agents/run-terminatio
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { isCronWithinActiveHours } from "../active-hours.js";
 import { isCronActiveJobMarkerCurrent } from "../active-jobs.js";
-import { resolveCronJobEffectiveAgentId, tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
-import { isHeartbeatTaskCronJob } from "../heartbeat-task.js";
-import { readDefaultProactiveJobReceiptsAsync } from "../proactive-job-receipt.js";
+import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { resolveCronOwnerTransferRecoveryError } from "../human-owner.js";
+import { readDefaultProactiveJobReceiptsByKeyAsync } from "../proactive-job-receipt.js";
 import { isProactiveJobMigrationPending } from "../proactive-job-receipt.kernel.js";
 import { resolveCronRunAdmissionSource } from "../run-authority.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
+import type { ScheduledOccurrence } from "../scheduled-occurrence.js";
 import { resolveCronToolsAllowExecTargetRecoveryError } from "../scheduled-tool-policy.js";
 import { isCronScratchEffectivelyEmpty } from "../scratch-contract.js";
-import { readCronScratchSnapshot } from "../scratch-read.js";
+import { readCronScratchSnapshotByKey } from "../scratch-read.js";
 import { cronScriptFailureMetadata } from "../script-failure.js";
 import { resolveCronSessionTargetSessionKey } from "../session-target.js";
 import { ownsCronSource } from "../source-schedule.js";
 import { appendCronPayloadText } from "../stream-schedule.js";
 import type {
-  CronJob,
   CronJobExecutionResult,
   CronStoredJob,
   CronNextCheckProposal,
@@ -27,16 +27,18 @@ import type {
 } from "../types.js";
 import { abortErrorMessage, cronAbortErrorClassification } from "./execution-errors.js";
 import { waitForCronExecutionIdle } from "./execution-idle.js";
+import { admitCronOccurrence, resolvePausedOccurrence } from "./occurrence-admission.js";
 import {
   describeCronHostExecutionRestriction,
   type CronServiceState,
   type CronSessionRunPreparation,
 } from "./state.js";
+import { executeScriptCronJob } from "./timer-execution-script.js";
 import {
   type ExecuteJobCoreOptions,
   resolveMainSessionCronDeliveryContext,
 } from "./timer-execution-timeout.js";
-import { wake } from "./wake.js";
+import { preparesCronSessionEvents, runsCronMainSessionRoute } from "./timer-session-route.js";
 
 /** Executes a cron job without mutating persisted job state. */
 export async function executeJobCore(
@@ -53,6 +55,10 @@ export async function executeJobCore(
   });
   if (abortSignal?.aborted) {
     return resolveAbortError();
+  }
+  const ownerTransferError = resolveCronOwnerTransferRecoveryError(job);
+  if (ownerTransferError) {
+    return { status: "error", error: ownerTransferError, executionStarted: false };
   }
   const executionBlockReason = describeCronHostExecutionRestriction(
     job,
@@ -109,7 +115,9 @@ export async function executeJobCore(
   );
   let migrationPending = options?.migrationPending;
   if (migrationPending === undefined && agentId) {
-    const receipts = await readDefaultProactiveJobReceiptsAsync(state.deps.storePath, [agentId]);
+    const receipts = await readDefaultProactiveJobReceiptsByKeyAsync(state.deps.storeKey, [
+      agentId,
+    ]);
     assertCurrent();
     migrationPending = isProactiveJobMigrationPending(receipts[agentId], job.id);
   }
@@ -170,11 +178,9 @@ export async function executeJobCore(
     }
   }
   let sessionPreparation: CronSessionRunPreparation | undefined;
+  let occurrence: ScheduledOccurrence | undefined;
   try {
-    if (
-      (job.payload.kind === "agentTurn" || job.payload.kind === "systemEvent") &&
-      (job.sessionTarget === "main" || job.sessionTarget.startsWith("session:"))
-    ) {
+    if (preparesCronSessionEvents(job)) {
       const target = state.deps.resolveSessionEventTarget?.({
         agentId: job.agentId,
         sessionKey: resolveCronSessionTargetSessionKey(job.sessionTarget),
@@ -195,8 +201,8 @@ export async function executeJobCore(
       }
     }
     if (job.payload.kind === "agentTurn" && job.payload.skipIfScratchEmpty) {
-      const snapshot = await readCronScratchSnapshot(
-        state.deps.storePath,
+      const snapshot = await readCronScratchSnapshotByKey(
+        state.deps.storeKey,
         { kind: "job", jobId: job.id, createdAtMsFallback: job.createdAtMs },
         {},
         { assertCurrent, signal: abortSignal },
@@ -245,6 +251,13 @@ export async function executeJobCore(
         return { status: "skipped", error: "stream batch source no longer current" };
       }
     }
+    // One admission per occurrence, shared by its trigger and payload executors.
+    occurrence = await admitCronOccurrence(state, job, agentId);
+    const paused = resolvePausedOccurrence(job, occurrence);
+    if (paused) {
+      return paused;
+    }
+    assertCurrent();
     let effectiveJob = job;
     let triggerEval: CronTriggerEvalOutcome | undefined;
     if (job.trigger) {
@@ -257,6 +270,7 @@ export async function executeJobCore(
         };
       }
       const evaluation = await evaluator({
+        occurrence,
         deliveryAttemptFence: options?.deliveryAttemptFence ?? null,
         job,
         script: job.trigger.script,
@@ -272,10 +286,15 @@ export async function executeJobCore(
         return resolveAbortError();
       }
       if (evaluation.kind === "busy") {
-        state.deps.log.debug({ jobId: job.id }, "cron: trigger evaluation skipped while busy");
+        state.deps.log.debug({ jobId: job.id }, "cron: trigger evaluation deferred while busy");
         return {
-          status: "ok",
-          triggerEval: { fired: false, stateChanged: false, busy: true },
+          status: "skipped",
+          summary: "Automation deferred while condition evaluations are busy",
+          admissionDeferred: true,
+          admissionDeferredReason: "busy",
+          executionStarted: false,
+          delivered: false,
+          deliveryAttempted: false,
         };
       }
       if (evaluation.kind === "error") {
@@ -320,7 +339,14 @@ export async function executeJobCore(
       }
     }
     if (effectiveJob.payload.kind === "script") {
-      const result = await executeScriptCronJob(state, effectiveJob, abortSignal, options);
+      const result = await executeScriptCronJob(
+        state,
+        effectiveJob,
+        occurrence,
+        abortSignal,
+        assertCurrent,
+        options,
+      );
       return triggerEval ? { ...result, triggerEval } : result;
     }
     if (options?.streamBatch !== undefined) {
@@ -329,65 +355,13 @@ export async function executeJobCore(
         payload: appendCronPayloadText(effectiveJob.payload, options.streamBatch),
       };
     }
-    const heartbeatTask = isHeartbeatTaskCronJob(effectiveJob) ? effectiveJob : undefined;
-    if (effectiveJob.payload.kind === "heartbeat" || heartbeatTask) {
-      options?.onPayloadExecutionStarted?.();
-      // Monitors and migrated tasks share the wake bus, keeping coalescing,
-      // quiet hours, cooldown, flood, and busy guards in the heartbeat runner.
-      const heartbeatAgentId = resolveCronJobEffectiveAgentId(
-        effectiveJob,
-        state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
-      );
-      const heartbeatWake = heartbeatTask
-        ? {
-            source: "interval" as const,
-            intent: "task" as const,
-            reason: `heartbeat-task:${heartbeatTask.id}`,
-            agentId: heartbeatAgentId,
-            tasks: [
-              {
-                jobId: heartbeatTask.id,
-                name: heartbeatTask.name,
-                prompt: heartbeatTask.payload.text,
-              },
-            ],
-          }
-        : {
-            source: "interval" as const,
-            intent: "scheduled" as const,
-            reason: "interval",
-            agentId: heartbeatAgentId,
-            scheduledEveryMs:
-              effectiveJob.schedule.kind === "every" ? effectiveJob.schedule.everyMs : undefined,
-          };
-      const heartbeatWaitLifecycle = options?.onHeartbeatExecutionStarted?.(heartbeatWake);
-      const heartbeatResult = await (state.deps.requestHeartbeatAndWait?.(heartbeatWake, {
-        ...(abortSignal ? { abortSignal } : {}),
-        ...heartbeatWaitLifecycle,
-      }) ?? { status: "failed" as const, reason: "heartbeat wake settlement unavailable" });
-      if (abortSignal?.aborted) {
-        return resolveAbortError();
-      }
-      const result =
-        heartbeatResult.status === "ran"
-          ? {
-              status: "ok" as const,
-              summary: heartbeatTask ? "heartbeat task completed" : "heartbeat completed",
-            }
-          : heartbeatResult.status === "failed"
-            ? { status: "error" as const, error: `heartbeat failed: ${heartbeatResult.reason}` }
-            : { status: "skipped" as const, error: `heartbeat skipped: ${heartbeatResult.reason}` };
-      return triggerEval ? { ...result, triggerEval } : result;
-    }
-    if (
-      effectiveJob.sessionTarget === "main" ||
-      (effectiveJob.sessionTarget.startsWith("session:") &&
-        effectiveJob.payload.kind === "agentTurn")
-    ) {
+    if (runsCronMainSessionRoute(effectiveJob, job)) {
       const result = await executeMainSessionCronJob(
         state,
         effectiveJob,
+        occurrence,
         abortSignal,
+        assertCurrent,
         options,
         sessionPreparation,
       );
@@ -395,9 +369,16 @@ export async function executeJobCore(
       return triggerEval ? { ...result, admissionDeferred: false, triggerEval } : result;
     }
 
-    const result = await executeDetachedCronJob(state, effectiveJob, abortSignal, options);
+    const result = await executeDetachedCronJob(
+      state,
+      effectiveJob,
+      occurrence,
+      abortSignal,
+      options,
+    );
     return triggerEval ? { ...result, triggerEval } : result;
   } finally {
+    occurrence?.release();
     sessionPreparation?.notices.release();
   }
 }
@@ -405,7 +386,9 @@ export async function executeJobCore(
 async function executeMainSessionCronJob(
   state: CronServiceState,
   job: CronStoredJob,
+  occurrence: ScheduledOccurrence,
   abortSignal: AbortSignal | undefined,
+  assertCurrent: () => void,
   options?: ExecuteJobCoreOptions,
   sessionPreparation?: CronSessionRunPreparation,
 ): Promise<CronJobExecutionResult> {
@@ -427,18 +410,12 @@ async function executeMainSessionCronJob(
       error: "Session event execution is unavailable; restart the Gateway and retry",
     };
   }
-  const assertCurrent = () => {
-    abortSignal?.throwIfAborted();
-    options?.deliveryAttemptFence?.assertCurrent();
-    if (!isCronActiveJobMarkerCurrent(options?.activeJobMarker)) {
-      throw new Error("Gateway restarting.");
-    }
-  };
   const deliveryContext = await resolveMainSessionCronDeliveryContext(state, job);
   assertCurrent();
   await options?.assertRunCurrent?.();
   assertCurrent();
   return await state.deps.runSessionEvent({
+    occurrence,
     waitForIdle: options?.waitForIdle,
     admissionSource: resolveCronRunAdmissionSource(job),
     sessionPreparation,
@@ -459,6 +436,7 @@ async function executeMainSessionCronJob(
 async function executeDetachedCronJob(
   state: CronServiceState,
   job: CronStoredJob,
+  occurrence: ScheduledOccurrence,
   abortSignal: AbortSignal | undefined,
   options?: ExecuteJobCoreOptions,
 ): Promise<
@@ -491,6 +469,7 @@ async function executeDetachedCronJob(
     }
     options?.onExecutionStarted?.();
     const res = await state.deps.runCommandJob({
+      occurrence,
       deliveryAttemptFence: options?.deliveryAttemptFence ?? null,
       job,
       abortSignal,
@@ -514,6 +493,7 @@ async function executeDetachedCronJob(
       deliverySuppressionReason: res.deliverySuppressionReason,
       deliveryState: res.deliveryState,
       summary: res.summary,
+      result: res.result,
       delivered: res.delivered,
       deliveryAttempted: res.deliveryAttempted,
       delivery: res.delivery,
@@ -538,6 +518,7 @@ async function executeDetachedCronJob(
   }
 
   const res = await state.deps.runIsolatedAgentJob({
+    occurrence,
     waitForIdle: options?.waitForIdle,
     deliveryAttemptFence: options?.deliveryAttemptFence ?? null,
     job,
@@ -570,159 +551,17 @@ async function executeDetachedCronJob(
     deliveryState: res.deliveryState,
     nextCheck: res.nextCheck,
     summary: res.summary,
+    result: res.result,
     delivered: res.delivered,
     deliveryAttempted: res.deliveryAttempted,
     delivery: res.delivery,
     sessionId: res.sessionId,
     sessionKey: res.sessionKey,
+    agentTerminal: res.agentTerminal,
     diagnostics: res.diagnostics,
     failureNotificationDetail: res.failureNotificationDetail,
     model: res.model,
     provider: res.provider,
     usage: res.usage,
-  };
-}
-
-async function executeScriptCronJob(
-  state: CronServiceState,
-  job: CronJob,
-  abortSignal: AbortSignal | undefined,
-  options?: ExecuteJobCoreOptions,
-) {
-  if (state.deps.cronConfig?.triggers?.enabled === false) {
-    return {
-      status: "error" as const,
-      error:
-        "cron script payload execution is disabled because the operator set cron.triggers.enabled: false; remove it or set it to true to allow unattended scripts",
-    };
-  }
-  if (!state.deps.runScriptJob) {
-    return {
-      status: "error" as const,
-      error: "cron script payload executor is unavailable",
-      ...cronScriptFailureMetadata("payload", "runtime_unavailable"),
-    };
-  }
-  const expectedTarget = await state.deps.captureSessionEventTarget?.(job);
-  abortSignal?.throwIfAborted();
-  await options?.assertRunCurrent?.();
-  const result = await state.deps.runScriptJob({
-    deliveryAttemptFence: options?.deliveryAttemptFence ?? null,
-    job,
-    streamBatch: options?.streamBatch,
-    abortSignal,
-    executionIdentity: options?.executionIdentity,
-  });
-  // Script runners may settle after ignoring an abort. Recheck both operator
-  // cancellation and scheduler ownership before any notify/wake side effect.
-  if (!isCronActiveJobMarkerCurrent(options?.activeJobMarker)) {
-    return {
-      status: "error" as const,
-      error: "Gateway restarting.",
-      errorClassification: { kind: "aborted" as const },
-    };
-  }
-  if (abortSignal?.aborted) {
-    return {
-      status: "error" as const,
-      error: abortErrorMessage(abortSignal),
-      errorClassification: cronAbortErrorClassification(abortSignal),
-    };
-  }
-  if (options?.assertRunCurrent) {
-    await options.assertRunCurrent();
-    if (options.activeJobMarker?.cancellation?.kind === "requested") {
-      return {
-        status: "error" as const,
-        error: options.activeJobMarker.cancellation.reason,
-        errorClassification: { kind: "aborted" as const },
-      };
-    }
-    if (!isCronActiveJobMarkerCurrent(options.activeJobMarker)) {
-      return {
-        status: "error" as const,
-        error: "Gateway restarting.",
-        errorClassification: { kind: "aborted" as const },
-      };
-    }
-    if (abortSignal?.aborted) {
-      return {
-        status: "error" as const,
-        error: abortErrorMessage(abortSignal),
-        errorClassification: cronAbortErrorClassification(abortSignal),
-      };
-    }
-  }
-  if (result.status !== "ok") {
-    return result;
-  }
-  if (result.nextCheck && !job.pacing) {
-    return {
-      status: "error" as const,
-      error: "cron script payload returned nextCheck, but this job has no pacing bounds",
-      ...cronScriptFailureMetadata("payload", "invalid_input"),
-    };
-  }
-
-  const notify = result.notify?.trim() ? result.notify : undefined;
-  if ((job.sessionTarget === "main" && notify) || result.wake) {
-    const agentId = resolveCronJobEffectiveAgentId(
-      job,
-      state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
-    );
-    const deliveryContext =
-      job.sessionTarget === "main"
-        ? await resolveMainSessionCronDeliveryContext(state, job)
-        : undefined;
-    await options?.assertRunCurrent?.();
-    abortSignal?.throwIfAborted();
-    options?.deliveryAttemptFence?.assertCurrent();
-    const eventOptions = { agentId, ...(deliveryContext ? { deliveryContext } : {}) };
-    if (job.sessionTarget === "main" && notify && !result.wake) {
-      state.deps.enqueueSystemEvent(notify, {
-        ...eventOptions,
-        contextKey: `cron:${job.id}:script`,
-      });
-    }
-    if (result.wake) {
-      if (!expectedTarget) {
-        return {
-          status: "error" as const,
-          error:
-            "Script follow-up has no original session target; inspect its result and request a fresh follow-up",
-        };
-      }
-      const wakeResult = await wake(state, {
-        mode: result.wake,
-        text: notify ?? `script job ${job.name} completed`,
-        agentId,
-        sessionKey: job.sessionKey,
-        expectedTarget,
-        commitGuard: () => {
-          abortSignal?.throwIfAborted();
-          options?.deliveryAttemptFence?.assertCurrent();
-          if (!isCronActiveJobMarkerCurrent(options?.activeJobMarker)) {
-            throw new Error("Gateway restarting.");
-          }
-        },
-      });
-      if (!wakeResult.ok) {
-        return { status: "error" as const, error: wakeResult.reason ?? "Wake was refused" };
-      }
-    }
-  }
-  return {
-    status: "ok" as const,
-    ...(notify ? { summary: notify } : {}),
-    delivered: result.delivered,
-    deliveryAttempted: result.deliveryAttempted,
-    deliveryError: result.deliveryError,
-    deliverySuppressionReason: result.deliverySuppressionReason,
-    deliveryState: result.deliveryState,
-    delivery: result.delivery,
-    diagnostics: result.diagnostics,
-    nextCheck: result.nextCheck,
-    scriptStateChanged: result.stateChanged === true,
-    ...(result.stateChanged === true ? { scriptState: result.state } : {}),
   };
 }

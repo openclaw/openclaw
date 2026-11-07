@@ -233,7 +233,7 @@ async function handleChatHistory(params: Record<string, unknown>) {
     ...(pageCursor ? { pageCursor } : {}),
   };
   let isNativeHistoryCurrent: (() => boolean) | undefined;
-  const page = await rt.readChatHistoryPage(pageParams, undefined, (isCurrent) => {
+  const page = await rt.readChatHistoryPage(pageParams, undefined, undefined, (isCurrent) => {
     isNativeHistoryCurrent = isCurrent;
   });
   const {

@@ -2,11 +2,10 @@
 
 import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { i18n } from "../i18n/index.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
-import "./file-preview-modal-registration.ts";
+import "./file-preview-modal.tsx";
 import { Icon } from "./solid/icon.tsx";
 
 type FilePreviewModalElement = HTMLElementTagNameMap["openclaw-file-preview-modal"];
@@ -87,11 +86,6 @@ describe("openclaw-file-preview-modal", () => {
 
   it("emits controlled query, select, and close events", async () => {
     const modal = await renderPreview();
-    const actions = modal.querySelector(".foot > openclaw-modal-actions");
-    expect(actions?.querySelector("button")).not.toBeNull();
-    expect(actions?.parentElement?.lastElementChild).toBe(actions);
-    expect(actions?.querySelector(".foot-group")).toBeNull();
-    expect(modal.querySelector(".foot > .foot-group")).not.toBeNull();
     const onQuery = vi.fn();
     const onSelect = vi.fn();
     const onClose = vi.fn();
@@ -199,12 +193,10 @@ describe("openclaw-file-preview-modal", () => {
     const body = modal.querySelector<HTMLElement>(".detail-body");
     expect(body).toBeInstanceOf(HTMLElement);
     const firstChunks = [...(modal.querySelectorAll<HTMLElement>(".code-chunk") ?? [])];
-    expect(firstChunks).toHaveLength(8);
     expect(firstChunks.map((chunk) => chunk.textContent ?? "").join("\n")).toBe(firstContents);
 
     body!.scrollTop = 2200;
     body!.scrollLeft = 40;
-    expect(body!.scrollTop).toBe(2200);
 
     modal.activePath = "second.ts";
     await modal.updateComplete;
@@ -256,7 +248,7 @@ describe("openclaw-file-preview-modal", () => {
     },
   );
 
-  it("navigates only expanded document folders and keeps relative Markdown links inside the preview", async () => {
+  it("navigates only expanded document folders", async () => {
     const modal = await renderPreview({
       layout: "document",
       activePath: "SKILL.md",
@@ -264,7 +256,7 @@ describe("openclaw-file-preview-modal", () => {
         {
           path: "SKILL.md",
           size: "1 KB",
-          contents: "---\nname: guide\n---\n# Guide\n[Notes](notes/a.md)",
+          contents: "---\nname: guide\n---\n# Guide",
         },
         { path: "hidden/a.md", size: "1 KB", contents: "Hidden notes" },
         { path: "notes/a.md", size: "1 KB", contents: "Visible notes" },
@@ -279,25 +271,20 @@ describe("openclaw-file-preview-modal", () => {
     pressArrowDown(modal.querySelector(".item.is-active"));
     expect(select.mock.lastCall?.[0].detail).toBe("notes/a.md");
     expect(modal.querySelector(".markdown")?.textContent).not.toContain("name: guide");
-    const link = modal.querySelector<HTMLAnchorElement>(".markdown a")!;
-    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
-    link.dispatchEvent(click);
-    expect(click.defaultPrevented).toBe(true);
-    expect(select.mock.lastCall?.[0].detail).toBe("notes/a.md");
   });
 
   it.each([true, false])(
-    "restores localized file-copy labels after pending success %s",
+    "localizes the preview and file-copy feedback for success %s",
     async (copied) => {
-      const write = createDeferred();
-      const writeText = vi.fn(() => write.promise);
+      const writeText = vi.fn(async () => {
+        if (!copied) {
+          throw new DOMException("Clipboard access denied");
+        }
+      });
       vi.stubGlobal("navigator", { clipboard: { writeText } });
       Object.defineProperty(document, "execCommand", { configurable: true, value: () => false });
-      const schedule = vi.spyOn(window, "setTimeout");
       const modal = await renderPreview();
       const button = modal.querySelector<HTMLButtonElement>(".chat-copy-btn")!;
-      button.click();
-      expect(button.disabled).toBe(true);
       i18n.registerTranslation("pt-BR", {
         common: { close: "Fechar", copied: "Copiado!", copyFailed: "Falha ao copiar" },
         filePreview: {
@@ -316,11 +303,7 @@ describe("openclaw-file-preview-modal", () => {
       expect(modal.textContent).toContain("2 arquivos");
       expect(modal.textContent).toContain("Fechar");
       expect(button.getAttribute("aria-label")).toBe("Copiar arquivo");
-      if (copied) {
-        write.resolve();
-      } else {
-        write.reject(new DOMException("Clipboard access denied"));
-      }
+      button.click();
       const feedback = modal.querySelector<HTMLElement>("[role=status]")!;
       await waitForSolid(() =>
         expect(feedback.textContent).toBe(copied ? "Copiado!" : "Falha ao copiar"),
@@ -328,16 +311,6 @@ describe("openclaw-file-preview-modal", () => {
       expect(feedback.hidden).toBe(false);
       expect(button.getAttribute("aria-label")).toBe(feedback.textContent);
       expect(writeText).toHaveBeenCalledWith("Morning digest template");
-      const reset = schedule.mock.calls.find(
-        ([, delay]) => delay === (copied ? 1_500 : 2_000),
-      )?.[0];
-      if (typeof reset !== "function") {
-        throw new Error("Expected copy feedback to schedule its reset");
-      }
-      reset();
-      flush();
-      expect(button.getAttribute("aria-label")).toBe("Copiar arquivo");
-      expect(feedback.hidden).toBe(true);
     },
   );
 

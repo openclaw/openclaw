@@ -14,16 +14,15 @@ import {
   isNativeHistoryAuthorizationRequest,
 } from "../../config/sessions/session-history-types.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
-import {
-  prepareForwardedMessageCronJobNameResolver,
-  projectForwardedMessages,
-} from "../chat-display-projection.history.js";
+import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.cron.js";
+import { projectForwardedMessages } from "../chat-display-projection.history.js";
+import { sanitizeChatHistoryMessages } from "../chat-display-projection.sanitize.js";
+import { readChatHistoryPageKernel } from "../chat-history-page-kernel.js";
+import { projectChatHistoryWithReplies } from "../chat-history-reply-messages.js";
+import { encodeChatHistoryResponsePage } from "../chat-history-response-page.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import { createSessionActorTranscriptReader } from "../session-transcript-memory-reader.js";
 import * as sessionTranscriptReaders from "../session-transcript-readers.js";
-import { readChatHistoryPageKernel } from "./chat-history-page-kernel.js";
-import { projectChatHistoryWithReplies } from "./chat-history-reply-messages.js";
-import { encodeChatHistoryResponsePage } from "./chat-history-response-page.js";
 
 // Kept outside worker params: the consumer retains this guard until publication,
 // without serializing callbacks or attaching native authority to canonical fallbacks.
@@ -157,7 +156,7 @@ export async function readChatHistoryMessageById(
   return resolved.result;
 }
 
-export async function readChatHistoryPage(
+async function readChatHistoryPageUnprojected(
   input: ChatHistoryPageParams,
   signal?: AbortSignal,
   retainNativeHistoryAuthorization?: RetainNativeHistoryAuthorization,
@@ -266,4 +265,32 @@ async function refreshForwardedLabels(messages: unknown[]): Promise<unknown[]> {
         await prepareForwardedMessageCronJobNameResolver(displayMessages),
       ),
   );
+}
+
+export type ChatHistoryMessageProjector = {
+  project: (messages: unknown[]) => Promise<unknown[]>;
+};
+
+/** Enrich only the admitted display copy, then budget the bytes actually sent. */
+export async function readChatHistoryPage(
+  input: ChatHistoryPageParams,
+  signal?: AbortSignal,
+  displayProjector?: ChatHistoryMessageProjector,
+  retainNativeHistoryAuthorization?: RetainNativeHistoryAuthorization,
+) {
+  const page = await readChatHistoryPageUnprojected(
+    displayProjector ? { ...input, deferChannelUserDisplay: true } : input,
+    signal,
+    retainNativeHistoryAuthorization,
+  );
+  if (!displayProjector || page.encodedResponse) {
+    return page;
+  }
+  const messages = sanitizeChatHistoryMessages(
+    await displayProjector.project(page.messages),
+    input.effectiveMaxChars,
+    { toolResultMaxChars: input.toolResultMaxChars },
+  );
+  signal?.throwIfAborted();
+  return encodeChatHistoryResponsePage({ ...page, messages }, input);
 }

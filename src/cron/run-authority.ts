@@ -17,7 +17,7 @@ export class CronSessionLifecycleClaimError extends Error {
 
 /** Scheduler-owned provenance determines authority, independently of the selected runner. */
 export function resolveCronRunAdmissionSource(
-  job: CronStoredJob,
+  job: Pick<CronStoredJob, "owner" | "scheduledToolPolicy" | "payload" | "toolsAllowProvenance">,
 ): NonNullable<AdmittedRunContext["admissionSource"]> {
   return job.owner?.sessionKey ||
     job.owner?.accountId ||

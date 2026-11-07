@@ -6,7 +6,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import * as historyProjection from "../chat-display-projection.history.js";
+import * as historyProjection from "../chat-display-projection.cron.js";
 import { handleChatHistoryRequest } from "./chat-history-handler.js";
 import * as historyPages from "./chat-history-pages.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
@@ -51,10 +51,12 @@ describe("history publication authority", () => {
         for (const retained of [false, true]) {
           for (const allowed of [false, true]) {
             let current = true;
-            read.mockImplementationOnce(async (_params, _signal, retainAuthorization) => {
-              retainAuthorization?.(() => current);
-              return { messages: [message] };
-            });
+            read.mockImplementationOnce(
+              async (_params, _signal, _projector, retainAuthorization) => {
+                retainAuthorization?.(() => current);
+                return { messages: [message] };
+              },
+            );
             context.readChatStartupProjection = async () => {
               if (!retained) {
                 current = allowed;

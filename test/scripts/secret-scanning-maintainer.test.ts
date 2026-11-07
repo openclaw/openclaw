@@ -8,13 +8,15 @@ const scriptPath = ".agents/skills/openclaw-secret-scanning-maintainer/scripts/s
 const { createTempDir } = createScriptTestHarness();
 const notificationArgs = ["notify", "123", "contributor", "issue_body", "Discord Bot Token"];
 
-function run(args: string[], env?: NodeJS.ProcessEnv) {
+function run(args: string[], env: NodeJS.ProcessEnv) {
   return execFileSync(process.execPath, [scriptPath, ...args], { encoding: "utf8", env });
 }
 
 function ghEnv(root: string) {
   return {
-    ...process.env,
+    HOME: root,
+    GH_CONFIG_DIR: root,
+    GH_TOKEN: "synthetic-test-token",
     OPENCLAW_GH_BIN: path.join(root, "gh"),
     PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
   };
@@ -27,33 +29,28 @@ it.each([
 ])("keeps %s private with identity and edit history", (type, nodeType, numberKey) => {
   const tempDir = createTempDir("openclaw-secret-scan-content-");
   const ghPath = path.join(tempDir, "gh");
-  const fixturePath = path.join(tempDir, "content.json");
   const body = "synthetic private content\n";
   const htmlUrl = "https://github.com/openclaw/openclaw/pull/123";
-  fs.writeFileSync(
-    fixturePath,
-    JSON.stringify({
-      id: 456,
-      node_id: "fixture-node",
-      number: 123,
-      user: { login: "contributor" },
-      body,
-      html_url: htmlUrl,
-      merged: false,
-      state: "open",
-    }),
-  );
+  const content = JSON.stringify({
+    id: 456,
+    node_id: "fixture-node",
+    number: 123,
+    user: { login: "contributor" },
+    body,
+    html_url: htmlUrl,
+    merged: false,
+    state: "open",
+  });
   fs.writeFileSync(
     ghPath,
     `#!/usr/bin/env node
-const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] !== "api") process.exit(1);
 if (args[1] === "graphql") {
-  if (!args.join(" ").includes("... on " + process.env.EXPECTED_NODE_TYPE)) process.exit(2);
+  if (!args.join(" ").includes(${JSON.stringify("... on " + nodeType)})) process.exit(2);
   console.log(JSON.stringify({ data: { node: { userContentEdits: { totalCount: 3 } } } }));
 } else {
-  process.stdout.write(fs.readFileSync(process.env.CONTENT_FIXTURE, "utf8"));
+  process.stdout.write(${JSON.stringify(content)});
 }
 `,
     { mode: 0o755 },
@@ -66,8 +63,6 @@ if (args[1] === "graphql") {
     {
       ...ghEnv(tempDir),
       TMPDIR: tempDir,
-      EXPECTED_NODE_TYPE: nodeType,
-      CONTENT_FIXTURE: fixturePath,
     },
   );
   const result = JSON.parse(output);
@@ -116,24 +111,66 @@ it.each([false, true])("notifies only for changed redaction: %s", (changed) => {
       `api repos/openclaw/openclaw/issues/123 -X PATCH -F body=@${redactedBody}`,
     );
   } else {
-    expect(JSON.parse(fs.readFileSync(resultFile, "utf8"))).toMatchObject({
-      notify_required: false,
-    });
-  }
-});
-
-it.each([false, true])("gates body notifications on redaction metadata: %s", (provided) => {
-  const tempDir = createTempDir("openclaw-secret-scan-");
-  const resultFile = path.join(tempDir, "redaction-result.json");
-  fs.writeFileSync(resultFile, JSON.stringify({ body_changed: false, notify_required: false }));
-  const notify = () => run([...notificationArgs, ...(provided ? [resultFile] : [])]);
-  if (provided) {
-    expect(JSON.parse(notify())).toStrictEqual({
+    expect(JSON.parse(run([...notificationArgs, resultFile], ghEnv(root)))).toStrictEqual({
       ok: true,
       reason: "current_body_already_redacted",
       skipped: true,
     });
-  } else {
-    expect(notify).toThrow(/Body notifications require a redaction result file/);
   }
 });
+
+it.each([
+  { args: notificationArgs, error: /Body notifications require a redaction result file/ },
+  { args: ["resolve"], error: /Usage:/ },
+  { args: ["resolve", "123"], error: /Usage:/ },
+  { args: ["resolve", "123", "pattern_deleted"], error: /Invalid resolution:/ },
+  { args: ["resolve", "123", "rotated"], error: /Invalid resolution:/ },
+])(
+  "refuses incomplete or unsupported maintenance requests before invoking GitHub: $args",
+  ({ args, error }) => {
+    const root = createTempDir("openclaw-secret-scan-resolution-");
+    const ghLog = path.join(root, "gh.log");
+    fs.writeFileSync(path.join(root, "gh"), `#!/bin/sh\ntouch "${ghLog}"\necho '{}'\n`, {
+      mode: 0o755,
+    });
+    expect(() => run(args, ghEnv(root))).toThrow(error);
+    expect(fs.existsSync(ghLog)).toBe(false);
+  },
+);
+
+it.each([
+  { resolution: "revoked", comment: "Issuer confirmed revocation." },
+  { resolution: "false_positive", comment: "Detection reviewed as a false positive." },
+  { resolution: "used_in_tests", comment: "Confirmed synthetic test credential." },
+  { resolution: "wont_fix" },
+])(
+  "forwards the explicit $resolution resolution without inventing evidence",
+  ({ resolution, comment }) => {
+    const root = createTempDir("openclaw-secret-scan-resolution-");
+    const ghLog = path.join(root, "gh.json");
+    fs.writeFileSync(
+      path.join(root, "gh"),
+      `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args[0] !== "api") process.exit(1);
+fs.writeFileSync(${JSON.stringify(ghLog)}, JSON.stringify(args));
+console.log(JSON.stringify({ number: 123, state: "resolved", resolution: ${JSON.stringify(resolution)} }));
+`,
+      { mode: 0o755 },
+    );
+    const output = run(["resolve", "123", resolution, ...(comment ? [comment] : [])], ghEnv(root));
+    expect(JSON.parse(output)).toEqual({ ok: true, number: 123, state: "resolved", resolution });
+    expect(JSON.parse(fs.readFileSync(ghLog, "utf8"))).toEqual([
+      "api",
+      "repos/openclaw/openclaw/secret-scanning/alerts/123",
+      "-X",
+      "PATCH",
+      "-f",
+      "state=resolved",
+      "-f",
+      `resolution=${resolution}`,
+      ...(comment ? ["-f", `resolution_comment=${comment}`] : []),
+    ]);
+  },
+);

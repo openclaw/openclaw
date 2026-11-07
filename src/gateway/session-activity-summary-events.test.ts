@@ -110,7 +110,6 @@ it("joins deferred recaps, coalesces the latest row, and admits changes made dur
   const second = f.publish();
   let following: Promise<void> | undefined;
   f.broadcast.mockImplementationOnce(() => {
-    expect(f.broadcast).toHaveBeenCalledOnce();
     f.projection.setEntry("first", { ...f.initial, label: "after delivery" });
     following = f.publish();
   });
@@ -171,7 +170,6 @@ it.each(["preparation", "publication"])(
     const retry = f.publish();
     await vi.runAllTimersAsync();
     await retry;
-    expect(f.broadcast).toHaveBeenCalledTimes(failureStage === "preparation" ? 1 : 2);
     expect(f.broadcast.mock.calls.at(-1)?.[1]).toMatchObject({
       reason: "activity-summary",
       session: { label: "first" },

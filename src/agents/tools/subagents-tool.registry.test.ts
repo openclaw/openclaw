@@ -1,5 +1,6 @@
 import { StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
@@ -15,9 +16,22 @@ const createRun = (overrides: Parameters<typeof createSubagentRunRecord>[0]) =>
     requesterAgentId: "main",
     ...overrides,
   });
+const persistedRun = (overrides: Parameters<typeof createRun>[0]) =>
+  createRun({
+    generation: 1,
+    completion: { required: false },
+    delivery: { status: "not_required" },
+    ...overrides,
+  });
 const createTool = () => createSubagentsTool({ agentSessionKey: ownerKey, config: {} });
 const waitForRuns = async (runIds: string[], tool = createTool()) =>
   (await tool.execute("wait", { action: "wait", runIds, timeoutSeconds: 0 })).details;
+const selectedRun = (runId: string) => ({ runs: [{ runId }] });
+const unavailableRun = (runId: string) => ({
+  reason: "unavailable",
+  unavailable: [runId],
+  runs: [],
+});
 const withRegistry = (run: () => Promise<void>, persisted = false) =>
   withOpenClawTestState(
     {
@@ -38,34 +52,19 @@ const withRegistry = (run: () => Promise<void>, persisted = false) =>
 
 it("keeps persisted subagent wait selection off the calling thread", async () => {
   await withRegistry(async () => {
-    const run = createRun({
+    const run = persistedRun({
       runId: "physical-run",
       taskRunId: "logical-run",
-      generation: 1,
       childSessionKey: "agent:main:subagent:persisted-wait",
-      completion: { required: false },
-      delivery: { status: "not_required" },
     });
     persistRegistryFixture(new Map([[run.runId, run]]));
     clearSubagentRunsReadCacheForTest();
-    let registryReads = 0;
-    for (const method of ["get", "all", "iterate"] as const) {
-      const execute = StatementSync.prototype[method];
-      vi.spyOn(StatementSync.prototype, method).mockImplementation(function (
-        this: StatementSync,
-        ...args: unknown[]
-      ) {
-        if (/\bfrom\s+"?subagent_runs\b/i.test(this.sourceSQL)) {
-          registryReads++;
-        }
-        return Reflect.apply(execute, this, args);
-      });
-    }
+    const sql = observeSqliteReadSql(StatementSync.prototype);
     expect(await waitForRuns([run.runId])).toMatchObject({
       reason: "timeout",
-      runs: [{ runId: run.runId }],
+      ...selectedRun(run.runId),
     });
-    expect(registryReads).toBe(0);
+    expect(sql.queries.filter((query) => /\bfrom\s+"?subagent_runs\b/i.test(query))).toEqual([]);
   }, true);
 });
 
@@ -97,10 +96,7 @@ it("bounds current control scope work to the caller tree in a 5,000-run registry
       }
       return undefined;
     });
-    expect(await read()).toMatchObject({
-      reason: "timeout",
-      runs: [{ runId: selected.runId }],
-    });
+    expect(await read()).toMatchObject({ reason: "timeout", ...selectedRun(selected.runId) });
     expect(visited).toBeLessThan(10);
     const replacement = {
       ...selected,
@@ -109,22 +105,14 @@ it("bounds current control scope work to the caller tree in a 5,000-run registry
       requesterSessionKey: "agent:main:other",
     };
     subagentRuns.set(replacement.runId, replacement);
-    expect(await read()).toMatchObject({
-      reason: "unavailable",
-      unavailable: [selected.runId],
-      runs: [],
-    });
+    expect(await read()).toMatchObject(unavailableRun(selected.runId));
     subagentRuns.delete(replacement.runId);
-    expect(await read()).toMatchObject({ runs: [{ runId: selected.runId }] });
+    expect(await read()).toMatchObject(selectedRun(selected.runId));
     subagentRuns.set(selected.runId, {
       ...selected,
       requesterSessionKey: "agent:main:other",
     });
-    expect(await read()).toMatchObject({
-      reason: "unavailable",
-      unavailable: [selected.runId],
-      runs: [],
-    });
+    expect(await read()).toMatchObject(unavailableRun(selected.runId));
     expect(visited).toBeLessThan(10);
   });
 });
@@ -135,36 +123,22 @@ it("reports the persisted pause age of a yielded leaf, never of a parent with a 
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(now);
     const pausedAt = now - (43 * 3_600_000 + 12 * 60_000);
-    const base = {
-      generation: 1,
-      completion: { required: false },
-      delivery: { status: "not_required" },
-    } as const;
-    const leaf = createRun({
-      ...base,
-      runId: "parked-leaf",
-      pauseReason: "sessions_yield",
-      execution: { status: "terminal", startedAt: pausedAt - 60_000, endedAt: pausedAt },
-    });
-    const orchestrator = createRun({
-      ...base,
-      runId: "waiting-orchestrator",
-      pauseReason: "sessions_yield",
-      execution: { status: "terminal", startedAt: pausedAt - 60_000, endedAt: pausedAt },
-    });
-    const announcedChild = createRun({
-      ...base,
+    const pausedRun = (runId: string) =>
+      persistedRun({
+        runId,
+        pauseReason: "sessions_yield",
+        execution: { status: "terminal", startedAt: pausedAt - 60_000, endedAt: pausedAt },
+      });
+    const leaf = pausedRun("parked-leaf");
+    const orchestrator = pausedRun("waiting-orchestrator");
+    const announcedChild = persistedRun({
       runId: "announced-child",
       requesterSessionKey: orchestrator.childSessionKey,
       expectsCompletionMessage: true,
       execution: { status: "running", startedAt: now - 60_000 },
     });
     persistRegistryFixture(
-      new Map([
-        [leaf.runId, leaf],
-        [orchestrator.runId, orchestrator],
-        [announcedChild.runId, announcedChild],
-      ]),
+      new Map([leaf, orchestrator, announcedChild].map((run) => [run.runId, run])),
     );
     // The announced child exists only in persisted rows, never in the in-memory registry.
     clearSubagentRunsReadCacheForTest();

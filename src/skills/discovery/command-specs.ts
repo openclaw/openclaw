@@ -6,6 +6,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   parseFrontmatterBlock,
   stripFrontmatterBlock,
@@ -20,7 +21,6 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
   mergeBundlePathLists,
-  normalizeBundlePathList,
 } from "../../plugins/bundle-manifest.js";
 import {
   hasExplicitPluginConfig,
@@ -63,7 +63,7 @@ function readClaudeBundleManifest(rootDir: string): Record<string, unknown> {
 
 function resolveClaudeCommandRootDirs(rootDir: string): string[] {
   const raw = readClaudeBundleManifest(rootDir);
-  const declared = normalizeBundlePathList(raw.commands);
+  const declared = normalizeUniqueSingleOrTrimmedStringList(raw.commands);
   const defaults = fs.existsSync(path.join(rootDir, "commands")) ? ["commands"] : [];
   return mergeBundlePathLists(defaults, declared);
 }
@@ -134,6 +134,8 @@ type WorkspaceSkillCommandOptions = {
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
   reservedNames?: Set<string>;
   gatewayOnly?: boolean;
+  executionWorkspaceDir?: string;
+  executionWorkspaceFileHost?: "gateway";
 };
 
 function resolveCommandSkillLoadOptions(opts?: WorkspaceSkillCommandOptions) {
@@ -151,6 +153,8 @@ function resolveCommandSkillLoadOptions(opts?: WorkspaceSkillCommandOptions) {
     eligibility: opts?.eligibility,
     pluginMetadataSnapshot: opts?.pluginMetadataSnapshot,
     gatewayOnly: opts?.gatewayOnly,
+    executionWorkspaceDir: opts?.executionWorkspaceDir,
+    executionWorkspaceFileHost: opts?.executionWorkspaceFileHost,
   };
 }
 

@@ -19,6 +19,11 @@ import {
   createFilePresentationState,
   renderFilePanelPresentation,
 } from "./chat-detail-file-presentation.ts";
+import {
+  createDetailOperationPresentation,
+  detailPanelOperationLifetime,
+  registerDetailPanelRetirement,
+} from "./chat-detail-panel-operation-lifetime.ts";
 import { createFileCopy } from "./chat-file-copy.ts";
 import { captureFileEditorDraft, readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
 import { createFileSessionAttachment } from "./chat-file-session-attachment.ts";
@@ -33,12 +38,15 @@ import type {
   FileReaderViewRequest,
 } from "./chat-sidebar-content-types.ts";
 import { buildRawContent, SidebarPanel, type SidebarPanelProps } from "./chat-sidebar-content.tsx";
-import type { ChatDetailPanel, ChatDetailPanelProps } from "./chat-sidebar-view-types.ts";
+import type {
+  ChatDetailPanel as ChatDetailPanelElement,
+  ChatDetailPanelProps,
+} from "./chat-sidebar-view-types.ts";
 import type { FileEditorViewHandle } from "./file-editor-view.ts";
 
 registerEnglishCatalog(registerFilePreviewEnglish);
 
-function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanel) {
+function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanelElement) {
   const fileAttachment = createFileSessionAttachment(props);
   const gateways = nativeGatewaysCapability();
   const nativeGateways = gateways && projectOwner(gateways, (owner) => owner);
@@ -62,7 +70,9 @@ function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanel) {
   let fileEditing = false;
   let fileDirty = false;
   let fileReloading = false;
+  // Plain admission also protects the dirty-editor close veto.
   let fileSaving = false;
+  const fileOperation = createDetailOperationPresentation();
   let fileSaveNotice: { kind: "conflict" } | { kind: "error"; message: string } | null = null;
 
   const htmlPreview = createFileHtmlPreview(
@@ -86,19 +96,9 @@ function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanel) {
     syncFileEditor,
     restoreFileReadingPresentation,
     showRequestedReadingMode,
-    handlePanelClick,
-    handlePanelKeyDown,
     resetFilePresentation,
     beginEditPresentation,
-    fileSearchMatches,
-    closeFileSearch,
-    toggleFileSearch,
-    toggleFileWrap,
-    updateFileSearch,
-    moveFileSearch,
-    handleFileSearchKeydown,
-    openInEditor,
-    changeFileReadingMode,
+    ...fileActions
   } = createFilePresentationActions({
     props,
     presentation,
@@ -168,14 +168,9 @@ function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanel) {
   function updateSelection(
     contentChanged: boolean,
     navigationChanged: boolean,
-    previousRuntime: AttachmentSidebarRuntime | undefined,
     content: ChatDetailPanelContent | null,
     navigation: FileSidebarNavigation | null,
-    runtime: AttachmentSidebarRuntime,
   ) {
-    if (previousRuntime && previousRuntime.connectionEpoch !== runtime.connectionEpoch) {
-      attachmentDownload.cancel();
-    }
     if (!contentChanged) {
       if (
         navigationChanged &&
@@ -193,7 +188,6 @@ function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanel) {
       }
       return;
     }
-    attachmentDownload.cancel();
     visibleContent = content;
     error = null;
     rawView = null;
@@ -568,22 +562,26 @@ function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanel) {
   }
 
   function trackFileOperation(operation: Promise<unknown>, version: number) {
-    return operation
-      .catch((cause: unknown) => {
-        if (version === fileOperationVersion) {
-          fileSaveNotice = { kind: "error", message: formatUiError(cause) };
+    const reportError = (cause: unknown) => {
+      if (version === fileOperationVersion) {
+        fileSaveNotice = { kind: "error", message: formatUiError(cause) };
+        invalidate();
+      }
+    };
+    const pending = operation.catch(reportError).finally(() => {
+      if (version === fileOperationVersion) {
+        fileSaving = false;
+        if (fileReloading) {
+          fileReloading = false;
+          fileEditor?.setEditable(fileEditing);
         }
-      })
-      .finally(() => {
-        if (version === fileOperationVersion) {
-          fileSaving = false;
-          if (fileReloading) {
-            fileReloading = false;
-            fileEditor?.setEditable(fileEditing);
-          }
-          invalidate();
-        }
-      });
+        invalidate();
+      }
+    });
+    void fileOperation
+      .observe(pending, () => isConnected() && version === fileOperationVersion)
+      .catch(reportError);
+    return pending;
   }
 
   const close = () => {
@@ -609,6 +607,16 @@ function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanel) {
   let previousContent: ChatDetailPanelContent | null | undefined;
   let previousNavigation: FileSidebarNavigation | null | undefined;
   let previousRuntime: AttachmentSidebarRuntime | undefined;
+  const unregisterRetirement = registerDetailPanelRetirement(
+    host,
+    () => previousContent,
+    () => previousRuntime,
+    () => {
+      attachmentDownload.cancel();
+      fileOperation.retire();
+    },
+    fileAttachment.retire,
+  );
   let handledFileViewRequest: FileReaderViewRequest | undefined;
   let fileViewRequestVersion = 0;
   let navigate = false;
@@ -631,14 +639,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanel) {
     }
     if (contentChanged || navigationChanged || runtime !== previousRuntime) {
       navigate ||= contentChanged || (navigationChanged && navigation?.line != null);
-      updateSelection(
-        contentChanged,
-        navigationChanged,
-        previousRuntime,
-        content,
-        navigation,
-        runtime,
-      );
+      updateSelection(contentChanged, navigationChanged, content, navigation);
       previousContent = content;
       previousNavigation = navigation;
       previousRuntime = runtime;
@@ -662,34 +663,26 @@ function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanel) {
         fileEditorLoading,
         fileOperationVersion,
         fileSaveNotice,
-        fileSaving,
+        get fileSaving() {
+          return fileOperation.pending() || fileSaving;
+        },
       },
       setEditorMount: (element) => {
         editorMount = element;
       },
       actions: {
-        fileSearchMatches,
+        ...fileActions,
         currentFileText,
         retryFileEditor,
         toggleHtmlSource,
-        closeFileSearch,
         interact,
-        changeFileReadingMode,
         discardFileEdits,
         editFile,
-        moveFileSearch,
-        openInEditor,
         overwriteFile: () => startLatestFileOperation("overwrite"),
         reloadFile: () => startLatestFileOperation("reload"),
         saveFile,
-        updateFileSearch,
-        handleFileSearchKeydown,
-        toggleFileSearch,
-        toggleFileWrap,
         close,
         showRawText,
-        handlePanelClick,
-        handlePanelKeyDown,
         invalidate,
       },
     });
@@ -705,7 +698,9 @@ function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanel) {
     () => lifecycle.snapshot(),
     () => {
       publishDraft();
-      const request = props.fileNavigation?.view;
+      // Bridge props may already describe the next selection while this frame applies.
+      // Consume only the navigation synchronized with visibleContent by renderPanel.
+      const request = previousNavigation?.view;
       if (request && request !== handledFileViewRequest) {
         // Consume even a mismatched request: it must not wait for a later selection.
         handledFileViewRequest = request;
@@ -728,6 +723,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanel) {
     },
   );
   onSettled(() => () => {
+    unregisterRetirement();
     disposed = true;
     draftListener?.(null);
     if (fileDirty) {
@@ -738,6 +734,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanel) {
   return <SidebarPanel {...lifecycle.snapshot()} />;
 }
 
-defineSolidBridge("openclaw-chat-detail-panel", DetailPanel, {
+export const ChatDetailPanel = defineSolidBridge("openclaw-chat-detail-panel", DetailPanel, {
   properties: chatDetailPanelProperties,
+  ...detailPanelOperationLifetime,
 });

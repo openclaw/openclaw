@@ -215,7 +215,25 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       return {
         entries: codexAppServerModelsToCatalogEntries(result.models, runtime),
         outcomes: [
-          { provider: "openai", status: observation.accountType ? "ready" : "unavailable" },
+          {
+            provider: "openai",
+            status: observation.accountType ? "ready" : "unavailable",
+            ...(observation.accountType
+              ? {
+                  modelAccessPrograms: result.models.flatMap((model) =>
+                    model.availableAccessPrograms
+                      ? [
+                          {
+                            modelId: model.id,
+                            runtimeId: runtime,
+                            cyber: model.availableAccessPrograms.cyber,
+                          },
+                        ]
+                      : [],
+                  ),
+                }
+              : {}),
+          },
         ],
       };
     },

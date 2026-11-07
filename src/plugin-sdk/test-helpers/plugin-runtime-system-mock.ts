@@ -23,13 +23,13 @@ export function createPluginSystemRuntimeMock(): PluginRuntime["system"] {
           delivered: false,
         }),
       })),
-    requestHeartbeat: vi.fn<PluginRuntime["system"]["requestHeartbeat"]>(),
-    requestHeartbeatNow: vi.fn<PluginRuntime["system"]["requestHeartbeatNow"]>(),
-    runHeartbeatOnce: vi.fn<PluginRuntime["system"]["runHeartbeatOnce"]>(async () => ({
-      status: "ran" as const,
-      durationMs: 0,
-    })),
     enqueueSystemEvent: vi.fn<PluginRuntime["system"]["enqueueSystemEvent"]>(),
+    captureSessionGeneration: vi
+      .fn<PluginRuntime["system"]["captureSessionGeneration"]>()
+      .mockResolvedValue(undefined),
+    postSessionNotice: vi
+      .fn<PluginRuntime["system"]["postSessionNotice"]>()
+      .mockResolvedValue({ status: "posted", delivered: false }),
     runCommandWithTimeout: vi.fn<PluginRuntime["system"]["runCommandWithTimeout"]>(),
     formatNativeDependencyHint: vi.fn<PluginRuntime["system"]["formatNativeDependencyHint"]>(
       () => "",

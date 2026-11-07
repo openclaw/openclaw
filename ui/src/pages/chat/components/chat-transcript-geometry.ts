@@ -2,7 +2,7 @@ import { measureElement, type Virtualizer } from "@tanstack/virtual-core";
 import { captureChatSessionScrollPosition, type ChatSessionScrollPosition } from "../scroll.ts";
 import type { TranscriptViewportMeasurement } from "./chat-transcript-scroll-events.ts";
 
-export const POSITION_RAIL_MARKER_HEIGHT = 12;
+export const POSITION_RAIL_MARKER_HEIGHT = 10;
 const POSITION_RAIL_MARKER_OVERSCAN = 6;
 
 export function positionRailWindowIndexes(
@@ -129,7 +129,9 @@ export function isTranscriptRangeCommitted(
     return (
       node !== undefined &&
       inner?.contains(node) === true &&
-      Number.parseFloat(node.style.getPropertyValue("contain-intrinsic-block-size")) === row.size
+      // This records the committed size without feeding it back into the row's styles.
+      (node.dataset.streamingRow === "true" ||
+        Math.abs(Number.parseFloat(node.dataset.rowSize ?? "") - row.size) < 1)
     );
   });
 }
@@ -153,7 +155,7 @@ export function readConnectedTranscriptRows(
   const measurements: Array<{ index: number; height: number }> = [];
   // Refs can arrive out of order during prepends; preserve DOM-order corrections.
   const rows = [...rowElements]
-    .filter((row) => scrollElement.contains(row))
+    .filter((row) => scrollElement.contains(row) && row.dataset.preparedRow !== "true")
     .toSorted(
       (left, right) => virtualizer.indexFromElement(left) - virtualizer.indexFromElement(right),
     );
@@ -181,16 +183,20 @@ export function measureTranscriptRow(
   entry: ResizeObserverEntry | undefined,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
 ): number {
-  if (entry || !virtualizer.targetWindow?.ResizeObserver) {
+  const parked =
+    element.dataset.preparedRow === "true" && !element.hasAttribute("data-preparing-row");
+  if (!parked && (entry || !virtualizer.targetWindow?.ResizeObserver)) {
     // Rounded row heights accumulate when skipped overscan uses those measurements.
-    const size =
-      entry?.borderBoxSize?.[0]?.blockSize ?? measureElement(element, entry, virtualizer);
-    if (size !== 0 || virtualizer.scrollElement?.clientHeight !== 0) {
+    const box = entry?.borderBoxSize?.[0];
+    const size = box?.blockSize ?? measureElement(element, entry, virtualizer);
+    // A deferred zero can describe a hidden pane or an earlier parked row.
+    // Preserve that geometry even if the pane or row is visible again.
+    if (size !== 0 || (box?.inlineSize !== 0 && virtualizer.scrollElement?.clientHeight !== 0)) {
       return size;
     }
   }
-  // Row registration waits for the observer's first layout; hidden panels retain
-  // their last measurement instead of replacing it with zero and moving the viewport.
+  // Parked rows have no layout box. Retain their geometry until preparation or
+  // presentation resumes, also while a whole pane is hidden or awaiting layout.
   const index = virtualizer.indexFromElement(element);
   return (
     virtualizer.itemSizeCache.get(virtualizer.options.getItemKey(index)) ??
@@ -199,9 +205,11 @@ export function measureTranscriptRow(
 }
 
 export function maxTranscriptScrollOffset(element: HTMLElement | null): number | null {
-  return element && element.clientHeight > 0
-    ? Math.max(0, element.scrollHeight - element.clientHeight)
-    : null;
+  if (!element) {
+    return null;
+  }
+  const clientHeight = element.clientHeight;
+  return clientHeight > 0 ? Math.max(0, element.scrollHeight - clientHeight) : null;
 }
 
 export function createPositionRailGutter(

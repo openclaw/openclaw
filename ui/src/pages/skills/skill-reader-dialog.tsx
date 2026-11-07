@@ -1,11 +1,13 @@
+import "../../styles/skill-reader-dialog.css";
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, Loading, Show } from "solid-js";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { renderPluginOfficialBadge } from "../plugins/plugin-card.tsx";
 import type { SkillsProps } from "./view-types.ts";
 
 export function MarkdownContent(props: {
@@ -33,21 +35,22 @@ export function SkillReaderDialog(props: {
   label: string;
   onClose: () => void;
   title: JSX.Element;
+  width?: string;
   footer?: JSX.Element;
   children: JSX.Element;
 }) {
   return (
     <openclaw-modal-dialog
       label={props.label}
-      style={{ "--openclaw-modal-width": "min(1040px, calc(100vw - 32px))" }}
+      style={{ "--openclaw-modal-width": `min(${props.width ?? "1040px"}, calc(100vw - 32px))` }}
       onModal-cancel={() => props.onClose()}
     >
-      <div class="exec-approval-card skill-reader-dialog">
-        <div class="exec-approval-header">
-          {props.title}
+      <div class="oc-dialog skill-reader-dialog">
+        <div class="oc-dialog__header">
+          <h2 class="oc-dialog__title">{props.title}</h2>
           <button
             type="button"
-            class="btn btn--icon btn--ghost"
+            class="oc-dialog__close"
             aria-label={t("skillsPage.close")}
             onClick={() => props.onClose()}
           >
@@ -73,7 +76,12 @@ export function ClawHubDetailDialog(props: { view: SkillsProps; installLocked: b
     return skillIconUrl() || !image ? undefined : props.view.state.clawhubIconUrls?.[image];
   };
   const detailImageUrl = () => skillIconUrl() ?? profileImageUrl();
-  const pendingTitle = () => <div class="exec-approval-title">{reference()}</div>;
+  const installResult = createMemo(() => {
+    const result = props.view.state.clawhubInstallMessage;
+    return props.view.showInventory !== false && result?.ref === reference() ? result : null;
+  });
+  const installed = () => installResult()?.kind === "success";
+  const pendingTitle = () => <span class="exec-approval-title">{reference()}</span>;
   return (
     <SkillReaderDialog
       label={
@@ -84,7 +92,7 @@ export function ClawHubDetailDialog(props: { view: SkillsProps; installLocked: b
       }
       onClose={() => props.view.onClawHubDetailClose()}
       title={
-        <div class="clawhub-skill-detail__identity">
+        <span class="clawhub-skill-detail__identity">
           <Errored fallback={pendingTitle}>
             <Loading on={reference()} fallback={pendingTitle()}>
               <Show when={detailImageUrl()}>
@@ -99,42 +107,64 @@ export function ClawHubDetailDialog(props: { view: SkillsProps; installLocked: b
                   />
                 )}
               </Show>
-              <div class="exec-approval-title">{detail()?.skill?.displayName ?? reference()}</div>
+              <span class="exec-approval-title">{detail()?.skill?.displayName ?? reference()}</span>
+              <Show when={detail()?.skill?.isOfficial}>{renderPluginOfficialBadge()}</Show>
             </Loading>
           </Errored>
-        </div>
+        </span>
       }
       footer={
         <Errored fallback={() => null}>
           <Loading on={reference()}>
             <Show when={detail()?.skill}>
               {(skill) => (
-                <openclaw-modal-actions class="exec-approval-actions skill-reader-dialog__actions">
-                  <button
-                    class="btn primary"
-                    disabled={props.installLocked}
-                    onClick={() => {
-                      const ref = reference();
-                      if (ref) {
-                        props.view.onClawHubInstall(ref);
-                      }
-                    }}
-                  >
-                    {props.view.state.skillOperation?.kind === "clawhub" &&
-                    props.view.state.skillOperation.ref === (reference() ?? "")
-                      ? t("skillsPage.installing")
-                      : props.view.showInventory === false
-                        ? t("skillLibrary.import")
-                        : t("skillsPage.installNamed", { name: skill().displayName })}
-                  </button>
-                </openclaw-modal-actions>
+                <>
+                  <Show when={installResult()}>
+                    {(result) => (
+                      <div
+                        role={result().kind === "error" ? "alert" : "status"}
+                        tabindex={0}
+                        class={[
+                          "callout skill-reader-dialog__notice",
+                          result().kind === "error" ? "danger" : "success",
+                        ]}
+                      >
+                        {result().text}
+                      </div>
+                    )}
+                  </Show>
+                  <openclaw-modal-actions class="oc-dialog__footer exec-approval-actions skill-reader-dialog__actions">
+                    <button
+                      class={["btn", { primary: !installed() }]}
+                      disabled={props.installLocked || installed()}
+                      onClick={() => {
+                        const ref = reference();
+                        if (ref) {
+                          props.view.onClawHubInstall(ref);
+                        }
+                      }}
+                    >
+                      <Show when={installed()}>
+                        <Icon name="check" />
+                      </Show>
+                      {props.view.state.skillOperation?.kind === "clawhub" &&
+                      props.view.state.skillOperation.ref === (reference() ?? "")
+                        ? t("skillsPage.installing")
+                        : installed()
+                          ? t("skillsPage.installed")
+                          : props.view.showInventory === false
+                            ? t("skillLibrary.import")
+                            : t("skillsPage.installNamed", { name: skill().displayName })}
+                    </button>
+                  </openclaw-modal-actions>
+                </>
               )}
             </Show>
           </Loading>
         </Errored>
       }
     >
-      <div class="skill-reader-dialog__body clawhub-skill-detail__body">
+      <div class="oc-dialog__body skill-reader-dialog__body clawhub-skill-detail__body">
         <Errored
           fallback={(error) => (
             <div class="callout danger skill-reader-dialog__error" role="alert">

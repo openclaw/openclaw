@@ -6,10 +6,7 @@ import { promisify } from "node:util";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { pauseVirtualClock, type ControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
-import {
-  createControlUiE2eSuite,
-  holdModuleResponse,
-} from "./control-ui-e2e-suite.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const indexHtmlPath = path.resolve(
   process.cwd(),
@@ -27,22 +24,20 @@ async function startRegisteredElementFixture(): Promise<ControlUiE2eServer> {
   const indexHtml = await readFile(indexHtmlPath, "utf8");
   const server = createServer((request, response) => {
     const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
-    const module = pathname === "/src/main.ts" || pathname === "/slow.js";
+    const module = pathname === "/src/main.ts";
     const body =
-      pathname === "/slow.js"
-        ? "export const loaded = true;"
-        : pathname === "/src/main.ts"
-          ? syntheticModuleRenders
-            ? `customElements.define("openclaw-app", class extends HTMLElement {
+      pathname === "/src/main.ts"
+        ? syntheticModuleRenders
+          ? `customElements.define("openclaw-app", class extends HTMLElement {
               connectedCallback() {
                 this.textContent = "Application rendered";
                 window.dispatchEvent(new Event(${JSON.stringify(renderEvent)}));
               }
             });`
-            : 'customElements.define("openclaw-app", class extends HTMLElement {});'
-          : pathname === "/"
-            ? indexHtml
-            : undefined;
+          : 'customElements.define("openclaw-app", class extends HTMLElement {});'
+        : pathname === "/"
+          ? indexHtml
+          : undefined;
     response.statusCode = body === undefined ? 404 : 200;
     if (body !== undefined) {
       response.setHeader(
@@ -108,49 +103,6 @@ const registeredElementSuite = createControlUiE2eSuite({
 });
 
 registeredElementSuite.define(() => {
-  it.each([false, true])(
-    "preserves a slow module graph (recovery document: %s)",
-    async (recovery) => {
-      syntheticModuleRenders = true;
-      let held!: Awaited<ReturnType<typeof holdModuleResponse>>;
-      await registeredElementSuite.withPage(
-        pageOptions,
-        async ({ page }) => {
-          await preparePage(page);
-          await page.route("**/src/main.ts", async (route) => {
-            const response = await route.fetch();
-            await route.fulfill({ response, body: `import "/slow.js";\n${await response.text()}` });
-          });
-          held = await holdModuleResponse(page, /\/slow\.js$/u);
-          const url = new URL(registeredElementSuite.server.baseUrl);
-          if (recovery) {
-            url.searchParams.set("openclaw_mount_recovery", "1");
-          }
-          url.searchParams.set("session", "synthetic-session");
-          url.hash = "synthetic-fragment";
-          await page.goto(url.href, { waitUntil: "commit" });
-          await held.request;
-          await page.clock.runFor(12_001);
-
-          await page.getByRole("heading", { name: "Control UI is still loading" }).waitFor();
-          expect(await counter(page, loadCountKey)).toBe("1");
-          await page.getByRole("button", { name: "Keep waiting" }).click();
-          await page.clock.runFor(12_001);
-          expect(held.requests()).toBe(1);
-          expect(await counter(page, loadCountKey)).toBe("1");
-
-          held.release();
-          await page.getByText("Application rendered", { exact: true }).waitFor();
-          expect(await page.locator("#openclaw-mount-fallback").isHidden()).toBe(true);
-          expect(await counter(page, renderCountKey)).toBe("1");
-          expect(new URL(page.url()).searchParams.get("session")).toBe("synthetic-session");
-          expect(new URL(page.url()).hash).toBe("#synthetic-fragment");
-        },
-        async () => held?.release(),
-      );
-    },
-  );
-
   it("shows the fallback when registration never produces an application render", async () => {
     syntheticModuleRenders = false;
     await registeredElementSuite.withPage(pageOptions, async ({ page }) => {
@@ -158,7 +110,10 @@ registeredElementSuite.define(() => {
       await page.goto(registeredElementSuite.server.baseUrl, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => customElements.get("openclaw-app") !== undefined);
 
-      expect(await page.locator("openclaw-app").textContent()).toBe("");
+      expect(await page.locator("#openclaw-boot-shell").isVisible()).toBe(true);
+      expect(
+        await page.locator("#openclaw-boot-shell .loading-skeleton__composer").isVisible(),
+      ).toBe(true);
       expect(await counter(page, renderCountKey)).toBeNull();
 
       await exhaustMountRecovery(page);

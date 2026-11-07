@@ -6,6 +6,7 @@ import {
   clearMcpAppModelContextForView,
   getMcpAppModelContext,
   leaseMcpAppModelContextForTurn,
+  projectMcpAppModelContextInput,
   removeMcpAppModelContextItem,
   revokeMcpAppModelContext,
   subscribeMcpAppModelContext,
@@ -56,7 +57,12 @@ describe("MCP App model context", () => {
     expect(getMcpAppModelContext(active, view)?.content?.[0]?._meta?.["openai/title"]).toBe("Part");
     const lease = leaseMcpAppModelContextForTurn({ runtime: active });
     expect(lease?.modelContext[0]).toEqual({ content, structuredContent: { selection: 1 } });
-    expect(lease?.context.text).not.toContain("_meta");
+    const input = projectMcpAppModelContextInput(lease!.modelContext);
+    expect(input.context.text).not.toContain("_meta");
+    expect(getMcpAppModelContext(active, view)?.content?.[3]).toMatchObject({
+      _meta: { "openai/title": "Part" },
+      resource: { _meta: { private: true } },
+    });
   });
 
   it("keeps idempotent update IDs and notifies user removals without accepting stale edits", () => {
@@ -143,7 +149,8 @@ describe("MCP App model context", () => {
     updateMcpAppModelContext(active, {}, params);
     const lease = leaseMcpAppModelContextForTurn({ runtime: active });
     expect(lease?.modelContext).toEqual([params]);
-    expect(lease?.context.kind).toBe("conversation-data");
-    expect(lease?.legacyText).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
+    const input = projectMcpAppModelContextInput(lease!.modelContext);
+    expect(input.context.kind).toBe("conversation-data");
+    expect(input.legacyText).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
   });
 });

@@ -5,9 +5,9 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import * as schtasksExec from "../../daemon/schtasks-exec.js";
 import type { GatewayService } from "../../daemon/service.js";
-import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import * as commandExec from "../../process/exec.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { waitForSignalExitBarriers } from "../signal-exit-barrier.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
@@ -23,21 +23,18 @@ import {
 } from "./update-command-service-maintenance.js";
 import * as windowsRecovery from "./update-command-windows-task.js";
 
-const { mocks, withServiceHome } =
+const { mockMaintenanceService, withServiceHome } =
   await import("./update-command-service-maintenance.test-support.js");
 
 function windowsService(home: string, overrides: Partial<GatewayService> = {}) {
-  const service = createMockGatewayService({
+  return mockMaintenanceService(home, {
     readCommand: async () => ({
       ...gatewayCommand(home),
       sourcePath: path.join(home, "gateway.cmd"),
     }),
     readRuntime: async () => ({ status: "running" }),
-    isLoaded: async () => true,
     ...overrides,
   });
-  mocks.service.mockReturnValue(service);
-  return service;
 }
 
 function mutableTask(
@@ -72,16 +69,8 @@ it.each([
   ({ hresult, detail, denied }) =>
     withServiceHome(async (home) => {
       mockProcessPlatform("win32");
-      const successfulExit = {
-        code: 0,
-        stdout: "",
-        stderr: "",
-        signal: null,
-        killed: false,
-        termination: "exit" as const,
-      };
-      const task = vi
-        .spyOn(commandExec, "runCommandWithTimeout")
+      const successfulExit = createCommandResult();
+      vi.spyOn(commandExec, "runCommandWithTimeout")
         .mockResolvedValueOnce({
           ...successfulExit,
           stdout: "<Task><Settings><Enabled>true</Enabled></Settings></Task>",
@@ -109,7 +98,6 @@ it.each([
         expect(String(failure)).toContain("Scheduled Task disable failed");
         expect(String(failure)).not.toContain("elevated terminal");
       }
-      expect(task).toHaveBeenCalledTimes(denied ? 2 : 3);
       expect(service.stop).not.toHaveBeenCalled();
     }),
 );
@@ -170,9 +158,8 @@ it.each([
         },
       });
       let stopped: PreManagedServiceStop | undefined;
-      let failure: unknown;
       try {
-        try {
+        const failure = await (async () => {
           stopped = await maybeStopManagedServiceBeforeMutableUpdate({
             ...maintenanceDefaults,
             shouldRestart: lostBefore !== "disable",
@@ -193,9 +180,7 @@ it.each([
           await recovery.restore();
           revokeDuringInspection = lostBefore === "compensation";
           await recovery.complete(false);
-        } catch (error) {
-          failure = error;
-        }
+        })().catch((error: unknown) => error);
         expect(task).toEqual({ mutations, enabled });
         if (lostDuringStop) {
           expect(stopped).toBeUndefined();

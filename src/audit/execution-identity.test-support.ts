@@ -15,6 +15,19 @@ import {
 } from "./execution-identity-admission.js";
 import { processExecutionIdentityAdmissionWorkInDatabase } from "./execution-identity-context.js";
 
+export function executionIdentityFacts(
+  runId: string,
+  overrides: Partial<ExecutionIdentityAdmissionFacts> = {},
+): ExecutionIdentityAdmissionFacts {
+  return {
+    runId,
+    agentId: "main",
+    ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
+    runtime: { kind: "embedded" },
+    ...overrides,
+  };
+}
+
 export function captureExecutionIdentityAdmissionEnvelope(
   admissionFacts: ExecutionIdentityAdmissionFacts,
   options: Pick<

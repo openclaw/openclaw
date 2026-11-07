@@ -7,18 +7,16 @@ type OpenAIFunctionDescriptor = {
   strict?: boolean;
 };
 
-type PreparedOpenAIFunctionTool = {
-  responses: OpenAIFunctionDescriptor & { type: "function" };
-  completions: { type: "function"; function: OpenAIFunctionDescriptor };
-};
-
 export function prepareOpenAIFunctionTool(
   name: string,
   description: string | undefined,
   parameters: Record<string, unknown>,
   strict: boolean | undefined,
   mutableParameters = false,
-): PreparedOpenAIFunctionTool {
+): {
+  responses: OpenAIFunctionDescriptor & { type: "function" };
+  completions: { type: "function"; function: OpenAIFunctionDescriptor };
+} {
   // Payload hooks own writable parameters; serialization can share published schemas.
   const descriptor: OpenAIFunctionDescriptor = {
     name,

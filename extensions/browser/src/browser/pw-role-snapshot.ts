@@ -1,5 +1,6 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { REDACTED_FIELD_VALUE, VALUE_FIELD_ROLES } from "./sensitive-field-values.js";
 import { INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
 type RoleRef = {
@@ -65,35 +66,6 @@ export function getRoleSnapshotIdentityKeys<T extends RoleRef>(
   );
 }
 
-/** Mark ref-bearing lines that were absent from the previous compatible snapshot. */
-function annotateRoleSnapshotDelta<T extends RoleRef>(params: {
-  lines: string[];
-  lineRefs: readonly (string | undefined)[];
-  refs: Record<string, T>;
-  mode: RoleSnapshotIdentityMode;
-  previousKeys: ReadonlySet<string>;
-}): boolean {
-  const markedKeys = new Set<string>();
-  for (const [index, line] of params.lines.entries()) {
-    const ref = params.lineRefs[index];
-    const value = ref && Object.hasOwn(params.refs, ref) ? params.refs[ref] : undefined;
-    if (!ref || !value) {
-      continue;
-    }
-    const key = getRoleSnapshotIdentityKey(ref, value, params.mode);
-    if (params.previousKeys.has(key)) {
-      continue;
-    }
-    params.lines[index] = `${line} [new]`;
-    markedKeys.add(key);
-  }
-  if (markedKeys.size === 0) {
-    return false;
-  }
-  params.lines.push(`${markedKeys.size} new element(s) since last snapshot`);
-  return true;
-}
-
 function truncateRoleSnapshot(lines: readonly string[], maxChars: number) {
   const marker =
     maxChars >= ROLE_SNAPSHOT_TRUNCATION_MARKER.length ? ROLE_SNAPSHOT_TRUNCATION_MARKER : "…";
@@ -132,13 +104,24 @@ export function finalizeRoleSnapshot<T extends RoleRef>(params: {
   let annotated = false;
   if (delta && previousKeys !== undefined) {
     lineRefs = sourceLines.map(findRoleSnapshotLineRef);
-    annotated = annotateRoleSnapshotDelta({
-      lines: sourceLines,
-      lineRefs,
-      refs: params.refs,
-      mode: delta.mode,
-      previousKeys,
-    });
+    const markedKeys = new Set<string>();
+    for (const [index, line] of sourceLines.entries()) {
+      const ref = lineRefs[index];
+      const value = ref && Object.hasOwn(params.refs, ref) ? params.refs[ref] : undefined;
+      if (!ref || !value) {
+        continue;
+      }
+      const key = getRoleSnapshotIdentityKey(ref, value, delta.mode);
+      if (previousKeys.has(key)) {
+        continue;
+      }
+      sourceLines[index] = `${line} [new]`;
+      markedKeys.add(key);
+    }
+    annotated = markedKeys.size > 0;
+    if (annotated) {
+      sourceLines.push(`${markedKeys.size} new element(s) since last snapshot`);
+    }
   }
   const sourceSnapshot = annotated ? sourceLines.join("\n") : params.snapshot;
   const truncated = maxChars !== undefined && sourceSnapshot.length > maxChars;
@@ -298,6 +281,59 @@ export function parseRoleRef(raw: string): string | null {
 function parseAiSnapshotRef(ref: string | undefined): string | null {
   // Playwright's page-wide AI snapshots qualify element refs with a frame seq.
   return ref && /^(?:f\d+)?e\d+$|^\d{1,9}$/i.test(ref) ? ref : null;
+}
+
+/**
+ * Mask form field values in a Playwright AI snapshot. Playwright prints every input value and
+ * renders password inputs as plain textboxes, either inline (`- textbox [ref=e1]: value`) or as
+ * a `- text:` child when the field also has props such as a placeholder. A valued field line
+ * without a ref is masked because nothing can prove the field safe.
+ */
+export async function redactAiSnapshotFieldValues(
+  aiSnapshot: string,
+  isSensitiveRef: (ref: string) => Promise<boolean>,
+): Promise<string> {
+  const lines = aiSnapshot.split("\n");
+  const fields: Array<{ ref: string | null; values: Array<{ index: number; head: string }> }> = [];
+  for (const [index, line] of lines.entries()) {
+    const parsed = parseSnapshotLine(line);
+    if (!parsed || !VALUE_FIELD_ROLES.has(parsed.role)) {
+      continue;
+    }
+    // Formatter attributes sit between the key and the value; the rest is page text.
+    const attributes = parsed.suffix.match(/^(?:\s+\[[^\][]*\])*/)?.[0] ?? "";
+    const tail = parsed.suffix.slice(attributes.length);
+    const values: Array<{ index: number; head: string }> = [];
+    if (/^: \S/.test(tail) && line.endsWith(tail)) {
+      values.push({ index, head: line.slice(0, line.length - tail.length + 2) });
+    } else if (tail === ":") {
+      const childIndent = getIndentLevel(line) + 1;
+      for (let child = index + 1; child < lines.length; child += 1) {
+        const childIndentLevel = getIndentLevel(lines[child]!);
+        if (childIndentLevel < childIndent) {
+          break;
+        }
+        const text = lines[child]!.match(/^\s*- text: /);
+        if (text && childIndentLevel === childIndent) {
+          values.push({ index: child, head: text[0] });
+        }
+      }
+    }
+    if (values.length) {
+      fields.push({ ref: parseAiSnapshotRef(parsed.ref), values });
+    }
+  }
+  await Promise.all(
+    fields.map(async ({ ref, values }) => {
+      if (ref && !(await isSensitiveRef(ref))) {
+        return;
+      }
+      for (const { index, head } of values) {
+        lines[index] = `${head}${REDACTED_FIELD_VALUE}`;
+      }
+    }),
+  );
+  return lines.join("\n");
 }
 
 /**

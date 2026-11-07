@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   attachActiveEmbeddedRun,
@@ -5,12 +6,14 @@ import {
 } from "../agents/embedded-agent-runner/runs.js";
 import { QuestionAnswerUnconfirmedError } from "../agents/harness/gateway-question-dispatch.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
+import { MessageInjectionWithdrawnError } from "../auto-reply/reply/message-injection-authority.js";
 import type { AgentHarnessAttemptParams } from "../plugin-sdk/agent-harness-runtime.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { controllerGate } from "./controller-core.test-support.js";
 import type {
   ReplyBackendHandle,
   ReplyMessageInjectionOptions,
@@ -18,6 +21,7 @@ import type {
 import {
   abortSessionControllerInput,
   clearSessionControllerMailbox,
+  releaseSessionControllerClaim,
   reserveSessionControllerSource,
   retireSessionControllerInput,
   tryClaimSessionControllerTask,
@@ -40,6 +44,7 @@ import { captureSessionTarget, type SessionTarget } from "./session-controller.t
 import { createUserTurnTranscriptRecorder } from "./user-turn-transcript.js";
 
 const key = "agent:main:controller-steer";
+const acceptedSteer = { status: "accepted", targetRunId: "steer-run" } as const;
 const cleanups: Array<() => void> = [];
 afterEach(() => {
   for (const cleanup of cleanups.splice(0)) {
@@ -80,6 +85,11 @@ function startTurn(
     target?: SessionTarget;
     adapter?: SessionControllerSourceAdapter;
     direct?: boolean;
+    turnKind?: "direct";
+    replyContract?: Pick<
+      ReplyBackendHandle,
+      "toolAuthorityFingerprint" | "terminalReplyExpectation"
+    >;
   } = {},
 ) {
   const sessionKey = params.target?.sessionKey ?? key;
@@ -88,6 +98,7 @@ function startTurn(
     sessionKey,
     sessionId,
     resetTriggered: false,
+    turnKind: params.turnKind,
     target: params.target,
   });
   operation.setPhase("running");
@@ -101,6 +112,7 @@ function startTurn(
     runId: "steer-run",
     cancel() {},
     isCompacting: () => params.compacting === true,
+    ...params.replyContract,
     ...(params.injection === "legacy"
       ? { messageInjection: { isAvailable: () => true, queueMessage } }
       : { messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage } }),
@@ -202,6 +214,41 @@ function revocableAuthority(message: string) {
 }
 
 describe("submitSessionControllerSteer", () => {
+  it.each([
+    [undefined, "required"],
+    [undefined, "optional"],
+    ["direct", "required"],
+    ["direct", "result-required"],
+  ] as const)(
+    "preserves human input custody with a %s %s reply owner",
+    async (turnKind, terminalReplyExpectation) => {
+      const fingerprint = "human-reply-contract-tools";
+      const { operation, input, injected } = startTurn({
+        turnKind,
+        queueMessage: acceptQueue,
+        replyContract: { toolAuthorityFingerprint: fingerprint, terminalReplyExpectation },
+      });
+      const result = await steer(input, {
+        isInboundUserMessage: true,
+        terminalReplyExpectation: "required",
+        toolAuthorityFingerprint: fingerprint,
+      });
+
+      if (terminalReplyExpectation !== "optional") {
+        expect(result).toMatchObject(acceptedSteer);
+        await input.settlement.promise;
+        expect(input.phase).toBe("consumed");
+        expect(injected).toEqual(["steer"]);
+        expectNoInput(input);
+      } else {
+        expect(result).toMatchObject({ status: "rejected", reason: "reply_expectation_mismatch" });
+        expect(injected).toEqual([]);
+        expectQueued(input);
+      }
+      expect(operation.result).toBeNull();
+    },
+  );
+
   it("preserves the published backend transcript-wait contract without a native capability observation", async () => {
     const received: unknown[] = [];
     const operation: NonNullable<AgentHarnessAttemptParams["replyOperation"]> =
@@ -260,11 +307,7 @@ describe("submitSessionControllerSteer", () => {
     });
     const result = direct ? directSteer(operation) : steer(input);
     if (status === "accepted") {
-      await expect(result).resolves.toEqual({
-        status: "accepted",
-        targetRunId: "steer-run",
-        result: undefined,
-      });
+      await expect(result).resolves.toEqual({ ...acceptedSteer, result: undefined });
       await input.settlement.promise;
       expect(input.phase).toBe("consumed");
     } else {
@@ -387,10 +430,8 @@ describe("submitSessionControllerSteer", () => {
     const target = captureCurrentReplyMessageInjectionTarget(key);
     const released: NonNullable<AgentHarnessAttemptParams["replyOperation"]> = operation;
     const internal = readSessionControllerOperationState(operation);
-    expect(released).toMatchObject({ phase: "running", result: null });
     expect(findSessionControllerOperationByRunId("steer-run")).toBe(operation);
     expect(findSessionControllerOperationByRunId("other-run")).toBeUndefined();
-
     expect(operation.yield()).toBe(true);
     expect(operation.yield()).toBe(false);
     expect(internal?.phase).toBe("yielded");
@@ -401,11 +442,7 @@ describe("submitSessionControllerSteer", () => {
     expectQueued(input);
     operation.complete();
     await released.ownerSettlement;
-    expect(released).toBe(operation);
-    expect(released.phase).toBe("completed");
-    expect(released.result).toEqual({ kind: "completed" });
-    const completed = released.result;
-    expect(released.result).toBe(completed);
+    expect(released).toMatchObject({ phase: "completed", result: { kind: "completed" } });
     expect(internal?.phase).toBe("yielded");
     expect(findSessionControllerOperationByRunId("steer-run")).toBeUndefined();
   });
@@ -434,30 +471,26 @@ describe("submitSessionControllerSteer", () => {
   it.each(["cancelled", "revoked"] as const)(
     "does not inject a %s source after asynchronous policy preparation",
     async (disposition) => {
-      const preparing = createDeferredCore();
-      const resume = createDeferredCore();
+      const preparationGate = controllerGate();
       const authority = revocableAuthority("source revoked");
       const { input, operation, injected } = startTurn({
         adapter: { authority },
       });
       const result = steer(input, {
         toolAuthorityPreparation: preparation({
-          async prepareCurrent() {
-            preparing.resolve();
-            await resume.promise;
-          },
+          prepareCurrent: preparationGate.run,
         }),
       });
       const rejected = expect(result).rejects.toThrow(
         disposition === "cancelled" ? "source cancelled" : "source revoked",
       );
-      await preparing.promise;
+      await preparationGate.entered;
       if (disposition === "cancelled") {
         abortSessionControllerInput(input, new Error("source cancelled"));
       } else {
         authority.revoke();
       }
-      resume.resolve();
+      preparationGate.release();
 
       await rejected;
       await input.settlement.promise;
@@ -569,9 +602,9 @@ describe("steerSessionControllerOperation", () => {
     }
 
     await expect(Promise.all([first, duplicate, second])).resolves.toMatchObject([
-      { status: "accepted", targetRunId: "steer-run" },
-      { status: "accepted", targetRunId: "steer-run" },
-      { status: "accepted", targetRunId: "steer-run" },
+      acceptedSteer,
+      acceptedSteer,
+      acceptedSteer,
     ]);
   });
 
@@ -597,8 +630,7 @@ describe("steerSessionControllerOperation", () => {
   });
 
   it("fences an async injection when the same backend is attached again before its effect", async () => {
-    const entered = createDeferredCore();
-    const resume = createDeferredCore();
+    const gate = controllerGate();
     let injected = false;
     const { operation } = startTurn({ direct: true });
     const backend = makeBackend("reattached-steer", {
@@ -606,8 +638,7 @@ describe("steerSessionControllerOperation", () => {
         throw new Error("Expected asynchronous prepared injection");
       },
       async queueMessageAsync(_text, options, authority) {
-        entered.resolve();
-        await resume.promise;
+        await gate.run();
         authority.assertCurrent();
         injected = true;
         options?.onQueueAccepted?.(true);
@@ -623,10 +654,10 @@ describe("steerSessionControllerOperation", () => {
       "Message injection authority is no longer current",
     );
     try {
-      await entered.promise;
+      await gate.entered;
       operation.attachBackend(backend);
     } finally {
-      resume.resolve();
+      gate.release();
     }
     await rejected;
     expect(injected).toBe(false);
@@ -680,4 +711,21 @@ describe("steerSessionControllerOperation", () => {
     });
     expectNoInput(input);
   });
+});
+
+it("returns a proven withdrawn accepted steer to runnable followup custody", async () => {
+  const { operation, input } = startTurn({
+    queueMessage: async ({ onQueueAccepted }) => {
+      onQueueAccepted?.(true);
+      throw new MessageInjectionWithdrawnError("exact queued input removed at delivery deadline");
+    },
+  });
+  await expect(steer(input, { waitForTranscriptCommit: true })).resolves.toMatchObject({
+    status: "rejected",
+    reason: "injection_unavailable",
+  });
+  operation.complete();
+  const claim = expectDefined(tryClaimSessionControllerTask(input), "withdrawn followup claim");
+  releaseSessionControllerClaim(claim);
+  await claim.settlement.promise;
 });

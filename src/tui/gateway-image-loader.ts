@@ -1,5 +1,6 @@
 import http, { type IncomingMessage } from "node:http";
 import https from "node:https";
+import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import type { ClientOptions } from "ws";
 import { normalizeTlsFingerprint } from "../../packages/gateway-client/src/client-address-utils.js";
 import { applyGatewayWebSocketTlsPin } from "../../packages/gateway-client/src/websocket-transport.js";
@@ -141,19 +142,10 @@ export async function loadGatewayImage(params: {
         if (size > TUI_IMAGE_MAX_BYTES) {
           throw new Error("Image exceeds the preview byte limit");
         }
-        const chunks: Buffer[] = [];
-        let received = 0;
-        for await (const chunk of response) {
-          if (!Buffer.isBuffer(chunk)) {
-            throw new Error("Invalid image response");
-          }
-          received += chunk.byteLength;
-          if (received > TUI_IMAGE_MAX_BYTES) {
-            throw new Error("Image exceeds the preview byte limit");
-          }
-          chunks.push(chunk);
-        }
-        return Buffer.concat(chunks, received);
+        return await readByteStreamWithLimit(response, {
+          maxBytes: TUI_IMAGE_MAX_BYTES,
+          onOverflow: () => new Error("Image exceeds the preview byte limit"),
+        });
       } finally {
         response.destroy();
       }

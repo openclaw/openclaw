@@ -4,7 +4,7 @@ import {
   type GitHubIdentityView,
 } from "../../lib/reactive/domain-github-identity.ts";
 import { trackSolidRoot } from "../../test-helpers/solid-cleanup.ts";
-import type { GitHubIdentity } from "./github-identity.ts";
+import type { createGitHubIdentity } from "./github-identity.ts";
 
 export function createGitHubIdentityForTest(
   deps: Parameters<typeof createGitHubIdentityView>[0] = {},
@@ -21,7 +21,7 @@ export function createGitHubIdentityForTest(
   });
 }
 export type TestGitHubIdentity = ReturnType<typeof createGitHubIdentityForTest>;
-type IdentityState = ReturnType<GitHubIdentity["read"]>;
+type IdentityState = ReturnType<ReturnType<typeof createGitHubIdentity>["read"]>;
 
 export function githubIdentityViewFixture(
   overrides: Partial<IdentityState> = {},

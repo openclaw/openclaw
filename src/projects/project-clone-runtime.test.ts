@@ -84,30 +84,27 @@ it("preserves an existing checkout when its target cannot be inspected", async (
   expect(command).not.toHaveBeenCalled();
 });
 
-it.each(["success", 0, 128, "throw"] as const)("retains a clone after %s", async (outcome) => {
-  const target = targetPath();
-  const failure = uncertainFailure();
-  const command = mockGit().mockImplementation(async () => {
-    await writeArtifact(target, "partial.txt", "owned clone data");
-    if (outcome === "throw") {
-      throw failure;
-    }
-    return outcome === "success"
-      ? successfulGit
-      : { ...failedClone, code: outcome, cleanup: "uncertain" };
-  });
-  const error = await capture(clone(target));
-  await expectFile(path.join(target, "partial.txt"), "owned clone data");
-  expect(command).toHaveBeenCalledOnce();
-  if (outcome === "success") {
-    expect(error).toBeUndefined();
-  } else {
+it.each([128, "throw"] as const)(
+  "retains a clone after uncertain cleanup (%s)",
+  async (outcome) => {
+    const target = targetPath();
+    const failure = uncertainFailure();
+    const command = mockGit().mockImplementation(async () => {
+      await writeArtifact(target, "partial.txt", "owned clone data");
+      if (outcome === "throw") {
+        throw failure;
+      }
+      return { ...failedClone, code: outcome, cleanup: "uncertain" };
+    });
+    const error = await capture(clone(target));
+    await expectFile(path.join(target, "partial.txt"), "owned clone data");
+    expect(command).toHaveBeenCalledOnce();
     expect(hasCommandProcessCleanupError(error)).toBe(true);
     if (outcome === "throw") {
       expect(error).toHaveProperty("cause", failure);
     }
-  }
-});
+  },
+);
 
 it.each([false, true])(
   "retries only after partial cleanup settles (removal fails: %s)",

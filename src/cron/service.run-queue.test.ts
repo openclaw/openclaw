@@ -60,7 +60,6 @@ function serviceDeps(storePath: string, overrides: Partial<CronServiceDeps> = {}
     defaultAgentId: "main",
     log: logger,
     enqueueSystemEvent() {},
-    requestHeartbeat() {},
     runIsolatedAgentJob: async () => ({ status: "ok" }),
     ...overrides,
   });
@@ -329,8 +328,9 @@ it.for([
         () => ownsPreparation,
       );
       const observed = createDeferred();
-      const waitForPreparation = admission.waitForAgentPreparation.bind(admission);
-      vi.spyOn(admission, "waitForAgentPreparation").mockImplementation((id, options) => {
+      const observer = admission.observation;
+      const waitForPreparation = observer.waitForAgentPreparation.bind(observer);
+      vi.spyOn(observer, "waitForAgentPreparation").mockImplementation((id, options) => {
         const waiting = waitForPreparation(id, options);
         observed.resolve();
         return waiting;

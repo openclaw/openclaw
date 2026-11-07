@@ -503,7 +503,7 @@ export function createDesktopPanel(
         return;
       }
       if (!target) {
-        throw new Error("Desktop render target is unavailable");
+        throw new Error(t("desktop.unavailable"));
       }
       controls.audio.connect(pending.observed, client.gatewayUrl);
       const connection = await host.desktopClientFactory().connect({
@@ -701,7 +701,7 @@ export function createDesktopPanel(
           },
           onControlToggle: () => void connectEnvironment(currentId, !controlling),
           onTakeControl: () => void connectEnvironment(currentId, true),
-          onLaunch: (app) => void controls.launcher.launch(app),
+          onLaunch: (app) => controls.launcher.launch(app),
           onClose: closePanel,
           onDocumentClose: () => host.onDocumentClose?.(),
           focusTarget: () => ({

@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -110,7 +111,6 @@ function createCron(storePath: string, deps: Partial<CronServiceDeps> = {}) {
     cronEnabled: true,
     log: createNoopLogger(),
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     ...deps,
   });
@@ -156,19 +156,12 @@ function runHistory(storePath: string, jobId: string, limit = 1) {
 function historyEntry(storePath: string, jobId: string) {
   const history = runHistory(storePath, jobId);
   expect(history.total).toBe(1);
-  const entry = history.entries[0];
-  if (!entry) {
-    throw new Error(`Expected cron run history for job ${jobId}`);
-  }
-  return entry;
-}
-
-async function persistedJob(storePath: string, jobId: string) {
-  return (await loadCronStore(storePath)).jobs.find((job) => job.id === jobId);
+  return expectDefined(history.entries[0], `cron run history for job ${jobId}`);
 }
 
 async function expectState(storePath: string, jobId: string, expected: Partial<CronJob["state"]>) {
-  expect((await persistedJob(storePath, jobId))?.state).toMatchObject(expected);
+  const storedJob = (await loadCronStore(storePath)).jobs.find((job) => job.id === jobId);
+  expect(storedJob?.state).toMatchObject(expected);
 }
 
 describe("cron delivery outcomes", { concurrent: false }, () => {
@@ -290,10 +283,8 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
       const history = runHistory(storePath, job.id, 25);
       expect(history.total).toBe(21);
       expect(history.entries).toHaveLength(21);
-      expect(history.entries).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ status: "error", error: "monitor failed" }),
-        ]),
+      expect(history.entries).toContainEqual(
+        expect.objectContaining({ status: "error", error: "monitor failed" }),
       );
       expect(
         history.entries.filter((entry) => entry.failureNotificationDelivery?.status === "unknown"),
@@ -308,7 +299,7 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
         { layout: "state-only", prefix: "openclaw-cron-alert-fallback-" },
         async (state) => {
           const enqueueSystemEvent = vi.fn();
-          const requestHeartbeat = vi.fn();
+          const enqueueSessionEvent = vi.fn<NonNullable<CronServiceDeps["enqueueSessionEvent"]>>();
           const storePath = state.path("cron", "jobs.json");
           let delivery: Promise<void> | undefined;
           const expectedError =
@@ -317,7 +308,7 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
               : "Blocked hostname or private/internal/special-use IP address";
           const cron = createCron(storePath, {
             enqueueSystemEvent,
-            requestHeartbeat,
+            enqueueSessionEvent,
             runIsolatedAgentJob: agentResult({ status: "error", error: "provider unavailable" }),
             sendCronFailureAlert: (params) => {
               const send = () =>
@@ -358,17 +349,16 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
               throw new Error("Expected a failure alert transport");
             }
             await expect(delivery).rejects.toThrow(expectedError);
-            expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+            expect(enqueueSystemEvent).not.toHaveBeenCalled();
+            expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
               expect.stringContaining('Automation "fallback owner" failed 1 times'),
-              { agentId: "work", sessionKey, contextKey: `cron:${job.id}:failure-alert` },
+              {
+                agentId: "work",
+                sessionKey,
+                contextKey: `cron:${job.id}:failure-alert`,
+                jobId: job.id,
+              },
             );
-            expect(requestHeartbeat).toHaveBeenCalledWith({
-              source: "notifications-event",
-              intent: "immediate",
-              reason: "wake",
-              agentId: "work",
-              sessionKey,
-            });
             await expectState(storePath, job.id, {
               lastFailureNotificationDelivered: false,
               lastFailureNotificationDeliveryStatus: "not-delivered",

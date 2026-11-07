@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
+import type { AcquireConfiguredProviderLocalService } from "openclaw/plugin-sdk/embedding-providers";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
@@ -16,7 +17,6 @@ import type {
   MemorySyncParams,
   MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import {
   resolveEmbeddingProviderIndexIdentity,
   type EmbeddingProvider,
@@ -90,6 +90,8 @@ export type MemorySemanticProviderGeneration = Extract<
 
 export type MemoryReindexProgress = {
   memoryComplete: boolean;
+  cachePrunePending?: boolean;
+  memoryPlan?: MemorySourceSyncPlan;
   completedSessionFiles: Set<string>;
   changedSessionFiles: Set<string>;
   changedSessionTargets: Map<string, MemorySessionSyncTarget>;
@@ -178,7 +180,7 @@ export abstract class MemoryManagerSyncBase {
   protected closing = false;
   protected activeManagerOperations = 0;
   protected managerIdleWaiters = new Set<() => void>();
-  protected readonly acquireLocalService?: MemoryCoreAcquireLocalService;
+  protected readonly acquireLocalService?: AcquireConfiguredProviderLocalService;
   protected abstract readonly runInBackgroundContext: NonNullable<
     MemoryCoreRuntimeHost["runInBackgroundContext"]
   >;
@@ -255,7 +257,7 @@ export abstract class MemoryManagerSyncBase {
     message: string,
   ): Promise<T>;
   protected abstract getIndexConcurrency(): number;
-  protected abstract pruneEmbeddingCacheIfNeeded(): Promise<void>;
+  protected abstract pruneEmbeddingCacheIfNeeded(recount?: boolean): Promise<void>;
   protected abstract resetProviderInitializationForRetry(): void;
   protected abstract assertRequiredProviderAvailable(operation: "search" | "sync"): void;
   protected abstract indexFile(entry: MemoryIndexEntry, source: MemorySource): Promise<void>;
@@ -359,7 +361,7 @@ export abstract class MemoryManagerSyncBase {
         2 ** Math.min(this.fullReindexRetryBackoff.attempts - 1, 30),
       FULL_REINDEX_RETRY_MAX_DELAY_MS,
     );
-    this.fullReindexRetryBackoff.retryAt = Date.now() + delay;
+    this.fullReindexRetryBackoff.retryAt = performance.now() + delay;
   }
 
   protected clearFullReindexRetryBackoff(): void {
@@ -434,15 +436,17 @@ export abstract class MemoryManagerSyncBase {
     progress?: MemorySyncProgressState;
   }): Promise<void> {
     const deferIndex = this.shouldDeferSourceWideBatch();
+    const reindexProgress = this.reindexProgress;
     const memoryPlan = params.shouldSyncMemory
-      ? await this.syncMemoryFiles({
+      ? ((deferIndex && !this.dirty ? reindexProgress?.memoryPlan : undefined) ??
+        (await this.syncMemoryFiles({
           needsFullReindex: params.needsFullReindex,
           progress: params.progress,
           ...(deferIndex ? { deferIndex: true } : {}),
-        })
+        })))
       : undefined;
-    if (params.shouldSyncMemory && !deferIndex && this.reindexProgress) {
-      this.reindexProgress.memoryComplete = true;
+    if (params.shouldSyncMemory && !deferIndex && reindexProgress) {
+      reindexProgress.memoryComplete = true;
     }
     if (params.shouldSyncSessions) {
       await this.syncArchiveFiles({
@@ -451,16 +455,25 @@ export abstract class MemoryManagerSyncBase {
         progress: params.progress,
         ...(deferIndex ? { prefixIndexItems: memoryPlan?.indexItems } : {}),
       });
+      if (memoryPlan && !this.dirty) {
+        // Session batches mark memory dirty if any memory items remain unindexed.
+        memoryPlan.indexItems = [];
+      }
     } else if (deferIndex) {
-      await this.indexQueuedFiles(memoryPlan?.indexItems ?? [], params.progress);
+      const remaining = await this.indexQueuedFiles(memoryPlan?.indexItems ?? [], params.progress);
+      if (memoryPlan) {
+        memoryPlan.indexItems = remaining;
+      }
     }
-    if (this.reindexProgress?.yielded) {
+    if (reindexProgress?.yielded) {
+      reindexProgress.memoryPlan = this.dirty ? undefined : memoryPlan;
       return;
     }
     if (deferIndex) {
       await memoryPlan?.finalize();
-      if (params.shouldSyncMemory && this.reindexProgress) {
-        this.reindexProgress.memoryComplete = true;
+      if (params.shouldSyncMemory && reindexProgress) {
+        reindexProgress.memoryPlan = undefined;
+        reindexProgress.memoryComplete = true;
       }
     }
     if (params.shouldSyncSessions) {
@@ -468,6 +481,14 @@ export abstract class MemoryManagerSyncBase {
     } else {
       this.refreshSessionDirtyFlag();
     }
+  }
+
+  protected resolveConfiguredMemoryScopeHash(): string {
+    return resolveConfiguredScopeHash({
+      workspaceDir: this.workspaceDir,
+      extraPaths: this.settings.extraPaths,
+      multimodal: this.settings.multimodal,
+    });
   }
 
   protected resolveConfiguredIndexIdentity() {
@@ -521,6 +542,7 @@ export abstract class MemoryManagerSyncBase {
           provider: configuredIndexIdentity.provider,
           cacheKeyData: configuredIndexIdentity.cacheKeyData,
           aliases: configuredIndexIdentity.aliases,
+          documentPrefix: this.settings.inputFormat?.document,
         })
       : [];
     const providerIdentities =
@@ -539,11 +561,7 @@ export abstract class MemoryManagerSyncBase {
       providerAliases: providerIdentities.slice(1),
       providerKeyKnown: configuredProviderKeyKnown ? true : params.providerKeyKnown,
       configuredSources: resolveConfiguredSourcesForMeta(this.sources),
-      configuredScopeHash: resolveConfiguredScopeHash({
-        workspaceDir: this.workspaceDir,
-        extraPaths: this.settings.extraPaths,
-        multimodal: this.settings.multimodal,
-      }),
+      configuredScopeHash: this.resolveConfiguredMemoryScopeHash(),
       chunkTokens: this.settings.chunking.tokens,
       chunkOverlap: this.settings.chunking.overlap,
       vectorReady,

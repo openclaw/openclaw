@@ -5,6 +5,7 @@ import type {
   ControlUiPageNavigationOptions,
   ControlUiPageTarget,
 } from "../../../src/plugin-sdk/control-ui.js";
+import { isPluginInlineViewVersion } from "../../../src/shared/plugin-inline-view.js";
 import { serializeSidebarEntry } from "../app-navigation.ts";
 import { isRouteId, pathForRoute, pluginTabLocation } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
@@ -355,6 +356,12 @@ export function createControlUiPluginHost(
       registerAction: (value) => runtime.register(owner, "actions", value),
       registerAccessory: (value) => runtime.register(owner, "accessories", value),
       registerWidget: (value) => runtime.register(owner, "widgets", value),
+      registerInlineView: (value) => {
+        if (!isPluginInlineViewVersion(value.version)) {
+          throw new Error("Inline view version must be an integer from 1 to 65535.");
+        }
+        return runtime.register(owner, "inlineViews", value, value.id + "@" + value.version);
+      },
       registerReplacement: (value) => runtime.register(owner, "replacements", value),
       selectReplacement(surface, id) {
         current();

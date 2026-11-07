@@ -38,7 +38,6 @@ it("deduplicates isolated scheduler execution and persisted run history across r
           cronEnabled: true,
           log: createNoopLogger(),
           enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
           scheduler: createTestGatewayScheduler(clock.clock),
           storePath,
           runIsolatedAgentJob,

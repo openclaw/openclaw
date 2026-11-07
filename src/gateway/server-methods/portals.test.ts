@@ -5,6 +5,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveCoreOperatorGatewayMethodScope } from "../methods/core-method-policy.js";
 import type { GatewayPortalService } from "../portals/portal-service.js";
+import { requestText, usePortalHarness } from "../portals/portal.test-support.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { makeClient } from "../server-broadcast.test-helpers.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
@@ -60,6 +61,28 @@ function expectFailure(response: ReturnType<typeof vi.fn>, error: Record<string,
 }
 
 describe("portal gateway methods", () => {
+  const { target, makeService } = usePortalHarness();
+
+  it.each(["%s", " %s ", "%s\n"])("closes a live portal with id %j", async (pattern) => {
+    const { service, httpServers } = makeService();
+    const { expectSuccess } = harness(service);
+    await expectSuccess(
+      "portal.open",
+      { port: target.port },
+      expect.objectContaining({ port: target.port }),
+    );
+    const opened = service.list()[0]!;
+    expect(await requestText(opened.url!)).toMatchObject({ status: 200, body: "target" });
+    const listeners = [...httpServers];
+    await expectSuccess("portal.close", { id: pattern.replace("%s", opened.id) }, { closed: true });
+    await expectSuccess("portal.list", {}, { portals: [] });
+    expect(httpServers).toEqual([]);
+    for (const listener of listeners) {
+      expect(listener.listening).toBe(false);
+      expect(listener.address()).toBeNull();
+    }
+  });
+
   it("registers list and mutations with least-privilege scopes", () => {
     expect(resolveCoreOperatorGatewayMethodScope("portal.list")).toBe("operator.read");
     expect(resolveCoreOperatorGatewayMethodScope("portal.open")).toBe("operator.write");

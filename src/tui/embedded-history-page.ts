@@ -4,14 +4,14 @@ import {
   createChatHistoryActivityProjection,
   createChatHistoryByteCounter,
   replaceOversizedChatHistoryMessages,
-} from "../gateway/server-methods/chat-history-budget.js";
+} from "../gateway/chat-history-budget.js";
+import { enrichChatHistoryCompactionMarkers } from "../gateway/chat-history-response-page.js";
 import { readChatHistoryPage } from "../gateway/server-methods/chat-history-pages.js";
-import { enrichChatHistoryCompactionMarkers } from "../gateway/server-methods/chat-history-response-page.js";
 import { capArrayByJsonBytes } from "../gateway/session-transcript-readers.js";
 
 export async function readEmbeddedHistoryPage(params: ChatHistoryPageParams) {
   let isNativeHistoryCurrent: (() => boolean) | undefined;
-  const historyPage = await readChatHistoryPage(params, undefined, (isCurrent) => {
+  const historyPage = await readChatHistoryPage(params, undefined, undefined, (isCurrent) => {
     isNativeHistoryCurrent = isCurrent;
   });
   const normalized = enrichChatHistoryCompactionMarkers(historyPage.messages, params.entry);

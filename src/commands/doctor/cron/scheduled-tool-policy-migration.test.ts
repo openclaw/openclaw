@@ -31,31 +31,33 @@ function job(overrides: Record<string, unknown> = {}): Record<string, unknown> {
 }
 
 it.each([
-  {
-    label: "agent mismatch",
-    owner: { ...creator, agentId: "other", sessionKey: directSessionKey },
-  },
-  {
-    label: "encoded account mismatch",
-    owner: { ...creator, sessionKey: directSessionKey, accountId: "personal" },
-  },
-])("does not guess authority for $label", ({ owner }) => {
-  const raw = job({ owner });
+  ["agent mismatch", { agentId: "other" }],
+  ["encoded account mismatch", { accountId: "personal" }],
+] as const)("does not guess authority for %s", (_label, overrides) => {
+  const raw = job({ owner: { ...creator, sessionKey: directSessionKey, ...overrides } });
   const result = normalizeStoredCronJobs([raw]);
   expect(result.legacyScheduledToolPolicyJobs).toEqual(["Legacy"]);
   expect(raw.scheduledToolPolicy).toBeUndefined();
 });
 
-it("recovers a capless creator account without changing execution permissions", () => {
+it("reports recoverable and ambiguous authority without granting tools to a capless creator", () => {
   const raw = job({
+    name: "Capless",
     owner: { agentId: "main", sessionKey: directSessionKey },
     payload: { kind: "agentTurn", message: "run" },
   });
-  const result = normalizeStoredCronJobs([raw]);
+  const result = normalizeStoredCronJobs([
+    raw,
+    job(),
+    job({ id: "ambiguous", name: "Ambiguous", owner: { agentId: "main", sessionKey } }),
+  ]);
   expect(raw.owner).toEqual({ ...creator, sessionKey: directSessionKey });
   expect(raw.payload).toEqual({ kind: "agentTurn", message: "run" });
   expect(raw.scheduledToolPolicy).toBeUndefined();
   expect(result.issues).toMatchObject({ reconciledOwnerAccount: 1 });
+  expect(result.issues.migratedScheduledToolPolicy).toBe(1);
+  expect(result.legacyScheduledToolPolicyJobs).toEqual(["Capless", "Ambiguous"]);
+  expect(advisory(result)).toContain("openclaw automations edit <id> --tools");
   expect(normalizeStoredCronJobs([raw]).issues).not.toHaveProperty("reconciledOwnerAccount");
 });
 
@@ -109,18 +111,4 @@ it("does not require tool authority for command payloads without a trigger", () 
   expect(command.scheduledToolPolicy).toEqual(policy);
   expect(command.payload).toEqual({ kind: "command", argv: ["sh", "-lc", "true"] });
   expect(command.toolsAllowProvenance).toBeUndefined();
-  expect(advisory(result)).not.toContain("Command");
-});
-
-it("reports auto-recoverable and ambiguous jobs through the doctor result", () => {
-  const ambiguous = job({
-    id: "ambiguous",
-    name: "Ambiguous",
-    owner: { agentId: "main", sessionKey },
-  });
-  const result = normalizeStoredCronJobs([job(), ambiguous]);
-
-  expect(result.issues.migratedScheduledToolPolicy).toBe(1);
-  expect(result.legacyScheduledToolPolicyJobs).toEqual(["Ambiguous"]);
-  expect(advisory(result)).toContain("openclaw automations edit <id> --tools");
 });

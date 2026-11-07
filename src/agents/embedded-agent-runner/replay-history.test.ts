@@ -3,14 +3,15 @@ import { describe, expect, it, vi } from "vitest";
 import { convertMessages } from "../../../packages/ai/src/openai-completions-messages.js";
 import { transformMessages } from "../../../packages/ai/src/transcript-transform.js";
 import { resolveOpenAICompletionsCompat } from "../../../packages/ai/src/transports/openai-completions-compat.js";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
+import { normalizeTranscriptJsonValue } from "../../config/sessions/transcript-json-normalize.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../../shared/transcript-only-openclaw-assistant.js";
 import { projectAgentHarnessTranscriptMessageForDisplay } from "../harness/transcript-visibility.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
-  OPENCLAW_RUNTIME_CONTEXT_NOTICE,
 } from "../internal-runtime-context.js";
 import type { StreamFn } from "../runtime/index.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
@@ -25,6 +26,8 @@ import { wrapStreamFnSanitizeMalformedToolCalls } from "./run/attempt-tool-call-
 // Preface of carriers persisted before the stable system prompt explained the markers.
 const LEGACY_HEADER =
   "OpenClaw runtime context for the active user request in this turn. Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.";
+const OPENCLAW_RUNTIME_CONTEXT_NOTICE =
+  "This context is runtime-generated, not user-authored. Keep internal details private.";
 const FALLBACK_TEXT = "[assistant turn failed before producing content]";
 const INBOUND_METADATA = [
   markInboundContextLabel("Conversation info:"),
@@ -93,16 +96,6 @@ function hiddenAssistant(
     }),
   });
 }
-function toolResult(tool: { id: string; name: string }, timestamp: number): AgentMessage {
-  return {
-    role: "toolResult",
-    toolCallId: tool.id,
-    toolName: tool.name,
-    content: [textBlock("file contents")],
-    isError: false,
-    timestamp,
-  };
-}
 function completionsModel() {
   return makeProviderModelFixture<"openai-completions">({
     id: "test-model",
@@ -156,7 +149,7 @@ describe("normalizeAssistantReplayContent", () => {
     const messages: AgentMessage[] = [
       user("Read the file internally."),
       hiddenCall,
-      toolResult(toolCall, 1),
+      makeTextToolResult(toolCall.id, toolCall.name, "file contents", false, 1),
       hiddenAnswer,
       user("What did the file contain?"),
     ];
@@ -201,7 +194,12 @@ describe("normalizeAssistantReplayContent", () => {
         stopReason,
         timestamp: 1,
       };
-      const messages: AgentMessage[] = [source, toolResult(completed, 2)];
+      const messages: AgentMessage[] = [
+        source,
+        makeTextToolResult(completed.id, completed.name, "file contents", false, 2),
+      ];
+      normalizeTranscriptJsonValue({ message: source }, "entry");
+      expect(normalize([source])).toEqual([]);
       const normalized = normalize(messages);
       const replay = transformMessages(providerMessages(normalized), model);
       expect(replay).toHaveLength(2);
@@ -214,6 +212,21 @@ describe("normalizeAssistantReplayContent", () => {
       ]);
     },
   );
+
+  it("reuses immutable message normalization while new and mutable content is still sanitized", () => {
+    const source = assistant([textBlock("answer"), { type: "audio", data: "managed" }], "stop");
+    normalizeTranscriptJsonValue({ message: source }, "entry");
+    const first = normalize([source]).find((message) => message.role === "assistant");
+    expect(first?.content).toEqual([textBlock("answer")]);
+    const tail = assistant([textBlock("new answer"), { type: "audio", data: "managed" }], "stop");
+    const next = normalize([source, tail]);
+    expect(next[0]).toBe(first);
+    expect(next[1]).toHaveProperty("content", [textBlock("new answer")]);
+    expect(Object.isFrozen(first?.content)).toBe(true);
+    tail.content = [textBlock("edited")];
+    expect(normalize([source, tail])[1]).toHaveProperty("content", [textBlock("edited")]);
+    expect(source.content).toEqual([textBlock("answer"), { type: "audio", data: "managed" }]);
+  });
 
   it.each([false, true])(
     "replays speech-only assistant content without changing the transcript (empty block: %s)",
@@ -581,6 +594,10 @@ describe("normalizeAssistantReplayContent", () => {
           } as unknown as AgentMessage);
     const input =
       kind === "bare" ? [user("hello"), realReply, mirror] : [user("hello"), mirror, realReply];
+    normalizeTranscriptJsonValue({ message: mirror }, "entry");
+    if (kind === "bare") {
+      expect(normalize([mirror])).toEqual([mirror]);
+    }
     expect(normalize(input)).toEqual([expect.objectContaining({ role: "user" }), realReply]);
   });
 

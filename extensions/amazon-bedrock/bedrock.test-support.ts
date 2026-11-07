@@ -1,5 +1,5 @@
 import { BedrockRuntimeClient, ConverseStreamCommand } from "@aws-sdk/client-bedrock-runtime";
-import type { Context, Model, UserMessage } from "openclaw/plugin-sdk/llm";
+import type { Context, Model, ToolResultMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { expect, vi } from "vitest";
 import type { BedrockOptions } from "./bedrock-options.js";
 import { streamSimpleBedrock } from "./stream.runtime.js";
@@ -29,6 +29,30 @@ export const runtimeUser = (content: UserMessage["content"], timestamp: number) 
   content,
   timestamp,
   runtimeContext: {},
+});
+export const textBlock = (text: string) => ({ type: "text" as const, text });
+export const wireText = (text: string) => ({ text });
+export const wireUser = (...content: Record<string, unknown>[]) => ({ role: "user", content });
+export const checkpoint = { cachePoint: { type: "default" } };
+export const png =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+// Any declared tool makes toolConfig present for native-block replay tests.
+export const readTool = { name: "read", description: "Read a file", parameters: {} };
+export function toolResult(
+  toolCallId: string,
+  content: ToolResultMessage["content"],
+  toolName = "inspect",
+  isError = false,
+  timestamp = 0,
+): ToolResultMessage {
+  return { role: "toolResult", toolCallId, toolName, content, isError, timestamp };
+}
+export const replayAssistant = <Content>(model: string, content: Content[]) => ({
+  role: "assistant" as const,
+  api: "bedrock-converse-stream" as const,
+  provider: "amazon-bedrock",
+  model,
+  content,
 });
 export async function* streamEvents(events: unknown[]) {
   yield* events;
@@ -67,22 +91,9 @@ export async function capturePayload(
   model: BedrockModel,
   context: Context,
   options: BedrockOptions = {},
-  validate?: (input: ConverseStreamCommand["input"]) => void,
 ) {
   const send = mockStream();
-  if (validate) {
-    send.mockImplementation((command) => {
-      validate(commandInput(command));
-      return {
-        $metadata: { httpStatusCode: 200 },
-        stream: streamEvents([startEvent, stopEvent]),
-      } as never;
-    });
-  }
-  const result = await streamBedrockForTest(model, context, options).result();
-  if (validate) {
-    expect(result.stopReason, result.errorMessage).toBe("stop");
-  }
+  await streamBedrockForTest(model, context, options).result();
   return commandInput(send.mock.calls.at(-1)?.[0]);
 }
 export async function collectStream(stream: ReturnType<typeof streamSimpleBedrock>) {

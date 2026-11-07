@@ -21,57 +21,50 @@ function createProgram(response: unknown) {
   };
 }
 
-it("reports the authoritative linked profile and uses the admin gateway method", async () => {
-  const { output, run } = createProgram({
-    profile: {
-      id: "p-1\nshadow",
-      displayName: "Ada\tadmin\u001b[2J",
-      emails: ["ada@example.com\nnext@example.com"],
+it.each([
+  [
+    ["link-email", "Ada@example.com", "--to", "p-1"],
+    {
+      profile: {
+        id: "p-1\nshadow",
+        displayName: "Ada\tadmin\u001b[2J",
+        emails: ["ada@example.com\nnext@example.com"],
+      },
     },
-  });
-  await run("link-email", "Ada@example.com", "--to", "p-1");
-
-  expect(callGatewayFromCli).toHaveBeenCalledWith(
     "users.linkEmail",
     expect.objectContaining({ to: "p-1" }),
     { email: "Ada@example.com", targetProfileId: "p-1" },
-    { scopes: ["operator.admin"] },
-  );
-  expect(output).toHaveBeenCalledWith(
+    "operator.admin",
     "p-1\\nshadow\tAda\\tadmin\tada@example.com\\nnext@example.com\n",
-  );
-});
-
-it("reports an empty user profile list", async () => {
-  const { output, run } = createProgram({ profiles: [] });
-  await run("list");
-
-  expect(callGatewayFromCli).toHaveBeenCalledWith(
+  ],
+  [
+    ["list"],
+    { profiles: [] },
     "users.list",
     expect.any(Object),
     {},
-    { scopes: ["operator.read"] },
-  );
-  expect(output).toHaveBeenCalledWith("No user profiles found.\n");
-});
-
-it("merges profiles through the admin RPC and explains the surviving identity", async () => {
-  const { output, run } = createProgram({
-    profile: { id: "p-survivor" },
-  });
-  await run("merge", "p-retired\nforged", "--into", "p-survivor");
-
-  expect(callGatewayFromCli).toHaveBeenCalledWith(
+    "operator.read",
+    "No user profiles found.\n",
+  ],
+  [
+    ["merge", "p-retired\nforged", "--into", "p-survivor"],
+    { profile: { id: "p-survivor" } },
     "users.merge",
     expect.objectContaining({ into: "p-survivor" }),
     { sourceProfileId: "p-retired\nforged", targetProfileId: "p-survivor" },
-    { scopes: ["operator.admin"] },
-  );
-  expect(output).toHaveBeenCalledWith(
+    "operator.admin",
     "Survivor: p-survivor\nRetired profile: p-retired\\nforged\n" +
       "History keeps its original attribution; logins, links, and accounts follow the survivor.\n",
-  );
-});
+  ],
+] as const)(
+  "routes %j with scoped authority and sanitized output",
+  async (args, response, method, options, params, scope, text) => {
+    const { output, run } = createProgram(response);
+    await run(...args);
+    expect(callGatewayFromCli).toHaveBeenCalledWith(method, options, params, { scopes: [scope] });
+    expect(output).toHaveBeenCalledWith(text);
+  },
+);
 
 it.each([
   {

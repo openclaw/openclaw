@@ -3,6 +3,7 @@ import { renameSync } from "node:fs";
 import { backup } from "node:sqlite";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createReadonlySessionHistoryReader } from "../../gateway/session-history-readonly-reader.js";
 import { disposeNodeSqliteDependents } from "../../infra/kysely-sync-cache-state.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
@@ -25,6 +26,7 @@ import { readRecentSessionTranscriptHistoryEvents } from "./session-accessor.sql
 import {
   historyEventId,
   historyMessage,
+  readActiveTranscriptStats,
   readSessionTranscriptHistoryEventById,
   readSessionTranscriptHistoryEventCount,
   useHistoryEventScope,
@@ -75,16 +77,13 @@ describe("SQLite transcript history cache", () => {
   const fixtureScope = useHistoryEventScope();
   beforeEach(() => setRuntimeConfigSnapshot({}));
   const limits = { maxMessages: 20, maxLines: 20, maxBytes: 64 * 1024 };
-  const read = () => readRecentSessionTranscriptHistoryEvents(fixtureScope, limits);
+  const read = (scope = fixtureScope, maxMessages = limits.maxMessages) =>
+    readRecentSessionTranscriptHistoryEvents(scope, { ...limits, maxMessages });
   const persist = (...messages: ReturnType<typeof turn>[]) =>
     persistSessionTranscriptTurn(fixtureScope, { messages, touchSessionEntry: false });
   const transact = <T>(run: () => T) => runOpenClawAgentWriteTransaction(run, fixtureScope);
   const readHeadPage = () =>
-    readSessionTranscriptHistoryEventPage(fixtureScope, {
-      offset: 0,
-      maxMessages: limits.maxMessages,
-      recentAtHead: limits,
-    });
+    historyPage(fixtureScope, { maxMessages: limits.maxMessages, recentAtHead: limits });
 
   async function seedRoot() {
     replaceSessionEntrySync(fixtureScope, {
@@ -93,6 +92,102 @@ describe("SQLite transcript history cache", () => {
     });
     await persist(turn("root", null));
   }
+
+  it("reuses exact accounting across interleaved sessions and retires changed or rolled-back facts", async () => {
+    const now = Date.now();
+    const timestamp = new Date(now).toISOString();
+    const root = {
+      type: "message",
+      id: "root",
+      parentId: null,
+      timestamp,
+      message: { role: "user", content: "é🦞" },
+    };
+    const other = { ...fixtureScope, sessionId: "other", sessionKey: "agent:main:other" };
+    for (const scope of [fixtureScope, other]) {
+      replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: now });
+      await persistSessionTranscriptTurn(scope, {
+        messages: [
+          {
+            ...turn(
+              scope === fixtureScope ? "root" : "other-root",
+              null,
+              scope === fixtureScope ? "é🦞" : "separate",
+            ),
+            now,
+          },
+        ],
+        touchSessionEntry: false,
+      });
+    }
+    const database = openOpenClawAgentDatabase(fixtureScope);
+    const count = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["aggregate"],
+      (sql) => (sql.includes('as "size_bytes"') && sql.includes("SUM(") ? "aggregate" : null),
+    );
+    using _ = { [Symbol.dispose]: count.restore };
+    const bytes = (event: unknown) => Buffer.byteLength(JSON.stringify(event)) + 1;
+    const readStats = () => readActiveTranscriptStats(fixtureScope);
+    const expectStats = (events: unknown[]) => {
+      const expected = {
+        eventCount: events.length,
+        sizeBytes: events.reduce<number>((total, event) => total + bytes(event), 0),
+      };
+      expect(readStats()).toEqual(expected);
+      const aggregates = count.counts.aggregate;
+      expect(readStats()).toEqual(expected);
+      expect(count.counts.aggregate).toBe(aggregates);
+    };
+    expectStats([root]);
+    readActiveTranscriptStats(other);
+    expectStats([root]);
+    expect(count.counts.aggregate).toBe(2);
+
+    const tail = { ...historyMessage("tail", "root", "next"), timestamp };
+    expect(
+      appendTranscriptMessageSync(fixtureScope, { ...turn("tail", "root", "next"), now }),
+    ).toMatchObject({ ok: true, value: { appended: true } });
+    expectStats([root, tail]);
+    const cut = {
+      type: "compaction",
+      id: "cut",
+      parentId: "tail",
+      summary: "Retained context",
+      tokensBefore: 10,
+      firstKeptEntryId: "root",
+    };
+    expect(appendTranscriptEventSync(fixtureScope, cut)).toMatchObject({ ok: true, value: true });
+    expectStats([root, tail, cut]);
+    const generation = readTranscriptGenerationInTransaction(database, fixtureScope.sessionId)!;
+    const rewritten = {
+      ...root,
+      message: { ...root.message, __openclaw: { steerTargetRunId: "changed-metadata" } },
+    };
+    expect(
+      await rewriteTranscriptEventRowsExact(fixtureScope, {
+        expectedGeneration: generation,
+        rows: [{ seq: 1, expectedEventJson: JSON.stringify(root), event: rewritten }],
+      }),
+    ).toEqual({ generation });
+    expectStats([rewritten, tail, cut]);
+
+    expect(() =>
+      transact(() => {
+        expect(
+          appendTranscriptEventSync(fixtureScope, resetEvent("discarded", "cut")),
+        ).toMatchObject({ ok: true, value: true });
+        expect(readStats()).toEqual({ eventCount: 0, sizeBytes: 0 });
+        throw new Error("rollback accounting");
+      }),
+    ).toThrow("rollback accounting");
+    expectStats([rewritten, tail, cut]);
+    expect(appendTranscriptEventSync(fixtureScope, resetEvent("reset", "cut"))).toMatchObject({
+      ok: true,
+      value: true,
+    });
+    expectStats([]);
+  });
 
   it("keeps worker history cursors scoped to the logical agent on a shared store", async () => {
     await seedRoot();
@@ -148,16 +243,16 @@ describe("SQLite transcript history cache", () => {
     await replaceTranscriptEvents(fixtureScope, events);
     const first = read();
     const parse = vi.spyOn(JSON, "parse");
+    const payloadReads = () =>
+      parse.mock.calls.filter(([json]) => json.includes("cache-window-original"));
     const second = read();
-    expect(parse.mock.calls.filter(([json]) => json.includes("cache-window-original"))).toEqual([]);
+    expect(payloadReads()).toEqual([]);
     channel("openclaw.memory.critical").publish(undefined);
     expect(read()).toEqual(first);
-    expect(
-      parse.mock.calls.filter(([json]) => json.includes("cache-window-original")),
-    ).toHaveLength(1);
+    expect(payloadReads()).toHaveLength(1);
     parse.mockClear();
     expect(read()).toEqual(first);
-    expect(parse.mock.calls.filter(([json]) => json.includes("cache-window-original"))).toEqual([]);
+    expect(payloadReads()).toEqual([]);
     parse.mockRestore();
     for (const page of [first, second]) {
       const message = asOptionalRecord(page.events[0]?.event)?.message;
@@ -173,12 +268,7 @@ describe("SQLite transcript history cache", () => {
     const replacement = [...events, rewritten];
     await replaceTranscriptEvents(fixtureScope, replacement);
     expect(asOptionalRecord(read().events.at(-1)?.event)?.message).toEqual(rewritten.message);
-    expect(
-      readRecentSessionTranscriptHistoryEvents(fixtureScope, {
-        ...limits,
-        maxMessages: 1,
-      }).events.map(historyEventId, readSessionTranscriptHistoryEventCount),
-    ).toEqual(["appended"]);
+    expect(read(fixtureScope, 1).events.map(historyEventId)).toEqual(["appended"]);
   });
 
   it.each(["close", "replace"] as const)(
@@ -188,14 +278,14 @@ describe("SQLite transcript history cache", () => {
       const marker = "dispose-history-payload";
       for (const scope of [fixtureScope, other]) {
         await replaceTranscriptEvents(scope, [historyMessage("root", null, marker)]);
-        readRecentSessionTranscriptHistoryEvents(scope, limits);
+        read(scope);
       }
       const database = openOpenClawAgentDatabase(fixtureScope);
       // The database closer retires its dependents before native close; replacement uses it too.
       disposeNodeSqliteDependents(requireNativeSqliteDatabase(database.db), reason);
       const parse = vi.spyOn(JSON, "parse");
       const payloadReads = () => parse.mock.calls.filter(([json]) => json.includes(marker));
-      expect(readRecentSessionTranscriptHistoryEvents(other, limits).events).toHaveLength(1);
+      expect(read(other).events).toHaveLength(1);
       expect(payloadReads()).toHaveLength(0);
       expect(read().events).toHaveLength(1);
       expect(payloadReads()).toHaveLength(1);
@@ -385,9 +475,8 @@ describe("SQLite transcript history cache", () => {
     await appendTranscriptEvent(scope, {
       message: { role: "assistant", content: "appended legacy row" },
     });
-    const continued = readSessionTranscriptHistoryEventPage(scope, {
+    const continued = historyPage(scope, {
       beforeSeq: 3,
-      offset: 0,
       maxMessages: 2,
       recentAtHead: { maxBytes: 64 * 1024, maxLines: 3, maxMessages: 3 },
       expectedReadWindow: readWindow,
@@ -396,10 +485,9 @@ describe("SQLite transcript history cache", () => {
     expect(continued.totalMessages).toBe(3);
     expect(continued).not.toHaveProperty("readWindow");
     expect(
-      readSessionTranscriptHistoryEventPage(scope, {
+      historyPage(scope, {
         beforeSeq: 3,
         offset: 1,
-        maxMessages: 1,
         expectedReadWindow: readWindow,
       }).events,
     ).toEqual(original.events.slice(0, 1));
@@ -418,8 +506,7 @@ describe("SQLite transcript history cache", () => {
     } else {
       await replaceTranscriptEvents(scope, [historyMessage("current", null, "current")]);
     }
-    const page = readSessionTranscriptHistoryEventPage(scope, {
-      maxMessages: 1,
+    const page = historyPage(scope, {
       offset: 10,
       beforeSeq: 1,
       expectedReadWindow: previous.readWindow,
@@ -427,11 +514,7 @@ describe("SQLite transcript history cache", () => {
     expect(page).toMatchObject({ windowReset: true, events: [{ event: { id: "current" } }] });
     expect(page.readWindow).toBeDefined();
     expect(page.readWindow).not.toEqual(previous.readWindow);
-    expect(
-      historyPage(scope, {
-        expectedReadWindow: page.readWindow,
-      }).events,
-    ).toEqual(page.events);
+    expect(historyPage(scope, { expectedReadWindow: page.readWindow }).events).toEqual(page.events);
   });
 
   it("keeps leading, interior, and trailing marker-gap ordinals across an append", async () => {
@@ -473,7 +556,7 @@ describe("SQLite transcript history cache", () => {
     expect(readSessionTranscriptHistoryEventCount(sibling)).toBe(2);
     expect(readSessionTranscriptHistoryEventCount(scope)).toBe(expected.length);
     for (const offset of [0, 2, 4, 6].filter((pageOffset) => pageOffset < expected.length)) {
-      const page = readSessionTranscriptHistoryEventPage(scope, { maxMessages: 3, offset });
+      const page = historyPage(scope, { maxMessages: 3, offset });
       const end = expected.length - offset;
       const start = Math.max(0, end - 3);
       expectHistory(

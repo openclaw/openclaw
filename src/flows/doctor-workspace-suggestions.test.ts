@@ -64,7 +64,7 @@ describe("core/doctor/workspace-suggestions", () => {
     ]);
   });
 
-  it("preserves the explicit empty-roster failure", async () => {
-    await expect(detect({}, async () => [])).rejects.toThrow("No agents configured");
+  it("returns no workspace suggestions for an explicitly empty roster", async () => {
+    await expect(detect({}, async () => [])).resolves.toEqual([]);
   });
 });

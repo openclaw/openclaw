@@ -20,23 +20,6 @@ import { isParentDefaultHelpAction } from "./parent-default-help.js";
 
 const HELP_OR_VERSION_FLAGS = new Set(["-h", "--help", "-V", "--version"]);
 
-// Every CLI invocation presents as `openclaw` in process listings instead of `node`; only the
-// long-running Gateway takes a distinct title (see gateway-cli/run-loop.ts), so lock readers and
-// operators can tell it apart from ordinary commands.
-function setProcessTitleForCommand() {
-  if (process.title !== CLI_NAME) {
-    process.title = CLI_NAME;
-  }
-}
-
-function getCliLogLevel(actionCommand: Command): LogLevel | undefined {
-  if (actionCommand.getOptionValueSourceWithGlobals("logLevel") !== "cli") {
-    return undefined;
-  }
-  const logLevel = actionCommand.optsWithGlobals<{ logLevel?: unknown }>().logLevel;
-  return typeof logLevel === "string" ? (logLevel as LogLevel) : undefined;
-}
-
 function isBareParentDefaultHelpInvocation(actionCommand: Command, argv: string[]): boolean {
   if (!isParentDefaultHelpAction(actionCommand)) {
     return false;
@@ -47,22 +30,6 @@ function isBareParentDefaultHelpInvocation(actionCommand: Command, argv: string[
     return false;
   }
   return primary === actionCommand.name() || actionCommand.aliases().includes(primary);
-}
-
-function isGuidedConfigCommandPath(commandPath: string[]): boolean {
-  const [primary, secondary, extra] = commandPath;
-  if (primary !== "config" || extra !== undefined) {
-    return false;
-  }
-  return (
-    secondary !== "get" &&
-    secondary !== "set" &&
-    secondary !== "patch" &&
-    secondary !== "unset" &&
-    secondary !== "file" &&
-    secondary !== "schema" &&
-    secondary !== "validate"
-  );
 }
 
 async function runStateStoreGuard(commandPath: string[]): Promise<void> {
@@ -89,7 +56,12 @@ async function runStateStoreGuard(commandPath: string[]): Promise<void> {
 /** Register global pre-action bootstrap hooks for every non-help command invocation. */
 export function registerPreActionHooks(program: Command, programVersion: string) {
   program.hook("preAction", async (_thisCommand, actionCommand) => {
-    setProcessTitleForCommand();
+    // Every CLI invocation presents as `openclaw` in process listings instead of `node`; only the
+    // long-running Gateway takes a distinct title (see gateway-cli/run-loop.ts), so lock readers and
+    // operators can tell it apart from ordinary commands.
+    if (process.title !== CLI_NAME) {
+      process.title = CLI_NAME;
+    }
     const argv = process.argv;
     const helpOrVersionWasOptionValue = hasCommanderOptionToken(
       actionCommand,
@@ -130,7 +102,11 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     });
     const verbose = getVerboseFlag(argv);
     setVerbose(verbose);
-    const cliLogLevel = getCliLogLevel(actionCommand);
+    let cliLogLevel: LogLevel | undefined;
+    if (actionCommand.getOptionValueSourceWithGlobals("logLevel") === "cli") {
+      const logLevel = actionCommand.optsWithGlobals<{ logLevel?: unknown }>().logLevel;
+      cliLogLevel = typeof logLevel === "string" ? (logLevel as LogLevel) : undefined;
+    }
     if (cliLogLevel) {
       process.env.OPENCLAW_LOG_LEVEL = cliLogLevel;
     }
@@ -138,7 +114,19 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       process.env.NODE_NO_WARNINGS ??= "1";
     }
     // Capability discovery precedes staged-update admission and must not migrate live state.
-    if (nativeUpdateExecutorCheck || isGuidedConfigCommandPath(commandPath)) {
+    const [primary, secondary, extra] = commandPath;
+    if (
+      nativeUpdateExecutorCheck ||
+      (primary === "config" &&
+        extra === undefined &&
+        secondary !== "get" &&
+        secondary !== "set" &&
+        secondary !== "patch" &&
+        secondary !== "unset" &&
+        secondary !== "file" &&
+        secondary !== "schema" &&
+        secondary !== "validate")
+    ) {
       return;
     }
     await runStateStoreGuard(commandPath);
