@@ -34,6 +34,7 @@ openclaw-app[data-native-titlebar] .shell--embed > .content {
 }
 
 .native-embed-header,
+.native-embed-header + .settings-sidebar__agent,
 .settings-embed-list {
   width: 100%;
   max-width: 760px;
@@ -47,36 +48,52 @@ openclaw-app[data-native-titlebar] .shell--embed > .content {
   gap: var(--space-3);
   flex: 0 0 auto;
   padding-bottom: var(--space-3);
-}
 
-.native-embed-header .page-title {
-  min-width: 0;
-  font-size: calc(24px * var(--control-ui-text-scale));
-  overflow-wrap: anywhere;
+  .page-title {
+    min-width: 0;
+    font-size: calc(24px * var(--control-ui-text-scale));
+    overflow-wrap: anywhere;
+  }
+
+  & + .settings-sidebar__agent {
+    padding-inline: 0;
+
+    .agent-select__trigger {
+      padding-inline: 0;
+    }
+  }
 }
 
 .native-embed-header__back {
   min-width: 44px;
   min-height: 44px;
   flex: 0 0 auto;
+
+  svg {
+    width: 20px;
+    height: 20px;
+  }
 }
 
-.native-embed-header__back svg {
-  width: 20px;
-  height: 20px;
+/* Center the visible capitals, not the fonts' different ascender/descender space. */
+.native-embed-header .page-title,
+.native-embed-header__back > span {
+  text-box: trim-both cap alphabetic;
 }
 
 .native-embed-header > openclaw-settings-save-indicator {
   margin-inline-start: auto;
 }
 
-.shell--embed-settings .content-header .page-title {
-  display: none;
-}
+.shell--embed-settings {
+  .content-header:not(.plugins-hub-header) .page-title {
+    display: none;
+  }
 
-.shell--embed-settings .content-header,
-.shell--embed-settings .settings-page {
-  padding-inline: 0;
+  .content-header,
+  .settings-page {
+    padding-inline: 0;
+  }
 }
 
 /* The selector's avatar and chevron share the list rows' edges. */

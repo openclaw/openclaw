@@ -113,6 +113,23 @@ async function getLayoutPage(viewport: (typeof viewports)[number], colorScheme: 
   return page;
 }
 
+async function expectHubAlignment(page: Page, name: string) {
+  const title = page.locator(".plugins-hub-header").getByRole("heading", { name, exact: true });
+  await title.waitFor();
+  const avatar = page.locator(
+    ".native-embed-header + .settings-sidebar__agent .agent-select__avatar",
+  );
+  await avatar.waitFor();
+  const titleBounds = await title.boundingBox();
+  const avatarBounds = await avatar.boundingBox();
+  assert(titleBounds && avatarBounds, "Hub title and selected agent are visible");
+  expect(Math.abs(avatarBounds.x - titleBounds.x)).toBeLessThanOrEqual(1);
+  const backBounds = await page.locator(".native-embed-header__back").boundingBox();
+  assert(backBounds, "embedded Back has visible bounds");
+  expect(backBounds.width).toBeGreaterThanOrEqual(44);
+  expect(backBounds.height).toBeGreaterThanOrEqual(44);
+}
+
 suite.define(() => {
   for (const destination of [
     { from: "memory", route: "memory-import", title: "Import memory", tab: "Settings" },
@@ -141,6 +158,9 @@ suite.define(() => {
           });
           await page.goto(new URL(pathForRoute(destination.from), suite.server.baseUrl).toString());
           await waitForControlUiRoute(page, { routeId: destination.from });
+          if (destination.from === "skills") {
+            await expectHubAlignment(page, "Skills");
+          }
           if (destination.from === "memory") {
             await page.getByRole("tab", { name: destination.tab, exact: true }).click();
             await page.locator('a[href="/memory-import"]').click();
@@ -150,6 +170,9 @@ suite.define(() => {
           await waitForControlUiRoute(page, { routeId: destination.route });
           const header = page.locator(".native-embed-header");
           await header.getByRole("heading", { name: destination.title, exact: true }).waitFor();
+          if (destination.from === "skills") {
+            await expectHubAlignment(page, destination.title);
+          }
           expect(await page.locator(".shell-nav, openclaw-app-topbar").count()).toBe(0);
           await header.getByRole("button", { name: "Back", exact: true }).click();
           // Memory's document link uses the parent fallback; hub tabs use app history.
@@ -163,6 +186,9 @@ suite.define(() => {
           );
           await waitForControlUiRoute(page, { routeId: destination.route });
           await header.getByRole("heading", { name: destination.title, exact: true }).waitFor();
+          if (destination.from === "skills") {
+            await expectHubAlignment(page, destination.title);
+          }
           await header.getByRole("button", { name: "Back", exact: true }).click();
           const parent = destination.from === "memory" ? "memory" : "settings";
           await waitForControlUiRoute(page, { routeId: parent, pathname: pathForRoute(parent) });
