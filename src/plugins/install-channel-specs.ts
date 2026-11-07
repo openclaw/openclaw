@@ -120,6 +120,7 @@ export function resolveStableOfficialPluginSpec(params: {
   const parsed = parseRegistryNpmSpec(params.spec);
   return params.updateChannel === "stable" &&
     parsed?.name === params.officialPackageName &&
+    parsed?.name.startsWith("@openclaw/") &&
     parsed?.selectorKind === "tag" &&
     /^(alpha|beta|next|rc|canary|nightly|dev)$/i.test(parsed.selector ?? "")
     ? `${parsed.name}@latest`

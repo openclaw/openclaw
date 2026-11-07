@@ -104,15 +104,22 @@ export function registerNpmUpdateMetadataTests({
     ["2026.11.8", "stable", true, true, "2026.11.8", "2026.11.8"],
     ["^2026.11.0", "stable", true, true, "2026.10.10-beta.5", "^2026.11.0"],
     ["beta", "stable", false, true, "2026.10.10-beta.5", "beta"],
+    ["beta", "stable", "external", true, "2.0.4-beta.1", "beta"],
     ["beta", "beta", true, true, "2026.11.5-beta.1", "beta"],
   ] as const)(
     "updates stored @%s on %s (official=%s, core published=%s)",
     async (selector, updateChannel, official, corePublished, expectedVersion, savedSelector) => {
       vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
-      const packageName = official ? "@openclaw/voice-call" : "channel-fixture";
-      const pluginId = official ? "voice-call" : "channel-fixture";
+      const packageName =
+        official === "external"
+          ? "@tencent-connect/openclaw-qqbot"
+          : official
+            ? "@openclaw/voice-call"
+            : "channel-fixture";
+      const pluginId =
+        official === "external" ? "openclaw-qqbot" : official ? "voice-call" : "channel-fixture";
       const available = { npmRoot: getNpmRoot(), packageName, pluginId };
-      const initialVersion = "2026.10.10-beta.5";
+      const initialVersion = official === "external" ? "2.0.3-beta.1" : "2026.10.10-beta.5";
       const installPath = writeInstalledNpmPlugin({
         ...available,
         npmRoot: path.join(getNpmRoot(), "previous"),
@@ -123,7 +130,11 @@ export function registerNpmUpdateMetadataTests({
         npmPackage(`${packageName}@latest`, "2026.11.2", available),
         npmPackage(
           `${packageName}@beta`,
-          official ? "2026.11.5-beta.1" : initialVersion,
+          official === "external"
+            ? expectedVersion
+            : official
+              ? "2026.11.5-beta.1"
+              : initialVersion,
           available,
         ),
         npmPackage(`${packageName}@next`, "2026.11.5-beta.1", available),
