@@ -1,4 +1,4 @@
 # CoreDNS configuration publication: atomic staged replacement with privilege
 # fallback, destination inspection under privilege, and access-policy
 # preservation regressions for PR #188368.
-614
+616
