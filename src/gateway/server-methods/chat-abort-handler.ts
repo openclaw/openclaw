@@ -533,14 +533,16 @@ export async function handleChatAbortRequestWithLifecycle(
           if (getRpcSourceForGateway(runId, resolveGatewayContext)) {
             throw new Error("Run changed before cancellation; retry Stop.");
           }
+          await stopWithoutCapturedRun("rpc", cancelWorker);
+          return true;
+        },
+        // The command:stop hooks above can await; announce only past the final guard.
+        onStopAccepted: () =>
           notifySessionRunStopped({
             source: "client-run",
             sessions: [{ agentId: abortAgentId, sessionKey: canonicalAbortSessionKey }],
             runIds: [runId],
-          });
-          await stopWithoutCapturedRun("rpc", cancelWorker);
-          return true;
-        },
+          }),
       });
       const error = descendantAbortError(descendants, "Parent run");
       if (error) {

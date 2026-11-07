@@ -25,6 +25,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { registerInternalHook, unregisterInternalHook } from "../../hooks/internal-hooks.js";
 import {
   captureExecRequestCustody,
   captureExecRequestOwners,
@@ -285,6 +286,56 @@ describe("descendant cascade ownership", () => {
       );
     },
   );
+
+  it("announces an exec-only Stop only once its command cancellation is accepted", async () => {
+    const sessionKey = "agent:main:command-stop";
+    await writeSession(sessionKey, "command-session");
+    const identity: ExecRequestIdentity = {
+      ...mainIdentity,
+      runId: "command-run",
+      sessionKey,
+      sessionId: "command-session",
+      ownerConnId: "command-owner",
+    };
+    const runStopped = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "run_stopped", handler: runStopped }]),
+    );
+    onTestFinished(resetGlobalHookRunner);
+    let authorized = true;
+    // The first Stop loses its requester's authority while its command:stop hook awaits.
+    const commandStop = vi.fn(async () => {});
+    commandStop.mockImplementationOnce(async () => {
+      await Promise.resolve();
+      authorized = false;
+    });
+    registerInternalHook("command:stop", commandStop);
+    onTestFinished(() => unregisterInternalHook("command:stop", commandStop));
+    await withExecRequestTurn({ identity }, async () => {
+      const owner = expectDefined(captureExecRequestOwners(identity)?.[0], "command owner");
+      const context = createChatAbortContext();
+      const request = { sessionKey, runId: "command-run" };
+      const client = { connId: "command-owner", connect: { scopes: ["operator.write"] } };
+      const handler: Parameters<typeof stop>[0]["handler"] = (options) =>
+        handleChatAbortRequestWithLifecycle({
+          ...options,
+          hasCurrentClientAuthority: () => authorized,
+        });
+      await expect(stop({ context, request, client, handler })).rejects.toThrow(
+        "requester authority changed",
+      );
+      expect(commandStop).toHaveBeenCalledOnce();
+      expect(owner.signal.aborted).toBe(false);
+      expect(runStopped).not.toHaveBeenCalled();
+
+      authorized = true;
+      expect(
+        requireLastRespondCall(await stop({ context, request, client, handler })),
+      ).toMatchObject([true, { ok: true, aborted: true, runIds: [] }]);
+      expect(owner.signal.aborted).toBe(true);
+      expect(runStopped).toHaveBeenCalledOnce();
+    });
+  });
 
   it("keeps foreign, protected, and side-run native work during session-wide Stop", async () => {
     const sessionKey = "agent:main:main";
