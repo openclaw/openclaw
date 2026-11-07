@@ -60,7 +60,7 @@ struct ServeCommand: CLICommand {
                 try await executor.run(job: job)
             }
             if cfg.transcripts.enabled {
-                await TranscriptsStore.shared.append(text: stripped)
+                await TranscriptsStore.shared.append(text: stripped, maxEntries: cfg.transcripts.maxEntries)
             }
         }
     }
