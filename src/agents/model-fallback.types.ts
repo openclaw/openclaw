@@ -1,6 +1,6 @@
 import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { AgentTerminalSnapshot } from "./agent-terminal-snapshot.js";
-import type { FailoverReason } from "./failover/signal.js";
+import type { FailoverReason, FailoverSignal } from "./failover/signal.js";
 
 export const MODEL_FALLBACK_SKIPPED_CODE = "MODEL_FALLBACK_SKIPPED";
 
@@ -30,6 +30,7 @@ export type FallbackAttempt = ModelCandidate & {
   authMode?: string;
   status?: number;
   code?: string;
+  quotaScope?: FailoverSignal["quotaScope"];
 };
 
 /** Original route plus the outer fallback stage that admitted one real attempt. */
@@ -49,6 +50,7 @@ export type ModelFallbackResultClassification =
       reason?: FailoverReason;
       status?: number;
       code?: string;
+      quotaScope?: FailoverSignal["quotaScope"];
       rawError?: string;
       rateLimitRetriesExhausted?: number;
       preserveResultOnExhaustion?: boolean;

@@ -13,6 +13,34 @@ behavior. Part of the [Building provider plugins](/plugins/sdk-provider-plugins)
 guide; start with [Provider hook
 families](/plugins/sdk-provider-plugins/hook-families) for the shared builders.
 
+## Model-scoped daily quota errors
+
+`quotaScope: "daily-model"` is an assertion made by the trusted transport producer,
+not a quota dimension that core can independently verify. The producer must verify
+upstream evidence that the limit applies to the requested model and daily window
+before attaching it with numeric `status: 429` and `code: "RESOURCE_EXHAUSTED"` on
+the same original error record. Generic throttling, prose, and arbitrary diagnostic
+JSON do not establish this assertion.
+
+The producer projection validates that error record and rejects conflicting
+status/code aliases, original non-429 statuses (including `402`), or inconsistent
+provider/model identities across transport wrappers. It carries the accepted
+assertion explicitly before clipping diagnostic bodies or applying host redaction.
+The terminal assistant must carry the typed `quotaScope` field; core never infers
+it from `errorBody`. Unrelated, truncated, or malformed diagnostic JSON cannot erase
+an accepted typed assertion or resurrect one rejected by the producer. Body-only
+adapters must validate the original facts and publish the typed field instead.
+
+Core preserves the producer assertion through failover normalization and disables
+transient same-model retries only for a coherent `429`/`RESOURCE_EXHAUSTED` daily
+assertion. Existing configured fallback chains remain authoritative; this contract
+does not append a default model to an exhausted chain or override an explicit
+empty chain.
+
+Internal continuation is unavailable under this contract. Neither an empty
+trajectory nor a transcript without tool messages proves zero dispatches; sending
+the original prompt again is not continuation.
+
 ## Model route policy
 
 The lightweight `provider-policy-api` artifact resolves model routes through

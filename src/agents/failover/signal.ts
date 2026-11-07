@@ -11,6 +11,8 @@ export type FailoverSignal = {
   status?: number;
   retryAfterMs?: number;
   code?: string;
+  /** Transport-verified daily limit for this model; never inferred from prose. */
+  quotaScope?: "daily-model";
   errorType?: string;
   message?: string;
   provider?: string;

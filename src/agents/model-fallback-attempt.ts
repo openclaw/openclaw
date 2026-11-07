@@ -13,6 +13,7 @@ import { isOpenClawAbortableWrapper } from "./embedded-agent-runner/run/abortabl
 import {
   FailoverError,
   buildFailoverRemediationHint,
+  coerceToFailoverError,
   describeFailoverError,
   hasModelFallbackStop,
   isFailoverError,
@@ -363,6 +364,7 @@ function resolveResultClassificationError(
           ...context,
           status: classification.status,
           code: classification.code,
+          quotaScope: classification.quotaScope,
           rawError: classification.rawError,
           rateLimitRetriesExhausted: classification.rateLimitRetriesExhausted,
         }),
@@ -521,6 +523,7 @@ function buildFailedCandidateAttempt(
     authMode: described.authMode,
     status: described.status,
     code: described.code,
+    quotaScope: described.quotaScope,
   };
 }
 
@@ -639,6 +642,7 @@ export function throwFallbackFailureSummary(params: {
       status: lastAttempt?.status,
       rateLimitRetriesExhausted: lastAttempt?.rateLimitRetriesExhausted,
       code: lastAttempt?.code,
+      quotaScope: lastAttempt?.quotaScope,
       cause: params.lastError instanceof Error ? params.lastError : undefined,
       sessionId: params.attribution?.sessionId,
       lane: params.attribution?.lane,
@@ -707,5 +711,21 @@ export function shouldDiscardDeferredSessionSuspension(params: {
     (resolution.kind !== "terminal" &&
       (isTranscriptNotContinuableError(params.error) ||
         isLikelyContextOverflowError(formatErrorMessage(params.error))))
+  );
+}
+
+export function normalizeFallbackError(
+  err: unknown,
+  failoverContext: Parameters<typeof coerceToFailoverError>[1],
+): unknown {
+  return (
+    coerceToFailoverError(err, failoverContext) ??
+    (isLikelyContextOverflowError(formatErrorMessage(err))
+      ? new FailoverError(formatErrorMessage(err), {
+          reason: "context_overflow",
+          ...failoverContext,
+          cause: err,
+        })
+      : err)
   );
 }

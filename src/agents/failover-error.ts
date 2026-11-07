@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
+import { readProviderDailyModelQuotaEvidence } from "../../packages/ai/src/utils/provider-error.js";
 import { isChannelRunAuthorizationError } from "../channels/message-access/run-authorization-error.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isSqliteTranscriptMutationConflict } from "../config/sessions/session-mutation-conflict-error.js";
@@ -347,8 +348,13 @@ function normalizeErrorSignal(
     scope === "direct" ? reader(err) : findErrorProperty(err, reader);
   const message = read(readDirectErrorMessage);
   const code = read(readDirectErrorCode);
+  const status = normalizeFailoverStatus(read(readDirectStatusCode), code);
   return {
-    status: normalizeFailoverStatus(read(readDirectStatusCode), code),
+    status,
+    quotaScope:
+      status === 429 && code === "RESOURCE_EXHAUSTED"
+        ? readProviderDailyModelQuotaEvidence(err)?.quotaScope
+        : undefined,
     code,
     errorType: read(readDirectErrorType),
     message: message || undefined,
@@ -551,6 +557,7 @@ export function describeFailoverError(err: unknown): {
   reason?: FailoverReason;
   status?: number;
   code?: string;
+  quotaScope?: FailoverSignal["quotaScope"];
   provider?: string;
   model?: string;
   profileId?: string;
@@ -573,6 +580,7 @@ export function describeFailoverError(err: unknown): {
       reason: err.reason,
       status: normalizeFailoverStatus(err.status, err.code),
       code: err.code,
+      quotaScope: normalizeErrorSignal(err).quotaScope,
       provider: err.provider,
       model: err.model,
       profileId: err.profileId,
@@ -588,6 +596,7 @@ export function describeFailoverError(err: unknown): {
     reason: resolveFailoverReasonFromError(err) ?? undefined,
     status: signal.status,
     code: signal.code,
+    quotaScope: signal.quotaScope,
     provider: signal.provider,
   };
 }
@@ -636,6 +645,7 @@ export function coerceToFailoverError(
           authMode: err.authMode ?? context?.authMode,
           status,
           code: err.code,
+          quotaScope: normalizeErrorSignal(err).quotaScope,
           rawError:
             err.rawError ??
             (context?.rateLimitRetriesExhausted !== undefined ? message : undefined),
@@ -685,6 +695,7 @@ export function coerceToFailoverError(
         lane: context?.lane,
         status,
         code,
+        quotaScope: signal.quotaScope,
         rawError: message,
         cause: err instanceof Error ? err : undefined,
         timeout: context?.timeout,

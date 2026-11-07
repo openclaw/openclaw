@@ -263,7 +263,15 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     return {
       message: `${params.provider}/${params.model} ended with a provider error: ${rawError}`,
       reason: failoverReason,
-      code: "embedded_error_payload",
+      ...(providerFailure?.quotaScope === "daily-model" &&
+      providerFailure.status === 429 &&
+      providerFailure.code === "RESOURCE_EXHAUSTED"
+        ? {
+            code: providerFailure.code,
+            status: providerFailure.status,
+            quotaScope: providerFailure.quotaScope,
+          }
+        : { code: "embedded_error_payload" }),
       rawError,
       rateLimitRetriesExhausted: providerFailure?.rateLimitRetriesExhausted,
     };

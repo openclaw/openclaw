@@ -48,6 +48,35 @@ describe("assistant failure recovery", () => {
     vi.useRealTimers();
   });
 
+  it("preserves daily quota evidence through assistant failure and outer fallback", async () => {
+    const run = vi.fn(async () =>
+      handleEmbeddedAssistantFailure(
+        makeInput({
+          provider: "provider-cedar",
+          model: "selected-model",
+          content: [],
+          ...projectProviderError({
+            status: 429,
+            code: "RESOURCE_EXHAUSTED",
+            quotaScope: "daily-model",
+            message: "Quota exhausted",
+          }),
+        }),
+      ),
+    );
+    await expect(
+      runWithModelFallback({
+        provider: "provider-cedar",
+        model: "selected-model",
+        manifestPlugins: [],
+        skipAuthProfileRuntime: true,
+        fallbacksOverride: [],
+        run,
+      }),
+    ).rejects.toMatchObject({ quotaScope: "daily-model", reason: "rate_limit" });
+    expect(run).toHaveBeenCalledOnce();
+  });
+
   it("explains retry exhaustion without replacing the raw provider failure", async () => {
     const providerError = "429 rate limit exceeded. Please try again in 221ms.";
     const input = makeInput({ errorMessage: providerError });
