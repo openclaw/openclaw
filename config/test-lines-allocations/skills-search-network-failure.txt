@@ -1,0 +1,2 @@
+# Regression test checks skills search names the network failure instead of a bare "fetch failed".
+10
