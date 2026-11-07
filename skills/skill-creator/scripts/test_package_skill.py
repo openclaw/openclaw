@@ -3,6 +3,7 @@
 Regression tests for skill packaging security behavior.
 """
 
+import os
 import sys
 import tempfile
 import zipfile
@@ -69,6 +70,26 @@ class TestPackageSkillSecurity(TestCase):
                 self.assertEqual(list(out_dir.iterdir()), [archive] if existing else [])
                 if existing:
                     self.assertEqual(archive.read_bytes(), original)
+
+    def test_packages_resource_timestamps_outside_zip_range(self):
+        skill_dir = self.create_skill()
+        resource = skill_dir / "script.py"
+        original = resource.read_bytes()
+        for timestamp, expected in (
+            (0, (1980, 1, 1, 0, 0, 0)),
+            (4354905600, (2107, 12, 31, 23, 59, 58)),  # January 2108, beyond ZIP's range.
+        ):
+            with self.subTest(timestamp=timestamp):
+                os.utime(resource, (timestamp, timestamp))
+                result = package_skill(str(skill_dir), str(self.temp_dir / "out"))
+
+                self.assertIsNotNone(result)
+                with zipfile.ZipFile(result) as archive:
+                    self.assertEqual(archive.read("test-skill/script.py"), original)
+                    self.assertIn("test-skill/SKILL.md", archive.namelist())
+                    self.assertEqual(archive.getinfo("test-skill/script.py").date_time, expected)
+                self.assertEqual(resource.read_bytes(), original)
+                self.assertEqual(resource.stat().st_mtime, timestamp)
 
     def test_skips_external_symlinks(self):
         for directory in (False, True):
