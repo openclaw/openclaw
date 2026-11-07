@@ -1,0 +1,2 @@
+65
+# Preserve complete compaction selection semantics while proving payloads use acknowledged streaming instead of a retained worker reply graph.

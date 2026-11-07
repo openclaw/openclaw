@@ -19,7 +19,11 @@ import { buildDeviceAuthPayloadV3 } from "../packages/gateway-client/src/device-
 import { applyMockOpenAiModelConfig } from "./e2e/lib/fixtures/mock-openai-config.mjs";
 import { stopChild } from "./lib/gateway-bench-child.ts";
 import { readGatewayMemory } from "./lib/gateway-bench-probes.ts";
-import { BASE_GATEWAY_BENCH_CONFIG, createGatewayBenchEnv } from "./lib/gateway-bench-runtime.ts";
+import {
+  BASE_GATEWAY_BENCH_CONFIG,
+  createGatewayBenchEnv,
+  waitForInitialProbe,
+} from "./lib/gateway-bench-runtime.ts";
 import { configureHeapRigCatalog } from "./lib/gateway-heap-rig-catalog.mjs";
 import { configureHeapRigTurns } from "./lib/gateway-heap-rig-turns.mjs";
 import { createGatewayWsClient } from "./lib/gateway-ws-client.ts";
@@ -27,6 +31,9 @@ import { createGatewayWsClient } from "./lib/gateway-ws-client.ts";
 const { values } = parseArgs({
   options: {
     root: { type: "string" },
+    "runtime-root": { type: "string" },
+    "legacy-workshop": { type: "boolean" },
+    "event-chars": { type: "string", default: "15000" },
     minutes: { type: "string", default: "90" },
     sessions: { type: "string", default: "2000" },
     clients: { type: "string", default: "10" },
@@ -38,6 +45,8 @@ const { values } = parseArgs({
     coverage: { type: "boolean" },
     "lazy-import-trace": { type: "boolean" },
     "turn-count": { type: "string" },
+    "large-session-events": { type: "string" },
+    "restart-after-seed": { type: "boolean" },
     "gateway-preload": { type: "string" },
     "shell-turns": { type: "boolean" },
     "idle-minutes": { type: "string" },
@@ -69,6 +78,19 @@ const idleMinutes = values["idle-minutes"]
   ? positiveInteger(values["idle-minutes"], "idle-minutes")
   : 0;
 const sessionCount = positiveInteger(values.sessions, "sessions");
+const largeSessionEvents = values["large-session-events"]
+  ? positiveInteger(values["large-session-events"], "large-session-events")
+  : undefined;
+if (largeSessionEvents && sessionCount !== 1) {
+  throw new Error("--large-session-events requires --sessions 1");
+}
+const eventChars = positiveInteger(values["event-chars"], "event-chars");
+if (
+  largeSessionEvents &&
+  (largeSessionEvents > 150000 || eventChars > 65536 || largeSessionEvents * eventChars > 600000000)
+) {
+  throw new Error("Synthetic fixture exceeds bounded investigation budget");
+}
 const clientCount = positiveInteger(values.clients, "clients");
 const port = positiveInteger(values.port, "port");
 const rpcInterval = positiveInteger(values["rpc-interval-ms"], "rpc-interval-ms");
@@ -83,7 +105,8 @@ if (!values.root) {
   throw new Error("--root is required; it must name a new synthetic state directory");
 }
 const root = path.resolve(values.root);
-const build = JSON.parse(readFileSync("dist/build-info.json", "utf8"));
+const runtimeRoot = path.resolve(values["runtime-root"] ?? ".");
+const build = JSON.parse(readFileSync(path.join(runtimeRoot, "dist/build-info.json"), "utf8"));
 const snapshotMinutes =
   values["snapshot-minutes"] === "none"
     ? []
@@ -94,7 +117,7 @@ if (snapshotMinutes.some((v, i) => v > minutes || (i > 0 && v - snapshotMinutes[
   throw new Error("snapshot minutes must increase by at least two and fit the duration");
 }
 mkdirSync(path.dirname(root), { recursive: true });
-mkdirSync(root); // Never reuse an operator directory or a previous run's databases.
+mkdirSync(root, { mode: 0o700 }); // Never reuse an operator directory or a previous run's databases.
 const eventsPath = path.join(root, "measurements.jsonl");
 const record = (event) => {
   const line = JSON.stringify({ time: new Date().toISOString(), ...event });
@@ -107,14 +130,19 @@ config.gateway.controlUi.allowedOrigins = [`http://127.0.0.1:${port}`];
 config.memory = { search: { enabled: false } };
 config.plugins.slots = { memory: "none" };
 // Background reviews share the agent model and would consume its ordered tool fixtures.
-config.plugins.entries = {
-  ...config.plugins.entries,
-  "skill-workshop": { config: { autonomous: { mode: "off" } } },
-};
-config.meta = {
-  ...config.meta,
-  migrations: { ...config.meta?.migrations, skillWorkshopPlugin: true },
-};
+if (values["legacy-workshop"]) {
+  // The release predates the Workshop plugin cutover. Keep the workload disabled there too.
+  config.skills = { ...config.skills, workshop: { autonomous: { mode: "off" } } };
+} else {
+  config.plugins.entries = {
+    ...config.plugins.entries,
+    "skill-workshop": { config: { autonomous: { mode: "off" } } },
+  };
+  config.meta = {
+    ...config.meta,
+    migrations: { ...config.meta?.migrations, skillWorkshopPlugin: true },
+  };
+}
 applyMockOpenAiModelConfig(config, { mockPort: port + 1 });
 // Utility summaries must not consume the agent mock's ordered tool-response script.
 config.models.providers["heap-rig-utility"] = {
@@ -157,6 +185,7 @@ const env = createGatewayBenchEnv(root, configPath, {
   startupTrace: false,
   caseEnv: {
     ...turnDriver.env,
+    ...(largeSessionEvents ? { MOCK_REQUEST_LOG: "" } : {}),
     OPENAI_API_KEY: "synthetic-heap-rig-not-a-real-key",
     OPENCLAW_PROFILE: `heap-rig-${port}`,
     OPENCLAW_SYSTEMD_UNIT: `openclaw-heap-rig-${port}`,
@@ -165,6 +194,7 @@ const env = createGatewayBenchEnv(root, configPath, {
   },
 });
 const children = [];
+const expectedStops = new Set();
 const clients = new Set();
 const requests = {};
 const events = {};
@@ -197,13 +227,18 @@ function start(args, label, extraEnv = {}) {
     cwd: process.cwd(),
     env: { ...env, ...extraEnv },
     detached: true,
-    stdio: ["ignore", fd, fd, ...(label === "gateway" && values["module-census"] ? ["ipc"] : [])],
+    stdio: [
+      "ignore",
+      fd,
+      fd,
+      ...(label.startsWith("gateway") && values["module-census"] ? ["ipc"] : []),
+    ],
   });
   closeSync(fd);
   children.push(child);
   child.once("error", fail);
   child.once("exit", (code, signal) => {
-    if (!abort.signal.aborted) {
+    if (!abort.signal.aborted && !expectedStops.has(child)) {
       fail(new Error(`${label} exited: ${code ?? signal}`));
     }
   });
@@ -321,7 +356,7 @@ let admin;
 const tasks = [];
 try {
   const { PROTOCOL_VERSION } = await import(
-    pathToFileURL(path.resolve("dist/gateway/protocol/index.js")).href
+    pathToFileURL(path.join(runtimeRoot, "dist/gateway/protocol/index.js")).href
   );
   start(["scripts/e2e/mock-openai-server.mjs"], "mock", {
     MOCK_PORT: String(port + 1),
@@ -331,29 +366,27 @@ try {
     MOCK_PORT: String(port + 2),
     MOCK_BIND_HOST: "127.0.0.1",
     MOCK_RESPONSE_CONTROL: "",
-    MOCK_REQUEST_LOG: path.join(root, "mock-utility-requests.jsonl"),
+    MOCK_REQUEST_LOG: largeSessionEvents ? "" : path.join(root, "mock-utility-requests.jsonl"),
     SUCCESS_MARKER: "Synthetic activity summary",
   });
   const coldStarted = performance.now();
-  const gateway = start(
-    [
-      ...(values["gateway-preload"] ? ["--import", path.resolve(values["gateway-preload"])] : []),
-      ...(values["lazy-import-trace"]
-        ? ["--import", path.resolve("scripts/perf/lazy-import-trace-preload.mjs")]
-        : []),
-      ...(values["module-census"]
-        ? ["--import", path.resolve("scripts/perf/main-module-census-preload.mjs")]
-        : []),
-      "dist/index.js",
-      "gateway",
-      "--port",
-      String(port),
-    ],
+  const gatewayArgs = [
+    ...(values["gateway-preload"] ? ["--import", path.resolve(values["gateway-preload"])] : []),
+    ...(values["lazy-import-trace"]
+      ? ["--import", path.resolve("scripts/perf/lazy-import-trace-preload.mjs")]
+      : []),
+    ...(values["module-census"]
+      ? ["--import", path.resolve("scripts/perf/main-module-census-preload.mjs")]
+      : []),
+    path.join(runtimeRoot, "dist/index.js"),
     "gateway",
-    values["lazy-import-trace"]
-      ? { OPENCLAW_LAZY_IMPORT_TRACE_DIR: path.join(root, "lazy-import-trace") }
-      : {},
-  );
+    "--port",
+    String(port),
+  ];
+  const gatewayEnv = values["lazy-import-trace"]
+    ? { OPENCLAW_LAZY_IMPORT_TRACE_DIR: path.join(root, "lazy-import-trace") }
+    : {};
+  let gateway = start(gatewayArgs, "gateway", gatewayEnv);
   async function census(action, label) {
     if (!values["module-census"]) {
       return;
@@ -391,6 +424,15 @@ try {
   if (!admin) {
     throw failure ?? new Error("Gateway readiness deadline exceeded; see gateway.log");
   }
+  const readiness = await waitForInitialProbe({
+    port,
+    path: "/startupz",
+    startAt: performance.now(),
+    deadlineAt: performance.now() + 120000,
+  });
+  if (readiness.status !== 200) {
+    throw new Error("Gateway startup readiness did not complete");
+  }
   record({
     kind: "ready",
     coldStartMs: performance.now() - coldStarted,
@@ -402,6 +444,8 @@ try {
     clientCount,
   });
   let nextSeed = 0;
+  let largeSessionId;
+  let completedLargeSessionTurns = 0;
   await Promise.all(
     Array.from({ length: Math.min(8, sessionCount) }, async () => {
       for (;;) {
@@ -410,11 +454,25 @@ try {
           return;
         }
         const { key, agentId } = sessions[index];
-        await admin.rpc("sessions.create", { key, agentId });
-        await admin.rpc("chat.inject", {
-          sessionKey: key,
-          message: `Synthetic history ${index}. `.repeat(2048).slice(0, 32 * 1024),
-        });
+        const created = await admin.rpc("sessions.create", { key, agentId });
+        if (largeSessionEvents) {
+          if (!created.sessionId) {
+            throw new Error("Large-session seed did not return a session ID");
+          }
+          largeSessionId = created.sessionId;
+        }
+        const eventCount = largeSessionEvents ?? 1;
+        for (let event = 0; event < eventCount; event++) {
+          await admin.rpc("chat.inject", {
+            sessionKey: key,
+            message: largeSessionEvents
+              ? `Synthetic history ${event}. `.padEnd(eventChars, "x")
+              : `Synthetic history ${index}. `.repeat(2048).slice(0, 32 * 1024),
+          });
+          if ((event + 1) % 500 === 0) {
+            record({ kind: "large-session-seed", completed: event + 1 });
+          }
+        }
         if ((index + 1) % 250 === 0) {
           record({ kind: "seed", completed: index + 1 });
         }
@@ -425,7 +483,44 @@ try {
   if (inventory.totalCount < sessionCount) {
     throw new Error(`Seed inventory incomplete: ${inventory.totalCount}`);
   }
-  record({ kind: "seeded", totalCount: inventory.totalCount, historyBytesPerSession: 32 * 1024 });
+  record({
+    kind: "seeded",
+    totalCount: inventory.totalCount,
+    historyEventsPerSession: largeSessionEvents ?? 1,
+    historyBytesPerSession: largeSessionEvents ? largeSessionEvents * eventChars : 32 * 1024,
+  });
+  if (values["restart-after-seed"]) {
+    admin.close();
+    admin = undefined;
+    expectedStops.add(gateway);
+    record({
+      kind: "seed-restart",
+      pid: gateway.pid,
+      ...(await stopChild(gateway, { teardownGraceMs: 30000 })),
+    });
+    gateway = start(gatewayArgs, "gateway-restarted", gatewayEnv);
+    const restartDeadline = Date.now() + 600000;
+    while (!admin && !abort.signal.aborted && Date.now() < restartDeadline) {
+      try {
+        admin = await connect(PROTOCOL_VERSION);
+      } catch {
+        await sleep(1000);
+      }
+    }
+    if (!admin) {
+      throw failure ?? new Error("Seeded Gateway restart failed");
+    }
+    const restartedReadiness = await waitForInitialProbe({
+      port,
+      path: "/startupz",
+      startAt: performance.now(),
+      deadlineAt: performance.now() + 120000,
+    });
+    if (restartedReadiness.status !== 200) {
+      throw new Error("Restarted Gateway startup readiness did not complete");
+    }
+    record({ kind: "seed-restarted", pid: gateway.pid });
+  }
   await census("capture", "seeded");
   if (values["ready-file"]) {
     writeFileSync(
@@ -604,7 +699,8 @@ try {
           break;
         }
         const turnWork = turnDriver.runTurn(admin.rpc, index, {
-          agentId: index % 2 === 0 ? "main" : "second",
+          agentId: largeSessionEvents ? "main" : index % 2 === 0 ? "main" : "second",
+          ...(largeSessionEvents ? { sessionKey: sessions[0].key, kind: "text" } : {}),
           canStart: () => !abort.signal.aborted && performance.now() < deadline,
           shell: values["shell-turns"],
         });
@@ -613,6 +709,12 @@ try {
         if (turn === null) {
           record({ kind: "turn-not-started", index, reason: "workload-ended" });
           break;
+        }
+        if (largeSessionEvents) {
+          if (turn.sessionId !== largeSessionId) {
+            throw new Error("Large-session turn replaced the seeded session");
+          }
+          completedLargeSessionTurns++;
         }
         record({ ...turn, kind: "turn", turnKind: turn.kind, atMs: performance.now() - startedAt });
         await sleep(Math.min(turnInterval, deadline - performance.now()));
@@ -643,6 +745,9 @@ try {
   finishFloor();
   if (failure) {
     throw failure;
+  }
+  if (largeSessionEvents && completedLargeSessionTurns !== turnCount) {
+    throw new Error(`Large-session run completed ${completedLargeSessionTurns}/${turnCount} turns`);
   }
   await census("capture", "complete");
   if (idleMinutes) {
