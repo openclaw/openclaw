@@ -90,6 +90,8 @@ async function mirrorBestEffort(params: {
   assistantTranscriptIdempotencyKey?: string;
   terminalAnchor?: TranscriptEntryAnchor;
   mirroredMessages: MirroredAgentMessage[];
+  /** Complete resolved source, kept separate from the verified persisted subset. */
+  settledMessages?: AgentMessage[];
 }> {
   if (!params.params.sessionTarget) {
     return { assistantTranscriptOwned: false, mirroredMessages: [] };
@@ -188,6 +190,7 @@ async function mirrorBestEffort(params: {
       ...(assistantTranscriptIdempotencyKey ? { assistantTranscriptIdempotencyKey } : {}),
       ...(terminalAnchor ? { terminalAnchor } : {}),
       mirroredMessages,
+      settledMessages: messages,
     };
   } catch (error) {
     embeddedAgentLog.warn("failed to mirror codex app-server transcript", {
@@ -233,7 +236,16 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
   turnId: string;
   upstreamUserText: string;
 }): Promise<void> {
-  if (params.params.suppressNextUserMessagePersistence || !params.params.sessionTarget) {
+  const recorder = params.params.userTurnTranscriptRecorder;
+  const persistedPrompt = recorder?.getPersistedMessage?.();
+  if (
+    !params.params.sessionTarget ||
+    (params.params.suppressNextUserMessagePersistence &&
+      (params.params.skipPreparedUserTurnMessage ||
+        !recorder?.getAdmissionReceipt() ||
+        !persistedPrompt ||
+        readMirrorIdentity(persistedPrompt)))
+  ) {
     return;
   }
   try {
@@ -260,7 +272,6 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
           mirrorSourceFingerprint: fingerprintCodexMirrorSourceMessage(userPromptMessage),
         });
       }
-      const recorder = params.params.userTurnTranscriptRecorder;
       const admission = recorder?.getAdmissionReceipt();
       if (admission) {
         const message = recorder?.getPersistedMessage?.();

@@ -199,15 +199,15 @@ export function createAgentHarnessHostCapabilities(params: {
   const sessionTarget = attempt.sessionTarget ? cloneSnapshot(attempt.sessionTarget) : undefined;
   const annotateCurrentUserTurn =
     attempt.userTurnTranscriptRecorder &&
-    attempt.sessionTarget &&
     attempt.agentId &&
     attempt.sessionId &&
     attempt.sessionKey &&
-    attempt.sessionTarget.storePath &&
-    !attempt.suppressNextUserMessagePersistence &&
+    attempt.sessionTarget?.storePath &&
     attempt.trigger !== "memory"
       ? bindUserTurnTranscriptAnnotation({
           recorder: attempt.userTurnTranscriptRecorder,
+          suppressNextUserMessagePersistence: attempt.suppressNextUserMessagePersistence,
+          skipPreparedUserTurnMessage: attempt.skipPreparedUserTurnMessage,
           target: {
             ...attempt.sessionTarget,
             agentId: attempt.agentId,

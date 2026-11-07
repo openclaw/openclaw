@@ -23,6 +23,8 @@ import type {
 /** Core-only binding performed by the harness host before invoking plugin code. */
 export function bindUserTurnTranscriptAnnotation(params: {
   recorder: UserTurnTranscriptRecorder;
+  suppressNextUserMessagePersistence?: boolean;
+  skipPreparedUserTurnMessage?: boolean;
   target: SessionTranscriptRuntimeTarget & {
     expectedLifecycleRevision?: string;
     expectedWriterRunId?: string;
@@ -36,6 +38,13 @@ export function bindUserTurnTranscriptAnnotation(params: {
   const receipt = owner?.receipt();
   const message = owner?.message();
   if (!owner || !receipt || !message || owner.blocked() || message.excludeFromContext === true) {
+    return undefined;
+  }
+  // An admitted first input still needs provenance; retries must keep the original identity.
+  if (
+    params.suppressNextUserMessagePersistence &&
+    (params.skipPreparedUserTurnMessage || message["__openclaw"]?.mirrorIdentity)
+  ) {
     return undefined;
   }
   let admission = snapshotTranscriptTurnAdmission(receipt);

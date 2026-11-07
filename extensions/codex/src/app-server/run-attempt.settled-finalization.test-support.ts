@@ -1,10 +1,12 @@
 import path from "node:path";
+import { loadUserTurnTranscriptRecorderFactoryForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
 import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
 import {
+  bindProductionHarnessHostCapabilitiesForTest,
   createParams,
   createStartedThreadHarness,
   runCodexAppServerAttempt,
@@ -15,7 +17,10 @@ import type { writeCodexAppServerBinding } from "./session-binding.test-helpers.
 import * as settledTurnContext from "./settled-turn-context.js";
 import { getCurrentSharedClientEntry } from "./shared-client-lifecycle.js";
 import { retainSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
-import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
+import {
+  attachSqliteSessionTarget,
+  readTranscriptMessagesByIdentity,
+} from "./sqlite-session.test-helpers.js";
 
 type SettledFinalizationFixtures = {
   expectResumeRequest: (
@@ -58,6 +63,62 @@ function commandEvents(cwd: string, output: string) {
 
 /** Keep finalization evidence cases under the parent suite's original hooks and ordering. */
 export function registerSettledFinalizationTests(_fixtures: SettledFinalizationFixtures) {
+  it("captures a pre-persisted user prompt exactly once for settled finalization", async () => {
+    const { params, workspaceDir } = await settledParams(
+      "prepersisted-finalization",
+      "Complete the recorded task and summarize its result.",
+    );
+    const target = params.sessionTarget;
+    if (!target?.agentId || !target.sessionKey || !target.storePath) {
+      throw new Error("Expected a complete SQLite session target");
+    }
+    const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
+    params.userTurnTranscriptRecorder = createRecorder({
+      input: { text: params.prompt, idempotencyKey: `${params.runId}:user` },
+      target: {
+        ...target,
+        agentId: target.agentId,
+        sessionId: params.sessionId,
+        sessionKey: target.sessionKey,
+        sessionEntry: undefined,
+      },
+    });
+    await params.userTurnTranscriptRecorder.persistApproved();
+    params.suppressNextUserMessagePersistence = true;
+    const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+    try {
+      const harness = createStartedThreadHarness();
+      const run = runCodexAppServerAttempt(params);
+      await run.waitForTurnAccepted();
+      await Promise.all([
+        ...commandEvents(workspaceDir, "completed-once").map((event) => harness.notify(event)),
+        harness.notify(turnCompleted({ id: "turn-1", status: "completed" })),
+      ]);
+      const result = await run;
+      // The native snapshot omits host-owned input; capture must still prove that row
+      // against SQLite without prefixing the newly annotated current prompt twice.
+      expect(result.messagesSnapshot.some((message) => message.role === "user")).toBe(false);
+      expect(result.settledTurnFinalizationContext).toMatchObject({
+        source: "harness",
+        data: [
+          {
+            role: "user",
+            content: [{ type: "input_text", text: expect.stringContaining(params.prompt) }],
+          },
+          { type: "function_call", call_id: "tool-settled" },
+          {
+            type: "function_call_output",
+            call_id: "tool-settled",
+            output: "completed-once\n",
+          },
+        ],
+      });
+      const transcript = await readTranscriptMessagesByIdentity(params);
+      expect(transcript.filter((message) => message.role === "user")).toHaveLength(1);
+    } finally {
+      closeHost();
+    }
+  });
   it("preserves idle Incognito history after a settled sibling transport failure", async () => {
     const workspaceDir = path.join(tempDir, "incognito-transport");
     const sessionKey = "agent:main:dashboard:incognito-transport";

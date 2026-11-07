@@ -7,6 +7,7 @@ import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { SettledTurnMessages } from "./settled-turn-evidence.js";
 import {
   attachCodexMirrorIdentity,
   attachUpstreamUserText,
@@ -79,9 +80,12 @@ export async function resolveFinalCodexMirrorMessages(params: {
   messagesSnapshot: AgentMessage[];
   turnId: string;
 }): Promise<AgentMessage[]> {
+  const recorder = params.params.userTurnTranscriptRecorder;
+  const persistedPrompt = recorder?.getPersistedMessage?.();
   if (
-    params.params.suppressNextUserMessagePersistence ||
-    !params.params.userTurnTranscriptRecorder
+    !recorder ||
+    (params.params.suppressNextUserMessagePersistence &&
+      (!persistedPrompt || readMirrorIdentity(persistedPrompt) !== `${params.turnId}:prompt`))
   ) {
     return params.messagesSnapshot;
   }
@@ -140,4 +144,33 @@ export function buildCodexAgentEndMessages(
     }),
     ...messagesSnapshot,
   ];
+}
+
+/** Keep host-admitted source evidence and its original native identity together. */
+export function buildCodexSettledTurnMessages(
+  params: EmbeddedRunAttemptParams,
+  mirror: {
+    mirroredMessages: readonly AgentMessage[];
+    settledMessages?: readonly AgentMessage[];
+  },
+  messagesSnapshot: readonly AgentMessage[],
+  turnId: string,
+): SettledTurnMessages {
+  const continuedPrompt = params.suppressNextUserMessagePersistence
+    ? params.userTurnTranscriptRecorder?.getPersistedMessage?.()
+    : undefined;
+  const promptIdentity = continuedPrompt && readMirrorIdentity(continuedPrompt);
+  const evidencePrefix =
+    continuedPrompt && promptIdentity && promptIdentity !== `${turnId}:prompt`
+      ? [continuedPrompt]
+      : [];
+  return {
+    mirroredMessages: [...evidencePrefix, ...mirror.mirroredMessages],
+    settledMessages: [...evidencePrefix, ...(mirror.settledMessages ?? messagesSnapshot)],
+    ...(promptIdentity ? { promptIdentity } : {}),
+    turnId,
+    // A model-only retry without a recorder never mirrored a prompt for this turn.
+    promptSuppressed:
+      params.suppressNextUserMessagePersistence === true && !params.userTurnTranscriptRecorder,
+  };
 }
