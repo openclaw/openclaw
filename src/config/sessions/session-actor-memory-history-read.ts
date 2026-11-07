@@ -78,7 +78,7 @@ export function readSessionActorMemoryHistoryQuery(
       return readSessionActorMemoryHistory(window, query.input.limits);
     }
     case "session.history.context-messages":
-      return readSessionActorMemoryContextMessages(window);
+      return readSessionActorMemoryContextMessages(window, query.input.seed);
     case "session.history.context":
       return readSessionActorMemoryContext(window, scope, query.input.through, query.input.limits);
     case "session.history.raw-delta":

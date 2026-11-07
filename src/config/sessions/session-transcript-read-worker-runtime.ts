@@ -194,11 +194,12 @@ export async function readSessionTranscriptContextMessagesInWorker(
   admission: SessionContextMessagesWorkerInput["admission"],
   signal?: AbortSignal,
   expectedIdentity?: SessionContextMessagesWorkerInput["expectedIdentity"],
+  seed?: SessionContextMessagesWorkerInput["seed"],
 ) {
   signal?.throwIfAborted();
   const value = unwrapSessionTranscriptWorkerReply(
     await modelContextReads.run(
-      { kind: "context-messages", target, admission, expectedIdentity },
+      { kind: "context-messages", target, admission, expectedIdentity, seed },
       { timeoutMs: 60_000, signal },
       {
         storePaths: [target.storePath],

@@ -5,7 +5,7 @@ import {
   isSyntheticMissingToolResult,
   SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
 } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
-import { jsonValid } from "../../infra/database-engine/json-values.js";
+import { jsonPathValue, jsonValid } from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
@@ -29,8 +29,11 @@ import {
   type TranscriptSourceAuthority,
 } from "./session-accessor.sqlite-transcript-anchor.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { readSessionContextSeed } from "./session-context-seed.js";
 import type {
+  SessionContextSeedRequest,
   SessionModelContextLimits,
+  SessionTranscriptContextSnapshot,
   SessionTranscriptModelContext,
 } from "./session-history-read.types.js";
 import { readModelContextNavigationPages } from "./session-model-context-pages.js";
@@ -54,6 +57,7 @@ import {
   transcriptEventJsonSql,
   transcriptEventModelBytesSql,
   transcriptEventModelNavigationSql,
+  transcriptEventNavigationSql,
   transcriptPredicateSql,
 } from "./transcript-payload.js";
 import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
@@ -287,11 +291,31 @@ export function readSessionTranscriptContextMessages<T>(
   return result.found ? result.value : read([], undefined);
 }
 
+/** Select native history in its original snapshot before full payloads cross the worker. */
+export function readSessionTranscriptContextSeed(
+  scope: SessionTranscriptReadScope,
+  seed: SessionContextSeedRequest,
+): SessionTranscriptContextSnapshot {
+  const result = withTranscriptContextSnapshot(
+    scope,
+    ({ header, entries, readEntry, version }) => ({
+      ...readSessionContextSeed(entries, seed, readEntry),
+      header,
+      version,
+    }),
+    undefined,
+    undefined,
+    seed,
+  );
+  return result.found ? result.value : { ...readSessionContextSeed([], seed), header: undefined };
+}
+
 function withTranscriptContextSnapshot<T>(
   scope: SessionTranscriptReadScope,
   read: (snapshot: TranscriptContextSnapshot) => T,
   through?: TranscriptEntryAnchor,
   limits?: SessionModelContextLimits,
+  seed?: SessionContextSeedRequest,
 ): { found: true; value: T } | { found: false } {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   return withOpenClawAgentDatabaseReadOnly(
@@ -389,6 +413,67 @@ function withTranscriptContextSnapshot<T>(
                 parameter((row) => row.seq),
               ),
           );
+          if (seed) {
+            // Full-fidelity seed policy needs two scalar facts absent from model navigation.
+            // Read them inside this same snapshot; neither query transfers message bodies.
+            if (seed.admittedKey) {
+              const bySeq = new Map(entries.map((entry) => [entry.seq, entry]));
+              for (const row of iterateSqliteQuerySync(
+                database.db,
+                base
+                  .select("seq")
+                  .where(transcriptPredicateSql(database.db, "message_role"), "=", "user")
+                  .where(
+                    jsonPathValue<string>(
+                      database.db,
+                      transcriptEventNavigationSql(database.db),
+                      sql.lit("$.message.idempotencyKey"),
+                    ),
+                    "=",
+                    seed.admittedKey,
+                  ),
+              )) {
+                const entry = bySeq.get(row.seq);
+                if (entry?.type === "message" && entry.message.role === "user") {
+                  Object.assign(entry.message, { idempotencyKey: seed.admittedKey });
+                }
+              }
+            }
+            const summaries = new Set<number>();
+            // Predicate discriminators intentionally omit branch_summary. Select the
+            // canonical path's identities instead of losing those entries before hydration.
+            for (const batch of chunkItems(
+              entries.filter((entry) => entry.type === "branch_summary"),
+              MODEL_CONTEXT_PAYLOAD_BATCH_SIZE,
+            )) {
+              for (const row of iterateSqliteQuerySync(
+                database.db,
+                base
+                  .select("seq")
+                  .where(
+                    "seq",
+                    "in",
+                    batch.map((entry) => entry.seq),
+                  )
+                  .where(
+                    jsonPathValue<string>(
+                      database.db,
+                      transcriptEventJsonSql(database.db),
+                      sql.lit("$.summary"),
+                    ),
+                    "!=",
+                    "",
+                  ),
+              )) {
+                summaries.add(row.seq);
+              }
+            }
+            for (const entry of entries) {
+              if (entry.type === "branch_summary" && summaries.has(entry.seq)) {
+                entry.summary = "nonempty";
+              }
+            }
+          }
           return read({
             prepared,
             header: header ? JSON.parse(header.event_json) : undefined,

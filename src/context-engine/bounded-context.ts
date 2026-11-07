@@ -4,6 +4,53 @@ import { classifyToolUseResultPairing } from "../../packages/agent-core/src/harn
 import { resolveExpiredRuntimeContextContentBytes } from "./transcript-byte-limit.js";
 import type { AssembleResult } from "./types.js";
 
+/** Shared cut policy; cold readers measure payloads lazily from newest to oldest. */
+export function selectBoundedContextStart(
+  messages: readonly AssembleResult["messages"][number][],
+  maxBytes: number,
+  tokenBudget: number | undefined,
+  measure: (index: number) => { bytes: number; tokens: number },
+): number {
+  let bytes = 2;
+  let tokens = 0;
+  let cut = messages.length;
+  let exceedsByteBudget = false;
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const size = measure(index);
+    bytes += size.bytes + 1;
+    tokens += size.tokens;
+    if (bytes > maxBytes) {
+      exceedsByteBudget = true;
+      break;
+    }
+    if (tokenBudget !== undefined && tokens > tokenBudget) {
+      continue;
+    }
+    if (index === 0 || messages[index]!.role === "user") {
+      cut = index;
+    }
+  }
+  // Ordinary token pressure still belongs to semantic compaction.
+  if (!exceedsByteBudget) {
+    return 0;
+  }
+  // Pairing uses the complete navigation, including calls outside the measured suffix.
+  for (const frame of classifyToolUseResultPairing(messages)) {
+    if (frame.startIndex >= cut) {
+      break;
+    }
+    for (const occurrence of frame.occurrences) {
+      if (occurrence.sourceResultIndex !== undefined && occurrence.sourceResultIndex >= cut) {
+        cut = occurrence.sourceResultIndex + 1;
+        while (cut < messages.length && messages[cut]?.role !== "user") {
+          cut++;
+        }
+      }
+    }
+  }
+  return cut;
+}
+
 /** Bounds only the model view; required instructions and the pending input stay with their owners. */
 export function boundContextEngineAssembly(
   assembled: AssembleResult,
@@ -19,51 +66,21 @@ export function boundContextEngineAssembly(
   const expiredContentBytes = clearsTurnScopedSystemUpdates
     ? resolveExpiredRuntimeContextContentBytes(messages)
     : undefined;
-  let bytes = 2;
-  let tokens = 0;
-  let cut = messages.length;
-  let exceedsByteBudget = false;
-  for (let index = messages.length - 1; index >= 0; index--) {
+  const cut = selectBoundedContextStart(messages, maxBytes, tokenBudget, (index) => {
     const message = messages[index]!;
     const extraBytes = additionalBytes?.get(message) ?? 0;
-    bytes +=
-      Buffer.byteLength(JSON.stringify(message), "utf8") +
-      1 +
-      extraBytes -
-      (expiredContentBytes?.get(message) ?? 0);
-    // Expired bodies remain in append-only replay but consume no provider context tokens.
-    tokens +=
-      (expiredContentBytes?.has(message) ? 0 : estimateTokens(message)) +
-      (extraBytes ? Math.ceil(extraBytes / 4) : 0);
-    if (bytes > maxBytes) {
-      exceedsByteBudget = true;
-      break;
-    }
-    if (tokenBudget !== undefined && tokens > tokenBudget) {
-      continue;
-    }
-    if (index === 0 || message.role === "user") {
-      cut = index;
-    }
-  }
-  // Ordinary token pressure still belongs to semantic compaction.
-  if (!exceedsByteBudget) {
+    return {
+      bytes:
+        Buffer.byteLength(JSON.stringify(message), "utf8") +
+        extraBytes -
+        (expiredContentBytes?.get(message) ?? 0),
+      tokens:
+        (expiredContentBytes?.has(message) ? 0 : estimateTokens(message)) +
+        (extraBytes ? Math.ceil(extraBytes / 4) : 0),
+    };
+  });
+  if (!cut) {
     return assembled;
-  }
-  // User messages can arrive between a call and its result. Advance past the
-  // complete occurrence rather than retaining an orphan or exceeding the budget.
-  for (const frame of classifyToolUseResultPairing(messages)) {
-    if (frame.startIndex >= cut) {
-      break;
-    }
-    for (const occurrence of frame.occurrences) {
-      if (occurrence.sourceResultIndex !== undefined && occurrence.sourceResultIndex >= cut) {
-        cut = occurrence.sourceResultIndex + 1;
-        while (cut < messages.length && messages[cut]?.role !== "user") {
-          cut++;
-        }
-      }
-    }
   }
   const retained = messages.slice(cut);
   const fingerprint = createHash("sha256")
