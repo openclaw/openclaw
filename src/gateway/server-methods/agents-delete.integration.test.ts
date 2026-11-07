@@ -34,6 +34,7 @@ import type {
   NativeBindingClientTestApi,
 } from "../../config/sessions/session-native-binding.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { DEFAULT_WORKER_PENDING_TASKS } from "../../infra/worker-task-capacity.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { appendSessionTranscriptMessageByIdentity } from "../../plugin-sdk/session-transcript-runtime.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
@@ -266,6 +267,15 @@ it.for(["active", "restart-draining"] as const)(
             : {}),
         };
         writeEntry(sessionKey, session);
+        // Restart recovery must drain idle history larger than the pool's pending-task budget.
+        if (scenario === "restart-draining") {
+          for (let index = 0; index < 3 * DEFAULT_WORKER_PENDING_TASKS; index++) {
+            writeEntry(`agent:${agentId}:subagent:idle-${index}`, {
+              sessionId: `idle-deletion-${index}`,
+              updatedAt: 1,
+            });
+          }
+        }
         await fs.mkdir(state.sessionsDir(agentId), { recursive: true });
         await fs.writeFile(
           path.join(state.sessionsDir(agentId), "owned-attachment.txt"),
@@ -671,7 +681,7 @@ it.for(["active", "restart-draining"] as const)(
           const recovery = vi
             .spyOn(deletionRecovery, "resumeAgentDeletions")
             .mockImplementation(async (...args) => {
-              await resume(...args);
+              await resume({ ...args[0], logGateway: context.logGateway }, args[1]);
               recovered.resolve();
             });
           const transient = vi
@@ -688,6 +698,7 @@ it.for(["active", "restart-draining"] as const)(
           try {
             await restarted.startupSettled;
             await withinTest(recovered.promise, signal);
+            expect(context.logGateway.warn).not.toHaveBeenCalled();
             expect(readAgentDeletionJournal(agentId)?.cleanupCompleted).toBe(true);
           } finally {
             recovery.mockRestore();
