@@ -24,6 +24,31 @@ import type { CronRunMode, CronRunResult, CronServiceState } from "./state.js";
 import { captureCronServiceMutationSource } from "./store.js";
 import { wake } from "./wake.js";
 
+// Scheduler ticks follow due slots, so nothing else may drain a committed manual request
+// soon. Retry while a database lock clears; after these the next wake or restart recovery
+// runs it.
+const COMMITTED_DRAIN_RETRY_DELAYS_MS = [5_000, 10_000, 20_000, 40_000, 60_000];
+
+function retryCommittedRunDrain(state: CronServiceState, jobId: string, attempt = 0): void {
+  const delayMs = COMMITTED_DRAIN_RETRY_DELAYS_MS[attempt];
+  if (delayMs === undefined) {
+    return;
+  }
+  const generation = state.lifecycleGeneration;
+  setSafeTimeout(() => {
+    if (state.stopped || generation !== state.lifecycleGeneration) {
+      return;
+    }
+    void drainCronRunQueue(state).catch((error: unknown) => {
+      state.deps.log.warn(
+        { jobId, err: String(error), retry: attempt + 1 },
+        "cron: queue drain delayed",
+      );
+      retryCommittedRunDrain(state, jobId, attempt + 1);
+    });
+  }, delayMs).unref();
+}
+
 async function requestManualCronRun(
   state: CronServiceState,
   id: string,
@@ -50,6 +75,15 @@ async function requestManualCronRun(
           reason: tracking.terminalTracker.emitted ? "ownerless" : "already-running",
         } as const);
   });
+  if ("requested" in result) {
+    // A committed request stays queued when this drain fails. Rejecting here would
+    // read as "not accepted" and invite a replay, so retry the drain instead.
+    await drainCronRunQueue(state).catch((error: unknown) => {
+      state.deps.log.warn({ jobId: id, err: String(error) }, "cron: queue drain delayed");
+      retryCommittedRunDrain(state, id);
+    });
+    return result;
+  }
   await drainCronRunQueue(state);
   return result;
 }
