@@ -270,9 +270,9 @@ export function controlUiUpdateCachePlugins(): Plugin[] {
             [...mapped].map(([real, stable]) => [`./${stable}`, `./${real}`]),
           );
           html.source = String(html.source).replace(
-            /<script\b[^>]*type="module"/u,
+            /<head\b[^>]*>/iu,
             (match) =>
-              `<script type="importmap" data-cfasync="false">${JSON.stringify({ imports })}</script>${match}`,
+              `${match}<script type="importmap" data-cfasync="false">${JSON.stringify({ imports })}</script>`,
           );
         },
       },

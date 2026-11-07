@@ -21,7 +21,7 @@ it("keeps updated imports cache-stable without reusing changed immutable assets"
   ) {
     const files = {
       "index.html":
-        '<html><head></head><body><script type="module" src="./entry.js"></script></body></html>',
+        '<html><head><script>globalThis.preloadLocale = true;</script></head><body><script type="module" src="./entry.js"></script></body></html>',
       "entry.js":
         'import { load } from "./connection.js"; globalThis.loadLeaf = load; globalThis.loadLocale = () => import("./locale.js");',
       "connection.js": 'export const load = () => import("./leaf.js");',
@@ -90,6 +90,9 @@ it("keeps updated imports cache-stable without reusing changed immutable assets"
     )?.[1];
     if (!encoded) throw new Error("Expected production import map");
     const imports: Record<string, string> = JSON.parse(encoded).imports;
+    expect(String(html.source).indexOf('type="importmap"')).toBeLessThan(
+      String(html.source).indexOf("globalThis.preloadLocale"),
+    );
     const entry = chunks.find((chunk) => chunk.isEntry);
     const connection = chunks.find((chunk) => chunk.name === "control-ui-connection");
     const locale = chunks.find((chunk) => chunk.moduleIds.includes(path.join(root, "locale.js")));

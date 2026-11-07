@@ -14,7 +14,7 @@ const files = {
 };
 const scriptBody = 'console.log("contained alias");\n';
 const documentBody =
-  '<!doctype html><html><head><script type="importmap">{"imports":{"./assets/_app.js":"./assets/app.js","remote":"https://cdn.invalid/module.js"}}</script><script src="./assets/app.js"></script></head><body>Ready</body></html>';
+  '<!doctype html><html><head><script type="importmap">{"imports":{"./assets/_app.js":"./assets/app.js","remote":"https://cdn.invalid/module.js"}}</script><link rel="modulepreload" href="./assets/app.js"><script type="module" src="./assets/app.js"></script></head><body>Ready</body></html>';
 
 describe.each(["", "/dashboard"])("Control UI artifact names under %j", (basePath) => {
   const tempDirs = createTempDirTracker();
@@ -80,6 +80,10 @@ describe.each(["", "/dashboard"])("Control UI artifact names under %j", (basePat
       const html = gunzipSync(get.body).toString();
       expect(html).toContain(`data-openclaw-control-ui-base-path="${basePath}"`);
       expect(html).toContain(`src="${basePath}/assets/app.js"`);
+      expect(html).toContain(`<link rel="modulepreload" href="${basePath}/assets/app.js">`);
+      expect(get.headers.link).toBe(
+        `<${basePath}/assets/app.js>; rel=preload; as=script; crossorigin`,
+      );
       const importMap = `{"imports":{"${basePath}/assets/_app.js":"${basePath}/assets/app.js","remote":"https://cdn.invalid/module.js"}}`;
       expect(html).toContain(`<script type="importmap">${importMap}</script>`);
       const importMapHash = createHash("sha256").update(importMap).digest("base64");
