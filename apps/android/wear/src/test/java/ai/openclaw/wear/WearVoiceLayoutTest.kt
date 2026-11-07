@@ -1,5 +1,6 @@
 package ai.openclaw.wear
 
+import ai.openclaw.wear.shared.WearRealtimeTalkNotice
 import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
 import ai.openclaw.wear.shared.WearRealtimeTalkStatus
 import android.graphics.Bitmap
@@ -88,6 +89,7 @@ class WearVoiceLayoutTest {
     val permissionRequired: Boolean = false,
     val settingsRequired: Boolean = false,
     val label: Int? = null,
+    val notice: WearRealtimeTalkNotice? = null,
   )
 
   @Test
@@ -347,6 +349,22 @@ class WearVoiceLayoutTest {
           Scenario("idle"),
           Scenario("connecting", status = WearRealtimeTalkStatus.CONNECTING, active = true, label = R.string.connecting),
           Scenario("listening", status = WearRealtimeTalkStatus.LISTENING, active = true, capturing = true, label = R.string.listening),
+          Scenario(
+            "input-fell-behind",
+            status = WearRealtimeTalkStatus.LISTENING,
+            active = true,
+            capturing = true,
+            label = R.string.realtime_input_fell_behind,
+            notice = WearRealtimeTalkNotice.INPUT_FELL_BEHIND,
+          ),
+          Scenario(
+            "input-recovered",
+            status = WearRealtimeTalkStatus.LISTENING,
+            active = true,
+            capturing = true,
+            label = R.string.realtime_input_recovered,
+            notice = WearRealtimeTalkNotice.INPUT_RECOVERED,
+          ),
           Scenario("thinking", status = WearRealtimeTalkStatus.THINKING, active = true, label = R.string.thinking),
           Scenario("speaking", active = true, playing = true, label = R.string.speaking),
           Scenario("stopping", stopping = true, label = R.string.stopping),
@@ -368,7 +386,7 @@ class WearVoiceLayoutTest {
           assertEquals(root.size.width, root.size.height)
           assertTrue(resources.configuration.isScreenRound)
           val label = next.label?.let { resources.getString(it) }
-          val status = label?.let { if (next.active) "$it · 0:00" else it }
+          val status = label?.let { if (next.active && next.notice == null) "$it · 0:00" else it }
           val texts =
             if (next.permissionRequired) {
               listOfNotNull(status, resources.getString(if (next.settingsRequired) R.string.open_settings else R.string.retry))
@@ -487,7 +505,7 @@ class WearVoiceLayoutTest {
                 WearConversationSnapshot(
                   gatewayState = WearGatewayState.CONNECTED,
                   activeSessionId = "agent:fixture:chat",
-                  realtimeTalk = WearRealtimeTalkSnapshot(status = value.status, active = value.active),
+                  realtimeTalk = WearRealtimeTalkSnapshot(status = value.status, active = value.active, notice = value.notice),
                 ),
               failure = null,
               loading = false,
