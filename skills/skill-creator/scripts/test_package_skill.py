@@ -70,6 +70,26 @@ class TestPackageSkillSecurity(TestCase):
                 if existing:
                     self.assertEqual(archive.read_bytes(), original)
 
+    def test_rejects_linked_required_entry_without_publishing(self):
+        skill_dir = self.create_skill()
+        out_dir = self.temp_dir / "out"
+        archive = package_skill(str(skill_dir), str(out_dir))
+        self.assertIsNotNone(archive)
+        original = archive.read_bytes()
+        entry = skill_dir / "SKILL.md"
+        target = skill_dir / "instructions.md"
+        entry.rename(target)
+        try:
+            entry.symlink_to(target)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlink unsupported on this platform")
+
+        for destination in (out_dir, self.temp_dir / "fresh"):
+            with self.subTest(destination=destination.name):
+                self.assertIsNone(package_skill(str(skill_dir), str(destination)))
+                self.assertEqual(archive.read_bytes(), original)
+                self.assertFalse((self.temp_dir / "fresh" / "test-skill.skill").exists())
+
     def test_skips_external_symlinks(self):
         for directory in (False, True):
             with self.subTest(directory=directory):
