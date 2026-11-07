@@ -34,4 +34,16 @@ describe("validateScheduleTimestamp", () => {
       expect(result.message).toContain("2037-01-01T00:00:00.000Z");
     }
   });
+
+  it("rejects compact digit datetimes with the raw input in the message", () => {
+    const result = validateScheduleTimestamp(
+      { kind: "at", at: "20250101120000" },
+      Date.parse("2026-01-01T00:00:00.000Z"),
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      message: "Invalid schedule.at: expected ISO-8601 timestamp (got 20250101120000)",
+    });
+  });
 });

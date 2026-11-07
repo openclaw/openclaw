@@ -514,6 +514,12 @@ export function parseAt(input: string, tz?: string): string | null {
   if (absolute !== null) {
     return timestampMsToIsoString(absolute) ?? null;
   }
+  // Bare numbers are absolute epoch-ms input, never relative durations; keep
+  // rejecting them here so a misread compact date (yyyyMMddHHmmss) does not
+  // resurface as a far-future duration.
+  if (/^\d+$/.test(raw)) {
+    return null;
+  }
   const durationInput = raw.startsWith("+") ? raw.slice(1) : raw;
   const dur = parsePositiveCronDurationMs(durationInput);
   if (dur !== null) {

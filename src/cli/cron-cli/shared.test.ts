@@ -276,6 +276,8 @@ it.each<[string, string | null, number?]>([
   ["+30m", "2026-05-25T00:30:00.000Z"],
   ["30m", "2026-05-25T00:30:00.000Z"],
   [String(Number.MAX_SAFE_INTEGER), null],
+  ["20250101120000", null],
+  ["01798761600000", "2027-01-01T00:00:00.000Z"],
   ["+999999999999999999d", null],
   ["+1m", null, 8_640_000_000_000_000],
 ])("parses relative/epoch time %s", (input, expected, now) => {
