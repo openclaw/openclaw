@@ -70,9 +70,9 @@ export type ChatThreadState = Parameters<typeof createAsyncQuestionPresentation>
   search: TranscriptSearchState;
   transcriptRenderDependencies: readonly unknown[];
   transcriptRenderContext: {
-    turnMediaMessages?: ReadonlyMap<
+    threadMediaMessages?: ReadonlyMap<
       string,
-      readonly import("./chat-turn-media-gallery.ts").TurnMediaMessage[]
+      readonly import("./chat-thread-media-gallery.ts").ThreadMediaMessage[]
     >;
     onSetReply?: (target: MessageReplyTarget) => void;
     onOpenReply?: (replyToId: string) => void;
@@ -97,7 +97,7 @@ export type ChatThreadProps = Omit<
   | "presented"
   | "agentId"
   | "mediaPolicyKey"
-  | "getTurnMediaMessages"
+  | "getThreadMediaMessages"
   | "onOpenWorkspaceFile"
 > &
   Pick<

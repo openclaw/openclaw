@@ -81,7 +81,7 @@ function GatewayMascot(props: { pose: "busy" | "error" | "updated" | "rest" }): 
   return (
     <span class="gateway-mascot" data-pose={props.pose} aria-hidden="true">
       <span class="gateway-mascot__ground" />
-      <svg class="gateway-mascot__figure" viewBox="-2 2 124 112" focusable="false">
+      <svg class="gateway-mascot__figure" viewBox="-2 2 124 112">
         <defs>
           <linearGradient id="gateway-mascot-shell" x1="0%" y1="0%" x2="100%" y2="100%">
             <stop offset="0%" stop-color="#ff4d4d" />

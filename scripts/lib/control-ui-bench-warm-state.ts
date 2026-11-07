@@ -18,6 +18,7 @@ type SessionSnapshotStore = {
 type SidebarSnapshotModel = {
   navigationView: string;
   onlineUsers: unknown[];
+  scrollTop?: number;
   roster?: { result: { sessions: Array<{ key: string }> } } | null;
 };
 
@@ -26,7 +27,11 @@ type StoredTranscript = {
   projectionVersion: number;
   snapshot: ChatSessionSnapshot;
 };
-type StoredSidebar = { sessionKey: string; model: SidebarSnapshotModel };
+type StoredSidebar = {
+  sessionKey: string;
+  projectionVersion: number;
+  model: SidebarSnapshotModel;
+};
 type WarmThumbnail = {
   sessionKey: string;
   messageId: string;
@@ -130,7 +135,7 @@ export async function persistColdLoadWarmState(input: {
         session: Object.entries(sessionStorage),
       },
       messages: record.snapshot.messages.length,
-      ...(input.rowFacts ? { snapshotBytes } : {}),
+      snapshotBytes,
       ...(input.lateRowFacts
         ? {
             displayFacts: {
@@ -153,8 +158,16 @@ export async function persistColdLoadWarmState(input: {
       databaseVersion: database.version,
       projectionVersion: record.projectionVersion,
       sidebarView: sidebar.model.navigationView,
+      sidebarScrollTop: document.querySelector(".sidebar-shell__body")?.scrollTop ?? 0,
+      sidebarCachedScrollTop: sidebar.model.scrollTop,
       sidebarPeople: sidebar.model.onlineUsers.length,
+      sidebarProjectionVersion: sidebar.projectionVersion,
       sidebarBytes: new TextEncoder().encode(JSON.stringify(sidebar.model)).byteLength,
+      sidebarRecordBytes: new TextEncoder().encode(JSON.stringify(sidebar)).byteLength,
+      sidebarAggregateBytes: sidebars.reduce(
+        (bytes, saved) => bytes + new TextEncoder().encode(JSON.stringify(saved)).byteLength,
+        0,
+      ),
     };
   } finally {
     database.close();

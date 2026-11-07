@@ -6,15 +6,16 @@ import type {
 import "../../components/modal-dialog.tsx";
 import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { formatUiError, UserFacingError } from "../../lib/format-error.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
-import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "./custom-elements.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { renderPluginCapabilitySection as PluginCapabilitySection } from "./overview.tsx";
-import { showPluginToolPreview, type PluginToolPreview } from "./tool-preview.tsx";
 import "./skill-preview.css";
+import { showPluginToolPreview, type PluginToolPreview } from "./tool-preview.tsx";
 
 registerEnglishCatalog(registerPluginManagementEnglish);
 
@@ -244,9 +245,9 @@ export function PluginSkillPreview(props: {
                   onClose={() => props.preview.close()}
                 />
                 <div class="oc-dialog__body">
-                  <div class="callout danger" role="alert">
+                  <InlineAlert tone="danger" role="alert">
                     {formatUiError(error())}
-                  </div>
+                  </InlineAlert>
                 </div>
                 <openclaw-modal-actions class="oc-dialog__footer">
                   <button

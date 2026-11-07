@@ -152,6 +152,9 @@ suite.define(() => {
       await page.locator("#new-session-where-trigger").tap();
       const destination = page.locator("#new-session-where-popover");
       await destination.waitFor();
+      // Near the bottom of a phone the list must take the roomier side, not scroll.
+      const list = destination.locator(".new-session-page__environment-list");
+      await expect.poll(() => list.evaluate((el) => el.scrollHeight - el.clientHeight)).toBe(0);
       await capture("menu", [destination]);
       const destinationBox = await destination.boundingBox();
       expect(destinationBox!.x).toBeGreaterThanOrEqual(0);

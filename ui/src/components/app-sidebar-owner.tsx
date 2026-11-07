@@ -100,6 +100,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   peopleView?: ReturnType<typeof createSidebarPeople>;
   // A connected host retains its pending boot read when Solid recreates the view.
   readonly snapshot = createSidebarSnapshot(this);
+  scroll?: ReturnType<typeof createSidebarScroll>;
 
   override shouldPublishSessionData(): boolean {
     this.snapshot.synchronize();

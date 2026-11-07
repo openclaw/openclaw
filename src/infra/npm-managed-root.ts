@@ -1,4 +1,4 @@
-import { constants as fsConstants, type Dirent } from "node:fs";
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,7 +8,7 @@ import { normalizeOptionalString as readOptionalString } from "@openclaw/normali
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { parse as parseYaml } from "yaml";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { hasErrnoCode, ignoreMissingPath } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
 import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import type { NpmSpecResolution } from "./install-source-utils.js";
 import { JsonFileReadError, readJson, readJsonIfExists, writeJson } from "./json-files.js";
@@ -465,15 +465,15 @@ async function isRequiredPlatformPackageComplete(params: {
       continue;
     }
     try {
-      await fs.access(
+      // Completeness is a filesystem fact; a sandbox may deny execution in the stage.
+      const stat = await fs.stat(
         path.join(params.packagePath, "vendor", target.name, "bin", executableFilename),
-        fsConstants.X_OK,
       );
-      return true;
-    } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "EACCES")) {
-        throw error;
+      if (stat.isFile() && (process.platform === "win32" || (stat.mode & 0o111) !== 0)) {
+        return true;
       }
+    } catch (error) {
+      ignoreMissingPath(error);
     }
   }
   return false;

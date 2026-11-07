@@ -774,7 +774,7 @@ export async function handleControlUiHttpRequest(
         uiPath,
         basePath,
         terminalEnabled,
-        opts?.config?.gateway?.controlUi?.environment,
+        opts?.getRuntimeConfig?.() ?? opts?.config,
         publicAssetBuildId,
         opts?.sessionEntryPath,
         () =>

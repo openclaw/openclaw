@@ -9,6 +9,7 @@ import {
 import { GatewayConnectionView } from "../components/solid/gateway-connection-view.tsx";
 import { GatewayStatus, gatewayStatusLabel } from "../components/solid/gateway-status.tsx";
 import { Icon } from "../components/solid/icon.tsx";
+import { InlineAlert } from "../components/solid/inline-alert.tsx";
 import { ShortcutHint } from "../components/solid/kbd.tsx";
 import { ConnectingSplash } from "../components/solid/loading-skeleton.tsx";
 import {
@@ -372,39 +373,31 @@ export function ApplicationShell(props: {
           keyed
         >
           {(notice) => (
-            <p
-              class="shell-config-read-only callout info callout--dismissible"
+            <InlineAlert
+              tone="info"
+              class="shell-config-read-only"
               inert={view().mobileNavLayout && view().navDrawerOpen}
+              onDismiss={() =>
+                patchSettings({
+                  gatewayUrl: view().context.gateway.connection.gatewayUrl,
+                  dismissedReadOnlyConfigNotice: JSON.stringify(notice),
+                })
+              }
             >
-              <span class="callout__content">
-                <strong>{t("nav.gateway.configReadOnly")}</strong>{" "}
-                {notice.message || t("nav.gateway.configReadOnlyHint")}
-                <Show when={notice.docsUrl}>
-                  {" "}
-                  <a
-                    href={notice.docsUrl}
-                    target={EXTERNAL_LINK_TARGET}
-                    rel={buildExternalLinkRel()}
-                    data-link-reader-external
-                  >
-                    {t("common.learnMore")}
-                  </a>
-                </Show>
-              </span>
-              <button
-                class="callout__dismiss"
-                type="button"
-                aria-label={t("common.dismiss")}
-                onClick={() =>
-                  patchSettings({
-                    gatewayUrl: view().context.gateway.connection.gatewayUrl,
-                    dismissedReadOnlyConfigNotice: JSON.stringify(notice),
-                  })
-                }
-              >
-                <Icon name="x" />
-              </button>
-            </p>
+              <strong>{t("nav.gateway.configReadOnly")}</strong>{" "}
+              {notice.message || t("nav.gateway.configReadOnlyHint")}
+              <Show when={notice.docsUrl}>
+                {" "}
+                <a
+                  href={notice.docsUrl}
+                  target={EXTERNAL_LINK_TARGET}
+                  rel={buildExternalLinkRel()}
+                  data-link-reader-external
+                >
+                  {t("common.learnMore")}
+                </a>
+              </Show>
+            </InlineAlert>
           )}
         </Show>
         <main

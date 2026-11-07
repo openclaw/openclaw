@@ -115,6 +115,9 @@ suite.define(() => {
         await form.getByRole("textbox", { name: "API key" }).fill("sk-synthetic-setup-check");
         await form.getByRole("button", { name: "Save provider", exact: true }).click();
         await expect.poll(() => form.isVisible(), { timeout: 30_000 }).toBe(false);
+        // Adding the first provider already ran one check, which the 5xx also failed.
+        expect(inferenceRequests).toBe(1);
+        inferenceRequests = 0;
         const dialog = page.getByRole("dialog", { name: "Set up a model" });
         const startCheck = async () => {
           await page.goto(await open("chat")); // Routes to Set up a model until one is verified.

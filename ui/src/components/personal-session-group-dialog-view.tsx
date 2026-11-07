@@ -11,7 +11,10 @@ import type {
   PersonalSessionGroupScopeChoices,
 } from "../lib/sessions/personal-groups.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
+import { Checkbox } from "./solid/checkbox.tsx";
+import { IconButton } from "./solid/icon-button.tsx";
 import { Icon } from "./solid/icon.tsx";
+import { Radio } from "./solid/radio.tsx";
 import { Picker } from "./solid/select-picker.tsx";
 import { renderSessionOwnerAvatar } from "./solid/session-presentation.tsx";
 
@@ -80,8 +83,7 @@ function SessionChoice(props: {
 }) {
   return (
     <label class="personal-section-dialog__option">
-      <input
-        type="checkbox"
+      <Checkbox
         checked={props.checked}
         onChange={(event) => props.onToggle(event.currentTarget.checked)}
       />
@@ -287,14 +289,13 @@ export function PersonalSessionGroupDialogView(props: {
                 <div class="personal-section-dialog__list personal-section-dialog__scopes">
                   <For each={scopeOptions(props.options.scopes)}>
                     {(option) => (
-                      <label class="personal-section-dialog__option">
-                        <input
-                          type="radio"
-                          name="personal-section-scope"
-                          value={option[0]}
-                          checked={kind() === option[0]}
-                          onChange={() => setKind(option[0])}
-                        />
+                      <Radio
+                        class="personal-section-dialog__option"
+                        name="personal-section-scope"
+                        value={option[0]}
+                        checked={kind() === option[0]}
+                        onChange={() => setKind(option[0])}
+                      >
                         <span class="personal-section-dialog__label">{t(option[1])}</span>
                         <Show
                           when={option[0] === "project" && kind() === "project"}
@@ -316,7 +317,7 @@ export function PersonalSessionGroupDialogView(props: {
                             />
                           </span>
                         </Show>
-                      </label>
+                      </Radio>
                     )}
                   </For>
                 </div>
@@ -335,16 +336,13 @@ export function PersonalSessionGroupDialogView(props: {
                   <span class="muted">
                     {t("sessionsView.personalGroupSelected", { count: String(selectedCount()) })}
                   </span>
-                  <button
+                  <IconButton
+                    size={28}
+                    icon="search"
+                    label={t("sessionsView.personalGroupSearch")}
                     ref={(element) => (searchToggle = element)}
-                    type="button"
-                    class="btn btn--sm btn--icon btn--ghost"
-                    aria-label={t("sessionsView.personalGroupSearch")}
-                    title={t("sessionsView.personalGroupSearch")}
                     onClick={() => setSearching(true)}
-                  >
-                    <Icon name="search" />
-                  </button>
+                  />
                 </>
               }
             >
@@ -381,15 +379,12 @@ export function PersonalSessionGroupDialogView(props: {
                   run(SEARCH_DELAY_MS);
                 }}
               />
-              <button
-                type="button"
-                class="btn btn--sm btn--icon btn--ghost"
-                aria-label={t("sessionsView.personalGroupSearchClose")}
-                title={t("sessionsView.personalGroupSearchClose")}
+              <IconButton
+                size={28}
+                icon="x"
+                label={t("sessionsView.personalGroupSearchClose")}
                 onClick={closeSearch}
-              >
-                <Icon name="x" />
-              </button>
+              />
             </Show>
           </div>
           <div
