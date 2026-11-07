@@ -87,9 +87,16 @@ export async function buildTemplateAddPlan(params: {
     context.agentId ??
     selectNextTemplateAgentId(params.manifest.agent.id, context.existingAgentIds ?? []);
   const copyNumber = templateAgentCopyNumber(params.manifest.agent.id, finalId);
-  const workspace = canonicalWorkspacePath(
-    context.workspace ?? resolve(resolveRequiredHomeDir(), ".openclaw", `workspace-${finalId}`),
-  );
+  const requestedWorkspace = context.workspace;
+  const workspaceEmpty = requestedWorkspace !== undefined && !requestedWorkspace.trim();
+  const workspace =
+    requestedWorkspace === undefined
+      ? canonicalWorkspacePath(
+          resolve(resolveRequiredHomeDir(), ".openclaw", `workspace-${finalId}`),
+        )
+      : workspaceEmpty
+        ? requestedWorkspace
+        : canonicalWorkspacePath(requestedWorkspace);
   const packageRoot = await realpath(params.source.packageRoot).catch(
     () => params.source.packageRoot,
   );
@@ -165,14 +172,16 @@ export async function buildTemplateAddPlan(params: {
   const workspaceExistsOnDisk = await lstat(workspace)
     .then(() => true)
     .catch(() => false);
-  const workspaceBlocked = configuredWorkspaceConflict || workspaceExistsOnDisk;
-  const workspaceCollisionMessage = configuredWorkspaceConflict
-    ? `Workspace ${JSON.stringify(workspace)} overlaps an existing agent workspace.`
-    : `Workspace ${JSON.stringify(workspace)} already exists.`;
+  const workspaceBlocked = workspaceEmpty || configuredWorkspaceConflict || workspaceExistsOnDisk;
+  const workspaceCollisionMessage = workspaceEmpty
+    ? "Workspace path must not be empty."
+    : configuredWorkspaceConflict
+      ? `Workspace ${JSON.stringify(workspace)} overlaps an existing agent workspace.`
+      : `Workspace ${JSON.stringify(workspace)} already exists.`;
   if (workspaceBlocked) {
     blockers.push(
       blocker(
-        "workspace_collision",
+        workspaceEmpty ? "invalid_workspace" : "workspace_collision",
         "$.workspace",
         `${workspaceCollisionMessage} A Template requires a new workspace.`,
       ),
@@ -203,9 +212,7 @@ export async function buildTemplateAddPlan(params: {
         lifecycle: "native-seed-once",
       },
       blocked: workspaceBlocked,
-      ...(workspaceBlocked
-        ? { reason: `Workspace ${JSON.stringify(workspace)} already exists.` }
-        : {}),
+      ...(workspaceBlocked ? { reason: workspaceCollisionMessage } : {}),
     });
   }
 
@@ -279,7 +286,7 @@ export async function buildTemplateAddPlan(params: {
     }
     action.blocked ||= workspaceBlocked;
     if (workspaceBlocked) {
-      action.reason = `Workspace ${JSON.stringify(workspace)} already exists.`;
+      action.reason = workspaceCollisionMessage;
     }
     actions.push(action);
     if ("blocker" in result) {

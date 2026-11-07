@@ -89,6 +89,16 @@ describe("Template project CLI", () => {
       blockers: [expect.objectContaining({ code: "invalid_agent_id" })],
       actions: expect.arrayContaining([expect.objectContaining({ kind: "agent", blocked: true })]),
     });
+    await expect(runTemplatesDevCommand(root, { ...options, workspace: "" })).rejects.toThrow(
+      "__exit__:1",
+    );
+    expect(devPlan(6)).toMatchObject({
+      agent: { workspace: "" },
+      blockers: [expect.objectContaining({ code: "invalid_workspace" })],
+      actions: expect.arrayContaining([
+        expect.objectContaining({ kind: "workspace", blocked: true }),
+      ]),
+    });
     expect(existsSync(options.workspace)).toBe(false);
   });
 

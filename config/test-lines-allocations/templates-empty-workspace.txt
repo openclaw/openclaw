@@ -1,0 +1,2 @@
+# Explicitly empty --workspace must block dev/Add plans instead of selecting a default.
+24

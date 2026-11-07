@@ -247,8 +247,8 @@ and starts with "What can you do?" after a successful Add.
 unused ID or new path. Ordinary Add does not require a separate plan or
 review token. Exceptional trust warnings can still require explicit consent.
 
-For `add` and `dev`, an explicitly empty `--agent-id` is invalid. Omit the option
-to use the default unused ID.
+For `add` and `dev`, an explicitly empty `--agent-id` or `--workspace` is invalid.
+Omit the option to use the default unused ID or new workspace path.
 
 Gateway Add review responses describe schedules as either `{ cron, timezone }`
 or `{ everyMs }`, where `everyMs` is a positive integer in milliseconds. Delivery

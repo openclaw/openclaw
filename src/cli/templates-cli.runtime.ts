@@ -238,7 +238,7 @@ export async function runTemplatesAddCommand(
         context: {
           config,
           agentId: opts.agentId,
-          ...(opts.workspace ? { workspace: opts.workspace } : {}),
+          workspace: opts.workspace,
           existingAgentIds,
           existingWorkspacePaths: existingAgentIds.map((agentId) =>
             resolveAgentWorkspaceDir(config, agentId),
