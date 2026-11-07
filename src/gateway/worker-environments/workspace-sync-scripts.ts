@@ -545,7 +545,8 @@ async function main() {
   }
   const ignoredPaths = await initializeBuildCacheInputs();
   assertManifestCurrent();
-  if (eligibleOnly && priorManifestDigests.length === 0) {
+  // Prior receipts retain paths in both preparation and results; only the caller selects scope.
+  if (eligibleOnly) {
     for (const relative of await eligiblePaths(ignoredPaths)) addWithParents(relative);
   } else {
     if (requestedBaseCommit) {

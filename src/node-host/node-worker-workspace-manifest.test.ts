@@ -104,6 +104,7 @@ describe("resident node manifest capture", () => {
     const { manifestRef: emptyRef } = manifestFixture();
     const memo = new Map<string, string>();
     const native = await captureManifest({
+      mode: "all",
       workspaceDir,
       manifestHome: home,
       baseCommit: null,
@@ -163,7 +164,14 @@ describe("resident node manifest capture", () => {
       baseCommit,
     });
     const digest = await writeManifest(homeDir, rawManifest);
-    const args = [baseCommit, "eligible", digest];
+    const eligible = await runStandalone([baseCommit, "eligible", digest], homeDir);
+    expect(eligible.code, eligible.stderr).toBe(0);
+    expect(
+      (await readWorkspaceManifest(homeDir, eligible.stdout.trim())).manifest.entries.map(
+        (entry) => entry.path,
+      ),
+    ).toEqual([".gitignore", "keep.ignored", "new.txt"]);
+    const args = [baseCommit, "all", digest];
     const child = await runStandalone(args, homeDir);
     expect(child.code, child.stderr).toBe(0);
     rejectChild();

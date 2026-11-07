@@ -112,7 +112,7 @@ export function createAcceptedWorkspacePublisher(params: {
       }
     };
 
-    // Git-ignored and derived worker scratch paths are intentionally outside the
+    // Excluded build/cache scratch paths are intentionally outside the
     // accepted manifest (for example dependency caches) and remain worker-local.
     // Only accepted manifest members may be mirrored from the gateway.
     const changed = changedPaths(params.remoteManifest, accepted.manifest);

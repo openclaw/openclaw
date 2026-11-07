@@ -123,8 +123,10 @@ checkout-root `dist/` and `.cache/openclaw-bun/`. Other ignored authored files,
 including `.artifacts/` reports and screenshots referenced by saved messages,
 still synchronize: ignore rules alone do not make them disposable. Tracked files,
 explicit `.worktreeinclude` inputs, and exact previously captured paths remain
-eligible. Initial source admission still uses Git eligibility; plain workspaces
-retain their filesystem capture policy.
+eligible. Initial source admission and prepared-project completion verification
+use Git eligibility, even when reusing prior captures. Result reconciliation
+explicitly captures authored workspace contents. Plain workspaces retain their
+filesystem capture policy.
 
 ### Deliver skills to the worker
 
