@@ -1120,6 +1120,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/context-engine-maintenance.ownership.test.ts",
   "src/agents/subagents/registry/subagent-control.retirement.test.ts",
   "src/agents/subagents/registry/subagent-registry-task-replacement.test.ts",
+  "src/agents/subagents/registry/subagent-registry-completion-replay.test.ts",
   "src/agents/subagents/registry/subagent-registry-read.prepared.test.ts",
   "src/agents/subagents/spawn/subagent-spawn.authority.test.ts",
   "src/agents/subagents/spawn/subagent-spawn.requester-incarnation.test.ts",
