@@ -2535,6 +2535,15 @@ select.data-table-pagination__size {
   width: 100%;
 }
 
+.agent-select__menu-title {
+  padding: 4px 8px 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: var(--control-ui-font-weight-semibold);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
 .agent-select__menu.oc-menu {
   width: min(320px, calc(100vw - 24px));
   max-height: 320px;

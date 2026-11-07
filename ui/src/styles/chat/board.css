@@ -219,6 +219,13 @@
   color: var(--accent);
 }
 
+.chat-dashboard-menu__panel .board-widget__menu-heading {
+  padding: 3px 10px 6px;
+  font-size: 12px;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
 .chat-dashboard-menu__sizes {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

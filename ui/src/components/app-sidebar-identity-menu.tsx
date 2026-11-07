@@ -19,15 +19,14 @@ import {
 } from "./sidebar-identity-menu-links.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd, KeyboardShortcut } from "./solid/kbd.tsx";
-import { MenuHeading } from "./solid/menu-heading.tsx";
-import "./solid/viewer-facepile.tsx";
-import "./tooltip.ts";
 import {
   createMenuControls,
   type MenuEntry,
   type MenuItem,
   type MenuItemBindings,
 } from "./solid/menu.tsx";
+import "./solid/viewer-facepile.tsx";
+import "./tooltip.ts";
 
 function ThemeModeToggle(props: {
   mode: ThemeMode;
@@ -196,7 +195,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
   const gatewayTitle: MenuEntry = {
     kind: "content",
     id: "gateway-title",
-    content: <MenuHeading label={t("nav.gateway.sectionLabel")} />,
+    content: <div class="sidebar-customize-menu__title">{t("nav.gateway.sectionLabel")}</div>,
   };
   const profileSeparator = separator("profile-separator");
   const gatewaySeparator = separator("gateway-separator");

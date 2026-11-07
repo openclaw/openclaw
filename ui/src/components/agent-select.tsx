@@ -13,7 +13,6 @@ import { Icon } from "./solid/icon.tsx";
 import { useAvatarGatewayContext } from "./solid/identity-avatar-view.ts";
 import { AgentOptionAvatar } from "./solid/identity-avatar.tsx";
 import "../styles/select-picker.css";
-import { MenuHeading } from "./solid/menu-heading.tsx";
 
 type AgentSelectProps = {
   options: readonly AgentSelectOption[];
@@ -153,7 +152,7 @@ defineSolidBridge<AgentSelectProps>(
       menuClass: "oc-menu agent-select__menu",
       header: (
         <Show when={props.menuLabel}>
-          <MenuHeading label={props.menuLabel} />
+          <div class="agent-select__menu-title">{props.menuLabel}</div>
         </Show>
       ),
       trigger: (attributes: Accessor<JSX.ButtonHTMLAttributes<HTMLButtonElement>>) => (

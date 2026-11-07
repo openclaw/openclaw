@@ -145,6 +145,5 @@ openclaw-app[data-native-titlebar] .shell--embed > .content {
 @media (pointer: coarse) {
   .shell--embed {
     --menu-item-height: 44px;
-    --overlay-control-height: 44px;
   }
 }

@@ -1,5 +1,6 @@
 @import "./session-menu.css";
 
+.context-usage__title,
 .palette-session-settings__title,
 .palette-session-settings__machine {
   color: var(--muted);

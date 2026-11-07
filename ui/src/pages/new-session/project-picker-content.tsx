@@ -14,7 +14,6 @@ import {
 import type { ProjectRecord } from "../../../../packages/gateway-protocol/src/index.js";
 import { HeaderSearch } from "../../components/solid/header-search.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import { MenuHeading } from "../../components/solid/menu-heading.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { isComposingKeyboardEvent, recordCompositionEnd } from "../../lib/ime.ts";
@@ -402,10 +401,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
             ) : undefined}
             {!view().cloneInput && view().query.length >= 2 && view().projectSearchAvailable ? (
               <>
-                <MenuHeading
-                  class="new-session-page__menu-title"
-                  label={t("newSession.githubProjects")}
-                />
+                <div class="new-session-page__menu-title">{t("newSession.githubProjects")}</div>
                 <Errored
                   fallback={(error) => (
                     <div class="new-session-page__project-error" role="alert">
@@ -470,10 +466,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
             ) : undefined}
             {props.state.recents.length > 0 ? (
               <>
-                <MenuHeading
-                  class="new-session-page__menu-title"
-                  label={t("newSession.recentFolders")}
-                />
+                <div class="new-session-page__menu-title">{t("newSession.recentFolders")}</div>
                 <For
                   each={view().recentItems}
                   keyed={(recent) =>

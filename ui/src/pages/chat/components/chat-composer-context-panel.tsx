@@ -4,7 +4,6 @@ import { Errored, Loading, Repeat, Show, createMemo, lazy } from "solid-js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../../../src/shared/transcript-only-openclaw-assistant.js";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { MenuHeading } from "../../../components/solid/menu-heading.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
 import { formatCompactTokenCount, formatCost } from "../../../lib/format.ts";
 import type { ProviderQuotaGroup } from "../../../lib/provider-quota-summary.ts";
@@ -162,21 +161,20 @@ export function ChatComposerContextPanel(
       <Show when={props.model}>
         {(context) => (
           <>
-            <MenuHeading
-              class="context-usage__header"
-              label={t(
-                context().fromLastPrompt
-                  ? "chat.composer.contextUsage.promptBudget"
-                  : "chat.composer.contextUsage.contextWindow",
-              )}
-              trailing={
-                /* Translation replaces the text anchors used by live token updates. */
-                <strong class="oc-menu-heading__value context-usage__context-value" translate="no">
-                  {context().detail} · {context().approximate ? "~" : ""}
-                  {context().pct}%
-                </strong>
-              }
-            />
+            <div class="context-usage__header">
+              <span class="context-usage__title">
+                {t(
+                  context().fromLastPrompt
+                    ? "chat.composer.contextUsage.promptBudget"
+                    : "chat.composer.contextUsage.contextWindow",
+                )}
+              </span>
+              {/* Translation replaces the text anchors used by live token updates. */}
+              <strong class="context-usage__context-value" translate="no">
+                {context().detail} · {context().approximate ? "~" : ""}
+                {context().pct}%
+              </strong>
+            </div>
             <Show when={props.gateway && props.session}>
               <Loading fallback={<ContextPopoverSkeleton />}>
                 <ChatContextBreakdown

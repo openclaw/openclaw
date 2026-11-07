@@ -1,6 +1,5 @@
 import { For, createMemo, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { MenuHeading } from "../../../components/solid/menu-heading.tsx";
 import type { ChatFastModeSelectValue } from "../../../lib/chat/model-select-state.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -310,38 +309,36 @@ export function ChatEffortPickerPanel(props: ChatEffortPickerPanelProps) {
       {props.accessProgram && <ChatAccessProgramControl {...props.accessProgram} />}
       {view().showReasoning && (
         <div class="chat-controls__reasoning-panel">
-          <MenuHeading
-            label={t("chat.modelControls.effort")}
-            trailing={
+          <div class="chat-controls__reasoning-head">
+            <span class="chat-controls__effort-heading">{t("chat.modelControls.effort")}</span>
+            <span
+              ref={(element) => (valueLabel = element)}
+              class="chat-controls__effort-value"
+              data-inherited={!view().hasThinkingOverride ? "true" : "false"}
+              aria-hidden="true"
+            >
               <span
-                ref={(element) => (valueLabel = element)}
-                class="oc-menu-heading__value chat-controls__effort-value"
-                data-inherited={!view().hasThinkingOverride ? "true" : "false"}
-                aria-hidden="true"
+                ref={(element) => (committedLabel = element)}
+                data-chat-thinking-preview-committed
               >
-                <span
-                  ref={(element) => (committedLabel = element)}
-                  data-chat-thinking-preview-committed
-                >
-                  {view().reasoningValueText}
-                </span>
-                <For each={view().sliderStops} keyed={(stop) => stop.value}>
-                  {(stop, index) => (
-                    <span
-                      ref={elementRef<HTMLSpanElement>((element) => {
-                        previewLabels.add(element);
-                        return () => previewLabels.delete(element);
-                      })}
-                      data-chat-thinking-preview-index={index()}
-                      hidden
-                    >
-                      {formatEffortLabel(stop().label)}
-                    </span>
-                  )}
-                </For>
+                {view().reasoningValueText}
               </span>
-            }
-          />
+              <For each={view().sliderStops} keyed={(stop) => stop.value}>
+                {(stop, index) => (
+                  <span
+                    ref={elementRef<HTMLSpanElement>((element) => {
+                      previewLabels.add(element);
+                      return () => previewLabels.delete(element);
+                    })}
+                    data-chat-thinking-preview-index={index()}
+                    hidden
+                  >
+                    {formatEffortLabel(stop().label)}
+                  </span>
+                )}
+              </For>
+            </span>
+          </div>
           {view().sliderStops.length > 1 ? (
             <div
               ref={elementRef<HTMLDivElement>((element) => {
@@ -502,7 +499,7 @@ export function ChatEffortPickerPanel(props: ChatEffortPickerPanelProps) {
       )}
       {props.fastMode.supported && (
         <div class="chat-controls__speed-panel chat-controls__speed-panel--inline">
-          <span class="chat-controls__effort-row-label">{t("chat.modelControls.speed")}</span>
+          <span class="chat-controls__effort-heading">{t("chat.modelControls.speed")}</span>
           <ChatPreferenceSegments
             kind="speed"
             label={t("chat.modelControls.speed")}

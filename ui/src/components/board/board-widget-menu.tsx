@@ -2,7 +2,6 @@ import { createMemo, createUniqueId } from "solid-js";
 import type { BoardTab, BoardWidget } from "../../lib/board/types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { Icon } from "../solid/icon.tsx";
-import { MenuHeading } from "../solid/menu-heading.tsx";
 import { Menu, type MenuEntry, type MenuHandle } from "../solid/menu.tsx";
 import { BOARD_SIZE_PRESETS } from "./board-widget-cell-options.ts";
 
@@ -16,7 +15,7 @@ export function boardWidgetMenuEntries(params: {
     {
       kind: "content",
       id: "move-heading",
-      content: <MenuHeading label={t("board.widget.moveToTab")} />,
+      content: <div class="board-widget__menu-heading">{t("board.widget.moveToTab")}</div>,
     },
     ...tabs.map((tab) => ({
       id: `move:${tab.tabId}`,
@@ -35,7 +34,7 @@ export function boardWidgetMenuEntries(params: {
     {
       kind: "content",
       id: "resize-heading",
-      content: <MenuHeading label={t("board.widget.resize")} />,
+      content: <div class="board-widget__menu-heading">{t("board.widget.resize")}</div>,
     },
     ...Object.entries(BOARD_SIZE_PRESETS).map(([label, size]) => ({
       id: `resize:${label}`,

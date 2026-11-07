@@ -12,7 +12,6 @@ import { resolveCloudProfileIconData } from "../../components/cloud-profile-icon
 import { CloudProfileIcon } from "../../components/solid/cloud-profile-icon.tsx";
 import { HeaderSearch } from "../../components/solid/header-search.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import { MenuHeading } from "../../components/solid/menu-heading.tsx";
 import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { prettifyPlatform } from "../../lib/platform-label.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -57,28 +56,25 @@ function EnvironmentHeading(props: {
   onAction: (() => void) | undefined;
 }) {
   return (
-    <MenuHeading
-      class="new-session-page__environment-heading"
-      label={props.label}
-      trailing={
-        <Show when={props.onAction}>
-          <button
-            type="button"
-            class="new-session-page__connect-device"
-            data-action={props.action}
-            aria-label={t(
-              props.action === "connect-machine"
-                ? "newSession.connectMachine"
-                : "newSession.manageCloudWorkers",
-            )}
-            disabled={props.disabled}
-            ref={nativeListener("click", () => props.onAction?.())}
-          >
-            <ConnectDeviceIcon />
-          </button>
-        </Show>
-      }
-    />
+    <div class="new-session-page__environment-heading new-session-page__devices-heading">
+      <span>{props.label}</span>
+      <Show when={props.onAction}>
+        <button
+          type="button"
+          class="new-session-page__connect-device"
+          data-action={props.action}
+          aria-label={t(
+            props.action === "connect-machine"
+              ? "newSession.connectMachine"
+              : "newSession.manageCloudWorkers",
+          )}
+          disabled={props.disabled}
+          ref={nativeListener("click", () => props.onAction?.())}
+        >
+          <ConnectDeviceIcon />
+        </button>
+      </Show>
+    </div>
   );
 }
 
@@ -352,10 +348,9 @@ export function WherePickerContent(
             {cloudProfilesRead()}
           </Loading>
           {view().hosted.length || view().showHostedSetup ? (
-            <MenuHeading
-              class="new-session-page__environment-heading"
-              label={t("newSession.hosted")}
-            />
+            <div class="new-session-page__environment-heading">
+              <span>{t("newSession.hosted")}</span>
+            </div>
           ) : undefined}
           {
             <For each={view().hosted} keyed={(entry) => entry.id}>

@@ -8,7 +8,6 @@ import {
 import { CloudProfileIcon } from "../../components/solid/cloud-profile-icon.tsx";
 import { Icon, type IconName } from "../../components/solid/icon.tsx";
 import "../../components/tooltip.ts";
-import { MenuHeading } from "../../components/solid/menu-heading.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { machineShapeText, type CloudChoiceMenuItemsOptions } from "./cloud-target.ts";
@@ -417,7 +416,7 @@ function CloudConfiguration(props: {
           <>
             {group().choices.length ? (
               <>
-                <MenuHeading class="new-session-page__environment-heading" label={group().label} />
+                <div class="new-session-page__environment-heading">{group().label}</div>
                 <div
                   class="new-session-page__cloud-choice-list"
                   role="group"

@@ -1,7 +1,6 @@
 import { createMemo, createUniqueId, onSettled } from "solid-js";
 import type { SessionPermissionMode } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { MenuHeading } from "../../../components/solid/menu-heading.tsx";
 import { Menu, type MenuHandle, type MenuItem } from "../../../components/solid/menu.tsx";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../../lib/external-link.ts";
@@ -103,7 +102,7 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
         label: t("common.learnMore"),
         href: PERMISSION_MODES_DOCS_URL,
         attributes: { target: EXTERNAL_LINK_TARGET, rel: buildExternalLinkRel() },
-        class: "oc-menu-heading__action chat-controls__permission-learn-more learn-more-link",
+        class: "chat-controls__permission-learn-more learn-more-link",
       },
       ...PERMISSION_OPTIONS.map((mode, index): MenuItem => {
         const value = mode ?? DEFAULT_PERMISSION_VALUE;
@@ -246,7 +245,9 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
         </>
       }
     >
-      <MenuHeading label={t("chat.permissionControls.label")} />
+      <div class="chat-controls__popover-title chat-controls__permission-heading">
+        {t("chat.permissionControls.label")}
+      </div>
     </Menu>
   );
 }

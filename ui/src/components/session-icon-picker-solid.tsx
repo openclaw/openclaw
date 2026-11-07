@@ -16,7 +16,6 @@ import {
 import { SessionIconGraphic } from "./session-icon-glyph-solid.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd, ShortcutText } from "./solid/kbd.tsx";
-import { MenuHeading } from "./solid/menu-heading.tsx";
 
 registerSessionMenuEnglish();
 
@@ -133,10 +132,7 @@ export function AppearancePicker(props: AppearancePickerProps) {
           <span>{props.sessionLabel}</span>
         </div>
       )}
-      <MenuHeading
-        class="session-menu__icon-section-label"
-        label={t("sessionsView.setColorMenu")}
-      />
+      <div class="session-menu__icon-section-label">{t("sessionsView.setColorMenu")}</div>
       <div class="session-menu__colors" role="group" aria-label={t("sessionsView.setColorMenu")}>
         <For each={props.clearable === false ? SESSION_COLOR_IDS : [null, ...SESSION_COLOR_IDS]}>
           {(color) => {
@@ -202,10 +198,7 @@ export function AppearancePicker(props: AppearancePickerProps) {
             ),
           )}
         >
-          <MenuHeading
-            class="session-menu__icon-section-label"
-            label={t("sessionsView.iconEmojiSection")}
-          />
+          <div class="session-menu__icon-section-label">{t("sessionsView.iconEmojiSection")}</div>
           {/* Emoji and glyph share one icon slot; both sections lead with the same clear
               choice, but only the first one is a tab stop. */}
           <div class="session-menu__icon-grid">
@@ -231,10 +224,7 @@ export function AppearancePicker(props: AppearancePickerProps) {
               <Icon name="moreHorizontal" />
             </button>
           </div>
-          <MenuHeading
-            class="session-menu__icon-section-label"
-            label={t("sessionsView.iconGlyphSection")}
-          />
+          <div class="session-menu__icon-section-label">{t("sessionsView.iconGlyphSection")}</div>
           <div class="session-menu__icon-grid">
             {props.clearable !== false ? choice(null, true, "glyph:none") : undefined}
             <For each={SESSION_ICON_GLYPH_IDS}>{(icon) => choice(icon, true)}</For>

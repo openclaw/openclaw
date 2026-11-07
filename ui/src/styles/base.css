@@ -336,7 +336,7 @@
   --overlay-modal-surface: var(--popover);
   --overlay-modal-padding: 20px;
   --overlay-modal-title-size: var(--control-ui-text-md);
-  --overlay-modal-close-size: var(--overlay-control-height);
+  --overlay-modal-close-size: var(--menu-item-height);
   --overlay-modal-shadow: var(--menu-shadow);
 
   /* Spacing scale. Settings surfaces use these (see
@@ -408,10 +408,7 @@
   --menu-radius: var(--radius-menu);
   --menu-radius-large: 22px;
   --menu-item-radius: var(--radius-menu-item);
-  /* Desktop option rows; avatar rows step to 36, touch rows to 40. */
   --menu-item-height: 28px;
-  /* Dialog close buttons, dialog titles and other small controls; not menu rows. */
-  --overlay-control-height: 28px;
   --menu-padding: 4px;
   --menu-item-gap: 2px;
   --menu-selected: var(--surface-selected);
@@ -497,18 +494,16 @@
   color-scheme: dark;
 }
 
-/* Touch menu rows match the 36px avatar rows, phones included. */
+/* Touch menu rows sit one step above the 38px touch controls; phones keep their taller rows. */
 @media (pointer: coarse) {
   :root {
-    --menu-item-height: 36px;
-    --overlay-control-height: 40px;
+    --menu-item-height: 40px;
   }
 }
 
-/* Phone dialog controls keep their taller touch size. */
 @media (pointer: coarse) and (max-width: 640px) {
   :root {
-    --overlay-control-height: 44px;
+    --menu-item-height: 44px;
   }
 }
 

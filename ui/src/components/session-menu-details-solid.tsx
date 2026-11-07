@@ -12,7 +12,6 @@ import type {
 } from "./session-menu-actions.ts";
 import { HeaderSearch } from "./solid/header-search.tsx";
 import { Icon } from "./solid/icon.tsx";
-import { MenuHeading } from "./solid/menu-heading.tsx";
 import type { MenuControls, MenuEntry } from "./solid/menu.tsx";
 import { SessionOwnerAvatar } from "./solid/session-owner-chip.tsx";
 
@@ -164,11 +163,7 @@ export function useSessionMenuDetails(
   const reason = () => readState().actionDisabledReasons["set-communication"];
   const communicationControls = (
     <div class="session-menu__communication">
-      <MenuHeading
-        as="h3"
-        class="session-menu__communication-heading"
-        label={t("sessionsView.communication.title")}
-      />
+      <h3 class="session-menu__communication-heading">{t("sessionsView.communication.title")}</h3>
       <For each={["send", "receive"] as const}>
         {(direction) => {
           const label = () =>

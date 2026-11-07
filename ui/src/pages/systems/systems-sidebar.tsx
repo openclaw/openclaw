@@ -1,6 +1,5 @@
 import { Errored, For, Loading, Show, createMemo, createUniqueId, latest } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
-import { MenuHeading } from "../../components/solid/menu-heading.tsx";
 import { Menu, type MenuEntry, type MenuItem } from "../../components/solid/menu.tsx";
 import { registerSystemsEnglish } from "../../i18n/locales/en-systems.ts";
 import { prettifyPlatform } from "../../lib/platform-label.ts";
@@ -9,8 +8,8 @@ import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import type { SystemsInventoryRow } from "./systems-data.ts";
 import { createSystemsRead } from "./systems-read.ts";
-import "../../styles/systems.css";
 import type { Systems, SystemsSortMode, SystemsStatusFilter } from "./systems-state.ts";
+import "../../styles/systems.css";
 
 registerEnglishCatalog(registerSystemsEnglish);
 
@@ -170,7 +169,7 @@ function SystemsInventory(props: { controller: Systems }) {
     {
       kind: "content",
       id: "sort-heading",
-      content: <MenuHeading label={t("systems.sortBy")} />,
+      content: <div class="sidebar-session-sort-menu__title">{t("systems.sortBy")}</div>,
     },
     ...sortOptions.map((option) =>
       filterItem("sort", option, controller().state.sortMode === option.value),
@@ -181,7 +180,7 @@ function SystemsInventory(props: { controller: Systems }) {
       content: (
         <>
           <div class="session-menu__separator" role="separator" />
-          <MenuHeading label={t("systems.status")} />
+          <div class="sidebar-session-sort-menu__title">{t("systems.status")}</div>
         </>
       ),
     },
