@@ -41,10 +41,10 @@ The measured journey includes the driver gaps between gestures; it is not
 single-wheel latency. Mobile retains the programmatic scrollport jump because
 Playwright's mobile WebKit driver does not support wheel input.
 
-For transcript geometry attribution, add `--transcript-layout-audit --engines chromium`
-to a separate run. This records a bounded JPEG filmstrip, native scroll offsets,
+For transcript geometry attribution, add `--transcript-layout-audit`
+to a separate run. This records native scroll writes and offsets,
 retained-row coordinates, streaming block coordinates, and mutation ancestry beside
-each observation. The capture adds layout reads and is not timing evidence. Its
+each observation, plus a bounded JPEG filmstrip in Chromium. The capture adds layout reads and is not timing evidence. Its
 timestamps let you distinguish ordinary wheel movement, same-frame compensation,
 and a residual jump in content already on screen. Layout-shift sources retain their
 row identity at observer delivery, before virtualization can remove them.

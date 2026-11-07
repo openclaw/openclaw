@@ -14,6 +14,7 @@ function observeTranscriptLayout() {
   const frames: unknown[] = [];
   const mutations: unknown[] = [];
   const input: unknown[] = [];
+  const scrollWrites: unknown[] = [];
   const ids = new WeakMap<Node, number>();
   let nextId = 0;
   let droppedFrames = 0;
@@ -23,6 +24,24 @@ function observeTranscriptLayout() {
   let previousRows = new Map<number, number>();
   let stopped = false;
   let frame = 0;
+  const scrollToDescriptor = Object.getOwnPropertyDescriptor(thread, "scrollTo");
+  const nativeScrollTo = thread.scrollTo.bind(thread);
+  thread.scrollTo = (options: ScrollToOptions | number = {}, y?: number) => {
+    const before = thread.scrollTop;
+    if (typeof options === "number") {
+      nativeScrollTo(options, y ?? 0);
+    } else {
+      nativeScrollTo(options);
+    }
+    if (scrollWrites.length < 6_000) {
+      scrollWrites.push({
+        at: performance.now(),
+        before,
+        requested: typeof options === "number" ? y : options.top,
+        after: thread.scrollTop,
+      });
+    }
+  };
   const id = (node: Node) => {
     let value = ids.get(node);
     if (value === undefined) {
@@ -100,7 +119,10 @@ function observeTranscriptLayout() {
       input.push({
         at: performance.now(),
         type: event.type,
+        trusted: event.isTrusted,
+        scrollTop: thread.scrollTop,
         deltaY: event instanceof WheelEvent ? event.deltaY : undefined,
+        deltaMode: event instanceof WheelEvent ? event.deltaMode : undefined,
       });
     }
   };
@@ -173,11 +195,17 @@ function observeTranscriptLayout() {
       observer.disconnect();
       scope.removeEventListener("wheel", onInput, true);
       scope.removeEventListener("input", onInput, true);
+      if (scrollToDescriptor) {
+        Object.defineProperty(thread, "scrollTo", scrollToDescriptor);
+      } else {
+        Reflect.deleteProperty(thread, "scrollTo");
+      }
       return {
         timeOrigin: performance.timeOrigin,
         frames,
         mutations,
         input,
+        scrollWrites,
         droppedFrames,
         droppedMutations,
       };
@@ -185,14 +213,21 @@ function observeTranscriptLayout() {
   };
 }
 
-export async function startTranscriptLayoutAudit(page: Page, directory: string, prefix: string) {
+export async function startTranscriptLayoutAudit(
+  page: Page,
+  directory: string,
+  prefix: string,
+  engine: string,
+) {
   const frameDirectory = path.join(directory, `${prefix}.transcript-frames`);
-  await mkdir(frameDirectory, { recursive: true });
-  const session = await page.context().newCDPSession(page);
+  const session = engine === "chromium" ? await page.context().newCDPSession(page) : undefined;
+  if (session) {
+    await mkdir(frameDirectory, { recursive: true });
+  }
   const observation = await page
     .evaluateHandle(observeTranscriptLayout)
     .catch(async (error: unknown) => {
-      await session.detach();
+      await session?.detach();
       throw error;
     });
   const images: unknown[] = [];
@@ -200,7 +235,7 @@ export async function startTranscriptLayoutAudit(page: Page, directory: string, 
   const errors: string[] = [];
   let imageBytes = 0;
   let droppedImages = 0;
-  session.on("Page.screencastFrame", (event) => {
+  session?.on("Page.screencastFrame", (event) => {
     void session
       .send("Page.screencastFrameAck", { sessionId: event.sessionId })
       .catch((error: unknown) => {
@@ -223,7 +258,7 @@ export async function startTranscriptLayoutAudit(page: Page, directory: string, 
     );
   });
   try {
-    await session.send("Page.startScreencast", {
+    await session?.send("Page.startScreencast", {
       format: "jpeg",
       quality: 65,
       maxWidth: 1440,
@@ -233,14 +268,14 @@ export async function startTranscriptLayoutAudit(page: Page, directory: string, 
   } catch (error) {
     await observation.evaluate((audit) => audit.finish());
     await observation.dispose();
-    await session.detach();
+    await session?.detach();
     throw error;
   }
   return {
     async finish() {
       try {
         const geometry = await observation.evaluate((audit) => audit.finish());
-        await session.send("Page.stopScreencast");
+        await session?.send("Page.stopScreencast");
         await Promise.all(writes);
         await writeFile(
           path.join(directory, `${prefix}.transcript-layout.json`),
@@ -253,6 +288,7 @@ export async function startTranscriptLayoutAudit(page: Page, directory: string, 
               errors,
               notes: [
                 "Diagnostic DOM reads and compositor capture add overhead; these results are not timing proof.",
+                "Compositor frames are available only in Chromium; other engines record DOM geometry and native scroll writes.",
                 "Geometry at is performance.now(); screencast timestamp is seconds since Unix epoch. Compare timestamp * 1000 - timeOrigin, allowing compositor pipeline delay.",
                 "screenDeltaY is visible same-node movement; layoutDeltaY removes native scroll and viewport movement. Compensation can keep screenDeltaY zero while layoutDeltaY changes.",
                 "Mutation ancestry contains identities and text lengths, never message text. Removed nodes may already lack parents at observer delivery.",
@@ -264,7 +300,7 @@ export async function startTranscriptLayoutAudit(page: Page, directory: string, 
         );
       } finally {
         await observation.dispose();
-        await session.detach();
+        await session?.detach();
       }
     },
   };

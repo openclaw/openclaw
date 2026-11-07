@@ -1,5 +1,4 @@
 import type { Virtualizer, VirtualItem } from "@tanstack/virtual-core";
-import { isIosBrowserPlatform } from "../../../lib/browser-platform.ts";
 import { maxTranscriptScrollOffset } from "./chat-transcript-geometry.ts";
 import type { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import type { ChatTranscriptRenderer } from "./chat-transcript-layout-solid.tsx";
@@ -34,10 +33,9 @@ function isAboveReader(top: number, height: number, first: boolean, readerTop: n
  * painted each correction as a jump. This owner compensates during resize delivery with native
  * geometry only, then reconciles virtual sizes when virtual-core lands them.
  *
- * iOS WebKit cancels touch and momentum scrolling on a scrollTop write, so while it scrolls
- * the correction moves the row column instead (a negative margin, mirrored in scrollMargin)
- * and folds into scrollTop once scrolling settles. Accepted edge: a reader who reaches the top
- * during that gesture sees the column's first rows clipped until the gesture settles.
+ * WebKit can cancel native wheel, touch and momentum scrolling on a scrollTop write, so during
+ * scrolling the correction moves the row column instead (a negative margin, mirrored in
+ * scrollMargin). It folds into scrollTop at the start boundary or once scrolling settles.
  */
 export class TranscriptReaderAnchor {
   focusedRowKey: string | null = null;
@@ -105,12 +103,9 @@ export class TranscriptReaderAnchor {
     this.observer?.unobserve(row);
   }
 
-  /** Native writes would stop an iOS gesture; hold the correction in the column until it ends. */
+  /** Native writes can stop a gesture; hold the correction in the column until it ends. */
   private holdsNativeOffset(): boolean {
-    return (
-      isIosBrowserPlatform() &&
-      (this.host.virtualizer.isScrolling || this.host.offsetState.touchActive)
-    );
+    return this.host.virtualizer.isScrolling || this.host.offsetState.touchActive;
   }
 
   private readonly resized = (entries: ResizeObserverEntry[]): void => {
@@ -285,11 +280,16 @@ export class TranscriptReaderAnchor {
   /** Fold a held column shift into scrollTop once native scrolling can be written again. */
   settle(force = false): void {
     const shift = this.columnShift;
-    if (!shift || (!force && this.holdsNativeOffset())) {
+    if (!shift) {
       return;
     }
     const element = this.host.scrollElement;
     const offset = element?.scrollTop ?? 0;
+    // A held negative shift cannot be reached by native scrolling past zero.
+    const reachesStart = shift < 0 && offset + shift <= 0;
+    if (!force && this.holdsNativeOffset() && !reachesStart) {
+      return;
+    }
     // A write during elastic overscroll snaps back and drops the correction; retry in range.
     if (!force && element && (offset < 0 || offset > (maxTranscriptScrollOffset(element) ?? 0))) {
       return;

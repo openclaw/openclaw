@@ -240,15 +240,14 @@ if (values.trace && values["cpu-only"]) {
 }
 if (
   values["transcript-layout-audit"] &&
-  (engines.some((engine) => engine !== "chromium") ||
-    values.trace ||
+  (values.trace ||
     values["cpu-only"] ||
     values["cpu-profile"] ||
     values["native-audit"] ||
     values.allocations ||
     values["mutation-audit"])
 ) {
-  throw new Error("--transcript-layout-audit requires Chromium and a separate diagnostic run");
+  throw new Error("--transcript-layout-audit requires a separate diagnostic run");
 }
 if (
   values["mutation-audit"] &&
@@ -1078,6 +1077,7 @@ try {
                   page,
                   artifactDir,
                   artifactPrefix,
+                  engine,
                 );
               }
               observation.evidence =
