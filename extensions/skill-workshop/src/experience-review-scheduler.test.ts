@@ -1,12 +1,15 @@
 import { setImmediate } from "node:timers/promises";
+import { SessionTranscriptReadFenceError } from "openclaw/plugin-sdk/context-engine-transcript-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   createSkillExperienceReviewScheduler,
   type ExperienceReviewCandidate,
   type SkillExperienceReviewParams,
 } from "./experience-review-scheduler.js";
+import { setWorkshopRuntime } from "./runtime.js";
 
-// Without register(api) the plugin logger is silent, so scheduler failures stay out of log sinks.
+const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 const workshopPluginConfig = (settings: Record<string, unknown>) => ({
   plugins: { entries: { "skill-workshop": { config: settings } } },
 });
@@ -21,6 +24,7 @@ let scheduler: ReturnType<typeof createSkillExperienceReviewScheduler>;
 let now: number;
 beforeEach(() => {
   vi.resetAllMocks();
+  setWorkshopRuntime(createPluginRuntimeMock({ logging: { getChildLogger: () => log } }));
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   now = 1_000;
   vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -94,6 +98,32 @@ it("defers queued reviews when a foreground turn hits the shared rate limit", as
   now += 15 * 60_000;
   await fireTimers(1);
 });
+
+it.each([
+  [new SessionTranscriptReadFenceError("Session transcript changed during context read"), "debug"],
+  [new Error("provider request failed"), "warn"],
+] as const)(
+  "correlates rejected review evidence without exposing source values (%s)",
+  async (error, level) => {
+    runReview.mockRejectedValue(error);
+    turn(10);
+    log.debug.mockClear();
+    await fireTimers(1);
+    expect(log[level]).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining(
+        `skill experience review ${level === "debug" ? "cancelled" : "failed"}:`,
+      ),
+    );
+    const message = log[level].mock.calls[0]?.[0];
+    expect(message).toContain(
+      "source=08704289cffb1011742d56f052672a0fb6a3bc81c7e26ecabfa82c54d2e8fc2d",
+    );
+    expect(message).not.toContain(source.sessionKey);
+    expect(message).not.toContain(source.sessionId);
+    expect(message).not.toContain(source.entryId);
+    expect(log[level === "debug" ? "warn" : "debug"]).not.toHaveBeenCalled();
+  },
+);
 
 it.each(["reported", "messages", "interrupted"])("accumulates %s iterations", async (kind) => {
   const usedSkills = [{ name: "deploy", source: "workspace", activation: "read" }] as const;

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { SessionTranscriptReadFenceError } from "openclaw/plugin-sdk/context-engine-transcript-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/routing";
 import { listWorkshopChanges } from "openclaw/plugin-sdk/skill-workshop-host-runtime";
@@ -109,6 +110,10 @@ export async function runSkillExperienceReview(
         if (!outcome.ok) {
           if (learningOff.signal.aborted) {
             throw learningOff.signal.reason;
+          }
+          // Keep the host's bounded mismatch diagnostic through the plugin's settlement.
+          if (outcome.error instanceof SessionTranscriptReadFenceError) {
+            throw outcome.error;
           }
           if (outcome.cancelled || options.abortSignal?.aborted) {
             // The model aborts with a plain error; normalize the outcome so the scheduler reports

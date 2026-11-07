@@ -10,7 +10,7 @@ import {
 } from "./session-transcript-read-fence.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
 import {
-  sameTranscriptEntryAnchor,
+  transcriptEntryAnchorMismatch,
   type TranscriptEntryAnchor,
 } from "./transcript-entry-anchor.js";
 
@@ -131,8 +131,11 @@ export function readSessionActorTranscriptAnchors(
     if (!retainedAnchor && !complete) {
       return undefined;
     }
-    if (!sameTranscriptEntryAnchor(through, retainedAnchor)) {
-      throw new SessionTranscriptReadFenceError("Completed-turn transcript anchor changed");
+    const mismatch = transcriptEntryAnchorMismatch(through, retainedAnchor);
+    if (mismatch) {
+      throw new SessionTranscriptReadFenceError(
+        `Completed-turn transcript anchor changed (${mismatch})`,
+      );
     }
   } else if (context && !context.admission) {
     const version = hot.transcript.version;
