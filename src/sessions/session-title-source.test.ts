@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { isControlCommandMessage } from "../auto-reply/command-detection.js";
 import type { SkillCommandSpec } from "../skills/types.js";
 import { resolveSessionTitleSource } from "./session-title-source.js";
 
@@ -12,7 +13,9 @@ describe("resolveSessionTitleSource with the skill registry", () => {
     ["/Users/me/notes/handover.md", "Users/me/notes/handover.md"],
     ["/explain how DNS resolution works", "explain how DNS resolution works"],
   ])("keeps unregistered slash text %j eligible for titles", (message, expected) => {
-    expect(resolveSessionTitleSource(message, [])).toBe(expected);
+    expect(
+      resolveSessionTitleSource(message, [], { isControlCommand: isControlCommandMessage }),
+    ).toBe(expected);
   });
 
   it.each([
@@ -25,17 +28,25 @@ describe("resolveSessionTitleSource with the skill registry", () => {
     ["/"],
     ["//"],
   ])("keeps control or empty slash text %j titleless", (message) => {
-    expect(resolveSessionTitleSource(message, [])).toBeNull();
+    expect(
+      resolveSessionTitleSource(message, [], { isControlCommand: isControlCommandMessage }),
+    ).toBeNull();
   });
 
   it("uses registered skill arguments as the title source", () => {
     expect(
-      resolveSessionTitleSource("/code-review https://example.com/pull/123", skillCommands),
+      resolveSessionTitleSource("/code-review https://example.com/pull/123", skillCommands, {
+        isControlCommand: isControlCommandMessage,
+      }),
     ).toBe("https://example.com/pull/123");
   });
 
   it("keeps a bare registered skill command titleless", () => {
-    expect(resolveSessionTitleSource("/code-review", skillCommands)).toBeNull();
+    expect(
+      resolveSessionTitleSource("/code-review", skillCommands, {
+        isControlCommand: isControlCommandMessage,
+      }),
+    ).toBeNull();
   });
 });
 

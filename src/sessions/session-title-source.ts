@@ -1,5 +1,4 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { isControlCommandMessage } from "../auto-reply/command-detection.js";
 import { INTERNAL_WAKE_TRANSCRIPT_PROMPTS } from "../auto-reply/heartbeat.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { resolveSkillCommandInvocation } from "../skills/discovery/chat-command-invocation.js";
@@ -12,10 +11,17 @@ export function needsSkillCommandsForSessionTitle(message: string): boolean {
   return stripInboundMetadata(message).trim().startsWith("/");
 }
 
-/** Select task text, not chat controls or internal wakes, using dispatch's skill metadata. */
+/**
+ * Select task text, not chat controls or internal wakes, using dispatch's
+ * skill metadata. Callers that run with the full runtime pass the canonical
+ * control-command detector (`isControlCommandMessage`) so control commands
+ * stay titleless; callers without it keep the legacy titleless contract for
+ * slash text, which keeps this module loadable in extracted wrapper contexts.
+ */
 export function resolveSessionTitleSource(
   message: string,
   skillCommands?: SkillCommandSpec[],
+  options?: { isControlCommand?: (text: string) => boolean },
 ): string | null {
   const text = stripInboundMetadata(message).trim();
   let source = text;
@@ -28,18 +34,15 @@ export function resolveSessionTitleSource(
       // Registered skill command: its arguments carry the task text; a bare
       // command has no title source.
       source = invocation.args?.trim() ?? "";
-    } else if (isControlCommandMessage(text)) {
-      // Canonical control commands (/new, /reset, /status, /model, ...) never
-      // feed titles.
+    } else if (!options?.isControlCommand || options.isControlCommand(text)) {
+      // Without the canonical control detector, or for an actual control
+      // command, slash text has no title source.
       source = "";
-    } else if (skillCommands !== undefined) {
-      // A registry was consulted: unregistered slash text (pasted paths,
-      // free-form commands) is task text.
-      source = text.replace(/^\/+/, "").trim();
     } else {
-      // No registry available (deterministic goal derivation, Doctor repair):
-      // preserve the legacy titleless contract for slash text.
-      source = "";
+      // The detector ruled out a control command and a registry was
+      // consulted: unregistered slash text (pasted paths, free-form commands)
+      // is task text.
+      source = text.replace(/^\/+/, "").trim();
     }
   }
   if (

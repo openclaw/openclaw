@@ -1,0 +1,3 @@
+# Session title-source regressions for slash-prefixed first messages (paths,
+# free-form commands, canonical control commands, registered skill arguments,
+# and the metadata-free legacy contract) plus the gateway inference boundary.

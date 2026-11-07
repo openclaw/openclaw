@@ -10,6 +10,7 @@ import { createCrustaceanSlug } from "../agents/session-slug.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { withWorktreeSourceWait } from "../agents/worktrees/allocation.js";
 import type { WorktreeSourceStage, WorktreeWaitBudget } from "../agents/worktrees/types.js";
+import { isControlCommandMessage } from "../auto-reply/command-detection.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -27,6 +28,8 @@ import {
   needsSkillCommandsForSessionTitle,
   resolveSessionTitleSource,
 } from "../sessions/session-title-source.js";
+
+const TITLE_SOURCE_CONTROL_OPTIONS = { isControlCommand: isControlCommandMessage } as const;
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import type { SkillCommandSpec } from "../skills/types.js";
@@ -389,6 +392,7 @@ export async function prepareDashboardSessionTitle(params: {
             agentId: params.agentId,
             assertCurrent: params.assertCurrent,
           }),
+          TITLE_SOURCE_CONTROL_OPTIONS,
         )
       : resolveSessionTitleSource(params.userMessage);
     return sourceText
@@ -548,13 +552,21 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
     ).firstUserMessage;
     assertMemoryCurrent();
     const transcriptText = transcriptSource ?? "";
-    const currentText = resolveSessionTitleSource(params.currentUserMessage ?? "", skillCommands);
+    const currentText = resolveSessionTitleSource(
+      params.currentUserMessage ?? "",
+      skillCommands,
+      TITLE_SOURCE_CONTROL_OPTIONS,
+    );
     // A first-turn transcript may win the persistence race before title work starts.
     // When it is the current turn, retain the supplied attachment-enriched source.
     const sourceText =
-      resolveSessionTitleSource(entry.pendingWorktree?.titleSource ?? "", skillCommands) ??
+      resolveSessionTitleSource(
+        entry.pendingWorktree?.titleSource ?? "",
+        skillCommands,
+        TITLE_SOURCE_CONTROL_OPTIONS,
+      ) ??
       (!transcriptText || (currentText && currentText === transcriptText)
-        ? resolveSessionTitleSource(params.userMessage, skillCommands)
+        ? resolveSessionTitleSource(params.userMessage, skillCommands, TITLE_SOURCE_CONTROL_OPTIONS)
         : transcriptText);
     if (!sourceText) {
       return false;
