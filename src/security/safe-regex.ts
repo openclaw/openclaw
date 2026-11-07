@@ -269,31 +269,35 @@ export function testRegexWithBoundedInput(regex: RegExp, input: string): boolean
   return testRegexFromStart(regex, input.slice(-SAFE_REGEX_TEST_WINDOW));
 }
 
-export function compileSafeRegexDetailed(source: string, flags = ""): SafeRegexCompileResult {
-  const trimmed = source.trim();
-  if (!trimmed) {
-    return { regex: null, source: trimmed, flags, reason: "empty" };
+/** Compiles an authored pattern without changing its whitespace. */
+export function compileSafeRegexSource(source: string, flags = ""): SafeRegexCompileResult {
+  if (!source.trim()) {
+    return { regex: null, source, flags, reason: "empty" };
   }
-  const cacheKey = `${flags}::${trimmed}`;
+  const cacheKey = `${flags}::${source}`;
   const cached = safeRegexCache.get(cacheKey);
   if (cached) {
     return cached;
   }
 
   let result: SafeRegexCompileResult;
-  if (hasNestedRepetition(trimmed)) {
-    result = { regex: null, source: trimmed, flags, reason: "unsafe-nested-repetition" };
+  if (hasNestedRepetition(source)) {
+    result = { regex: null, source, flags, reason: "unsafe-nested-repetition" };
   } else {
     try {
-      result = { regex: new RegExp(trimmed, flags), source: trimmed, flags, reason: null };
+      result = { regex: new RegExp(source, flags), source, flags, reason: null };
     } catch {
-      result = { regex: null, source: trimmed, flags, reason: "invalid-regex" };
+      result = { regex: null, source, flags, reason: "invalid-regex" };
     }
   }
 
   safeRegexCache.set(cacheKey, result);
   pruneMapToMaxSize(safeRegexCache, SAFE_REGEX_CACHE_MAX);
   return result;
+}
+
+export function compileSafeRegexDetailed(source: string, flags = ""): SafeRegexCompileResult {
+  return compileSafeRegexSource(source.trim(), flags);
 }
 
 export function compileSafeRegex(source: string, flags = ""): RegExp | null {

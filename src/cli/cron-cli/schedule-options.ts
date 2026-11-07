@@ -224,7 +224,7 @@ function normalizeScheduleOptions(options: ScheduleOptionInput) {
     streamCwdSupplied: options.streamCwd !== undefined,
     streamMode,
     streamModeSupplied,
-    streamMatch: normalizeOptionalString(options.streamMatch),
+    streamMatch: readNonBlankString(options.streamMatch),
     streamMatchSupplied: options.streamMatch !== undefined,
     streamBatchMs: parsePositiveInteger(options.streamBatchMs, "--stream-batch-ms"),
     streamMaxBatchBytes: parsePositiveInteger(
