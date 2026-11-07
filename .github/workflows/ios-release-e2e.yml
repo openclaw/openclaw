@@ -1,145 +1,117 @@
-name: iOS Release E2E
-
+name: Release 37 iOS share diagnostic (nonqualification)
+run-name: release37-ios-share-${{ inputs.diagnostic_id }}
 on:
-  workflow_call:
-    inputs:
-      target_sha:
-        type: string
-        required: true
-      mode:
-        type: string
-        default: stock
   workflow_dispatch:
     inputs:
-      mode:
-        description: Stock qualification or four matched stock/SimSlim pairs
-        type: choice
-        options: [stock, compare]
-        default: stock
-
+      diagnostic_id:
+        description: Unique request identifier for read-only reconciliation
+        required: true
+        type: string
+      artifact_recipient_certificate:
+        description: Public X.509 encryption certificate; private key stays off runner
+        required: true
+        type: string
 permissions:
   contents: read
-
+concurrency:
+  group: release37-ios-share-diagnostic
+  cancel-in-progress: false
 jobs:
-  qualify:
-    runs-on: xcode-27-xlarge
-    timeout-minutes: 240
-    env:
-      TARGET_SHA: ${{ inputs.target_sha || github.sha }}
-      E2E_MODE: ${{ inputs.mode }}
+  diagnostic:
+    runs-on: xcode-27
+    timeout-minutes: 150
     steps:
-      - name: Initialize failure proof and validate inputs
-        id: start
+      - name: Initialize private evidence and verify recipient
         shell: bash
+        env:
+          RECIPIENT_CERT: ${{ inputs.artifact_recipient_certificate }}
         run: |
           set -euo pipefail
-          export PROOF_PATH="$RUNNER_TEMP/ios-release-e2e-proof.json"
-          echo "PROOF_PATH=$PROOF_PATH" >> "$GITHUB_ENV"
-          echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
-          python3 - <<'PY'
-          import json, os, re
-          sha = os.environ["TARGET_SHA"]
-          mode = os.environ["E2E_MODE"]
-          with open(os.environ["PROOF_PATH"], "w") as out:
-              json.dump({"schema": 2, "kind": "qualification", "status": "failed", "trials": [],
-                         "targetSha": sha if re.fullmatch(r"[a-f0-9]{40}", sha) else None,
-                         "harnessSha": None,
-                         "mode": mode if mode in ("stock", "compare") else None,
-                         "errors": ["workflow-setup-incomplete"]}, out)
-          PY
-          [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
-          [[ "$E2E_MODE" == stock || "$E2E_MODE" == compare ]] || exit 1
-          [[ "$TARGET_SHA" == "$GITHUB_SHA" ]] || exit 1
-
-      - name: Checkout exact qualification target
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+          umask 077
+          mkdir -p "$RUNNER_TEMP/ios-share-private"
+          printf '%s\n' "$RECIPIENT_CERT" > "$RUNNER_TEMP/ios-share-private/recipient.pem"
+          openssl x509 -in "$RUNNER_TEMP/ios-share-private/recipient.pem" -noout
+          printf preflight | openssl cms -encrypt -binary -aes-256-cbc -outform DER \
+            -out "$RUNNER_TEMP/ios-share-private/preflight.p7m" "$RUNNER_TEMP/ios-share-private/recipient.pem"
+      - name: Checkout frozen candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ github.sha }}
+          ref: a27b5ab63e3c4efc4b700f60ae468b0ce529f0cd
           persist-credentials: false
-
-      - name: Verify target and require target-owned harness
+      - name: Checkout reviewed diagnostic observer only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .diagnostic-control
+          persist-credentials: false
+          sparse-checkout: scripts/diagnostics/release37-ios-share.py
+          sparse-checkout-cone-mode: false
+      - name: Verify exact source and record identity
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]] || exit 1
-          test -f scripts/ios-release-e2e.ts
-          test -f scripts/lib/ios-release-e2e-native.ts
-          test -f test/helpers/openclaw-test-instance.ts
-
-      - name: Start shared toolchain installation clock
-        id: install-start
-        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
-
-      - name: Setup Node environment
+          test "$(git rev-parse HEAD)" = a27b5ab63e3c4efc4b700f60ae468b0ce529f0cd
+          git rev-parse HEAD > "$RUNNER_TEMP/ios-share-private/source.txt"
+          git -C .diagnostic-control rev-parse HEAD > "$RUNNER_TEMP/ios-share-private/observer-source.txt"
+          shasum -a 256 .diagnostic-control/scripts/diagnostics/release37-ios-share.py > "$RUNNER_TEMP/ios-share-private/observer.sha256"
+      - name: Prepare frozen Node dependencies
         uses: ./.github/actions/setup-node-env
         with:
           node-version: "24.22.1"
           install-bun: "false"
           cache-mode: "off"
-
-      - name: Select Xcode and install pinned native tools
+      - name: Prepare frozen native tools
         shell: bash
         run: |
           set -euo pipefail
           source scripts/lib/swift-toolchain.sh
-          select_xcode_toolchain
-          swift_tools_dir="$RUNNER_TEMP/ios-release-e2e-tools"
-          ./scripts/install-xcodegen.sh "$swift_tools_dir"
-          ./scripts/install-swift-tools.sh "$swift_tools_dir"
-          echo "$swift_tools_dir" >> "$GITHUB_PATH"
-          export PATH="$HOME/.cargo/bin:$PATH"
-          watch_toolchain="$(awk -F '"' '/^channel =/ { print $2; exit }' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"
-          test -n "$watch_toolchain"
-          rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
+          select_xcode_toolchain > "$RUNNER_TEMP/ios-share-private/toolchain.log" 2>&1
+          tools="$RUNNER_TEMP/ios-share-tools"
+          ./scripts/install-xcodegen.sh "$tools" >> "$RUNNER_TEMP/ios-share-private/toolchain.log" 2>&1
+          ./scripts/install-swift-tools.sh "$tools" >> "$RUNNER_TEMP/ios-share-private/toolchain.log" 2>&1
+          echo "$tools" >> "$GITHUB_PATH"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-
-      - name: Install pinned comparison meter
-        id: simslim
-        if: inputs.mode == 'compare'
+          export PATH="$HOME/.cargo/bin:$PATH"
+          toolchain="$(awk -F '"' '/^channel =/ {print $2; exit}' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"
+          test -n "$toolchain"
+          rustup toolchain install "$toolchain" --profile minimal --component rust-src >> "$RUNNER_TEMP/ios-share-private/toolchain.log" 2>&1
+      - name: Run unchanged attachment driver with passive share-service capture
+        shell: bash
+        env:
+          IOS_DIAGNOSTIC_OUTPUT: ${{ runner.temp }}/ios-share-private
+        run: |
+          set -euo pipefail
+          python3 .diagnostic-control/scripts/diagnostics/release37-ios-share.py > "$RUNNER_TEMP/ios-share-private/controller.log" 2>&1
+      - name: Seal diagnostic evidence without publishing raw logs
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
-          install_dir="$RUNNER_TEMP/ios-release-e2e-simslim"
-          ./scripts/install-simslim.sh "$install_dir"
-          echo "binary=$install_dir/simslim" >> "$GITHUB_OUTPUT"
-
-      - name: Finish shared toolchain installation clock
-        id: install-end
-        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
-
-      - name: Qualify native pairing and chat
-        env:
-          OPENCLAW_CI_SIMSLIM_BINARY: ${{ steps.simslim.outputs.binary }}
-        run: |
-          node --import ./scripts/tsx.mjs scripts/ios-release-e2e.ts \
-            --mode "$E2E_MODE" --target-sha "$TARGET_SHA" --output "$PROOF_PATH"
-
-      - name: Complete sanitized timing proof
+          umask 077
+          evidence="$RUNNER_TEMP/ios-share-private"
+          test -f "$evidence/recipient.pem"
+          if test -d apps/ios/build/LifecycleTestResults; then
+            cp -R apps/ios/build/LifecycleTestResults "$evidence/"
+          fi
+          tar -czf "$RUNNER_TEMP/ios-share-evidence.tar.gz" -C "$RUNNER_TEMP" ios-share-private
+          openssl cms -encrypt -binary -aes-256-cbc -outform DER \
+            -in "$RUNNER_TEMP/ios-share-evidence.tar.gz" -out "$RUNNER_TEMP/ios-share-evidence.p7m" "$evidence/recipient.pem"
+          shasum -a 256 "$RUNNER_TEMP/ios-share-evidence.p7m" > "$RUNNER_TEMP/ios-share-evidence.sha256"
+      - name: Upload encrypted diagnostic evidence
         if: always()
-        env:
-          START_EPOCH: ${{ steps.start.outputs.epoch }}
-          INSTALL_START: ${{ steps.install-start.outputs.epoch }}
-          INSTALL_END: ${{ steps.install-end.outputs.epoch }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
-        run: |
-          python3 - <<'PY'
-          import json, os, time
-          path = os.environ["PROOF_PATH"]
-          with open(path) as source:
-              proof = json.load(source)
-          proof["workflowSha"] = os.environ["WORKFLOW_SHA"]
-          proof["overallMs"] = round((time.time() - int(os.environ["START_EPOCH"])) * 1000)
-          start, end = os.environ["INSTALL_START"], os.environ["INSTALL_END"]
-          proof["sharedInstallerMs"] = (int(end) - int(start)) * 1000 if start and end else None
-          with open(path, "w") as out:
-              json.dump(proof, out, indent=2)
-          PY
-
-      - name: Upload sanitized proof only
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: ios-release-e2e-${{ inputs.mode }}
-          path: ${{ runner.temp }}/ios-release-e2e-proof.json
+          name: release37-ios-share-${{ inputs.diagnostic_id }}
+          path: |
+            ${{ runner.temp }}/ios-share-evidence.p7m
+            ${{ runner.temp }}/ios-share-evidence.sha256
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 7
+      - name: Remove task-owned plaintext evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf -- "$RUNNER_TEMP/ios-share-private"
+          rm -f -- "$RUNNER_TEMP/ios-share-evidence.tar.gz"
+          rm -rf -- "$GITHUB_WORKSPACE/apps/ios/build/LifecycleTestResults"
