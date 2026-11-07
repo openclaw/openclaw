@@ -170,6 +170,30 @@ it.each([false, true])(
   },
 );
 
+it("forwards the catalog advisory hook for both catalog shapes", () => {
+  const getUnlistedConfiguredModelIds = vi.fn(() => ["configured-missing"]);
+  const discovered = captureRegistration(
+    createEntry({
+      catalog: {
+        liveModelDiscovery: true,
+        getUnlistedConfiguredModelIds,
+      },
+    }),
+  ).providers[0];
+  expect(discovered?.catalog?.getUnlistedConfiguredModelIds).toBe(getUnlistedConfiguredModelIds);
+
+  const customRun = async (): Promise<null> => null;
+  const custom = captureRegistration(
+    createEntry({
+      catalog: {
+        run: customRun,
+        getUnlistedConfiguredModelIds,
+      },
+    }),
+  ).providers[0];
+  expect(custom?.catalog?.getUnlistedConfiguredModelIds).toBe(getUnlistedConfiguredModelIds);
+});
+
 it("creates registration-scoped provider state for provider factories", () => {
   let registrations = 0;
   const registrationApis: unknown[] = [];
