@@ -1,0 +1,2 @@
+# Preserve JSONC metadata, normalized diagnostics, and generated-catalog isolation.
+40

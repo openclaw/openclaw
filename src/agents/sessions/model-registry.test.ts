@@ -231,36 +231,47 @@ describe("ModelRegistry", () => {
     );
   });
 
-  it.each(["persisted", "registered"] as const)("preserves %s model metadata", (source) => {
-    const model = {
-      id: "shared-model",
-      name: "Shared model",
-      reasoning: false,
-      input: ["text"] as const,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      parameterCount: 4_000_000_000,
-      family: "meta",
-      maxTokens: 128_000,
-      contextWindow: 1_000_000,
-      contextTokens: 872_000,
-    };
-    const config: ProviderConfigInput = {
-      api: "openai-responses",
-      baseUrl: "https://models.example/v1",
-      models: [{ ...model, input: [...model.input] }],
-    };
-    const registry =
-      source === "persisted"
-        ? createRegistry(writeRoot({ fixture: config }))
-        : ModelRegistry.inMemory(AuthStorage.inMemory());
-    if (source === "registered") {
-      registry.registerProvider("fixture", config);
-    }
-    expect(registry.getError()).toBeUndefined();
-    for (const candidate of [registry, registry.fork(AuthStorage.inMemory())]) {
-      expect(candidate.find("fixture", model.id)).toMatchObject(model);
-    }
-  });
+  it.each(["persisted", "registered", "captured JSONC"] as const)(
+    "preserves %s model metadata",
+    (source) => {
+      const model = {
+        id: "shared-model",
+        name: 'Shared // model ,} ,] "quoted" \\ path',
+        reasoning: false,
+        input: ["text"] as const,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        parameterCount: 4_000_000_000,
+        family: "meta",
+        maxTokens: 128_000,
+        contextWindow: 1_000_000,
+        contextTokens: 872_000,
+      };
+      const config: ProviderConfigInput = {
+        api: "openai-responses",
+        baseUrl: "https://models.example/v1",
+        models: [{ ...model, input: [...model.input] }],
+      };
+      const registry =
+        source === "persisted"
+          ? createRegistry(writeRoot({ fixture: config }))
+          : source === "captured JSONC"
+            ? capturedRegistry(null, AuthStorage.inMemory(), {
+                modelsJsonContents: `// authored catalog\n{"providers":{"fixture":{
+                  "api":"openai-responses","baseUrl":"https://models.example/v1",
+                  "models":[${JSON.stringify(model)},],
+                },},}`,
+                pluginCatalogs: [],
+              })
+            : ModelRegistry.inMemory(AuthStorage.inMemory());
+      if (source === "registered") {
+        registry.registerProvider("fixture", config);
+      }
+      expect(registry.getError()).toBeUndefined();
+      for (const candidate of [registry, registry.fork(AuthStorage.inMemory())]) {
+        expect(candidate.find("fixture", model.id)).toMatchObject(model);
+      }
+    },
+  );
 
   it("drops a malformed persisted family without rejecting the catalog", () => {
     const registry = createRegistry(
@@ -378,6 +389,35 @@ describe("ModelRegistry", () => {
     expect(registry.find("zai", "glm-5.1")?.name).toBe("GLM 5.1");
     expect(registry.find("invalid", "invalid")).toBeUndefined();
   });
+
+  it.each(["authored", "generated"] as const)(
+    "preserves malformed %s catalog diagnostics",
+    (source) => {
+      const malformed = '// header\n{"providers": invalid,}';
+      const normalized = '\n{"providers": invalid}';
+      let parseError: unknown;
+      try {
+        JSON.parse(normalized);
+      } catch (error) {
+        parseError = error;
+      }
+      expect(parseError).toBeInstanceOf(SyntaxError);
+      const registry = capturedRegistry(null, AuthStorage.inMemory(), {
+        modelsJsonContents: source === "authored" ? malformed : null,
+        pluginCatalogs: [
+          ...(source === "generated" ? [{ pluginId: "invalid", contents: malformed }] : []),
+          capturedCatalog("zai", { zai }),
+        ],
+        pluginMetadataSnapshot: ownerSnapshot("invalid", "zai"),
+      });
+      expect(registry.find("zai", "glm-5.1")?.name).toBe("GLM 5.1");
+      expect(registry.getError()).toBe(
+        source === "authored"
+          ? `Failed to parse models.json: ${(parseError as SyntaxError).message}\n\nFile: /unused/models.json`
+          : undefined,
+      );
+    },
+  );
 
   it.each([
     ["non-generated", false, undefined],
