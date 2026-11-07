@@ -14,6 +14,17 @@ ordinary system input asking the agent to inspect current state and continue.
 The transcript remains the agent's context; the Gateway does not reconstruct or
 replay the old execution.
 
+The recovery input stays intact in the agent transcript but is hidden from the
+Control UI chat feed, including queued, live, and reloaded history. The continued
+answer remains visible as its own turn. This is not the separate update outcome
+(`restart-sentinel`), which remains visible with any actionable failure guidance.
+
+Control UI status summaries use source-owned copy, not recovery/workflow
+instructions. Their complete summary (including its label) is one line of at most
+64 characters; oversized summaries retain their details behind a disclosure.
+This budget does not truncate agent prompts, ordinary messages, actionable update
+outcomes, or the existing expandable context notices.
+
 A crash or `SIGKILL` cannot write shutdown markers. Startup also recognizes the
 existing persisted nonterminal run identity when it has no live execution owner
 and its run started in the immediately preceding Gateway lifetime. The existing
@@ -47,6 +58,33 @@ preserving its status, archive, current writer identities, and delivery notice
 without resuming it or replaying a pending final; startup reports an aggregate
 count per agent instead of repeating warnings for each such session.
 
+## A wedged main thread
+
+If the Gateway main thread makes no progress for five continuous minutes, its
+worker-thread stall observer writes `main-thread stall recovery:` to the service's
+stderr log, including the PID, elapsed time, threshold, and `signal=SIGKILL`, then
+kills the process. Five minutes leaves generous headroom over ordinary stalls
+lasting tens of seconds. Every successful heartbeat resets the deadline; separate
+stalls do not add up. If the observer itself was suspended (for example, during
+laptop sleep), it starts a fresh observation window on wake. This bound is fixed, with no configuration option.
+
+Systemd, launchd, and the macOS app's child supervisor restart the failed Gateway.
+Eligible interrupted runs then follow the crash-recovery rules above. A foreground
+Gateway or `gateway:watch` needs an external supervisor to restart automatically.
+The observer uses `SIGKILL` because a wedged JavaScript thread cannot handle
+`SIGTERM`; it avoids `SIGABRT` and its potentially large core dump.
+
+Look for preceding `main-thread stall in progress:` lines for bounded JavaScript
+profile evidence when the runtime supports it. Stack capture is best effort and
+cannot hold up termination; Bun and uninterruptible native stalls may only have
+the heartbeat diagnostic. These off-thread lines go directly to stderr: use the
+systemd journal, launchd stderr log, or macOS app Gateway log rather than relying
+only on `openclaw logs`.
+
+Recovery is suppressed while an inspector is enabled, including debugger pauses,
+and when startup profiling or coverage flags conflict with diagnostics. The
+heartbeat observer works independently of the optional V8 flight recorder.
+
 ## What survives a restart
 
 | State                                                             | Behavior                                                                        |
@@ -75,8 +113,14 @@ IDs of accepted user inputs still queued behind that session at shutdown. The
 Gateway writes one marker per running root session, batched by session store,
 before aborting work. It uses the existing session-entry JSON in SQLite and needs
 no schema migration.
-Crash recovery uses the run identity already persisted by ordinary turn admission
-and cleared by terminal settlement, bounded by the recorded predecessor lifetime.
+Crash recovery uses the nonterminal run marker committed with accepted plain
+chat input, before dispatch hooks or runtime start. The same commit records its
+writer identity; terminal settlement clears the run marker. Recovery is bounded
+by the recorded predecessor lifetime. Command persistence
+records activity only; commands gain recovery markers when their runs start.
+Commands that become runs, such as `/goal` or skill rewrites, remain unprotected
+between input persistence and runtime start. A plain message that a hook ends
+without starting a run can retain its marker and be retried after a crash.
 The same startup metadata read discovers both sources; there are no extra restart checkpoints or execution reconstruction.
 
 Startup recovers marked sessions in ready stores immediately. Before adopting
@@ -94,6 +138,10 @@ own input readiness pending until its retained inputs are admitted. This also
 applies when several logical agents share the same physical store. Database
 reads and writes retain their normal admission rules; recovery does not borrow
 startup's temporary database access or wait for model executions to finish.
+Crash recovery waits for preparation to settle without an interactive request
+deadline. Slow preparation does not disqualify interrupted work; failed preparation
+still prevents unmarked adoption and reports the normal admission diagnostics.
+This requires the updated Gateway, with no marker or schema migration.
 
 <a id="graceful-restarts-drain-first" />
 

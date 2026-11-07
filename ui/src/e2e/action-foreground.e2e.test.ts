@@ -219,7 +219,7 @@ suite.define(() => {
             page,
             rail,
             `${id} rail`,
-            "var(--accent-foreground)",
+            "var(--sidebar-rail-action-foreground)",
             [
               "var(--sidebar-rail-action-bg)",
               "var(--sidebar-rail-action-hover-bg)",

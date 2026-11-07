@@ -220,6 +220,7 @@ export function renderChatComposerView(
         {props.realtimeTalkInputNotice ? (
           <ChatVoiceStatus
             status="error"
+            tone="warning"
             detail={props.realtimeTalkInputNotice}
             onDismissError={props.onDismissRealtimeTalkInputNotice}
           />
@@ -649,6 +650,7 @@ export function renderChatComposerView(
                     session={props.selectedSession}
                     messages={props.messages}
                     providerUsage={props.providerUsage}
+                    accountSelection={props.composerControls?.model.accountSelection}
                     gateway={props.contextGateway}
                     agentId={props.currentAgentId}
                     onOpenContext={props.onOpenContext}

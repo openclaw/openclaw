@@ -1,0 +1,2 @@
+# Exact sender byte boundary and native receiver acceptance at 1 MiB.
+39

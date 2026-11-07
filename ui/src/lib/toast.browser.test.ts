@@ -33,14 +33,27 @@ const archived = {
   durationMs: 60_000,
 } satisfies ToastOptions;
 async function settleAnimations(host: HTMLElement) {
-  await new Promise<void>((resolve) => {
-    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-  });
-  await Promise.all(
-    [...host.querySelectorAll(".app-toast")].flatMap((toast) =>
-      toast.getAnimations({ subtree: true }).map((animation) => animation.finished),
-    ),
-  );
+  for (;;) {
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+    const animations = [...host.querySelectorAll(".app-toast")]
+      .flatMap((toast) => toast.getAnimations({ subtree: true }))
+      .filter((animation) => animation.playState !== "finished");
+    if (animations.length === 0) {
+      return;
+    }
+    await Promise.all(
+      animations.map((animation) =>
+        animation.finished.catch((error: unknown) => {
+          // Replaced transitions reject; their replacements still need to settle.
+          if (!(error instanceof DOMException && error.name === "AbortError")) {
+            throw error;
+          }
+        }),
+      ),
+    );
+  }
 }
 async function renderToast(
   options: Partial<ToastOptions> = {},
@@ -111,6 +124,8 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
     ] as const) {
       const { toast: card, action } = await renderToast({ severity }, host);
       expect(card.classList.contains(`app-toast--${severity}`)).toBe(true);
+      expect(getComputedStyle(card).columnGap).toBe("6px");
+      expect(getComputedStyle(card.querySelector(".app-toast__content")!).columnGap).toBe("14px");
       expect(getComputedStyle(card.querySelector(".app-toast__icon")!).color).toBe(tone(token));
       expect(getComputedStyle(card).backgroundColor).toBe(neutral.card);
       expect(getComputedStyle(card).color).toBe(neutral.text);
@@ -228,6 +243,41 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
     }
     lane.dispatchEvent(new PointerEvent("pointerleave", { pointerType: "mouse" }));
     await waitForSolid(() => expect(lane.hasAttribute("data-open")).toBe(false));
+  });
+
+  it("waits for replacement animations before checking toast layout", async () => {
+    await useViewport(390);
+    const { host, toast } = await renderToast();
+    const restingTop = rect(toast).top;
+    const frames = () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
+    const enter = () => {
+      const animation = toast.animate([{ translate: "0 -14px" }, { translate: "0 0" }], {
+        duration: 200,
+        fill: "forwards",
+      });
+      animation.pause();
+      return animation;
+    };
+    const first = enter();
+    await first.ready;
+    let settled = false;
+    const settling = settleAnimations(host).then(() => {
+      settled = true;
+    });
+    void settling.catch(() => {});
+    await frames();
+    first.cancel();
+    const replacement = enter();
+    await replacement.ready;
+    await frames();
+    expect(settled).toBe(false);
+    expect(rect(toast).top).toBeCloseTo(restingTop - 14, 0);
+    replacement.finish();
+    await settling;
+    expect(rect(toast).top).toBeCloseTo(restingTop, 0);
   });
 
   it("keeps a toast usable inside a native modal and returns it to the shell on dismissal", async () => {

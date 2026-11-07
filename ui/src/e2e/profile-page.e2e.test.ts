@@ -180,7 +180,7 @@ suite.define(() => {
     await suite.withPage(undefined, async ({ page }) => {
       await openProfilePage(page, { "users.authConnect.catalog": { providers: [] } });
       const section = page.locator("section.settings-section", {
-        has: page.getByRole("heading", { name: "Connected accounts" }),
+        has: page.getByRole("heading", { name: "Saved accounts" }),
       });
       // Where a sign-in lands is read while signing in, not on every visit.
       await expect(section.getByText("Person", { exact: true })).toHaveCount(0);

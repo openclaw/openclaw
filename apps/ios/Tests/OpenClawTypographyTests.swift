@@ -22,6 +22,15 @@ struct RootSidebarTypographyTests {
 }
 
 struct OpenClawTypographyTests {
+    @Test func `local device settings use branded typography`() throws {
+        let source = try String(
+            contentsOf: Self.sourceURL("Settings/DeviceSettings/LocalDeviceSettingsScreen.swift"),
+            encoding: .utf8)
+        #expect(source.contains("OpenClawType.body"))
+        #expect(source.contains("OpenClawType.footnote"))
+        #expect(!source.contains(".font(."))
+    }
+
     @Test func `ESP setup controls and secret prompts use branded typography`() throws {
         let source = try String(contentsOf: Self.sourceURL("Settings/ESPDeviceSetupScreen.swift"), encoding: .utf8)
         #expect(Self.unbrandedTextCallOffenders(in: source, relativePath: "ESPDeviceSetupScreen.swift").isEmpty)
@@ -48,9 +57,11 @@ struct OpenClawTypographyTests {
         #expect(settings.contains("Text(verbatim: target.origin.url.absoluteString)"))
         #expect(settings.contains(".fixedSize(horizontal: false, vertical: true)"))
         #expect(settings.contains(".textSelection(.enabled)"))
-        let dashboard = try String(contentsOf: Self.sourceURL("Settings/DashboardPageScreen.swift"), encoding: .utf8)
-        #expect(dashboard.contains("Text(\"Open Gateway settings\")"))
-        #expect(dashboard.contains(".font(OpenClawType.body)"))
+        let embeddedDashboard = try String(
+            contentsOf: Self.sourceURL("Settings/SettingsHubScreen.swift"),
+            encoding: .utf8)
+        #expect(embeddedDashboard.contains("Text(\"Open Gateway settings\")"))
+        #expect(embeddedDashboard.contains(".font(OpenClawType.subheadSemiBold)"))
     }
 
     @Test(arguments: ["ChatFileAttachment.swift", "ChatMessageReactions.swift"])

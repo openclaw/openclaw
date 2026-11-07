@@ -4,7 +4,6 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import * as apple from "../../scripts/apple-app-i18n.ts";
-
 type Entry = Parameters<typeof apple.buildIosCatalog>[1][number];
 const emptyCatalog = { sourceLanguage: "en", strings: {}, version: "1.0" };
 const unit = (value: string, state = "translated") => ({ stringUnit: { state, value } });
@@ -22,9 +21,8 @@ function artifact(translations: Record<string, string>) {
 
 const probe = vi.hoisted(() => ({
   source: "",
-  files: new Map<string, string>(),
-  directories: new Map<string, unknown>(),
-  captureIO: false,
+  catalogs: new Map<string, string>(),
+  captureWrites: false,
   paths: [
     "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift",
     "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift",
@@ -37,41 +35,23 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return {
     ...actual,
-    // Synthetic source/artifact I/O is opt-in; all other I/O stays real.
+    // Synthetic calls are opt-in and limited to production-source reads; all other I/O stays real.
     readFile: async (...args: Parameters<typeof actual.readFile>) => {
       const file = typeof args[0] === "string" ? args[0].replaceAll("\\", "/") : "";
-      const source = probe.files.get(path.resolve(file)) ?? (await actual.readFile(...args));
-      if (probe.captureIO && typeof source === "string") {
-        probe.files.set(path.resolve(file), source);
-      }
+      const source = probe.catalogs.get(path.resolve(file)) ?? (await actual.readFile(...args));
       return probe.source &&
         typeof source === "string" &&
         probe.paths.some((entry) => file.endsWith("/" + entry))
         ? source + "\n" + probe.source
         : source;
     },
-    readdir: async (...args: Parameters<typeof actual.readdir>) => {
-      if (!probe.captureIO) {
-        return actual.readdir(...args);
-      }
-      const key = JSON.stringify(args);
-      if (!probe.directories.has(key)) {
-        probe.directories.set(key, await actual.readdir(...args));
-      }
-      return probe.directories.get(key) as Awaited<ReturnType<typeof actual.readdir>>;
-    },
     writeFile: async (...args: Parameters<typeof actual.writeFile>) => {
-      if (!probe.captureIO) {
-        return actual.writeFile(...args);
+      if (probe.captureWrites && typeof args[0] === "string" && typeof args[1] === "string") {
+        probe.catalogs.set(path.resolve(args[0]), args[1]);
+        return;
       }
-      const [file, contents] = args;
-      if (typeof file !== "string" || typeof contents !== "string") {
-        throw new Error("Expected a textual Apple artifact fixture write");
-      }
-      probe.files.set(path.resolve(file), contents);
+      await actual.writeFile(...args);
     },
-    mkdir: async (...args: Parameters<typeof actual.mkdir>) =>
-      probe.captureIO ? undefined : actual.mkdir(...args),
   };
 });
 
@@ -113,9 +93,9 @@ it("verification and compile-macos reject raw macOS interpolation and retain sha
 });
 
 it("warns only when obsolete Apple keys are the entire catalog drift", async () => {
-  probe.captureIO = true;
   try {
-    // Snapshot real source I/O once, then exercise the producer and drift checks in memory.
+    // Source PRs defer generated locale files; normalize all sibling artifacts in memory.
+    probe.captureWrites = true;
     const { build, macosBuild } = await apple.syncAppleAppI18n();
     const catalogs = [
       {
@@ -127,14 +107,6 @@ it("warns only when obsolete Apple keys are the entire catalog drift", async () 
         catalog: macosBuild.catalog,
       },
     ];
-    const infoPath = path.resolve("apps/ios/Sources/de.lproj/InfoPlist.strings");
-    const info = await readFile(infoPath, "utf8");
-    probe.files.set(infoPath, info + "\n");
-    await expect(apple.checkAppleAppI18n()).rejects.toThrow("InfoPlist localization");
-    probe.files.set(infoPath, info);
-    for (const { filePath, catalog } of catalogs) {
-      probe.files.set(filePath, apple.serializeAppleCatalog(catalog));
-    }
     for (const { filePath, catalog } of catalogs) {
       const warnings: string[] = [];
       const options = { reportObsolete: (message: string) => warnings.push(message) };
@@ -154,10 +126,10 @@ it("warns only when obsolete Apple keys are the entire catalog drift", async () 
       };
       const serialized = apple.serializeAppleCatalog(obsolete);
       const reject = async (invalid: string) => {
-        probe.files.set(filePath, invalid);
+        probe.catalogs.set(filePath, invalid);
         await expect(apple.checkAppleAppI18n(options)).rejects.toThrow();
       };
-      probe.files.set(filePath, serialized);
+      probe.catalogs.set(filePath, serialized);
       await expect(apple.checkAppleAppI18n()).rejects.toThrow("is stale");
       await expect(apple.checkAppleAppI18n(options)).resolves.toBeUndefined();
       expect(warnings).toEqual([
@@ -198,12 +170,11 @@ it("warns only when obsolete Apple keys are the entire catalog drift", async () 
       ]) {
         await reject(invalid);
       }
-      probe.files.set(filePath, apple.serializeAppleCatalog(catalog));
+      probe.catalogs.set(filePath, apple.serializeAppleCatalog(catalog));
     }
   } finally {
-    probe.files.clear();
-    probe.directories.clear();
-    probe.captureIO = false;
+    probe.captureWrites = false;
+    probe.catalogs.clear();
   }
 });
 

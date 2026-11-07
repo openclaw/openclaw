@@ -275,7 +275,7 @@ describe("operator config startup corpus", () => {
         shouldRepair: true,
         doctorFixCommand: "openclaw doctor --fix",
       });
-      const normalized = normalizeCompatibilityConfigValues(migrated.state.candidate, {
+      const normalized = await normalizeCompatibilityConfigValues(migrated.state.candidate, {
         sourceRaw: snapshot.parsed,
       });
       const retired = await retireHeartbeatWithDoctor(normalized.config, env);

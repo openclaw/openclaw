@@ -45,6 +45,8 @@ export type SessionLifecyclePatchEffects = {
     errorKind?: "state_contention";
     suppressErrorNotice?: boolean;
     notice?: string;
+    /** The run's provider error observation; the failure recorder bounds what it keeps. */
+    errorObservation?: unknown;
   };
 };
 
@@ -67,6 +69,7 @@ export type LifecycleEventLike = { ts: number; sessionId?: string } & {
     suppressErrorNotice?: unknown;
     /** Host-authored failure copy the requester already saw; recorded verbatim. */
     errorNotice?: unknown;
+    errorObservation?: unknown;
     executionStarted?: unknown;
     livenessState?: unknown;
     timeoutPhase?: unknown;
@@ -470,6 +473,7 @@ export function projectSessionLifecyclePatch(
   ) {
     effects.failedRun = {
       runId: eventRunId,
+      errorObservation: params.event.data?.errorObservation,
       suppressErrorNotice: params.event.data?.suppressErrorNotice === true,
       errorKind:
         params.event.data?.errorKind === "state_contention" ? "state_contention" : undefined,

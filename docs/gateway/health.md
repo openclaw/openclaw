@@ -62,7 +62,9 @@ preparation clears the degraded status when all runtimes are ready.
 If a newer model-runtime refresh replaces preparation in progress, startup
 follows the admitted replacement through preparation and publication. Cancelling
 the retired acquisition does not stop the Gateway; genuine replacement failures
-still propagate.
+still propagate. A config reload that retires the plugins behind that preparation
+follows the same bounded retry. If replacements outlast those retries, the agent's
+refusal asks for a Gateway restart; it does not require database repair.
 
 Transcript projection repair runs after readiness in yielding worker-backed work.
 Pending GitHub publication recovery runs in the background and does not delay
@@ -134,6 +136,26 @@ All three check pairs share the Gateway HTTP transport; there is no separate
 always-on check listener. Connection refusal is expected before the initial bind
 and after transport closure. An in-process restart can close and reopen the
 listener while the same PID stays alive; requests racing closure can also reset.
+
+While the listener is available, the normal Control UI document and static app
+assets remain available during core startup or draining. A fresh browser loads
+the real application shell and shows its connection state while waiting for the
+Gateway. Existing conversations keep their mounted route, transcript and draft.
+Authentication failures still use the normal sign-in flow.
+
+When the app assets are unavailable, a self-contained `503` availability page
+retries automatically with bounded request timeouts and backoff. It does not require
+the app bundle or a WebSocket connection. APIs and authenticated dynamic routes
+keep their normal admission and authorization checks. Optional startup sidecars
+do not block the normal UI once core request preparation is ready.
+
+An HTTP document is not a completed WebSocket handshake: the loaded app still owns
+connection recovery and reload-required states. If the document loads but the app
+cannot mount after three recovery navigations, its fallback offers manual reload
+and wait actions. A fresh browser with no cached
+app cannot receive a Gateway page while its listener is fully stopped. An existing
+ingress can provide a retryable HTML error page for that interval; keep API and
+WebSocket handling intact, and do not label an unknown connection failure an update.
 
 Supervisors should combine HTTP checks with process and exit information, allow
 bounded startup/restart grace, and honor the process owner's shutdown budget.

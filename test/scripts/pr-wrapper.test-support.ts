@@ -80,13 +80,14 @@ export function copyPrWrapperSources(destination: string): string[] {
 }
 
 export function copyPrRoutingWrapperSources(destination: string): string[] {
-  // Routing and supervision use wrapper tooling; app-import fixtures keep the full inventory.
+  // Routing, review artifacts, and supervision use tooling; app-import fixtures keep the full inventory.
   // Keep the local-check component for the unanchored fixture's trust-drift assertions.
   const components = [
     "package.json",
     "scripts/lib/plain-gh.sh",
     "scripts/lib/plain-gh.mjs",
     "scripts/lib/direct-run.mjs",
+    "scripts/lib/record-shared.mjs",
     "scripts/lib/managed-child-process.mts",
     "scripts/lib/managed-cleanup-handoff.mts",
     "scripts/windows-cmd-helpers.mjs",
@@ -119,6 +120,7 @@ export function linkPrWrapperDependencies(destination: string): void {
     "acorn",
     "chalk",
     "commander",
+    "croner",
     "dotenv",
     "execa",
     "hosted-git-info",
@@ -138,6 +140,7 @@ export function linkPrWrapperDependencies(destination: string): void {
     "typebox",
     "typescript",
     "undici",
+    "ws",
     "yaml",
     "zod",
   ]) {
