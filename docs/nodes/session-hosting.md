@@ -373,6 +373,32 @@ turns or workspace writes.
 See [Anthropic: Claude sessions across computers](/providers/anthropic#claude-sessions-across-computers)
 for the Control UI behavior and storage sources.
 
+### Writable volume ancestors
+
+Startup rejects a group- or world-writable ancestor of the node's private state
+unless its existing sticky-directory rules permit it. For a dedicated node whose
+storage is isolated from other writers, the operator can trust specific ancestors:
+
+```bash
+OPENCLAW_NODE_TRUSTED_WRITABLE_ANCESTORS='["/sandbox"]' openclaw node run --session-host
+```
+
+Set this in the node service or container environment and restart the node.
+Use canonical absolute paths: entries match only the named directory, not its
+descendants. The default remains strict. An empty array grants no exceptions.
+Node admission, workspace transfers, and node temp-root selection (including
+terminal uploads) use the same captured policy. Importing the shared temp-root
+resolver does not activate it. Subprocesses do not inherit the setting, and
+workspace `.env` files cannot set it.
+
+This relaxes only the writability check for the listed ancestors. Private state
+and temporary directories must remain private and correctly owned; fs-safe's
+ownership, symlink, confinement, and identity checks still apply. Trusting an
+ancestor does not prevent another writer from replacing directories below it.
+Use this only when the deployment excludes untrusted writers and trusts its
+storage administrators. A PVC or `ReadWriteOnce` access mode alone does not
+establish that isolation.
+
 ### Work in an existing device folder
 
 Session hosting allows existing folders by default. To restrict sessions to specific

@@ -1,8 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { FsSafeError } from "@openclaw/fs-safe";
-import { tempWorkspace, type TempWorkspaceOptions } from "@openclaw/fs-safe/temp";
+import {
+  tempWorkspace,
+  withTempWorkspace,
+  type TempWorkspace,
+  type TempWorkspaceOptions,
+} from "@openclaw/fs-safe/temp";
 import { isMissingPathError } from "../infra/errno.js";
+import { captureNodeTrustedWritableAncestors } from "../infra/node-filesystem-policy.js";
 import type { OpenClawPluginNodeWorkspaceLease } from "../plugins/types.node-host.js";
 import type { NodeWorkerDeviceFolders } from "./node-worker-device-folder.js";
 import {
@@ -19,6 +25,16 @@ import {
   type NodeWorkerManagedWorkspaceRequest,
 } from "./node-worker-workspace-identity.js";
 import type { NodeWorkerWorkspaceProcesses } from "./node-worker-workspace-processes.js";
+
+// Capture before node services start; worker subprocesses must not inherit the setting.
+const trustedWritableAncestors = captureNodeTrustedWritableAncestors();
+
+export function withNodeWorkerTempWorkspace<T>(
+  options: TempWorkspaceOptions,
+  body: (workspace: TempWorkspace) => Promise<T>,
+): Promise<T> {
+  return withTempWorkspace({ ...options, trustedWritableAncestors }, body);
+}
 
 /** Workspace custody and its admitted process environment share one release/currentness fence. */
 function createNodeWorkerManagedWorkspaceLease(params: {
@@ -98,7 +114,11 @@ async function describeWritableAncestor(rootDir: string): Promise<string | undef
   for (const directory of ancestry.toReversed()) {
     const stat = await fs.stat(directory);
     // Diagnostic only: fs-safe remains the authority, including owner and sticky checks.
-    if ((stat.mode & 0o022) !== 0 && (stat.mode & 0o1000) === 0) {
+    if (
+      (stat.mode & 0o022) !== 0 &&
+      (stat.mode & 0o1000) === 0 &&
+      !trustedWritableAncestors?.includes(directory)
+    ) {
       const writable = (stat.mode & 0o002) !== 0 ? "world-writable" : "group-writable";
       const quotedPath = `'${directory.replaceAll("'", "'\\''")}'`;
       return `State directory ${directory} is ${writable} without sticky protection; run chmod go-w ${quotedPath} on the node, then restart the node host.`;
@@ -110,7 +130,7 @@ async function describeWritableAncestor(rootDir: string): Promise<string | undef
 /** Share startup and transfer admission without weakening fs-safe's mutation-time checks. */
 export async function createNodeWorkerTempWorkspace(options: TempWorkspaceOptions) {
   try {
-    return await tempWorkspace(options);
+    return await tempWorkspace({ ...options, trustedWritableAncestors });
   } catch (error) {
     if (error instanceof FsSafeError && error.code === "insecure-permissions" && options.rootDir) {
       const message = await describeWritableAncestor(options.rootDir).catch(() => undefined);

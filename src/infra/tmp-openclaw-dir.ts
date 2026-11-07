@@ -1,5 +1,6 @@
 import path from "node:path";
 import { resolveStateDir } from "../config/state-dir.js";
+import { getNodeTrustedWritableAncestors } from "./node-filesystem-policy.js";
 import { getSealedRuntimeSecureTempRoot } from "./sealed-runtime-registry.js";
 
 /** Preferred shared OpenClaw temp root on POSIX systems when ownership and permissions are safe. */
@@ -74,7 +75,16 @@ function assertSafeTempAncestors(
       : fs.realpathSync.native(root);
   for (let directory = path.dirname(canonicalRoot); ; directory = path.dirname(directory)) {
     const stat = lstat(directory);
-    if (stat.mode !== undefined && (stat.mode & 0o022) !== 0 && (stat.mode & 0o1000) === 0) {
+    const trustedAncestor =
+      getNodeTrustedWritableAncestors()?.includes(directory) &&
+      stat.isDirectory() &&
+      !stat.isSymbolicLink();
+    if (
+      stat.mode !== undefined &&
+      (stat.mode & 0o022) !== 0 &&
+      (stat.mode & 0o1000) === 0 &&
+      !trustedAncestor
+    ) {
       const quoted = `'${directory.replaceAll("'", "'\\''")}'`;
       throw new Error(
         `Temp workspace ancestor ${JSON.stringify(directory)} is group/world writable without sticky protection; have its owner run chmod +t ${quoted} for a shared temp directory or chmod go-w ${quoted} for a private ancestor.`,
