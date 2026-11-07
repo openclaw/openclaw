@@ -1,7 +1,7 @@
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { defaultRuntime } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { ExpectedCliError } from "./expected-cli-error.js";
 import type { PluginMarketplaceListOptions } from "./plugins-cli.js";
 import { quietPluginJsonLogger } from "./plugins-json-logger.js";

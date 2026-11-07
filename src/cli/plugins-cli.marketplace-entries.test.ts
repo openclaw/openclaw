@@ -428,23 +428,20 @@ describe("plugins marketplace list", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
-  it.each(["before", "result"] as const)(
-    "cancels the marketplace list read: %s",
-    async (mode) => {
-      const scope = new AsyncWorkScope();
-      mocks.listMarketplacePlugins.mockImplementation(() => {
-        scope.beginClose();
-        return Promise.resolve({ ok: true as const, sourceLabel: source, manifest });
-      });
-      if (mode === "before") {
-        scope.beginClose();
-      }
-      await scope.run(() => list(source, { json: true }));
-      expect(mocks.listMarketplacePlugins).toHaveBeenCalledTimes(mode === "before" ? 0 : 1);
-      expect(runtime.log).not.toHaveBeenCalled();
-      expect(runtime.writeJson).not.toHaveBeenCalled();
-      expect(runtime.error).not.toHaveBeenCalled();
-      expect(runtime.exit).not.toHaveBeenCalled();
-    },
-  );
+  it.each(["before", "result"] as const)("cancels the marketplace list read: %s", async (mode) => {
+    const scope = new AsyncWorkScope();
+    mocks.listMarketplacePlugins.mockImplementation(() => {
+      scope.beginClose();
+      return Promise.resolve({ ok: true as const, sourceLabel: source, manifest });
+    });
+    if (mode === "before") {
+      scope.beginClose();
+    }
+    await scope.run(() => list(source, { json: true }));
+    expect(mocks.listMarketplacePlugins).toHaveBeenCalledTimes(mode === "before" ? 0 : 1);
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.writeJson).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
 });
