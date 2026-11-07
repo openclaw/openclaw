@@ -164,6 +164,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
               expectedSessionId: sessionStoreEntry.entry?.sessionId,
               commandText: ctx.commandText,
               commandId,
+              ...(fast.logKind === "fast_approve" ? { contextFreeCommand: true as const } : {}),
               text: fast.payload.text,
               preferText: true,
               idempotencyKey: `${fast.logKind}:${commandId}`,

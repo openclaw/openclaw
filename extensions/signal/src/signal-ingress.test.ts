@@ -82,6 +82,65 @@ async function receive(monitor: Monitor, ...events: SignalSseEvent[]) {
 }
 
 describe("Signal durable ingress", () => {
+  it.each([undefined, "group-123"])(
+    "dispatches approval controls without releasing ordinary work (group: %s)",
+    async (groupId) => {
+      const groupInfo = groupId ? { groupId } : undefined;
+      const seen: string[] = [];
+      let adopt: (() => void | Promise<void>) | undefined;
+      const monitor = await start((event, lifecycle, payload) => {
+        const data = payload.envelope?.dataMessage;
+        const text = data?.message;
+        if (text === "needs approval") {
+          adopt = lifecycle.onAdopted;
+          return defer(event, lifecycle);
+        }
+        seen.push(text || payload.envelope?.reactionMessage?.emoji || data?.reaction?.emoji || "");
+        return undefined;
+      });
+      await receive(
+        monitor,
+        signalEvent({}, { message: "needs approval", groupInfo }),
+        signalEvent({ timestamp: 2 }, { message: "followup", groupInfo }),
+        signalEvent({ timestamp: 3 }, { message: "/reset", groupInfo }),
+        signalEvent({ timestamp: 4 }, { message: "/approve abc12345 allow-once", groupInfo }),
+        {
+          event: "receive",
+          data: JSON.stringify({
+            envelope: {
+              sourceNumber: "+15550001111",
+              timestamp: 5,
+              reactionMessage: {
+                emoji: "👍",
+                targetAuthor: "+15550009999",
+                targetSentTimestamp: 100,
+                groupInfo,
+              },
+            },
+          }),
+        },
+        signalEvent(
+          { timestamp: 6 },
+          {
+            message: null,
+            groupInfo,
+            reaction: {
+              emoji: "👎",
+              targetAuthor: "+15550009999",
+              targetSentTimestamp: 100,
+              groupInfo,
+            },
+          },
+        ),
+      );
+      expect(seen).toEqual(["/approve abc12345 allow-once", "👍", "👎"]);
+      expect(await queue.listPending()).toHaveLength(2);
+      await adopt?.();
+      await monitor.waitForIdle();
+      expect(seen.slice(-2)).toEqual(["followup", "/reset"]);
+    },
+  );
+
   it("resumes accepted ingress and publishes HTTP recovery", async () => {
     const abort = new AbortController();
     const received: Array<string | undefined> = [];
@@ -148,6 +207,33 @@ describe("Signal durable ingress", () => {
     const monitor = await start(dispatch, failingQueue);
     await expect(monitor.receive(signalEvent())).rejects.toBe(appendError);
     expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("recovers pre-upgrade controls only from their original conversation lane", async () => {
+    const approval = signalEvent({ timestamp: 2 }, { message: "/approve abc12345 deny" });
+    const mismatched = signalEvent({ timestamp: 3 }, { message: "/approve abc12345 deny" });
+    for (const [event, laneKey] of [
+      [signalEvent(), "direct:number:+15550001111"],
+      [approval, "direct:number:+15550001111"],
+      [mismatched, "direct:number:+15550002222"],
+    ] as const) {
+      const payload = JSON.parse(event.data!);
+      await queue.enqueue(
+        JSON.stringify(["number:+15550001111", payload.envelope.timestamp]),
+        { version: 1, receivedAt: payload.envelope.timestamp, event },
+        { laneKey },
+      );
+    }
+    const seen: SignalSseEvent[] = [];
+    const monitor = await start((event, lifecycle, payload) => {
+      seen.push(event);
+      return payload.envelope?.timestamp === 2 ? undefined : defer(event, lifecycle);
+    });
+    await monitor.waitForIdle();
+    expect(seen).toEqual([signalEvent(), approval]);
+    expect(await queue.listPending()).toHaveLength(0);
+    // Identity-mismatched rows are rejected rather than retargeted during reconciliation.
+    expect(await queue.listFailed?.()).toHaveLength(1);
   });
 
   it("persists independent conversation lanes and recovers each raw event exactly once", async () => {

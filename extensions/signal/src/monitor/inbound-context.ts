@@ -3,13 +3,32 @@ import {
   resolveInboundSupplementalSenderAllowed,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   formatSignalSenderDisplay,
   isSignalSenderAllowed,
   resolveSignalSender,
 } from "../identity.js";
-import type { SignalDataMessage } from "./event-handler.types.js";
+import type { SignalDataMessage, SignalEventHandlerDeps } from "./event-handler.types.js";
+
+export function resolveSignalInboundRoute(params: {
+  cfg: SignalEventHandlerDeps["cfg"];
+  accountId: SignalEventHandlerDeps["accountId"];
+  isGroup: boolean;
+  groupId?: string;
+  senderPeerId: string;
+}) {
+  return resolveAgentRoute({
+    cfg: params.cfg,
+    channel: "signal",
+    accountId: params.accountId,
+    peer: {
+      kind: params.isGroup ? "group" : "direct",
+      id: params.isGroup ? (params.groupId ?? "unknown") : params.senderPeerId,
+    },
+  });
+}
 
 export function resolveSignalQuoteContext(params: {
   cfg: Parameters<typeof resolveChannelContextVisibilityMode>[0]["cfg"];
