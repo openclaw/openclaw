@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { applyChannelAccountRemoval } from "../../channels/plugins/account-config-mutation.js";
+import { splitChannelAccountDelete } from "../../channels/plugins/account-delete-follow-up.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -15,6 +16,7 @@ import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { withCommandPluginMetadata } from "../config-validation.js";
+import { persistAccountDeleteFollowUp } from "./account-delete-persistence.js";
 import { parseAccountSelector } from "./account-selector.js";
 import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { channelLabel } from "./runtime-label.js";
@@ -191,13 +193,19 @@ export async function channelsRemoveCommand(
         runtime.exit(1);
         return;
       }
-      await persistChannelPluginConfig({
-        cfg: removal.value.nextConfig,
+      const removed = deleteConfig
+        ? splitChannelAccountDelete({ cfg, nextConfig: removal.value.nextConfig })
+        : { config: removal.value.nextConfig };
+      const committed = await persistChannelPluginConfig({
+        cfg: removed.config,
         pluginInstalled: false,
         writeOptions: writeSnapshot.writeOptions,
         baseHash: writeSnapshot.snapshot.hash,
         runtime,
       });
+      if (removed.followUp) {
+        await persistAccountDeleteFollowUp(removed.followUp, committed.path, runtime);
+      }
       const message = deleteConfig
         ? `Deleted ${channelLabel(resolvedChannel)} account "${accountId}".`
         : `Disabled ${channelLabel(resolvedChannel)} account "${accountId}".`;

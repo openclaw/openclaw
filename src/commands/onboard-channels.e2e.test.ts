@@ -1,6 +1,7 @@
 // Onboard channels e2e tests cover setup wizard adapters, plugin install hooks, and channel picker behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createExitThrowingRuntime, createWizardPrompter } from "../../test/helpers/auth-wizard.js";
+import type { ChannelAccountDeleteFollowUp } from "../channels/plugins/account-delete-follow-up.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { ChannelSetupWizardAdapter } from "../channels/plugins/setup-wizard-types.js";
 import {
@@ -287,6 +288,70 @@ describe("setupChannels", () => {
           initialValue: false,
         });
       }
+    },
+  );
+
+  it.each([true, false])(
+    "hands a deleted account's binding changes to the follow-up sink when one exists: %s",
+    async (withSink) => {
+      const bindings = [{ agentId: "main", match: { channel: "discord", accountId: "default" } }];
+      registerDiscord(
+        {
+          channel: "discord",
+          getStatus: async ({ cfg }) => ({
+            channel: "discord",
+            configured: Boolean(cfg.channels?.discord),
+            statusLines: [],
+          }),
+          configure: async ({ cfg }) => ({ cfg }),
+        },
+        {
+          deleteAccount: ({ cfg }) => {
+            const channels = { ...cfg.channels };
+            delete channels.discord;
+            return { ...cfg, channels, bindings: undefined };
+          },
+        },
+      );
+      const choices = ["discord", "__done__"];
+      const prompter = createPrompter({
+        select: vi.fn(async ({ message }: Parameters<WizardPrompter["select"]>[0]) => {
+          if (message === "Select a channel") {
+            return choices.shift();
+          }
+          if (message === "Discord already configured. What do you want to do?") {
+            return "delete";
+          }
+          throw new Error(`unexpected selection: ${message}`);
+        }) as WizardPrompter["select"],
+        confirm: vi.fn(async () => true),
+      });
+      const followUps: ChannelAccountDeleteFollowUp[] = [];
+
+      const next = await runSetupChannels(
+        { channels: { discord: { token: "synthetic-token" } }, bindings },
+        prompter,
+        {
+          allowDisable: true,
+          skipDmPolicyPrompt: true,
+          ...(withSink ? { onAccountDeleteFollowUp: (followUp) => followUps.push(followUp) } : {}),
+        },
+      );
+
+      expect(next.channels?.discord).toBeUndefined();
+      expect(next.bindings).toEqual(withSink ? bindings : undefined);
+      expect(followUps).toEqual(
+        withSink
+          ? [
+              {
+                paths: ["bindings"],
+                deleted: [{ path: ["channels", "discord"], value: undefined }],
+                previous: [{ path: ["bindings"], value: bindings }],
+                next: [{ path: ["bindings"], value: undefined }],
+              },
+            ]
+          : [],
+      );
     },
   );
 
