@@ -217,6 +217,7 @@ const repositoryScriptEntries = [
   "scripts/bench-control-ui-route-leaks.ts!",
   "scripts/bench-plugin-views.ts!",
   "scripts/perf/long-lived-error-stacks-measure.ts!",
+  "scripts/perf/matrix-send-preparation-measure.ts!",
   "scripts/perf/mcp-http-dispatcher-measure.ts!",
   "scripts/perf/prepared-gateway-startup-measure.mjs!",
   "scripts/perf/sandbox-paths-measure.ts!",
