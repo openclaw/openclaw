@@ -1,7 +1,7 @@
 import { once } from "node:events";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, inject, it } from "vitest";
 import type { ControlUiRootState } from "../../../src/gateway/server-control-ui-root.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
@@ -22,7 +22,13 @@ const suite = createControlUiE2eSuite({
   async startServer() {
     await mkdir(path.resolve(".openclaw/tmp"), { recursive: true });
     currentUiRoot = await mkdtemp(path.resolve(".openclaw/tmp/fallback-current-ui-"));
-    await buildProductionControlUiE2e(currentUiRoot, "fallback-current-source");
+    const currentBuild =
+      inject("controlUiE2ePrebuiltAssets")?.root ?? inject("controlUiE2eBuildRoot");
+    if (currentBuild) {
+      await cp(currentBuild, currentUiRoot, { recursive: true });
+    } else {
+      await buildProductionControlUiE2e(currentUiRoot, "fallback-current-source");
+    }
     const { createOpenClawTestState } =
       await import("../../../src/test-utils/openclaw-test-state.ts");
     const state = await createOpenClawTestState({
