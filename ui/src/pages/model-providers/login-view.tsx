@@ -1,7 +1,7 @@
 import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import type { ModelAuthStatusResult } from "../../api/types.ts";
-import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { IconButton } from "../../components/solid/icon-button.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";

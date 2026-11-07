@@ -17,9 +17,9 @@ import {
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import type { PortalPanelToggleDetail } from "../../components/panel-toggle-contract.ts";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
-import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
 import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
 import { registerPortalsEnglish } from "../../i18n/locales/en-portals.ts";

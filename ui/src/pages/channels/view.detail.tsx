@@ -2,8 +2,8 @@ import { asNullableRecord, readStringField } from "@openclaw/normalization-core/
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import { ChannelIcon } from "../../components/solid/channel-icon.tsx";
-import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { IconButton } from "../../components/solid/icon-button.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import { channelSnapshotEntryIsActive, resolveChannelAccounts } from "../../lib/channels/index.ts";
 import "../../components/modal-dialog.tsx";

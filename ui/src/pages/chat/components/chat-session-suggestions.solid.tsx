@@ -4,8 +4,8 @@ import type {
   SessionSuggestion,
   SessionSuggestionResolution,
 } from "../../../../../packages/gateway-protocol/src/index.js";
-import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { IconButton } from "../../../components/solid/icon-button.tsx";
+import type { IconName } from "../../../components/solid/icon.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 
@@ -57,7 +57,9 @@ export function ChatSessionSuggestions(props: {
                             label={t(`chat.sessionSuggestions.${action[1]}`, {
                               author: author(),
                             })}
-                            tooltip={t(`chat.sessionSuggestions.${action[1]}`, { author: author() })}
+                            tooltip={t(`chat.sessionSuggestions.${action[1]}`, {
+                              author: author(),
+                            })}
                             disabled={props.busyIds.has(suggestion().id)}
                             onClick={() => props.onResolve(suggestion(), action[0])}
                           />

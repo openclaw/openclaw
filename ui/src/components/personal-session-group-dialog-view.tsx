@@ -12,9 +12,9 @@ import type {
 } from "../lib/sessions/personal-groups.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
 import { Checkbox } from "./solid/checkbox.tsx";
+import { IconButton } from "./solid/icon-button.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Radio } from "./solid/radio.tsx";
-import { IconButton } from "./solid/icon-button.tsx";
 import { Picker } from "./solid/select-picker.tsx";
 import { renderSessionOwnerAvatar } from "./solid/session-presentation.tsx";
 

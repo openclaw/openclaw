@@ -5,8 +5,8 @@ import {
   PLUGIN_DECLARED_SURFACE_GROUPS,
   type PluginDeclaredSurfaceGroup,
 } from "../../../../packages/gateway-protocol/src/schema/plugin-declared-surface-groups.js";
-import { Icon } from "../../components/solid/icon.tsx";
 import { IconButton } from "../../components/solid/icon-button.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/modal-dialog.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {

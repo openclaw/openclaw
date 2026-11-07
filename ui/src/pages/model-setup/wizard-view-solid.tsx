@@ -1,9 +1,9 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Match, Show, Switch } from "solid-js";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
-import { IconButton } from "../../components/solid/icon-button.tsx";
 import { WizardStepControls } from "../../components/wizard-step-controls.tsx";
 import "../../components/modal-dialog.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";

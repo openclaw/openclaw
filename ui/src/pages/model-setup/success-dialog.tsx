@@ -3,8 +3,8 @@ import {
   hasProviderBrandIcon,
   providerIdFromModelRef,
 } from "../../components/provider-icon-data.ts";
-import { Icon } from "../../components/solid/icon.tsx";
 import { IconButton } from "../../components/solid/icon-button.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/modal-dialog.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";

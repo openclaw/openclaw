@@ -277,7 +277,8 @@ function createModalPolicy(host: OpenClawModalDialog): ModalPolicy {
       }
       return dispatch(type, cancelable);
     },
-    onRootChange: (root) => retainShadowStyles(root, [overlayStyles, iconButtonStyles, modalStyles]),
+    onRootChange: (root) =>
+      retainShadowStyles(root, [overlayStyles, iconButtonStyles, modalStyles]),
     native: {
       isOpen: () => dialog.open,
       show: () => {

@@ -1,7 +1,7 @@
 import { action, createOptimistic, createSignal, Show } from "solid-js";
 import { ModalDialog } from "../../components/modal-dialog.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
 import { IconButton } from "../../components/solid/icon-button.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import { registerChatSessionOptionalEnglish } from "../../i18n/locales/en-chat-session-optional.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";

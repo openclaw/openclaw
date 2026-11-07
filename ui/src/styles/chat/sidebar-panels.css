@@ -864,9 +864,6 @@ button.sidebar-image-view__image {
   height: 26px;
   min-height: 26px;
   padding: 4px;
-}
-
-.session-diff__toolbar-button {
   display: inline-flex;
   align-items: center;
   gap: 2px;

@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createSignal, Show } from "solid-js";
-import { Icon } from "./icon.tsx";
 import { IconButton } from "./icon-button.tsx";
+import { Icon } from "./icon.tsx";
 import { SettingsRow } from "./settings-ui.tsx";
 
 /**

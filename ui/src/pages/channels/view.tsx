@@ -3,10 +3,10 @@ import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import type { ChannelsStatusSnapshot } from "../../api/types.ts";
 import "../../styles/channels.css";
 import { ChannelIcon } from "../../components/solid/channel-icon.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
-import { InlineAlert } from "../../components/solid/inline-alert.tsx";
-import "../../components/openclaw-mascot.tsx";
 import { IconButton } from "../../components/solid/icon-button.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
+import "../../components/openclaw-mascot.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
   SettingsEmpty,
   SettingsPage,

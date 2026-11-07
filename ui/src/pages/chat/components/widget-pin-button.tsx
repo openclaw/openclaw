@@ -53,7 +53,7 @@ export function WidgetPinButton(props: { target: WidgetPinTarget; title?: string
   const failed = createMemo(() => {
     const completion = attempt();
     const outcome = createMemo(() => completion, { loadingValue: undefined });
-    // Only the native title's failure fact belongs to this boundary, not its optimistic label.
+    // Only the tooltip's failure fact belongs to this boundary, not its optimistic label.
     return createErrorBoundary(
       () => {
         outcome();
