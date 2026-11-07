@@ -45,7 +45,9 @@ import { syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import type { SolidReadinessShell } from "./control-ui-readiness-solid.ts";
 import type { ControlUiReadiness, ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import { createGatewayControlUiReloadOptions } from "./gateway-control-ui-reload.ts";
+import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
 import { postNativeNavState, type NativeNavState } from "./native-nav-state.ts";
+import { isNativeEmbedHost } from "./native-web-chrome.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { RouteElements, type RouteElementEvent } from "./route-elements.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
@@ -139,10 +141,23 @@ export class ShellOwner
     return routeSearch === undefined ? this.onboarding : resolveOnboardingMode(routeSearch);
   }
 
+  /** A cold connection has no navigation yet, so the compact drawer stays closed. */
+  get initialConnectionPending(): boolean {
+    const runtime = this.runtime;
+    return Boolean(
+      runtime &&
+      this.routeState.routeId === undefined &&
+      !isNativeEmbedHost() &&
+      !runtime.warmBoot &&
+      !gatewayPresentationScope(runtime.context.gateway).readyOnce &&
+      runtime.context.gateway.snapshot.phase !== "connected",
+    );
+  }
+
   get workspaceChromeVisible(): boolean {
     const routeId = this.routeState.routeId;
     // Hidden workspace chrome must not preload its sidebar and panel graphs.
-    return routeId !== undefined && !isSettingsNavigationRoute(routeId) && !this.onboardingMode;
+    return (routeId === undefined || !isSettingsNavigationRoute(routeId)) && !this.onboardingMode;
   }
 
   storedOutboxScopeHost(context: ApplicationContext): StoredOutboxScopeHost {

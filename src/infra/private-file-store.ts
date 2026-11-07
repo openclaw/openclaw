@@ -5,6 +5,7 @@ import {
   type FileStore,
   type FileStoreSync,
 } from "@openclaw/fs-safe/store";
+import { allowDrvfsRenameRecovery } from "./fs-safe-drvfs.js";
 import { readExistingStateRootMode, tightenPrivateDirRootSync } from "./private-dir-mode.js";
 
 const PRIVATE_STORE_DIR_MODE = 0o700;
@@ -13,13 +14,21 @@ const PRIVATE_STORE_DIR_MODE = 0o700;
 /** Create an async private file store rooted at `rootDir`. */
 export function privateFileStore(rootDir: string): FileStore {
   tightenPrivateDirRootSync(rootDir, PRIVATE_STORE_DIR_MODE);
-  return fileStore({ rootDir, private: true });
+  return fileStore({
+    rootDir,
+    private: true,
+    allowDrvfsRenameRecovery: allowDrvfsRenameRecovery(rootDir),
+  });
 }
 
 /** Create a sync private file store rooted at `rootDir`. */
 export function privateFileStoreSync(rootDir: string): FileStoreSync {
   tightenPrivateDirRootSync(rootDir, PRIVATE_STORE_DIR_MODE);
-  return fileStoreSync({ rootDir, private: true });
+  return fileStoreSync({
+    rootDir,
+    private: true,
+    allowDrvfsRenameRecovery: allowDrvfsRenameRecovery(rootDir),
+  });
 }
 
 /** Root-level state files stay private without treating the shared root as a private store. */
@@ -34,8 +43,10 @@ export function writePrivateTextFileAtomicSync(
     privateFileStoreSync(directory).writeText(path.basename(filePath), content);
     return;
   }
-  fileStoreSync({ rootDir: directory, private: true, dirMode }).writeText(
-    path.basename(filePath),
-    content,
-  );
+  fileStoreSync({
+    rootDir: directory,
+    private: true,
+    dirMode,
+    allowDrvfsRenameRecovery: allowDrvfsRenameRecovery(directory),
+  }).writeText(path.basename(filePath), content);
 }

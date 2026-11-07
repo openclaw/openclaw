@@ -9,6 +9,7 @@ import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import { VERSION } from "../version.js";
 import { sha256Hex } from "./crypto-digest.js";
+import { allowDrvfsRenameRecovery } from "./fs-safe-drvfs.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -203,6 +204,7 @@ export function repairPublishedTranscriptArchive(params: {
   params.signal?.throwIfAborted();
   assertAgentDatabaseMaintenanceAuthority();
   replaceFileAtomicSync({
+    allowDrvfsRenameRecovery: allowDrvfsRenameRecovery(archiveDirectory),
     beforeRename: () => {
       params.signal?.throwIfAborted();
       // Staging and fsync can outlive the timer-driven lease heartbeat. Recheck
