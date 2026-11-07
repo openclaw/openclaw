@@ -407,12 +407,17 @@ function formatReadResult(
 
   const truncation = result.details?.kind === "truncated" ? result.details.truncation : undefined;
   if (truncation?.truncated) {
+    // Stay on the cause the notice reports; a budget-bound page never reached the byte cap.
+    const bound =
+      truncation.truncatedBy === "budget"
+        ? "model context budget"
+        : `${formatSize(truncation.maxBytes ?? DEFAULT_MAX_BYTES)} limit`;
     if (truncation.firstLineExceedsLimit) {
-      text += `\n${theme.fg("warning", `[First line exceeds ${formatSize(truncation.maxBytes ?? DEFAULT_MAX_BYTES)} limit]`)}`;
+      text += `\n${theme.fg("warning", `[First line exceeds ${bound}]`)}`;
     } else if (truncation.truncatedBy === "lines") {
       text += `\n${theme.fg("warning", `[Truncated: showing ${truncation.outputLines}${truncation.totalLines === undefined ? "" : ` of ${truncation.totalLines}`} lines (${truncation.maxLines ?? DEFAULT_MAX_LINES} line limit)]`)}`;
     } else {
-      text += `\n${theme.fg("warning", `[Truncated: ${truncation.outputLines} lines shown (${formatSize(truncation.maxBytes ?? DEFAULT_MAX_BYTES)} limit)]`)}`;
+      text += `\n${theme.fg("warning", `[Truncated: ${truncation.outputLines} lines shown (${bound})]`)}`;
     }
   }
   return text;
