@@ -697,9 +697,9 @@ async function initSessionStateAttemptLocked(
   const resetBoundary = previousSessionEntry
     ? createReplySessionResetBoundary({
         cwd: resolveAgentWorkspaceDir(cfg, agentId),
-        explicitReason: resolveExplicitSessionEndReason(matchedResetTriggerLower),
         previousReason: previousSessionEndReason,
         resetTriggered,
+        tailMessages: resetPolicy.tailMessages,
       })
     : undefined;
   let previousSessionMemory: SessionMemoryTranscript | undefined;

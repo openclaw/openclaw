@@ -281,6 +281,10 @@ Sessions are reused until you reset them manually or opt into an automatic reset
 
 When both daily and idle resets are configured, whichever expires first wins.
 The message that triggers an automatic reset continues in the new conversation.
+The new session also keeps up to the last six user/assistant messages of the
+old one so short follow-ups still make sense; set `tailMessages` on any reset
+policy to change that number, or `0` to start empty. `/new` and `/reset` always
+start empty.
 Heartbeat, cron, exec, and other system-event turns may write session metadata,
 but those writes do not extend daily or idle reset freshness. When a reset
 rolls the session, queued system-event notices for the old session are

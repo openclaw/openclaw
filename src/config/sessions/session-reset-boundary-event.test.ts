@@ -139,4 +139,25 @@ describe("reset boundary planning", () => {
       reason: "daily",
     });
   });
+
+  it.each([
+    [undefined, "user-2"],
+    [2, "user-4"],
+    [10, "user-1"],
+    [0, undefined],
+  ])("keeps a configured tail of %s messages", (tailMessages, firstKeptEntryId) => {
+    const events = [1, 2, 3, 4].flatMap((turn) => [
+      message(`user-${turn}`, turn === 1 ? null : `assistant-${turn - 1}`, "user", "q", turn * 2),
+      message(`assistant-${turn}`, `user-${turn}`, "assistant", "a", turn * 2 + 1),
+    ]);
+
+    const boundary = buildSessionResetBoundaryEvent({
+      events,
+      context: "preserve-tail",
+      reason: "idle",
+      tailMessages,
+    });
+
+    expect(boundary.firstKeptEntryId).toBe(firstKeptEntryId);
+  });
 });

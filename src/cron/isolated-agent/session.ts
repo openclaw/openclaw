@@ -204,7 +204,9 @@ export function resolveCronSession(
   let sessionId: string;
   let isNewSession: boolean;
   let systemSent: boolean;
-  let resetBoundaryPending: { reason: "cron-stale"; sessionFile: string } | undefined;
+  let resetBoundaryPending:
+    | { reason: "cron-stale"; sessionFile: string; tailMessages: number }
+    | undefined;
 
   if (!params.forceNew && entry?.sessionId) {
     // Cron/webhook sessions follow the direct reset policy so scheduled turns
@@ -232,7 +234,11 @@ export function resolveCronSession(
       isNewSession = true;
       systemSent = false;
       if (!sourceSessionDiffers) {
-        resetBoundaryPending = { reason: "cron-stale", sessionFile: params.sessionKey };
+        resetBoundaryPending = {
+          reason: "cron-stale",
+          sessionFile: params.sessionKey,
+          tailMessages: resetPolicy.tailMessages,
+        };
       }
     }
   } else {
