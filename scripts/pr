@@ -16,6 +16,8 @@ if [ -n "${OPENCLAW_PR_ANCHOR_REPO_ROOT:-}" ] &&
   trap 'exit 129' HUP
   trap 'exit 130' INT
   trap 'exit 131' QUIT
+  # `scripts/pr --help | head` closes stderr mid-run; dying here would strand dependency holds.
+  trap 'exit 141' PIPE
   trap 'exit 143' TERM
 fi
 
@@ -1234,6 +1236,7 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
           trap 'exit 129' HUP
           trap 'exit 130' INT
           trap 'exit 131' QUIT
+          trap 'exit 141' PIPE
           trap 'exit 143' TERM
           exec 9< "$anchor_exec_dir"
           pr_prepare_bootstrap "$anchor_exec_dir" "$anchor_commit" || exit 1
@@ -1292,7 +1295,7 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
             exit 1
           fi
           pr_retire_created_anchor "$anchor_exec_dir"
-          trap - EXIT HUP INT QUIT TERM
+          trap - EXIT HUP INT QUIT PIPE TERM
           exec 9<&-
         fi
         # HEAD blobs are authoritative here: the uncommitted-wrapper guard above

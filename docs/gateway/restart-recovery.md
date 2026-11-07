@@ -58,6 +58,33 @@ preserving its status, archive, current writer identities, and delivery notice
 without resuming it or replaying a pending final; startup reports an aggregate
 count per agent instead of repeating warnings for each such session.
 
+## A wedged main thread
+
+If the Gateway main thread makes no progress for five continuous minutes, its
+worker-thread stall observer writes `main-thread stall recovery:` to the service's
+stderr log, including the PID, elapsed time, threshold, and `signal=SIGKILL`, then
+kills the process. Five minutes leaves generous headroom over ordinary stalls
+lasting tens of seconds. Every successful heartbeat resets the deadline; separate
+stalls do not add up. If the observer itself was suspended (for example, during
+laptop sleep), it starts a fresh observation window on wake. This bound is fixed, with no configuration option.
+
+Systemd, launchd, and the macOS app's child supervisor restart the failed Gateway.
+Eligible interrupted runs then follow the crash-recovery rules above. A foreground
+Gateway or `gateway:watch` needs an external supervisor to restart automatically.
+The observer uses `SIGKILL` because a wedged JavaScript thread cannot handle
+`SIGTERM`; it avoids `SIGABRT` and its potentially large core dump.
+
+Look for preceding `main-thread stall in progress:` lines for bounded JavaScript
+profile evidence when the runtime supports it. Stack capture is best effort and
+cannot hold up termination; Bun and uninterruptible native stalls may only have
+the heartbeat diagnostic. These off-thread lines go directly to stderr: use the
+systemd journal, launchd stderr log, or macOS app Gateway log rather than relying
+only on `openclaw logs`.
+
+Recovery is suppressed while an inspector is enabled, including debugger pauses,
+and when startup profiling or coverage flags conflict with diagnostics. The
+heartbeat observer works independently of the optional V8 flight recorder.
+
 ## What survives a restart
 
 | State                                                             | Behavior                                                                        |
