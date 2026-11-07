@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   request:
-    name: Request stable Store approval or publish beta GitHub assets
+    name: Request Gateway Store Production or Development approval
     if: github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 55
@@ -50,7 +50,7 @@ jobs:
           repositories: |
             openclaw
             openclaw-windows-packaging
-            ${{ !contains(inputs.tag, '-beta.') && 'releases' || '' }}
+            releases
           permission-actions: write
           permission-contents: read
       - name: Request publication of the exact published Gateway source

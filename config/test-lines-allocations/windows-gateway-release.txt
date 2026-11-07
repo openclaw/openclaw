@@ -1,3 +1,3 @@
-# Exact-source stable Store requests and beta MSIX publication, including replay,
-# revocation, artifact expiry, ambiguous dispatch, and both parent workflow gates.
-468
+# Exact-source Production/Development Store requests, including current-attempt
+# witnesses, replay, revocation, artifact expiry, and both parent workflow gates.
+571

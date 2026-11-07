@@ -170,7 +170,9 @@ function verifyBuild(run, expectedHead) {
       run.path === `.github/workflows/${buildWorkflow}` &&
       run.event === "workflow_dispatch" &&
       run.head_branch === "main" &&
-      run.head_sha === expectedHead,
+      run.head_sha === expectedHead &&
+      Number.isSafeInteger(run.run_attempt) &&
+      run.run_attempt > 0,
     "The packaging run does not match the selected main workflow.",
   );
 }
@@ -197,7 +199,12 @@ async function awaitBuild(id, expectedHead) {
 
 function verifySource(id, run) {
   const artifacts = collection(`repos/${packaging}/actions/runs/${id}/artifacts`, "artifacts");
-  for (const name of ["openclaw-source-resolution", "openclaw-gateway-msix-store-submission"]) {
+  const witnessName = `store-release-source-${run.run_attempt}`;
+  for (const name of [
+    "openclaw-source-resolution",
+    `openclaw-gateway-msix-store-submission-${run.run_attempt}`,
+    witnessName,
+  ]) {
     const matches = artifacts.filter((artifact) => artifact.name === name);
     requireValue(
       matches.length === 1 && !matches[0].expired,
@@ -206,17 +213,9 @@ function verifySource(id, run) {
   }
   const directory = mkdtempSync(join(tmpdir(), "openclaw-gateway-store-"));
   try {
-    gh([
-      "run",
-      "download",
-      id,
-      "--repo",
-      packaging,
-      "--name",
-      "openclaw-source-resolution",
-      "--dir",
-      directory,
-    ]);
+    for (const name of ["openclaw-source-resolution", witnessName]) {
+      gh(["run", "download", id, "--repo", packaging, "--name", name, "--dir", directory]);
+    }
     const source = JSON.parse(readFileSync(join(directory, "source-resolution.json"), "utf8"));
     const identity = source.releaseIdentitySource;
     requireValue(
@@ -229,15 +228,32 @@ function verifySource(id, run) {
         source.workflowRef === `${packaging}/.github/workflows/${buildWorkflow}@refs/heads/main` &&
         source.githubRef === "refs/heads/main" &&
         source.eventName === "workflow_dispatch" &&
-        source.signingMode === "store" &&
+        source.releaseChannel === channel &&
+        source.signingMode === (channel === "beta" ? "official" : "store") &&
         identity?.repository === source.repository &&
         identity.resolvedCommit === sha &&
         identity.packageVersion === tag.slice(1) &&
         identity.releaseTag === tag &&
-        identity.channel === "stable",
+        identity.channel === channel,
       "The MSIX payload or separately selected release identity differs from the published Gateway. Do not submit this build.",
     );
-    record({ source });
+    const storeSource = JSON.parse(readFileSync(join(directory, "store-source.json"), "utf8"));
+    const releasePrefix = `${tag}-msix.`;
+    requireValue(
+      storeSource.runId === id &&
+        storeSource.runAttempt === run.run_attempt &&
+        storeSource.packagingCommit === run.head_sha &&
+        storeSource.releaseChannel === channel &&
+        typeof storeSource.releaseTag === "string" &&
+        storeSource.releaseTag.startsWith(releasePrefix) &&
+        /^[0-9]$/.test(storeSource.releaseTag.slice(releasePrefix.length)) &&
+        storeSource.bundleName ===
+          `OpenClawGateway-${storeSource.releaseTag.slice(1)}-store.msixbundle` &&
+        /^[a-f0-9]{64}$/.test(storeSource.bundleSha256),
+      "The Store witness does not match this Gateway release, build, or current attempt. Do not submit this build.",
+    );
+    // The central publisher owns bundle-byte verification and Store destination policy.
+    record({ source, storeSource, buildRunAttempt: run.run_attempt });
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -295,24 +311,22 @@ async function main() {
     signing_mode: channel === "beta" ? "official" : "store",
     publish_release: channel === "beta" ? "true" : "false",
   });
-  record({ state: channel === "beta" ? "beta-build-dispatched" : "building", buildRunId: buildId });
+  record({ state: "building", buildRunId: buildId });
   report(`Gateway MSIX build: ${runUrl(packaging, buildId)}`);
-  if (channel === "beta") {
-    // The canonical packaging workflow owns beta authorization, signing, and
-    // prerelease publication. It produces no Store artifacts or Store request.
-    report(
-      "Beta signing and GitHub prerelease publication remain pending; no Store submission was requested.",
-    );
-    return;
-  }
   const run = await awaitBuild(buildId, packagingHead);
   verifySource(buildId, run);
   authorize(requestWorkflow);
-  record({ state: "store-dispatch-attempted", storeRepository: releases });
-  const storeId = dispatch(releases, storeWorkflow, { product: "gateway", run_id: buildId });
+  const storeChannel = channel === "beta" ? "development" : "production";
+  record({ state: "store-dispatch-attempted", storeRepository: releases, storeChannel });
+  const storeId = dispatch(releases, storeWorkflow, {
+    product: "gateway",
+    run_id: buildId,
+    channel: storeChannel,
+    automatic: "true",
+  });
   record({ state: "store-approval-pending", storeRunId: storeId });
   report(
-    `Gateway Store approval request: ${runUrl(releases, storeId)}. Release-manager approval and Microsoft acceptance remain pending; certification and public availability are not yet verified.`,
+    `Gateway Store ${storeChannel} approval request: ${runUrl(releases, storeId)}. Release-manager approval and Microsoft acceptance remain pending; certification and delivery availability are not yet verified.`,
   );
 }
 
