@@ -602,7 +602,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         case "inline":
             guard ControlUIDocumentHost.isHTTPURL(url) else { return nil }
         case "external":
-            guard ControlUIDocumentHost.isExternalURL(url) else { return nil }
+            guard ControlUIDocumentHost.isExternalURL(url) || ControlUIDocumentHost.isTrustedAppLinkURL(url)
+            else { return nil }
         default:
             return nil
         }
