@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 89622,
-  "reason": "Remove unused boot copy, obsolete browser fallbacks, and unused initialization; measured startup 89,622 B normalized gzip.",
-  "updatedAt": "2026-11-06"
+  "startupJsGzipBytes": 90908,
+  "reason": "PR #194142 (L293): Details first-frame prewarm loader in startup; lead byte exception",
+  "updatedAt": "2026-11-07"
 }

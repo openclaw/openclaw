@@ -24,7 +24,7 @@ import {
   clearCompactionPendingAskSection,
   computeFileLists,
   createFileOps,
-  extractFileOpsFromMessage,
+  extractFileOpsFromMessages,
   findLatestCompactionUserMessage,
   type FileOperations,
   formatCompactionUserLabel,
@@ -556,14 +556,10 @@ export function prepareCompaction(
   if (previousSummaryDetails) {
     mergeSummaryFileOperations(fileOps, previousSummaryDetails);
   }
-  for (const msg of messagesToSummarize) {
-    extractFileOpsFromMessage(msg, fileOps);
-  }
-  if (cutPoint.isSplitTurn) {
-    for (const msg of turnPrefixMessages) {
-      extractFileOpsFromMessage(msg, fileOps);
-    }
-  }
+  extractFileOpsFromMessages(
+    [...messagesToSummarize, ...(cutPoint.isSplitTurn ? turnPrefixMessages : [])],
+    fileOps,
+  );
 
   return ok({
     firstKeptEntryId,

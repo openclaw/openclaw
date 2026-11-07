@@ -291,8 +291,8 @@ jobs:
     runs-on: &linux_runner_large >-
       ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
       toJSON(inputs.runner_group), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' ||
-      'blacksmith-16vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04'
-      || 'blacksmith-16vcpu-ubuntu-2404') }}
+      'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04'
+      || 'blacksmith-4vcpu-ubuntu-2404') }}
     timeout-minutes: 30
     env:
       QA_PARITY_CONCURRENCY: "1"

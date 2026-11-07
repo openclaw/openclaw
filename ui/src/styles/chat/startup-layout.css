@@ -431,7 +431,6 @@ div.chat-thread:where(.chat-thread--annotations) {
   line-height: calc(20px * var(--control-ui-text-scale));
 }
 
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-icon-btn,
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-details-toggle,
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__layout-trigger {
   min-height: 32px;
@@ -445,9 +444,7 @@ div.chat-thread:where(.chat-thread--annotations) {
     :hover,
     :focus-visible,
     [aria-expanded="true"]
-  ),
-.sidebar-region__panels-toggle
-  .chat-pane__panels-toggle:not(:hover, :focus-visible, [aria-expanded="true"]) {
+  ) {
   color: var(--control-secondary-text, var(--muted));
 
   svg {
@@ -459,13 +456,6 @@ div.chat-thread:where(.chat-thread--annotations) {
 @media (hover: none) {
   .chat-pane__header:not(.chat-pane__header--mobile)
     :is(.chat-icon-btn, .chat-details-toggle, .chat-pane__layout-trigger):not(
-      :focus-visible,
-      [aria-expanded="true"],
-      :disabled,
-      [aria-disabled="true"]
-    ),
-  .sidebar-region__panels-toggle
-    .chat-pane__panels-toggle:not(
       :focus-visible,
       [aria-expanded="true"],
       :disabled,
@@ -498,24 +488,14 @@ div.chat-thread:where(.chat-thread--annotations) {
     justify-content: flex-end;
   }
 
-  & .chat-icon-btn {
-    width: var(--chat-pane-header-icon-size);
-    min-width: var(--chat-pane-header-icon-size);
-    padding: 0;
-  }
-
-  & .chat-icon-btn svg {
-    width: 16px;
-    height: 16px;
-  }
-
-  & .chat-pane__panels-toggle svg {
-    stroke-width: 1.6;
-  }
+  /* Header icon buttons share the bar's 16px glyph and secondary ink with the
+     labelled triggers beside them. */
+  --icon-button-glyph: var(--rail-header-action-glyph-size);
+  --icon-button-stroke: 1.6px;
+  --icon-button-color: var(--icon-interactive, var(--control-secondary-text, var(--muted)));
 
   /* Header composition supplies the approved glyph to the native Details trigger. */
-  & .chat-details-toggle,
-  & .chat-pane__panels-toggle {
+  & .chat-details-toggle {
     width: var(--rail-header-action-size);
     min-width: var(--rail-header-action-size);
     height: var(--rail-header-action-size);
@@ -528,7 +508,7 @@ div.chat-thread:where(.chat-thread--annotations) {
     background: transparent;
   }
 
-  & :is(.chat-details-toggle, .chat-pane__panels-toggle):hover {
+  & .chat-details-toggle:hover {
     background: var(--session-header-control-hover-bg);
   }
 
@@ -539,6 +519,7 @@ div.chat-thread:where(.chat-thread--annotations) {
     height: var(--rail-header-action-glyph-size);
   }
 
+  /* An open panel reads as the header's selected control. */
   & .chat-pane__panels-toggle[aria-expanded="true"],
   & .chat-details-toggle[aria-expanded="true"] {
     background: var(--session-header-control-surface);
@@ -567,8 +548,8 @@ div.chat-thread:where(.chat-thread--annotations) {
     letter-spacing: normal;
   }
 
-  & .chat-pane__session-title {
-    padding-inline-end: 0;
+  & .chat-pane__header-leading {
+    gap: 0;
   }
 
   /* Align visible lettering with the glyph centerline without moving hit areas. */
@@ -1279,34 +1260,18 @@ openclaw-chat-sidebar-region,
   align-items: center;
 }
 
-.sidebar-region__panels-toggle .chat-icon-btn.chat-pane__panels-toggle {
-  width: var(--rail-header-action-size);
-  min-width: var(--rail-header-action-size);
-  height: var(--rail-header-action-size);
-  min-height: var(--rail-header-action-size);
-  padding: 0;
-  border-color: transparent;
-  border-radius: calc(8px * var(--openclaw-corner-radius-scale));
-  corner-shape: superellipse(1.5);
-  background: transparent;
+.sidebar-region__panels-toggle {
+  --icon-button-glyph: var(--rail-header-action-glyph-size);
+  --icon-button-stroke: 1.6px;
+  --icon-button-color: var(--icon-interactive, var(--control-secondary-text, var(--muted)));
 }
 
-.sidebar-region__panels-toggle .chat-icon-btn.chat-pane__panels-toggle:hover {
-  background: var(--session-header-control-hover-bg);
-}
-
-.sidebar-region__panels-toggle .chat-pane__panels-toggle svg {
-  width: 16px;
-  height: 16px;
-  stroke-width: 1.6;
-}
-
-.sidebar-region__panels-toggle .chat-icon-btn.chat-pane__panels-toggle[aria-expanded="true"] {
+.sidebar-region__panels-toggle .chat-pane__panels-toggle[aria-expanded="true"] {
   background: var(--session-header-control-surface);
   color: var(--session-header-control-active-color, var(--text));
 }
 
-.sidebar-region__panels-toggle .chat-icon-btn.chat-pane__panels-toggle[aria-expanded="true"]:hover {
+.sidebar-region__panels-toggle .chat-pane__panels-toggle[aria-expanded="true"]:hover {
   background: var(--session-header-control-active-hover-bg);
 }
 

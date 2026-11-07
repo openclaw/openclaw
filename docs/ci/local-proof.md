@@ -327,12 +327,14 @@ comparison base is positive; non-growing changes pass with an over-ceiling notic
 while runs without a base retain the absolute ceiling check.
 
 When allocation keys or values change, positive effective-ceiling growth must
-not exceed positive net test-line growth against the same comparison base.
-This includes scalar changes in the same diff, prevents overlapping grants
-from counting the same growth twice, and does not forgive inherited debt.
+not exceed net test-line growth plus the comparison base's existing overage,
+floored at zero. An explicitly approved exact grant can reconcile that debt
+without creating extra headroom. This includes scalar changes in the same diff
+and prevents overlapping grants from counting the same growth twice. Debt still
+fails the ceiling check unless a grant covers it.
 Comments do not change credit. Untracked records are ignored; `--staged` reads
 the index exactly. Scalar-only raises retain the explicit review-owned warning
-route and need approval under the
+route. Raises beyond this change's net regression growth need approval under the
 [testing policy](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-testing/SKILL.md#baseline-and-expected-failure-exceptions).
 
 `pnpm check:test-lines-ratchet --prune` folds the measured total into the scalar
