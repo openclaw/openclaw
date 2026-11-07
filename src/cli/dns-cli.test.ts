@@ -288,6 +288,10 @@ describe("dns-cli probe bounds", () => {
       const importGlob = path.join(etcDir, "conf.d", "*.server");
       fs.mkdirSync(etcDir, { recursive: true });
       fs.mkdirSync(path.join(etcDir, "conf.d"));
+      // Modes are set while the runner still owns the tree; the chown is the
+      // last fixture step, because a runner-side chmod after it would EPERM.
+      fs.chmodSync(etcDir, 0o755);
+      fs.chmodSync(path.join(etcDir, "conf.d"), 0o700);
       const grant = actualSpawnSync("sudo", ["-n", "chown", "root:wheel", etcDir], {
         encoding: "utf-8",
       });
@@ -296,8 +300,6 @@ describe("dns-cli probe bounds", () => {
         // mocked regressions.
         return;
       }
-      fs.chmodSync(etcDir, 0o755);
-      fs.chmodSync(path.join(etcDir, "conf.d"), 0o700);
 
       spawnSyncMock.mockImplementation((cmd: string, args: string[], opts?: { input?: string }) => {
         // The CLI's privileged publication calls execute for real; only the
@@ -334,14 +336,25 @@ describe("dns-cli probe bounds", () => {
       const etcDir = path.join(brewPrefix, "etc", "coredns");
       const corefilePath = path.join(etcDir, "Corefile");
       const importGlob = path.join(etcDir, "conf.d", "*.server");
+      // Traversable ancestors first: an excluded principal must be able to
+      // reach the files, or a denial proves nothing about the file policy.
+      fs.chmodSync(brewPrefix, 0o755);
       fs.mkdirSync(etcDir, { recursive: true });
       fs.mkdirSync(path.join(etcDir, "conf.d"));
       fs.writeFileSync(corefilePath, ".:53 {\n  errors\n}\n");
       fs.chmodSync(corefilePath, 0o644);
+      const controlFile = path.join(etcDir, "control.txt");
+      fs.writeFileSync(controlFile, "readable control\n");
       const denied = actualSpawnSync("chmod", ["+a", "user:nobody deny read", corefilePath], {
         encoding: "utf-8",
       });
       expect(denied.status).toBe(0);
+      // The same principal reads the unrestricted control file, so the later
+      // refusal on the configured file is the file's own policy.
+      const control = actualSpawnSync("sudo", ["-n", "-u", "nobody", "cat", controlFile], {
+        encoding: "utf-8",
+      });
+      expect(control.status).toBe(0);
       const grant = actualSpawnSync("sudo", ["-n", "chown", "root:wheel", etcDir], {
         encoding: "utf-8",
       });
@@ -351,14 +364,31 @@ describe("dns-cli probe bounds", () => {
       fs.chmodSync(etcDir, 0o755);
       fs.chmodSync(path.join(etcDir, "conf.d"), 0o700);
 
-      // The widen call names the staged file; everything recorded before it is
-      // the pre-widening state of the staged bytes.
-      const widenCalls: string[] = [];
-      const readAsRoot = (target: string) =>
-        actualSpawnSync("sudo", ["-n", "cat", target], { encoding: "utf-8" });
+      // The widen call names the staged file; it is inspected synchronously
+      // before being forwarded, while the staged bytes still exist.
+      const observations: { mode: number; deniedPolicy: boolean; readerRefused: boolean }[] = [];
       spawnSyncMock.mockImplementation((cmd: string, args: string[], opts?: { input?: string }) => {
-        if (cmd === "sudo" && args[0] === "chmod" && typeof args[2] === "string") {
-          widenCalls.push(args[2]);
+        if (
+          cmd === "sudo" &&
+          args[0] === "chmod" &&
+          typeof args[2] === "string" &&
+          path.basename(args[2]).includes("openclaw-")
+        ) {
+          const staged = args[2];
+          const mode = actualSpawnSync("sudo", ["-n", "stat", "-f", "%Lp", staged], {
+            encoding: "utf-8",
+          });
+          const policy = actualSpawnSync("sudo", ["-n", "/bin/ls", "-lde", staged], {
+            encoding: "utf-8",
+          });
+          const asReader = actualSpawnSync("sudo", ["-n", "-u", "nobody", "cat", staged], {
+            encoding: "utf-8",
+          });
+          observations.push({
+            mode: Number.parseInt(mode.stdout ?? "", 8),
+            deniedPolicy: String(policy.stdout ?? "").includes("deny read"),
+            readerRefused: asReader.status !== 0,
+          });
         }
         if (cmd === "sudo" && args[0] !== "brew") {
           return actualSpawnSync(cmd, args, { encoding: "utf-8", ...opts });
@@ -380,19 +410,14 @@ describe("dns-cli probe bounds", () => {
       expect(fs.readFileSync(corefilePath, "utf-8")).toBe(
         `.:53 {\n  errors\n}\n\nimport ${importGlob}\n`,
       );
-      // The staged file was sampled at the widening call: the ACL was already
-      // restored and the bytes were unreadable to the excluded account.
-      expect(widenCalls.length).toBeGreaterThan(0);
-      for (const staged of widenCalls) {
-        const policy = actualSpawnSync("ls", ["-lde", staged], { encoding: "utf-8" });
-        if (policy.status !== 0) {
-          continue;
-        }
-        expect(policy.stdout).toContain("deny read");
-        const asReader = actualSpawnSync("sudo", ["-n", "-u", "nobody", "cat", staged], {
-          encoding: "utf-8",
-        });
-        expect(asReader.status).not.toBe(0);
+      // The synchronous observation is mandatory: at the widening call the
+      // staged file still existed, its access policy was in place, its mode
+      // was still private, and the excluded account was refused.
+      expect(observations.length).toBeGreaterThan(0);
+      for (const observed of observations) {
+        expect(observed.mode).toBe(0o600);
+        expect(observed.deniedPolicy).toBe(true);
+        expect(observed.readerRefused).toBe(true);
         const asRoot = readAsRoot(staged);
         expect(asRoot.status).toBe(0);
       }
@@ -426,13 +451,22 @@ describe("dns-cli probe bounds", () => {
       const etcDir = path.join(brewPrefix, "etc", "coredns");
       const corefilePath = path.join(etcDir, "Corefile");
       const importGlob = path.join(etcDir, "conf.d", "*.server");
+      // Traversable ancestors and a control read: the refusal later must be
+      // the file's own policy, not an unreachable ancestor.
+      fs.chmodSync(brewPrefix, 0o755);
       fs.mkdirSync(etcDir, { recursive: true });
       fs.writeFileSync(corefilePath, ".:53 {\n  errors\n}\n");
       fs.chmodSync(corefilePath, 0o644);
+      const controlFile = path.join(etcDir, "control.txt");
+      fs.writeFileSync(controlFile, "readable control\n");
       const denied = actualSpawnSync("chmod", ["+a", "user:nobody deny read", corefilePath], {
         encoding: "utf-8",
       });
       expect(denied.status).toBe(0);
+      const control = actualSpawnSync("sudo", ["-n", "-u", "nobody", "cat", controlFile], {
+        encoding: "utf-8",
+      });
+      expect(control.status).toBe(0);
       const policy = actualSpawnSync("ls", ["-lde", corefilePath], { encoding: "utf-8" });
       expect(policy.stdout).toContain("deny read");
 
@@ -460,14 +494,23 @@ describe("dns-cli probe bounds", () => {
       const corefilePath = path.join(etcDir, "Corefile");
       const managedPath = path.join(etcDir, "managed-Corefile");
       const importGlob = path.join(etcDir, "conf.d", "*.server");
+      // Traversable ancestors and a control read prove that the later refusal
+      // is the file's own policy, not an unreachable ancestor.
+      fs.chmodSync(brewPrefix, 0o755);
       fs.mkdirSync(etcDir, { recursive: true });
       fs.writeFileSync(managedPath, ".:53 {\n  errors\n}\n");
       fs.chmodSync(managedPath, 0o644);
       fs.symlinkSync("managed-Corefile", corefilePath);
+      const controlFile = path.join(etcDir, "control.txt");
+      fs.writeFileSync(controlFile, "readable control\n");
       const denied = actualSpawnSync("chmod", ["+a", "user:nobody deny read", managedPath], {
         encoding: "utf-8",
       });
       expect(denied.status).toBe(0);
+      const control = actualSpawnSync("sudo", ["-n", "-u", "nobody", "cat", controlFile], {
+        encoding: "utf-8",
+      });
+      expect(control.status).toBe(0);
 
       await runDnsSetup();
 
