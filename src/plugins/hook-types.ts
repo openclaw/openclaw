@@ -24,6 +24,11 @@ import type {
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
 } from "./hook-before-agent-start.types.js";
+import type {
+  PluginHookBeforeDispatchContext,
+  PluginHookBeforeDispatchEvent,
+  PluginHookBeforeDispatchResult,
+} from "./hook-before-dispatch.types.js";
 import type { PluginHookBeforeToolCallResult } from "./hook-before-tool-call-result.js";
 import type { PluginHookChannelPairingRequestedHandler } from "./hook-channel-pairing.types.js";
 import type { InputGateDecision } from "./hook-decision-types.js";
@@ -78,6 +83,11 @@ export type {
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
 } from "./hook-before-agent-start.types.js";
+export type {
+  PluginHookBeforeDispatchContext,
+  PluginHookBeforeDispatchEvent,
+  PluginHookBeforeDispatchResult,
+} from "./hook-before-dispatch.types.js";
 export type {
   PluginHookChannelChatContext,
   PluginHookChannelContext,
@@ -339,41 +349,6 @@ type PluginHookAfterCompactionEvent = {
 export type PluginHookInboundClaimResult = {
   handled: boolean;
   reply?: ReplyPayload;
-};
-
-export type PluginHookBeforeDispatchEvent = {
-  messageId?: string;
-  content: string;
-  body?: string;
-  channel?: string;
-  sessionKey?: string;
-  senderId?: string;
-  replyToId?: string;
-  replyToIdFull?: string;
-  replyToBody?: string;
-  replyToSender?: string;
-  replyToIsQuote?: boolean;
-  isGroup?: boolean;
-  timestamp?: number;
-};
-
-export type PluginHookBeforeDispatchContext = {
-  messageId?: string;
-  channelId?: string;
-  accountId?: string;
-  conversationId?: string;
-  sessionKey?: string;
-  senderId?: string;
-  replyToId?: string;
-  replyToIdFull?: string;
-  replyToBody?: string;
-  replyToSender?: string;
-  replyToIsQuote?: boolean;
-};
-
-export type PluginHookBeforeDispatchResult = {
-  handled: boolean;
-  text?: string;
 };
 
 export type PluginHookReplyDispatchContext = {

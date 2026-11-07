@@ -577,6 +577,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
           getPreDispatchAbortSignal(),
           () => {
             const hookContext = state.hookState.hookContext;
+            const connId = normalizeOptionalString(ctx.GatewayUiCommandTarget?.connId);
             const replyContext = {
               messageId: hookContext.messageId,
               sessionKey: beforeDispatchSessionKey,
@@ -599,6 +600,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
               withClaimingHookAdmission(
                 {
                   ...replyContext,
+                  ...(connId ? { connId } : {}),
                   channelId: hookContext.channelId,
                   accountId: hookContext.accountId,
                   conversationId: state.hookState.inboundClaimContext.conversationId,
