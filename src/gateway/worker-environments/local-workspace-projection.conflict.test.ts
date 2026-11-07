@@ -18,6 +18,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { synchronizeResolvedCanonicalPaths } from "./local-workspace-conflict-resolution.js";
 import {
   acknowledgeLocalWorkspaceConflict,
   withLocalWorkspaceProjection,
@@ -313,4 +314,82 @@ it("preserves newer guest divergence in projection if edited while conflict is p
   // Live guest divergence in projection must NOT be overwritten
   await expectText(projection, "source.txt", "guest v2 newer divergence\n");
   expect((await readProjection())?.pending_ref).toBeTruthy();
+});
+
+it("allows explicitly accepted Markdown separator lines (Revision 3 Finding 1)", async () => {
+  const projection = await prepare();
+  // Concurrent edit with markdown separator in canonical
+  await writeText(projection, "source.txt", "Guest Handover\n");
+  await writeText(canonical, "source.txt", "Handover\n=======\nDetailed summary\n");
+  await expect(synchronize()).rejects.toThrow("conflict");
+
+  // Operator explicitly acknowledges source.txt containing '=======\n'
+  await acknowledge("source.txt");
+  await settleProjection();
+
+  expect((await readProjection())?.pending_ref).toBeNull();
+  await expectText(projection, "source.txt", "Handover\n=======\nDetailed summary\n");
+});
+
+it("refuses to resolve when an ancestor directory component is a symlink (Revision 3 Finding 2)", async () => {
+  const projection = await prepare();
+  const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-outside-"));
+
+  // Guest creates sub as a symlink pointing outside
+  await fs.symlink(outsideDir, path.join(projection, "sub"));
+
+  // Canonical has a file at sub/deep/file.txt
+  await fs.mkdir(path.join(canonical, "sub", "deep"), { recursive: true });
+  await writeText(canonical, path.join("sub", "deep", "file.txt"), "canonical content\n");
+
+  // synchronizeResolvedCanonicalPaths must throw because ancestor component 'sub' escapes projection root
+  await expect(
+    synchronizeResolvedCanonicalPaths({
+      canonicalRoot: canonical,
+      projectionRoot: projection,
+      resolvedPaths: ["sub/deep/file.txt"],
+    }),
+  ).rejects.toThrow(/escapes projection root|ancestor is a symlink/);
+
+  // Guest creates internal_target directory and links internal_sub -> internal_target
+  await fs.mkdir(path.join(projection, "internal_target"), { recursive: true });
+  await fs.symlink("internal_target", path.join(projection, "internal_sub"));
+  await fs.mkdir(path.join(canonical, "internal_sub", "deep"), { recursive: true });
+  await writeText(canonical, path.join("internal_sub", "deep", "file.txt"), "canonical internal\n");
+
+  // synchronizeResolvedCanonicalPaths must throw specifically because internal ancestor is a symlink
+  await expect(
+    synchronizeResolvedCanonicalPaths({
+      canonicalRoot: canonical,
+      projectionRoot: projection,
+      resolvedPaths: ["internal_sub/deep/file.txt"],
+    }),
+  ).rejects.toThrow(/ancestor is a symlink/);
+
+  await fs.rm(outsideDir, { recursive: true, force: true });
+});
+
+it("preserves live guest symlink divergence across retries (Revision 3 Finding 4)", async () => {
+  const projection = await prepare();
+  // Guest creates a symlink target
+  await writeText(projection, "target1.txt", "target 1\n");
+  await writeText(projection, "target2.txt", "target 2\n");
+  await fs.unlink(path.join(projection, "source.txt"));
+  await fs.symlink("target1.txt", path.join(projection, "source.txt"));
+
+  await writeText(canonical, "source.txt", "canonical v1\n");
+  await expect(synchronize()).rejects.toThrow("conflict");
+
+  // Guest concurrently changes the symlink target to target2.txt
+  await fs.unlink(path.join(projection, "source.txt"));
+  await fs.symlink("target2.txt", path.join(projection, "source.txt"));
+
+  // Canonical acknowledges resolution
+  await acknowledge("source.txt");
+  await expect(settleProjection()).rejects.toThrow("conflict");
+
+  // Live guest symlink must NOT be overwritten
+  const stat = await fs.lstat(path.join(projection, "source.txt"));
+  expect(stat.isSymbolicLink()).toBe(true);
+  expect(await fs.readlink(path.join(projection, "source.txt"))).toBe("target2.txt");
 });

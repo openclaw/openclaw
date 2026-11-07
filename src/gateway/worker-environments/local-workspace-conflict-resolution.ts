@@ -1,10 +1,14 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { root as openFsSafeRoot } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import type { LocalWorkspaceSyncTarget as Direction } from "./local-workspace-checkpoint.js";
 import type { LocalWorkspaceManifestCheckpoint } from "./local-workspace-manifest-scan.js";
+import type { LocalWorkspaceProjection } from "./local-workspace-store.js";
+import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
+import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import {
   parseWorkerWorkspaceManifest,
   serializeWorkerWorkspaceManifest,
@@ -41,6 +45,8 @@ function buildLocalWorkspaceConflictRecord(
           size: entry.type === "file" ? entry.size : undefined,
           target: entry.type === "symlink" ? entry.target : undefined,
         };
+      } else if (resolvedManifest.directories?.includes(entryPath)) {
+        conflicts[entryPath] = { type: "directory" };
       } else {
         conflicts[entryPath] = { type: "missing" };
       }
@@ -49,7 +55,80 @@ function buildLocalWorkspaceConflictRecord(
   return conflicts;
 }
 
-async function synchronizeResolvedCanonicalPaths(params: {
+type LiveNode =
+  | { type: "missing" }
+  | { type: "directory" }
+  | { type: "symlink"; target: string }
+  | { type: "file"; sha256: string; mode?: number };
+
+async function inspectLiveNode(
+  root: string,
+  relativePath: string,
+  fsRoot?: { read: (p: string) => Promise<{ buffer: Uint8Array }> },
+): Promise<LiveNode> {
+  const fullPath = path.join(root, relativePath);
+  const stat = await fs.lstat(fullPath).catch(() => undefined);
+  if (!stat) {
+    return { type: "missing" };
+  }
+  if (stat.isDirectory()) {
+    return { type: "directory" };
+  }
+  if (stat.isSymbolicLink()) {
+    const target = await fs.readlink(fullPath);
+    return { type: "symlink", target };
+  }
+  if (stat.isFile()) {
+    let buf: Uint8Array | undefined;
+    if (fsRoot) {
+      buf = (await fsRoot.read(relativePath).catch(() => undefined))?.buffer;
+    }
+    if (!buf) {
+      buf = await fs.readFile(fullPath).catch(() => undefined);
+    }
+    const sha256 = buf ? createHash("sha256").update(buf).digest("hex") : "";
+    return { type: "file", sha256, mode: stat.mode & 0o777 };
+  }
+  return { type: "missing" };
+}
+
+function liveMatchesExpected(
+  live: LiveNode,
+  expected: { type?: string; sha256?: string; target?: string; mode?: number },
+): boolean {
+  if (expected.type && expected.type !== "diverged" && live.type !== expected.type) {
+    return false;
+  }
+  if (live.type === "file") {
+    if (expected.sha256 && live.sha256 !== expected.sha256) {
+      return false;
+    }
+    if (expected.mode !== undefined && live.mode !== undefined && live.mode !== expected.mode) {
+      return false;
+    }
+  }
+  if (live.type === "symlink" && expected.target && live.target !== expected.target) {
+    return false;
+  }
+  return true;
+}
+
+function nodesEqual(a: LiveNode, b: LiveNode): boolean {
+  if (a.type !== b.type) {
+    return false;
+  }
+  if (a.type === "symlink" && b.type === "symlink") {
+    return a.target === b.target;
+  }
+  if (a.type === "file" && b.type === "file") {
+    return (
+      a.sha256 === b.sha256 && (a.mode === undefined || b.mode === undefined || a.mode === b.mode)
+    );
+  }
+  return true;
+}
+
+export async function synchronizeResolvedCanonicalPaths(params: {
   canonicalRoot: string;
   projectionRoot: string;
   resolvedPaths: string[];
@@ -75,10 +154,34 @@ async function synchronizeResolvedCanonicalPaths(params: {
     ) {
       throw new Error(`Resolved path escapes projection root: ${resolvedPath}`);
     }
-    const destDirReal = await fs.realpath(destDir).catch(() => undefined);
-    if (destDirReal && !isPathInside(realProjectionRoot, destDirReal)) {
+    const resolvedDestDirAncestor = resolvePathViaExistingAncestorSync(destDir);
+    if (!isPathInside(realProjectionRoot, resolvedDestDirAncestor)) {
       throw new Error(`Resolved path directory escapes projection root: ${resolvedPath}`);
     }
+    let checkPath = params.projectionRoot;
+    const relativeSegments = path
+      .relative(params.projectionRoot, destDir)
+      .split(path.sep)
+      .filter(Boolean);
+    for (const segment of relativeSegments) {
+      checkPath = path.join(checkPath, segment);
+      const ancestorStat = await fs.lstat(checkPath).catch(() => undefined);
+      if (ancestorStat?.isSymbolicLink()) {
+        throw new Error(`Resolved path directory ancestor is a symlink: ${resolvedPath}`);
+      }
+    }
+
+    const liveGuestNode = await inspectLiveNode(params.projectionRoot, resolvedPath, projectionFs);
+    const canonicalNode = await inspectLiveNode(params.canonicalRoot, resolvedPath, canonicalFs);
+    const expectedGuestConflict = params.conflicts?.[resolvedPath];
+
+    if (expectedGuestConflict && !nodesEqual(liveGuestNode, canonicalNode)) {
+      if (!liveMatchesExpected(liveGuestNode, expectedGuestConflict)) {
+        params.divergedPaths?.add(resolvedPath);
+        continue;
+      }
+    }
+
     const stats = await fs.lstat(src).catch(() => undefined);
     if (!stats) {
       const destStats = await fs.lstat(dest).catch(() => undefined);
@@ -104,29 +207,13 @@ async function synchronizeResolvedCanonicalPaths(params: {
       await fs.mkdir(destDir, { recursive: true });
       params.assertCurrent?.();
       await fs.rm(dest, { force: true, recursive: true });
+      params.assertCurrent?.();
       await fs.symlink(targetLink, dest);
       params.assertCurrent?.();
     } else if (stats.isFile()) {
       const readResult = await canonicalFs.read(resolvedPath);
       params.assertCurrent?.();
       const destStats = await fs.lstat(dest).catch(() => undefined);
-      if (destStats?.isFile()) {
-        const destFile = await projectionFs.read(resolvedPath).catch(() => undefined);
-        if (destFile) {
-          const destSha = createHash("sha256").update(destFile.buffer).digest("hex");
-          const canonicalSha = createHash("sha256").update(readResult.buffer).digest("hex");
-          const expectedGuestConflict = params.conflicts?.[resolvedPath];
-          const hasNewerGuestEdits =
-            expectedGuestConflict &&
-            destSha !== canonicalSha &&
-            ((expectedGuestConflict.sha256 && destSha !== expectedGuestConflict.sha256) ||
-              expectedGuestConflict.type === "missing");
-          if (hasNewerGuestEdits) {
-            params.divergedPaths?.add(resolvedPath);
-            continue;
-          }
-        }
-      }
       if (destStats && !destStats.isFile()) {
         params.assertCurrent?.();
         await projectionFs.remove(resolvedPath);
@@ -166,6 +253,7 @@ export async function commitLocalWorkspaceReconciliation(params: {
     checkpoint?: LocalWorkspaceManifestCheckpoint,
   ) => Promise<void>;
   replaceBaseline: (raw: string, ref: string, patch: Record<string, unknown>) => Promise<void>;
+  baselineDocument?: () => Promise<{ rawManifest: string; manifestRef: string }>;
 }): Promise<void> {
   const divergedPaths = new Set<string>();
   if (params.conflictPaths.length) {
@@ -254,21 +342,32 @@ export async function commitLocalWorkspaceReconciliation(params: {
       divergedPaths,
     });
   }
+  const baselineDoc = params.baselineDocument ? await params.baselineDocument() : undefined;
   const baseManifestRaw =
+    baselineDoc?.rawManifest ??
     params.checkpoint?.baseManifestRaw ??
     params.snapshot.baseManifestRaw ??
     params.snapshot.currentManifestRaw;
   const baseManifestRef =
+    baselineDoc?.manifestRef ??
     params.checkpoint?.baseManifestRef ??
     params.snapshot.baseManifestRef ??
     params.snapshot.currentManifestRef;
   if (divergedPaths.size > 0) {
-    const conflicts: LocalWorkspaceConflictRecord = {};
+    const conflicts: LocalWorkspaceConflictRecord = {
+      ...params.checkpoint?.conflicts,
+    };
     for (const divergedPath of divergedPaths) {
       conflicts[divergedPath] = params.checkpoint?.conflicts?.[divergedPath] ?? {
-        type: "diverged",
+        type: "conflict",
       };
     }
+    const resolvedPaths = [
+      ...new Set([
+        ...(params.checkpoint?.resolvedPaths ?? []),
+        ...(params.resolvedCanonicalPaths ?? []),
+      ]),
+    ].filter((p) => !divergedPaths.has(p));
     const checkpointRecord: LocalWorkspaceCheckpointRecord = {
       version: 1,
       kind: "scan",
@@ -287,7 +386,7 @@ export async function commitLocalWorkspaceReconciliation(params: {
       previousRoot: params.checkpoint?.previousRoot ?? params.baselineRef ?? null,
       conflicts,
       acknowledgedPaths: params.checkpoint?.acknowledgedPaths?.filter((p) => !divergedPaths.has(p)),
-      resolvedPaths: params.checkpoint?.resolvedPaths?.filter((p) => !divergedPaths.has(p)),
+      resolvedPaths,
     };
     await params.update({
       journal_json: null,
@@ -318,8 +417,11 @@ export async function commitLocalWorkspaceReconciliation(params: {
     for (const entry of base.entries) {
       entriesMap.set(entry.path, entry);
     }
+    const resolvedSet = new Set(params.resolvedCanonicalPaths);
     for (const resolvedEntry of params.resolvedManifest.entries) {
-      entriesMap.set(resolvedEntry.path, resolvedEntry);
+      if (resolvedSet.has(resolvedEntry.path)) {
+        entriesMap.set(resolvedEntry.path, resolvedEntry);
+      }
     }
     for (const resolvedPath of params.resolvedCanonicalPaths) {
       if (!params.resolvedManifest.entries.some((e) => e.path === resolvedPath)) {
@@ -362,5 +464,37 @@ export async function commitLocalWorkspaceReconciliation(params: {
       params.snapshot.currentManifestRef,
       patch,
     );
+  }
+}
+
+export async function commitProjectionReconciliation(params: {
+  conflictPaths: string[];
+  resolvedCanonicalPaths?: string[];
+  resolvedManifest?: WorkerWorkspaceManifest;
+  resolvedManifestRef?: string;
+  checkpoint?: LocalWorkspaceCheckpointRecord;
+  snapshot: Parameters<typeof commitLocalWorkspaceReconciliation>[0]["snapshot"];
+  refresh?: boolean;
+  target: Direction;
+  owner: LocalWorkspaceOwner;
+  current: () => LocalWorkspaceProjection;
+  selected: LocalWorkspaceProjection;
+  assertCurrent?: () => void;
+  update: (
+    patch: Record<string, unknown>,
+    checkpoint?: LocalWorkspaceManifestCheckpoint,
+  ) => Promise<void>;
+  replaceBaseline: (raw: string, ref: string, patch: Record<string, unknown>) => Promise<void>;
+  baselineDocument?: () => Promise<{ rawManifest: string; manifestRef: string }>;
+}): Promise<void> {
+  try {
+    await commitLocalWorkspaceReconciliation({
+      ...params,
+      worktreePath: params.owner.worktree.path,
+      projectionPath: params.current().projection_path,
+      baselineRef: params.selected.baseline_ref,
+    });
+  } catch (error) {
+    throw new AcceptedWorkspacePublicationIndeterminateError("commit", error);
   }
 }

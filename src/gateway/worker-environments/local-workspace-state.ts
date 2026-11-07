@@ -21,7 +21,7 @@ import {
 } from "./local-workspace-checkpoint.js";
 import { LocalWorkspaceConflictError } from "./local-workspace-conflict-error.js";
 import {
-  commitLocalWorkspaceReconciliation,
+  commitProjectionReconciliation,
   type LocalWorkspaceCheckpointRecord,
 } from "./local-workspace-conflict-resolution.js";
 import {
@@ -38,7 +38,6 @@ import type {
 import { assertLocalWorkspaceProjectionOwner } from "./local-workspace-owner-identity.js";
 import type { LocalWorkspaceStore, LocalWorkspaceProjection } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
-import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import {
   loadStagedWorkspaceManifest,
   captureWorkspaceManifestDocument,
@@ -376,8 +375,7 @@ export function projectionOperations(
       throw new Error("Local workspace checkpoint no longer matches its baseline");
     }
     const refreshBaseline = refresh ? await baselineDocument() : undefined;
-    let conflictPaths: string[] | undefined;
-    let resolvedCanonicalPaths: string[] | undefined;
+    let conflictPaths: string[] | undefined, resolvedCanonicalPaths: string[] | undefined;
     let resolvedManifest: WorkerWorkspaceManifest | undefined,
       resolvedManifestRef: string | undefined;
     await withStagedWorkerWorkspaceManifest(
@@ -413,10 +411,8 @@ export function projectionOperations(
           current: snapshot.current,
           assertCurrent,
           priorConflicts: checkpoint?.conflicts,
-          acknowledgedPaths: checkpoint?.acknowledgedPaths
-            ? new Set(checkpoint.acknowledgedPaths)
-            : undefined,
-          resolvedPaths: checkpoint?.resolvedPaths ? new Set(checkpoint.resolvedPaths) : undefined,
+          acknowledgedPaths: checkpoint?.acknowledgedPaths && new Set(checkpoint.acknowledgedPaths),
+          resolvedPaths: checkpoint?.resolvedPaths && new Set(checkpoint.resolvedPaths),
           journal: {
             load: async () => undefined,
             begin: async (journal) => {
@@ -432,26 +428,23 @@ export function projectionOperations(
               if (!conflictPaths) {
                 throw new Error("Local workspace acceptance is missing");
               }
-              try {
-                await commitLocalWorkspaceReconciliation({
-                  conflictPaths,
-                  resolvedCanonicalPaths,
-                  resolvedManifest,
-                  resolvedManifestRef,
-                  checkpoint,
-                  snapshot,
-                  refresh,
-                  target,
-                  worktreePath: owner.worktree.path,
-                  projectionPath: current().projection_path,
-                  baselineRef: selected.baseline_ref,
-                  assertCurrent,
-                  update,
-                  replaceBaseline,
-                });
-              } catch (error) {
-                throw new AcceptedWorkspacePublicationIndeterminateError("commit", error);
-              }
+              await commitProjectionReconciliation({
+                conflictPaths,
+                resolvedCanonicalPaths,
+                resolvedManifest,
+                resolvedManifestRef,
+                checkpoint,
+                snapshot,
+                refresh,
+                target,
+                owner,
+                current,
+                selected,
+                assertCurrent,
+                update,
+                replaceBaseline,
+                baselineDocument,
+              });
             },
           },
           acceptance: {

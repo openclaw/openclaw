@@ -23,20 +23,6 @@ import {
 
 const MAX_RECONCILIATION_PATH_BYTES = 64 * 1024 * 1024;
 
-async function fileHasConflictMarkers(root: string, entryPath: string): Promise<boolean> {
-  try {
-    const content = await fs.readFile(localPath(root, entryPath), "utf8");
-    return (
-      content.includes("\n<<<<<<< ") ||
-      content.startsWith("<<<<<<< ") ||
-      content.includes("\n=======\n") ||
-      content.includes("\n>>>>>>> ")
-    );
-  } catch {
-    return false;
-  }
-}
-
 async function localWorkspaceDescendantPaths(
   root: string,
   entryPaths: readonly string[],
@@ -221,14 +207,7 @@ export async function preflightWorkspaceApplyImpl(
           params.acknowledgedPaths?.includes(entryPath) ||
           params.resolvedPaths?.includes(entryPath),
         );
-      let isResolved = false;
-      if (isExplicitlyAccepted) {
-        if (local?.type === "file") {
-          isResolved = !(await fileHasConflictMarkers(params.root, entryPath));
-        } else {
-          isResolved = true;
-        }
-      }
+      const isResolved = isExplicitlyAccepted;
       if (!isResolved) {
         conflicts.add(entryPath);
         const current = currentNodes.get(entryPath);
