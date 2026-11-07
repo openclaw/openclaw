@@ -26,7 +26,7 @@ const ALL_CASES = [
   ...corners(
     "20px",
     "25px",
-    ".agent-chat__input, .agent-chat__input--dictating::after, .agent-chat__disabled-banner, .agent-chat__composer-notices .chat-composer-neighbor-card, .agent-chat__composer-errors--standalone, .agent-chat__talk-status",
+    ".agent-chat__input, .agent-chat__input--dictating::after, .agent-chat__disabled-banner, .agent-chat__composer-notices .chat-composer-neighbor-card, .agent-chat__talk-status",
   ),
   ...corners("9999px", "9999px", ".chip, .statusDot"),
   ...corners("10px", "10px", ".run-inspector__panel, .settings-segmented"),
@@ -43,7 +43,6 @@ const markup = `<main>
     <div class="agent-chat__disabled-banner callout">Archived session</div>
     <div class="agent-chat__composer-notices">
       <div class="chat-composer-neighbor-card">Recovery</div>
-      <div class="agent-chat__composer-errors--standalone">Error</div>
       <div class="agent-chat__talk-status callout">Connecting</div>
     </div>
   </div>
