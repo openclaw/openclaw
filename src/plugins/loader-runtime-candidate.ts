@@ -8,7 +8,7 @@ import { compareOpenClawReleaseVersions } from "../infra/npm-registry-spec.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import {
-  resolveImmutableInstallIdentity,
+  resolveInstallMetadata,
   resolvePluginCandidateInstallOwner,
 } from "./candidate-install-owner.js";
 import { capabilityCatalogFamilies, resolvePluginCapabilityCatalog } from "./capability-catalog.js";
@@ -115,6 +115,8 @@ export function* loadRuntimePluginCandidate(params: {
     return;
   }
   const { pluginId, isDreamingSidecar, activationState, enableState, entry, record } = prepared;
+  const installOwner = resolvePluginCandidateInstallOwner(candidate);
+  const install = resolveInstallMetadata(candidate.origin, installOwner, context.installRecords);
   const finish = () => {
     registry.plugins.push(record);
     state.seenIds.set(pluginId, candidate.origin);
@@ -509,11 +511,7 @@ export function* loadRuntimePluginCandidate(params: {
       rootDir: moduleRoot,
       registry,
       standalone: manifestRecord.manifestPath === candidate.source,
-      immutableInstallIdentity: resolveImmutableInstallIdentity(
-        candidate.origin,
-        resolvePluginCandidateInstallOwner(candidate),
-        context.installRecords,
-      ),
+      immutableInstallIdentity: install.identity,
     };
     try {
       if (!recovery) {
@@ -699,6 +697,7 @@ export function* loadRuntimePluginCandidate(params: {
       logPrefix: `[plugins] ${record.id} failed during ${failurePhase} from ${record.source}: `,
       diagnosticMessagePrefix: `plugin failed during ${failurePhase}: `,
       missingDependencyHint,
+      damagedNativeCaptureReinstall: install.reinstall,
       ...(error instanceof PluginDashboardDeclarationError
         ? { diagnosticCode: "dashboard-declaration-invalid" }
         : {}),
