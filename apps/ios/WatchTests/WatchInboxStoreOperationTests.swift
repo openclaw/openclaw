@@ -333,7 +333,6 @@ struct WatchInboxStoreOperationTests {
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let store = WatchInboxStore(defaults: defaults, requestNotificationAuthorization: false)
-        let receiver = WatchConnectivityReceiver(store: store, directNodeSetupHandler: { _, _ in })
         let approvalID = " approval "
         let gatewayStableID = " gateway "
         let snapshotType = WatchPayloadType.execApprovalSnapshot.rawValue
@@ -349,15 +348,37 @@ struct WatchInboxStoreOperationTests {
             "snapshotId": "exact-ids",
         ]]
 
-        let accepted: Bool = await withCheckedContinuation { continuation in
+        #expect(await Self.receive(payload, store: store))
+        let record = try #require(store.sortedExecApprovals.first)
+        #expect(Array(record.approvalID.utf8) == Array(approvalID.utf8))
+        #expect(record.approval.gatewayStableID.map { Array($0.utf8) } == Array(gatewayStableID.utf8))
+    }
+
+    @Test func `received resolution keeps its semantic outcome over the legacy decision`() async throws {
+        let suiteName = "WatchInboxStoreOperationTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = WatchInboxStore(defaults: defaults, requestNotificationAuthorization: false)
+        let payload: [String: Any] = [
+            "type": WatchPayloadType.execApprovalResolved.rawValue,
+            "approvalId": "resolved-approval",
+            "gatewayStableID": "watch-test-gateway",
+            "decision": "deny",
+            "outcome": "allowedAlways",
+            "source": "another-reviewer",
+        ]
+
+        #expect(await Self.receive(payload, store: store))
+        #expect(store.lastExecApprovalOutcome?.code == .allowedAlways)
+    }
+
+    private static func receive(_ payload: [String: Any], store: WatchInboxStore) async -> Bool {
+        let receiver = WatchConnectivityReceiver(store: store, directNodeSetupHandler: { _, _ in })
+        return await withCheckedContinuation { continuation in
             receiver.session(WCSession.default, didReceiveMessage: payload) { reply in
                 continuation.resume(returning: reply["ok"] as? Bool == true)
             }
         }
-        #expect(accepted)
-        let record = try #require(store.sortedExecApprovals.first)
-        #expect(Array(record.approvalID.utf8) == Array(approvalID.utf8))
-        #expect(record.approval.gatewayStableID.map { Array($0.utf8) } == Array(gatewayStableID.utf8))
     }
 
     @Test func `switching chat sessions retires voice replies and the previous preview`() throws {
