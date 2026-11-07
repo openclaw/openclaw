@@ -20,6 +20,7 @@ import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { isChatControlCommand } from "../../lib/chat/commands.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { cancelLayout, yieldAfterLayout } from "../../lib/layout-frame.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { projectProgressCard } from "../../lib/reactive/domain-keyed.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
@@ -88,6 +89,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
   ]);
   const [ready, setReady] = createSignal(false);
   let disposed = false;
+  let mountScheduled = false;
   let pendingCommit: Deferred<boolean> | undefined;
   let previousFocusComposer: boolean | undefined;
   let focusPending = false;
@@ -111,7 +113,8 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         // Explicit DOM tasks may need no new frame. Parked tasks wait for reveal or disposal.
         if (
           pendingCommit?.promise === promise &&
-          (disposed || (runtime.presented && runtime.presentation.documentVisible))
+          (disposed ||
+            (!mountScheduled && runtime.presented && runtime.presentation.documentVisible))
         ) {
           const finish = pendingCommit;
           pendingCommit = undefined;
@@ -147,6 +150,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
   });
   onCleanup(() => {
     disposed = true;
+    cancelLayout(runtime);
     runtime.dispose();
     pendingCommit?.resolve(true);
     pendingCommit = undefined;
@@ -175,11 +179,41 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     finish?.resolve(true);
   }
 
-  function MountedPane() {
+  function PreparedPane() {
+    // Projections created by start belong to this retained component.
     if (!runtime.isConnected) {
-      // The ready gate defers connection until settlement; its projections belong to this view.
       runtime.start();
     }
+    const state = runtime.state;
+    // Freeze admission before yielding: live refill must not turn a cold load warm.
+    const initialCachedSession = Boolean(
+      state &&
+      readChatSessionSnapshot(state.chatMessagesBySession, state, {
+        sessionKey: state.sessionKey,
+      }),
+    );
+    const pendingLayout = !initialCachedSession && yieldAfterLayout(runtime);
+    if (!pendingLayout) {
+      return <MountedPane initialCachedSession={initialCachedSession} />;
+    }
+    mountScheduled = true;
+    const [mounted, setMounted] = createSignal(false);
+    void waitForCommit();
+    // Mount the pane, composer and Details together after the loading frame.
+    void pendingLayout.then(() => {
+      if (!disposed) {
+        setMounted(true);
+      }
+    });
+    return (
+      <Show when={mounted()} fallback={<LoadingState route composer={runtime.ownsRouteComposer} />}>
+        <MountedPane initialCachedSession={initialCachedSession} />
+      </Show>
+    );
+  }
+
+  function MountedPane(props: { initialCachedSession: boolean }) {
+    mountScheduled = false;
     const context = runtime.context;
     // The pane retains mobile presentation while its optional host is absent.
     onSettled(() => runtime.observeMobileViewport());
@@ -203,13 +237,6 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     const theme = projectTheme(context.theme);
     // Startup attaches one host for this mounted pane's lifetime.
     const state = runtime.state;
-    // Snapshot admission is fixed for this pane; live refill must not turn a cold load warm.
-    const initialCachedSession = Boolean(
-      state &&
-      readChatSessionSnapshot(state.chatMessagesBySession, state, {
-        sessionKey: state.sessionKey,
-      }),
-    );
     const realtime = createMemo(() => {
       const owner = runtime.state?.realtimeTalk;
       return (
@@ -371,7 +398,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     // Importing its renderer here makes the optional runtime a required boot dependency.
     return (
       <openclaw-link-reader-hovercard-provider
-        data-cached-session={initialCachedSession ? "true" : "false"}
+        data-cached-session={props.initialCachedSession ? "true" : "false"}
         prop:client={
           gateway.read().snapshot.phase === "connected" ? gateway.read().snapshot.client : null
         }
@@ -415,7 +442,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
 
   return (
     <Show when={ready()} fallback={<LoadingState route composer={runtime.ownsRouteComposer} />}>
-      <MountedPane />
+      <PreparedPane />
     </Show>
   );
 }

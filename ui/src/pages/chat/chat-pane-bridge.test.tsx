@@ -50,6 +50,57 @@ function mountPane(context: ApplicationContext, props: Partial<ChatPaneProps>) {
 }
 
 const composerSelector = ".agent-chat__composer-combobox textarea";
+it.each([false, true])(
+  "holds DOM completion until the yielded pane mounts or retires (retire: %s)",
+  async (retire) => {
+    const yielding = createDeferred();
+    vi.stubGlobal("chrome", {});
+    vi.stubGlobal("scheduler", { yield: () => yielding.promise });
+    const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    onTestFinished(() => {
+      yielding.resolve();
+      hidden.mockRestore();
+      vi.unstubAllGlobals();
+    });
+    const { pane, container } = mountedFixture("yielded-pane").render({
+      active: true,
+      presented: true,
+    });
+    await vi.dynamicImportSettled();
+    flush();
+    let completed = false;
+    const completion = pane.updateComplete.then(() => {
+      completed = true;
+    });
+    await Promise.resolve();
+    flush();
+    expect(pane.querySelector(".chat-pane__header")).toBeNull();
+    expect(pane.querySelector(".lazy-view-state--route")).not.toBeNull();
+    expect(completed).toBe(false);
+
+    if (retire) {
+      container.remove();
+      await completion;
+    }
+    yielding.resolve();
+    await completion;
+    await Promise.resolve();
+    flush();
+    expect(completed).toBe(true);
+    expect(pane.querySelectorAll(".chat-pane__header")).toHaveLength(retire ? 0 : 1);
+  },
+);
+
+it("mounts immediately without the Chromium optimization marker", async () => {
+  const yieldTask = vi.fn(() => Promise.resolve());
+  vi.stubGlobal("scheduler", { yield: yieldTask });
+  onTestFinished(() => vi.unstubAllGlobals());
+  const { pane } = mountedFixture("immediate-pane").render({ active: true, presented: true });
+  await waitForSolid(() => expect(pane.querySelector(".chat-pane__header")).not.toBeNull());
+  await pane.updateComplete;
+  expect(yieldTask).not.toHaveBeenCalled();
+});
+
 it("applies a route draft and its focus cue to an already mounted native pane", async () => {
   const { pane } = mountedFixture("bridge-draft").render({ active: true, presented: true });
   const textarea = await waitForSolid(() =>
@@ -168,6 +219,18 @@ it.each(["ready", "unavailable"] as const)(
   "admits the first pane from a pending snapshot, bounded at 100ms (%s)",
   async (outcome) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const yielding = createDeferred();
+    const yieldTask = vi.fn(() => yielding.promise);
+    if (outcome === "ready") {
+      vi.stubGlobal("chrome", {});
+      vi.stubGlobal("scheduler", { yield: yieldTask });
+      const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+      onTestFinished(() => {
+        yielding.resolve();
+        hidden.mockRestore();
+        vi.unstubAllGlobals();
+      });
+    }
     const bootComposer = document.createElement("textarea");
     bootComposer.id = "openclaw-boot-composer";
     bootComposer.value = "Keep the pending draft";
@@ -227,6 +290,7 @@ it.each(["ready", "unavailable"] as const)(
     expect(view.pane.querySelectorAll("textarea")).toHaveLength(1);
     expect(view.pane.querySelector("textarea")).toBe(bootComposer);
     expect(bootComposer.value).toBe("Keep the pending draft");
+    inactive.container.remove();
     if (outcome === "ready") {
       read.resolve({
         projectionVersion: CHAT_SNAPSHOT_PROJECTION_VERSION,
@@ -255,6 +319,8 @@ it.each(["ready", "unavailable"] as const)(
       expect(view.pane.querySelector(".agent-chat__disabled-banner--replacement")).not.toBeNull();
       expect(view.pane.querySelector(".agent-chat__input")).toBeNull();
       expect(view.pane.textContent).toContain("Stored conversation");
+      expect(view.pane.querySelector('[data-cached-session="true"]')).not.toBeNull();
+      expect(yieldTask).not.toHaveBeenCalled();
     } else {
       await vi.advanceTimersByTimeAsync(1);
       flush();

@@ -2,6 +2,7 @@ import type { JSX as SolidJSX } from "@solidjs/web";
 import { Errored, Loading, lazy, onSettled } from "solid-js";
 import { LazyViewError } from "../components/solid/lazy-view-error.tsx";
 import { ConnectingSplash } from "../components/solid/loading-skeleton.tsx";
+import { yieldAfterLayout } from "../lib/layout-frame.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import type { OpenClawShellProps } from "./app-host.tsx";
 import { bootComposerElement } from "./boot-composer.ts";
@@ -15,13 +16,7 @@ import {
 const LazyShell = lazy(
   async () => {
     const shell = await import("./app-host.tsx");
-    const browser = globalThis as typeof globalThis & {
-      scheduler?: { yield?: () => Promise<void> };
-    };
-    // Native continuation priority avoids delaying startup with a timer fallback.
-    if (!document.hidden && browser.scheduler?.yield) {
-      await browser.scheduler.yield();
-    }
+    await yieldAfterLayout();
     return shell;
   },
   { export: "OpenClawShell" },
