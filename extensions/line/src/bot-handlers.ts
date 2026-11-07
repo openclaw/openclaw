@@ -3,7 +3,6 @@ import { firstDefined } from "openclaw/plugin-sdk/allow-from";
 import {
   type buildChannelInboundEventContext,
   buildMentionRegexes,
-  isChannelPartialDeliveryError,
   logInboundDrop,
   matchesMentionPatterns,
   implicitMentionKindWhen,
@@ -64,6 +63,7 @@ import {
   resolveLineQuestionPostback,
 } from "./question-postback.js";
 import { getLineRuntime } from "./runtime.js";
+import { canFallbackAfterLineReplyFailure } from "./send-retry.js";
 import { getLineGroupName, getUserDisplayName, pushMessageLine, replyMessageLine } from "./send.js";
 import type { ResolvedLineAccount } from "./types.js";
 import type { LineWebhookTurnAdoptionLifecycle } from "./webhook-spool.js";
@@ -110,8 +110,8 @@ interface LineHandlerContext {
 
 /**
  * Say one line back to a sender, preferring their reply token so the answer costs no
- * push quota, and falling back to a push when no token is usable. A partial-delivery
- * failure means the reply was seen, so it never falls back.
+ * push quota, and falling back to a push when no token is usable or LINE refused the
+ * reply. A reply that may have been seen never falls back, so the text is not sent twice.
  */
 async function sendLineHandlerText(params: {
   context: LineHandlerContext;
@@ -137,7 +137,7 @@ async function sendLineHandlerText(params: {
       return;
     } catch (err) {
       logVerbose(`${logLabel}: ${String(err)}`);
-      if (isChannelPartialDeliveryError(err)) {
+      if (!canFallbackAfterLineReplyFailure(err)) {
         return;
       }
     }
