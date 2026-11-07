@@ -7,7 +7,10 @@ import type {
   SystemChangeEntry,
   SystemChangesListResult,
 } from "../../packages/gateway-protocol/src/index.ts";
-import type { UserProfile } from "../../packages/gateway-protocol/src/schema/users.ts";
+import type {
+  UserProfile,
+  UsersPersonalFileGetResult,
+} from "../../packages/gateway-protocol/src/schema/users.ts";
 import type { loadVoiceWakeConfig } from "../../src/infra/voicewake.ts";
 import type { ModelAuthStatusResult } from "../../ui/src/api/types.ts";
 import {
@@ -1381,6 +1384,7 @@ function createPageFixture(
           "skills.search",
           "secrets.store.set",
           "users.setDisplayName",
+          ...(id === "profile" ? ["users.personalFile.get"] : []),
           "templates.catalog.search",
           "node.list",
           "device.pair.list",
@@ -1409,6 +1413,17 @@ function createPageFixture(
           ? {
               "cron.list": base.methodResponses?.["cron.list"],
               "cron.status": base.methodResponses?.["cron.status"],
+            }
+          : {}),
+        ...(id === "profile"
+          ? {
+              "users.personalFile.get": {
+                agentId: "main",
+                profileId: savedProfile.id,
+                content: "",
+                hash: null,
+                missing: true,
+              } satisfies UsersPersonalFileGetResult,
             }
           : {}),
         "config.get": {

@@ -1,10 +1,13 @@
-import { spawn } from "node:child_process";
+import childProcess, { spawn } from "node:child_process";
 import { once } from "node:events";
-import { describe, expect, it, vi } from "vitest";
-import {
-  findCommandReservationCandidates,
-  parseDarwinProcessBirths,
-} from "./command-reservation-census.js";
+import { syncBuiltinESMExports } from "node:module";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { findCommandReservationCandidates } from "./command-reservation-census.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  syncBuiltinESMExports();
+});
 
 // Orphaned by its shell, like a command whose killed spawner never bound it.
 async function spawnOrphan(): Promise<number> {
@@ -41,23 +44,20 @@ describe.skipIf(process.platform === "win32")("command reservation census", () =
     }
   });
 
-  it("reads Darwin rows for accounts printed as a negative uid", () => {
-    const uid = process.getuid?.();
-    expect(
-      parseDarwinProcessBirths(
-        `  600     1    -2 S    Sun Oct 25 19:58:03 2026    \n  700   600 ${uid} Z+   Sun Oct 25 19:58:03 2026\n`,
-      ),
-    ).toEqual([{ pid: 700, ppid: 600, bornAtMs: Date.UTC(2026, 9, 25, 19, 58, 3), zombie: true }]);
-
-    // Running as nobody itself: Node reports the unsigned uid.
-    const getuid = vi.spyOn(process, "getuid").mockReturnValue(4_294_967_294);
-    try {
-      expect(
-        parseDarwinProcessBirths("  600     1    -2 S    Sun Oct 25 19:58:03 2026\n"),
-      ).toMatchObject([{ pid: 600 }]);
-    } finally {
-      getuid.mockRestore();
-    }
+  it.each([1_000, 4_294_967_294])("reads signed Darwin account rows for uid %i", (uid) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    vi.spyOn(process, "getuid").mockReturnValue(uid);
+    vi.spyOn(childProcess, "spawnSync").mockReturnValue({
+      pid: 900,
+      output: [],
+      stdout: "600 1 -2 S Sun Oct 25 19:58:03 2026\n700 600 1000 S Sun Oct 25 19:58:03 2026\n",
+      stderr: "",
+      status: 0,
+      signal: null,
+    });
+    syncBuiltinESMExports();
+    const reservedAtMs = Date.UTC(2026, 9, 25, 19, 58, 3);
+    expect(findCommandReservationCandidates(reservedAtMs)).toEqual([uid === 1_000 ? 700 : 600]);
   });
 
   it("keeps orphans a settling init adopted", async () => {
