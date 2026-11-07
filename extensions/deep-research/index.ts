@@ -1,6 +1,5 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { definePluginEntry, type PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
-import { RESEARCH_INLINE_VIEW } from "./inline-view-contract.js";
 import { researchToolDefinition } from "./src/contract.js";
 import type { ResearchJobs } from "./src/jobs.js";
 import { registerResearchViewApi } from "./src/view-api.js";
@@ -15,13 +14,6 @@ export default definePluginEntry({
   description: "Bounded, evidence-backed research",
   register(api) {
     let service: { scheduler: PluginServiceSchedulerV1; jobs: ResearchJobs } | undefined;
-    api.session.controls.registerControlUiDescriptor({
-      id: RESEARCH_INLINE_VIEW.id,
-      surface: "inline",
-      label: "Deep research",
-      requiredScopes: ["operator.read"],
-      version: RESEARCH_INLINE_VIEW.version,
-    });
     registerResearchViewApi(api, () => {
       if (!service || service.scheduler.signal.aborted) {
         return undefined;

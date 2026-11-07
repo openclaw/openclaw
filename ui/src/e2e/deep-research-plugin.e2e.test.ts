@@ -1,7 +1,8 @@
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { expect as pw, type Page } from "playwright/test";
+import { expect as pw, type Locator, type Page } from "playwright/test";
 import { expect, it } from "vitest";
+import { openChatPanels } from "../test-helpers/chat-layout-menu.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -9,48 +10,24 @@ import {
   defaultControlUiFeatureMethods,
 } from "../test-helpers/control-ui-e2e.ts";
 import { installNativePluginMockGateway } from "../test-helpers/control-ui-plugin-e2e.ts";
-import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { sessionsListResponse } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Deep research native bundle" });
 
-// The session header stays plugin-free; the panel opens from the session's sidebar actions menu.
-async function openResearchFromSessionMenu(page: Page) {
-  const row = page.locator(`[data-session-key="${sessionKey}"] a.sidebar-recent-session__link`);
-  await row.first().focus();
-  await page.keyboard.press("Shift+F10");
-  await page.getByRole("menuitem", { name: "Deep research", exact: true }).click();
+// The side panel is the plugin's only Control UI entry point; sessions carry no research chrome.
+async function openResearchPanel(page: Page, beforeSelect?: (launcher: Locator) => Promise<void>) {
+  await pw(page.getByRole("button", { name: /deep research/i })).toHaveCount(0);
+  await openChatPanels(page, "desktop");
+  const launcher = page.locator(".side-panel-launcher");
+  const option = launcher.getByRole("button", { name: "Deep research" });
+  await pw(option).toBeVisible();
+  await beforeSelect?.(launcher);
+  await option.click();
 }
 const sessionKey = "agent:main:dashboard:research-ui";
-// Session actions resolve against the live roster row, so the session must be listed.
-const sessionList = sessionsListResponse([
-  createControlUiSessionRow(sessionKey, "Research UI", Date.parse("2026-01-01T12:00:00Z")),
-]);
 const method = (action: string) => `deep-research.view.v1.${action}`;
 const timestamp = Date.parse("2026-01-01T12:00:00Z");
 const id = "a".repeat(64);
-// A saved deep_research start result carrying the plugin's transcript card descriptor.
-const inlineView = { id: "research-job", label: "Deep research", version: 1 };
-const researchToolResult = {
-  role: "toolResult",
-  toolName: "deep_research",
-  toolCallId: "research-call",
-  content: [{ type: "text", text: "Deep research running: Gathering evidence (round 1)" }],
-  details: {
-    pluginView: {
-      type: "plugin_view",
-      pluginId: "deep-research",
-      viewId: inlineView.id,
-      version: inlineView.version,
-      toolName: "deep_research",
-      toolCallId: "research-call",
-      summary: "Deep research running: Gathering evidence (round 1)",
-      payload: { jobId: id },
-    },
-  },
-  timestamp,
-};
 const question = "How do urban trees reduce summer heat?";
 const running = {
   version: 1,
@@ -143,7 +120,6 @@ suite.define(() => {
           ...["list", "read", "start", "cancel", "resume"].map(method),
         ],
         methodResponses: {
-          "sessions.list": sessionList,
           [method("list")]: list(),
           [method("start")]: {
             __mockError: { code: "UNAVAILABLE", message: "Synthetic lost start reply" },
@@ -151,7 +127,7 @@ suite.define(() => {
         },
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      await openResearchFromSessionMenu(page);
+      await openResearchPanel(page);
       const pane = page.locator(".deep-research-pane");
       const input = pane.getByLabel("Research question");
       await input.fill(questionA);
@@ -259,10 +235,8 @@ suite.define(() => {
               pluginId: "deep-research",
               rootDir: resolve("extensions/deep-research"),
               source: "./browser/index.tsx",
-              inlineViews: [inlineView],
             },
           ],
-          historyMessages: [researchToolResult],
           communityInvite: false,
           assistantAgentId: "main",
           defaultAgentId: "main",
@@ -271,7 +245,6 @@ suite.define(() => {
             ...["list", "read", "start", "cancel", "resume"].map(method),
           ],
           methodResponses: {
-            "sessions.list": sessionList,
             [method("list")]: list(),
             [method("read")]: read(running),
             [method("start")]: {
@@ -326,11 +299,11 @@ suite.define(() => {
           }
         };
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        await openResearchFromSessionMenu(page);
-        const card = page.locator('[data-plugin-inline-view="research-call"] .deep-research-card');
-        const open = card.getByRole("button", { name: /^(Open details|Read report)$/ });
-        await pw(card).toBeVisible();
+        await pw(page.getByText("No messages yet")).toBeVisible();
+        await capture("desktop-before");
+        await openResearchPanel(page, (launcher) => capture("desktop-launcher", launcher));
         const pane = page.locator(".deep-research-pane");
+        const retained = pane.locator(".deep-research-counts div", { hasText: "Sources retained" });
         await pw(pane).toBeVisible();
         try {
           await pw(
@@ -407,15 +380,14 @@ suite.define(() => {
         });
         expect(startKeys[1]).toBe(startKeys[2]);
         expect(startKeys[0]).not.toBe(startKeys[1]);
-        // The Gateway announces job changes; every view, including the card, refreshes from them.
+        // The Gateway announces job changes; the pane refreshes from them.
         await gateway.emitGatewayEvent("plugin.deep-research.changed", {});
-        await pw(card).toContainText("Deep research · Researching · gathering");
-        await pw(card.locator(".deep-research-card__meta")).toHaveText("1 source");
+        await pw(retained.locator("dd")).toHaveText("1");
         const progressed = { ...running, counts: { ...running.counts, sources: 2 } };
         await gateway.setMethodResponse(method("list"), list(progressed));
         await gateway.setMethodResponse(method("read"), read(progressed));
         await gateway.emitGatewayEvent("plugin.deep-research.changed", {});
-        await pw(card.locator(".deep-research-card__meta")).toHaveText("2 sources");
+        await pw(retained.locator("dd")).toHaveText("2");
         await capture("desktop-running", pane, [pane.getByText("Gathering evidence (round 1)")]);
         await pane.getByRole("button", { name: "Cancel research", exact: true }).click();
         await gateway.waitForRequest(method("cancel"), {
@@ -436,13 +408,7 @@ suite.define(() => {
         const cite = pane.getByRole("button", { name: "Source S1", exact: true });
         await pw(cite).toBeVisible();
         await pw(pane.getByRole("heading", { name: question, exact: true })).toBeVisible();
-        await pw(card).toContainText("Deep research · Partial report");
-        await pw(card.locator(".deep-research-card__meta")).toHaveText(
-          "1 source · 1 finding · 1 open gap",
-        );
-        await pw(open).toHaveText("Read report");
-        await capture("desktop-inline-card", card);
-        await capture("desktop-after", page.locator("openclaw-app"), [card]);
+        await capture("desktop-after", page.locator("openclaw-app"), [pane]);
         await capture("desktop-report", pane, [cite]);
         await cite.click();
         await pw(pane.getByRole("region", { name: "Research sources" })).toBeVisible();
@@ -459,7 +425,8 @@ suite.define(() => {
         await page.setViewportSize({ width: 390, height: 844 });
         // Mobile starts with its conversation open, independently of the saved desktop panels.
         await pw(pane).toBeHidden();
-        await open.click();
+        // Mobile Panels restores the research tab opened on desktop.
+        await openChatPanels(page, "mobile");
         await pw(pane).toBeVisible();
         await pane.getByRole("button", { name: "Report", exact: true }).click();
         await capture("phone-portrait-report", pane, [cite]);

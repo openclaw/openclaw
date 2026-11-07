@@ -22,7 +22,7 @@ const start = {
 };
 
 describe("durable research tool", () => {
-  it("keeps a large start result within the transcript limit so its inline card survives", async () => {
+  it("keeps a large start result within the transcript limit", async () => {
     const { tool, runtime } = await fixture();
     vi.mocked(runtime.gateway.request)
       .mockResolvedValueOnce(descriptor)
@@ -31,10 +31,7 @@ describe("durable research tool", () => {
         value: { ...completed.value, report: "River evidence. ".repeat(2_000) },
       });
     const result = await tool.execute("call-large", start);
-    expect(result.details).toMatchObject({
-      state: "completed",
-      pluginInlineView: { viewId: "research-job", payload: { jobId: expect.any(String) } },
-    });
+    expect(result.details).toMatchObject({ state: "completed", jobId: expect.any(String) });
     expect(result.details).not.toHaveProperty("result");
     expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(24_000);
   });
