@@ -60,7 +60,11 @@ list_sessions() {
   fi
 
   if [[ -n "$query" ]]; then
-    sessions="$(printf '%s\n' "$sessions" | grep -i -- "$query" || true)"
+    # Pass through the environment so awk preserves query backslashes literally.
+    sessions="$(printf '%s\n' "$sessions" |
+      OPENCLAW_TMUX_QUERY="$query" awk -F '\t' '
+        index(tolower($1), tolower(ENVIRON["OPENCLAW_TMUX_QUERY"]))
+      ')"
   fi
 
   if [[ -z "$sessions" ]]; then
