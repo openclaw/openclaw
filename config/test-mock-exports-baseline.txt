@@ -1493,7 +1493,6 @@
 ["src/agents/embedded-agent-runner/run/attempt-execution-settle.test.ts","./attempt-stream-settle.js","57df80be69f4cff00e1ccb6c4263c2a34b19a72270d3b23d02f51e92f27d5f02",1]
 ["src/agents/embedded-agent-runner/run/attempt-history-prepare.test.ts","../../../config/sessions/session-accessor.js","f3c0454b85fca2f97d53fc3a064331320db88bfedf4547c2e9254c77c2a00246",1]
 ["src/agents/embedded-agent-runner/run/attempt-history-prepare.test.ts","../../../config/sessions/session-entry-read-runtime.js","9dd47641252291bf1cf7a6f13bee857f21b899df828b0f40dc79cfb6aee7d9c4",1]
-["src/agents/embedded-agent-runner/run/attempt-history-prepare.test.ts","../replay-history.js","49e9e68376959f75e962513d309a358daf01841465f1d3e37e2a332402eedda7",1]
 ["src/agents/embedded-agent-runner/run/attempt-nested-tool-activity.test.ts","../../embedded-agent-subscribe.js","2937533ad50ce847ebaf4782dd6e48fa078afa249fbb05c21527467a52bdf37b",1]
 ["src/agents/embedded-agent-runner/run/attempt-nested-tool-activity.test.ts","../../harness/lifecycle-hook-helpers.js","d90faa21d0f45a2775aeeb3df5eb0d9ea954bbeabe6043a8864cae62c076ff97",1]
 ["src/agents/embedded-agent-runner/run/attempt-phase-lifecycle.test.ts","./attempt-async-tasks.js","2feaa4cf11f2e46d3d226641455e5d827590cb2a6aa905b04734851022127dae",1]

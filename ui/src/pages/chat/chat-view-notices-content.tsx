@@ -379,7 +379,8 @@ export function ChatComposerNoticesContent(props: ChatComposerNoticesProps) {
     Boolean(
       props.runError?.runId &&
       props.messages.some(
-        (message) => readRunFailureNotice(message)?.runId === props.runError?.runId,
+        (message) =>
+          readRunFailureNotice(message, { audience: "desktop" })?.runId === props.runError?.runId,
       ),
     );
   const contention = () => props.runError?.kind === "state_contention";
