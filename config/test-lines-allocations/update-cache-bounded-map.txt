@@ -1,2 +1,2 @@
-# Immutable chunk identity, rooted HTTP/CSP, mapped page-style, and deep-link base regression coverage.
-159
+# Immutable chunk identity, rooted HTTP/offline CSP, mapped page-style, and deep-link base coverage.
+172
