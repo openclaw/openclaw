@@ -1,6 +1,9 @@
 import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { isStagedInputPath, stagedInputDirectoriesFromEntries } from "../../media/staged-inputs.js";
-import { WorkspaceResultLimitError } from "./workspace-inventory-limits.js";
+import {
+  MAX_WORKSPACE_RESULT_CHANGED_PATHS,
+  WorkspaceResultLimitError,
+} from "./workspace-inventory-limits.js";
 import {
   MAX_RECONCILIATION_FILE_BYTES,
   MAX_RECONCILIATION_TOTAL_BYTES,
@@ -15,7 +18,6 @@ const OVERSIZED_WORKSPACE_FILE_ERROR_PREFIX = "Cloud workspace result is too lar
 export const OVERSIZED_WORKSPACE_TOTAL_ERROR_PREFIX =
   "Cloud workspace staged result exceeds its byte limit";
 const RECOVERY_CANDIDATES_PREFIX = "Largest new files: ";
-const MAX_WORKSPACE_RESULT_CHANGED_PATHS = 50_000;
 /** Worker errors preserve messages, not custom fields; these paths are advice, never authority. */
 export function workspaceSizeRecoveryPaths(error: Error): string[] {
   if (error.message.startsWith(OVERSIZED_WORKSPACE_FILE_ERROR_PREFIX)) {

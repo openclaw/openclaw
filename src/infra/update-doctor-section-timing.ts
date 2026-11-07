@@ -43,10 +43,13 @@ export function createUpdateDoctorSectionTiming(
   const decoder = new StringDecoder("utf8");
   let pending = "";
   let droppingLine = false;
-  let retirementWidening: string | undefined;
+  const retirementWidenings = new Set<string>();
 
   const observeLine = (line: string) => {
-    retirementWidening ??= parseDoctorRetirementWideningLine(line);
+    const widening = parseDoctorRetirementWideningLine(line);
+    if (widening) {
+      retirementWidenings.add(widening);
+    }
     const match = DOCTOR_TRACE.exec(line);
     if (!match) {
       return;
@@ -154,7 +157,7 @@ export function createUpdateDoctorSectionTiming(
     stripTrace,
     annotate: (step) => {
       const line = diagnostic();
-      const diagnostics = [line, retirementWidening].filter((value) => value !== undefined);
+      const diagnostics = [line, ...retirementWidenings].filter((value) => value !== undefined);
       if (diagnostics.length) {
         step.diagnostics = [...diagnostics, ...(step.diagnostics ?? [])];
       }

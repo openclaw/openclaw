@@ -1813,6 +1813,8 @@ async function measureVisit(page: Page, id: RouteId, definition: PageDefinition)
         let readyFrames = 0;
         let completeFrames = 0;
         let readyMs: number | undefined;
+        let previousAnchorTop: number | undefined;
+        const scrollport = document.getElementById("control-ui-main")!;
         const probe = () => {
           const snapshot = window.openclawControlUi?.snapshot();
           const route = snapshot?.route;
@@ -1868,8 +1870,26 @@ async function measureVisit(page: Page, id: RouteId, definition: PageDefinition)
           if (readyFrames >= 2) {
             readyMs ??= performance.now() - started;
           }
+          // General redirects to the Language anchor. Controls can be ready
+          // before its smooth scroll finishes. A busy frame can pause scrolling,
+          // so require its destination as well as consecutive stable frames.
+          const anchorTop =
+            routeId === "config"
+              ? document.getElementById("settings-language")?.getBoundingClientRect().top
+              : undefined;
+          const anchorSettled =
+            routeId !== "config" ||
+            (anchorTop !== undefined &&
+              anchorTop >= -1 &&
+              anchorTop < window.innerHeight &&
+              (Math.abs(anchorTop - scrollport.getBoundingClientRect().top) < 1 ||
+                Math.abs(scrollport.scrollHeight - scrollport.clientHeight - scrollport.scrollTop) <
+                  1) &&
+              anchorTop === previousAnchorTop);
+          previousAnchorTop = anchorTop;
           const contentReady =
             pageReady &&
+            anchorSettled &&
             (!completion ||
               completion.every(({ selector: contentSelector, minimum, maximum }) => {
                 const count = document.querySelectorAll(contentSelector).length;
@@ -2115,28 +2135,26 @@ export function createEnginePageScenarios(
         prepare: enter,
         run: async (page) => {
           const advanced = page.locator(".config-advanced-disclosure");
-          const fields = advanced.locator(":scope > .settings-group > .settings-row");
+          const fields = advanced.locator(":scope > .settings-row--stacked-on-narrow");
           const inputs = advanced.locator("input, select, textarea, button");
           assert.equal(await advanced.getAttribute("open"), null);
           const mountedFieldsBefore = await fields.count();
           await advanced.locator(":scope > summary").click();
-          // The base schema has three numeric fields and the native-search object (ten controls).
           await page.waitForFunction(() => {
             const details = document.querySelector<HTMLDetailsElement>(
               ".config-advanced-disclosure",
             );
-            return (
-              details?.open &&
-              details.querySelectorAll(":scope > .settings-group > .settings-row").length === 4 &&
-              details.querySelectorAll("input, select, textarea, button").length === 10
-            );
+            return details?.open && details.querySelectorAll("input, select, textarea").length > 0;
           });
           await frames(page);
+          const mounted = { fields: await fields.count(), inputs: await inputs.count() };
+          // Native-search object leaves now have their own rows alongside the three numbers.
+          assert.deepEqual(mounted, { fields: 11, inputs: 14 });
           return {
             opened: true,
             mountedFieldsBefore,
-            mountedFields: await fields.count(),
-            mountedInputs: await inputs.count(),
+            mountedFields: mounted.fields,
+            mountedInputs: mounted.inputs,
           };
         },
       };

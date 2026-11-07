@@ -6,7 +6,7 @@
 // javaScriptResources includes completed modulepreloads absent from V8 coverage.
 // --cpu-profile-compare <baseline cpu-profile.json>: profile and diff against that report.
 // --selector-stats: ranked boot CSS selectors (instrumentation overhead included).
-// --viewport desktop|mobile: 1719×1179 (default) or 390×844 browser viewport.
+// --viewport desktop|mobile|1720x1180: default desktop, phone, or warm-reload proof size.
 // --allocations --untraced --live-events: collected-object renderer bytes per event.
 // --streaming-allocations: sampled allocation bytes including collected objects during deltas.
 // --streaming-content tool-code grows an expanded tool card and code fence together.
@@ -32,6 +32,7 @@
 // --critical-path-intent-ms 150 includes hover/focus prefetch before route activation.
 // --settings-core-schema replays the server's core config schema, prepared before sampling.
 // Paint/CLS and static-shell geometry are recorded in presentation; --filmstrip-only saves frames.
+// --active-transcript-two-round appends new turns, then completes the pending tool after commit.
 // --transcript-witness distinguishes native saved/live text paint in warm Chat reloads.
 // --transcript-witness-hold also holds startup for saved paint: correctness only, never timing.
 // --details-processes observes populated warm Details with one synthetic running process.
@@ -78,6 +79,7 @@ import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway
 import { resolveColdLoadLatency } from "./lib/control-ui-bench-latency.ts";
 import {
   persistColdLoadWarmState,
+  qualifyDetailsSubagentsWarmState,
   restoreColdLoadWarmState,
 } from "./lib/control-ui-bench-warm-state.ts";
 import {
@@ -125,7 +127,8 @@ import { probeColdLoadOverlays } from "./lib/control-ui-overlay-probe.ts";
 import { installPaneChromeProbe } from "./lib/control-ui-pane-chrome-probe.ts";
 import { createControlUiStreamingReply } from "./lib/control-ui-streaming-fixture.ts";
 import { createStreamingReplyProbeInitScript } from "./lib/control-ui-streaming-reply.ts";
-import { warmReloadProbe, type TranscriptWitnesses } from "./lib/control-ui-warm-reload-probe.ts";
+import { createTranscriptReloadWitness } from "./lib/control-ui-transcript-reload-fixture.ts";
+import { warmReloadProbe } from "./lib/control-ui-warm-reload-probe.ts";
 import {
   GATEWAY_HEAP_SAMPLE_INTERVAL,
   readGatewayHeapProfile,
@@ -134,6 +137,7 @@ import {
   installWarmReloadBrowserProbe,
   summarizeDetailsGeometry,
 } from "./perf/warm-reload-browser-probe.ts";
+import { installWarmReloadTranscriptProbe } from "./perf/warm-reload-transcript-probe.ts";
 type SidebarPresentationSnapshot = ReturnType<ReturnType<typeof sidebarPresentationProbe>["read"]>;
 
 function readRigProbeSnapshot() {
@@ -293,6 +297,9 @@ const { values } = parseArgs({
     allocations: { type: "boolean", default: false },
     "warm-reload": { type: "boolean", default: false },
     "transcript-witness": { type: "boolean", default: false },
+    "active-transcript": { type: "boolean", default: false },
+    "active-transcript-reader": { type: "boolean", default: false },
+    "active-transcript-two-round": { type: "boolean", default: false },
     "transcript-witness-hold": { type: "boolean", default: false },
     "row-facts": { type: "boolean", default: false },
     "late-row-facts": { type: "boolean", default: false },
@@ -485,11 +492,15 @@ if (colorScheme !== undefined && colorScheme !== "light" && colorScheme !== "dar
   throw new Error("Expected color-scheme light or dark");
 }
 const viewportName = values.viewport;
-if (viewportName !== "desktop" && viewportName !== "mobile") {
-  throw new Error("Expected viewport desktop or mobile");
+if (!["desktop", "mobile", "1720x1180"].includes(viewportName)) {
+  throw new Error("Expected viewport desktop, mobile, or 1720x1180");
 }
 const viewport =
-  viewportName === "mobile" ? { width: 390, height: 844 } : { width: 1719, height: 1179 };
+  viewportName === "mobile"
+    ? { width: 390, height: 844 }
+    : viewportName === "1720x1180"
+      ? { width: 1720, height: 1180 }
+      : { width: 1719, height: 1179 };
 if (values["filmstrip-only"] && cpuProfile) {
   throw new Error("filmstrip-only excludes CPU profiling");
 }
@@ -945,81 +956,24 @@ const fixture = createControlUiTeamScaleFixture({
   dashboardPaintMarker: values["dashboard-paint-marker"],
 });
 const witnessPhaseKey = "openclaw-bench-transcript-witness-phase";
-const transcriptWitness = values["transcript-witness"]
-  ? (() => {
-      const messages = fixture.scenario.historyMessages ?? [];
-      const index = messages.length - 1;
-      const message = messages[index];
-      const metadata = message?.["__openclaw"];
-      if (
-        message?.role !== "assistant" ||
-        typeof metadata?.id !== "string" ||
-        !Array.isArray(message.content)
-      ) {
-        throw new Error("Transcript witness requires an existing final assistant text message");
-      }
-      const originalText = "The current implementation is ready for verification.";
-      const witnesses: TranscriptWitnesses = {
-        saved: {
-          messageId: `${metadata.id}-cache`,
-          rowKey: "",
-          text: "The cached implementation is ready for verification.",
-        },
-        live: {
-          messageId: `${metadata.id}-fresh`,
-          rowKey: "",
-          text: "The latest implementation is ready for verification.",
-        },
-      };
-      const variants = { saved: messages, live: messages };
-      for (const source of ["saved", "live"] as const) {
-        const witness = witnesses[source];
-        witness.rowKey = `group:assistant:msg:id:${witness.messageId}:0`;
-        let replacements = 0;
-        const content = message.content.slice();
-        content.forEach((value, position) => {
-          if (
-            value.type !== "text" ||
-            typeof value.text !== "string" ||
-            !value.text.includes(originalText)
-          ) {
-            return;
-          }
-          replacements++;
-          content[position] = { ...value, text: value.text.replace(originalText, witness.text) };
-        });
-        if (replacements !== 1) {
-          throw new Error("Transcript witness requires exactly one existing fixture paragraph");
-        }
-        const replacement = { ...message };
-        replacement["__openclaw"] = { ...metadata, id: witness.messageId };
-        replacement.content = content;
-        const variant = messages.slice();
-        variant[index] = replacement;
-        variants[source] = variant;
-      }
-      // Preserve the visible reaction across both IDs; one unused lookup alias remains per phase.
-      const reactions = fixture.scenario.sessionReactions?.[fixture.selectedSessionKey];
-      const reaction = reactions?.[metadata.id];
-      if (reactions && reaction) {
-        reactions[witnesses.saved.messageId] = reaction;
-        reactions[witnesses.live.messageId] = reaction;
-        delete reactions[metadata.id];
-      }
-      return {
-        witnesses,
-        variants,
-        originalMessageId: metadata.id,
-        messageCount: messages.length,
-        // Native persistence retains the last 80 distinct-sequence fixture messages.
-        snapshotMessageCount: Math.min(messages.length, 80),
-        preparedAt: new Date().toISOString(),
-      };
-    })()
-  : undefined;
-if (transcriptWitness && fixture.liveHistory) {
-  fixture.liveHistory.messages = transcriptWitness.variants.live;
+if (values["active-transcript"] && !values["transcript-witness"]) {
+  throw new Error("active-transcript requires transcript-witness for native saved/live phases");
 }
+if (values["active-transcript-reader"] && !values["active-transcript"]) {
+  throw new Error("active-transcript-reader requires active-transcript");
+}
+if (values["active-transcript-two-round"] && !values["active-transcript"]) {
+  throw new Error("active-transcript-two-round requires active-transcript");
+}
+const transcriptWitness = values["transcript-witness"]
+  ? createTranscriptReloadWitness(fixture, values["active-transcript"])
+  : undefined;
+const liveHistory = fixture.liveHistory
+  ? {
+      ...fixture.liveHistory,
+      messages: transcriptWitness?.variants.live ?? fixture.liveHistory.messages,
+    }
+  : undefined;
 const streamingReply = values["streaming-reply"]
   ? createControlUiStreamingReply(streamingRate, streamingContent)
   : undefined;
@@ -1649,17 +1603,25 @@ try {
       : "";
   const warmProbes =
     values["warm-reload"] || firstLoad
-      ? `\n${paneChromeScript}\n(${warmReloadProbe.toString()})(${JSON.stringify({ rowFacts: values["row-facts"], avatars: values["transcript-avatars"], lateRowFacts: values["late-row-facts"], witnesses: transcriptWitness?.witnesses })}, ${values["pane-chrome-probe"] ? "__paneChrome.sample" : "undefined"});`
+      ? `\n${paneChromeScript}\n${values["active-transcript"] || values["archived-session"] || values["chat-dashboard-route"] ? `(${installWarmReloadTranscriptProbe.toString()})(${JSON.stringify(values["active-transcript-reader"] ? "reader" : "end")});` : ""}\n(${warmReloadProbe.toString()})(${JSON.stringify({ rowFacts: values["row-facts"], avatars: values["transcript-avatars"], lateRowFacts: values["late-row-facts"], witnesses: transcriptWitness?.witnesses })}, ${values["pane-chrome-probe"] ? "__paneChrome.sample" : "undefined"});`
       : "";
   const warmPerformanceProbe = values["warm-reload-perf-probe"]
     ? `\nReflect.set(window, "__warmReloadProof", (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(face)}));`
     : "";
-  // The last history case is the fixture's full-window fallback. Witness mode
-  // measures a changed transcript, so it must not replay the unchanged-cursor delta.
+  // Changed history must not replay the unchanged-cursor delta. Active reloads
+  // retain the server's bounded window instead of prepending the entire fixture.
   const historyCases = asNullableRecord(fixture.scenario.methodResponses?.["chat.history"])?.cases;
   const witnessHistory =
     transcriptWitness && Array.isArray(historyCases)
-      ? asNullableRecord(asNullableRecord(historyCases.at(-1))?.response)
+      ? asNullableRecord(
+          asNullableRecord(
+            values["active-transcript"]
+              ? historyCases.find(
+                  (entry) => asNullableRecord(asNullableRecord(entry)?.match)?.limit === 80,
+                )
+              : historyCases.at(-1),
+          )?.response,
+        )
       : undefined;
   if (transcriptWitness && !Array.isArray(witnessHistory?.messages)) {
     throw new Error("Transcript witness requires the fixture's complete history response");
@@ -1678,9 +1640,65 @@ try {
   const witnessInit = transcriptWitness
     ? `
     const witnessLive = localStorage.getItem(${JSON.stringify(witnessPhaseKey)}) === "live";
-    const witnessMessages = ${JSON.stringify(transcriptWitness.variants.saved)};
-    if (witnessLive) witnessMessages[witnessMessages.length - 1] = ${JSON.stringify(transcriptWitness.variants.live.at(-1))};
+    const witnessMessages = witnessLive ? ${JSON.stringify(values["active-transcript-two-round"] ? transcriptWitness.variants.intermediate : transcriptWitness.variants.live)} : ${JSON.stringify(transcriptWitness.variants.saved)};
     window.openclawControlUiE2eGateway.setHistoryMessages(witnessMessages);
+    ${
+      values["active-transcript"]
+        ? `
+    const totalMessages = witnessLive ? ${values["active-transcript-two-round"] ? transcriptWitness.totalMessages.intermediate : transcriptWitness.totalMessages.live} : ${transcriptWitness.totalMessages.saved};
+    for (const method of ["chat.history", "chat.startup"]) window.openclawControlUiE2eGateway.setMethodResponse(method, {
+      ...${JSON.stringify({ ...witnessHistory, messages: [] })}, messages: witnessMessages, totalMessages,
+      hasMore: totalMessages > witnessMessages.length,
+      nextOffset: totalMessages > witnessMessages.length ? witnessMessages.length : undefined,
+    });`
+        : ""
+    }
+    ${
+      values["active-transcript-two-round"]
+        ? `
+    if (witnessLive) {
+      const phases = [];
+      Reflect.set(window, "__activeTranscriptRounds", phases);
+      const awaitFirstCommit = () => {
+        const pane = document.querySelector(".chat-pane-cache__pane--active");
+        const history = Reflect.get(window, "__warmReload")?.witnesses()?.history ?? [];
+        const received = history.some((entry) => entry.source !== "snapshot-read" && entry.live === 1);
+        if (!pane || !Reflect.get(pane, "transcriptReady") || !received || !pane.querySelector('[data-position-marker-id="active-reload-fresh-result"]')) {
+          requestAnimationFrame(awaitFirstCommit);
+          return;
+        }
+        phases.push({ phase: "intermediate-commit", atMs: performance.now() });
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          const messages = ${JSON.stringify(transcriptWitness.variants.live)};
+          const totalMessages = ${transcriptWitness.totalMessages.live};
+          const response = {
+            ...${JSON.stringify({ ...witnessHistory, messages: [] })}, messages, totalMessages,
+            deltaCursor: "active-transcript-completed-v1",
+            hasMore: totalMessages > messages.length,
+            nextOffset: totalMessages > messages.length ? messages.length : undefined,
+          };
+          window.openclawControlUiE2eGateway.setHistoryMessages(messages);
+          for (const method of ["chat.history", "chat.startup"]) {
+            window.openclawControlUiE2eGateway.setMethodResponse(method, response);
+          }
+          window.openclawControlUiE2eGateway.emit("sessions.changed", {
+            sessionKey: ${JSON.stringify(fixture.selectedSessionKey)}, agentId: "main", phase: "message",
+          });
+          const awaitCompletedCommit = () => {
+            const completed = Reflect.get(pane, "state")?.chatMessages.some((message) => message.__openclaw?.id === "active-reload-tool-answer");
+            if (!completed || !Reflect.get(pane, "transcriptReady")) {
+              requestAnimationFrame(awaitCompletedCommit);
+              return;
+            }
+            phases.push({ phase: "completed-commit", atMs: performance.now() });
+          };
+          requestAnimationFrame(awaitCompletedCommit);
+        }));
+      };
+      requestAnimationFrame(awaitFirstCommit);
+    }`
+        : ""
+    }
     if (witnessLive && ${values["transcript-witness-hold"]}) window.openclawControlUiE2eGateway.deferNext("chat.startup");
   `
     : "";
@@ -1694,7 +1712,7 @@ try {
     ? `\n(${installRotatingBoardTickets.toString()})(${JSON.stringify(fixture.board)}, window.openclawControlUiE2eGateway);`
     : "";
   await page.addInitScript({
-    content: `;(() => { if (window !== window.top || location.protocol === "about:") return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(gatewayScenario)}\n${witnessInit}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${boardTickets}\n${createColdLoadProbeInitScript({ latencyMs, downloadKbps: values["critical-path"] || values["long-session"] || latencyProfile === "live-capped" ? downloadKbps : undefined, methodLatencyMs, sidebarQueryLatencyMs, omitHelloSelfPresence: values["omit-hello-self-presence"], connectNotBeforeMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes, sidebarCounters })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes}${warmPerformanceProbe}${presentationProbes}${paritySettings} })();`,
+    content: `;(() => { if (window !== window.top || location.protocol === "about:") return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(gatewayScenario)}\n${witnessInit}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${boardTickets}\n${createColdLoadProbeInitScript({ latencyMs, downloadKbps: values["critical-path"] || values["long-session"] || latencyProfile === "live-capped" ? downloadKbps : undefined, methodLatencyMs, sidebarQueryLatencyMs, omitHelloSelfPresence: values["omit-hello-self-presence"], connectNotBeforeMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory, ownerProbes, sidebarCounters })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes}${warmPerformanceProbe}${presentationProbes}${paritySettings} })();`,
   });
   if (values["critical-path"]) {
     await page.addInitScript({
@@ -1847,6 +1865,8 @@ try {
         await page
           .locator(".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea")
           .waitFor({ state: "visible" });
+      } else if (values["active-transcript"]) {
+        await page.getByText("Verification 24", { exact: true }).waitFor();
       } else {
         await page
           .frameLocator(".chat-tool-card__preview-frame")
@@ -2035,7 +2055,7 @@ try {
   };
   const qualifyDetails = async () => {
     if (!values["details-processes"] && !values["details-subagent-activity"]) {
-      return;
+      return null;
     }
     const details = page.locator(".chat-details:visible");
     if (!(await details.count())) {
@@ -2044,13 +2064,27 @@ try {
     if (values["details-processes"]) {
       await details.locator('[data-details-group="processes"] [data-process-id]').waitFor();
     }
-    if (values["details-subagent-activity"] && !values["archived-session"]) {
-      await details.locator(".chat-subagent-activity__row").first().waitFor();
-    }
     await details
       .locator('[data-details-group="automations"] .chat-summary__automation')
       .first()
       .waitFor();
+    if (values["details-subagent-activity"] && !values["archived-session"]) {
+      const rows = fixture.scenario.sessions!.flatMap((row) =>
+        row.parentSessionKey === fixture.selectedSessionKey &&
+        typeof row.label === "string" &&
+        row.label.startsWith("Synthetic child review ")
+          ? [{ key: row.key, label: row.label }]
+          : [],
+      );
+      const qualified = await page.waitForFunction(qualifyDetailsSubagentsWarmState, {
+        sessionKey: fixture.selectedSessionKey,
+        rows,
+      });
+      const receipt = await qualified.jsonValue();
+      await qualified.dispose();
+      return receipt;
+    }
+    return null;
   };
   const qualifyLateRowFacts = async () => {
     if (!fixture.lateRowFacts) {
@@ -2188,10 +2222,10 @@ try {
     }
     await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor({ state: "attached" });
     await qualifyLateRowFacts();
-    await qualifyDetails();
+    const detailsSubagentsWarmState = await qualifyDetails();
     const { storage: warmStorage, ...snapshotSave } = await page.evaluate(
       persistColdLoadWarmState,
-      warmInput,
+      { ...warmInput, detailsSubagentsWarmState },
     );
     const passes = values["warm-reload"] ? 2 : 1;
     for (let index = 0; index < bundleSlots.length; index++) {
@@ -2226,11 +2260,11 @@ try {
         );
         await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
         await qualifyLateRowFacts();
-        await qualifyDetails();
-        const { storage: captured, ...saved } = await page.evaluate(
-          persistColdLoadWarmState,
-          warmInput,
-        );
+        const primedDetailsSubagentsWarmState = await qualifyDetails();
+        const { storage: captured, ...saved } = await page.evaluate(persistColdLoadWarmState, {
+          ...warmInput,
+          detailsSubagentsWarmState: primedDetailsSubagentsWarmState,
+        });
         qualifyLateRowSnapshot(saved, index);
         storage = captured;
         primes.push(saved);
@@ -2848,10 +2882,39 @@ try {
     }
     const warmReload =
       values["warm-reload"] || firstLoad
-        ? await page.evaluate(() => Reflect.get(window, "__warmReload").read())
+        ? await page.evaluate(() => ({
+            ...Reflect.get(window, "__warmReload").read(),
+            transcriptRounds: Reflect.get(window, "__activeTranscriptRounds"),
+          }))
         : undefined;
     if (transcriptWitness) {
       const observed = warmReload?.transcriptWitnesses;
+      const finalWitnessVisible =
+        values["active-transcript"] && !values["active-transcript-reader"]
+          ? await page.evaluate(({ rowKey, text }) => {
+              const thread = document.querySelector<HTMLElement>(
+                ".chat-pane-cache__pane--active .chat-thread",
+              );
+              const row = [
+                ...(thread?.querySelectorAll<HTMLElement>(".chat-virtual-row") ?? []),
+              ].find((element) => element.dataset.virtualRowKey === rowKey);
+              const body = row?.querySelector<HTMLElement>(".chat-text");
+              const rect = body?.getBoundingClientRect();
+              const rowRect = row?.getBoundingClientRect();
+              const threadBounds = thread?.getBoundingClientRect();
+              return Boolean(
+                body?.textContent?.includes(text) &&
+                body.checkVisibility({ checkOpacity: true, visibilityProperty: true }) &&
+                rect &&
+                rowRect &&
+                threadBounds &&
+                Math.min(rect.bottom, rowRect.bottom, threadBounds.bottom, innerHeight) >
+                  Math.max(rect.top, rowRect.top, threadBounds.top, 0) &&
+                Math.min(rect.right, rowRect.right, threadBounds.right, innerWidth) >
+                  Math.max(rect.left, rowRect.left, threadBounds.left, 0),
+              );
+            }, transcriptWitness.witnesses.live)
+          : null;
       const cache =
         observed?.history.filter((entry: { source: string }) => entry.source === "snapshot-read") ??
         [];
@@ -2869,13 +2932,25 @@ try {
         wire.length > 0 &&
         wire.every(
           (entry: { saved: number; live: number; messageCount: number }) =>
-            entry.saved === 0 &&
+            entry.saved === (values["active-transcript"] ? 1 : 0) &&
             entry.live === 1 &&
-            entry.messageCount === transcriptWitness.messageCount,
+            entry.messageCount === transcriptWitness.liveMessageCount,
         ) &&
-        observed.attached.live &&
-        !observed.attached.saved &&
-        observed.live.paintMs !== null;
+        (values["active-transcript-reader"] || observed.attached.live) &&
+        (!values["active-transcript"] || Boolean(warmReload?.transcriptStability?.anchor)) &&
+        (!values["active-transcript-reader"] ||
+          warmReload?.transcriptStability?.frames[0]?.atMs < wire[0]?.atMs) &&
+        (values["active-transcript"] || !observed.attached.saved) &&
+        // Chrome's one-shot text timing entry can precede the tail's scroll into view.
+        (values["active-transcript-reader"] ||
+          (values["active-transcript"]
+            ? finalWitnessVisible &&
+              warmReload?.transcriptStability?.frames.at(-1)?.distanceFromEnd <= 1
+            : observed.live.paintMs !== null)) &&
+        (!values["active-transcript-two-round"] ||
+          warmReload?.transcriptRounds?.some(
+            (entry: { phase: string }) => entry.phase === "completed-commit",
+          ));
       await writeFile(
         path.join(artifactDir, `run-${run + 1}.transcript-witness.json`),
         JSON.stringify(
@@ -2884,6 +2959,7 @@ try {
             capturedAt: new Date().toISOString(),
             hold: witnessHold,
             observed,
+            finalWitnessVisible,
             valid: Boolean(valid),
             savedPaintObserved:
               observed?.saved.paintMs !== null && observed?.saved.paintMs !== undefined,
@@ -2893,6 +2969,9 @@ try {
         ),
       );
       if (!valid) {
+        await page.screenshot({
+          path: path.join(artifactDir, `run-${run + 1}.witness-failure.png`),
+        });
         throw new Error(
           "Saved/live witness provenance or final live presentation was not established; see transcript-witness artifact",
         );
@@ -4142,6 +4221,8 @@ try {
               preparedAt: transcriptWitness.preparedAt,
               messageCount: transcriptWitness.messageCount,
               snapshotMessageCount: transcriptWitness.snapshotMessageCount,
+              twoRound: values["active-transcript-two-round"],
+              totalMessages: transcriptWitness.totalMessages,
               measurement: values["transcript-witness-hold"]
                 ? "held-correctness"
                 : "natural-timing",

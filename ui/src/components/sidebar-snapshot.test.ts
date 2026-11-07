@@ -173,6 +173,47 @@ describe("sidebar snapshot lifecycle", () => {
     return { ...test, store };
   }
 
+  it("saves when live readiness settles without another render capture", async () => {
+    const test = fixture();
+    disposers.push(() => test.snapshotOwner.disconnect());
+    test.snapshotOwner.connect();
+    test.publish();
+    await capture(test.snapshotOwner);
+    expect(test.capture).not.toHaveBeenCalled();
+    const saved = test.settle();
+    test.snapshotOwner.synchronize();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(test.capture).toHaveBeenCalledOnce();
+    await saved;
+    const store = new SessionSnapshotStore();
+    store.connect();
+    disposers.push(() => store.disconnect());
+    expect(await store.readSidebar(sidebarSnapshotScopeKey(scope), parseSidebarSnapshot)).toEqual(
+      model,
+    );
+  });
+
+  it("diagnoses a blocked capture and an unfinished or rejected write", async () => {
+    const write = createDeferred<boolean>();
+    const persist = vi
+      .spyOn(SessionSnapshotStore.prototype, "writeSidebar")
+      .mockReturnValue(write.promise);
+    const test = fixture();
+    disposers.push(() => test.snapshotOwner.disconnect());
+    test.snapshotOwner.connect();
+    test.publish();
+    await capture(test.snapshotOwner);
+    expect(test.snapshotOwner.read()).toMatchObject({ captureStatus: "unsettled", saved: false });
+    void test.settle();
+    test.snapshotOwner.capture();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(test.snapshotOwner.read()).toMatchObject({ captureStatus: "writing", saved: false });
+    write.resolve(false);
+    await vi.dynamicImportSettled();
+    expect(test.snapshotOwner.read().captureStatus).toBe("rejected");
+    expect(persist).toHaveBeenCalledOnce();
+  });
+
   it("shares one boot read and prunes a deleted row without retiring unrelated sidebar display", async () => {
     const store = new SessionSnapshotStore();
     store.connect();
