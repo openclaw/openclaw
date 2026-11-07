@@ -208,6 +208,11 @@ describe("assertLocalMediaAllowed", () => {
 
       await expect(read(aliasFile, [root])).resolves.toEqual(Buffer.from("inside"));
       await expect(read(finalLink, [root])).rejects.toMatchObject({ code: "symlink" });
+      // `link/..` is base/private, so a lexical root/secret.bin check must not authorize it.
+      await write(path.join(base, "private", "nested", "keep"));
+      await write(path.join(base, "private", "secret.bin"), "outside-secret");
+      await fs.symlink(path.join(base, "private", "nested"), path.join(root, "link"));
+      await denied(assertLocalMediaAllowed(`${root}/link/../secret.bin`, [root]));
     },
   );
 
