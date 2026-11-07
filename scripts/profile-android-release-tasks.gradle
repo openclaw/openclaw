@@ -1,0 +1,79 @@
+import groovy.json.JsonOutput
+import org.gradle.api.GradleException
+import org.gradle.api.Plugin
+import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.invocation.Gradle
+import org.gradle.api.services.BuildService
+import org.gradle.api.services.BuildServiceParameters
+import org.gradle.build.event.BuildEventsListenerRegistry
+import org.gradle.tooling.events.FinishEvent
+import org.gradle.tooling.events.OperationCompletionListener
+import org.gradle.tooling.events.task.TaskFailureResult
+import org.gradle.tooling.events.task.TaskFinishEvent
+import org.gradle.tooling.events.task.TaskSkippedResult
+import org.gradle.tooling.events.task.TaskSuccessResult
+import javax.inject.Inject
+
+// Temporary diagnostic observer; task result times come from Gradle's public events.
+abstract class OpenClawAndroidTaskProfile implements BuildService<OpenClawAndroidTaskProfile.Parameters>, OperationCompletionListener, AutoCloseable {
+    interface Parameters extends BuildServiceParameters {
+        RegularFileProperty getOutputFile()
+    }
+
+    private Writer output
+
+    @Override
+    synchronized void onFinish(FinishEvent event) {
+        if (!(event instanceof TaskFinishEvent)) {
+            return
+        }
+        if (output == null) {
+            File file = parameters.outputFile.get().asFile
+            file.parentFile.mkdirs()
+            output = file.newWriter('UTF-8', true)
+        }
+        def result = event.result
+        String outcome = 'executed'
+        if (result instanceof TaskFailureResult) {
+            outcome = 'failed'
+        } else if (result instanceof TaskSkippedResult) {
+            outcome = 'skipped'
+        } else if (result instanceof TaskSuccessResult) {
+            outcome = result.fromCache ? 'from-cache' : result.upToDate ? 'up-to-date' : 'executed'
+        }
+        String taskPath = event.descriptor.taskPath
+        output.write(JsonOutput.toJson([
+            taskPath: taskPath,
+            modulePath: taskPath.substring(0, taskPath.lastIndexOf(':')) ?: ':',
+            startTime: result.startTime,
+            endTime: result.endTime,
+            outcome: outcome,
+            daemonPid: ProcessHandle.current().pid(),
+        ]) + '\n')
+        output.flush()
+    }
+
+    @Override
+    synchronized void close() {
+        output?.close()
+    }
+}
+
+abstract class OpenClawAndroidTaskProfilePlugin implements Plugin<Gradle> {
+    @Inject
+    abstract BuildEventsListenerRegistry getBuildEventsListenerRegistry()
+
+    @Override
+    void apply(Gradle gradle) {
+        String outputPath = System.getProperty('openclaw.profile.tasks')
+        if (!outputPath || !new File(outputPath).isAbsolute()) {
+            throw new GradleException('Set -Dopenclaw.profile.tasks to an absolute diagnostic output path.')
+        }
+        def listener = gradle.sharedServices.registerIfAbsent('openClawAndroidReleaseTaskProfile', OpenClawAndroidTaskProfile) {
+            parameters.outputFile.set(new File(outputPath))
+        }
+        buildEventsListenerRegistry.onTaskCompletion(listener)
+    }
+}
+
+apply plugin: OpenClawAndroidTaskProfilePlugin
