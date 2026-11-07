@@ -2379,6 +2379,16 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/simlock:
+    dependencies:
+      typebox:
+        specifier: 1.4.3
+        version: 1.4.3
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/skill-workshop:
     dependencies:
       '@openclaw/gateway-protocol':
