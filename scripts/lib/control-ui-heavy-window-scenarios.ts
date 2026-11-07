@@ -360,7 +360,10 @@ export function createHeavyWindowScenarios(
           diagnostic: "Source-map entry counters modify loaded code; timing is diagnostic only.",
           setup: async (page) => {
             await scenario.setup!(page);
-            await installHeavyCountProbe(page, { markdownParserRender: true });
+            await installHeavyCountProbe(page, {
+              markdownParserRender: true,
+              targetPrefix: `${marker} `,
+            });
           },
           run: async (page, gateway) => {
             const before = await readHeavyCountProbe(page);
@@ -373,8 +376,19 @@ export function createHeavyWindowScenarios(
               ...result,
               markdownRenders: after.counts.markdownRenders - before.counts.markdownRenders,
               parserRenders: after.counts.parserRenders - before.counts.parserRenders,
+              targetMarkdownRenders:
+                after.counts.targetMarkdownRenders - before.counts.targetMarkdownRenders,
+              targetParserRenders:
+                after.counts.targetParserRenders - before.counts.targetParserRenders,
               toolFormats: after.counts.toolFormats - before.counts.toolFormats,
               diffAnalyses: after.counts.diffAnalyses - before.counts.diffAnalyses,
+              // Cumulative navigation/prepare counts provide a positive instrumentation control.
+              warmupMarkdownRenders: before.counts.markdownRenders,
+              warmupParserRenders: before.counts.parserRenders,
+              warmupTargetMarkdownRenders: before.counts.targetMarkdownRenders,
+              warmupTargetParserRenders: before.counts.targetParserRenders,
+              warmupToolFormats: before.counts.toolFormats,
+              warmupDiffAnalyses: before.counts.diffAnalyses,
               markdownInstrumented: after.instrumented.includes("markdownRenders"),
               parserInstrumented: after.instrumented.includes("parserRenders"),
               toolInstrumented: after.instrumented.includes("toolFormats"),

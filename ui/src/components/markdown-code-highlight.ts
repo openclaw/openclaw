@@ -43,20 +43,22 @@ function requestHighlight(
   language: string,
   receive: (reply: HighlightResult) => void,
 ) {
-  const key = `${language.length}:${language}${source}`;
-  const cached = highlightCache.get(key);
-  if (cached) {
-    highlightCache.delete(key);
-    highlightCache.set(key, cached);
-    let active = true;
-    queueMicrotask(() => {
-      if (active) {
-        receive(cached.result);
-      }
-    });
-    return () => {
-      active = false;
-    };
+  if (highlightCache.size) {
+    const key = `${language.length}:${language}${source}`;
+    const cached = highlightCache.get(key);
+    if (cached) {
+      highlightCache.delete(key);
+      highlightCache.set(key, cached);
+      let active = true;
+      queueMicrotask(() => {
+        if (active) {
+          receive(cached.result);
+        }
+      });
+      return () => {
+        active = false;
+      };
+    }
   }
   const id = ++sequence;
   if (!worker) {
@@ -78,33 +80,7 @@ function requestHighlight(
       }
     });
   }
-  pending.set(id, (reply) => {
-    // Worker failures remain retryable. A completed no-syntax result is reusable too.
-    if (reply.chunks !== null) {
-      const result: HighlightResult = {
-        chunks: reply.chunks,
-        previewEnd: reply.previewEnd,
-        highlighted: reply.highlighted,
-      };
-      const chars =
-        key.length + reply.chunks.reduce((total, chunk) => total + chunk.html.length, 0);
-      if (chars <= HIGHLIGHT_CACHE_CHARS) {
-        highlightCacheChars -= highlightCache.get(key)?.chars ?? 0;
-        highlightCache.delete(key);
-        highlightCache.set(key, { result, chars });
-        highlightCacheChars += chars;
-        while (
-          highlightCache.size > HIGHLIGHT_CACHE_LIMIT ||
-          highlightCacheChars > HIGHLIGHT_CACHE_CHARS
-        ) {
-          const [oldest, entry] = highlightCache.entries().next().value!;
-          highlightCache.delete(oldest);
-          highlightCacheChars -= entry.chars;
-        }
-      }
-    }
-    receive(reply);
-  });
+  pending.set(id, receive);
   worker.postMessage({ id, source, language } satisfies CodeHighlightRequest, { transfer: [] });
   return () => pending.delete(id);
 }
@@ -114,11 +90,13 @@ type Block = {
   viewport: HTMLElement;
   code: HTMLElement;
   language: string;
+  source: string;
   tail: Text;
   visible: boolean;
   applied: number;
   next: number;
   reply?: HighlightResult;
+  result?: HighlightResult;
   complete: boolean;
   frame?: number;
   cancel?: () => void;
@@ -160,6 +138,7 @@ export class MarkdownCodeHighlights {
       viewport,
       code,
       language: code.getAttribute("data-code-highlight") ?? "",
+      source: tail.data,
       tail,
       visible: false,
       applied: 0,
@@ -216,6 +195,28 @@ export class MarkdownCodeHighlights {
     block.stopObserving = undefined;
     block.visible = false;
     this.cancel(block);
+    const result = block.result;
+    if (!result?.chunks) {
+      return;
+    }
+    // Publish only when leaving a row; first paint does not build or budget cache entries.
+    const key = `${block.language.length}:${block.language}${block.source}`;
+    const chars = key.length + result.chunks.reduce((total, chunk) => total + chunk.html.length, 0);
+    if (chars > HIGHLIGHT_CACHE_CHARS) {
+      return;
+    }
+    highlightCacheChars -= highlightCache.get(key)?.chars ?? 0;
+    highlightCache.delete(key);
+    highlightCache.set(key, { result, chars });
+    highlightCacheChars += chars;
+    while (
+      highlightCache.size > HIGHLIGHT_CACHE_LIMIT ||
+      highlightCacheChars > HIGHLIGHT_CACHE_CHARS
+    ) {
+      const [oldest, entry] = highlightCache.entries().next().value!;
+      highlightCache.delete(oldest);
+      highlightCacheChars -= entry.chars;
+    }
   }
 
   private cancel(block: Block): void {
@@ -251,30 +252,28 @@ export class MarkdownCodeHighlights {
         } else if (!block.cancel) {
           block.releaseWorker ??= retainWorker();
           try {
-            block.cancel = requestHighlight(
-              block.code.textContent ?? "",
-              block.language,
-              (reply) => {
-                block.cancel = undefined;
-                block.releaseWorker?.();
-                block.releaseWorker = undefined;
-                if (!this.current(block)) {
-                  return;
-                }
-                if (!reply.highlighted || !reply.chunks?.length) {
-                  this.finish(block);
-                  return;
-                }
-                block.reply = reply;
-                while ((reply.chunks[block.next]?.to ?? Infinity) <= block.applied) {
-                  block.next += 1;
-                }
-                if (reply.highlighted) {
-                  block.code.classList.add("hljs");
-                }
-                this.schedule(block);
-              },
-            );
+            block.cancel = requestHighlight(block.source, block.language, (reply) => {
+              block.cancel = undefined;
+              block.releaseWorker?.();
+              block.releaseWorker = undefined;
+              if (!this.current(block)) {
+                return;
+              }
+              // Keep completed data after its application cursor is exhausted; failures retry.
+              block.result = reply.chunks === null ? undefined : reply;
+              if (!reply.highlighted || !reply.chunks?.length) {
+                this.finish(block);
+                return;
+              }
+              block.reply = reply;
+              while ((reply.chunks[block.next]?.to ?? Infinity) <= block.applied) {
+                block.next += 1;
+              }
+              if (reply.highlighted) {
+                block.code.classList.add("hljs");
+              }
+              this.schedule(block);
+            });
           } catch {
             this.finish(block);
           }

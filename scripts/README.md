@@ -669,6 +669,10 @@ Add `-counts` to a window scenario for diagnostic source-map instrumentation of
 Markdown rendering, Markdown-it parsing, tool formatting and diff analysis.
 Check each `*Instrumented` flag before interpreting a zero. Formatter entries
 are not cache misses, and Markdown-it counts cover `render`, not direct `parse`.
+`targetMarkdownRenders` and `targetParserRenders` count only input beginning with
+the fixture's exact `Heavy window target ` prefix; the page-wide totals also
+include unrelated prewarming. `warmup*` totals cover navigation and preparation
+before the measured crossings, providing a positive instrumentation control.
 The diff fixture is a Markdown fence; tool cases reopen the 8,000-character
 in-row preview, not the full-output sidebar. These intercepted builds are for
 work counts only. `heavy-megabyte-{markdown,line}-arrival` and

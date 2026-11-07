@@ -5,8 +5,15 @@ import type { Node } from "@babel/types";
 import type { Page } from "playwright";
 
 type CounterName = "markdownRenders" | "toolFormats" | "diffAnalyses" | "parserRenders";
-type Counts = Record<CounterName, number>;
-type Target = { source: string; name: string; counter: CounterName; method?: boolean };
+type TargetCounterName = "targetMarkdownRenders" | "targetParserRenders";
+type Counts = Record<CounterName | TargetCounterName, number>;
+type Target = {
+  source: string;
+  name: string;
+  counter: CounterName;
+  targetCounter?: TargetCounterName;
+  method?: boolean;
+};
 type OriginalTarget = Target & { line: number; column: number; endLine: number; endColumn: number };
 type Transformation = { body: string; counters: CounterName[] };
 type ProbeState = { errors: string[]; instrumented: Set<CounterName>; unmappedAssets: Set<string> };
@@ -16,6 +23,7 @@ const targets: Target[] = [
     source: "ui/src/components/markdown.ts",
     name: "renderSanitizedMarkdown",
     counter: "markdownRenders",
+    targetCounter: "targetMarkdownRenders",
   },
   {
     source: "ui/src/lib/chat/tool-output.ts",
@@ -32,6 +40,7 @@ const parserTarget: Target = {
   source: "markdown-it/dist/markdown-it.mjs",
   name: "render",
   counter: "parserRenders",
+  targetCounter: "targetParserRenders",
   method: true,
 };
 const states = new WeakMap<Page, ProbeState>();
@@ -122,12 +131,18 @@ function originalTargets(map: SourceMap, selected: Target[]): OriginalTarget[] {
   return result;
 }
 
-function transform(body: string, mapText: string, selected: Target[]): Transformation {
+function transform(
+  body: string,
+  mapText: string,
+  selected: Target[],
+  scopeTarget: boolean,
+): Transformation {
   const key = createHash("sha256")
     .update(body)
     .update("\0")
     .update(mapText)
     .update(selected.map((target) => target.counter).join(","))
+    .update(scopeTarget ? "scoped" : "pagewide")
     .digest("hex");
   const cached = transformed.get(key);
   if (cached) {
@@ -135,7 +150,11 @@ function transform(body: string, mapText: string, selected: Target[]): Transform
   }
   const map = new SourceMap(JSON.parse(mapText));
   const originals = originalTargets(map, selected);
-  const insertions: { offset: number; counter: CounterName }[] = [];
+  const insertions: {
+    offset: number;
+    counter: CounterName;
+    target?: { counter: TargetCounterName; input: string };
+  }[] = [];
   if (originals.length) {
     walk(parse(body, { sourceType: "module" }), (node) => {
       if (node.type !== "FunctionDeclaration" && node.type !== "ClassMethod") {
@@ -171,7 +190,17 @@ function transform(body: string, mapText: string, selected: Target[]): Transform
       if (offset === undefined || offset === null) {
         throw new Error(`Heavy count probe has no insertion offset for ${target.name}`);
       }
-      insertions.push({ offset, counter: target.counter });
+      let scoped: { counter: TargetCounterName; input: string } | undefined;
+      if (scopeTarget && target.targetCounter) {
+        const input = node.params[0];
+        if (input?.type !== "Identifier") {
+          throw new Error(
+            `Heavy count probe needs an identifier first parameter for ${target.source}:${target.name}`,
+          );
+        }
+        scoped = { counter: target.targetCounter, input: input.name };
+      }
+      insertions.push({ offset, counter: target.counter, target: scoped });
     });
     for (const target of originals) {
       const matches = insertions.filter((entry) => entry.counter === target.counter).length;
@@ -184,7 +213,11 @@ function transform(body: string, mapText: string, selected: Target[]): Transform
   }
   let output = body;
   for (const insertion of insertions.toSorted((left, right) => right.offset - left.offset)) {
-    output = `${output.slice(0, insertion.offset)};window.heavyContentEntryCounts.${insertion.counter}++;${output.slice(insertion.offset)}`;
+    const scoped = insertion.target;
+    const targetCount = scoped
+      ? `if(typeof ${scoped.input}==="string"&&${scoped.input}.startsWith(window.heavyContentTargetPrefix)){window.heavyContentEntryCounts.${scoped.counter}++;}`
+      : "";
+    output = `${output.slice(0, insertion.offset)};window.heavyContentEntryCounts.${insertion.counter}++;${targetCount}${output.slice(insertion.offset)}`;
   }
   const result = { body: output, counters: insertions.map((entry) => entry.counter) };
   transformed.set(key, result);
@@ -194,13 +227,14 @@ function transform(body: string, mapText: string, selected: Target[]): Transform
 declare global {
   interface Window {
     heavyContentEntryCounts: Counts;
+    heavyContentTargetPrefix: string;
   }
 }
 
 /** Diagnostic only: route interception disables HTTP caching and alters generated code. */
 export async function installHeavyCountProbe(
   page: Page,
-  options: { markdownParserRender?: boolean } = {},
+  options: { markdownParserRender?: boolean; targetPrefix?: string } = {},
 ): Promise<void> {
   if (states.has(page)) {
     throw new Error("Heavy count probe is already installed on this page");
@@ -208,14 +242,17 @@ export async function installHeavyCountProbe(
   const state: ProbeState = { errors: [], instrumented: new Set(), unmappedAssets: new Set() };
   states.set(page, state);
   const selected = options.markdownParserRender ? [...targets, parserTarget] : targets;
-  await page.addInitScript(() => {
+  await page.addInitScript((targetPrefix) => {
+    window.heavyContentTargetPrefix = targetPrefix;
     window.heavyContentEntryCounts = {
       markdownRenders: 0,
       toolFormats: 0,
       diffAnalyses: 0,
       parserRenders: 0,
+      targetMarkdownRenders: 0,
+      targetParserRenders: 0,
     };
-  });
+  }, options.targetPrefix ?? "");
   await page.route("**/assets/*.js", async (route) => {
     try {
       const response = await route.fetch();
@@ -243,7 +280,12 @@ export async function installHeavyCountProbe(
           `Heavy count probe source map fetch failed: ${mapResponse.status()} ${mapUrl.href}`,
         );
       }
-      const result = transform(body, await mapResponse.text(), selected);
+      const result = transform(
+        body,
+        await mapResponse.text(),
+        selected,
+        options.targetPrefix !== undefined,
+      );
       for (const counter of result.counters) {
         state.instrumented.add(counter);
       }
