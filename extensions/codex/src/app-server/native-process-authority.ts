@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
+import { CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS } from "./attempt-client-cleanup.js";
 import { protectCodexAppServerLiveThread } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { NativeModelSource } from "./native-subagent-monitor-types.js";
@@ -18,6 +21,7 @@ type CommandAdmission = NativeCommand & {
   client: CodexNativeProcessClient;
   parentTurn: NativeTurn;
   accepting: boolean;
+  cancellationRequested: boolean;
   background?: { processId: string | null; confirmed: boolean };
   processes: Set<ProcessCustody>;
   assertActive: () => void;
@@ -189,10 +193,15 @@ export class CodexNativeProcessClient {
       client: this,
       parentTurn,
       accepting: true,
+      cancellationRequested: false,
       processes: new Set(),
       assertActive,
       releaseClient: retainSharedCodexAppServerClientIfCurrent(this.client),
-      releaseThread: protectCodexAppServerLiveThread(this.client, receipt.threadId),
+      releaseThread: protectCodexAppServerLiveThread(
+        this.client,
+        receipt.threadId,
+        "native-command",
+      ),
     };
     commands.set(receipt.itemId, command);
     owner.commands.add(command);
@@ -256,6 +265,72 @@ export class CodexNativeProcessClient {
         (command) => command.turnId === turnId,
       ),
     );
+  }
+
+  /** Native-only commands settle through final receipts, not termination acknowledgments. */
+  async terminateBackground(command: CommandAdmission): Promise<void> {
+    const custody = command.background;
+    if (!custody) {
+      return;
+    }
+    const uncertainClose = new Error(
+      "Codex native background cleanup is uncertain after its client closed",
+    );
+    if (this.closed) {
+      throw uncertainClose;
+    }
+    const settled = createDeferred<void>();
+    const check = () => {
+      if (!command.background) {
+        settled.resolve();
+      }
+    };
+    const closed = new AbortController();
+    const stopWatching = this.client.addNotificationHandler(check);
+    const stopClosing = this.client.addCloseHandler(() => closed.abort(uncertainClose));
+    const signal = AbortSignal.any([
+      AbortSignal.timeout(CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS),
+      closed.signal,
+    ]);
+    try {
+      const { data } = await this.client.request(
+        "thread/backgroundTerminals/list",
+        { threadId: command.threadId },
+        { signal },
+      );
+      const background = data.find(
+        ({ itemId, processId }) =>
+          itemId === command.itemId &&
+          (custody.processId === null || processId === custody.processId),
+      );
+      if (background) {
+        await this.client
+          .request(
+            "thread/backgroundTerminals/terminate",
+            { threadId: command.threadId, processId: background.processId },
+            {
+              signal,
+              assertCurrent: () => {
+                if (this.closed || command.background !== custody) {
+                  throw new Error("Native command settled before termination");
+                }
+              },
+            },
+          )
+          .catch((error: unknown) => {
+            // A final receipt during retry/backoff forbids writing to a reused handle.
+            if (command.background === custody) {
+              throw error;
+            }
+          });
+      }
+      // Inventory absence, an acknowledgment, and logical close are not final receipts.
+      check();
+      await racePromiseWithAbortSignal(settled.promise, signal);
+    } finally {
+      stopWatching();
+      stopClosing();
+    }
   }
 
   private forgetSettled(command: CommandAdmission): void {
@@ -389,7 +464,9 @@ export class CodexNativeProcessAuthority {
         () => this.assertCurrent(),
       );
       command.accepting = false;
-      command.background = { processId, confirmed: false };
+      if (!command.cancellationRequested) {
+        command.background = { processId, confirmed: false };
+      }
       entries.set(itemId, command);
     }
     return (retained) => {
@@ -397,6 +474,9 @@ export class CodexNativeProcessAuthority {
         const processId = retained.get(itemId);
         if (!this.commands.has(command)) {
           // Completion may arrive while the inventory RPC or projection drain is pending.
+          retained.delete(itemId);
+        } else if (command.cancellationRequested) {
+          // Cancellation owns settlement even when the registration RPC fails.
           retained.delete(itemId);
         } else if (processId) {
           command.background = { processId, confirmed: true };
@@ -428,7 +508,7 @@ export class CodexNativeProcessAuthority {
     this.holds -= 1;
     if (this.holds === 0) {
       for (const command of this.commands) {
-        if (!command.background?.confirmed) {
+        if (!command.background?.confirmed && !command.cancellationRequested) {
           command.background = undefined;
         }
         command.client.closeAdmission(command);
@@ -480,13 +560,19 @@ export class CodexNativeProcessAuthority {
 }
 
 async function terminateCommands(commands: CommandAdmission[]): Promise<void> {
-  const processes = commands.flatMap((command) => {
+  const cleanup = commands.flatMap((command) => {
+    // Registration may still be awaiting inventory when cancellation takes custody.
+    command.cancellationRequested = true;
+    if (command.background && command.processes.size === 0) {
+      command.client.closeAdmission(command);
+      return [() => command.client.terminateBackground(command)];
+    }
     command.background = undefined;
     command.client.closeAdmission(command);
-    return [...command.processes];
+    return [...command.processes].map((process) => () => process.terminate());
   });
   // These closures own concrete children. Native numeric process IDs may already belong to a successor.
-  const results = await Promise.allSettled(processes.map((process) => process.terminate()));
+  const results = await Promise.allSettled(cleanup.map((terminate) => terminate()));
   const failures = results.flatMap((result) =>
     result.status === "rejected" ? [result.reason] : [],
   );

@@ -173,7 +173,7 @@ it("keeps a protected warm policy usable after refusing the changed-deny trigger
   const unprotect = protectCodexAppServerLiveThread(fixture.client, first.threadId);
   fixture.request.mockClear();
   try {
-    await expect(start(safeDeny)).rejects.toThrow("claimed by active work");
+    await expect(start(safeDeny)).rejects.toThrow("background work or live resources");
     expect(read()).toEqual(previous);
     expect(isCodexAppServerLiveThreadClaimed(fixture.client, first.threadId)).toBe(false);
     const retry = await start({ runId: "original-policy" });
