@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
+import { performance } from "node:perf_hooks";
 import { expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
@@ -34,6 +35,7 @@ import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-aut
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import { prepareChatAdmission } from "./chat-send-admission.test-support.js";
+import { startChatSendDiagnostics } from "./chat-send-diagnostics.js";
 import { runChatSendPreAdmission } from "./chat-send-pre-admission.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import { prepareChatSendSession } from "./chat-send-session.js";
@@ -332,7 +334,10 @@ it.for([
         });
       };
       const admission = await f.prepare({
-        params: { intent: { kind: "session-goal-start", version: 1, issuedAtMs: now } },
+        params: {
+          expectedLeafEntryId: null,
+          intent: { kind: "session-goal-start", version: 1, issuedAtMs: now },
+        },
       });
       if (change === "lifecycle changed before admission") {
         replaceLifecycle();
@@ -356,10 +361,7 @@ it.for([
       );
       const firstPreparation = createDeferred<"ACP" | "writer admission">();
       const orderedRequested = createDeferred();
-      const metadataBindings: Array<{
-        lifecycleRevision: string | undefined;
-        hasMetadata: boolean;
-      }> = [];
+      const metadataBindings: { lifecycleRevision?: string; hasMetadata: boolean }[] = [];
       const readMetadata = acpMetadata.readAcpSessionMetaForEntries;
       using metadata = vi.spyOn(acpMetadata, "readAcpSessionMetaForEntries");
       metadata.mockImplementation(async (params, options) => {
@@ -386,10 +388,18 @@ it.for([
       const respond = vi.fn();
       let admitted: Admission | undefined;
       let pending: Promise<Admission> | undefined;
+      let elapsedMs = 0;
+      using clock = vi.spyOn(performance, "now");
+      clock.mockImplementation(() => elapsedMs);
+      const info = vi.fn();
+      using diagnostics = startChatSendDiagnostics({ info });
+      const wait = (gate: Promise<unknown>, message: string) =>
+        withinTest(awaitGateBeforeSettlement(gate, pending!, message), signal);
       try {
         await withinTest(held.promise, signal);
         pending = admitChatSend({
           ...admission,
+          diagnostics,
           respond,
           assertCurrent() {
             if (!callerCurrent) {
@@ -397,33 +407,22 @@ it.for([
             }
           },
         }).then((result) => (admitted = result));
-        expect(
-          await withinTest(
-            awaitGateBeforeSettlement(
-              firstPreparation.promise,
-              pending,
-              "chat skipped preparation",
-            ),
-            signal,
-          ),
-        ).toBe("ACP");
-        await withinTest(
-          awaitGateBeforeSettlement(
-            orderedRequested.promise,
-            pending,
-            "chat skipped final ordering",
-          ),
-          signal,
-        );
+        expect(await wait(firstPreparation.promise, "chat skipped preparation")).toBe("ACP");
+        await wait(orderedRequested.promise, "chat skipped final ordering");
         expect(metadataBindings).toEqual([
           { lifecycleRevision: "original-lifecycle", hasMetadata: false },
         ]);
         expect(admitted).toBeUndefined();
         expect(respond).not.toHaveBeenCalled();
         callerCurrent = change !== "caller revoked";
+        elapsedMs = 1_000;
         release.resolve();
         await holder;
         admitted = await pending;
+        diagnostics.finish();
+        expect(info.mock.calls.flat().join(" ")).toContain(
+          "detail.admission.current_session.history_reader=0ms detail.admission.current_session.ordered_admission=1000ms detail.admission.current_session.read_barrier=0ms detail.admission.current_session.source_prepare=0ms",
+        );
         if (change === "caller revoked") {
           expect(admitted.ok).toBe(false);
           expectAdmissionError(respond, {
