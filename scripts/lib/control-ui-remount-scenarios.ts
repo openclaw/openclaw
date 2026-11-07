@@ -143,7 +143,13 @@ export function createEngineRemountScenarios(): EngineScenario[] {
           const routeId = direction === "back" ? pair.from : (pair.landed ?? pair.to);
           await waitForControlUiRoute(page, { routeId });
           if (routeId === "chat") {
-            await prepareChat(page);
+            if (pair.to === "settings") {
+              await page
+                .locator(".chat-pane-cache__pane--active .agent-chat__composer-shell")
+                .waitFor();
+            } else {
+              await prepareChat(page);
+            }
           }
           await frames(page);
           return { historyTransitions: 1 };
