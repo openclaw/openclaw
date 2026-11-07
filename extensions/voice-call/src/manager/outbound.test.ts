@@ -468,7 +468,7 @@ describe("voice-call outbound helpers", () => {
         startListening,
         stopListening: vi.fn(async () => {}),
       },
-      config: { tts: { provider: "openai" } },
+      config: { tts: { provider: "openai" }, streaming: { enabled: false } },
       storePath: "/tmp/voice-call.json",
       activeTurnCalls,
       transcriptWaiters: new Map(),
