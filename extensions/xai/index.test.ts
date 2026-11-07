@@ -465,9 +465,10 @@ describe("xai provider plugin", () => {
       });
       assert(tool && !Array.isArray(tool));
       const mockFetch = vi.fn<typeof fetch>(async (url, init) => {
-        expect(String(url)).toBe("https://cli-chat-proxy.grok.com/v1/responses");
-        const headers = new Headers(init?.headers);
-        const body = JSON.parse(String(init?.body));
+        const request = new Request(url, init);
+        expect(request.url).toBe("https://cli-chat-proxy.grok.com/v1/responses");
+        const headers = request.headers;
+        const body = await request.json();
         expect(headers.get("authorization")).toBe("Bearer synthetic-oauth");
         expect(headers.get("x-xai-token-auth")).toBe("xai-grok-cli");
         expect(headers.get("x-grok-client-version")).toBe("1.0.13");
