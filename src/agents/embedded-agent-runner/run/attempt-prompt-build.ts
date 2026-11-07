@@ -329,15 +329,17 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
         `(${hookResult?.prependSystemContext?.trim().length ?? 0}+${hookResult?.appendSystemContext?.trim().length ?? 0} chars)`,
     );
   }
-  // Presence forensics: freeze THIS attempt's expectation set (post size guard) and
-  // assign the per-run logical request ordinal. One assembly per model request.
+  // Presence forensics: freeze THIS attempt's expectation set (post size guard).
+  // The logical request ordinal is assigned at the streamFn invocation boundary
+  // (wrapper), NOT here — one assembly may feed several model requests.
   {
     const providerPromptState = getProviderPromptState(input.attempt.runId);
     providerPromptState.pendingInjectedExpectations =
       hookResult?.injectedExpectations && hookResult.injectedExpectations.length > 0
         ? hookResult.injectedExpectations
         : undefined;
-    providerPromptState.requestCount = (providerPromptState.requestCount ?? 0) + 1;
+    providerPromptState.pendingInjectedExpectationsOverflow =
+      hookResult?.injectedExpectationsOverflow;
   }
   // Keep current model identity after the stable system cache boundary.
   const modelAwareSystemPrompt = isSettledTurnFinalization

@@ -2,6 +2,7 @@ import { isProxy } from "node:util/types";
 import {
   modelRequestBodyState,
   promptPresenceExpectations,
+  promptPresenceRequestToken,
   responsesPromptObserver,
   type PromptPresenceExpectation,
   type ResponsesPromptObservation,
@@ -42,8 +43,13 @@ export type ProviderPromptState = {
    * prompt-build phase; memory-only; never a global latest-value cache).
    */
   pendingInjectedExpectations?: PromptPresenceExpectation[];
-  /** Monotonic per-run logical model request ordinal (incremented per attempt assembly). */
-  requestCount?: number;
+  /** Entries the producer dropped at its own collection cap (visibility fact). */
+  pendingInjectedExpectationsOverflow?: number;
+  /**
+   * Monotonic per-run logical model request ordinal, assigned at the streamFn
+   * invocation boundary (outermost wrapper layer) — not at assembly time.
+   */
+  logicalRequestCount?: number;
 };
 
 const PROVIDER_PROMPT_STATES_KEY = Symbol.for("openclaw.providerPromptStates");
@@ -194,8 +200,19 @@ export function wrapStreamFnWithProviderPromptState(params: {
     let promptObservation: ResponsesPromptObservation | undefined;
     // Presence forensics: bind the current attempt's frozen expectation set to this
     // request's options so the transport checkpoint observes exactly what was assembled.
+    // Logical request ordinal binds to the streamFn invocation boundary: the
+    // OUTERMOST wrapper layer (whose options carry no token yet) assigns it once
+    // per invocation; inner layers observe the incoming token and propagate, so
+    // wrapper stacking cannot over-count and retries keep one requestIndex.
+    const outerToken = promptPresenceRequestToken.get(options);
+    let requestIndex: number;
+    if (outerToken && typeof outerToken.requestIndex === "number") {
+      requestIndex = outerToken.requestIndex;
+    } else {
+      params.state.logicalRequestCount = (params.state.logicalRequestCount ?? 0) + 1;
+      requestIndex = params.state.logicalRequestCount;
+    }
     const pendingExpectations = params.state.pendingInjectedExpectations;
-    const requestIndex = params.state.requestCount;
     const originalOnPayload = options?.onPayload;
     const observedOptions: NonNullable<Parameters<StreamFn>[2]> = {
       ...options,
@@ -265,8 +282,12 @@ export function wrapStreamFnWithProviderPromptState(params: {
       }
       return encoded!;
     };
+    promptPresenceRequestToken.set(observedOptions, { requestIndex });
     if (pendingExpectations && pendingExpectations.length > 0) {
-      promptPresenceExpectations.set(observedOptions, pendingExpectations);
+      promptPresenceExpectations.set(observedOptions, {
+        expectations: pendingExpectations,
+        overflowCount: params.state.pendingInjectedExpectationsOverflow,
+      });
     }
     responsesPromptObserver.set(observedOptions, (observation) => {
       promptObservation = observation;

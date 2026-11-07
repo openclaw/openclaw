@@ -101,7 +101,11 @@ describe("provider prompt state", () => {
     const result = await wrapped(model, { systemPrompt: marker, messages: [], tools: [] });
     await result.result();
 
-    expect(recordEvent).toHaveBeenCalledWith("provider.prompt.observed", observation);
+    expect(recordEvent).toHaveBeenCalledWith("provider.prompt.observed", {
+      ...observation,
+      // Presence forensics stamps the logical request ordinal on every event.
+      requestIndex: 1,
+    });
     expect(JSON.stringify({ calls: recordEvent.mock.calls, state })).not.toContain(marker);
     expect(state.lastAttempt?.cachePrefix).toBeUndefined();
     clearProviderPromptState(runId);

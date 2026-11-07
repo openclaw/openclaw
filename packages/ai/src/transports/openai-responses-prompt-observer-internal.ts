@@ -80,7 +80,8 @@ export function createResponsesPromptEgressObserver(
   const expectedPrompt = sanitizeTransportPayloadText(
     stripSystemPromptCacheBoundary(assembledPrompt ?? ""),
   );
-  const expectations = promptPresenceExpectations.get(options);
+  const carrier = options ? promptPresenceExpectations.get(options) : undefined;
+  const expectations = carrier?.expectations;
   let attemptCounter = 0;
   return (request: ResponsesPromptRequest, metadata: ResponsesPromptMetadata) => {
     const [promptSource, observedPrompt] = readFinalResponsesPrompt(request);
@@ -99,7 +100,9 @@ export function createResponsesPromptEgressObserver(
       expectedChars: expectedPrompt.length,
       observedChars: observedPrompt.length,
       matchesAssembledPrompt: promptSource !== "missing" && observedPrompt === expectedPrompt,
-      ...(presenceCheck ? { presenceCheck } : {}),
+      ...(presenceCheck
+        ? { presenceCheck: { ...presenceCheck, expectationsOverflow: carrier?.overflowCount } }
+        : {}),
       ...(typeof request.model === "string" ? { model: request.model } : {}),
       ...(typeof request.reasoning?.effort === "string"
         ? { reasoningEffort: request.reasoning.effort }
@@ -117,7 +120,8 @@ export function createCompletionsPromptEgressObserver(
   if (!observer) {
     return undefined;
   }
-  const expectations = promptPresenceExpectations.get(options);
+  const carrier = options ? promptPresenceExpectations.get(options) : undefined;
+  const expectations = carrier?.expectations;
   const expectedPrompt = sanitizeTransportPayloadText(
     stripSystemPromptCacheBoundary(assembledPrompt ?? ""),
   );
@@ -134,7 +138,9 @@ export function createCompletionsPromptEgressObserver(
       expectedChars: expectedPrompt.length,
       observedChars: firstLegal ? firstLegal.text.length : 0,
       matchesAssembledPrompt: firstLegal !== undefined && firstLegal.text === expectedPrompt,
-      ...(presenceCheck ? { presenceCheck } : {}),
+      ...(presenceCheck
+        ? { presenceCheck: { ...presenceCheck, expectationsOverflow: carrier?.overflowCount } }
+        : {}),
     });
   };
 }
