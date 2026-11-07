@@ -45,6 +45,23 @@ type CurrentTurnView = {
   isInterruptedTail?: (entry: SessionEntry) => boolean;
 };
 
+/**
+ * A delivered command exchange (`/stop`, `/new`, …) is a transcript mirror of the
+ * dispatcher's reply, not a model-facing user turn. Walking the current turn must
+ * look past it, or a follow-up queued before the mirror is admitted against the
+ * command row and fails "Persisted user turn changed before replay admission".
+ */
+function isTranscriptOnlyCommandExchangeEntry(entry: SessionEntry): boolean {
+  if (entry.type !== "message") {
+    return false;
+  }
+  const idempotencyKey = Reflect.get(entry.message, "idempotencyKey");
+  return (
+    typeof idempotencyKey === "string" &&
+    (idempotencyKey.startsWith("command-input:") || idempotencyKey.startsWith("command-reply:"))
+  );
+}
+
 function traversalEntry(
   entry: SessionEntry | undefined,
   entryId: string,
@@ -57,6 +74,7 @@ function traversalEntry(
     id: entry.id,
     parentId: entry.parentId,
     traversable:
+      isTranscriptOnlyCommandExchangeEntry(entry) ||
       isSessionContextMetadataEntry(entry) ||
       entry.type === "compaction" ||
       (entry.type === "custom_message" &&
