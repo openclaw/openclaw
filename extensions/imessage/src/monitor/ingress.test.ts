@@ -74,6 +74,63 @@ afterEach(async () => {
 });
 
 describe("iMessage durable ingress", () => {
+  it("aborts a signal-waiting dispatch instead of waiting for it to finish first", async () => {
+    const started = deferred<void>();
+    const release = deferred<void>();
+    let aborted = false;
+    const dispatch = vi.fn(
+      async (_message: { id?: number | null }, lifecycle: { abortSignal: AbortSignal }) => {
+        started.resolve();
+        await Promise.race([
+          new Promise<void>((resolve) => {
+            if (lifecycle.abortSignal.aborted) {
+              aborted = true;
+              resolve();
+              return;
+            }
+            lifecycle.abortSignal.addEventListener(
+              "abort",
+              () => {
+                aborted = true;
+                resolve();
+              },
+              { once: true },
+            );
+          }),
+          release.promise,
+        ]);
+        return { kind: "completed" } as const;
+      },
+    );
+    const ingress = createIngress({ dispatch });
+    ingress.start();
+    await ingress.receive(rawRow());
+    await started.promise;
+    const stopPromise = ingress.stop();
+    try {
+      const finished = await Promise.race([
+        stopPromise.then(() => "stopped" as const),
+        new Promise<"pending">((resolve) => {
+          setTimeout(() => resolve("pending"), 300);
+        }),
+      ]);
+      expect(finished).toBe("stopped");
+      expect(aborted).toBe(true);
+    } finally {
+      release.resolve();
+      await stopPromise;
+    }
+  });
+
+  it("returns the same promise when stop is called twice", async () => {
+    const ingress = createIngress();
+    ingress.start();
+    const first = ingress.stop();
+    const second = ingress.stop();
+    expect(second).toBe(first);
+    await first;
+  });
+
   it("does not advance the read cursor or dispatch when durable append fails", async () => {
     const appendError = new Error("sqlite unavailable");
     const failingQueue = {
