@@ -28,7 +28,7 @@ it("returns inventory while shared configuration is still pending", async () => 
   );
   const runtimeConfig = createRuntimeConfigCapability(harness.gateway);
   onTestFinished(() => runtimeConfig.dispose());
-  vi.spyOn(runtimeConfig, "refreshDisplay").mockReturnValue(policy.promise);
+  vi.spyOn(runtimeConfig, "refresh").mockReturnValue(policy.promise);
   const context = { gateway: harness.gateway, runtimeConfig } as ApplicationContext;
   let inventory: unknown;
   void Promise.resolve(
@@ -73,7 +73,7 @@ it("loads Devices from the connection current after the route module yield", asy
   );
   const runtimeConfig = createRuntimeConfigCapability(harness.gateway);
   onTestFinished(() => runtimeConfig.dispose());
-  const refresh = vi.spyOn(runtimeConfig, "refreshDisplay").mockResolvedValue(undefined);
+  const refresh = vi.spyOn(runtimeConfig, "refresh").mockResolvedValue(undefined);
   const context = {
     gateway: harness.gateway,
     runtimeConfig,
