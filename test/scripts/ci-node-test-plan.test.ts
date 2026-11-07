@@ -296,6 +296,7 @@ describe("Control UI release-only inventories", () => {
   const entry = "ui/src/e2e/chat-session-entry.e2e.test.ts";
   const staleBuild = "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts";
   const teamScale = "ui/src/e2e/team-scale-cold-load.e2e.test.ts";
+  const mantis = "ui/src/e2e/mantis-chat-proof.e2e.test.ts";
   const automationManagement =
     "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts";
   const reconnectContinuity = "ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts";
@@ -455,7 +456,7 @@ describe("Control UI release-only inventories", () => {
     {
       name: "directly edited release matrices",
       full: false,
-      edited: [entry, staleBuild, teamScale, ...releaseOnlyRealGateway],
+      edited: [entry, staleBuild, teamScale, mantis, ...releaseOnlyRealGateway],
     },
     {
       name: "full selection with one edited release suite",
@@ -466,7 +467,7 @@ describe("Control UI release-only inventories", () => {
     const groups = createUiTestShardGroups({
       includeReleaseOnlyTests: false,
       includeReleaseOnlyE2eTests: full,
-      uiE2eFiles: full ? [embed, entry, staleBuild, teamScale] : undefined,
+      uiE2eFiles: full ? [embed, entry, staleBuild, teamScale, mantis] : undefined,
       changedPaths: [...edited, "ui/src/e2e", "ui/src/pages/usage/usage-page.tsx"],
     });
     expect(groups.ui[0]?.includePatterns).not.toContain(sidebar);
@@ -479,7 +480,7 @@ describe("Control UI release-only inventories", () => {
     for (const file of [embed, entry]) {
       expect(groups.e2e[0]?.includePatterns).toContain(file);
     }
-    for (const file of [staleBuild, teamScale]) {
+    for (const file of [staleBuild, teamScale, mantis]) {
       expect(groups.e2e[0]?.includePatterns?.includes(file)).toBe(edited.includes(file));
     }
     expectRealGatewayCoverage(
