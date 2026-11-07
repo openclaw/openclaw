@@ -66,7 +66,7 @@ import { readTranscriptViewport } from "./components/chat-transcript-scroll-even
 import { persistChatComposerState } from "./composer-draft-storage.ts";
 import {
   getChatSessionProjection,
-  publishChatSessionProjectionMessages,
+  prependChatSessionProjectionMessages,
   retireChatSubmissionDisplay,
 } from "./history-merge.ts";
 import {
@@ -526,13 +526,13 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
         }
         const previousCount = state.chatMessages.length;
         const next = prependUniqueNativeMessages(messages, state.chatMessages);
-        visible = contributesContent(next.slice(0, next.length - previousCount));
-        publishChatSessionProjectionMessages(state, next);
-        const grew = state.chatMessages.length > previousCount;
+        const older = next.slice(0, next.length - previousCount);
+        visible = contributesContent(older);
+        prependChatSessionProjectionMessages(state, older);
         state.chatHistoryPagination = nextPagination;
         commitCurrentChatHistorySnapshot(state);
         scheduleChatScroll(state, false);
-        prepended = grew || nextPagination.hasMore;
+        prepended = older.length > 0 || nextPagination.hasMore;
         if (nextPagination.hasMore && readerIntent) {
           this.stageNextOlderPage(state);
         }

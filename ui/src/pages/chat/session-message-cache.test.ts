@@ -584,7 +584,7 @@ describe("session message cache", () => {
     });
   });
 
-  it("measures the trimmed envelope once while dropping many older rows", () => {
+  it("measures the trimmed envelope once and never weighs the older rows it drops", () => {
     const { cache, write, read } = createCacheContext();
     observeChatCache(cache, {
       write: (_key, snapshot, weight) => expect(weight).toBe(JSON.stringify(snapshot).length),
@@ -606,12 +606,15 @@ describe("session message cache", () => {
     const envelopes = stringify.mock.calls.filter(
       ([value]) => Array.isArray(value?.messages) && value.messages.length === 0,
     ).length;
+    const weighed = stringify.mock.calls.filter(([value]) => messages.includes(value?.[0])).length;
     stringify.mockRestore();
     const retained = read()?.messages ?? [];
     expect(retained.length).toBeGreaterThan(2_000);
     expect(retained.length).toBeLessThan(messages.length);
     expect(retained.at(-1)).toBe(messages.at(-1));
     expect(envelopes).toBeLessThanOrEqual(2);
+    // Only the retained window and the first row past the budget are measured.
+    expect(weighed).toBe(retained.length + 1);
   });
 
   it("evicts whole least-recently-used snapshots when the global budget is exceeded", () => {

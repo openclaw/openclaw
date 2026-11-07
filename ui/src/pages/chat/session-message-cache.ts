@@ -599,16 +599,35 @@ export function readChatSessionSnapshot(
 }
 
 function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSessionSnapshot | null {
-  const messageWeights: number[] = [];
-  for (const message of snapshot.messages) {
-    const weight = serializedArrayItemWeight(message);
+  const { messages } = snapshot;
+  // Weigh from the newest row until the rows alone exceed the budget. Older rows
+  // can never be retained, so prepending history costs the retained window, not
+  // every loaded message; an unserializable row beyond it is trimmed unread.
+  let retainedMessageWeight = 0;
+  let start = messages.length;
+  while (start > 0) {
+    const weight = serializedArrayItemWeight(messages[start - 1]);
     if (weight === null) {
       return null;
     }
-    messageWeights.push(weight);
+    if (
+      retainedMessageWeight + weight + messages.length - start >
+      MAX_CACHED_CHAT_SNAPSHOT_WEIGHT
+    ) {
+      break;
+    }
+    retainedMessageWeight += weight;
+    start -= 1;
   }
-  let retainedMessageWeight = messageWeights.reduce((sum, weight) => sum + weight, 0);
-  let start = 0;
+  // Trims keep whole sequence groups: resume at the next group boundary.
+  while (start > 0 && start < messages.length) {
+    const seq = readSessionMessageSequence(messages[start - 1]);
+    if (seq === null || seq !== readSessionMessageSequence(messages[start])) {
+      break;
+    }
+    retainedMessageWeight -= serializedArrayItemWeight(messages[start]) ?? 0;
+    start += 1;
+  }
   // Every trim before the row display window shares one envelope; measure it once,
   // not once per dropped message group.
   const trimmedPagination = trimmedChatHistoryPagination(snapshot.pagination);
@@ -629,7 +648,7 @@ function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSess
     const weight =
       envelope.weight === null
         ? null
-        : envelope.weight + retainedMessageWeight + Math.max(0, messageWeights.length - start - 1);
+        : envelope.weight + retainedMessageWeight + Math.max(0, messages.length - start - 1);
     if (weight !== null && weight <= MAX_CACHED_CHAT_SNAPSHOT_WEIGHT) {
       return {
         snapshot:
@@ -650,7 +669,7 @@ function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSess
     }
     const boundarySeq = readSessionMessageSequence(snapshot.messages[start]);
     do {
-      retainedMessageWeight -= messageWeights[start] ?? 0;
+      retainedMessageWeight -= serializedArrayItemWeight(messages[start]) ?? 0;
       start += 1;
       if (boundarySeq === null) {
         break;
