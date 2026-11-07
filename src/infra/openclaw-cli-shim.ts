@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeProfileName } from "../cli/profile-utils.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
@@ -8,8 +9,12 @@ import { quoteCmdScriptArg } from "../daemon/cmd-argv.js";
 import { renderCmdSetAssignment } from "../daemon/cmd-set.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { writeTextAtomic } from "./json-files.js";
-import { resolveCurrentOpenClawCliInvocation } from "./openclaw-cli-invocation.js";
+import {
+  resolveCurrentOpenClawCliInvocation,
+  type OpenClawCliInvocation,
+} from "./openclaw-cli-invocation.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
+import { encodeWindowsLauncherScript } from "./windows-launcher-encoding.js";
 
 const AGENT_CLI_BIN_DIR = path.join("tmp", "agent-cli");
 const GATEWAY_AGENT_CLI_STATE_KEY = Symbol.for("openclaw.gatewayAgentCliShim");
@@ -25,16 +30,24 @@ const gatewayAgentCliState = resolveGlobalSingleton(
  * Materialize the exact running Gateway CLI as an agent-visible PATH command.
  * The generated launcher is a runtime tool contract, not persisted product state.
  */
-export async function prepareGatewayAgentCliShim(): Promise<void> {
-  const env = process.env;
-  const platform = process.platform;
-  const invocation = resolveCurrentOpenClawCliInvocation([]);
+export async function prepareGatewayAgentCliShim(
+  options: {
+    env?: NodeJS.ProcessEnv;
+    invocation?: OpenClawCliInvocation;
+    onUnavailable?: (error: unknown) => void;
+    platform?: NodeJS.Platform;
+    stateDir?: string;
+  } = {},
+): Promise<void> {
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const invocation = options.invocation ?? resolveCurrentOpenClawCliInvocation([]);
   // The launcher outlives this process: a version-pinned interpreter (Homebrew
   // Cellar) is removed by the next runtime upgrade and strands every shim call
   // until the Gateway restarts, so prefer an upgrade-stable path when one exists.
   const command = await resolveStableNodePath(invocation.command);
   const profile = normalizeProfileName(env.OPENCLAW_PROFILE);
-  const binDir = path.join(resolveStateDir(env), AGENT_CLI_BIN_DIR);
+  const binDir = path.join(options.stateDir ?? resolveStateDir(env), AGENT_CLI_BIN_DIR);
   const executablePath = path.join(binDir, platform === "win32" ? "openclaw.cmd" : "openclaw");
   const args = [...invocation.args, ...(profile ? ["--profile", profile] : [])];
   const context = { delayedExpansion: false };
@@ -61,12 +74,38 @@ exec ${[command, ...args].map(quoteCliArg).join(" ")} "$@"
 
   await fs.mkdir(binDir, { recursive: true, mode: 0o700 });
   await fs.chmod(binDir, 0o700).catch(() => undefined);
-  await writeTextAtomic(executablePath, content, {
-    mode: 0o700,
-    dirMode: 0o700,
-    durable: false,
-    tempPrefix: "openclaw-agent-cli",
-  });
+  if (platform === "win32") {
+    // cmd.exe reads .cmd files in the active OEM code page, so preserve the
+    // existing Windows launcher encoding contract before atomically publishing.
+    let encodedContent: Buffer;
+    try {
+      encodedContent = encodeWindowsLauncherScript({ format: "cmd", content });
+    } catch (error) {
+      // An unrepresentable path must not turn an optional agent command into a
+      // Gateway startup failure. Leave any existing file untouched and keep it
+      // out of the process PATH because it may contain stale invocation data.
+      gatewayAgentCliState.binDir = undefined;
+      options.onUnavailable?.(error);
+      return;
+    }
+    await replaceFileAtomic({
+      filePath: executablePath,
+      content: encodedContent,
+      mode: 0o700,
+      dirMode: 0o700,
+      copyFallbackOnPermissionError: true,
+      syncTempFile: false,
+      syncParentDir: false,
+      tempPrefix: "openclaw-agent-cli",
+    });
+  } else {
+    await writeTextAtomic(executablePath, content, {
+      mode: 0o700,
+      dirMode: 0o700,
+      durable: false,
+      tempPrefix: "openclaw-agent-cli",
+    });
+  }
   gatewayAgentCliState.binDir = binDir;
 }
 
