@@ -817,6 +817,10 @@ connection SecretRef before restoring; point that secret at the recovery server
 when recovering to another server. The live installation's selections do not
 override the archive. Restore publishes the recovered configuration last, after
 all stores and their matching anchors pass verification.
+`openclaw backup restore <archive> --target <dir> --postgres-connection-env <name>`
+imports into the server named by the DSN in that environment variable instead,
+for restore drills against a staging database; the restored configuration keeps
+the archived connection.
 `openclaw backup sqlite restore` remains SQLite-only.
 
 Git restore supports `--global`, `--agent <id>`, and `--store <id>` for recorded

@@ -62,6 +62,10 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
       scenario: "compatibility",
       name: "preserves unlisted legacy exports and cleans failed provider restores",
     },
+    {
+      scenario: "override",
+      name: "imports into the --postgres-connection-env server while the archived connection resolves elsewhere",
+    },
   ])(
     "$name",
     async ({ scenario }) => {
@@ -70,7 +74,11 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
         scenario === "credentials" ? generateStoredDeviceIdentity(23) : undefined;
       assert(connection);
       await withEnvAsync(
-        { OPENCLAW_ARCHIVE_TEST_PG: connection, OPENCLAW_INCLUDE_ROOTS: undefined },
+        {
+          OPENCLAW_ARCHIVE_TEST_PG: connection,
+          OPENCLAW_ARCHIVE_TEST_RECOVERY_PG: undefined,
+          OPENCLAW_INCLUDE_ROOTS: undefined,
+        },
         async () => {
           await withOpenClawTestState(
             { scenario: "minimal", prefix: "pg-archive-" },
@@ -354,7 +362,12 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                 for (const store of stores) {
                   await fs.unlink(store.file);
                 }
-                process.env.OPENCLAW_ARCHIVE_TEST_PG = recoveryConnection.href;
+                // The override scenario keeps the archived connection on the source server.
+                if (scenario === "override") {
+                  process.env.OPENCLAW_ARCHIVE_TEST_RECOVERY_PG = recoveryConnection.href;
+                } else {
+                  process.env.OPENCLAW_ARCHIVE_TEST_PG = recoveryConnection.href;
+                }
                 if (sqliteAgent) {
                   await fs.writeFile(
                     includePath,
@@ -408,6 +421,9 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                     restored = await backupRestoreCommand(createTestRuntime(), {
                       archive: backup.archivePath,
                       target: targetPath,
+                      ...(scenario === "override"
+                        ? { postgresConnectionEnv: "OPENCLAW_ARCHIVE_TEST_RECOVERY_PG" }
+                        : {}),
                     });
                   } finally {
                     publication.mockRestore();
@@ -487,6 +503,12 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                   ).toEqual([]);
 
                   expect(await fs.readFile(restoredConfig)).toEqual(configBytes);
+                  if (scenario === "override") {
+                    expect(restored).toMatchObject({
+                      postgresConnectionEnv: "OPENCLAW_ARCHIVE_TEST_RECOVERY_PG",
+                    });
+                    return;
+                  }
                   if (clientIdentity) {
                     const restoredEnv = {
                       ...state.env,
