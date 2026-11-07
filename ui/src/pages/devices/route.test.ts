@@ -61,3 +61,33 @@ it("loads Devices from the connection current after the route module yield", asy
     devices: { client: currentClient, nodes: [{ id: "current-node" }] },
   });
 });
+
+it("does not start Devices reads after navigation leaves during the module load", async () => {
+  const request = vi.fn(async () => ({ nodes: [], pending: [], paired: [] }));
+  const harness = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      client: createTestGatewayClient(request),
+      phase: "connected",
+    }),
+  );
+  const runtimeConfig = createRuntimeConfigCapability(harness.gateway);
+  onTestFinished(() => runtimeConfig.dispose());
+  const refresh = vi.spyOn(runtimeConfig, "refresh").mockResolvedValue(undefined);
+  // SAFETY: The Devices loader only reads the Gateway and runtime config capabilities.
+  const context = { gateway: harness.gateway, runtimeConfig } as ApplicationContext;
+  const controller = new AbortController();
+  const options = {
+    ...createRouteLoaderOptions({ pathname: "/devices", search: "", hash: "" }),
+    signal: controller.signal,
+    shouldRun: () => !controller.signal.aborted,
+  };
+  if (!page.loader) {
+    throw new Error("Devices route has no loader");
+  }
+  const pending = page.loader(context, options);
+  controller.abort(new Error("superseded navigation"));
+  await Promise.resolve(pending).catch(() => undefined);
+
+  expect(request).not.toHaveBeenCalled();
+  expect(refresh).not.toHaveBeenCalled();
+});

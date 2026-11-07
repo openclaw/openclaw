@@ -7,9 +7,10 @@ export const page = defineSolidPage<"devices", ApplicationContext, DevicesRouteD
   "devices",
   () => import("./devices-page.tsx").then((module) => module.DevicesPage),
   {
-    loader: async (context: ApplicationContext): Promise<DevicesRouteData> => {
+    loader: async (context: ApplicationContext, { signal }): Promise<DevicesRouteData> => {
       const { createInitialDevicesState, loadDevices, loadExecApprovals, loadNodes } =
         await import("../../lib/nodes/page-operations.ts");
+      signal.throwIfAborted();
       const gateway = context.gateway;
       const gatewaySnapshot = gateway.snapshot;
       const devices = createInitialDevicesState({
