@@ -351,7 +351,7 @@ select.settings-select {
 
   :root .cron-job-menu__trigger,
   :root .btn.secrets-store__menu-trigger,
-  :root .plugin-editor__menu .btn.btn--icon,
+  :root .plugin-editor__menu .oc-icon-button,
   :root openclaw-sessions-page td .session-row-menu-trigger {
     width: var(--row-action-size);
     min-width: var(--row-action-size);

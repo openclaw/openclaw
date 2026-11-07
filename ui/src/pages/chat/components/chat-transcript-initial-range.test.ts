@@ -24,6 +24,7 @@ it("keeps following rows during a viewport-sized jump past shorter-than-estimate
     () => 120,
     queueMicrotask,
     () => false,
+    () => false,
   );
   onTestFinished(() => range.disconnect());
   range.recordReaderMovement(1000);
@@ -65,6 +66,7 @@ it("yields between destination-size corrections and waits for a stable end befor
       events.push("measure");
       return remainingCorrections-- > 0;
     },
+    () => false,
   );
   onTestFinished(() => range.disconnect());
   const settleCommits = async () => {
@@ -84,6 +86,7 @@ it("yields between destination-size corrections and waits for a stable end befor
   range.prepareEnd(
     () => events.push("scroll"),
     () => true,
+    false,
   );
   await settleCommits();
   expect(events).toEqual(["measure"]);
