@@ -230,8 +230,13 @@ async function runFileInScope(
 
 export async function describeImageFile(
   params: DescribeImageFileParams,
+  execution?: MediaExecutionContext,
 ): Promise<RunMediaUnderstandingFileResult> {
-  return await runMediaUnderstandingFile({ ...params, capability: "image" });
+  return await runFile(
+    { ...params, capability: "image" },
+    { prompt: params.prompt?.trim() || undefined },
+    execution,
+  );
 }
 
 /** Reads and normalizes image input once before explicit-model fallback attempts. */

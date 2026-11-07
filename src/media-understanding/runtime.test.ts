@@ -154,6 +154,7 @@ describe("media-understanding runtime", () => {
   it.each([
     ["audio", transcribeAudioFile],
     ["video", describeVideoFile],
+    ["image", describeImageFile],
   ] as const)("refuses canceled %s before preparing media", async (_kind, describeFile) => {
     const signal = AbortSignal.abort(new Error("Media request interrupted"));
     const execution = { signal, assertCurrent: () => signal.throwIfAborted() };

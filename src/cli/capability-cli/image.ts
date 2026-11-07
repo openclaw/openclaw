@@ -223,6 +223,10 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
           const promptInput = opts.prompt as string | undefined;
           const timeoutMs = parseOptionalTimeoutMs(opts.timeoutMs);
           const agent = resolveCapabilityAgentOption(command, opts.agent);
+          const signal = getAsyncWorkSignal();
+          const execution = signal
+            ? { signal, assertCurrent: () => signal.throwIfAborted() }
+            : undefined;
           const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
           const { runWithImageModelFallback } =
             await import("../../agents/model-fallback-image.js");
@@ -256,6 +260,7 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
                   ? await runWithImageModelFallback({
                       cfg,
                       modelOverride: `${activeModel.provider}/${activeModel.model}`,
+                      abortSignal: signal,
                       run: async (provider, model) => {
                         const described = await describePreparedImageWithModel({
                           image: preparedImage,
@@ -274,15 +279,18 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
                       },
                     })
                   : {
-                      result: await describeImageFile({
-                        filePath: resolvedPath,
-                        ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
-                        cfg,
-                        agentId,
-                        agentDir,
-                        prompt,
-                        timeoutMs,
-                      }),
+                      result: await describeImageFile(
+                        {
+                          filePath: resolvedPath,
+                          ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
+                          cfg,
+                          agentId,
+                          agentDir,
+                          prompt,
+                          timeoutMs,
+                        },
+                        execution,
+                      ),
                       provider: undefined,
                       model: undefined,
                       attempts: [],
