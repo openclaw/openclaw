@@ -522,9 +522,15 @@ it.each([
   },
 );
 
-it.each([undefined, "caller"] as const)(
-  "applies deployment scope %s to native-app admin chat management",
-  async (scope) => {
+it.each(["admin", "caller", "non-admin", "revoked"] as const)(
+  "enforces native-app final-write authority: %s",
+  async (scenario) => {
+    const scope = scenario === "caller" ? "caller" : undefined;
+    const caller = captureGatewayDeviceRevocation(
+      fixture.context,
+      { deviceId: "native-admin-device", role: "operator" },
+      () => true,
+    );
     config.tools = {
       ...config.tools,
       gatewayPolicy: {
@@ -534,7 +540,9 @@ it.each([undefined, "caller"] as const)(
       },
     };
     setRuntimeConfigSnapshot(config);
-    const client = createOperatorClient({ scopes: ["operator.admin"] });
+    const client = createOperatorClient({
+      scopes: [scenario === "non-admin" ? "operator.write" : "operator.admin"],
+    });
     client.connect.client = {
       id: "openclaw-macos",
       mode: "ui",
@@ -547,6 +555,7 @@ it.each([undefined, "caller"] as const)(
       runId,
       resolvedSessionKey: SESSION,
       client,
+      isCurrent: caller.isCurrent,
       hasExplicitOrigin: false,
       hasRestoredCronContinuation: false,
       isIncognito: false,
@@ -565,37 +574,56 @@ it.each([undefined, "caller"] as const)(
       owner: { agentId: "main", sessionKey: "agent:main:foreign", accountId: "other" },
       delivery: { mode: "none" },
     });
-    await inRun(
-      runId,
-      creatorAdmission,
-      boundTo(fixture, async (_identity, admitted, creator) => {
-        const tools = await createCreatorTransportTools({
-          transport: "embedded",
-          config,
-          admitted,
-          creator,
-          senderIsOwner: false,
-        });
-        const inventory = await tools.invoke(AUTOMATIONS_TOOL_NAME, {
-          action: "list",
-          includeDisabled: true,
-        });
-        expect(inventory).toHaveProperty("details.scope", scope ?? "gateway");
-        if (scope === "caller") {
-          await expect(
-            tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "get", jobId: foreign.id }),
-          ).rejects.toThrow("not found");
-          return;
-        }
-        await tools.invoke(AUTOMATIONS_TOOL_NAME, {
-          action: "update",
-          jobId: foreign.id,
-          job: { payload: { kind: "agentTurn", message: "Repaired prompt" } },
-        });
-        expect(await fixture.read()).toMatchObject([
-          { id: foreign.id, payload: { message: "Repaired prompt" } },
-        ]);
-      }),
-    );
+    try {
+      await inRun(
+        runId,
+        creatorAdmission,
+        boundTo(fixture, async (_identity, admitted, creator) => {
+          const tools = await createCreatorTransportTools({
+            transport: "embedded",
+            config,
+            admitted,
+            creator,
+            senderIsOwner: false,
+          });
+          const inventory = await tools.invoke(AUTOMATIONS_TOOL_NAME, {
+            action: "list",
+            includeDisabled: true,
+          });
+          expect(inventory).toHaveProperty(
+            "details.scope",
+            scenario === "non-admin" ? "caller" : (scope ?? "gateway"),
+          );
+          const update = () =>
+            tools.invoke(AUTOMATIONS_TOOL_NAME, {
+              action: "update",
+              jobId: foreign.id,
+              job: { payload: { kind: "agentTurn", message: "Repaired prompt" } },
+            });
+          if (scope === "caller" || scenario === "non-admin") {
+            const before = await fixture.read();
+            await expect(update()).rejects.toThrow("not found");
+            expect(await fixture.read()).toEqual(before);
+            await expect(
+              tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "get", jobId: foreign.id }),
+            ).rejects.toThrow("not found");
+            return;
+          }
+          if (scenario === "revoked") {
+            await fixture.rejectMutation(update, /authority.*no longer active/i, () =>
+              invalidateGatewayDeviceRevocation(fixture.context, "native-admin-device", "operator"),
+            );
+            return;
+          }
+          await update();
+          expect(await fixture.read()).toMatchObject([
+            { id: foreign.id, payload: { message: "Repaired prompt" } },
+          ]);
+        }),
+      );
+    } finally {
+      fixture.release.resolve();
+      caller.release();
+    }
   },
 );
