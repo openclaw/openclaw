@@ -202,6 +202,44 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     Telegram must deliver ordinary group messages for `false` to work: disable privacy mode or make the bot a group admin. See [Privacy mode and group visibility](/channels/telegram/setup#privacy-mode-and-group-visibility). Group and sender authorization, group silence policy, and visible-reply policy still apply. See [Bot-created forum topics](/channels/telegram/threads-and-sessions#bot-created-forum-topics) for ownership tracking and its limits.
 
+    By default, a group message that does not mention the bot never starts an agent turn, but it is still retained in the group's history. Set `ingest: true` on a group (or a topic) to also deliver those mention-skipped messages to the internal `message:received` hook, without starting an agent turn:
+
+```json5
+{
+  channels: {
+    telegram: {
+      groups: {
+        "-1001234567890": {
+          requireMention: true,
+          ingest: true,
+        },
+      },
+    },
+  },
+}
+```
+
+    With `ingest: true`, mention-skipped group messages are delivered to the internal `message:received` hook in addition to being retained in history. They never trigger an agent turn. The value is inherited: a topic that leaves `ingest` unset uses the group's setting.
+
+    When `requireMention` is on and a group message contains audio but no text, OpenClaw first transcribes the audio to check whether it mentions the bot. Set `disableAudioPreflight: true` to skip that preflight transcription (for example, when group members routinely send voice notes that should not start a turn):
+
+```json5
+{
+  channels: {
+    telegram: {
+      groups: {
+        "-1001234567890": {
+          requireMention: true,
+          disableAudioPreflight: true,
+        },
+      },
+    },
+  },
+}
+```
+
+    `disableAudioPreflight` applies only when audio arrives without accompanying text in a group that requires a mention. It is inherited the same way as `ingest`: a topic that leaves it unset uses the group's setting.
+
     Group history context is bounded by `historyLimit` (default 50). Set `channels.telegram.historyLimit: 0` to disable the automatic window without deleting retained group messages or disabling explicit history reads. Permitted unmentioned messages are recorded without starting agent turns when mentions are required. See [Retained group history](/channels/telegram/messaging#retained-group-history). `openclaw doctor --fix` removes the retired `includeGroupHistoryContext` key.
 
     Getting the group chat ID: forward a group message to `@userinfobot` / `@getidsbot`, read `chat.id` from `openclaw logs --follow`, inspect Bot API `getUpdates`, or (once the group is allowed) run `/whoami@<bot_username>`.
