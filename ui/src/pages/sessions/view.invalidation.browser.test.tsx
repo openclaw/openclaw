@@ -139,6 +139,7 @@ it.each([1280, 390])(
     scroller.style.height = "200px";
     draft.value = "Retained draft";
     const scrollBeforeFocus = scroller.scrollTop;
+    const scrollWrites = vi.spyOn(scroller, "scrollTo");
     draft.focus();
     const scrollAfterFocus = scroller.scrollTop;
     await vi.waitFor(() => {
@@ -149,6 +150,7 @@ it.each([1280, 390])(
         scrollBeforeFocus,
         scrollAfterFocus,
         scrollTop: scroller.scrollTop,
+        scrollWrites: scrollWrites.mock.calls,
         field,
         viewport,
         row: draft.closest("tbody")?.getBoundingClientRect(),
