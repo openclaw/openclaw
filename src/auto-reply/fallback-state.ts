@@ -1,7 +1,7 @@
 /** Formats model-fallback notice state for UI/status messages and persisted transition tracking. */
 import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
+import { sliceUtf16Safe, truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
@@ -9,6 +9,8 @@ import type { FallbackNoticeState } from "../status/fallback-notice-state.js";
 import type { RuntimeFallbackAttempt } from "./reply/agent-runner-execution.types.js";
 
 const FALLBACK_REASON_PART_MAX = 80;
+const FALLBACK_ATTEMPT_REF_MAX = 40;
+const FALLBACK_REASON_MAX_ATTEMPTS = 3;
 const TRANSIENT_FALLBACK_REASONS = new Set([
   "rate_limit",
   "overloaded",
@@ -65,13 +67,34 @@ function formatFallbackAttemptReason(attempt: RuntimeFallbackAttempt): string {
   );
 }
 
+// Keeps both ends of a long model ref: an inference-profile ARN is told apart by its tail.
+function truncateFallbackAttemptRef(ref: string): string {
+  if (ref.length <= FALLBACK_ATTEMPT_REF_MAX) {
+    return ref;
+  }
+  const head = Math.floor((FALLBACK_ATTEMPT_REF_MAX - 1) / 2);
+  const tail = FALLBACK_ATTEMPT_REF_MAX - 1 - head;
+  return `${sliceUtf16Safe(ref, 0, head)}…${sliceUtf16Safe(ref, -tail)}`;
+}
+
+function formatFallbackAttemptSummary(attempt: RuntimeFallbackAttempt): string {
+  // The ref has its own budget so a long ref cannot crowd the reason out of the hop.
+  const ref = truncateFallbackAttemptRef(buildModelCatalogRef(attempt.provider, attempt.model));
+  return truncateFallbackReasonPart(`${ref} ${formatFallbackAttemptReason(attempt)}`);
+}
+
 function buildFallbackReasonSummary(attempts: RuntimeFallbackAttempt[]): string {
+  if (attempts.length > 1) {
+    // Several failed hops: name each model with its reason, so a chain shows which failed and why.
+    const shown = attempts.slice(0, FALLBACK_REASON_MAX_ATTEMPTS).map(formatFallbackAttemptSummary);
+    const hidden = attempts.length - shown.length;
+    return `${shown.join("; ")}${hidden > 0 ? ` (+${hidden} more attempts)` : ""}`;
+  }
   const firstAttempt = attempts[0];
   const firstReason = firstAttempt
     ? formatFallbackAttemptReason(firstAttempt)
     : "selected model unavailable";
-  const moreAttempts = attempts.length > 1 ? ` (+${attempts.length - 1} more attempts)` : "";
-  return `${truncateFallbackReasonPart(firstReason)}${moreAttempts}`;
+  return truncateFallbackReasonPart(firstReason);
 }
 
 /** Builds the visible notice shown when runtime falls back from the selected model. */
@@ -152,11 +175,7 @@ export function resolveFallbackTransition(
       );
   const fallbackCleared = !fallbackActive && previousStateWasRealFallback;
   const reasonSummary = buildFallbackReasonSummary(params.attempts);
-  const attemptSummaries = params.attempts.map((attempt) =>
-    truncateFallbackReasonPart(
-      `${buildModelCatalogRef(attempt.provider, attempt.model)} ${formatFallbackAttemptReason(attempt)}`,
-    ),
-  );
+  const attemptSummaries = params.attempts.map(formatFallbackAttemptSummary);
   const nextState = fallbackActive
     ? {
         selectedModel: selectedModelRef,
