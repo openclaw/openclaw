@@ -159,6 +159,8 @@ function installEventLoadProbe() {
   let phaseFrame = 0;
   let phaseBackgroundEvents = 0;
   let phaseBackgroundReceipts = 0;
+  let phaseTools = 0;
+  let phaseCompletedTools = 0;
   const inputs: number[] = [];
   const delays: number[] = [];
   const taskSpans: number[] = [];
@@ -230,6 +232,9 @@ function installEventLoadProbe() {
         return;
       }
       phaseInput ||= performance.now();
+      if (phaseKind !== "typing") {
+        return;
+      }
       delays.push(Math.max(0, performance.now() - event.timeStamp));
       requestAnimationFrame(() => inputs.push(performance.now() - event.timeStamp));
     },
@@ -730,6 +735,8 @@ function installEventLoadProbe() {
       phaseTarget = target;
       phaseBackgroundEvents = backgroundEvents;
       phaseBackgroundReceipts = backgroundReceipts;
+      phaseTools = tools;
+      phaseCompletedTools = completedTools;
       cancelAnimationFrame(phaseFrame);
       const sample = () => {
         const host = document.querySelector(".chat-pane-cache__pane--active");
@@ -757,6 +764,10 @@ function installEventLoadProbe() {
         backgroundReceiptsAtStart: phaseBackgroundReceipts,
         startedAfterMs: phaseStart - started,
         backgroundReceiptsAtEnd: backgroundReceipts,
+        toolsAtStart: phaseTools,
+        toolsAtEnd: tools,
+        completedToolsAtStart: phaseCompletedTools,
+        completedToolsAtEnd: completedTools,
         backgroundActiveAtStart:
           phaseStart < loadDeadline && phaseBackgroundReceipts < targetBackgroundReceipts,
         backgroundActiveAtEnd:
@@ -806,6 +817,7 @@ function installEventLoadProbe() {
         targetBackgroundReceipts,
         maxBackgroundSchedulerLagMs,
         byEvent,
+        inputSampleCount: inputs.length,
         inputs: distribution(inputs),
         delays: distribution(delays),
         delivery: distribution(taskSpans),
@@ -895,6 +907,10 @@ export function createEngineEventLoadScenarios(
           backgroundReceiptsAtEnd: number;
           backgroundActiveAtStart: boolean;
           backgroundActiveAtEnd: boolean;
+          toolsAtStart: number;
+          toolsAtEnd: number;
+          completedToolsAtStart: number;
+          completedToolsAtEnd: number;
         },
       ) => {
         evidence[`${name}BackgroundReceived`] = result.backgroundReceived;
@@ -903,6 +919,10 @@ export function createEngineEventLoadScenarios(
         evidence[`${name}BackgroundReceiptsAtEnd`] = result.backgroundReceiptsAtEnd;
         evidence[`${name}BackgroundActiveAtStart`] = result.backgroundActiveAtStart;
         evidence[`${name}BackgroundActiveAtEnd`] = result.backgroundActiveAtEnd;
+        evidence[`${name}ToolsAtStart`] = result.toolsAtStart;
+        evidence[`${name}ToolsAtEnd`] = result.toolsAtEnd;
+        evidence[`${name}CompletedToolsAtStart`] = result.completedToolsAtStart;
+        evidence[`${name}CompletedToolsAtEnd`] = result.completedToolsAtEnd;
         if (count > 0 && (!result.backgroundActiveAtStart || !result.backgroundActiveAtEnd)) {
           throw new Error(
             `Event load drained before ${name} completed; increase --event-load-duration-ms (started at ${result.backgroundReceiptsAtStart} background receipts)`,
@@ -1160,6 +1180,7 @@ export function createEngineEventLoadScenarios(
           incomingNarrationEvents: result.byEvent["session.narration"] ?? 0,
           mutationRecords: result.mutations,
           addedRows: result.addedRows,
+          inputSampleCount: result.inputSampleCount,
           inputDelayMedianMs: result.delays.median,
           inputDelayP95Ms: result.delays.p95,
           inputToFrameMedianMs: result.inputs.median,

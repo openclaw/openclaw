@@ -66,7 +66,11 @@ Firefox CPU remains unavailable rather than zero. Scroll delivery time measures
 the delay before the in-page loop begins; observed scroll time and rAF gaps then
 describe that loop separately. A good median frame gap does not excuse a long
 delivery delay or a maximum-frame stall. Native input-to-frame samples are not
-a complete INP measurement: inspect the action wall time as well.
+a complete INP measurement: inspect the action wall time as well. Only keys
+delivered during the typing phase enter those samples; setup disclosure keys
+are excluded. Each phase records foreground tools started and completed at its
+boundaries. A delayed action can overlap a different portion of the finite
+foreground burst, so inspect those counts alongside delivery delay and frames.
 
 The real capture also observes shared startup invalidations. Usage invalidation
 is coalesced by agent over 500 ms, but none occurred inside the captured short
