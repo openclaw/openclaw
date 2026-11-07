@@ -170,8 +170,7 @@ export function AgentCron(
         <CronReadBoundary read={params.read().jobs} reportError errorRole="alert">
           {() => undefined}
         </CronReadBoundary>
-        {params.read().jobs &&
-        !params.readState().cronLoading &&
+        {!params.readState().cronLoading &&
         !params.readState().cronJobsError &&
         params.readState().cronJobs.length === 0 &&
         params.readState().cronJobsSnapshotRevision !== null ? (

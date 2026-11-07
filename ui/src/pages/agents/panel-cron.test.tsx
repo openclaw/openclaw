@@ -17,6 +17,7 @@ import {
   agentsList,
   agentsRouteData,
   createAgentsPage,
+  emitGatewaySnapshot,
   gateway,
   pageContext,
   snapshot,
@@ -145,7 +146,9 @@ describe("Agent Cron native reads and actions", () => {
     const jobs = createDeferred<CronJobsListResult>();
     const status = createDeferred<CronStatus>();
     let result = jobs.promise;
-    const { container } = mount((method) => (method === "cron.status" ? status.promise : result));
+    const { container, context } = mount((method) =>
+      method === "cron.status" ? status.promise : result,
+    );
     await waitForSolid(() => expect(button(container, "Refresh").disabled).toBe(true));
     expect(container.textContent).not.toContain("No automations yet.");
     expect(container.textContent).not.toContain("0 of");
@@ -159,9 +162,10 @@ describe("Agent Cron native reads and actions", () => {
     result = Promise.resolve(pageOf([]));
     button(container, "Refresh").click();
     await waitForSolid(() => expect(container.textContent).toContain("No automations yet."));
-    result = Promise.resolve(pageOf([job("first")]));
-    button(container, "Refresh").click();
-    await waitForSolid(() => expect(container.textContent).toContain("Job first"));
+    const client = context.gateway.snapshot.client;
+    emitGatewaySnapshot(context.gateway, snapshot(client, false));
+    emitGatewaySnapshot(context.gateway, snapshot(client));
+    expect(container.textContent).toContain("No automations yet.");
   });
 
   it("retains loaded rows during an admitted page append", async () => {
