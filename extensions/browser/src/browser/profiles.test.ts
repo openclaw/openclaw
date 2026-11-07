@@ -21,16 +21,10 @@ describe("port allocation", () => {
 });
 
 describe("getUsedPorts", () => {
-  it("returns empty set for undefined profiles", () => {
-    expect(getUsedPorts(undefined)).toEqual(new Set());
-  });
-
-  it("ignores invalid cdpUrl values", () => {
-    const profiles = {
-      bad: { cdpUrl: "notaurl" },
-      portZero: { cdpUrl: "http://127.0.0.1:0" },
-    };
-    const used = getUsedPorts(profiles);
-    expect(used.size).toBe(0);
-  });
+  it.each([undefined, { bad: { cdpUrl: "notaurl" }, portZero: { cdpUrl: "http://127.0.0.1:0" } }])(
+    "ignores absent or invalid profile ports: %j",
+    (profiles) => {
+      expect(getUsedPorts(profiles)).toEqual(new Set());
+    },
+  );
 });
