@@ -72,7 +72,7 @@ export async function startDisposableGatewayIngress(port: number) {
         res,
         { ok: false, status: "draining", uptimeMs: 0 },
         new URL(req.url ?? "/", "http://localhost"),
-        { controlUiEnabled: true, controlUiRoot: { kind: "missing" } },
+        { controlUiEnabled: true, controlUiBasePath: "", controlUiRoot: { kind: "missing" } },
       )
     ) {
       return;
