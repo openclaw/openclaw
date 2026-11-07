@@ -467,6 +467,9 @@ function ProviderActions(props: ProviderRowProps) {
 
 /** Gateways often echo the raw id as the name; the shared label map reads better. */
 function providerName(card: ModelProviderCard): string {
+  if (card.providerName) {
+    return card.providerName;
+  }
   return card.displayName && card.displayName !== card.id
     ? card.displayName
     : providerDisplayLabel(card.id);
@@ -529,7 +532,11 @@ export function ProviderRow(props: ProviderRowProps) {
         aria-controls={detailId()}
         onClick={() => setExpanded(!open())}
       >
-        <ProviderBrandIcon provider={card().id} class="provider-row__icon model-providers__icon" />
+        <ProviderBrandIcon
+          provider={card().id}
+          presentation={card()}
+          class="provider-row__icon model-providers__icon"
+        />
         <span class="provider-row__identity">
           <span class="provider-row__name">{providerName(card())}</span>
           <span class="provider-row__meta settings-row__desc">
@@ -582,7 +589,11 @@ export function UnconnectedProviderRow(props: ProviderRowProps) {
   return (
     <li class="provider-row provider-row--quiet model-providers__row" data-provider-id={card().id}>
       <div class="provider-row__summary model-providers__head">
-        <ProviderBrandIcon provider={card().id} class="provider-row__icon model-providers__icon" />
+        <ProviderBrandIcon
+          provider={card().id}
+          presentation={card()}
+          class="provider-row__icon model-providers__icon"
+        />
         <span class="provider-row__identity">
           <span class="provider-row__name">{providerName(card())}</span>
           <span class="provider-row__meta settings-row__desc">

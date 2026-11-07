@@ -518,18 +518,6 @@ select.usage-select {
   margin-top: 0;
 }
 
-.callout.warning {
-  background: var(--warn-subtle);
-  color: var(--text);
-}
-
-.callout.warning.usage-cache-warning {
-  background: var(--warn-subtle);
-  color: var(--accent);
-  font-weight: 600;
-  box-shadow: none;
-}
-
 .usage-empty-state {
   justify-items: start;
 }
@@ -1611,18 +1599,6 @@ select.usage-creator-filter {
   align-items: center;
   gap: 10px;
   flex: 0 0 auto;
-}
-
-.session-bar-copy {
-  width: 28px;
-  height: 28px;
-  min-width: 28px;
-  padding: 5px;
-}
-
-.session-bar-copy svg {
-  width: 14px;
-  height: 14px;
 }
 
 .session-bar-copy-feedback {

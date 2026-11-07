@@ -8,6 +8,7 @@ import type {
   PluginDiscoveryResult,
 } from "../../ui/src/lib/plugins/index.ts";
 import { createSkill } from "../../ui/src/pages/skills/view.test-support.ts";
+import type { MockGatewayWindow } from "../../ui/src/test-helpers/control-ui-e2e-contract.ts";
 import {
   defaultControlUiFeatureMethods,
   waitForControlUiRoute,
@@ -666,7 +667,11 @@ function pluginsRefreshScenario(roundTripMs: 0 | 100): InteractionScenario {
         exactParams: true,
       });
       await waitSyntheticResponse(roundTripMs);
-      await gateway.resolveDeferred("plugins.list");
+      await page.evaluate(() => {
+        window.openclawEngineMarkGatewayInput?.();
+        // SAFETY: The scenario installs the typed mock Gateway before navigation.
+        (window as MockGatewayWindow).openclawControlUiE2eGateway!.resolveDeferred("plugins.list");
+      });
       await page
         .locator('[data-plugin-id="data-plugin-0000"] .settings-row__title')
         .getByText("Data plugin 0000 updated", { exact: true })
@@ -718,7 +723,7 @@ function skillsRefreshScenario(roundTripMs: 0 | 100): InteractionScenario {
         match: { agentId: "main" },
         exactParams: true,
       });
-      const pending = section.getByRole("button", { name: "Loading…", exact: true });
+      const pending = section.getByRole("button", { name: "Refreshing…", exact: true });
       await pending.waitFor();
       if (!(await pending.isDisabled())) {
         throw new Error("Skills refresh did not expose its pending state");

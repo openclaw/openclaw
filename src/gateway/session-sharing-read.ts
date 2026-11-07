@@ -369,7 +369,8 @@ export function prepareProjectedSessionSharing(params: {
   const policy =
     actor?.kind === "system"
       ? undefined
-      : actor?.kind === "operator" && client?.internal?.operatorRunAuthority
+      : actor?.kind === "operator" &&
+          (client?.internal?.operatorRunAuthority || client?.internal?.openclawIdPrincipal)
         ? resolveOperatorRolePolicy(client, cfg)
         : resolveOperatorRolePolicyForAssignment(
             roleProfile?.profileId,

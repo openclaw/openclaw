@@ -52,7 +52,12 @@ enum AuthenticatedControlUI {
         default:
             components.scheme = "http"
         }
-        components.percentEncodedPath = self.pagePath(basePath: components.percentEncodedPath, path: path)
+        // Discovered and host:port routes carry no mount; the Gateway advertises it in hello-ok.
+        let urlPath = components.percentEncodedPath
+        let basePath = urlPath.isEmpty || urlPath == "/"
+            ? config.controlUiBasePath?.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? urlPath
+            : urlPath
+        components.percentEncodedPath = self.pagePath(basePath: basePath, path: path)
         components.fragment = nil
         let encodedItems = queryItems.compactMap { item -> String? in
             guard let name = Self.percentEncodedQueryComponent(item.name) else { return nil }

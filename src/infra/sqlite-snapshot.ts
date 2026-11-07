@@ -13,7 +13,7 @@ import {
   syncDirectory,
 } from "./directory-durability.js";
 import { formatErrorMessage } from "./errors.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { openNodeSqliteDatabase, resolveSqliteFilesystemPath } from "./node-sqlite.js";
 import { pathEntryExists } from "./path-existence.js";
 import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
 import { copySqliteFile } from "./sqlite-file-copy.js";
@@ -632,6 +632,7 @@ async function verifyAndPublishSqliteSnapshot(
     : await createPrivateSqliteTempDirectory(path.dirname(options.targetPath), ".sqlite-snapshot-");
   await fs.chmod(stagingDir, 0o700);
   const stagedPath = privateSourcePath ?? path.join(stagingDir, "database.sqlite");
+  let outputPath = stagedPath;
   let stagedIdentity: BigIntStats | undefined;
   try {
     await withSqliteSnapshotSource(
@@ -690,18 +691,24 @@ async function verifyAndPublishSqliteSnapshot(
       // checkpoints opt out because VACUUM can rewrite implicit row IDs. DELETE
       // journaling above still makes the published artifact single-file.
       if (!options.preserveRowIds) {
-        snapshot.exec("VACUUM;");
+        // Keep the database-sized rebuild on the staging volume rather than
+        // SQLite's potentially quota-limited SQLITE_TMPDIR/TMPDIR filesystem.
+        // Reuse the staging payload name recognized by abandoned-snapshot reclamation.
+        const compactedPath = path.join(stagingDir, "database.sqlite.partial");
+        snapshot.prepare("VACUUM INTO ?;").run(resolveSqliteFilesystemPath(compactedPath));
+        outputPath = compactedPath;
+        await fs.chmod(outputPath, 0o600);
       }
       // Publication validates this output once, after transfer and before exposing the target.
       const userVersion = readSqliteUserVersion(snapshot);
       snapshot.close();
-      await syncFile(stagedPath);
-      stagedIdentity = await fs.lstat(stagedPath, { bigint: true });
-      const expectedContent = await hashPublishedFile(stagedPath, stagedIdentity);
+      await syncFile(outputPath);
+      stagedIdentity = await fs.lstat(outputPath, { bigint: true });
+      const expectedContent = await hashPublishedFile(outputPath, stagedIdentity);
       await publishSqliteFile(
         {
           sourceIdentity: stagedIdentity,
-          sourcePath: stagedPath,
+          sourcePath: outputPath,
           targetPath: options.targetPath,
           expectedContent,
           beforePublish: options.beforePublish,

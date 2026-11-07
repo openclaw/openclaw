@@ -8,6 +8,12 @@ read_when:
   - You are changing ClawSweeper dispatch or GitHub activity forwarding
 ---
 
+Blacksmith Linux x64 jobs now request their measured physical size. The planner
+retains its historical profiles and timing keys: 4/8/16/32 profiles select
+2/2/4/8-vCPU runners at admission, raised when a group requires more memory.
+Windows, ARM, hosted routing, coverage, and concurrency remain unchanged.
+See [runner allocation evidence](/ci/routing-costs#blacksmith-physical-allocation).
+
 CI continues during Full Release Validation; the legacy release-priority variable
 does not pause workflow admission. See [deferred CI recovery](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery)
 for runs already deferred by older workflow revisions.
@@ -34,6 +40,12 @@ the following declaration phase; a complete Windows installer job previously too
 78 minutes. The remaining job budget covers dependency installation, Rust
 compilation, desktop tests, and installer packaging. The override stays on each
 source-build step; release-workflow budgets and package-integrity checks are unchanged.
+
+Precise PR plans can run the complete source-boundary gate first in an existing
+short, serial 8-class tooling job. Both configs retain separate test processes;
+a 90-second boundary reservation must fit the existing 150-second test budget.
+Other runners, preparation modes, parallel jobs, and full validation keep their
+standalone boundary ownership.
 
 Broad PRs retain their compact selected-owner Node plan when time-based splitting
 would exceed the 130-row matrix cap. See [Node test lanes](/ci/scope-and-routing/node-test-lanes).
@@ -134,6 +146,11 @@ Compact mocked Control UI E2E uses six 16-class jobs with four workers each,
 matching the four observed CPUs per runner and retaining 24 aggregate worker slots.
 Private source-server projects stay serial. The conditional browser-extension
 row, noncompact plans, and real-Gateway worker limits retain their existing rules.
+The Mantis chat recording runs in its dedicated evidence workflow and full release
+validation, or when its test changes; routine CI keeps the equivalent chat lifecycle
+assertions without recording the same scenario again.
+Sidebar cached-row parity screenshots and JSON require `OPENCLAW_CAPTURE_UI_PROOF=1`;
+the parity assertions still run during routine CI.
 Browser suites that only exercise the rendered UI borrow the invocation's
 production bundle. Private source servers are reserved for source-module
 interception, custom build identities, or development-server contracts.
@@ -218,6 +235,36 @@ Full `main` CI and cache warming are [hourly by default](/ci/scheduled-workflows
 
 Hourly iOS retains `ios-build (tests)` with Rust, voice, native Access, and focused lifecycle coverage. Successful current iOS builds run SwiftLint and SwiftFormat once through their required Xcode prebuild phases; a standalone fallback retains both checks after failed or skipped builds and for historical or frozen targets. Debug builds select their simulator before compiling, overlap its boot and SimSlim preparation with compilation, and join preparation before either focused simulator test group. Preparation failures or a timed-out join fail the job with its log; test selection and build settings stay unchanged. Current smoke builds prepare testing products once with `build-for-testing`; the voice cleanup and lifecycle groups separately reuse those products with `test-without-building`. Historical targets and other phases retain their existing build actions. Managed attachment UI/export, Watch operation, and Watch delivery UI suites retain every assertion in full manual/release validation. Main-tier simulator builds use the native architecture without indexing or verbose test diagnostics; logs and xcresult bundles remain available. A coalesced scheduled iOS cancellation can leave `openclaw/ci-gate` green with a notice delegating iOS proof to a later scheduled job; it does not validate the canceled revision, and the workflow can still be canceled. Genuine failures remain red. Screenshot capture runs for its own changed inputs and full manual/release validation. See [scope selection](/ci/scope-and-routing/selection) and [capacity](/ci/capacity#owner-path-and-release-coverage) for the coverage trade-off.
 
+iOS Store Release reuses its locked Fastlane gems through `ruby/setup-ruby`'s
+Bundler cache for trusted `main` upload jobs. The action keys gems by runner
+OS and architecture, Ruby, bundle configuration, and the lockfile; it still runs
+a frozen install on a hit and installs normally on a miss or cache-transfer
+failure. Generated Bundler configuration stays in the runner's temporary
+directory, and its absolute gem path lets the detached release worktree reuse
+the installed bundle without copying gems or dirtying the source checkout. Both mobile
+release entry points separately log elapsed time for the clean-checkout check
+and the current-main fetch, including failed checks, without logging arguments
+or credentials.
+
+For a non-publishing notes/archive contention comparison, run
+`node scripts/bench-ios-release-note-overlap.mjs --root CLEAN_SOURCE --plan PLAN.json --output IGNORED_DIR --samples 5`
+with `OPENAI_API_KEY` available. The plan schema is documented in the helper;
+freeze the source SHA and release identity before running. After warming the
+archive and notes generator, it interleaves warm serial and overlapping samples
+using the same generated inputs and isolated compilation caches. Each archive
+starts with fresh DerivedData while retaining compilation replay and package
+download caches to model a fresh release runner with restored caches. Results include timings, task counts, compilation replay
+hits/misses, and resource samples. Archives are unsigned: this does not validate
+signing, export, upload, or hosted-runner performance.
+
+Store and TestFlight archives share an optional Xcode compilation cache, separated
+by Xcode build, runner OS, and architecture. The release job restores the latest
+matching compiler storage and saves an immutable run-specific snapshot after a
+successful release. Each transfer has a three-minute limit and cannot fail the
+release. Compiler input hashes own invalidation across source changes; signed
+products and DerivedData are never saved in this cache. Existing clean archive,
+signing, export, and IPA validation remain required.
+
 Current iOS builds restore three independent input caches: verified Mermaid assets, SwiftPM source packages and binary artifacts, and the Watch RTC Cargo registry and compiled simulator library. Only trusted `main` push and scheduled runs save them; PRs restore only. Frozen targets retain their original cold path. Mermaid validates source and output hashes before copying resources. Its key covers the renderer's complete locked dependency graph, including workspace sources and optional build dependencies, so unrelated root dependency upgrades reuse the assets. SwiftPM downloads use `apps/ios/build/SourcePackages`, shared with screenshot capture through the same exact cache key and Xcode's `-clonedSourcePackagesDirPath` option. Keys cover Xcode, package manifests, and available `Package.resolved` files; automatic resolution remains enabled (the generated iOS project currently has no tracked lockfile). Watch keys cover Xcode, architecture, target mappings, the pinned Rust toolchain, lockfile, crate sources, and iOS build settings; restores first try the exact key, then fall back to the same OS, architecture, and Xcode prefix so unrelated iOS project edits can reuse existing slices. The build phase verifies the library checksum and input fingerprint before reuse, and otherwise runs the locked Cargo build. Caching the finished slice avoids rebuilding the Rust standard library when a fresh runner installs `rust-src` with new timestamps. The hourly Watch engine test shares registry downloads, while its host Debug products stay out of the simulator Release cache.
 
 Current iOS Debug builds log CPU count, memory, machine model, booted simulators, and timestamps immediately around Xcode execution. The read-only hardware and simulator checks each have a five-second limit; unavailable diagnostics do not block the build. These markers distinguish simulator-query delays from Xcode startup, package resolution, and compilation.
@@ -250,6 +297,21 @@ bundle time from 621 to 217 seconds. This trades paid compute for shorter releas
 runs; qualification and ordinary screenshot CI retain hosted Ubuntu. See
 [runner evidence and cost](/ci/runners#android-release-runner).
 
+Both Android release destinations restore the shared Gradle user-home cache
+read-only, reusing dependency downloads, compiled scripts, transforms and wrapper
+distributions from main CI. A cache miss or transfer failure keeps the cold build
+path. Release jobs do not save the archive or enable Gradle task-output caching.
+Toolchain setup runs before mobile dependency installation so cache-key hashing
+does not traverse the installed dependency tree.
+The shared toolchain action's `gradle-cache-mode` override leaves Android SDK
+caching off for these jobs; other callers inherit their existing `cache-mode`.
+
+Android's Gradle daemon uses Parallel GC with the existing 3 GiB heap. A controlled
+phone/Wear release comparison with warm dependencies and fresh build outputs
+reduced median bundle time from 158.78 to 149.10 seconds (6.09%), with lower Java
+CPU time and peak memory. Task selection, lint, R8, signing, and upload behavior
+stay unchanged.
+
 Android Release E2E adds one hosted Ubuntu KVM job to exact-source, full-scope
 manual validation when Android is selected, matching the iOS qualification
 selection. The final CI gate requires its success. Manual Android Store Release
@@ -270,6 +332,12 @@ dependencies are downloaded during setup; no Google account, companion APK, or
 paired-device image is provisioned.
 
 Eligible core-source and core-test PRs use targeted type checks when every selected compiler input exists in the checkout. Deleted Markdown files and UI stylesheets do not prevent narrowing for accompanying code changes. GitHub and hybrid profiles distribute the selected consumers across their existing core stripes; the Blacksmith profile checks them in the central row. Ambiguous ownership and deleted compiler inputs keep the full type-check coverage.
+
+Numeric test-budget records retain full guard coverage without widening an
+otherwise scoped source/test compiler and lint selection.
+
+Selected singleton compiler rows share setup in pairs within the existing
+two-compiler limit. Full stripes and rows carrying root partitions stay unchanged.
 
 Scoped PR plans inspect the four root-test partitions separately and select every
 partition that consumes a changed input, including type-only imports. A change
@@ -388,6 +456,9 @@ Changed-owner Node rows use existing file/group timing evidence with a
 150-test-second admission target and the existing 130-row PR cap. Complete files,
 standard configs, and worker policies remain intact; predicted test seconds
 are separate from measured CI wall time.
+Compatible selected serial jobs share setup after singleton worker limits are
+fixed. Combined jobs retain the shortest contributing timeout and the existing
+test-work budget; complete and scheduled plans keep their original layout.
 Known indivisible-file costs remain a floor when selected subsets are priced;
 older complete-group measurements cannot cap those costs. Process-heavy worktree
 and updater suites carry explicit case-cost weights so they do not share a row
