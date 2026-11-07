@@ -324,6 +324,25 @@ describe("A2A HTTP agent discovery", () => {
 });
 
 describe("A2A HTTP authentication and request limits", () => {
+  it("stops guessing bearer tokens after the peer rate limit", async () => {
+    const harness = await startHttpHarness({ a2aConfig: { rateLimitPerMinute: 2 } });
+    await expectReply(
+      harness.post(taskRequest("missing"), "wrong-1"),
+      { error: expect.any(String) },
+      401,
+    );
+    await expectReply(
+      harness.post(taskRequest("missing"), "wrong-2"),
+      { error: expect.any(String) },
+      401,
+    );
+    await expectReply(
+      harness.post(taskRequest("missing"), "wrong-3"),
+      { error: "Too many authentication attempts" },
+      429,
+    );
+  });
+
   it("rejects a missing bearer", async () => {
     const { post } = await startHttpHarness();
     await expectReply(
