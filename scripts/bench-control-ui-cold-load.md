@@ -856,9 +856,11 @@ fetches)`: those totals must not be described as readiness bytes. Without a summ
 the scope is `V8 only` and excludes fetched-only scripts. `javaScriptResources` is
 an aggregate and cannot identify modules. Coverage indicates which ranges ran,
 not CPU cost or whether a module can safely be removed.
-Compare separate readiness and `--coverage-after-ready-ms 5000` captures to distinguish
-boot-only observations from code used shortly afterward; keep the same route,
-fixture, and exact build for both.
+Compare separate settled-readiness and `--coverage-after-ready-ms 5000` captures
+to distinguish boot-only observations from code used shortly afterward; keep the
+same route, fixture, and exact build for both. This cutoff follows the harness's
+existing content and quiet-event-queue checks, not the first enabled composer;
+idle preloads begun during that quiet window are included.
 
 On a noisy host, run an A/A control before interpreting candidate differences.
 First copy the baseline bundle to a separate directory (`cp -R <base> <control>`):
