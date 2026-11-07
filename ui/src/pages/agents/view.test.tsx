@@ -331,6 +331,7 @@ describe("renderAgents", () => {
               ...createProps().readData().cron,
               cronStatus: { enabled: true, triggersEnabled: true, jobs: 80, nextWakeAtMs: null },
               cronJobs: cronState.cronJobs,
+              cronJobsSnapshotRevision: cronState.cronJobsSnapshotRevision,
               cronJobsTotal: cronState.cronJobsTotal,
               cronJobsHasMore: cronState.cronJobsHasMore,
               cronJobsLoadingMore: cronState.cronJobsLoadingMore,
