@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as terminalTheme from "../../packages/terminal-core/src/theme.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { registerSecurityCli } from "./security-cli.js";
 
 const mocks = await vi.hoisted(async () => {
@@ -173,13 +174,20 @@ describe("security CLI", () => {
   );
 
   it.each([
-    ["token", /pass --token <token>/i],
-    ["password", /pass --password <password>/i],
-  ] as const)(
-    "rejects shared-secret auth override without the matching secret",
-    async (mode, message) => {
-      await expect(run("--auth", mode, "--json")).rejects.toThrow(message);
-      expect(runSecurityAuditCore).not.toHaveBeenCalled();
-    },
-  );
+    ["token", "--auth token requires --token."],
+    ["password", "--auth password requires --password."],
+    ["bogus", 'Invalid --auth value. Expected "none", "token", "password", or "trusted-proxy".'],
+  ] as const)("rejects --auth %s with the reason", async (mode, message) => {
+    // The root CLI replaces plain errors with a generic failure line.
+    const execution = run("--auth", mode);
+    await expect(execution).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      humanOutput: message,
+    });
+    // Rendering must not mask the remedy as a secret.
+    await expect(execution.catch((error: unknown) => formatErrorMessage(error))).resolves.toBe(
+      message,
+    );
+    expect(runSecurityAuditCore).not.toHaveBeenCalled();
+  });
 });
