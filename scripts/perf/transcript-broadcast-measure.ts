@@ -4358,13 +4358,13 @@ async function rpc(
   return response.payload;
 }
 function latencySummary(latenciesMs: number[]) {
-  const sorted = latenciesMs.toSorted((a, b) => a - b);
+  const { count, p50, p95, p99, max } = summarizeLatencies(latenciesMs);
   return {
-    count: sorted.length,
-    p50Ms: sorted[Math.ceil(sorted.length * 0.5) - 1] ?? null,
-    p95Ms: sorted[Math.ceil(sorted.length * 0.95) - 1] ?? null,
-    p99Ms: sorted[Math.ceil(sorted.length * 0.99) - 1] ?? null,
-    maxMs: sorted.at(-1) ?? null,
+    count,
+    p50Ms: p50,
+    p95Ms: p95,
+    p99Ms: p99,
+    maxMs: max,
     latenciesMs,
   };
 }
