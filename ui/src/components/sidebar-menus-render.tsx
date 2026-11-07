@@ -5,6 +5,7 @@ import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { patchSettings } from "../app/settings.ts";
 import { registerAgentCreationEnglish } from "../i18n/locales/en-agent-creation.ts";
+import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { openEditor } from "../lib/editor-links.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
@@ -162,6 +163,15 @@ function renderSidebarMenus(
           const trigger = projected.triggers.get("agent");
           const menuRef = projected.menuRef("agent");
           const chipAgent = createMemo(() => view.activeChipAgent());
+          const activity = createMemo(() => {
+            const context = view.sessionDataContext;
+            if (!context) {
+              return undefined;
+            }
+            const store = rosterActivityStore(context);
+            store.setInvolvingMe(view.sessionInvolvingMeFilterActive);
+            return projectOwner(store, (owner) => owner.snapshot);
+          });
           const agents = createMemo(() => {
             const source = view.sessionDataContext?.agents;
             return source && projectAgents(source);
@@ -221,7 +231,10 @@ function renderSidebarMenus(
                 },
                 avatarErrorHandler: (url) => avatarReader().imageErrorHandler(url),
                 openMode: projected.agentMenuMode,
-                agentUnreadCount: (agentId) => view.agentUnreadCount(agentId),
+                agentUnreadCount: (agentId) => {
+                  activity()?.read();
+                  return view.agentUnreadCount(agentId);
+                },
                 onPointerEnter: () => projected.handleAgentMenuPointerEnter(),
                 onPointerLeave: () => projected.handleAgentMenuPointerLeave(),
                 onAfterShow: () => projected.restoreFocusAfterAgentMenuHoverOpen(),
