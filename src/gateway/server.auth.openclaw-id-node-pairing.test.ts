@@ -180,6 +180,31 @@ test("approves the reviewed subset, prompts for additions, and never re-pairs af
   expect(ssh).not.toHaveBeenCalled();
 });
 
+test("keeps removal manual when the first tunnel connection used an existing pairing", async () => {
+  const peer = nodePeer();
+  const path = identityPath("ocid-node-manual-first");
+  const identity = loadOrCreateDeviceIdentity({ path });
+  const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
+  const request = await requestDevicePairing({
+    deviceId: identity.deviceId,
+    publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+    role: "node",
+    scopes: [],
+    clientMode: "node",
+  });
+  await approveDevicePairing(request.request.requestId, { callerScopes: ["operator.admin"] });
+  expect((await connect(peer, path)).ok).toBe(true);
+  expect((await getPairedDevice(identity.deviceId))?.tokens?.node?.approval?.peerKey).toBe(peer);
+  await removePairedDeviceRole({ deviceId: identity.deviceId });
+  await closeOpenClawStateDatabaseAsync();
+  expect((await connect(peer, path)).ok).toBe(false);
+  expect(await getPairedDevice(identity.deviceId)).toBeNull();
+  expect(
+    (await listDevicePairing()).pending.find((entry) => entry.deviceId === identity.deviceId)
+      ?.silent,
+  ).not.toBe(true);
+});
+
 test("removes only peer-granted node roles, preserving unrelated operator grants and repeat cleanup", async () => {
   const peer = nodePeer();
   const path = identityPath("ocid-node-mixed");

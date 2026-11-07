@@ -1,5 +1,6 @@
 // The pairing transaction owns both the one-time receipt and the node-role grant.
-import type { DB } from "../state/openclaw-state-db.generated.js";
+import { readConfigMachineStateRowInDatabase } from "../state/config-machine-state-row.js";
+import { writeConfigMachineStateInDatabase } from "../state/config-machine-state-write.js";
 import { approveDevicePairingInWorker } from "./device-pairing-approval.kernel.js";
 import { removePairedDeviceRoleInWorker } from "./device-pairing-core.kernel.js";
 import type {
@@ -12,10 +13,22 @@ import {
 } from "./device-pairing-state.kernel.js";
 import { persistDevicePairingStoreState } from "./device-pairing-store.js";
 import type { OpenClawIdNodePairingProvenance } from "./device-pairing.types.js";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import type { EngineConnection } from "./sql-connection.js";
 
 const receiptKey = (peerKey: string) => `devicePairing.openclawIdNode.${peerKey}`;
+
+/** An accepted node binding consumes automatic pairing even when it was approved manually. */
+export function consumeOpenClawIdNodePairingInWorker(
+  db: EngineConnection,
+  peerKey: string,
+): boolean {
+  const key = receiptKey(peerKey);
+  if (readConfigMachineStateRowInDatabase(db, key)) {
+    return false;
+  }
+  writeConfigMachineStateInDatabase(db, key, true);
+  return true;
+}
 
 export type OpenClawIdNodePairingInput = {
   requestId: string;
@@ -35,7 +48,6 @@ export function approveOpenClawIdNodeInWorker(
   db: EngineConnection,
   input: OpenClawIdNodePairingInput,
 ): ApproveDevicePairingResult {
-  const kysely = getNodeSqliteKysely<DB>(db);
   const state = loadDevicePairingStateForMutation(input.nowMs);
   const pending = state.pendingById[input.requestId];
   // Never consume a pending operator request, repair, or previously granted role.
@@ -52,18 +64,7 @@ export function approveOpenClawIdNodeInWorker(
   ) {
     return null;
   }
-  const claimed = executeSqliteQueryTakeFirstSync(
-    db,
-    kysely
-      .insertInto("config_machine_state")
-      .values({
-        state_key: receiptKey(input.peerKey),
-        value_json: "true",
-        updated_at_ms: input.nowMs,
-      })
-      .onConflict((conflict) => conflict.column("state_key").doNothing())
-      .returning("state_key"),
-  );
+  const claimed = consumeOpenClawIdNodePairingInWorker(db, input.peerKey);
   if (!claimed) {
     return null;
   }

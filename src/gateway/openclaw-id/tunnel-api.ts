@@ -11,7 +11,7 @@
 //   POST /_openclaw-id/v1/node-invites { cap, proof_key }      NodeInviteCap plus proof key
 //   POST /_openclaw-id/v1/signout     no body                 end this peer's browser credentials
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { AuthorityAccepted, AuthorityRefusal } from "./authority.js";
+import type { AuthorityAccepted, AuthorityRefusal } from "./authority-result.js";
 import { decodeInviteProofKey } from "./invites-view.js";
 
 /** Path prefix the tunnel API owns on the claw origin. */

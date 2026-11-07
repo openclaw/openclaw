@@ -7,7 +7,8 @@ import {
   type AuthorityEvent,
   type MailboxMessage,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
-import type { AuthorityAccepted, AuthorityRefusal, RedemptionSender } from "./authority.js";
+import type { AuthorityAccepted, AuthorityRefusal } from "./authority-result.js";
+import type { RedemptionSender } from "./authority.js";
 import type { DiscoveryClient } from "./discovery-client.js";
 
 const BACKOFF_INITIAL_MS = 5_000;

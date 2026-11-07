@@ -30,6 +30,7 @@ import {
   ROOT_EPOCH,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
+import type { AuthorityAccepted, AuthorityRefusal } from "./authority-result.js";
 import { verifyBinding } from "./binding-check.js";
 import {
   needsAllowlistUpgrade,
@@ -76,20 +77,6 @@ export type LinkCommit = {
   owner_device: unknown;
   /** ServerBinding(seq 1), signed by R. */
   binding: unknown;
-};
-
-/** A refused write: a stable code the UI matches, and detail for logs. */
-export type AuthorityRefusal = {
-  ok: false;
-  code: string;
-  detail: string;
-};
-
-/** Accepted write and the effects to perform. */
-export type AuthorityAccepted = {
-  ok: true;
-  status: "applied" | "pending";
-  events: AuthorityEvent[];
 };
 
 const nowSeconds = () => Math.floor(Date.now() / 1000);
