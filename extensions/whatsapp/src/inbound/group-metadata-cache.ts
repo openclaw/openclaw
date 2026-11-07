@@ -59,7 +59,7 @@ function readGroupMetadataCacheEntry<T extends WhatsAppGroupMetadataCacheEntry>(
   if (!entry) {
     return null;
   }
-  if (entry.expires <= Date.now()) {
+  if (entry.expires <= performance.now()) {
     cache.delete(jid);
     return null;
   }
@@ -95,13 +95,13 @@ export function createWhatsAppGroupMetadataCacheOwner(params: GroupMetadataCache
       subject: meta.subject,
       participants: participantEntries.map((entry) => entry.display).filter(Boolean),
       mentionParticipants: participantEntries.map((entry) => entry.mention),
-      expires: Date.now() + GROUP_META_TTL_MS,
+      expires: performance.now() + GROUP_META_TTL_MS,
     };
   };
 
   const summarizeForReconnect = (meta: GroupMetadata): WhatsAppGroupMetadataCacheEntry => ({
     subject: meta.subject,
-    expires: Date.now() + GROUP_META_TTL_MS,
+    expires: performance.now() + GROUP_META_TTL_MS,
   });
 
   const rememberFullUpdate = (jid: string, meta: GroupMetadata) => {
@@ -123,7 +123,7 @@ export function createWhatsAppGroupMetadataCacheOwner(params: GroupMetadataCache
 
   const get = async (jid: string): Promise<LocalGroupMetadataCacheEntry> => {
     if (closed) {
-      return { expires: Date.now() + GROUP_META_TTL_MS };
+      return { expires: performance.now() + GROUP_META_TTL_MS };
     }
     const cached = readGroupMetadataCacheEntry(localCache, jid);
     if (cached) {
@@ -142,7 +142,7 @@ export function createWhatsAppGroupMetadataCacheOwner(params: GroupMetadataCache
         hydratedMetadata ?? (await (params.getCurrentSock() ?? params.sock).groupMetadata(jid));
       const entry = await summarize(meta);
       if (closed) {
-        return { expires: Date.now() + GROUP_META_TTL_MS };
+        return { expires: performance.now() + GROUP_META_TTL_MS };
       }
       // Baileys uses this cache for sender-key recipients, not just display metadata.
       if (revision !== cacheRevision) {
@@ -169,7 +169,7 @@ export function createWhatsAppGroupMetadataCacheOwner(params: GroupMetadataCache
         return hydrated;
       }
       params.logVerbose(`Failed to fetch group metadata for ${jid}: ${String(error)}`);
-      return { expires: Date.now() + GROUP_META_TTL_MS };
+      return { expires: performance.now() + GROUP_META_TTL_MS };
     }
   };
 
