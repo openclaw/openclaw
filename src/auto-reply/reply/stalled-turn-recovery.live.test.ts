@@ -126,7 +126,7 @@ describe.skipIf(!isLiveTestEnabled(["OPENAI_LIVE_TEST"]))(
           const recovery = buildStalledTurnRecoveryRun(base);
           using _ = useLiveTestRuntimeConfig(config);
           const runId = "stalled-recovery-live-" + name.replaceAll(" ", "-");
-          const admission = await prepareSystemAgentRunAdmission(
+          const admission = prepareSystemAgentRunAdmission(
             config,
             runId,
             "main",
