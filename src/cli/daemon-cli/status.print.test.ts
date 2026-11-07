@@ -668,6 +668,27 @@ describe("printDaemonStatus", () => {
     expect(combinedOutput).not.toContain("openclaw plugins update");
     expect(combinedOutput).not.toContain("openclaw gateway restart");
   });
+
+  it("recommends a package-name update when stable Gateway drift retains @beta", () => {
+    printDrift({
+      pluginId: "codex",
+      installedVersion: "2026.10.25",
+      gatewayVersion: "2026.11.1",
+      source: "npm",
+      packageName: "@openclaw/codex",
+      spec: "@openclaw/codex@beta",
+    });
+
+    expectMockLineContains(runtime.log, "- codex: 2026.10.25 (npm, selector @beta)");
+    expectMockLineContains(
+      runtime.log,
+      "Retained @beta keeps that release line; id-only update will not move it to stable.",
+    );
+    expectMockLineContains(
+      runtime.log,
+      `Fix: ${formatCliCommand("openclaw plugins update @openclaw/codex")} && ${formatCliCommand("openclaw gateway restart")}.`,
+    );
+  });
   it("reports an admitted probe timeout as event-loop saturation instead of failed connectivity", () => {
     printDaemonStatus(
       {

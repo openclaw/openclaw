@@ -138,13 +138,15 @@ A plugin selected through `plugins.load.paths` is operator-managed. Named update
 
     For npm installs, you can also pass an explicit npm package spec with a dist-tag or exact version. OpenClaw resolves that package name back to the tracked plugin record, updates that installed plugin, and records the new npm spec for future id-based updates.
 
-    Passing the npm package name without a version or tag also resolves back to the tracked plugin record. Use this when a plugin was pinned to an exact version and you want to move it back to the registry's default release line.
+    Passing the npm package name without a version or tag also resolves back to the tracked plugin record. Use this when a plugin was pinned to an exact version and you want to move it back to the registry's default release line. The same bare package-name form leaves a retained dist-tag such as `@beta` and returns that plugin to the registry default line after a stable Gateway switch.
 
   </Accordion>
   <Accordion title="Beta channel updates">
     Targeted `openclaw plugins update <id-or-npm-spec>` uses the configured update channel when present. Otherwise, recognized official plugins inherit OpenClaw's registry channel. Bulk `openclaw plugins update --all` uses the same registry-channel resolver for official plugins. Moving selectors remain moving even when the downloaded artifact has an exact version; recovered OpenClaw release pins follow that same policy.
 
     `openclaw update` resolves plugin targets from the newly installed core. npm updates on the beta channel select the newer of the package's `beta` and `latest` releases; ClawHub default-line updates try `@beta` and can fall back to the recorded default/latest selector when that release is unavailable. Integrity, compatibility, trust, install-policy, and capability-consent failures do not trigger source fallback. An unavailable plugin update leaves a notice without failing an otherwise successful core update. Explicit selectors retain their meaning, with the managed OpenClaw release-pin recovery described above.
+
+    After you move core to the stable channel, stored npm `@beta` (or other non-`latest`) selectors still keep their release line. Id-only `openclaw plugins update <id>` and `plugins update --all` do not rewrite those selectors. Doctor and status drift repair therefore recommend `openclaw plugins update <packageName>` so the install record can leave `@beta` explicitly; pin a stable release with `openclaw plugins install <packageName>@<version> --force` when you need an exact cohort match.
 
   </Accordion>
   <Accordion title="Existing plugin source choices">
