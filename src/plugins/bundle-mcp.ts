@@ -2,6 +2,7 @@ import path from "node:path";
 import { isStringArray, isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
+import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import {
   resolveConfiguredMcpTransport,
   resolveOpenClawMcpTransportAlias,
@@ -412,6 +413,48 @@ function loadRootRelativeMcpConfig(params: {
   };
 }
 
+function loadNativePluginMcpConfig(params: {
+  rootDir: string;
+  mcpServers: Record<string, BundleMcpServerConfig>;
+}): { config: BundleMcpRuntimeConfig; diagnostics: string[] } {
+  let missingHeaderEnv = false;
+  const mcpServers = Object.fromEntries(
+    Object.entries(params.mcpServers).flatMap(([name, server]) => {
+      if (!isRecord(server.headers)) {
+        return [[name, server]];
+      }
+      let missing = false;
+      // Resolve values, not names or arbitrary manifest fields. The shared config
+      // parser owns escaping and defaults, and never expands substituted values twice.
+      const headers = Object.fromEntries(
+        Object.entries(server.headers).map(([key, value]) => [
+          key,
+          typeof value === "string"
+            ? resolveConfigEnvVars(value, process.env, {
+                onMissing: () => {
+                  missing = true;
+                },
+              })
+            : value,
+        ]),
+      );
+      if (missing) {
+        missingHeaderEnv = true;
+        return [];
+      }
+      return [[name, { ...server, headers }]];
+    }),
+  );
+  const loaded = loadRootRelativeMcpConfig({ ...params, mcpServers });
+  if (missingHeaderEnv) {
+    // Never include partial credentials, endpoint URLs, or variable names here.
+    loaded.diagnostics.push(
+      "one or more native MCP servers were skipped because a required header environment variable is unavailable",
+    );
+  }
+  return loaded;
+}
+
 function loadBundleMcpConfig(params: {
   pluginId: string;
   rootDir: string;
@@ -526,7 +569,7 @@ export function loadEnabledBundleMcpConfig(params: {
       record.mcpServers
         ? withMcpPluginOwnership(
             record.id,
-            loadRootRelativeMcpConfig({
+            loadNativePluginMcpConfig({
               rootDir: record.rootDir,
               mcpServers: record.mcpServers,
             }),
