@@ -22,7 +22,7 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("does not accumulate detached shimmers as sessions are replaced", async () => {
+  it("retires bootstrap and session-loading shimmers as sessions are replaced", async () => {
     const sessions = Array.from({ length: 20 }, (_, index) =>
       createControlUiSessionRow(`agent:main:animation-${index}`, `Session ${index}`, index),
     );
@@ -64,9 +64,9 @@ suite.define(() => {
       // changes the short-lived fallback lifecycle that exposed this bug.
       const aged = await countDetachedWebKitShimmers(pages[0]!);
       const fresh = await countDetachedWebKitShimmers(pages[1]!);
-      // One initial loading frame may differ; replacement must not add nine per visit.
-      expect(aged.detached - fresh.detached).toBeLessThanOrEqual(9);
-      expect(aged.running - fresh.running).toBeLessThanOrEqual(9);
+      // Static bootstrap placeholders must not leave effects behind either.
+      expect(fresh).toEqual({ detached: 0, running: 0 });
+      expect(aged).toEqual({ detached: 0, running: 0 });
     } finally {
       for (const context of contexts) {
         await context.close();

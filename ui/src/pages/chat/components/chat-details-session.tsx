@@ -651,9 +651,7 @@ export type ChatDetailsDesktopCompositionProps = Omit<Props, "desktop"> & {
 
 /** Desktop entry point: one scroll body and the native Progress owner after Outputs. */
 export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositionProps) {
-  onSettled(() => {
-    props.onReady?.();
-  });
+  onSettled(() => props.onReady?.());
   return (
     <>
       <ChatDetailsSession

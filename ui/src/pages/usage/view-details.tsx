@@ -1,8 +1,9 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createMemo, For, Show } from "solid-js";
-import { Icon } from "../../components/solid/icon.tsx";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import "../../components/tooltip.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { parseSessionLog, prepareUsageDateRange } from "./helpers.ts";
@@ -588,8 +589,7 @@ function SessionLogs(props: {
                 </>
               )}
               <label class="usage-filters-inline session-log-has-tools">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={props.detail.logFilters.hasTools}
                   onChange={(event) =>
                     props.callbacks.onLogFiltersChange({ hasTools: event.currentTarget.checked })

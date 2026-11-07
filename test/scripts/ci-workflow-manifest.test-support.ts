@@ -77,6 +77,7 @@ type CiManifestFixtureOptions = {
   publishedDriverUpdateCapability?: boolean;
   changedPaths?: string[] | null;
   checkFamilyScope?: boolean;
+  checkPlanSource?: string;
   ciLintPlan?: Awaited<ReturnType<typeof createChangedCiLintPlan>>;
   ciTypeGraphNames?: string[];
   ciTypeBoundaryFailure?: boolean;
@@ -328,7 +329,10 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
       ]);
     }
     if (options.checkFamilyScope) {
-      copyFixture("scripts/ci-check-plan.mts");
+      writeFixture(
+        "scripts/ci-check-plan.mts",
+        options.checkPlanSource ?? readFileSync("scripts/ci-check-plan.mts"),
+      );
       writeScript(
         "ci-check-family-scope.mts",
         reexport("resolveCiCheckFamilyScope", "scripts/lib/ci-check-family-scope.mts"),
@@ -578,6 +582,7 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
       "release-context.mjs",
       "release-version.mjs",
       "ci-ios-smoke-plan.mjs",
+      "ci-blacksmith-capacity.mjs",
       "ci-skills-python-plan.mjs",
       "changed-path-facts.mjs",
     ]) {

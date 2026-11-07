@@ -111,6 +111,7 @@ shell-completion metadata.
   `embedding create`, and `model auth login/logout/status`) also accept `--agent <id>`. They resolve
   an explicit id first, then `agents.defaults.systemAgent.agentId`, then the sole configured agent.
 - Generated image and video `--output` files are staged beside the destination and replace it only after the complete buffer is written; a failed write leaves an existing destination unchanged. An interrupt cancels image generation or editing and discards late provider results before output writes begin. It also stops an in-progress provider-URL video download instead of letting it finish and publish a late result.
+- Ctrl-C or SIGTERM cancels image description provider requests and prevents later model fallback attempts.
 - Local `model run` is a lean one-shot provider completion: it resolves the configured agent model and auth but does not start a chat-agent turn, load tools, or open bundled MCP servers.
 - Model runs load the catalog for case correction only when an explicit model override contains uppercase characters. Runs using the configured default or a lowercase model ref skip that catalog lookup.
 - `model run --file` attaches image files (auto-detected MIME type) to the prompt; repeat `--file` for multiple images. Non-image files are rejected — use `infer audio transcribe` or `infer video describe` instead.
@@ -231,6 +232,9 @@ openclaw infer audio transcribe --file ./memo.m4a --model openai/whisper-1 --jso
 An accepted interrupt cancels the pending transcription request and suppresses
 late transcript output.
 
+The same cancellation behavior applies to `infer video describe`: interruption
+stops the pending provider request and suppresses late description output.
+
 For audio transcription and video description on POSIX systems, `--file` follows
 directory symlinks before resolving `..`, matching filesystem path resolution.
 Final-file symlinks remain subject to the existing media-directory checks.
@@ -259,6 +263,7 @@ Notes:
 - `tts status` only supports `--gateway` (it reflects gateway-managed TTS state).
 - Local and loopback-Gateway `tts convert --output` copies stage beside the destination and replace it only after success; a failed copy leaves an existing file unchanged.
 - If interruption is accepted before the output copy begins, `tts convert` leaves the requested destination unchanged. Completed synthesis audio remains in the media store for its normal lifetime.
+- Interrupting `tts convert --gateway` cancels the caller's pending RPC and exits with status 130 without printing a late result. Gateway-owned speech synthesis keeps its existing lifetime.
 - Remote-Gateway `tts convert --output` is rejected before requesting speech synthesis.
 - Use `tts convert --provider <id>` when selecting a provider without overriding its model.
 - `--channel <id>` is an output-format hint, not a delivery request. Local conversion

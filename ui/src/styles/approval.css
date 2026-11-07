@@ -574,14 +574,6 @@
     border-color: var(--border-strong);
   }
 
-  /* Own answer is one more choice among the radios, so it takes their round marker. */
-  .question-page
-    .chat-question-panel:has(.chat-question-panel__option[role="radio"])
-    .chat-question-panel__option--other
-    .chat-question-panel__option-marker {
-    border-radius: var(--radius-full);
-  }
-
   .question-page .chat-question-panel .input {
     min-height: 44px;
     padding-block: 9px;
