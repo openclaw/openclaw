@@ -2,9 +2,12 @@ import { beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { DoctorMemoryEmbeddingRuntimePayload } from "../gateway/server-methods/doctor.js";
+import { resolveRememberAcrossConversations } from "../memory-host-sdk/host/config-utils.js";
+import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
 import type { ManifestOwnerBasePolicyBlockReason } from "../plugins/manifest-owner-policy.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { MemoryHealth } from "../plugins/memory-provider-types.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 
 const note = vi.hoisted(() => vi.fn());
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "agent-default"));
@@ -62,7 +65,8 @@ const getMissingLocalMemoryEmbeddingProviderMessage = vi.hoisted(() =>
 // mock-isolation: Capture memory-health notices without rendering terminal UI.
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
-vi.mock("../agents/agent-scope.js", () => ({
+vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
   listAgentIds,
   tryResolveDefaultAgentId: resolveDefaultAgentId,
   resolveAgentDir,
@@ -93,6 +97,12 @@ vi.mock("../plugins/memory-runtime.js", () => ({
 
 // mock-isolation: Health scenarios must not discover or activate the host's plugins.
 vi.mock("../plugins/plugin-registry.js", () => ({ loadPluginManifestRegistryForPluginRegistry }));
+
+// mock-isolation: Fix installed metadata without mocking effective activation policy.
+vi.mock("../plugins/plugin-registry-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-registry-snapshot.js")>()),
+  loadPluginRegistrySnapshot: () => activeMemoryIndex,
+}));
 
 // mock-isolation: Fixtures select the installed-provider policy outcome explicitly.
 vi.mock("../plugins/manifest-owner-policy.js", () => ({ resolveManifestOwnerBasePolicyBlock }));
@@ -133,7 +143,13 @@ function expectFirstNoteExcludes(...values: string[]) {
   }
 }
 
-const cfg: OpenClawConfig = {};
+const activeMemoryIndex = createPluginMetadataSnapshotFixture({
+  plugins: [{ id: "active-memory", origin: "bundled", enabledByDefault: false }],
+}).index;
+const { resolveMemorySearchConfig: resolveRealMemorySearchConfig } = await vi.importActual<
+  typeof import("../agents/memory-search.js")
+>("../agents/memory-search.js");
+const cfg: OpenClawConfig = { plugins: { entries: { "active-memory": { enabled: true } } } };
 const skippedGatewayOptions = {
   gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
 } satisfies NonNullable<Parameters<typeof noteMemorySearchHealth>[1]>;
@@ -187,7 +203,7 @@ async function runMemorySearchHealth(
   config: OpenClawConfig = cfg,
 ) {
   stubMemorySearchConfig(provider, overrides);
-  await noteMemorySearchHealth(config, options);
+  await noteMemorySearchHealth({ plugins: cfg.plugins, ...config }, options);
 }
 
 const recallAgent = (rememberAcrossConversations: boolean) => ({
@@ -258,6 +274,67 @@ function collectFindings(config: OpenClawConfig) {
   });
 }
 
+it.each([
+  ["missing entry", {}, true],
+  ["explicit enablement", { plugins: { entries: { "active-memory": { enabled: true } } } }, false],
+  ["recall opt-out", { memory: { search: { rememberAcrossConversations: false } } }, false],
+  ["isolated DM default", { session: { dmScope: "per-peer" } }, false],
+  [
+    "global disablement",
+    { plugins: { enabled: false, entries: { "active-memory": { enabled: true } } } },
+    true,
+  ],
+  [
+    "denylist",
+    { plugins: { deny: ["active-memory"], entries: { "active-memory": { enabled: true } } } },
+    true,
+  ],
+  [
+    "restrictive allowlist",
+    { plugins: { allow: ["other-plugin"], entries: { "active-memory": { enabled: true } } } },
+    true,
+  ],
+  [
+    "internal disablement",
+    { plugins: { entries: { "active-memory": { enabled: true, config: { enabled: false } } } } },
+    true,
+  ],
+] satisfies Array<[string, OpenClawConfig, boolean]>)(
+  "reports effective Active Memory prerequisites with %s in normal Doctor and lint",
+  async (name, overrides: OpenClawConfig, warns) => {
+    const config: OpenClawConfig = {
+      ...overrides,
+      agents: { entries: { personal: {} } },
+      memory: { search: { provider: "none", ...overrides.memory?.search } },
+    };
+    resolveMemorySearchConfig.mockImplementation(resolveRealMemorySearchConfig);
+    if (name === "missing entry") {
+      expect(resolveRememberAcrossConversations(config, "personal")).toBe(true);
+      expect(isInstalledPluginEnabled(activeMemoryIndex, "active-memory", config)).toBe(false);
+    }
+
+    await noteMemorySearchHealth(config, { includeWorkspaceMemoryHealth: false });
+    const findings = await collectFindings(config);
+    if (warns) {
+      expectFirstNoteContains(
+        "Active Memory plugin is disabled",
+        "plugins.entries.active-memory.enabled=true",
+        "memory.search.rememberAcrossConversations to false",
+      );
+      expect(findings).toMatchObject([
+        {
+          checkId: "core/doctor/memory-search",
+          severity: "warning",
+          message: firstNoteMessage(),
+        },
+      ]);
+    } else {
+      expect(note).not.toHaveBeenCalled();
+      expect(findings).toEqual([]);
+    }
+  },
+);
+
 it("reports native provider health as an informational doctor note", async () => {
   const close = configureProviderHealth({ status: "ready", message: "connected" });
 
@@ -324,7 +401,7 @@ it("emits recall warnings before a later provider diagnostic fails", async () =>
 
   expect(note).toHaveBeenCalledOnce();
   expect(firstNoteMessage()).toBe(
-    'Remember across conversations is effectively enabled for agent "personal", but the Active Memory plugin is disabled. Enable the plugin or set memory.search.rememberAcrossConversations to false.',
+    'Remember across conversations is effectively enabled for agent "personal", but the Active Memory plugin is disabled. Set plugins.entries.active-memory.enabled=true or set memory.search.rememberAcrossConversations to false.',
   );
 });
 
