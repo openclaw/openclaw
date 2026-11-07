@@ -2,6 +2,7 @@ import { createMemo, createSignal, lazy, Loading, onSettled, Show } from "solid-
 import type { RunFailureCause } from "../../../../../src/shared/run-failure-notice.js";
 import { formatWebUiIconErrorText } from "../../../components/error-presentation.ts";
 import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
+import { ReportIssueLink } from "../../../components/report-issue-link.tsx";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../../components/solid/popover.tsx";
@@ -191,6 +192,7 @@ export function ChatRunFailureNotice(props: {
             {t("chat.recovery.tryAgain")}
           </button>
         </Show>
+        <ReportIssueLink />
       </div>
     </openclaw-chat-run-failure-notice>
   );
