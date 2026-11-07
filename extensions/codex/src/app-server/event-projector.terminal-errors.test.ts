@@ -409,7 +409,7 @@ describe("CodexAppServerEventProjector terminal errors", () => {
       );
       const terminal = readAttemptTerminal(fixture.result(projector));
       const { message } = expectUsageLimitPromptError(terminal.promptError);
-      expect(message).toContain("You've reached your Codex subscription usage limit.");
+      expect(message).toContain("Codex reported a usage or quota limit.");
       expect(message).toContain(
         recent ? "Next reset in" : "Codex says to try again at May 11th, 2026 9:00 AM.",
       );

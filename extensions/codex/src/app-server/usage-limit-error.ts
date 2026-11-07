@@ -30,12 +30,20 @@ type CodexUsageLimitErrorSource = {
 
 type CodexUsageLimitErrorResult = {
   message: string;
+  promptError: Error;
   rateLimitsForProfile?: JsonValue;
 };
 
 // HTTP 429 alone is not subscription exhaustion and must not inherit its reset cooldown.
 export class CodexUsageLimitPromptError extends Error {
   readonly status = 429;
+
+  constructor(
+    message: string,
+    readonly nativeMessage?: string | null,
+  ) {
+    super(message);
+  }
 }
 
 export function resolveCodexPromptError(
@@ -43,7 +51,7 @@ export function resolveCodexPromptError(
 ): string | Error | undefined {
   const usageLimitMessage = formatCodexUsageLimitErrorMessage(source);
   if (usageLimitMessage) {
-    return new CodexUsageLimitPromptError(usageLimitMessage);
+    return new CodexUsageLimitPromptError(usageLimitMessage, source.message);
   }
   // Native retry exhaustion is not a permanent model/configuration failure.
   // Preserve the provider facts before terminal projection drops the native envelope.
@@ -116,7 +124,7 @@ export async function resolveCodexTurnStartError(params: {
   rateLimitsRevisionBeforeTurnStart?: number;
   timeoutMs?: number;
   signal?: AbortSignal;
-}): Promise<(CodexUsageLimitErrorResult & { promptError: Error }) | undefined> {
+}): Promise<CodexUsageLimitErrorResult | undefined> {
   const source = readCodexTurnStartUsageLimitErrorSource(
     params.client,
     params.error,
@@ -125,7 +133,7 @@ export async function resolveCodexTurnStartError(params: {
   );
   const usageLimit = await refreshCodexUsageLimitError({ ...params, source });
   if (usageLimit) {
-    return { ...usageLimit, promptError: new CodexUsageLimitPromptError(usageLimit.message) };
+    return usageLimit;
   }
   // Startup RPC errors carry the same provider facts as terminal notifications.
   // Normalize them before the generic runner loses the native error envelope.
@@ -135,17 +143,21 @@ export async function resolveCodexTurnStartError(params: {
 
 export async function refreshCodexUsageLimitPromptError(params: {
   client: CodexAppServerClient;
-  message: string | undefined;
+  promptError: unknown;
   timeoutMs?: number;
   signal?: AbortSignal;
 }): Promise<CodexUsageLimitErrorResult | undefined> {
-  if (!shouldRefreshCodexRateLimitsForUsageLimitMessage(params.message)) {
+  if (
+    !(params.promptError instanceof CodexUsageLimitPromptError) ||
+    !shouldRefreshCodexRateLimitsForUsageLimitMessage(params.promptError.message)
+  ) {
     return undefined;
   }
   return refreshCodexUsageLimitError({
     ...params,
     source: {
-      message: params.message,
+      // Refresh from the native cause, never from our already formatted guidance.
+      message: params.promptError.nativeMessage,
       codexErrorInfo: "usageLimitExceeded",
       rateLimits: readRecentCodexRateLimits(params.client),
     },
@@ -172,6 +184,7 @@ async function refreshCodexUsageLimitError(params: {
   return message
     ? {
         message,
+        promptError: new CodexUsageLimitPromptError(message, params.source.message),
         ...(rateLimits || params.source.rateLimitsTrustedForProfile
           ? { rateLimitsForProfile: rateLimits || params.source.rateLimits }
           : {}),
