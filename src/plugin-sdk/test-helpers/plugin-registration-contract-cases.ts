@@ -77,6 +77,10 @@ export const pluginRegistrationContractCases = {
     pluginId: "groq",
     mediaUnderstandingProviderIds: ["groq"],
   },
+  heygenSpeech: {
+    pluginId: "heygen-speech",
+    speechProviderIds: ["heygen"],
+  },
   kie: {
     pluginId: "kie",
     videoGenerationProviderIds: ["kie"],

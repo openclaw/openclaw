@@ -487,6 +487,29 @@
       }
     },
     {
+      "name": "@openclaw/heygen-speech",
+      "description": "OpenClaw HeyGen Voice speech plugin.",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "heygen-speech",
+          "label": "HeyGen Voice"
+        },
+        "contracts": {
+          "speechProviders": [
+            "heygen"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/heygen-speech",
+          "npmSpec": "@openclaw/heygen-speech",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.11.1"
+        }
+      }
+    },
+    {
       "name": "@openclaw/inworld-speech",
       "description": "OpenClaw Inworld speech plugin.",
       "source": "official",

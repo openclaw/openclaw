@@ -1,0 +1,26 @@
+{
+  "id": "heygen-speech",
+  "categories": ["voice"],
+  "capabilityCatalogEntry": "./capability-catalog.ts",
+  "activation": {
+    "onStartup": false
+  },
+  "name": "HeyGen Voice",
+  "description": "HeyGen Voice hosted text-to-speech with streaming, voice notes, and telephony output.",
+  "setup": {
+    "providers": [
+      {
+        "id": "heygen",
+        "envVars": ["HEYGEN_API_KEY"]
+      }
+    ]
+  },
+  "contracts": {
+    "speechProviders": ["heygen"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

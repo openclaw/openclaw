@@ -112,6 +112,24 @@ or blank, it keeps the base TTS voice.
 }
 ```
   </Tab>
+  <Tab title="HeyGen Voice">
+```json5
+{
+  tts: {
+    auto: "always",
+    provider: "heygen",
+    providers: {
+      heygen: {
+        apiKey: "${HEYGEN_API_KEY}",
+        model: "heygen-voice-1-turbo",
+        speakerVoiceId: "83548de556df48ba8c09c42a57c51d85",
+        // streamTransport: "websocket",
+      },
+    },
+  },
+}
+```
+  </Tab>
   <Tab title="Inworld">
 ```json5
 {

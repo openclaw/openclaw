@@ -89,6 +89,7 @@ inbound media through their reply model; see the full provider list in
 | fal               |   ✓   |   ✓   |   ✓   |     |     |                |                     |
 | Google            |   ✓   |   ✓   |   ✓   |  ✓  |  ✓  |       ✓        |          ✓          |
 | Gradium           |       |       |       |  ✓  |     |                |                     |
+| HeyGen Voice      |       |       |       |  ✓  |     |                |                     |
 | Inworld           |       |       |       |  ✓  |     |                |                     |
 | LiteLLM           |   ✓   |       |       |     |     |                |                     |
 | Local CLI         |       |       |       |  ✓  |     |                |                     |
