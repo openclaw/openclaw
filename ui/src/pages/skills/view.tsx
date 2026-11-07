@@ -4,6 +4,7 @@ import type { SkillStatusEntry } from "../../api/types.ts";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
@@ -19,10 +20,10 @@ import { clampText } from "../../lib/format.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createProgressiveList } from "../../lib/reactive/progressive-list.ts";
-import { groupSkills, type SkillGroup } from "../../lib/skills-grouping.ts";
 import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
 import "../../styles/sidebar-markdown.css";
+import { groupSkills, type SkillGroup } from "../../lib/skills-grouping.ts";
 import {
   computeSkillMissing,
   computeSkillReasons,
@@ -130,9 +131,9 @@ export function Skills(props: SkillsProps) {
                 fallback={(error) => (
                   <Loading>
                     <Show when={!isPending(read)}>
-                      <div class="callout danger" role="alert">
+                      <InlineAlert tone="danger" role="alert">
                         {formatUiError(error())}
-                      </div>
+                      </InlineAlert>
                     </Show>
                   </Loading>
                 )}
@@ -272,7 +273,7 @@ function SkillsToolbar(props: {
 }
 
 function SkillRow(props: { skill: SkillStatusEntry; view: SkillsProps }) {
-  const verdict = () => verdictForSkill(props.skill, props.view.state.clawhubVerdicts);
+  const verdict = createMemo(() => verdictForSkill(props.skill, props.view.state.clawhubVerdicts));
   const status = () => {
     latest(props.view.readClawHubVerdicts);
     return verdictStatus(verdict(), isPending(props.view.readClawHubVerdicts));
@@ -433,10 +434,10 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
           </Show>
         </div>
         <Show when={missing().length > 0}>
-          <div class="callout warn">
+          <InlineAlert tone="warning">
             <div class="skill-detail__warning-title">{t("skillsPage.missingRequirements")}</div>
             <div>{missing().join(", ")}</div>
-          </div>
+          </InlineAlert>
         </Show>
         <Show when={reasons().length > 0}>
           <div class="skill-detail__note">
@@ -484,12 +485,9 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
         </div>
         <Show when={message()}>
           {(value) => (
-            <div
-              class={["callout", value().kind === "error" ? "danger" : "success"]}
-              role={value().kind === "error" ? "alert" : "status"}
-            >
+            <InlineAlert tone={value().kind === "error" ? "danger" : "success"}>
               {formatUiExternalText(value().message)}
-            </div>
+            </InlineAlert>
           )}
         </Show>
         <Show when={props.skill.primaryEnv}>
@@ -563,10 +561,10 @@ function InstalledClawHubOverview(props: {
         <Show
           when={current().status !== "invalid"}
           fallback={
-            <div class="callout danger">
+            <InlineAlert tone="danger">
               <div class="skill-detail__warning-title">{t("skillsPage.invalidLink")}</div>
               <div>{formatUiExternalText(invalidReason() ?? "")}</div>
-            </div>
+            </InlineAlert>
           }
         >
           <div class="oc-dialog__rows">
@@ -679,9 +677,9 @@ function InstalledSkillCard(props: { skill: SkillStatusEntry; view: SkillsProps 
       >
         <Errored
           fallback={(error) => (
-            <div class="callout danger" role="alert">
+            <InlineAlert tone="danger" role="alert">
               {formatUiError(error())}
-            </div>
+            </InlineAlert>
           )}
         >
           <CardContent />

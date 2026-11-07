@@ -173,7 +173,7 @@ it("publishes native scroll policy and row position in one Solid update", async 
           state: new TranscriptOffsetState(),
           getScrollElement: () => viewport,
           endAnchor: new TranscriptEndAnchor(() => {}),
-          prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn()),
+          prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn(), () => false),
           canFollowEnd: () => false,
           isProgrammaticScroll: () => false,
           cancelScroll: vi.fn(),
@@ -642,7 +642,10 @@ it("commits uncompensated extents while coalescing reader row updates", async ()
   expect(viewport.scrollTop).toBe(480);
 });
 
-it("defers uncompensated measurement read-back until the next frame", async () => {
+it.each([
+  { name: "uncompensated measurement", offset: 600, rowHeight: 180 },
+  { name: "fast scroll measurement", offset: 1800, rowHeight: 120 },
+])("defers $name read-back until the next frame", async ({ offset, rowHeight }) => {
   const { host, session, viewport, virtualizer } = await mountPane(false, 120, undefined, 480);
   scrollReader(viewport, 480);
   const inner = requireElement(host, ".chat-thread-inner");
@@ -653,17 +656,17 @@ it("defers uncompensated measurement read-back until the next frame", async () =
   const frame = requestAnimationFrame(paint);
   try {
     // The compositor can advance before the next native scroll event arrives.
-    viewport.scrollTop = 600;
-    row.style.height = "180px";
+    viewport.scrollTop = offset;
+    row.style.height = `${rowHeight}px`;
     const entry: ResizeObserverEntry = {
       target: row,
-      borderBoxSize: [{ inlineSize: 800, blockSize: 180 }],
-      contentBoxSize: [{ inlineSize: 800, blockSize: 180 }],
+      borderBoxSize: [{ inlineSize: 800, blockSize: rowHeight }],
+      contentBoxSize: [{ inlineSize: 800, blockSize: rowHeight }],
       devicePixelContentBoxSize: [],
       contentRect: row.getBoundingClientRect(),
     };
     virtualizer.resizeItem(6, virtualizer.options.measureElement(row, entry, virtualizer));
-    expect(virtualizer.scrollOffset).toBe(600);
+    expect(virtualizer.scrollOffset).toBe(offset);
     expect(render).not.toHaveBeenCalled();
     await Promise.resolve();
     flush();
@@ -674,46 +677,14 @@ it("defers uncompensated measurement read-back until the next frame", async () =
     });
     flush();
     expect(render).toHaveBeenCalledOnce();
-    expect(Number.parseFloat(inner.style.height)).toBe(height + 60);
-    expect(viewport.scrollTop).toBe(600);
+    expect(Number.parseFloat(inner.style.height)).toBe(height + rowHeight - 120);
+    expect(viewport.scrollTop).toBe(offset);
     const bounds = viewport.getBoundingClientRect();
     const visible = [...host.querySelectorAll<HTMLElement>(".chat-virtual-row")]
       .map((element) => element.getBoundingClientRect())
       .filter((rect) => rect.bottom > bounds.top && rect.top < bounds.bottom);
     expect(Math.min(...visible.map((rect) => rect.top))).toBeLessThanOrEqual(bounds.top);
     expect(Math.max(...visible.map((rect) => rect.bottom))).toBeGreaterThanOrEqual(bounds.bottom);
-  } finally {
-    cancelAnimationFrame(frame);
-  }
-});
-
-it("renders new viewport rows before paint when a measurement reads a fast scroll", async () => {
-  const { host, session, viewport, virtualizer } = await mountPane();
-  scrollReader(viewport, 480);
-  const row = requireElement(host, '.chat-virtual-row[data-index="6"]');
-  const render = vi.spyOn(session["renderer"], "render");
-  const paint = vi.fn();
-  const frame = requestAnimationFrame(paint);
-  try {
-    viewport.scrollTop = 1800;
-    const entry: ResizeObserverEntry = {
-      target: row,
-      borderBoxSize: [{ inlineSize: 800, blockSize: 120 }],
-      contentBoxSize: [{ inlineSize: 800, blockSize: 120 }],
-      devicePixelContentBoxSize: [],
-      contentRect: row.getBoundingClientRect(),
-    };
-    virtualizer.resizeItem(6, virtualizer.options.measureElement(row, entry, virtualizer));
-    await Promise.resolve();
-    flush();
-    expect(render).toHaveBeenCalled();
-    const bounds = viewport.getBoundingClientRect();
-    const visible = [...host.querySelectorAll<HTMLElement>(".chat-virtual-row")]
-      .map((element) => element.getBoundingClientRect())
-      .filter((rect) => rect.bottom > bounds.top && rect.top < bounds.bottom);
-    expect(Math.min(...visible.map((rect) => rect.top))).toBeLessThanOrEqual(bounds.top);
-    expect(Math.max(...visible.map((rect) => rect.bottom))).toBeGreaterThanOrEqual(bounds.bottom);
-    expect(paint).not.toHaveBeenCalled();
   } finally {
     cancelAnimationFrame(frame);
   }

@@ -64,10 +64,8 @@ function assertRecoveryOriginal(
       ? artifact.disposal.claimPath
       : archivePath;
   if (!statMigrationPath(currentPath)) {
-    if (
-      artifact.disposal.state === "pending-disposal" &&
-      artifact.disposal.phase === "unlink-pending"
-    ) {
+    // A consented disposal whose bytes are already gone has nothing left to retain.
+    if (artifact.disposal.state === "pending-disposal") {
       return undefined;
     }
     throw new Error("artifact is unexpectedly missing");

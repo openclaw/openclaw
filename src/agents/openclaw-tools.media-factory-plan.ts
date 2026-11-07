@@ -178,7 +178,11 @@ function hasConfiguredVisionModelAuthSignal(params: {
     if (
       profileIds.length > 0 ||
       hasEnv ||
-      resolveUsableCustomProviderApiKey({ cfg: params.config, provider: providerId })
+      resolveUsableCustomProviderApiKey({
+        cfg: params.config,
+        provider: providerId,
+        authStore: params.authStore,
+      })
     ) {
       return true;
     }

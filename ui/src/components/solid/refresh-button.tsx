@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { Icon } from "./icon.tsx";
+import { IconButton } from "./icon-button.tsx";
 
 /** Reloads a page's or section's data: a quiet icon that keeps its box while it spins. */
 export function RefreshButton(props: {
@@ -12,17 +12,14 @@ export function RefreshButton(props: {
   class?: JSX.ClassValue;
 }) {
   return (
-    <openclaw-tooltip prop:content={props.tooltip ?? props.label}>
-      <button
-        type="button"
-        class={["btn btn--icon btn--ghost refresh-button", props.class]}
-        aria-label={props.label}
-        aria-busy={props.busy ? "true" : undefined}
-        disabled={props.busy || props.disabled}
-        onClick={() => props.onClick()}
-      >
-        <Icon name="refresh" />
-      </button>
-    </openclaw-tooltip>
+    <IconButton
+      class={["refresh-button", props.class]}
+      icon="refresh"
+      label={props.label}
+      tooltip={props.tooltip}
+      busy={props.busy}
+      disabled={props.busy || props.disabled}
+      onClick={() => props.onClick()}
+    />
   );
 }

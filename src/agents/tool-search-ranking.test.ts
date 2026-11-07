@@ -76,7 +76,13 @@ function runtime(catalog = CATALOG): ToolSearchRuntime {
 const catalogRuntime = (catalog: Parameters<typeof entry>[0][]) => runtime(catalog.map(entry));
 const objectSchema = <T>(properties: T) => ({ type: "object", properties });
 const queryTerms = (query: string) => tokenizeQuery(query).map(({ term }) => term);
-const document = (value: string, text: string) => ({ value, terms: tokenizeDocument(text) });
+const document = (value: string, text: string) => {
+  const terms = new Map<string, number>();
+  for (const term of tokenizeDocument(text)) {
+    terms.set(term, (terms.get(term) ?? 0) + 1);
+  }
+  return { value, terms };
+};
 
 const searchField =
   (field: "name" | "id") =>
@@ -121,10 +127,10 @@ it("does not let a singular/plural collision invent an intent", () => {
 
 it("preserves exact scores for nonadjacent repeated terms and sparse document positions", () => {
   const index = buildLexicalIndex([
-    { value: "empty-first", terms: [] },
-    { value: "alpha-heavy", terms: ["alpha", "beta", "alpha"] },
-    { value: "empty-middle", terms: [] },
-    { value: "beta-heavy", terms: ["beta", "alpha", "beta"] },
+    document("empty-first", ""),
+    document("alpha-heavy", "alpha beta alpha"),
+    document("empty-middle", ""),
+    document("beta-heavy", "beta alpha beta"),
   ]);
   expect(index.averageLength).toBe(1.5);
   // Four documents, two matches per term, average length 1.5, matching length 3.

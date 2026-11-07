@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  compareCloudProfiles,
-  hasProviderBrandIcon,
-  providerDisplayLabel,
-} from "./provider-icon-data.ts";
+import { compareCloudProfiles } from "./cloud-profile-icon-data.ts";
+import { hasProviderBrandIcon, providerDisplayLabel } from "./provider-icon-data.ts";
 
 describe("model provider labels", () => {
   it.each([
@@ -54,5 +51,15 @@ describe("cloud provider presentation", () => {
       ]);
       expect(profiles.map((p) => p.id)).toEqual(["b", "z", "a", "y"]);
     },
+  );
+});
+
+it("uses configured names without reinterpreting provider identity", () => {
+  expect(providerDisplayLabel("rtx-pro-workstation", { providerName: "Workstation" })).toBe(
+    "Workstation",
+  );
+  expect(providerDisplayLabel("rtx-pro-workstation")).toBe("Rtx Pro Workstation");
+  expect(providerDisplayLabel("openai", { providerName: "My inference server" })).toBe(
+    "My inference server",
   );
 });

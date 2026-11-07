@@ -1,4 +1,3 @@
-import type { Buffer } from "node:buffer";
 import type { SessionsCatalogHostEvent } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { AgentsListResult, PresenceEntry } from "../api/types.ts";
 import type { PresencePayload } from "../app/user-profile.ts";
@@ -12,11 +11,15 @@ import {
   prepareTeamScaleSidebarListChurn,
   type TeamScaleLiveEvent,
 } from "./control-ui-sidebar-list-fixture.ts";
-import { createTeamScaleSidebarPresentation } from "./control-ui-sidebar-presentation.test-support.ts";
+import {
+  createTeamScaleSidebarCategories,
+  createTeamScaleSidebarPresentation,
+  teamScaleAgentIdentities,
+} from "./control-ui-sidebar-presentation.test-support.ts";
 import { withTeamScaleConfig } from "./control-ui-team-scale-config.ts";
+import type { FixtureOptions } from "./control-ui-team-scale-fixture-options.ts";
 import {
   createTeamScaleHistoryFixture,
-  type LongSessionScenario,
   type TeamScaleFixtureAsset,
 } from "./control-ui-team-scale-history-fixture.ts";
 import {
@@ -44,37 +47,6 @@ const TEAM_SCALE_LIVE_RUN_ID = "team-scale-live-run";
 type TeamScaleCatalogEvent = { event: "sessions.catalog.host"; payload: SessionsCatalogHostEvent };
 type TeamScaleEvent = TeamScaleCatalogEvent | { event: "presence"; payload: PresencePayload };
 
-type FixtureOptions = Parameters<typeof prepareTeamScalePaneFixture>[0]["options"] & {
-  baseUrl?: string;
-  now?: number;
-  /** Supply the real canvas sandbox fixture for browser/widget measurements. */
-  sandboxUrl?: string;
-  sandboxPort?: number;
-  liveRun?: boolean;
-  sidebarListChurn?: boolean;
-  sidebarLiveChurn?: boolean;
-  sidebarAvatars?: boolean;
-  sidebarPresentation?: boolean;
-  sidebarPersistentChildren?: boolean;
-  sessionEventChurn?: boolean;
-  sessionEventDurationMs?: number;
-  sessionEventAncestorRefs?: boolean;
-  duplicateBootReads?: boolean;
-  closedMenuMembers?: boolean;
-  largeSnapshot?: boolean;
-  historyStateReceipt?: boolean;
-  rowFacts?: boolean;
-  offRosterSession?: boolean;
-  archivedSession?: boolean;
-  transcriptMessages?: number;
-  richTranscript?: boolean;
-  longSessionScenario?: LongSessionScenario;
-  dashboardMcpApp?: { font: Buffer };
-  /** Opt into a scripted HTML dashboard with an independently fetched web font. */
-  dashboardWidgetFontUrl?: string;
-  dashboardPaintMarker?: boolean;
-};
-
 /** One deterministic inventory shared by browser benchmarks and focused UI proofs. */
 export function createControlUiTeamScaleFixture(input: FixtureOptions = {}) {
   const options = input.lateRowFacts
@@ -101,7 +73,11 @@ export function createControlUiTeamScaleFixture(input: FixtureOptions = {}) {
     counts.people,
     now,
     {
-      avatars: options.sidebarLiveChurn || options.sidebarAvatars || options.sidebarPresentation,
+      avatars:
+        options.sidebarLiveChurn ||
+        options.sidebarAvatars ||
+        options.sidebarPresentation ||
+        options.sidebarCachedParity,
       sharing: options.closedMenuMembers,
     },
   );
@@ -140,9 +116,10 @@ export function createControlUiTeamScaleFixture(input: FixtureOptions = {}) {
     pinnedRows[0]!.boardFace = "chat";
     pinnedRows[1]!.boardFace = "chat";
   }
-  const sidebarPresentation = options.sidebarPresentation
-    ? createTeamScaleSidebarPresentation({ agents, pinnedRows, assets, now })
-    : undefined;
+  const sidebarPresentation =
+    options.sidebarPresentation || options.sidebarCachedParity
+      ? createTeamScaleSidebarPresentation({ agents, pinnedRows, assets, now })
+      : undefined;
   if (duplicateReads) {
     assets.set(duplicateReads.mediaPath, duplicateReads.asset);
     pinnedRows[0]!.worktree = duplicateReads.worktree;
@@ -158,10 +135,16 @@ export function createControlUiTeamScaleFixture(input: FixtureOptions = {}) {
       ];
     }
     if (
-      (options.sidebarLiveChurn || options.sidebarAvatars || options.sidebarPresentation) &&
+      (options.sidebarLiveChurn ||
+        options.sidebarAvatars ||
+        options.sidebarPresentation ||
+        options.sidebarCachedParity) &&
       (!options.transcriptAvatars || person !== transcriptSender)
     ) {
-      assets.set(`/api/users/${person.id}/avatar`, teamScalePersonAvatar(index));
+      assets.set(
+        `/api/users/${person.id}/avatar`,
+        teamScalePersonAvatar(options.sidebarCachedParity ? index * 6 : index),
+      );
     }
   }
   const sidebarListInput = {
@@ -344,11 +327,15 @@ export function createControlUiTeamScaleFixture(input: FixtureOptions = {}) {
     ...pinnedKeys.map((key) => `session:${key}`),
     ...plugins.map((plugin) => `plugin:${plugin.pluginId}/overview`),
   ];
+  const sidebarCategories = options.sidebarCachedParity
+    ? createTeamScaleSidebarCategories(sessions)
+    : undefined;
   const scenario = withTeamScaleConfig({
+    ...(sidebarCategories ? { sessionGroups: sidebarCategories.groups } : {}),
     awaitInitialRoster: false,
     authMethod: "trusted-proxy",
     authMode: "trusted-proxy",
-    ...(options.transcriptAvatars || options.paneChromeFacts
+    ...(options.transcriptAvatars || options.paneChromeFacts || options.sidebarCachedParity
       ? { deviceToken: null, hasMultipleSessionSharingIdentities: true }
       : {}),
     assistantAgentId: "main",
@@ -422,22 +409,13 @@ export function createControlUiTeamScaleFixture(input: FixtureOptions = {}) {
         ? { "session.members.listEvidence": { sessionKey: selectedSessionKey, ...sharingMembers } }
         : {}),
       "question.list": { questions: [] },
+      ...sidebarCategories?.methodResponses,
       ...paneMethodResponses,
       ...(options.dashboardWidgetFontUrl ? { "mcp.app.discover": { servers: [] } } : {}),
       ...duplicateReads?.methodResponses,
       ...methodResponses,
       "agents.list": agents,
-      "agent.identity.get": {
-        cases: agents.agents.map((agent) => ({
-          match: { agentId: agent.id },
-          response: {
-            agentId: agent.id,
-            name: agent.name,
-            emoji: agent.identity?.emoji,
-            avatar: agent.identity?.avatarUrl ?? "",
-          },
-        })),
-      },
+      "agent.identity.get": teamScaleAgentIdentities(agents),
       "users.list": { profiles },
       "cron.status": {
         enabled: true,
