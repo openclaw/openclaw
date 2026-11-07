@@ -105,8 +105,11 @@ weather” still start tasks while idle. Genuine new tasks retain the native
 delegation replacement behavior.
 
 These calls disable provider-generated delegation acknowledgments at creation.
-OpenClaw asks the voice model for one brief, naturally worded launch acknowledgment
-in the caller's language. Wording should fit the request and avoid repeating recent
+OpenClaw starts the task immediately and gives the answer a 1.5-second head start.
+If it is still pending without a spoken update, OpenClaw asks the voice model for
+one brief, naturally worded acknowledgment in the caller's language. Fast results
+and failures skip this filler. Spoken updates, new requests, and call teardown
+cancel a pending acknowledgment. Wording should fit the request and avoid repeating recent
 acknowledgments; variation is not guaranteed. It must remain provisional, without
 claiming acceptance or completion, guessing an answer, or promising one. Status and
 cancellation requests wait for the host result instead, without waiting for final
