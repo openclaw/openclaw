@@ -77,6 +77,8 @@ export type TelegramAccountConfig = CommonChannelMessagingConfig<
   ChannelReactionConfig<"off" | "own" | "all", ReactionLevel, string> & {
     /** Post a room-specific introduction when joining a group. Default: true. */
     joinIntro?: boolean;
+    /** Explicit, text-only guest requests. Only these numeric Telegram users may invoke it. */
+    guestMode?: { enabled?: boolean; allowFrom?: Array<string | number> };
     /** Telegram-native exec approval delivery + approver authorization. */
     execApprovals?: TelegramExecApprovalConfig;
     /** Override native command registration for Telegram (bool or "auto"). */

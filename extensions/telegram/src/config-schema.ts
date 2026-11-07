@@ -174,6 +174,15 @@ const TelegramAccountSchemaBase = z
   .object({
     ...accountShape,
     joinIntro: z.boolean().optional(),
+    guestMode: z
+      .object({
+        enabled: z.boolean().optional(),
+        allowFrom: z
+          .array(z.union([z.string().regex(/^[1-9][0-9]*$/), z.number().int().positive().safe()]))
+          .optional(),
+      })
+      .strict()
+      .optional(),
     execApprovals: buildChannelExecApprovalsSchema(z.union([z.string(), z.number()])),
     commands: ProviderCommandsSchema,
     customCommands: z.array(TelegramCustomCommandSchema).optional(),
