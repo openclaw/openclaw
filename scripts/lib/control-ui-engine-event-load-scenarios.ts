@@ -1,7 +1,9 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { getControlUiContextHandle } from "../../ui/src/test-helpers/control-ui-e2e-context.ts";
 import type { MockGatewayWindow } from "../../ui/src/test-helpers/control-ui-e2e-contract.ts";
 import { controlUiSessionPath } from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import { createTeamScaleSidebarListOwner } from "../../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
 import {
   createEngineTranscript,
   engineProbeInitScript,
@@ -175,10 +177,28 @@ function installEventLoadProbe() {
   });
   channel.port1.start();
   const OriginalWebSocket = window.WebSocket;
+  let socketGeneration = 0;
+  let connectedGeneration = 0;
+  const socketCloses: Array<{ code: number; reason: string }> = [];
   window.WebSocket = new Proxy(OriginalWebSocket, {
     construct(target, args) {
       const socket: WebSocket = Reflect.construct(target, args);
+      const generation = ++socketGeneration;
+      socket.addEventListener("close", (event) => {
+        if (connectedGeneration === generation) {
+          connectedGeneration = 0;
+        }
+        if (socketCloses.length < 8) {
+          socketCloses.push({ code: event.code, reason: event.reason });
+        }
+      });
       socket.addEventListener("message", (event: MessageEvent<string>) => {
+        if (generation === socketGeneration && connectedGeneration !== generation) {
+          const frame = JSON.parse(event.data) as { type?: string; payload?: { type?: string } };
+          if (frame.type === "res" && frame.payload?.type === "hello-ok") {
+            connectedGeneration = generation;
+          }
+        }
         if (!active) {
           return;
         }
@@ -257,10 +277,10 @@ function installEventLoadProbe() {
       max: sorted.at(-1) ?? 0,
     };
   };
-  const rows = new Map<string, ReturnType<typeof gateway.getSessionRow>>();
+  let observedKeys: string[] = [];
   const histories = new Map<string, unknown[]>();
   const history = (key: string) => {
-    const row = rows.get(key);
+    const row = gateway.getSessionRow(key);
     const runId = Array.isArray(row?.activeRunIds) ? row.activeRunIds[0] : undefined;
     return {
       sessionId: row?.sessionId,
@@ -296,9 +316,7 @@ function installEventLoadProbe() {
       const keys = Array.from({ length: options.count }, (_, index) =>
         index === 0 ? options.background : `agent:main:interaction-${index + 1}`,
       );
-      for (const key of [options.foreground, options.background, ...keys]) {
-        rows.set(key, { ...gateway.getSessionRow(key) });
-      }
+      observedKeys = [...new Set([options.foreground, options.background, ...keys])];
       let foregroundMessageSeq = 400;
       const initialMessages: Record<string, unknown>[] = Array.from(
         { length: 400 },
@@ -363,7 +381,7 @@ function installEventLoadProbe() {
         respond({ ok: true });
       });
       const toolSnapshot = (key: string) => {
-        const row = rows.get(key)!;
+        const row = gateway.getSessionRow(key);
         const full: Record<string, unknown> = { ...options.receiptDefaults, ...row };
         const fields = Object.fromEntries(
           options.referenceFields
@@ -376,11 +394,19 @@ function installEventLoadProbe() {
       };
       // Each connection starts without row baselines, then advances the negotiated delta wire.
       const wireRows = new Map<string, { version: number; row: Record<string, unknown> }>();
+      let wireGeneration = connectedGeneration;
       const emitSnapshot = (
         event: string,
         envelope: Record<string, unknown>,
         row: Record<string, unknown>,
       ) => {
+        if (!connectedGeneration) {
+          return;
+        }
+        if (wireGeneration !== connectedGeneration) {
+          wireRows.clear();
+          wireGeneration = connectedGeneration;
+        }
         const key = row.key as string;
         const previous = wireRows.get(key);
         const version = (previous?.version ?? 0) + 1;
@@ -426,7 +452,7 @@ function installEventLoadProbe() {
         });
       };
       const emitRow = (key: string, terminal: boolean, publishStatus: boolean, tick = 0) => {
-        const previous = rows.get(key)!;
+        const previous = gateway.getSessionRow(key);
         const ts = 1_800_001_000_000 + ++sequence;
         const text = `Event load checkpoint ${sequence} for ${key}.`;
         const displayed = terminal || tick % 2 === 1;
@@ -442,7 +468,7 @@ function installEventLoadProbe() {
           ...(displayed ? { lastAssistantMessage: { text, timestamp: ts } } : {}),
           ...(publishStatus ? { agentStatus: { note: text, expiresAt: ts + 60_000 } } : {}),
         };
-        rows.set(key, row);
+        gateway.setSessionRow(row);
         const envelope = {
           sessionKey: key,
           agentId: "main",
@@ -585,13 +611,13 @@ function installEventLoadProbe() {
         };
         initialMessages.push(message);
         const row = {
-          ...rows.get(options.foreground)!,
+          ...gateway.getSessionRow(options.foreground),
           updatedAt: ts,
           snapshotAt: ts,
           lastMessagePreview: text,
           ...(result ? { agentStatus: { note: text, expiresAt: ts + 60_000 } } : {}),
         };
-        rows.set(options.foreground, row);
+        gateway.setSessionRow(row);
         const envelope = {
           sessionKey: options.foreground,
           agentId: "main",
@@ -626,8 +652,8 @@ function installEventLoadProbe() {
             runId: "event-load-foreground",
           },
         });
-        rows.set(options.foreground, {
-          ...rows.get(options.foreground)!,
+        gateway.setSessionRow({
+          ...gateway.getSessionRow(options.foreground),
           status: "done",
           hasActiveRun: false,
           activeRunIds: [],
@@ -644,7 +670,7 @@ function installEventLoadProbe() {
               ts: 1_800_002_000_000,
               ancestorSessions: [],
             },
-            rows.get(options.foreground)!,
+            gateway.getSessionRow(options.foreground),
           );
         }
         if (options.toolCount) {
@@ -785,7 +811,13 @@ function installEventLoadProbe() {
         phaseStartedAt: phaseStart,
         latestText,
         displayedCheckpoint,
+        socketGeneration,
+        connectedGeneration,
+        socketCloses,
       };
+    },
+    currentRows() {
+      return observedKeys.map((key) => gateway.getSessionRow(key));
     },
     liveProven() {
       liveProven = true;
@@ -816,6 +848,8 @@ function installEventLoadProbe() {
         backgroundReceipts,
         targetBackgroundReceipts,
         maxBackgroundSchedulerLagMs,
+        socketsOpened: socketGeneration,
+        socketsClosed: socketCloses.length,
         byEvent,
         inputSampleCount: inputs.length,
         inputs: distribution(inputs),
@@ -840,282 +874,313 @@ export function createEngineEventLoadScenarios(
   duration = 240_000,
   toolCount = 200,
 ): EngineScenario[] {
-  return [-1, 0, 5, 20, 100].map((count) => ({
-    id: count === -1 ? "event-load-unloaded" : `event-load-${count}`,
-    explicitOnly: true,
-    route: controlUiSessionPath(foreground),
-    expected: `${Math.max(0, count)} background sessions at one tool/s (two durable-message receipts/s and one status patch/2 s) plus ${count === -1 ? 0 : toolCount} foreground tools preserve typing, scroll, route/session switches and current history.`,
-    initScript: `${engineProbeInitScript()};(() => { const __name = (value) => value; (${installEventLoadProbe.toString()})(); })();`,
-    settings: { chatShowToolCalls: true, sidebarLiveActivity: true, sidebarAgentsMode: "chip" },
-    fixtureOverrides: (_sandbox, base) => ({
-      sessions: base.sessions.map((input, index) => {
-        const row = { ...eventLoadRowDefaults, ...input };
-        return index === 0 && count >= 0
-          ? {
-              ...row,
-              hasActiveRun: true,
-              status: "running",
-              activeRunIds: ["event-load-foreground"],
-            }
-          : index > 0 && index <= count
+  return [-1, 0, 5, 20, 100].map((count) => {
+    let requestPage: Page;
+    let roster: ReturnType<typeof createTeamScaleSidebarListOwner>;
+    return {
+      id: count === -1 ? "event-load-unloaded" : `event-load-${count}`,
+      explicitOnly: true,
+      route: controlUiSessionPath(foreground),
+      expected: `${Math.max(0, count)} background sessions at one tool/s (two durable-message receipts/s and one status patch/2 s) plus ${count === -1 ? 0 : toolCount} foreground tools preserve typing, scroll, route/session switches and current history.`,
+      initScript: `${engineProbeInitScript()};(() => { const __name = (value) => value; (${installEventLoadProbe.toString()})(); })();`,
+      settings: { chatShowToolCalls: true, sidebarLiveActivity: true, sidebarAgentsMode: "chip" },
+      setup: async (page) => {
+        requestPage = page;
+      },
+      createRequestHandlers: () => ({
+        "sessions.list": async (params) => {
+          if (!isRecord(params)) {
+            throw new Error("Expected sessions.list parameters");
+          }
+          const currentRows = await requestPage.evaluate(() =>
+            Reflect.get(window, "__eventLoad").currentRows(),
+          );
+          roster.apply({ upsert: currentRows });
+          return roster.list(params).result;
+        },
+      }),
+      fixtureOverrides: (_sandbox, base) => {
+        const sessions = base.sessions.map<(typeof base.sessions)[number]>((input, index) => {
+          const row = { ...eventLoadRowDefaults, ...input };
+          return index === 0 && count >= 0
             ? {
                 ...row,
                 hasActiveRun: true,
                 status: "running",
-                activeRunIds: [`event-load-${row.key}`],
+                activeRunIds: ["event-load-foreground"],
               }
-            : row;
-      }),
-      sessionTranscripts: {
-        [foreground]: {
-          messages: createEngineTranscript(400),
-          ...(count >= 0
-            ? {
-                inFlightRun: {
-                  runId: "event-load-foreground",
-                  text: "",
-                  startedAt: 1_800_000_400_000,
-                },
-              }
-            : {}),
-        },
-      },
-    }),
-    prepare: async (page) => {
-      await waitForEngineTranscript(page, 400);
-    },
-    run: async (page) => {
-      const requestsBefore = await page.evaluate(
-        () => (window as MockGatewayWindow).openclawControlUiE2eGateway!.requests.length,
-      );
-      await page.evaluate((options) => Reflect.get(window, "__eventLoad").start(options), {
-        count: Math.max(0, count),
-        duration,
-        toolCount: count === -1 ? 0 : toolCount,
-        foreground,
-        background,
-        receiptDefaults: eventLoadReceiptDefaults,
-        referenceFields: eventLoadReferenceFields,
-      });
-      const evidence: Record<string, number | boolean> = {};
-      const recordPhase = (
-        name: string,
-        result: {
-          backgroundReceived: number;
-          backgroundReceiptsAtStart: number;
-          startedAfterMs: number;
-          backgroundReceiptsAtEnd: number;
-          backgroundActiveAtStart: boolean;
-          backgroundActiveAtEnd: boolean;
-          toolsAtStart: number;
-          toolsAtEnd: number;
-          completedToolsAtStart: number;
-          completedToolsAtEnd: number;
-        },
-      ) => {
-        evidence[`${name}BackgroundReceived`] = result.backgroundReceived;
-        evidence[`${name}BackgroundReceiptsAtStart`] = result.backgroundReceiptsAtStart;
-        evidence[`${name}StartedAfterMs`] = result.startedAfterMs;
-        evidence[`${name}BackgroundReceiptsAtEnd`] = result.backgroundReceiptsAtEnd;
-        evidence[`${name}BackgroundActiveAtStart`] = result.backgroundActiveAtStart;
-        evidence[`${name}BackgroundActiveAtEnd`] = result.backgroundActiveAtEnd;
-        evidence[`${name}ToolsAtStart`] = result.toolsAtStart;
-        evidence[`${name}ToolsAtEnd`] = result.toolsAtEnd;
-        evidence[`${name}CompletedToolsAtStart`] = result.completedToolsAtStart;
-        evidence[`${name}CompletedToolsAtEnd`] = result.completedToolsAtEnd;
-        if (count > 0 && (!result.backgroundActiveAtStart || !result.backgroundActiveAtEnd)) {
-          throw new Error(
-            `Event load drained before ${name} completed; increase --event-load-duration-ms (started at ${result.backgroundReceiptsAtStart} background receipts)`,
-          );
-        }
-      };
-      try {
-        if (count >= 0) {
-          await page.waitForFunction(() => Reflect.get(window, "__eventLoad").ready().tools > 0);
-          const summary = page
-            .locator(`${pane} .chat-tool-msg-summary[aria-expanded]`)
-            .filter({ hasText: "verify-event-load-1" });
-          await summary.waitFor({ state: "visible" });
-          if ((await summary.getAttribute("aria-expanded")) === "false") {
-            await summary.press("Enter");
-          }
-          const tool = page
-            .locator(`${pane} .chat-tool-msg-collapse`)
-            .filter({ hasText: "verify-event-load-1" })
-            .first();
-          await tool.waitFor({ state: "visible" });
-          await tool
-            .getByText("Tool 1: live output 2", { exact: false })
-            .waitFor({ state: "visible" });
-          await page.evaluate(() => Reflect.get(window, "__eventLoad").liveProven());
-          evidence.liveToolOutputVisible = true;
-        }
-        const text = "Event load typing preserves every character.";
-        const typing = await phase(page, "typing", async () => {
-          await page.locator(composer).pressSequentially(text, { delay: 35 });
-          await frames(page);
-        });
-        evidence.typingActionWallMs = typing.actionWallMs;
-        recordPhase("typing", typing);
-        if (typing.applicationMs !== undefined) {
-          evidence.typingApplicationMs = typing.applicationMs;
-        }
-        if ((await page.locator(composer).inputValue()) !== text) {
-          throw new Error("Event load lost native input");
-        }
-        const scrolling = await phase(page, "scroll", async () => {
-          const scroll = await page.locator(`${pane} .chat-thread`).evaluate(
-            async (thread) => {
-              const started = performance.now();
-              const deliveryMs =
-                started - Reflect.get(window, "__eventLoad").ready().phaseStartedAt;
-              const frameTimes: number[] = [];
-              let blank = 0;
-              let firstFrameMs = 0;
-              for (let step = 0; step < 90; step++) {
-                thread.scrollTop = (thread.scrollHeight - thread.clientHeight) * (1 - step / 89);
-                await new Promise<void>((resolve) => {
-                  requestAnimationFrame((at) => {
-                    if (frameTimes.length === 0) {
-                      firstFrameMs = performance.now() - started;
-                    }
-                    frameTimes.push(at);
-                    resolve();
-                  });
-                });
-                const viewport = thread.getBoundingClientRect();
-                const top = viewport.top + thread.clientTop;
-                const left = viewport.left + thread.clientLeft;
-                const bottom = top + thread.clientHeight;
-                const right = left + thread.clientWidth;
-                const visibleRow = [...thread.querySelectorAll(".chat-virtual-row")].some((row) => {
-                  const bounds = row.getBoundingClientRect();
-                  return (
-                    bounds.bottom > top &&
-                    bounds.top < bottom &&
-                    bounds.right > left &&
-                    bounds.left < right
-                  );
-                });
-                if (!visibleRow) {
-                  blank++;
+            : index > 0 && index <= count
+              ? {
+                  ...row,
+                  hasActiveRun: true,
+                  status: "running",
+                  activeRunIds: [`event-load-${row.key}`],
                 }
-              }
-              const observedMs = performance.now() - started;
-              const gaps = frameTimes
-                .slice(1)
-                .map((at, index) => at - frameTimes[index]!)
-                .toSorted((a, b) => a - b);
-              return {
-                scrollFrameMedianMs: gaps[Math.floor(gaps.length / 2)]!,
-                scrollFrameP95Ms: gaps[Math.ceil(gaps.length * 0.95) - 1]!,
-                scrollFrameMaxMs: gaps.at(-1)!,
-                scrollFirstFrameMs: firstFrameMs,
-                scrollObservedMs: observedMs,
-                scrollDeliveryMs: deliveryMs,
-                blankScrollFrames: blank,
-              };
+              : row;
+        });
+        roster = createTeamScaleSidebarListOwner({
+          rows: sessions,
+          viewerProfileId: "interaction-viewer",
+          now: 1_800_000_000_000,
+          defaults: { model: "model-0", modelProvider: "example", contextTokens: 128_000 },
+          owners: [],
+        });
+        return {
+          sessions,
+          sessionTranscripts: {
+            [foreground]: {
+              messages: createEngineTranscript(400),
+              ...(count >= 0
+                ? {
+                    inFlightRun: {
+                      runId: "event-load-foreground",
+                      text: "",
+                      startedAt: 1_800_000_400_000,
+                    },
+                  }
+                : {}),
             },
-            undefined,
-            { timeout: 120_000 },
-          );
-          Object.assign(evidence, scroll);
-          if (scroll.blankScrollFrames > 0) {
-            throw new Error(`Event load exposed ${scroll.blankScrollFrames} blank scroll frames`);
-          }
-        });
-        evidence.scrollActionWallMs = scrolling.actionWallMs;
-        recordPhase("scroll", scrolling);
-        const drainTimeout =
-          count < 0
-            ? undefined
-            : Math.max(
-                1,
-                duration -
-                  (await page.evaluate(() => Reflect.get(window, "__eventLoad").ready().elapsed)),
-              );
-        await page.waitForFunction(
-          (expected) => Reflect.get(window, "__eventLoad").ready().completedTools === expected,
-          count === -1 ? 0 : toolCount,
-          { timeout: drainTimeout },
+          },
+        };
+      },
+      prepare: async (page) => {
+        await waitForEngineTranscript(page, 400);
+      },
+      run: async (page) => {
+        const requestsBefore = await page.evaluate(
+          () => (window as MockGatewayWindow).openclawControlUiE2eGateway!.requests.length,
         );
-        // These are user-idle intervals under event load, not no-work CPU claims.
-        const engine = page.context().browser()!.browserType().name();
-        if (engine !== "chromium" && engine !== "webkit" && engine !== "firefox") {
-          throw new Error(`Unsupported idle engine: ${engine}`);
-        }
-        const beforeIdle = await page.evaluate(() => Reflect.get(window, "__eventLoad").ready());
-        const idle = await startEngineMeasurement(page, engine, { trace: false });
-        const idlePhase = await phase(page, "idle", async () => {
-          evidence.idleObservedMs = await page.evaluate(async () => {
-            const start = performance.now();
-            await new Promise((resolve) => {
-              setTimeout(resolve, 1_000);
-            });
-            return performance.now() - start;
-          });
+        await page.evaluate((options) => Reflect.get(window, "__eventLoad").start(options), {
+          count: Math.max(0, count),
+          duration,
+          toolCount: count === -1 ? 0 : toolCount,
+          foreground,
+          background,
+          receiptDefaults: eventLoadReceiptDefaults,
+          referenceFields: eventLoadReferenceFields,
         });
-        const idleMetrics = (await idle.stop()).metrics;
-        const afterIdle = await page.evaluate(() => Reflect.get(window, "__eventLoad").ready());
-        // Collector calls bracket the phase; retain their uncertainty instead of
-        // attributing their CPU to only the frames received inside the phase.
-        evidence.idleMinimumWindowMs = idlePhase.actionWallMs;
-        evidence.idleMaximumWindowMs = afterIdle.elapsed - beforeIdle.elapsed;
-        evidence.idleMinimumBackgroundFrames = idlePhase.backgroundReceived;
-        evidence.idleMaximumBackgroundFrames =
-          afterIdle.backgroundEvents - beforeIdle.backgroundEvents;
-        recordPhase("idle", idlePhase);
-        evidence.idleCpuAvailable = idleMetrics.cpuMs !== null;
-        if (idleMetrics.cpuMs !== null) {
-          evidence.idleCpuMs = idleMetrics.cpuMs;
-        }
-        if (idleMetrics.taskMs !== null) {
-          evidence.idleTaskMs = idleMetrics.taskMs;
-        }
-        if (idleMetrics.scriptMs !== null) {
-          evidence.idleScriptMs = idleMetrics.scriptMs;
-        }
-        const key = count > 0 ? background : "agent:main:interaction-b";
-        const checkpoint = await page.evaluate(
-          () => Reflect.get(window, "__eventLoad").ready().displayedCheckpoint,
-        );
-        const switching = await phase(
-          page,
-          "session",
-          async () => {
-            await navigation(page, "sessions");
-            if (count > 0) {
-              await page.waitForFunction((sessionKey) => {
-                const row = document.querySelector(
-                  `.sidebar-recent-session[data-session-key="${sessionKey}"]`,
-                );
-                return (
-                  row?.classList.contains("session-row-host--running") &&
-                  [...row.querySelectorAll(".sr-only[id]")].some((state) =>
-                    state.textContent?.includes("Unread"),
-                  )
-                );
-              }, key);
-              evidence.activeStatusUnreadVisible = true;
-            }
-            await page
-              .locator(
-                `.sidebar-recent-session[data-session-key="${key}"] .sidebar-recent-session__link`,
-              )
-              .click();
-            await page.waitForFunction(
-              (target) =>
-                Reflect.get(
-                  document.querySelector(".chat-pane-cache__pane--active") ?? {},
-                  "sessionKey",
-                ) === target,
-              key,
+        const evidence: Record<string, number | boolean> = {};
+        const recordPhase = (
+          name: string,
+          result: {
+            backgroundReceived: number;
+            backgroundReceiptsAtStart: number;
+            startedAfterMs: number;
+            backgroundReceiptsAtEnd: number;
+            backgroundActiveAtStart: boolean;
+            backgroundActiveAtEnd: boolean;
+            toolsAtStart: number;
+            toolsAtEnd: number;
+            completedToolsAtStart: number;
+            completedToolsAtEnd: number;
+          },
+        ) => {
+          evidence[`${name}BackgroundReceived`] = result.backgroundReceived;
+          evidence[`${name}BackgroundReceiptsAtStart`] = result.backgroundReceiptsAtStart;
+          evidence[`${name}StartedAfterMs`] = result.startedAfterMs;
+          evidence[`${name}BackgroundReceiptsAtEnd`] = result.backgroundReceiptsAtEnd;
+          evidence[`${name}BackgroundActiveAtStart`] = result.backgroundActiveAtStart;
+          evidence[`${name}BackgroundActiveAtEnd`] = result.backgroundActiveAtEnd;
+          evidence[`${name}ToolsAtStart`] = result.toolsAtStart;
+          evidence[`${name}ToolsAtEnd`] = result.toolsAtEnd;
+          evidence[`${name}CompletedToolsAtStart`] = result.completedToolsAtStart;
+          evidence[`${name}CompletedToolsAtEnd`] = result.completedToolsAtEnd;
+          if (count > 0 && (!result.backgroundActiveAtStart || !result.backgroundActiveAtEnd)) {
+            throw new Error(
+              `Event load drained before ${name} completed; increase --event-load-duration-ms (started at ${result.backgroundReceiptsAtStart} background receipts)`,
             );
-            if (count > 0) {
+          }
+        };
+        try {
+          if (count >= 0) {
+            await page.waitForFunction(() => Reflect.get(window, "__eventLoad").ready().tools > 0);
+            const summary = page
+              .locator(`${pane} .chat-tool-msg-summary[aria-expanded]`)
+              .filter({ hasText: "verify-event-load-1" });
+            await summary.waitFor({ state: "visible" });
+            if ((await summary.getAttribute("aria-expanded")) === "false") {
+              await summary.press("Enter");
+            }
+            const tool = page
+              .locator(`${pane} .chat-tool-msg-collapse`)
+              .filter({ hasText: "verify-event-load-1" })
+              .first();
+            await tool.waitFor({ state: "visible" });
+            await tool
+              .getByText("Tool 1: live output 2", { exact: false })
+              .waitFor({ state: "visible" });
+            await page.evaluate(() => Reflect.get(window, "__eventLoad").liveProven());
+            evidence.liveToolOutputVisible = true;
+          }
+          const text = "Event load typing preserves every character.";
+          const typing = await phase(page, "typing", async () => {
+            await page.locator(composer).pressSequentially(text, { delay: 35 });
+            await frames(page);
+          });
+          evidence.typingActionWallMs = typing.actionWallMs;
+          recordPhase("typing", typing);
+          if (typing.applicationMs !== undefined) {
+            evidence.typingApplicationMs = typing.applicationMs;
+          }
+          if ((await page.locator(composer).inputValue()) !== text) {
+            throw new Error("Event load lost native input");
+          }
+          const scrolling = await phase(page, "scroll", async () => {
+            const scroll = await page.locator(`${pane} .chat-thread`).evaluate(
+              async (thread) => {
+                const started = performance.now();
+                const deliveryMs =
+                  started - Reflect.get(window, "__eventLoad").ready().phaseStartedAt;
+                const frameTimes: number[] = [];
+                let blank = 0;
+                let firstFrameMs = 0;
+                for (let step = 0; step < 90; step++) {
+                  thread.scrollTop = (thread.scrollHeight - thread.clientHeight) * (1 - step / 89);
+                  await new Promise<void>((resolve) => {
+                    requestAnimationFrame((at) => {
+                      if (frameTimes.length === 0) {
+                        firstFrameMs = performance.now() - started;
+                      }
+                      frameTimes.push(at);
+                      resolve();
+                    });
+                  });
+                  const viewport = thread.getBoundingClientRect();
+                  const top = viewport.top + thread.clientTop;
+                  const left = viewport.left + thread.clientLeft;
+                  const bottom = top + thread.clientHeight;
+                  const right = left + thread.clientWidth;
+                  const visibleRow = [...thread.querySelectorAll(".chat-virtual-row")].some(
+                    (row) => {
+                      const bounds = row.getBoundingClientRect();
+                      return (
+                        bounds.bottom > top &&
+                        bounds.top < bottom &&
+                        bounds.right > left &&
+                        bounds.left < right
+                      );
+                    },
+                  );
+                  if (!visibleRow) {
+                    blank++;
+                  }
+                }
+                const observedMs = performance.now() - started;
+                const gaps = frameTimes
+                  .slice(1)
+                  .map((at, index) => at - frameTimes[index]!)
+                  .toSorted((a, b) => a - b);
+                return {
+                  scrollFrameMedianMs: gaps[Math.floor(gaps.length / 2)]!,
+                  scrollFrameP95Ms: gaps[Math.ceil(gaps.length * 0.95) - 1]!,
+                  scrollFrameMaxMs: gaps.at(-1)!,
+                  scrollFirstFrameMs: firstFrameMs,
+                  scrollObservedMs: observedMs,
+                  scrollDeliveryMs: deliveryMs,
+                  blankScrollFrames: blank,
+                };
+              },
+              undefined,
+              { timeout: 120_000 },
+            );
+            Object.assign(evidence, scroll);
+            if (scroll.blankScrollFrames > 0) {
+              throw new Error(`Event load exposed ${scroll.blankScrollFrames} blank scroll frames`);
+            }
+          });
+          evidence.scrollActionWallMs = scrolling.actionWallMs;
+          recordPhase("scroll", scrolling);
+          const drainTimeout =
+            count < 0
+              ? undefined
+              : Math.max(
+                  1,
+                  duration -
+                    (await page.evaluate(() => Reflect.get(window, "__eventLoad").ready().elapsed)),
+                );
+          await page.waitForFunction(
+            (expected) => Reflect.get(window, "__eventLoad").ready().completedTools === expected,
+            count === -1 ? 0 : toolCount,
+            { timeout: drainTimeout },
+          );
+          // These are user-idle intervals under event load, not no-work CPU claims.
+          const engine = page.context().browser()!.browserType().name();
+          if (engine !== "chromium" && engine !== "webkit" && engine !== "firefox") {
+            throw new Error(`Unsupported idle engine: ${engine}`);
+          }
+          const beforeIdle = await page.evaluate(() => Reflect.get(window, "__eventLoad").ready());
+          const idle = await startEngineMeasurement(page, engine, { trace: false });
+          const idlePhase = await phase(page, "idle", async () => {
+            evidence.idleObservedMs = await page.evaluate(async () => {
+              const start = performance.now();
+              await new Promise((resolve) => {
+                setTimeout(resolve, 1_000);
+              });
+              return performance.now() - start;
+            });
+          });
+          const idleMetrics = (await idle.stop()).metrics;
+          const afterIdle = await page.evaluate(() => Reflect.get(window, "__eventLoad").ready());
+          // Collector calls bracket the phase; retain their uncertainty instead of
+          // attributing their CPU to only the frames received inside the phase.
+          evidence.idleMinimumWindowMs = idlePhase.actionWallMs;
+          evidence.idleMaximumWindowMs = afterIdle.elapsed - beforeIdle.elapsed;
+          evidence.idleMinimumBackgroundFrames = idlePhase.backgroundReceived;
+          evidence.idleMaximumBackgroundFrames =
+            afterIdle.backgroundEvents - beforeIdle.backgroundEvents;
+          recordPhase("idle", idlePhase);
+          evidence.idleCpuAvailable = idleMetrics.cpuMs !== null;
+          if (idleMetrics.cpuMs !== null) {
+            evidence.idleCpuMs = idleMetrics.cpuMs;
+          }
+          if (idleMetrics.taskMs !== null) {
+            evidence.idleTaskMs = idleMetrics.taskMs;
+          }
+          if (idleMetrics.scriptMs !== null) {
+            evidence.idleScriptMs = idleMetrics.scriptMs;
+          }
+          const key = count > 0 ? background : "agent:main:interaction-b";
+          const checkpoint = await page.evaluate(
+            () => Reflect.get(window, "__eventLoad").ready().displayedCheckpoint,
+          );
+          const switching = await phase(
+            page,
+            "session",
+            async () => {
+              await navigation(page, "sessions");
+              if (count > 0) {
+                await page.waitForFunction((sessionKey) => {
+                  const row = document.querySelector(
+                    `.sidebar-recent-session[data-session-key="${sessionKey}"]`,
+                  );
+                  return (
+                    row?.classList.contains("session-row-host--running") &&
+                    [...row.querySelectorAll(".sr-only[id]")].some((state) =>
+                      state.textContent?.includes("Unread"),
+                    )
+                  );
+                }, key);
+                evidence.activeStatusUnreadVisible = true;
+              }
+              await page
+                .locator(
+                  `.sidebar-recent-session[data-session-key="${key}"] .sidebar-recent-session__link`,
+                )
+                .click();
               await page.waitForFunction(
-                ({ key: sessionKey, checkpoint: expectedCheckpoint }) =>
-                  [...document.querySelectorAll(".chat-pane-cache__pane--active .chat-text")].some(
-                    (element) => {
+                (target) =>
+                  Reflect.get(
+                    document.querySelector(".chat-pane-cache__pane--active") ?? {},
+                    "sessionKey",
+                  ) === target,
+                key,
+              );
+              if (count > 0) {
+                await page.waitForFunction(
+                  ({ key: sessionKey, checkpoint: expectedCheckpoint }) =>
+                    [
+                      ...document.querySelectorAll(".chat-pane-cache__pane--active .chat-text"),
+                    ].some((element) => {
                       const match = /Event load checkpoint (\d+) for ([^.]+)\./u.exec(
                         element.textContent ?? "",
                       );
@@ -1124,98 +1189,100 @@ export function createEngineEventLoadScenarios(
                         Number(match[1]) >= expectedCheckpoint &&
                         expectedCheckpoint > 0
                       );
-                    },
-                  ),
-                { key, checkpoint },
-              );
-            }
-            await frames(page);
-          },
-          key,
-        );
-        evidence.sessionSwitchActionWallMs = switching.actionWallMs;
-        recordPhase("sessionSwitch", switching);
-        if (switching.applicationMs !== undefined) {
-          evidence.sessionSwitchApplicationMs = switching.applicationMs;
+                    }),
+                  { key, checkpoint },
+                );
+              }
+              await frames(page);
+            },
+            key,
+          );
+          evidence.sessionSwitchActionWallMs = switching.actionWallMs;
+          recordPhase("sessionSwitch", switching);
+          if (switching.applicationMs !== undefined) {
+            evidence.sessionSwitchApplicationMs = switching.applicationMs;
+          }
+          const route = await phase(
+            page,
+            "route",
+            async () => {
+              await navigation(page, "pages");
+              await page.locator('.sidebar-pages a[href="/usage"]').click();
+              await page.locator("openclaw-usage-page .usage-page").waitFor({ state: "visible" });
+              await frames(page);
+            },
+            "openclaw-usage-page .usage-page",
+          );
+          evidence.routeSwitchActionWallMs = route.actionWallMs;
+          recordPhase("routeSwitch", route);
+          if (route.applicationMs !== undefined) {
+            evidence.routeSwitchApplicationMs = route.applicationMs;
+          }
+        } finally {
+          const result = await page.evaluate(() => Reflect.get(window, "__eventLoad").finish());
+          Object.assign(evidence, {
+            backgroundSessions: Math.max(0, count),
+            foregroundTools: result.tools,
+            completedTools: result.completedTools,
+            producerElapsedMs: result.producerElapsedMs,
+            liveProofMs: result.liveProofMs,
+            foregroundDrainMs: result.foregroundDrainMs,
+            lateBackgroundEmissions: result.lateBackgroundEmissions,
+            backgroundReceipts: result.backgroundReceipts,
+            targetBackgroundReceipts: result.targetBackgroundReceipts,
+            maxBackgroundSchedulerLagMs: result.maxBackgroundSchedulerLagMs,
+            socketsOpened: result.socketsOpened,
+            socketsClosed: result.socketsClosed,
+            achievedBackgroundHz: result.backgroundReceipts / (result.elapsed / 1_000),
+            loadElapsedMs: result.elapsed,
+            maximumLoadDurationMs: duration,
+            incomingEvents: result.delivered,
+            incomingBytes: result.bytes,
+            incomingBackgroundEvents: result.backgroundEvents,
+            incomingBackgroundBytes: result.backgroundBytes,
+            incomingSessionsChanged: result.byEvent["sessions.changed"] ?? 0,
+            incomingSessionMessages: result.byEvent["session.message"] ?? 0,
+            incomingToolEvents: (result.byEvent["session.tool"] ?? 0) + (result.byEvent.agent ?? 0),
+            incomingNarrationEvents: result.byEvent["session.narration"] ?? 0,
+            mutationRecords: result.mutations,
+            addedRows: result.addedRows,
+            inputSampleCount: result.inputSampleCount,
+            inputDelayMedianMs: result.delays.median,
+            inputDelayP95Ms: result.delays.p95,
+            inputToFrameMedianMs: result.inputs.median,
+            inputToFrameP95Ms: result.inputs.p95,
+            deliveryTaskMedianMs: result.delivery.median,
+            deliveryTaskP95Ms: result.delivery.p95,
+          });
+          await page.evaluate((partial) => {
+            Reflect.set(window, "__eventLoadEvidence", partial);
+          }, evidence);
         }
-        const route = await phase(
-          page,
-          "route",
-          async () => {
-            await navigation(page, "pages");
-            await page.locator('.sidebar-pages a[href="/usage"]').click();
-            await page.locator("openclaw-usage-page .usage-page").waitFor({ state: "visible" });
-            await frames(page);
-          },
-          "openclaw-usage-page .usage-page",
+        const requests = await page.evaluate(
+          (after) =>
+            (window as MockGatewayWindow)
+              .openclawControlUiE2eGateway!.requests.slice(after)
+              .map(({ method }) => method),
+          requestsBefore,
         );
-        evidence.routeSwitchActionWallMs = route.actionWallMs;
-        recordPhase("routeSwitch", route);
-        if (route.applicationMs !== undefined) {
-          evidence.routeSwitchApplicationMs = route.applicationMs;
+        for (const method of [
+          "sessions.list",
+          "chat.history",
+          "chat.startup",
+          "sessions.messages.subscribe",
+          "chat.send",
+        ]) {
+          evidence[`rpc:${method}`] = requests.filter((candidate) => candidate === method).length;
         }
-      } finally {
-        const result = await page.evaluate(() => Reflect.get(window, "__eventLoad").finish());
-        Object.assign(evidence, {
-          backgroundSessions: Math.max(0, count),
-          foregroundTools: result.tools,
-          completedTools: result.completedTools,
-          producerElapsedMs: result.producerElapsedMs,
-          liveProofMs: result.liveProofMs,
-          foregroundDrainMs: result.foregroundDrainMs,
-          lateBackgroundEmissions: result.lateBackgroundEmissions,
-          backgroundReceipts: result.backgroundReceipts,
-          targetBackgroundReceipts: result.targetBackgroundReceipts,
-          maxBackgroundSchedulerLagMs: result.maxBackgroundSchedulerLagMs,
-          achievedBackgroundHz: result.backgroundReceipts / (result.elapsed / 1_000),
-          loadElapsedMs: result.elapsed,
-          maximumLoadDurationMs: duration,
-          incomingEvents: result.delivered,
-          incomingBytes: result.bytes,
-          incomingBackgroundEvents: result.backgroundEvents,
-          incomingBackgroundBytes: result.backgroundBytes,
-          incomingSessionsChanged: result.byEvent["sessions.changed"] ?? 0,
-          incomingSessionMessages: result.byEvent["session.message"] ?? 0,
-          incomingToolEvents: (result.byEvent["session.tool"] ?? 0) + (result.byEvent.agent ?? 0),
-          incomingNarrationEvents: result.byEvent["session.narration"] ?? 0,
-          mutationRecords: result.mutations,
-          addedRows: result.addedRows,
-          inputSampleCount: result.inputSampleCount,
-          inputDelayMedianMs: result.delays.median,
-          inputDelayP95Ms: result.delays.p95,
-          inputToFrameMedianMs: result.inputs.median,
-          inputToFrameP95Ms: result.inputs.p95,
-          deliveryTaskMedianMs: result.delivery.median,
-          deliveryTaskP95Ms: result.delivery.p95,
-        });
-        await page.evaluate((partial) => {
-          Reflect.set(window, "__eventLoadEvidence", partial);
-        }, evidence);
-      }
-      const requests = await page.evaluate(
-        (after) =>
-          (window as MockGatewayWindow)
-            .openclawControlUiE2eGateway!.requests.slice(after)
-            .map(({ method }) => method),
-        requestsBefore,
-      );
-      for (const method of [
-        "sessions.list",
-        "chat.history",
-        "chat.startup",
-        "sessions.messages.subscribe",
-        "chat.send",
-      ]) {
-        evidence[`rpc:${method}`] = requests.filter((candidate) => candidate === method).length;
-      }
-      if (evidence["rpc:chat.send"]) {
-        throw new Error("Event load typing sent a message");
-      }
-      evidence.inputPreserved = true;
-      evidence.switchHistoryCurrent = count > 0;
-      return evidence;
-    },
-  }));
+        if (evidence["rpc:chat.send"]) {
+          throw new Error("Event load typing sent a message");
+        }
+        evidence.inputPreserved = true;
+        evidence.switchHistoryCurrent = count > 0;
+        return evidence;
+      },
+    };
+  });
 }
 
 /** Correctness runs after the profiler stops, so it cannot inflate event CPU. */
@@ -1226,20 +1293,52 @@ export async function verifyEngineEventLoad(page: Page, count: number, toolCount
   if (count > 0) {
     const context = await getControlUiContextHandle(page);
     try {
-      await page.waitForFunction(
-        ({ context: appContext, count: sessionCount }) => {
-          const rows = appContext.sessions.state.result?.sessions;
-          return Array.from({ length: sessionCount }, (_, index) =>
-            index === 0 ? "agent:main:interaction-b" : `agent:main:interaction-${index + 1}`,
-          ).every((key) => {
-            const row = rows?.find((candidate) => candidate.key === key);
-            return (
-              row?.status === "done" && row.hasActiveRun === false && row.activeRunIds?.length === 0
-            );
+      await page
+        .waitForFunction(
+          ({ context: appContext, count: sessionCount }) => {
+            const rows = appContext.sessions.state.result?.sessions;
+            return Array.from({ length: sessionCount }, (_, index) =>
+              index === 0 ? "agent:main:interaction-b" : `agent:main:interaction-${index + 1}`,
+            ).every((key) => {
+              const row = rows?.find((candidate) => candidate.key === key);
+              return (
+                row?.status === "done" &&
+                row.hasActiveRun === false &&
+                row.activeRunIds?.length === 0
+              );
+            });
+          },
+          { context, count },
+        )
+        .catch(async (error: unknown) => {
+          const diagnostic = await page.evaluate(
+            ({ context: appContext, count: sessionCount }) => {
+              const rows = appContext.sessions.state.result?.sessions;
+              const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
+              return {
+                socketCount: gateway.socketCount(),
+                sockets: gateway
+                  .socketStates()
+                  .map(({ readyState, state }) => ({ readyState, state })),
+                socketCloses: Reflect.get(window, "__eventLoad").ready().socketCloses,
+                unsettled: Array.from({ length: sessionCount }, (_, index) =>
+                  index === 0 ? "agent:main:interaction-b" : `agent:main:interaction-${index + 1}`,
+                ).flatMap((key) => {
+                  const row = rows?.find((candidate) => candidate.key === key);
+                  return row?.status === "done" &&
+                    row.hasActiveRun === false &&
+                    row.activeRunIds?.length === 0
+                    ? []
+                    : [{ key, status: row?.status, active: row?.hasActiveRun }];
+                }),
+              };
+            },
+            { context, count },
+          );
+          throw new Error(`Background sessions did not settle: ${JSON.stringify(diagnostic)}`, {
+            cause: error,
           });
-        },
-        { context, count },
-      );
+        });
     } finally {
       await context.dispose();
     }

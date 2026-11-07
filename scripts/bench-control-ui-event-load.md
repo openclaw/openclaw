@@ -40,6 +40,14 @@ authoritative history after the measurement window. Every background row must
 settle, and all foreground tool results must remain in history. Blank scroll
 frames fail the scenario. Failed observations retain partial counters and CPU.
 
+Live snapshots update the mock's canonical row owner, so list, describe, history
+and mutation replies agree after a reconnect. List queries keep the existing
+filtering, ordering and pagination owner and refresh it only when queried. Row
+delta baselines belong to a connected socket: a replacement connection receives
+a full row before its deltas, and disconnected emissions do not advance that
+baseline. The observations record opened/closed socket counts; settlement failures
+also report close reasons and the rows that did not settle.
+
 Ground the fixture against the real Gateway before interpreting its results:
 
 ```sh
