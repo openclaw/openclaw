@@ -2,6 +2,7 @@ import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { createComponent, createSignal, merge } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { page } from "vitest/browser";
+import { loadSettings, saveSettings } from "../../../app/settings.ts";
 import { observeResize } from "../../../lib/reactive/observers.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { stubResizeObserver } from "../../../test-helpers/resize-observer.ts";
@@ -483,6 +484,34 @@ describe("chat Details presentation", () => {
     flush();
     expect(panel.matches(":popover-open")).toBe(false);
     expect(document.activeElement).toBe(trigger);
+  });
+
+  it("keeps a remembered collapsed preference across presentation resets", async () => {
+    await page.viewport(1700, 900);
+    saveSettings({ ...loadSettings(), chatDetailsCollapsed: true });
+    onTestFinished(() => {
+      saveSettings({ ...loadSettings(), chatDetailsCollapsed: undefined });
+    });
+    const { updateChat, trigger, panel } = await fixture(props(), 1320, false, "desktop", true);
+    const expanded = () => trigger.getAttribute("aria-expanded");
+    // Auto-dock would open at this width; the remembered preference keeps it collapsed.
+    expect(expanded()).toBe("false");
+    // A presentation reset (new gateway scope identity) restores the preference, not auto.
+    updateChat({ gatewayScope: {} });
+    flush();
+    expect(expanded()).toBe("false");
+    // Manual open updates the preference; manual close remembers the collapsed state.
+    trigger.click();
+    flush();
+    expect(expanded()).toBe("true");
+    expect(panel.matches(":popover-open") || panel.classList.contains("chat-details--docked")).toBe(
+      true,
+    );
+    expect(loadSettings().chatDetailsCollapsed).toBe(false);
+    trigger.click();
+    flush();
+    expect(expanded()).toBe("false");
+    expect(loadSettings().chatDetailsCollapsed).toBe(true);
   });
 
   it("opens full-width mobile Details from Panels and restores focus to that control", async () => {

@@ -445,6 +445,8 @@ export function loadUiPreferences(
       chatPersistCommentary: booleanSetting("chatPersistCommentary"),
       chatShowTaskProgress: booleanSetting("chatShowTaskProgress"),
       chatCollapseTaskProgress: booleanSetting("chatCollapseTaskProgress"),
+      chatDetailsCollapsed:
+        typeof parsed.chatDetailsCollapsed === "boolean" ? parsed.chatDetailsCollapsed : undefined,
       chatBubbleSessionKeys: normalizeChatBubbleSessionKeys(parsed.chatBubbleSessionKeys),
       chatBubbleDisabledSessionKeys: normalizeChatBubbleSessionKeys(
         parsed.chatBubbleDisabledSessionKeys,
@@ -631,6 +633,8 @@ export function saveSettings(
     chatPersistCommentary: next.chatPersistCommentary ?? true,
     chatShowTaskProgress: next.chatShowTaskProgress === false ? false : undefined,
     chatCollapseTaskProgress: next.chatCollapseTaskProgress === true ? true : undefined,
+    chatDetailsCollapsed:
+      typeof next.chatDetailsCollapsed === "boolean" ? next.chatDetailsCollapsed : undefined,
     chatBubbleSessionKeys: normalizeChatBubbleSessionKeys(next.chatBubbleSessionKeys),
     chatBubbleDisabledSessionKeys: normalizeChatBubbleSessionKeys(
       next.chatBubbleDisabledSessionKeys,
