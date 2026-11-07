@@ -716,7 +716,9 @@ try {
       0,
     );
   const firstReadStarted = performance.now();
+  const firstReadCpuStarted = process.threadCpuUsage();
   const initialGolden = await capture();
+  const firstReadCpu = process.threadCpuUsage(firstReadCpuStarted);
   const firstReadMs = performance.now() - firstReadStarted;
   let sequence = 0;
   const durations: number[] = [];
@@ -1047,6 +1049,7 @@ try {
     acpRows: values["acp-rows"],
     sourceRef: values["source-ref"] ?? "working-tree",
     firstReadMs,
+    firstReadCpuMs: (firstReadCpu.user + firstReadCpu.system) / 1000,
     latencyMs: {
       median: durations[Math.floor(durations.length * 0.5)],
       p95: durations[Math.floor(durations.length * 0.95)],
