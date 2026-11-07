@@ -21,6 +21,12 @@ const user = (id: string, content: unknown) => entry(id, { role: "user", content
 const estimate = (...texts: string[]) =>
   estimateTokensFromChars(texts.reduce((sum, text) => sum + estimateStringChars(text), 0));
 const archive = (id: string, text: string) => entry(id, assistant(text));
+const retainedRows = (prefix: string, boundary: unknown, liveTail?: string) => [
+  archive(`${prefix}-archived`, archived),
+  user(`${prefix}-retained`, retained),
+  boundary,
+  ...(liveTail === undefined ? [] : [archive(`${prefix}-tail`, liveTail)]),
+];
 const compact = (id: string, summary: string, firstKeptEntryId: string) => ({
   type: "compaction",
   id,
@@ -64,24 +70,14 @@ const scenarios = [
   {
     name: "a compaction keeps the summary and the retained window it names",
     id: "usage-compaction-retained-window",
-    rows: [
-      archive("m-archived", archived),
-      user("m-retained", retained),
-      compact("c-1", summary, "m-retained"),
-      archive("m-tail", tail),
-    ],
+    rows: retainedRows("m", compact("c-1", summary, "m-retained"), tail),
     expected: estimate(retained, summary, tail),
   },
   {
     name: "a reset keeps the retained tail named by firstKeptEntryId",
     id: "usage-reset-retained-window",
-    rows: [
-      archive("r-archived", archived),
-      user("r-retained", "k".repeat(1500)),
-      reset("reset-1", "r-retained"),
-      archive("r-tail", "after reset"),
-    ],
-    expected: estimate("k".repeat(1500), "after reset"),
+    rows: retainedRows("r", reset("reset-1", "r-retained"), "after reset"),
+    expected: estimate(retained, "after reset"),
   },
   {
     name: "an unknown kept target drops the archive but keeps the summary and live tail",
@@ -105,22 +101,14 @@ const scenarios = [
   {
     name: "a compaction retaining only user messages keeps its estimate",
     id: "usage-compaction-retained-user-only",
-    rows: [
-      archive("uo-archived", archived),
-      user("uo-retained", retained),
-      compact("c-user-only", summary, "uo-retained"),
-    ],
+    rows: retainedRows("uo", compact("c-user-only", summary, "uo-retained")),
     expected: estimate(retained, summary),
   },
   {
     name: "a reset retaining only user text keeps its estimate",
     id: "usage-reset-retained-user-only",
-    rows: [
-      archive("ro-archived", archived),
-      user("ro-retained", "k".repeat(1500)),
-      reset("reset-user-only", "ro-retained"),
-    ],
-    expected: estimate("k".repeat(1500)),
+    rows: retainedRows("ro", reset("reset-user-only", "ro-retained")),
+    expected: estimate(retained),
   },
   {
     name: "a compaction naming a structural entry keeps the retained tail behind it",

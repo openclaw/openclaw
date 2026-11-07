@@ -1,2 +1,3 @@
 # Preserve retained-tail eligibility, structural anchors, reset boundaries, and snapshot precedence across the independent usage-estimate regressions.
-157
+# Cover 145 added regression lines and 10 inherited main-debt lines without creating new headroom.
+155
