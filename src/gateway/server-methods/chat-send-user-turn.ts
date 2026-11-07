@@ -1,5 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
+import {
+  GATEWAY_CLIENT_IDS,
+  isNativeAppUiClient,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { bindRequesterProfile } from "../../auto-reply/requester-profile.js";
 import type { RuntimeMsgContext as MsgContext } from "../../auto-reply/templating.js";
@@ -309,7 +312,7 @@ export function prepareChatSendUserTurn(params: {
     client &&
     requester &&
     (client.authenticatedUserId || client.internal?.authenticatedOperator) &&
-    isBrowserOperatorUiClient(request.clientInfo) &&
+    (isBrowserOperatorUiClient(request.clientInfo) || isNativeAppUiClient(request.clientInfo)) &&
     !isSyntheticGatewayCaller(client) &&
     externalInput
   ) {

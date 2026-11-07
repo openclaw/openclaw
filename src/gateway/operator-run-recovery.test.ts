@@ -145,6 +145,52 @@ async function restoreFixture(fixture: RecoveryFixture) {
 }
 
 describe("scheduled authenticated operator source", () => {
+  it.each([
+    "openclaw-control-ui",
+    "openclaw-macos",
+    "openclaw-linux",
+    "openclaw-ios",
+    "openclaw-android",
+  ] as const)(
+    "restores automation admin delegation for %s without borrowing browser identity and fences revocation",
+    (id) =>
+      withRecovery(
+        async (fixture) => {
+          using restored = await restoreFixture(fixture);
+          expect(restored.automationAdmin).toBe(true);
+          expect(restored.controlUiAdmin).toBe(id === "openclaw-control-ui");
+          expectCurrent(restored.authority);
+          expect(
+            (await rotateDeviceToken({ deviceId: "recovery-device", role: "operator" })).ok,
+          ).toBe(true);
+          invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
+          expectRevoked(restored.authority);
+          await expect(fixture.restore()).rejects.toThrow();
+        },
+        { clientInfo: { id, mode: "ui" } },
+      ),
+  );
+  it("preserves legacy browser grants but does not upgrade legacy native sources", () =>
+    withRecovery(async (fixture) => {
+      const { automationAdmin: _admin, ...legacy } = fixture.snapshot;
+      const restore = (controlUiAdmin: boolean) =>
+        restoreGatewayOperatorSource({
+          snapshot: { ...legacy, controlUiAdmin },
+          target: fixture.target,
+          context: fixture.context,
+          assertCurrent: () => {},
+        });
+      const browser = await restore(true);
+      const native = await restore(false);
+      try {
+        expect(browser.automationAdmin).toBe(true);
+        expect(native.automationAdmin).toBe(false);
+      } finally {
+        browser.release();
+        native.release();
+      }
+    }));
+
   it.each(["pending", "uncertain"] as const)(
     "refuses cached profile facts while their mutation is %s",
     (outcome) =>

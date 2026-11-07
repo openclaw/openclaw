@@ -144,7 +144,7 @@ export type ScheduledSessionAutomation = {
   };
   operatorAuthority?: AdmittedRunOperatorAuthority;
   /** Original Control UI admin classification, revalidated by the restored operator source. */
-  controlUiAdmin?: true;
+  automationAdmin?: true;
   admissionSource: NonNullable<AdmittedRunContext["admissionSource"]>;
   executionIdentity?: import("../../cron/service/state.js").CronExecutionIdentityAdmission;
   deliveryAttemptFence?:
