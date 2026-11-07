@@ -281,6 +281,16 @@ and uses existing resource delivery for workers. Discovery assigns file ownershi
 request Gateway-local reads by returning source or path metadata.
 Stopping the binding revokes retained host readers.
 
+The paired-node file-transfer adapter retries interrupted read-only Skill discovery
+and resource reads up to twice, after one and two seconds, within one 60-second budget.
+Each attempt opens a new channel to the same configured node and rechecks current
+authorization. Permission denials and cancellation remain failures; subscriptions
+and mutations are not replayed by this read retry.
+
+The node prepares both workspace command handlers before advertising availability.
+In source checkouts, this keeps initial module compilation outside the live request's
+progress deadline.
+
 The Skills worker also runs install and ClawHub operations. Install/remove use
 an authenticated adapter's duplex channel so Gateway policy and mutation checks
 run before the native filesystem operation. The adapter admits source roots and

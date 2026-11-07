@@ -365,6 +365,15 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   })),
   {
+    // This read runs in the packaged Gateway child, outside the static import graph.
+    testFile: "test/e2e/qa-lab/runtime/paired-node-worker-skills-reconnect.e2e.test.ts",
+    watchGlobs: [
+      "extensions/file-transfer/src/workspace-skills.ts",
+      "extensions/file-transfer/src/workspace-worker.ts",
+    ],
+    sourceOnly: true,
+  },
+  {
     testFile: "extensions/file-transfer/src/workspace-service.test.ts",
     watchGlobs: ["src/worker/memory-worker-entry.ts", "src/worker/skills-worker-entry.ts"],
   },
