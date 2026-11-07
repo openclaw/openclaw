@@ -169,6 +169,13 @@ async function fileHash(pathname: string) {
 
 async function archiveFixture(fixture: Fixture) {
   await expectCounts(maintain(fixture));
+  expect(
+    rows(
+      fixture,
+      "SELECT * FROM session_transcript_active_event_facts WHERE session_id = ?",
+      historicalId,
+    ),
+  ).toEqual([]);
   const descriptor = readSessionColdTranscript(fixture.database(), historicalId);
   if (!descriptor) {
     throw new Error("Successful archival did not retain its descriptor");
@@ -237,7 +244,11 @@ describe("cold transcript storage workers", () => {
     const storePath = fixture.scope.storePath;
     const sibling = fixture.secondScope;
     const siblingEvents = loadTranscriptEventsSync(sibling);
+    expect(
+      rows(fixture, "SELECT * FROM session_transcript_active_event_facts").length,
+    ).toBeGreaterThan(0);
     await expectCounts(maintain(fixture), 2);
+    expect(rows(fixture, "SELECT * FROM session_transcript_active_event_facts")).toEqual([]);
     const archiveStarts = () =>
       getTrackedWorkerLifecycleSnapshot().workerLifecycle.find(
         ({ script }) => script === "session-accessor.sqlite-archive.worker.js",
@@ -261,6 +272,7 @@ describe("cold transcript storage workers", () => {
     expect(await loadTranscriptEvents(sibling)).toEqual(siblingEvents);
     expect(leases()).toEqual(baselineLeases);
     expect(fixture.snapshot()).toEqual(fixture.original);
+    expect(rows(fixture, "SELECT * FROM session_transcript_active_event_facts")).toEqual([]);
     expect(archiveStarts()).toBe(before);
     expect(await loadTranscriptEvents(sibling)).toEqual(siblingEvents);
     expect(archiveStarts()).toBe(before);
