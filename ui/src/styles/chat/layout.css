@@ -1547,53 +1547,94 @@ openclaw-chat-video-player {
   white-space: nowrap;
 }
 
-/* Label and destinations share one grid cell, so revealing them never resizes
-   or repositions the toolbar. */
 .chat-selection-popup__ask {
-  display: grid;
+  display: flex;
+  align-items: center;
 }
 
-.chat-selection-popup__ask-label,
-.chat-selection-popup__ask-options {
-  grid-area: 1 / 1;
-  transition: opacity 0.12s var(--ease-out);
+/* Separates the destinations from the composer action. */
+.chat-selection-popup__ask::before {
+  content: "";
+  align-self: stretch;
+  width: 1px;
+  margin: 7px 4px;
+  background: var(--border);
 }
 
 .chat-selection-popup__ask-label {
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: 2px;
   min-height: var(--menu-item-height);
-  padding: 6px 10px;
+  padding: 6px 6px 6px 8px;
   font-size: 12px;
   white-space: nowrap;
   color: var(--text);
-  pointer-events: none;
+  transition:
+    color 0.12s var(--ease-out),
+    padding 0.16s var(--ease-out);
 }
 
+.chat-selection-popup__ask-label svg {
+  width: 12px;
+  height: 12px;
+  color: var(--muted);
+  transition:
+    width 0.16s var(--ease-out),
+    opacity 0.12s var(--ease-out);
+}
+
+/* 0fr -> 1fr animates the options' intrinsic width without measuring it. */
 .chat-selection-popup__ask-options {
+  display: grid;
+  grid-template-columns: 0fr;
+  transition: grid-template-columns 0.16s var(--ease-out);
+}
+
+.chat-selection-popup__ask-options > span {
   display: flex;
   gap: 2px;
+  min-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: opacity 0.12s var(--ease-out);
+}
+
+/* Expanded, the label becomes a quiet heading for its two destinations. */
+.chat-selection-popup__ask:is(:hover, :focus-within) .chat-selection-popup__ask-label {
+  padding-right: 2px;
+  color: var(--muted);
+}
+
+.chat-selection-popup__ask:is(:hover, :focus-within) .chat-selection-popup__ask-label svg {
+  width: 0;
   opacity: 0;
 }
 
-.chat-selection-popup__ask:hover .chat-selection-popup__ask-label,
-.chat-selection-popup__ask:focus-within .chat-selection-popup__ask-label {
-  opacity: 0;
+.chat-selection-popup__ask:is(:hover, :focus-within) .chat-selection-popup__ask-options {
+  grid-template-columns: 1fr;
 }
 
-.chat-selection-popup__ask:hover .chat-selection-popup__ask-options,
-.chat-selection-popup__ask:focus-within .chat-selection-popup__ask-options {
+.chat-selection-popup__ask:is(:hover, :focus-within) .chat-selection-popup__ask-options > span {
   opacity: 1;
 }
 
-/* Touch has no hover to reveal destinations; show them directly. */
+/* Touch has no hover to reveal destinations; show them expanded. */
 @media (hover: none) {
   .chat-selection-popup__ask-label {
-    opacity: 0;
+    padding-right: 2px;
+    color: var(--muted);
+  }
+
+  .chat-selection-popup__ask-label svg {
+    display: none;
   }
 
   .chat-selection-popup__ask-options {
+    grid-template-columns: 1fr;
+  }
+
+  .chat-selection-popup__ask-options > span {
     opacity: 1;
   }
 }

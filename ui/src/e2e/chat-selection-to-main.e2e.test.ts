@@ -145,7 +145,8 @@ suite.define(() => {
             expect(await toolbar.count()).toBe(0);
             await selectText(text);
           }
-          await button(page, "Ask in side chat").click();
+          await toolbar.getByRole("group", { name: "Ask in", exact: true }).hover();
+          await button(toolbar, "Ask in side chat").click();
           await editor.waitFor({ state: "visible" });
           if (scenario === "normal") {
             expect(await sideComposer.count()).toBe(0);
@@ -532,7 +533,7 @@ suite.define(() => {
       await composer.fill(draft);
       await selectText(selectedSource(page));
       await toolbar.waitFor({ state: "visible" });
-      const destinations = toolbar.getByRole("group", { name: "Ask in…", exact: true });
+      const destinations = toolbar.getByRole("group", { name: "Ask in", exact: true });
       await destinations.hover();
       await button(destinations, "Ask in new session").click();
       const palette = page.locator("openclaw-command-palette");

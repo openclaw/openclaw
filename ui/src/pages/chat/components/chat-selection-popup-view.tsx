@@ -1,4 +1,5 @@
 import { Portal, render } from "@solidjs/web";
+import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { ChatSelectionSource } from "../../../lib/chat/chat-types.ts";
@@ -68,26 +69,30 @@ export function showChatSelectionToolbar(
               {t("chat.messages.addToChat")}
             </button>
           ) : undefined}
-          {/* One stable-width slot: hover or focus swaps the label for its destinations. */}
+          {/* Hover or focus expands the destinations to the right, keeping the label
+              under the pointer; touch shows them expanded. */}
           <div class="chat-selection-popup__ask" role="group" aria-label={t("chat.messages.askIn")}>
             <span class="chat-selection-popup__ask-label" aria-hidden="true">
               {t("chat.messages.askIn")}
+              <Icon name="chevronRight" />
             </span>
             <span class="chat-selection-popup__ask-options">
-              <button
-                type="button"
-                aria-label={t("chat.messages.askInSideChat")}
-                onClick={() => activate(() => actions.onAskSideChat(source, anchor))}
-              >
-                {t("chat.messages.sideChatOption")}
-              </button>
-              <button
-                type="button"
-                aria-label={t("chat.messages.askInNewSession")}
-                onClick={() => activate(() => actions.onAskNewSession(source))}
-              >
-                {t("chat.messages.newSessionOption")}
-              </button>
+              <span>
+                <button
+                  type="button"
+                  aria-label={t("chat.messages.askInSideChat")}
+                  onClick={() => activate(() => actions.onAskSideChat(source, anchor))}
+                >
+                  {t("chat.messages.sideChatOption")}
+                </button>
+                <button
+                  type="button"
+                  aria-label={t("chat.messages.askInNewSession")}
+                  onClick={() => activate(() => actions.onAskNewSession(source))}
+                >
+                  {t("chat.messages.newSessionOption")}
+                </button>
+              </span>
             </span>
           </div>
         </div>
@@ -101,6 +106,11 @@ export function showChatSelectionToolbar(
     actions.paneId,
     dispose,
   );
+  // Expanding the destinations grows the toolbar rightward; slide left only
+  // by the overflow so the hovered label stays under the pointer.
+  const resize = new ResizeObserver(() => keepChatSelectionPopupInView(popup));
+  resize.observe(popup);
+  signal.addEventListener("abort", () => resize.disconnect());
   listen(
     document,
     "selectionchange",
@@ -112,6 +122,16 @@ export function showChatSelectionToolbar(
     },
     { signal },
   );
+}
+
+function keepChatSelectionPopupInView(popup: HTMLElement) {
+  const viewport = window.visualViewport;
+  const minLeft = (viewport?.offsetLeft ?? 0) + 8;
+  const right = minLeft - 8 + (viewport?.width ?? window.innerWidth) - 16;
+  const bounds = popup.getBoundingClientRect();
+  if (bounds.right > right) {
+    popup.style.left = `${Math.max(minLeft, right - bounds.width)}px`;
+  }
 }
 
 export function positionChatSelectionPopup(popup: HTMLElement, anchor: DOMRect) {
