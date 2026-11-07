@@ -289,6 +289,77 @@ struct WatchInboxStoreOperationTests {
         }
     }
 
+    @Test func `only a correlated snapshot closes approvals it omits`() throws {
+        try Self.withStore { store, _ in
+            let gatewayStableID = "watch-test-gateway"
+            let approval = WatchExecApprovalItem(
+                id: "pending-approval",
+                gatewayStableID: gatewayStableID,
+                commandText: "echo pending",
+                allowedDecisions: [.allowOnce])
+            #expect(store.consume(
+                execApprovalSnapshot: WatchExecApprovalSnapshotMessage(
+                    approvals: [approval],
+                    gatewayStableID: gatewayStableID,
+                    sentAtMs: 100,
+                    snapshotId: "initial"),
+                transport: "test"))
+
+            // An iPhone cache can send an unsolicited snapshot before it has read Watch-held approvals.
+            #expect(store.consume(
+                execApprovalSnapshot: WatchExecApprovalSnapshotMessage(
+                    approvals: [],
+                    gatewayStableID: gatewayStableID,
+                    sentAtMs: 200,
+                    snapshotId: "unsolicited"),
+                transport: "test"))
+            #expect(store.sortedExecApprovals.map(\.approvalID) == ["pending-approval"])
+
+            #expect(store.consume(
+                execApprovalSnapshot: WatchExecApprovalSnapshotMessage(
+                    approvals: [],
+                    gatewayStableID: gatewayStableID,
+                    sentAtMs: 300,
+                    snapshotId: "requested",
+                    requestId: "refresh",
+                    requestGatewayStableID: gatewayStableID),
+                transport: "test"))
+            #expect(store.sortedExecApprovals.isEmpty)
+        }
+    }
+
+    @Test func `received approval snapshots keep approval and gateway IDs exactly as sent`() async throws {
+        let suiteName = "WatchInboxStoreOperationTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = WatchInboxStore(defaults: defaults, requestNotificationAuthorization: false)
+        let receiver = WatchConnectivityReceiver(store: store, directNodeSetupHandler: { _, _ in })
+        let approvalID = " approval "
+        let gatewayStableID = " gateway "
+        let snapshotType = WatchPayloadType.execApprovalSnapshot.rawValue
+        let payload: [String: Any] = [snapshotType: [
+            "type": snapshotType,
+            "approvals": [[
+                "id": approvalID,
+                "gatewayStableID": gatewayStableID,
+                "commandText": "echo exact",
+            ]],
+            "gatewayStableID": gatewayStableID,
+            "sentAtMs": NSNumber(value: 100),
+            "snapshotId": "exact-ids",
+        ]]
+
+        let accepted: Bool = await withCheckedContinuation { continuation in
+            receiver.session(WCSession.default, didReceiveMessage: payload) { reply in
+                continuation.resume(returning: reply["ok"] as? Bool == true)
+            }
+        }
+        #expect(accepted)
+        let record = try #require(store.sortedExecApprovals.first)
+        #expect(Array(record.approvalID.utf8) == Array(approvalID.utf8))
+        #expect(record.approval.gatewayStableID.map { Array($0.utf8) } == Array(gatewayStableID.utf8))
+    }
+
     @Test func `switching chat sessions retires voice replies and the previous preview`() throws {
         try Self.withStore { store, defaults in
             var original = Self.snapshot(id: "original-session")
