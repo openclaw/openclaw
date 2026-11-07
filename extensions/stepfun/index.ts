@@ -18,7 +18,7 @@ const STEPFUN_STANDARD_INTL_BASE_URL = "https://api.stepfun.ai/v1";
 const STEPFUN_PLAN_CN_BASE_URL = "https://api.stepfun.com/step_plan/v1";
 const STEPFUN_PLAN_INTL_BASE_URL = "https://api.stepfun.ai/step_plan/v1";
 
-const STEPFUN_DEFAULT_MODEL_ID = "step-3.5-flash";
+const STEPFUN_DEFAULT_MODEL_ID = "step-5-preview";
 const STEPFUN_DEFAULT_MODEL_REF = `${STEPFUN_PROVIDER_ID}/${STEPFUN_DEFAULT_MODEL_ID}`;
 const STEPFUN_PLAN_DEFAULT_MODEL_REF = `${STEPFUN_PLAN_PROVIDER_ID}/${STEPFUN_DEFAULT_MODEL_ID}`;
 
@@ -100,8 +100,23 @@ export default definePluginEntry({
       const provider = STEPFUN_SURFACES[surface];
       const presetAppliers = createProviderConnectionPresetAppliers<[string]>({
         primaryModelRef: provider.defaultModel,
-        resolveParams: (_cfg, baseUrl) => {
+        resolveParams: (cfg, baseUrl) => {
           const catalog = provider.buildProvider(baseUrl);
+          // A prior onboarding run bound the shared alias (e.g. "StepFun") to the
+          // then-current default. Re-binding it to a new default would leave two
+          // model refs claiming the alias, and last-wins resolution would silently
+          // redirect it off the model the user's config still points at. Only claim
+          // the alias for the new default when no other ref already owns it.
+          // Ownership is compared with the runtime's own alias key (trimmed +
+          // lowercased), so padding like " StepFun " cannot slip past the guard.
+          const aliasKey = normalizeLowercaseStringOrEmpty(provider.modelAlias);
+          const primaryKey = normalizeLowercaseStringOrEmpty(provider.defaultModel);
+          const aliasOwnedByOtherModel = Object.entries(cfg.agents?.defaults?.models ?? {}).some(
+            ([ref, entry]) =>
+              typeof entry?.alias === "string" &&
+              normalizeLowercaseStringOrEmpty(entry.alias) === aliasKey &&
+              normalizeLowercaseStringOrEmpty(ref) !== primaryKey,
+          );
           return {
             providerId: provider.providerId,
             api: catalog.api ?? "openai-completions",
@@ -109,7 +124,9 @@ export default definePluginEntry({
             catalogModels: catalog.models,
             aliases: [
               ...catalog.models.map((model) => `${provider.providerId}/${model.id}`),
-              { modelRef: provider.defaultModel, alias: provider.modelAlias },
+              ...(aliasOwnedByOtherModel
+                ? []
+                : [{ modelRef: provider.defaultModel, alias: provider.modelAlias }]),
             ],
           };
         },
