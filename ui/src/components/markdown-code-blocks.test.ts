@@ -54,14 +54,47 @@ function ownBlocks(root: HTMLElement) {
   return blocks;
 }
 
-function mountBlocks() {
-  const section = document.body.appendChild(document.createElement("section"));
-  section.className = "chat-text";
-  section.innerHTML = toSanitizedMarkdownHtml(
+function codeAndTableHtml() {
+  return toSanitizedMarkdownHtml(
     "```ts\nconst answer = 42;\n```\n\n| Name | Value |\n| --- | --- |\n| Alpha | One |",
     { codeBlockInteraction: "interactive", tableInteractions: "enabled" },
   );
+}
+
+function mountBlocks() {
+  const section = document.body.appendChild(document.createElement("section"));
+  section.className = "chat-text";
+  section.innerHTML = codeAndTableHtml();
   return { container: section, section, blocks: ownBlocks(section) };
+}
+
+function mockResizeObservers() {
+  const observers: TestResizeObserver[] = [];
+  class TestResizeObserver implements ResizeObserver {
+    readonly targets = new Set<Element>();
+    constructor(private readonly callback: ResizeObserverCallback) {
+      observers.push(this);
+    }
+    observe = (target: Element) => this.targets.add(target);
+    unobserve = (target: Element) => this.targets.delete(target);
+    disconnect = () => this.targets.clear();
+    deliver(target: Element) {
+      const width = target.matches(".markdown-table__viewport") ? 100 : 300;
+      const entry: ResizeObserverEntry = {
+        target,
+        contentRect: new DOMRect(0, 0, width, 100),
+        borderBoxSize: [{ inlineSize: width, blockSize: 100 }],
+        contentBoxSize: [{ inlineSize: width, blockSize: 100 }],
+        devicePixelContentBoxSize: [],
+      };
+      this.callback([entry], this);
+    }
+  }
+  vi.stubGlobal("ResizeObserver", TestResizeObserver);
+  return {
+    observers,
+    observed: () => [...new Set(observers.flatMap((observer) => Array.from(observer.targets)))],
+  };
 }
 const denied = new DOMException("Clipboard access denied", "NotAllowedError");
 function mockClipboard(writeText = vi.fn().mockRejectedValue(denied), fallback = true) {
@@ -97,7 +130,6 @@ it.each([true, false])("activates preview code copying once with success=%s", as
       },
     }),
   );
-  onTestFinished(() => view.unmount());
   const button = view.container.querySelector<HTMLButtonElement>(".code-block-copy")!;
   await copy(button);
   expect(writeText.mock.calls).toEqual([["const first = true;"]]);
@@ -132,22 +164,9 @@ it.each(["visible", "hidden"] as const)(
   "gates direct Markdown owners on tab visibility without losing pane intent (initially %s)",
   async (initial) => {
     const show = mockDocumentVisibility(initial);
-    const observations: Set<Element>[] = [];
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        private readonly targets = new Set<Element>();
-        constructor() {
-          observations.push(this.targets);
-        }
-        observe = (target: Element) => this.targets.add(target);
-        unobserve = (target: Element) => this.targets.delete(target);
-        disconnect = () => this.targets.clear();
-      },
-    );
+    const { observed } = mockResizeObservers();
     const { section, blocks } = mountBlocks();
     const code = section.querySelector("code")!;
-    const observed = () => observations.flatMap((targets) => Array.from(targets));
     blocks.update(true);
     await Promise.resolve();
     expect(observed().includes(code)).toBe(initial === "visible");
@@ -183,15 +202,7 @@ it.each(["visible", "hidden"] as const)(
 
 it("follows the rendering tab when a template reader is adopted after activation", async () => {
   const show = mockDocumentVisibility("visible");
-  const observed = new Set<Element>();
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe = (target: Element) => observed.add(target);
-      unobserve = (target: Element) => observed.delete(target);
-      disconnect = () => observed.clear();
-    },
-  );
+  const { observed } = mockResizeObservers();
   const template = document.createElement("template");
   template.innerHTML =
     '<article><div class="code-block-wrapper"><pre class="code-block-viewport"><code>const answer = 42;</code></pre></div></article>';
@@ -203,37 +214,29 @@ it("follows the rendering tab when a template reader is adopted after activation
   document.body.append(root);
   await Promise.resolve();
   const code = root.querySelector("code")!;
-  expect(observed).toContain(code);
+  expect(observed()).toContain(code);
 
   show("hidden");
-  expect(observed.size).toBe(0);
+  expect(observed()).toHaveLength(0);
   show("visible");
   await Promise.resolve();
-  expect(observed).toContain(code);
+  expect(observed()).toContain(code);
   expect(root.querySelector("code")).toBe(code);
   blocks.dispose();
-  expect(observed.size).toBe(0);
+  expect(observed()).toHaveLength(0);
 });
 
 it("reobserves retained Markdown DOM while fencing scans queued before hide or disposal", async () => {
-  const observed = new Set<Element>();
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe = (target: Element) => observed.add(target);
-      unobserve = (target: Element) => observed.delete(target);
-      disconnect = () => observed.clear();
-    },
-  );
+  const { observed } = mockResizeObservers();
   const { container, section, blocks: initialBlocks } = mountBlocks();
   let blocks = initialBlocks;
   blocks.update(true);
   const code = container.querySelector("code");
   const tableViewport = container.querySelector(".markdown-table__viewport");
   const expectObserved = (count: number) => {
-    expect(observed.size).toBe(count);
+    expect(observed()).toHaveLength(count);
     if (count) {
-      expect([...observed]).toEqual(expect.arrayContaining([code, tableViewport]));
+      expect(observed()).toEqual(expect.arrayContaining([code, tableViewport]));
     }
   };
   const settleObserved = async (count: number) => {
@@ -270,48 +273,12 @@ it("reobserves retained Markdown DOM while fencing scans queued before hide or d
 
 it("suspends parked transcript Markdown measurements and resumes the same DOM", async () => {
   vi.useFakeTimers();
-  const observers: Array<{ targets: Set<Element>; deliver: (target: Element) => void }> = [];
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      readonly targets = new Set<Element>();
-      constructor(private readonly callback: ResizeObserverCallback) {
-        observers.push(this);
-      }
-      observe(target: Element) {
-        this.targets.add(target);
-      }
-      unobserve(target: Element) {
-        this.targets.delete(target);
-      }
-      disconnect() {
-        this.targets.clear();
-      }
-      deliver(target: Element) {
-        const width = target.matches(".markdown-table__viewport") ? 100 : 300;
-        this.callback(
-          [
-            {
-              target,
-              contentRect: new DOMRect(0, 0, width, 100),
-              borderBoxSize: [{ inlineSize: width, blockSize: 100 }],
-              contentBoxSize: [{ inlineSize: width, blockSize: 100 }],
-              devicePixelContentBoxSize: [],
-            },
-          ],
-          this,
-        );
-      }
-    },
-  );
+  const { observers } = mockResizeObservers();
   const root = document.body.appendChild(document.createElement("div"));
   root.className = "chat-thread";
   const row = root.appendChild(document.createElement("div"));
   row.className = "chat-virtual-row";
-  row.innerHTML = `<div class="chat-text">${toSanitizedMarkdownHtml(
-    "```ts\nconst answer = 42;\n```\n\n| Name | Value |\n| --- | --- |\n| Alpha | One |",
-    { codeBlockInteraction: "interactive", tableInteractions: "enabled" },
-  )}</div>`;
+  row.innerHTML = `<div class="chat-text">${codeAndTableHtml()}</div>`;
   const code = row.querySelector<HTMLElement>("code")!;
   const codeViewport = row.querySelector<HTMLElement>(".code-block-viewport")!;
   const tableViewport = row.querySelector<HTMLElement>(".markdown-table__viewport")!;
@@ -415,20 +382,7 @@ it("does not remeasure settled Markdown while neighboring prose streams", async 
 
 it("defers code overflow measurement out of resize delivery and retires it on hide", async () => {
   vi.useFakeTimers();
-  const observations = new Map<Element, () => void>();
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      constructor(private readonly callback: (entries: { target: Element }[]) => void) {}
-      observe(target: Element) {
-        observations.set(target, () => this.callback([{ target }]));
-      }
-      unobserve(target: Element) {
-        observations.delete(target);
-      }
-      disconnect() {}
-    },
-  );
+  const { observers } = mockResizeObservers();
   const { container, blocks } = mountBlocks();
   blocks.update(true);
   await Promise.resolve();
@@ -438,14 +392,15 @@ it("defers code overflow measurement out of resize delivery and retires it on hi
   Object.defineProperty(viewport, "clientWidth", { configurable: true, value: 100 });
   const width = vi.fn(() => 300);
   Object.defineProperty(code, "scrollWidth", { configurable: true, get: width });
-  observations.get(code)!();
+  const observer = observers.find((candidate) => candidate.targets.has(code))!;
+  observer.deliver(code);
   expect(width).not.toHaveBeenCalled();
   expect(wrapper.classList.contains("has-horizontal-overflow")).toBe(false);
   vi.advanceTimersToNextFrame();
   expect(wrapper.classList.contains("has-horizontal-overflow")).toBe(true);
 
   width.mockReturnValue(50).mockClear();
-  observations.get(code)!();
+  observer.deliver(code);
   blocks.update(false);
   vi.advanceTimersToNextFrame();
   expect(width).not.toHaveBeenCalled();
@@ -531,79 +486,73 @@ it("shares one worker for long fences and preserves complete text through reveal
     return root;
   });
   const owners = roots.map(ownBlocks);
-  try {
-    owners.forEach((owner) => owner.update(true));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(workers).toHaveLength(1);
-    expect(requests).toHaveLength(2);
-    expect(roots[1]!.querySelector("code")?.textContent).toBe(jsonSource);
-    expect(readMarkdownCodeBlockCopyText(roots[1]!.querySelector(".code-block-copy")!)).toBe(
-      jsonSource,
+  owners.forEach((owner) => owner.update(true));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(workers).toHaveLength(1);
+  expect(requests).toHaveLength(2);
+  expect(roots[1]!.querySelector("code")?.textContent).toBe(jsonSource);
+  expectCodeCopyText(roots[1]!, jsonSource);
+  requests.forEach(({ worker, data }) => worker.deliver(data));
+  await vi.advanceTimersByTimeAsync(2_000);
+  for (const [index, root] of roots.entries()) {
+    const value = sources[index]!;
+    const code = root.querySelector("code")!;
+    expect(code.textContent).toBe(value);
+    expect(code.querySelector(".hljs-comment")?.textContent).toBe(
+      value.split("\n").slice(0, 7).join("\n") + "\n",
     );
-    requests.forEach(({ worker, data }) => worker.deliver(data));
-    await vi.advanceTimersByTimeAsync(2_000);
-    for (const [index, root] of roots.entries()) {
-      const value = sources[index]!;
-      const code = root.querySelector("code")!;
-      expect(code.textContent).toBe(value);
-      expect(code.querySelector(".hljs-comment")?.textContent).toBe(
-        value.split("\n").slice(0, 7).join("\n") + "\n",
-      );
-      expect(readMarkdownCodeBlockCopyText(root.querySelector(".code-block-copy")!)).toBe(
-        index === 0 ? value.slice(0, -1) : value,
-      );
-    }
-    roots[0]!.appendChild(document.createElement("p")).textContent = "Unrelated prose";
-    owners[0]!.update(true);
-    roots[0]!.querySelector<HTMLButtonElement>(".code-block-expand")!.click();
-    const code = roots[0]!.querySelector("code")!;
-    const selection = document.getSelection()!;
-    const range = document.createRange();
-    range.setStart(code.lastChild!, 100);
-    range.setEnd(code.lastChild!, 120);
-    selection.removeAllRanges();
-    selection.addRange(range);
-    onTestFinished(() => selection.removeAllRanges());
-    const selected = selection.toString();
-    expect(selected).toHaveLength(20);
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(selection.toString()).toBe(selected);
-    selection.removeAllRanges();
-    document.dispatchEvent(new Event("selectionchange"));
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(roots[0]!.querySelector("code")?.textContent).toBe(source);
-    expect(
-      [...roots[0]!.querySelectorAll(".hljs-comment")].map((node) => node.textContent).join(""),
-    ).toBe(source);
-    roots[1]!.querySelector<HTMLButtonElement>(".code-block-expand")!.click();
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(roots[1]!.querySelector("code")?.textContent).toBe(jsonSource);
-    expect(
-      [...roots[1]!.querySelectorAll(".hljs-comment")].map((node) => node.textContent).join(""),
-    ).toBe(jsonSource);
-    expect(readMarkdownCodeBlockCopyText(roots[1]!.querySelector(".code-block-copy")!)).toBe(
-      jsonSource,
-    );
-    expect(requests).toHaveLength(2);
-    owners.forEach((owner) => owner.update(false));
-    expect(workers[0]!.terminate).toHaveBeenCalledOnce();
-    roots[0]!.innerHTML = toSanitizedMarkdownHtml(
-      `\`\`\`ts\n${source.replaceAll("source", "new")}\`\`\``,
-      { codeBlockInteraction: "interactive" },
-    );
-    owners[0]!.update(true);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(requests).toHaveLength(3);
-    owners[0]!.update(false);
-    const latest = requests[2]!;
-    latest.worker.deliver(latest.data);
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(roots[0]!.querySelector("code")?.textContent).toBe(source.replaceAll("source", "new"));
-    expect(roots[0]!.querySelector("code span")).toBeNull();
-  } finally {
-    owners.forEach((owner) => owner.dispose());
+    expectCodeCopyText(root, index === 0 ? value.slice(0, -1) : value);
   }
+  roots[0]!.appendChild(document.createElement("p")).textContent = "Unrelated prose";
+  owners[0]!.update(true);
+  roots[0]!.querySelector<HTMLButtonElement>(".code-block-expand")!.click();
+  const code = roots[0]!.querySelector("code")!;
+  const selection = document.getSelection()!;
+  const range = document.createRange();
+  range.setStart(code.lastChild!, 100);
+  range.setEnd(code.lastChild!, 120);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  onTestFinished(() => selection.removeAllRanges());
+  const selected = selection.toString();
+  expect(selected).toHaveLength(20);
+  await vi.advanceTimersByTimeAsync(2_000);
+  expect(selection.toString()).toBe(selected);
+  selection.removeAllRanges();
+  document.dispatchEvent(new Event("selectionchange"));
+  await vi.advanceTimersByTimeAsync(2_000);
+  expect(roots[0]!.querySelector("code")?.textContent).toBe(source);
+  expect(
+    [...roots[0]!.querySelectorAll(".hljs-comment")].map((node) => node.textContent).join(""),
+  ).toBe(source);
+  roots[1]!.querySelector<HTMLButtonElement>(".code-block-expand")!.click();
+  await vi.advanceTimersByTimeAsync(2_000);
+  expect(roots[1]!.querySelector("code")?.textContent).toBe(jsonSource);
+  expect(
+    [...roots[1]!.querySelectorAll(".hljs-comment")].map((node) => node.textContent).join(""),
+  ).toBe(jsonSource);
+  expectCodeCopyText(roots[1]!, jsonSource);
+  expect(requests).toHaveLength(2);
+  owners.forEach((owner) => owner.update(false));
+  expect(workers[0]!.terminate).toHaveBeenCalledOnce();
+  roots[0]!.innerHTML = toSanitizedMarkdownHtml(
+    `\`\`\`ts\n${source.replaceAll("source", "new")}\`\`\``,
+    { codeBlockInteraction: "interactive" },
+  );
+  owners[0]!.update(true);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(requests).toHaveLength(3);
+  owners[0]!.update(false);
+  const latest = requests[2]!;
+  latest.worker.deliver(latest.data);
+  await vi.advanceTimersByTimeAsync(2_000);
+  expect(roots[0]!.querySelector("code")?.textContent).toBe(source.replaceAll("source", "new"));
+  expect(roots[0]!.querySelector("code span")).toBeNull();
 });
+
+function expectCodeCopyText(root: ParentNode, source: string) {
+  expect(readMarkdownCodeBlockCopyText(root.querySelector(".code-block-copy")!)).toBe(source);
+}
 
 function expectText(root: ParentNode, selector: string) {
   return expect(root.querySelector(selector)?.textContent);
@@ -764,7 +713,7 @@ describe("source-preserving JSON tree", () => {
     [...document.body.querySelectorAll(selector)].map((node) => node.textContent);
   function expectSource(source: string, suffix = "") {
     expect(find("pre code")?.textContent).toBe(source + suffix);
-    expect(readMarkdownCodeBlockCopyText(find(".code-block-copy")!)).toBe(source);
+    expectCodeCopyText(document.body, source);
   }
   function renderJson(source: string, fenced = false) {
     const json = parseMarkdownJson(source);
