@@ -5,6 +5,7 @@ import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, onTestFinished } from "vitest";
 import { buildMockOpenAiResponsesProvider } from "../../../src/gateway/test-openai-responses-model.ts";
+import { writeGatewayRestartIntentSync } from "../../../src/infra/restart-intent.ts";
 import { ensureGatewayOwnerProfile } from "../../../src/state/user-profiles.ts";
 import { startGatewayRestartProvider } from "../../../test/helpers/gateway-restart-provider.ts";
 import {
@@ -114,7 +115,7 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("gives a new browser a restart document and recovers here without user work", async () => {
+  it("retains the open chat and draft across a real Gateway restart", async () => {
     let phase = "agent inference";
     onTestFinished(() => {
       if (phase !== "complete") {
@@ -130,51 +131,73 @@ suite.define(() => {
     await client.request("sessions.create", {
       agentId: "main",
       key: "agent:main:fresh-visit-proof",
+      label: "Restart proof",
     });
-    await client.request("chat.send", {
-      sessionKey: "agent:main:fresh-visit-proof",
-      message: "RESTART_HANDOFF_0: reply briefly after this local proof.",
-      idempotencyKey: "fresh-visit-announced-restart",
-    });
-    await provider.ready;
-    phase = "announced drain";
-    const pid = instance.child?.pid;
-    if (!pid) {
-      throw new Error("The isolated Gateway has no running process");
-    }
-    process.kill(pid, "SIGUSR2");
-    const url = suite.server.baseUrl + "new?view=retained#draft";
     try {
-      await expect
-        .poll(async () => {
-          const response = await fetch(suite.server.baseUrl + "startupz");
-          return asOptionalRecord(await response.json())?.status;
-        })
-        .toBe("draining");
       await suite.withPage(
         { viewport: { width: 1280, height: 900 }, serviceWorkers: "block" },
         async ({ page }) => {
-          await page.goto(url, { waitUntil: "domcontentloaded" });
-          const maintenance = page.locator("#openclaw-maintenance");
-          if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
-            const frame = await takeControlUiScreenshotFrame(page, page.locator("body"), [], {
-              animations: "disabled",
-            });
-            await writeFile(
-              path.join(suite.artifactDir, "fresh-announced-restart-desktop.png"),
-              frame.png,
-            );
-          }
-          expect(await maintenance.isVisible()).toBe(true);
-          expect(await maintenance.textContent()).toContain("Gateway is restarting");
-          expect(page.url()).toBe(url);
+          let connections = 0;
+          page.on("websocket", () => connections++);
+          await page.goto(
+            suite.server.baseUrl + "new#token=" + encodeURIComponent(instance.gatewayToken),
+          );
+          await waitForControlUiGatewayReady(page);
+          await page
+            .locator("openclaw-app-sidebar")
+            .getByRole("link", { name: /Restart proof/ })
+            .click();
+          const url = page.url();
+          const shell = await page.locator("openclaw-app-shell").elementHandle();
+          const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
+          const draft = "Keep this draft across the real Gateway restart.";
+          await composer.fill(draft);
+          const connectionsBeforeRestart = connections;
+          await client.request("chat.send", {
+            sessionKey: "agent:main:fresh-visit-proof",
+            message: "RESTART_HANDOFF_0: reply briefly after this local proof.",
+            idempotencyKey: "fresh-visit-announced-restart",
+          });
+          await provider.ready;
           provider.beginRecovery();
+          phase = "announced drain";
+          const pid = instance.child?.pid;
+          if (!pid) {
+            throw new Error("The isolated Gateway has no running process");
+          }
+          if (
+            !writeGatewayRestartIntentSync({
+              env: instance.env,
+              targetPid: pid,
+              reason: "control-ui-restart-proof",
+            })
+          ) {
+            throw new Error("The isolated Gateway did not accept its restart intent");
+          }
+          process.kill(pid, "SIGUSR2");
+          await expect
+            .poll(async () => {
+              const response = await fetch(suite.server.baseUrl + "startupz");
+              return asOptionalRecord(await response.json())?.status;
+            })
+            .toBe("draining");
+          expect(await shell?.evaluate((element) => element.isConnected)).toBe(true);
+          expect(await composer.inputValue()).toBe(draft);
+          expect(page.url()).toBe(url);
+
+          phase = "network reconnection";
           provider.releaseRecovery();
           await expect
-            .poll(() => page.locator(".gateway-connection-view").count(), { timeout: 45_000 })
-            .toBe(0);
+            .poll(() => connections, { timeout: 45_000 })
+            .toBeGreaterThan(connectionsBeforeRestart);
+          await waitForControlUiGatewayReady(page);
+          expect(await shell?.evaluate((element) => element.isConnected)).toBe(true);
+          expect(await composer.inputValue()).toBe(draft);
           expect(page.url()).toBe(url);
           expect(instance.logs()).toContain("in-process restart");
+          await assertServedUi(page, suite.server.baseUrl);
+          await client.stopAndWait();
+          client = await connectChatGateway(instance, controller.signal);
           phase = "complete";
         },
       );

@@ -144,13 +144,15 @@ Gateway. Existing conversations keep their mounted route, transcript and draft.
 Authentication failures still use the normal sign-in flow.
 
 When the app assets are unavailable, a self-contained `503` availability page
-provides bounded automatic retries and a manual retry action. It does not require
+retries automatically with bounded request timeouts and backoff. It does not require
 the app bundle or a WebSocket connection. APIs and authenticated dynamic routes
 keep their normal admission and authorization checks. Optional startup sidecars
 do not block the normal UI once core request preparation is ready.
 
 An HTTP document is not a completed WebSocket handshake: the loaded app still owns
-connection recovery and reload-required states. A fresh browser with no cached
+connection recovery and reload-required states. If the document loads but the app
+cannot mount after three recovery navigations, its fallback offers manual reload
+and wait actions. A fresh browser with no cached
 app cannot receive a Gateway page while its listener is fully stopped. An existing
 ingress can provide a retryable HTML error page for that interval; keep API and
 WebSocket handling intact, and do not label an unknown connection failure an update.

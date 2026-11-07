@@ -4,7 +4,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import { AUTH_NONE, withGatewayServer } from "./server-http.test-harness.js";
+import { AUTH_NONE, sendRequest, withGatewayServer } from "./server-http.test-harness.js";
 
 it.each([
   { basePath: "", pathname: "/new", accept: "text/html" },
@@ -138,3 +138,52 @@ it.each(["", "/console"])(
     });
   },
 );
+
+it("retains callback ownership and retries missing resolved documents during startup", async () => {
+  await withTempDir("control-ui-startup-recovery-", async (root) => {
+    const index = path.join(root, "index.html");
+    await fs.writeFile(index, "<!doctype html><openclaw-app></openclaw-app>");
+    let runtimeEntries = 0;
+    await withGatewayServer({
+      prefix: "control-ui-startup-recovery",
+      resolvedAuth: AUTH_NONE,
+      overrides: {
+        controlUiEnabled: true,
+        controlUiBasePath: "",
+        controlUiRoot: { kind: "resolved", path: root },
+        getStartup: () => ({
+          ok: false,
+          status: "starting",
+          uptimeMs: 1,
+          pendingReason: "startup-sidecars",
+        }),
+        isRequestRuntimeReady: () => false,
+        waitForRequestRuntime: async () => {
+          runtimeEntries++;
+        },
+        handleMcpOAuthCallbackRequest: async (_req, res) => {
+          res.end("callback owner");
+          return true;
+        },
+      },
+      run: async (server) => {
+        const request = (pathname: string) =>
+          sendRequest(server, {
+            path: pathname,
+            method: "GET",
+            host: "127.0.0.1",
+            headers: { accept: "text/html" },
+          });
+        const callback = await request("/oauth/mcp/callback?code=synthetic");
+        expect.soft(callback.getBody()).toBe("callback owner");
+        expect.soft(runtimeEntries).toBe(1);
+        for (const missing of [index, root]) {
+          await fs.rm(missing, { recursive: true });
+          const document = await request("/new");
+          expect.soft(document.res.statusCode).toBe(503);
+          expect.soft(document.getBody()).toContain('id="openclaw-maintenance"');
+        }
+      },
+    });
+  });
+});

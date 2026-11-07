@@ -4275,7 +4275,8 @@ html.openclaw-native-web-chrome
 }
 
 /* Keep the header geometry still; reveal its controls once they can act. */
-.topbar--navigation-locked :is(.topbar-nav-toggle, .topnav-shell__actions) {
+.topbar--navigation-locked .topbar-nav-toggle,
+.topbar--navigation-locked .topnav-shell__actions {
   visibility: hidden;
 }
 

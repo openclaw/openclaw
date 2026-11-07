@@ -3,8 +3,6 @@ import { Show } from "solid-js";
 import type { ControlUiEnvironment } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
-import wordmarkDarkText from "../assets/brand/openclaw-horizontal-dark-text.svg";
-import wordmarkLightText from "../assets/brand/openclaw-horizontal-light-text.svg";
 import type { GatewayStatus as GatewayStatusKind } from "../lib/gateway-status.ts";
 import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -16,6 +14,15 @@ import { Kbd, ShortcutText } from "./solid/kbd.tsx";
 import { MobileHeaderNotice } from "./solid/mobile-header-notice.tsx";
 import { MobileNavToggle } from "./solid/mobile-nav-toggle.tsx";
 import "./tooltip.ts";
+
+const wordmarkDarkText = new URL(
+  "../assets/brand/openclaw-horizontal-dark-text.svg",
+  import.meta.url,
+).href;
+const wordmarkLightText = new URL(
+  "../assets/brand/openclaw-horizontal-light-text.svg",
+  import.meta.url,
+).href;
 
 type Props = {
   navDrawerOpen: boolean;
@@ -98,12 +105,12 @@ defineSolidBridge<Props>(
                       <img
                         class="topbar-connection-brand__light"
                         src={wordmarkDarkText}
-                        alt="OpenClaw"
+                        alt={t("connection.workspace.header")}
                       />
                       <img
                         class="topbar-connection-brand__dark"
                         src={wordmarkLightText}
-                        alt="OpenClaw"
+                        alt={t("connection.workspace.header")}
                       />
                     </span>
                   </Show>

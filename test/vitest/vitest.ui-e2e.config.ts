@@ -69,6 +69,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/deepseek-search.real-gateway.e2e.test.ts",
   "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
   "ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts",
+  "ui/src/e2e/gateway-fresh-visit.real-gateway.e2e.test.ts",
   "ui/src/e2e/initial-connect-splash.e2e.test.ts",
   "ui/src/e2e/locale-offline-retry.e2e.test.ts",
   "ui/src/e2e/mcp-app-conformance.e2e.test.ts",

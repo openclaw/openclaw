@@ -201,6 +201,8 @@ export async function serveControlUiStartupRequest(
         basePath,
         config: getRuntimeConfigSnapshot() ?? undefined,
         root,
+        onUnavailableDocument: () =>
+          serveControlUiUnavailableDocument(req, res, startup, url, basePath),
       })
     ) {
       return true;

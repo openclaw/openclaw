@@ -1,9 +1,16 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show } from "solid-js";
-import wordmarkDarkText from "../../assets/brand/openclaw-horizontal-dark-text.svg";
-import wordmarkLightText from "../../assets/brand/openclaw-horizontal-light-text.svg";
 import type { GatewayStatus } from "../../lib/gateway-status.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+
+const wordmarkDarkText = new URL(
+  "../../assets/brand/openclaw-horizontal-dark-text.svg",
+  import.meta.url,
+).href;
+const wordmarkLightText = new URL(
+  "../../assets/brand/openclaw-horizontal-light-text.svg",
+  import.meta.url,
+).href;
 
 /** Cold connections use the real shell; presented conversations retain their own feedback. */
 export function GatewayConnectionView(props: {

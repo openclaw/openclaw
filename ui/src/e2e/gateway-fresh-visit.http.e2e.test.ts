@@ -87,10 +87,9 @@ const suite = createControlUiE2eSuite({
           },
         }),
       () => state.cleanup(),
+      () => rm(currentUiRoot, { recursive: true, force: true }),
     );
-    void lifetime
-      .finally(() => rm(currentUiRoot, { recursive: true, force: true }))
-      .catch(ready.reject);
+    void lifetime.catch(ready.reject);
     return ready.promise;
   },
 });
