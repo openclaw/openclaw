@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { TranscriptNotContinuableError } from "../../packages/agent-core/src/errors.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import {
   onTrustedInternalDiagnosticEvent,
@@ -591,6 +592,20 @@ describe("runWithModelFallback", () => {
         ),
     ],
     ["transcript continuation", () => new TranscriptNotContinuableError("assistant")],
+    [
+      "transcript projection rebuild",
+      () => new SessionTranscriptProjectionUnavailableError("synthetic-session"),
+    ],
+    [
+      "transcript projection rebuild inside a provider-looking wrapper",
+      () =>
+        Object.assign(
+          new Error("provider request failed", {
+            cause: new SessionTranscriptProjectionUnavailableError("synthetic-session"),
+          }),
+          { status: 503 },
+        ),
+    ],
     [
       "abortable client disconnect",
       async () => {
