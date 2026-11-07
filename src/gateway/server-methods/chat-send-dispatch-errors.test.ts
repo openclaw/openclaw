@@ -183,6 +183,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
   it.each([
     { missingProfile: false, policyFailure: false, sessionChanged: false },
     { unstarted: true },
+    { unstarted: true, stateContention: true, flattenedStartup: true },
     { stateContention: true },
     { restartFailure: true },
     { missingProfile: true, policyFailure: false, sessionChanged: false },
@@ -197,6 +198,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       stateContention,
       restartFailure,
       unstarted,
+      flattenedStartup,
     }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         setRuntimeConfigSnapshot({});
@@ -299,6 +301,24 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           markGatewayRestartDraining();
         }
         try {
+          if (flattenedStartup) {
+            const diagnostic =
+              "Wrapped startup cleanup failed | database is locked | ERR_SQLITE_ERROR";
+            expect(() => lifecycle.captureUnstartedFailure(failure)).toThrow(failure);
+            await lifecycle.recordUnstartedFailure({ error: diagnostic });
+            const notices = (await loadTranscriptEvents(target)).filter(
+              (entry) => isRecord(entry) && entry.type === "custom_message",
+            );
+            expect(notices).toEqual([
+              expect.objectContaining({
+                content:
+                  "The request was interrupted because OpenClaw storage is busy. Check its status before trying again.",
+                details: { runId, error: diagnostic, errorKind: "state_contention" },
+              }),
+            ]);
+            await lifecycle.finalize();
+            return;
+          }
           await lifecycle.handleError(failure);
           expect(previewGroup?.signal.aborted).toBe(false);
           await lifecycle.finalize();
@@ -350,7 +370,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         ]);
         if (stateContention) {
           const summary =
-            "Your request was interrupted while the server was busy. Check its status before trying again.";
+            "The request was interrupted because OpenClaw storage is busy. Check its status before trying again.";
           const terminal = broadcast.mock.calls.at(-1)?.[1];
           expect(terminal).toMatchObject({ errorKind: "state_contention" });
           expect(terminal.errorMessage).toMatch(new RegExp(`^${summary.replaceAll(".", "\\.")}`));

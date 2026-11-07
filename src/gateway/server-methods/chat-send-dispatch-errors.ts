@@ -11,12 +11,16 @@ import { DispatchSessionRefreshRequiredError } from "../../auto-reply/reply/disp
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { SessionGoalOperationError } from "../../config/sessions/goals-operations.js";
 import { clearAgentRunContext, getAgentRunContext } from "../../infra/agent-run-registry.js";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import {
   getRpcSourceIdentity,
   getRpcSourceLifecycleGeneration,
   getRpcSourceStartedAt,
 } from "../../sessions/session-controller.rpc-sources.js";
-import { resolveStateContentionPresentation } from "../../sessions/session-run-error-presentation.js";
+import {
+  resolveStateContentionPresentation,
+  STATE_CONTENTION_SUMMARY,
+} from "../../sessions/session-run-error-presentation.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import {
@@ -132,6 +136,20 @@ type PendingDispatchLifecycleError = {
   startedAt: number;
 };
 
+function resolveChatSendErrorPresentation(error: unknown) {
+  const storageFailure = classifyGatewayStorageFailure(error);
+  if (storageFailure === "SQLITE_BUSY" || storageFailure === "SQLITE_LOCKED") {
+    return { errorKind: "state_contention" as const, notice: STATE_CONTENTION_SUMMARY };
+  }
+  return {
+    errorKind: undefined,
+    notice:
+      resolveChatSendStorageErrorMessage(error) ??
+      renderAgentHarnessPreflightUserMessage(error) ??
+      renderFailoverCodeUserCopy(describeFailoverError(error).code),
+  };
+}
+
 function formatChatSendError(error: unknown): string {
   if (error instanceof DispatchSessionRefreshRequiredError) {
     return (
@@ -141,9 +159,7 @@ function formatChatSendError(error: unknown): string {
   }
   return (
     resolveStateContentionPresentation(error)?.errorMessage ??
-    resolveChatSendStorageErrorMessage(error) ??
-    renderAgentHarnessPreflightUserMessage(error) ??
-    renderFailoverCodeUserCopy(describeFailoverError(error).code) ??
+    resolveChatSendErrorPresentation(error).notice ??
     String(error)
   );
 }
@@ -358,7 +374,8 @@ export function createChatSendDispatchErrorLifecycle(params: {
       err = new AggregateError([err, settlementError], "Refused input custody could not settle");
     }
     const errorMessage = formatChatSendError(err);
-    const errorKind = resolveStateContentionPresentation(err)?.errorKind;
+    // Preserve host-authored presentation before the lifecycle diagnostic becomes a string.
+    const { errorKind, notice } = resolveChatSendErrorPresentation(err);
     const queuedFollowupEnqueued = isQueuedFollowupEnqueued();
     if (queuedFollowupEnqueued) {
       context.logGateway.warn(
@@ -433,6 +450,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
         endedAt: Date.now(),
         error: errorMessage,
         errorKind,
+        notice,
         sessionId: getRpcSourceIdentity(activeRunAbort.entry).sessionId,
         lifecycleRevision:
           session.entry?.lifecycleRevision ?? admission.initialSessionEntry?.lifecycleRevision,
@@ -545,6 +563,13 @@ export function createChatSendDispatchErrorLifecycle(params: {
    * failure before any runtime lifecycle exists. Record it as this run's durable
    * terminal so history and other clients show the outcome, not only the live broadcast.
    */
+  let unstartedFailurePresentation: ReturnType<typeof resolveChatSendErrorPresentation> | undefined;
+  const captureUnstartedFailure = (error: unknown): never => {
+    // Source completion flattens this error before delivering the unstarted terminal.
+    unstartedFailurePresentation = resolveChatSendErrorPresentation(error);
+    throw error;
+  };
+
   const recordUnstartedFailure = async (failure: { error: string; notice?: string }) => {
     if (suppressLifecycle || params.isAgentRunStarted()) {
       return;
@@ -553,8 +578,10 @@ export function createChatSendDispatchErrorLifecycle(params: {
       allowUnstartedFailure: true,
       terminationFields: {},
       endedAt: Date.now(),
-      // A returned payload notice is already user-facing copy with its next step.
       ...failure,
+      errorKind: unstartedFailurePresentation?.errorKind,
+      // Prefer the native failure; returned payload notices are already user-facing.
+      notice: unstartedFailurePresentation?.notice ?? failure.notice,
       sessionId: getRpcSourceIdentity(activeRunAbort.entry).sessionId,
       lifecycleRevision:
         session.entry?.lifecycleRevision ?? admission.initialSessionEntry?.lifecycleRevision,
@@ -631,5 +658,12 @@ export function createChatSendDispatchErrorLifecycle(params: {
     }
   };
 
-  return { broadcastError, classifyFailure, finalize, handleError, recordUnstartedFailure };
+  return {
+    broadcastError,
+    captureUnstartedFailure,
+    classifyFailure,
+    finalize,
+    handleError,
+    recordUnstartedFailure,
+  };
 }

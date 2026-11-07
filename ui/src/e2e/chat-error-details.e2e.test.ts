@@ -48,6 +48,55 @@ async function expectMobileFit(page: Page, alert: Locator) {
 }
 
 suite.define(() => {
+  it("keeps startup failure guidance visible without inventing recovery activity", async () => {
+    await suite.withPage(diagnosticContext, async ({ page }) => {
+      const runId = "workspace-startup-failure";
+      const summary =
+        "The request was interrupted because OpenClaw storage is busy. Check its status before trying again.";
+      await installMockGateway(page, {
+        sessionKey,
+        historyMessages: [
+          {
+            role: "user",
+            content: "Help me plan today's work.",
+            timestamp: 1,
+            __openclaw: { id: "startup-user", seq: 1, runId },
+          },
+          {
+            role: "custom",
+            customType: "run-failed-before-reply",
+            content: summary,
+            display: true,
+            timestamp: 2,
+            openclawRunError: { runId, summary },
+            __openclaw: { id: "startup-failure", seq: 2, runId },
+          },
+        ],
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      const notice = page.locator(".chat-run-failure");
+      await notice.locator(".chat-run-failure__toggle").click();
+      const details = notice.locator(".chat-run-failure__log");
+      await details.waitFor();
+      expect(await details.textContent()).toBe(summary);
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        const directory = createControlUiE2eArtifactDir("startup-failure");
+        const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [details], {
+          animations: "disabled",
+        });
+        await writeFile(path.join(directory, "startup-failure.png"), frame.png);
+      }
+      expect(await notice.locator(".chat-run-failure__summary").textContent()).toBe(
+        "Check any completed work before trying again.",
+      );
+      expect(await notice.textContent()).not.toContain("Automatic recovery has stopped");
+      await page.reload();
+      await notice.locator(".chat-run-failure__toggle").click();
+      await details.waitFor();
+      expect(await details.textContent()).toBe(summary);
+    });
+  });
+
   it("keeps archived child failures out of the composer while paging past tool activity", async () => {
     await suite.withPage(diagnosticContext, async ({ page }) => {
       const childKey = "agent:main:dashboard:archived-child";
