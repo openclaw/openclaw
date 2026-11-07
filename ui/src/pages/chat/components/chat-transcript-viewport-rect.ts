@@ -94,8 +94,7 @@ export class TranscriptViewportRect {
         );
       }
       if (widthChanged) {
-        // Preserve offscreen estimates; connected resizeItem measurements own scroll compensation.
-        this.owner.measureConnectedRows();
+        // Preserve offscreen estimates; measure connected rows in the existing frame pass.
         this.owner.queueRowMeasure();
       }
       this.owner.positionRail.sync(railGeometry);

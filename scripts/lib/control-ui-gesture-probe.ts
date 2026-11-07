@@ -38,9 +38,34 @@ export type GestureFrameSummary = {
   over33Ms: number;
 };
 
+export type GestureTranscriptGeometry = {
+  at: number;
+  threads: Array<{
+    index: number;
+    top: number;
+    bottom: number;
+    width: number;
+    height: number;
+    scrollTop: number;
+    rows: Array<{
+      index: number;
+      top: number;
+      bottom: number;
+      visible: boolean;
+      rowOverlapPx: number;
+      textClipPx: number;
+      textCount: number;
+      measuredHeight: number;
+      cachedHeight: number | null;
+    }>;
+  }>;
+};
+
 export type GestureProbeOptions = {
   /** Diagnostic runs only: stack capture changes timing and must be reported separately. */
   geometryReadStacks?: boolean;
+  /** Separate from stack capture: diagnostic layout reads must not become app-read evidence. */
+  transcriptGeometry?: boolean;
   maxGeometryReadSamples?: number;
   /** Safety bound for a hung driver; a truncated recording is not acceptance evidence. */
   maxFrameSamples?: number;
@@ -49,7 +74,7 @@ export type GestureProbeOptions = {
 
 export type GestureProbeResult = {
   label: string;
-  mode: "timing" | "geometry-diagnostic";
+  mode: "timing" | "geometry-diagnostic" | "transcript-geometry-diagnostic";
   clock: "requestAnimationFrame callback intervals; not CPU or presentation timestamps";
   startedAt: number;
   stoppedAt: number;
@@ -65,6 +90,11 @@ export type GestureProbeResult = {
   totals: GestureCounters;
   geometryReads: GestureGeometryRead[];
   geometryReadSamplesDropped: number;
+  transcriptGeometry?: {
+    frames: GestureTranscriptGeometry[];
+    final: GestureTranscriptGeometry;
+    failures: string[];
+  };
   frameSummary: GestureFrameSummary;
   /** Complete callback intervals intersecting the first-to-last physical input span. */
   activeFrameSummary: GestureFrameSummary;
@@ -121,6 +151,7 @@ export function installControlUiGestureProbe(options: GestureProbeOptions = {}) 
   let totals = newCounters();
   let geometryReads: GestureGeometryRead[] = [];
   let geometryReadSamplesDropped = 0;
+  let transcriptFrames: GestureTranscriptGeometry[] = [];
   const sampleLimit = options.maxGeometryReadSamples ?? 2_000;
   const frameLimit = options.maxFrameSamples ?? 36_000;
   const inputLimit = options.maxInputSamplesPerKind ?? 100_000;
@@ -226,11 +257,96 @@ export function installControlUiGestureProbe(options: GestureProbeOptions = {}) 
     wrapMethod(window, "getComputedStyle", "Window.getComputedStyle");
   }
 
+  // This reads layout and is never installed on a timing or read-stack run.
+  const readTranscriptGeometry = options.transcriptGeometry
+    ? (at: number): GestureTranscriptGeometry => ({
+        at,
+        threads: [...document.querySelectorAll<HTMLElement>(".chat-thread")].flatMap(
+          (thread, threadIndex) => {
+            if (!thread.checkVisibility({ opacityProperty: true, visibilityProperty: true })) {
+              return [];
+            }
+            const viewport = thread.getBoundingClientRect();
+            const top = Math.max(0, viewport.top);
+            const bottom = Math.min(innerHeight, viewport.bottom);
+            if (bottom <= top || viewport.right <= 0 || viewport.left >= innerWidth) {
+              return [];
+            }
+            let previous: { index: number; bottom: number } | undefined;
+            const rows = [
+              ...thread.querySelectorAll<HTMLElement>(
+                ".chat-virtual-block > .chat-virtual-row:not([data-prepared-row])",
+              ),
+            ].map((row) => {
+              const index = Number(row.dataset.index);
+              const bounds = row.getBoundingClientRect();
+              let textClipPx = 0;
+              let textCount = 0;
+              for (const text of row.querySelectorAll<HTMLElement>(".chat-text")) {
+                if (!text.checkVisibility({ opacityProperty: true, visibilityProperty: true })) {
+                  continue;
+                }
+                const textBounds = text.getBoundingClientRect();
+                let textTop = textBounds.top;
+                let textBottom = textBounds.bottom;
+                // A collapsed human message intentionally clips its full Markdown box.
+                const disclosure = text.closest(".chat-message-disclosure:not(.is-expanded)");
+                const clip = disclosure?.querySelector(".chat-message-disclosure__content");
+                if (clip?.contains(text)) {
+                  const clipped = clip.getBoundingClientRect();
+                  textTop = Math.max(textTop, clipped.top);
+                  textBottom = Math.min(textBottom, clipped.bottom);
+                }
+                if (textBottom > textTop && textBottom > top && textTop < bottom) {
+                  textCount++;
+                  textClipPx = Math.max(
+                    textClipPx,
+                    bounds.top - textTop,
+                    textBottom - bounds.bottom,
+                  );
+                }
+              }
+              const rowOverlapPx =
+                previous?.index === index - 1 ? Math.max(0, previous.bottom - bounds.top) : 0;
+              previous = { index, bottom: bounds.bottom };
+              const cached = Number.parseFloat(row.dataset.rowSize ?? "");
+              return {
+                index,
+                top: bounds.top,
+                bottom: bounds.bottom,
+                visible: bounds.bottom > top && bounds.top < bottom,
+                rowOverlapPx,
+                textClipPx,
+                textCount,
+                // Match the owner's unscaled fractional border-box measurement.
+                measuredHeight: Number.parseFloat(getComputedStyle(row).height),
+                cachedHeight: Number.isFinite(cached) ? cached : null,
+              };
+            });
+            return [
+              {
+                index: threadIndex,
+                top,
+                bottom,
+                width: viewport.width,
+                height: viewport.height,
+                scrollTop: thread.scrollTop,
+                rows,
+              },
+            ];
+          },
+        ),
+      })
+    : undefined;
+
   const frame = (at: number) => {
     if (!recording) {
       return;
     }
     if (frames.length < frameLimit) {
+      if (readTranscriptGeometry) {
+        transcriptFrames.push(readTranscriptGeometry(at));
+      }
       frames.push({
         at,
         intervalMs:
@@ -260,6 +376,7 @@ export function installControlUiGestureProbe(options: GestureProbeOptions = {}) 
       totals = newCounters();
       geometryReads = [];
       geometryReadSamplesDropped = 0;
+      transcriptFrames = [];
       previousFrame = undefined;
       startedAt = performance.now();
       recording = true;
@@ -300,9 +417,50 @@ export function installControlUiGestureProbe(options: GestureProbeOptions = {}) 
           at >= firstPhysicalInputAt &&
           at - intervalMs <= lastPhysicalInputAt,
       );
+      const finalGeometry = readTranscriptGeometry?.(stoppedAt);
+      const geometryFailures: string[] = [];
+      if (finalGeometry) {
+        const visible = finalGeometry.threads.flatMap(({ rows }) =>
+          rows.filter((row) => row.visible),
+        );
+        if (!visible.some((row) => row.textCount > 0)) {
+          geometryFailures.push("Final diagnostic has no visible transcript text rows");
+        }
+        if (frameSamplesDropped || !transcriptFrames.length) {
+          geometryFailures.push("Transcript frame diagnostics are incomplete");
+        }
+        // Native fractional rounding is allowed; an actual pixel of overlap is not.
+        for (const sample of [...transcriptFrames, finalGeometry]) {
+          for (const thread of sample.threads) {
+            for (const row of thread.rows) {
+              if (
+                (row.visible || row.textCount > 0) &&
+                (row.rowOverlapPx > 0.5 || row.textClipPx > 0.5)
+              ) {
+                geometryFailures.push(
+                  `${sample.at}: transcript ${thread.index} row ${row.index}: overlap ${row.rowOverlapPx}, text clip ${row.textClipPx}`,
+                );
+              }
+              if (
+                sample === finalGeometry &&
+                row.cachedHeight !== null &&
+                Math.abs(row.cachedHeight - row.measuredHeight) > 0.5
+              ) {
+                geometryFailures.push(
+                  `Final transcript ${thread.index} row ${row.index}: cache ${row.cachedHeight}, measured ${row.measuredHeight}`,
+                );
+              }
+            }
+          }
+        }
+      }
       return {
         label,
-        mode: options.geometryReadStacks ? "geometry-diagnostic" : "timing",
+        mode: options.transcriptGeometry
+          ? "transcript-geometry-diagnostic"
+          : options.geometryReadStacks
+            ? "geometry-diagnostic"
+            : "timing",
         clock: "requestAnimationFrame callback intervals; not CPU or presentation timestamps",
         startedAt,
         stoppedAt,
@@ -317,6 +475,15 @@ export function installControlUiGestureProbe(options: GestureProbeOptions = {}) 
         totals,
         geometryReads,
         geometryReadSamplesDropped,
+        ...(finalGeometry
+          ? {
+              transcriptGeometry: {
+                frames: transcriptFrames,
+                final: finalGeometry,
+                failures: geometryFailures,
+              },
+            }
+          : {}),
         frameSummary: summarize(frames),
         activeFrameSummary: summarize(activeFrames),
       };

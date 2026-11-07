@@ -352,7 +352,15 @@ the gesture's bounds/assertion and settle work; dividing by native input count i
 an amortized cost, not causal per-event attribution. Missing engine fields remain
 null. `--gesture-geometry` additionally captures bounded geometry-read stacks;
 read attempts are not proof of forced layout, and this diagnostic instrumentation
-must not be used for timing acceptance.
+must not be used for timing acceptance. `--gesture-transcript-geometry` is a
+separate diagnostic for resize gestures: it samples active transcript row
+adjacency, visible `.chat-text` containment (respecting collapsed disclosures),
+and the virtual row size against the owner's unscaled fractional border box.
+It fails on visible overlap or clipped text above 0.5 px, missing samples, or
+final cache/DOM size disagreement above 0.5 px. It reads layout each frame;
+never use its timings or native pass counts for acceptance or combine it with
+`--gesture-geometry`. Pseudo-elements, decorations, images and top-layer overlays
+are outside this text-fixture diagnostic; inspect those separately when present.
 
 Idle scenarios default to a 30-second Node-side measurement window. Use
 `--idle-duration-ms` for a bounded diagnostic or rotated comparison; the manifest

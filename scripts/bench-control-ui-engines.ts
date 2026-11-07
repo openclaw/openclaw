@@ -165,6 +165,7 @@ const { values } = parseArgs({
     trace: { type: "boolean", default: false },
     "observer-origins": { type: "boolean", default: false },
     "gesture-geometry": { type: "boolean", default: false },
+    "gesture-transcript-geometry": { type: "boolean", default: false },
     "cpu-only": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
     "native-audit": { type: "boolean", default: false },
@@ -180,6 +181,10 @@ const { values } = parseArgs({
     "memory-soak-rounds": { type: "string", default: "10" },
   },
 });
+if (values["gesture-geometry"] && values["gesture-transcript-geometry"]) {
+  throw new Error("Run transcript geometry separately from geometry-read stack capture");
+}
+
 const pairs = Number(values.pairs);
 const configurations = resolveEngineConfigurations(values.configurations);
 const memorySoakRounds = Number(values["memory-soak-rounds"]);
@@ -699,6 +704,7 @@ try {
     trace: values.trace,
     observerOrigins: values["observer-origins"],
     gestureGeometry: values["gesture-geometry"],
+    gestureTranscriptGeometry: values["gesture-transcript-geometry"],
     cpuOnly: values["cpu-only"],
     cpuProfile: values["cpu-profile"],
     nativeAudit: values["native-audit"],
@@ -963,6 +969,7 @@ try {
               if (scenario.id.startsWith("gesture-")) {
                 await addControlUiGestureProbe(page, {
                   geometryReadStacks: values["gesture-geometry"],
+                  transcriptGeometry: values["gesture-transcript-geometry"],
                 });
               }
               if (values["remount-audit"]) {
@@ -1347,6 +1354,10 @@ try {
               if (scenario.id.startsWith("gesture-")) {
                 observation.gesture = await stopControlUiGestureProbe(page);
                 gestureRecording = false;
+                const geometryFailures = observation.gesture.transcriptGeometry?.failures;
+                if (geometryFailures?.length) {
+                  throw new Error(geometryFailures.slice(0, 3).join("; "));
+                }
               }
               if (actionTiming) {
                 await actionTiming.evaluate((timing) => timing.endScenario());
