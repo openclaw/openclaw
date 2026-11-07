@@ -312,7 +312,14 @@ OPENCLAW_LOCALE=en openclaw onboard # Explicit English override
 
 Replacing an existing provider credential saves it inactive and prints a
 `models auth activate` command; setup does not automatically switch your working
-connection or continue to daemon installation. Temporary credential staging files
+connection or continue to daemon installation. If setup cannot choose a model to
+test the new key with (the provider sets no starter model and your agent has no model
+on it: for example a provider without a text model, or Vercel AI Gateway when the key
+lists none of its recommended models or the list cannot be fetched), it does not save
+the key, keeps your connection, and prints a `models auth paste-api-key` command that
+replaces the current inline key without a test; a key kept in a secret reference is
+updated at its source.
+Temporary credential staging files
 are removed after their databases close. If removal remains blocked, setup warns
 with the leftover directory path without hiding the provider result or activation
 instructions. Remove that directory manually once the lock clears.
