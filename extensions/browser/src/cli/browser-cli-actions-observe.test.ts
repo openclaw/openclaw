@@ -1,3 +1,4 @@
+import { Command } from "commander";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   createBrowserProgram,
@@ -11,6 +12,7 @@ gatewayMock.mockResolvedValue({ response: { body: "ok" } });
 mockBrowserCliRuntime();
 
 const { registerBrowserActionObserveCommands } = await import("./browser-cli-actions-observe.js");
+const { registerBrowserCli } = await import("./browser-cli.js");
 
 function run(...args: string[]) {
   const { program, browser, parentOpts } = createBrowserProgram();
@@ -38,6 +40,24 @@ describe("browser action observe commands", () => {
       "browser.request",
       expect.objectContaining({ timeout: String(Number(timeout) + 130_000) }),
       expect.objectContaining({ path, timeoutMs: Number(timeout) }),
+      expect.objectContaining({ scopes: ["operator.admin"] }),
+    );
+  });
+
+  it("discovers archive through the lazy CLI and forwards the selected tab", async () => {
+    const args = ["browser", "--json", "--timeout", "60000", "archive", "--target-id", "tab-7"];
+    const program = new Command().name("openclaw").enablePositionalOptions().exitOverride();
+    registerBrowserCli(program, ["node", "openclaw", ...args]);
+    await program.parseAsync(args, { from: "user" });
+    expect(gatewayMock).toHaveBeenCalledExactlyOnceWith(
+      "browser.request",
+      expect.anything(),
+      expect.objectContaining({
+        method: "POST",
+        path: "/archive",
+        body: { targetId: "tab-7" },
+        timeoutMs: 60000,
+      }),
       expect.objectContaining({ scopes: ["operator.admin"] }),
     );
   });

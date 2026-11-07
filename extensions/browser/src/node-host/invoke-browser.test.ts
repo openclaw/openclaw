@@ -560,6 +560,19 @@ describe("runBrowserProxyCommand", () => {
       });
       await expect(invoke("/stop")).rejects.toThrow("node browser proxy disabled");
       expect(write).not.toHaveBeenCalled();
+
+      allowProfiles("openclaw");
+      routes.dispatch.mockImplementationOnce(async (request) => {
+        await request.assertCurrent?.();
+        allowProfiles("user");
+        request.requester?.isCurrent();
+        write();
+        return okResponse;
+      });
+      await expect(invoke("/stop", { profile: "openclaw" })).rejects.toThrow(
+        "browser profile not allowed",
+      );
+      expect(write).not.toHaveBeenCalled();
     });
 
     it("rechecks policy after native ownership discovery before closing a target", async () => {

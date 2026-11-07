@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_UPLOAD_DIR } from "../paths.js";
 import { registerBrowserAgentActRoutes } from "./agent.act.js";
@@ -71,6 +72,29 @@ describe.runIf(process.env.OPENCLAW_BROWSER_PASTE_E2E === "1")("Chromium focused
 describe.runIf(process.env.OPENCLAW_BROWSER_CONTENT_E2E === "1")(
   "Chromium browser content routes",
   () => {
+    it("archives the rendered document as a reopenable offline MHTML file", async () => {
+      await withContentPage(async ({ page, call }) => {
+        await page.locator("main").evaluate((element) => {
+          element.textContent = "Rendered archive receipt";
+          element.setAttribute("style", "color: rgb(12, 34, 56)");
+        });
+        const response = await call("post", "/archive");
+        expect(response.statusCode, JSON.stringify(response.body)).toBe(200);
+        const saved = response.body as { path: string };
+        expect(path.extname(saved.path)).toBe(".mhtml");
+        const buffer = await fs.readFile(saved.path, "utf8");
+        expect(buffer).toContain("multipart/related");
+        const context = page.context();
+        await context.setOffline(true);
+        const reopened = await context.newPage();
+        await reopened.goto(pathToFileURL(saved.path).href);
+        expect(await reopened.locator("main").textContent()).toBe("Rendered archive receipt");
+        expect(await reopened.locator("main").evaluate((el) => getComputedStyle(el).color)).toBe(
+          "rgb(12, 34, 56)",
+        );
+      });
+    }, 30_000);
+
     it.each(["", "  padded 🦞  "])(
       "preserves prompt response %j",
       (promptText) =>
