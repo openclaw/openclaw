@@ -2,10 +2,12 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
+  markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
 } from "../../../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import { applyPreparedReplyMedia } from "../../../auto-reply/reply/reply-media-paths.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { estimateAggregateUsageCost } from "../../../utils/usage-format.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
@@ -16,11 +18,15 @@ import {
   sanitizeAgentRunTerminalReply,
 } from "../../agent-run-terminal-reply.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
+import { sanitizeUserFacingText } from "../../embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
   extractAssistantVisibleText,
   sanitizeAssistantVisibleStreamText,
 } from "../../embedded-agent-utils.js";
+import { renderAssistantRequestFailureCopy } from "../../failover/assistant-request-failure-copy.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
+import { resolveReplyFailoverFacts } from "../../failover/request-error-facts.js";
+import { renderRateLimitOrOverloadedCopy } from "../../failover/user-copy.js";
 import { isProviderModelRerouted } from "../../provider-model-route.js";
 import type { ReplyDeliveryState } from "../../reply-completion.js";
 import { isExecLikeToolName } from "../../tool-error-summary.js";
@@ -95,9 +101,8 @@ export function prepareEmbeddedRunTerminal(input: {
     attempt,
     input.sourceReplyDeliveryState ?? replyDeliveryState,
   );
-  const { timedOutDuringCompaction, timedOutDuringToolExecution } = projectAgentRunAttemptTerminal(
-    attempt.terminal,
-  );
+  const { promptError, timedOutDuringCompaction, timedOutDuringToolExecution } =
+    projectAgentRunAttemptTerminal(attempt.terminal);
   const timedOutDuringPrompt =
     isEmbeddedRunTerminalTimeout(input.terminalState.outcome) &&
     !timedOutDuringCompaction &&
@@ -281,6 +286,31 @@ export function prepareEmbeddedRunTerminal(input: {
     deferAssistantTimeoutError:
       timedOutDuringPrompt && (!hasMessagingToolDeliveryEvidence(attempt) || timeoutFinal),
   }).map((payload) => applyPreparedReplyMedia(payload, attempt.preparedReplyMedia ?? []));
+  // A tool warning does not report the later provider failure that ended the turn.
+  if (
+    promptError &&
+    !isEmbeddedRunTerminalInterrupted(input.terminalState.outcome) &&
+    payloads.some((payload) => getReplyPayloadMetadata(payload)?.toolErrorWarning)
+  ) {
+    const message = formatErrorMessage(promptError);
+    const failure = resolveReplyFailoverFacts(promptError, message);
+    const copy =
+      failure.reason === "rate_limit" || failure.reason === "overloaded"
+        ? renderRateLimitOrOverloadedCopy({ reason: failure.reason, raw: message })
+        : (failure.providerRequestError?.userMessage ??
+          failure.requestFailureText ??
+          renderAssistantRequestFailureCopy(failure));
+    if (copy) {
+      const failurePayload = {
+        text: sanitizeUserFacingText(copy, { errorContext: true }),
+        isError: true,
+      };
+      if (runParams.sourceReplyDeliveryMode === "message_tool_only") {
+        markReplyPayloadForSourceSuppressionDelivery(failurePayload);
+      }
+      payloads.unshift(failurePayload);
+    }
+  }
   // Keep the local transcript fact before aggregate delivery also includes message tools.
   if (input.sourceReplyDeliveryState === "missing" && input.replyDeliveryState === "delivered") {
     for (const payload of payloads) {
