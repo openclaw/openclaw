@@ -1,3 +1,3 @@
-89
-# Regression coverage for the memory workspace watcher: a remote subscription that
-# retires without an abort must re-subscribe once, then keep the search fallback.
+66
+# Consolidated lifecycle coverage: index edits after re-subscription, warn on
+# exhausted recovery, preserve searchable rows, and join quiet shutdown.

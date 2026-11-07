@@ -58,8 +58,11 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
             }
             markDirty("unavailable");
             // One bounded re-subscription restores observation; a transport that
-            // keeps retiring settles on the search fallback instead of a retry loop.
+            // keeps retiring must not enter a retry loop.
             if (this.remoteWatchRestarts >= 1) {
+              log.warn(
+                "memory workspace watcher ended unexpectedly again; restart the Gateway to restore remote memory watching",
+              );
               return;
             }
             this.remoteWatchRestarts += 1;
