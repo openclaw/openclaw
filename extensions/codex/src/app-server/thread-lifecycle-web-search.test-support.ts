@@ -155,4 +155,34 @@ export function registerThreadWebSearchBindingTests({
       config/read thread/read thread/resume thread/inject_items`.split(/\s+/),
     ]);
   });
+  it("keeps the turn-1 thread when a cold unsupported verdict resolves as supported on turn 2", async () => {
+    const { sessionFile } = createPaths();
+
+    const fixture = await createSequentialLifecycleHarness((requestParams) =>
+      threadStartResult((requestParams as { threadId: string }).threadId),
+    );
+    const { client, request } = fixture;
+
+    // A cold app-server can report missing web-search capability before its
+    // model metadata hydrates; that definitive-looking "unsupported" verdict
+    // must not pin the conversation to a replacement when support resolves.
+    await startOrResumeThread({
+      client,
+      nativeProviderWebSearchSupport: "unsupported",
+      webSearchAllowed: true,
+    });
+    await fixture.endTurn("thread-1");
+    const savedAfterColdVerdict = await readCodexAppServerBinding(sessionFile);
+    expect(savedAfterColdVerdict?.threadId).toBe("thread-1");
+    expect(savedAfterColdVerdict?.webSearchThreadConfigFingerprint).toContain("disabled");
+
+    const resumedBinding = await startOrResumeThread({
+      client,
+      nativeProviderWebSearchSupport: "supported",
+      webSearchAllowed: true,
+    });
+
+    expect(resumedBinding.threadId).toBe("thread-1");
+    expect(request.mock.calls.filter(([method]) => method === "thread/start")).toHaveLength(1);
+  });
 }
