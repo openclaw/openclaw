@@ -14,6 +14,7 @@ import {
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { allowDrvfsRenameRecovery } from "../../infra/fs-safe-drvfs.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import { stateRootDirectoryMode } from "../../infra/private-dir-mode.js";
 import {
@@ -469,6 +470,7 @@ export async function rollbackFailedUpdate(params: {
             await fs.rm(targetPath, { force: true });
           } else {
             await replaceFileAtomic({
+              allowDrvfsRenameRecovery: allowDrvfsRenameRecovery(path.dirname(targetPath)),
               filePath: targetPath,
               content: file.raw,
               mode: 0o600,

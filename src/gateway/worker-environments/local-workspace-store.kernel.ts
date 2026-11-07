@@ -12,23 +12,56 @@ import {
   readLocalWorkspaceSourcePaths,
   readLocalWorkspaceSweepCandidates,
 } from "./local-workspace-cas.kernel.js";
-import type { LocalWorkspaceMutation } from "./local-workspace-store.types.js";
+import type {
+  LocalWorkspaceCheckpointReceipt,
+  LocalWorkspaceMutation,
+  LocalWorkspaceProjection,
+} from "./local-workspace-store.types.js";
 
 const table = "local_workspace_projections";
 const nodes = "local_workspace_manifest_nodes";
 const query = (db: EngineConnection) =>
   getNodeSqliteKysely<Pick<DB, typeof table | typeof nodes>>(db);
 
-export function readLocalWorkspaceProjectionInDatabase(db: EngineConnection, id: string) {
+export function readLocalWorkspaceProjectionInDatabase(
+  db: EngineConnection,
+  id: string,
+): LocalWorkspaceProjection | undefined {
   const row = tableExists(db, table)
     ? executeSqliteQueryTakeFirstSync(
         db,
         query(db).selectFrom(table).selectAll().where("worktree_id", "=", id),
       )
     : undefined;
-  return row?.source_paths_digest
-    ? { ...row, source_paths_json: readLocalWorkspaceSourcePaths(db, row.source_paths_digest) }
-    : row;
+  if (!row) {
+    return undefined;
+  }
+  // This owner writes the rejection envelope in this order; ordinary checkpoints
+  // retain their bytes without decoding the full inventory on every read.
+  let receipt: Extract<LocalWorkspaceCheckpointReceipt, { kind: "rejected" }> | undefined;
+  if (row.checkpoint_json?.startsWith('{"kind":"rejected",')) {
+    // SAFETY: The projection writer owns this rejection envelope and its preserved checkpoint.
+    receipt = JSON.parse(row.checkpoint_json) as Extract<
+      LocalWorkspaceCheckpointReceipt,
+      { kind: "rejected" }
+    >;
+  }
+  return {
+    ...row,
+    ...(row.source_paths_digest
+      ? { source_paths_json: readLocalWorkspaceSourcePaths(db, row.source_paths_digest) }
+      : {}),
+    ...(receipt
+      ? {
+          checkpoint_json: receipt.checkpoint,
+          rejectedResult: {
+            ref: receipt.ref,
+            reason: receipt.reason,
+            manifestRef: receipt.manifestRef,
+          },
+        }
+      : {}),
+  };
 }
 
 export function hasLocalWorkspaceProjectionInDatabase(db: EngineConnection, id: string): boolean {
@@ -64,6 +97,9 @@ export function mutateLocalWorkspaceProjection(
         query(db)
           .selectFrom(table)
           .select(["revision", "baseline_ref"])
+          .$if(mutation.kind === "update" && mutation.rejectedResult !== undefined, (builder) =>
+            builder.select("checkpoint_json"),
+          )
           .$if(mutation.kind === "delete", (builder) =>
             builder.select((eb) =>
               eb
@@ -133,6 +169,15 @@ export function mutateLocalWorkspaceProjection(
       .updateTable(table)
       .set({
         ...mutation.patch,
+        ...(mutation.rejectedResult
+          ? {
+              checkpoint_json: JSON.stringify({
+                kind: "rejected",
+                ...mutation.rejectedResult,
+                checkpoint: current.checkpoint_json ?? null,
+              } satisfies Extract<LocalWorkspaceCheckpointReceipt, { kind: "rejected" }>),
+            }
+          : {}),
         ...(mutation.manifest
           ? {
               baseline_ref: mutation.manifest.resultingRoot,

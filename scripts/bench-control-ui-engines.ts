@@ -26,6 +26,7 @@ import {
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import { installNativePluginMockGateway } from "../ui/src/test-helpers/control-ui-plugin-e2e.ts";
 import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
 import {
   mapControlUiAllocationProfile,
@@ -103,6 +104,7 @@ import {
   type ControlUiMutationAudit,
 } from "./lib/control-ui-mutation-audit.ts";
 import { summarizeControlUiNativeTrace } from "./lib/control-ui-native-trace.ts";
+import { createControlUiObservationWriter } from "./lib/control-ui-observation-output.ts";
 import {
   finishControlUiPageObserver,
   installControlUiPageObserver,
@@ -405,6 +407,7 @@ type Observation = {
   artifactPrefix: string;
 };
 const observations: Observation[] = [];
+const observationWriter = createControlUiObservationWriter(artifactDir);
 const cpuCensus = createControlUiCpuCensus();
 const writeJson = (name: string, value: unknown) =>
   writeFile(path.join(artifactDir, name), JSON.stringify(value, null, 2));
@@ -690,16 +693,14 @@ try {
               observation.status = "skipped";
               observation.skipReason = "This control is unavailable at this viewport.";
               observations.push(observation);
-              await writeJson(`${artifactPrefix}.json`, observation);
-              await writeJson("observations.json", observations);
+              await observationWriter.record(observation);
               continue;
             }
             if (scenario.visibility === "hidden" && engine !== "chromium") {
               observation.status = "skipped";
               observation.skipReason = `${engine} has no supported native headless hiding API; no simulated visibility proof.`;
               observations.push(observation);
-              await writeJson(`${artifactPrefix}.json`, observation);
-              await writeJson("observations.json", observations);
+              await observationWriter.record(observation);
               continue;
             }
             if (scenario.memory || !browsers.get(engine)!.isConnected()) {
@@ -762,6 +763,9 @@ try {
                   deviceScaleFactor: configuration.deviceScaleFactor,
                   mobile: viewport.name === "mobile",
                 });
+                if (viewport.name === "mobile") {
+                  await throttle.send("Emulation.setTouchEmulationEnabled", { enabled: true });
+                }
                 await throttle.send("Emulation.setLocaleOverride", {
                   locale: configuration.locale,
                 });
@@ -888,12 +892,16 @@ try {
                   return sessions.list(params).result;
                 },
               };
+              const installGateway = scenario.fixture?.workboardResources
+                ? installNativePluginMockGateway
+                : installMockGateway;
               const gateway = idleControl
                 ? undefined
-                : await installMockGateway(
+                : await installGateway(
                     page,
                     { ...fixture, awaitInitialRoster: false },
                     {
+                      nativeAssetLatencyMs: networkProfile.httpLatencyMs,
                       requestHandlers: {
                         ...defaults,
                         ...scenario.createRequestHandlers?.(defaults),
@@ -1354,8 +1362,7 @@ try {
                 await writeJson("cpu-census.json", cpuCensus.report());
               }
               observations.push(observation);
-              await writeJson(`${artifactPrefix}.json`, observation);
-              await writeJson("observations.json", observations);
+              await observationWriter.record(observation);
               console.log(
                 JSON.stringify(
                   observation.memory
@@ -1370,11 +1377,15 @@ try {
     }
   }
 } finally {
-  for (const browser of browsers.values()) {
-    await browser.close();
-  }
-  for (const { server } of servers) {
-    await server.close();
+  try {
+    for (const browser of browsers.values()) {
+      await browser.close();
+    }
+    for (const { server } of servers) {
+      await server.close();
+    }
+  } finally {
+    await observationWriter.finish(observations);
   }
 }
 function distribution(samples: number[]) {

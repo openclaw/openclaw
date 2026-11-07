@@ -9,6 +9,7 @@ import { z } from "zod";
 import { resolveStateDir } from "../config/paths.js";
 import { VERSION } from "../version.js";
 import { requireDirectorySync, syncDirectorySync } from "./directory-durability.js";
+import { allowDrvfsRenameRecovery } from "./fs-safe-drvfs.js";
 import { MigrationArtifactSchema } from "./session-sqlite-migration-artifact.js";
 import {
   isSessionSqliteMigrationWarning,
@@ -234,6 +235,7 @@ export function writeSessionSqliteMigrationManifest(
 ): void {
   fs.mkdirSync(path.dirname(activeRun.manifestPath), { recursive: true, mode: 0o700 });
   replaceFile.replaceFileAtomicSync({
+    allowDrvfsRenameRecovery: allowDrvfsRenameRecovery(path.dirname(activeRun.manifestPath)),
     filePath: activeRun.manifestPath,
     content: `${JSON.stringify(activeRun.manifest, null, 2)}\n`,
     dirMode: 0o700,

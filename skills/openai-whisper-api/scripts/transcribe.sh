@@ -105,7 +105,7 @@ if [[ "$json_output" == "0" && ( "$request_format" == "json" || "$request_format
 fi
 
 curl_args=(
-  -sS "${api_base}/audio/transcriptions"
+  -fsS "${api_base}/audio/transcriptions"
   -H "Authorization: Bearer $OPENAI_API_KEY"
   -H "Accept: application/json"
   -F "file=@${in}"
@@ -116,7 +116,7 @@ if [[ "$language" != "" ]]; then
   curl_args+=(-F "language=${language}")
 fi
 if [[ "$prompt" != "" ]]; then
-  curl_args+=(-F "prompt=${prompt}")
+  curl_args+=(--form-string "prompt=${prompt}")
 fi
 if [[ "$diarize" == "1" ]]; then
   curl_args+=(-F "chunking_strategy=auto")
