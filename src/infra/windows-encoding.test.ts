@@ -92,6 +92,36 @@ it.each([
   }
 });
 
+it("probes the system code page through the absolute PowerShell path, not bare PATH lookup", async () => {
+  // #193785: a PATH without the Windows PowerShell directory made the bare
+  // "powershell.exe" spawn fail, and the cached null fell back to UTF-8 replacement
+  // decoding, corrupting legacy ANSI files. Keep the probe inside SystemRoot.
+  spawnSyncMock.mockImplementation((command: string) =>
+    command.includes("\\")
+      ? { status: 0, stdout: "1252\n", stderr: "" }
+      : Object.assign(new Error("spawnSync powershell.exe ENOENT"), { code: "ENOENT" }),
+  );
+  const previous = process.env.SystemRoot;
+  process.env.SystemRoot = String.raw`C:\Windows`;
+  try {
+    const fresh = await freshEncoding("win32");
+    expect(
+      fresh.decodeWindowsTextFileBuffer({ buffer: Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]) }),
+    ).toBe("café\n");
+  const commands = spawnSyncMock.mock.calls.map((call) => String(call[0]));
+  expect(commands.some((command) => command === "powershell.exe")).toBe(false);
+    expect(commands.some((command) => /WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe$/u.test(command))).toBe(
+      true,
+    );
+  } finally {
+    if (previous === undefined) {
+      delete process.env.SystemRoot;
+    } else {
+      process.env.SystemRoot = previous;
+    }
+  }
+});
+
 it("bounds and caches failed encoding probes", async () => {
   spawnSyncMock.mockReturnValue({
     error: Object.assign(new Error("spawnSync ETIMEDOUT"), { code: "ETIMEDOUT" }),
