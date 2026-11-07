@@ -381,7 +381,7 @@ if (endpoint === "repos/openclaw/openclaw/actions/jobs/2/logs") {
       jobs: [job("Kova mock provider performance", 1), job("Correctness integrity", 2)],
     });
     expect(terminalPolicyPass(observed, "2026.11.2")).toBe(false);
-    expect(observed.jobs[0].conclusion).toBe("failure");
+    expect(observed.jobs[0]).toMatchObject({ conclusion: "failure" });
   });
 
   it("does not accept a waived leaf without its required aggregate", async () => {
