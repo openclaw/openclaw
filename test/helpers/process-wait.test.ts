@@ -85,6 +85,21 @@ it("waits through empty PID contents using the injected delay", async ({ signal 
   expect(await waiting).toBe(42);
 });
 
+it.for(["42stale", "42\njunk", "4.2", "0x2a"])(
+  "rejects non-decimal PID contents %s on abort",
+  async (contents, { signal }) => {
+    const file = fixturePath();
+    fsSync.writeFileSync(file, contents);
+    const cancelled = cancellation(signal);
+    const tick = createDeferred();
+    const waiting = waitForPidFile(file, cancelled.signal, () => tick.promise);
+    const rejected = expect(waiting).rejects.toMatchObject(fileError(file, cancelled.reason));
+    cancelled.abort();
+    await rejected;
+    tick.resolve();
+  },
+);
+
 it("observes real process death before and after abort", async ({ signal, onTestFinished }) => {
   const child = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
     stdio: ["pipe", "ignore", "ignore"],
