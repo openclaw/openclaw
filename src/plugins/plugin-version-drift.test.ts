@@ -136,6 +136,31 @@ describe("resolvePluginVersionDriftTargets", () => {
     expect(repairCommand(firstDrift(floating))).toBe("openclaw plugins update brave");
     expect(fetchNpmPackageTargetStatus).not.toHaveBeenCalled();
   });
+
+  it("points stable Gateway recovery at a package-name update when @beta is retained", async () => {
+    const entry = firstDrift(
+      await resolveTargets(driftReport("2026.7.1", "@openclaw/brave-plugin@beta")),
+    );
+    expect(repairCommand(entry)).toBe("openclaw plugins update @openclaw/brave-plugin");
+    expect(fetchNpmPackageTargetStatus).not.toHaveBeenCalled();
+  });
+
+  it("keeps id-only updates for retained @beta while Gateway itself is still beta", async () => {
+    const entry = firstDrift(
+      await resolveTargets(
+        detectDrift({
+          gatewayVersion: "2026.7.1-beta.2",
+          installRecords: {
+            brave: npmRecord("2026.7.1-beta.1", {
+              resolvedName: "@openclaw/brave-plugin",
+              spec: "@openclaw/brave-plugin@beta",
+            }),
+          },
+        }),
+      ),
+    );
+    expect(repairCommand(entry)).toBe("openclaw plugins update brave");
+  });
 });
 
 describe("resolvePluginVersionDriftTargets for ClawHub installs", () => {

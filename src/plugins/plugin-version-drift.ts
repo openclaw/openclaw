@@ -11,6 +11,7 @@ import {
 } from "../infra/npm-registry-spec.js";
 import { isPackageVersionDowngrade } from "../infra/package-update-utils.js";
 import {
+  isBetaTag,
   normalizeUpdateChannel,
   resolveRegistryUpdateChannel,
   type UpdateChannel,
@@ -79,6 +80,25 @@ function resolveExactNpmPinPackageName(entry: PluginVersionDriftEntry): string |
   return parsed.name;
 }
 
+/**
+ * When a stable Gateway still has a stored `@beta` (or other non-`latest`) npm
+ * dist-tag, id-only `plugins update <id>` keeps that release line. Point operators
+ * at an explicit package-name update so they can move to the default/stable line.
+ */
+function resolveRetainedNpmDistTagStableRecoveryCommand(
+  entry: PluginVersionDriftEntry,
+): string | undefined {
+  if (entry.source !== "npm" || !entry.spec || isBetaTag(entry.gatewayVersion)) {
+    return undefined;
+  }
+  const parsed = parseRegistryNpmSpec(entry.spec);
+  const tag = parsed?.selector?.toLowerCase();
+  if (!parsed || parsed.selectorKind !== "tag" || !tag || tag === "latest") {
+    return undefined;
+  }
+  return `openclaw plugins update ${parsed.name}`;
+}
+
 /** Exact npm pins need a registry-confirmed package@version target; id-only updates preserve pins. */
 export function resolvePluginVersionDriftUpdateCommand(
   entry: PluginVersionDriftEntry,
@@ -108,7 +128,24 @@ export function resolvePluginVersionDriftUpdateCommand(
     }
     return undefined;
   }
-  return `openclaw plugins update ${entry.pluginId}`;
+  return (
+    resolveRetainedNpmDistTagStableRecoveryCommand(entry) ??
+    `openclaw plugins update ${entry.pluginId}`
+  );
+}
+
+/** Human-readable retained npm selector for drift/status copy (for example `@beta`). */
+export function formatPluginVersionDriftRetainedNpmSelector(
+  entry: PluginVersionDriftEntry,
+): string | undefined {
+  if (entry.source !== "npm" || !entry.spec) {
+    return undefined;
+  }
+  const parsed = parseRegistryNpmSpec(entry.spec);
+  if (parsed?.selectorKind !== "tag" || !parsed.selector) {
+    return undefined;
+  }
+  return `@${parsed.selector}`;
 }
 
 /**

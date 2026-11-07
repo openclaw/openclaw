@@ -28,10 +28,6 @@ import { resolveControlUiLinks } from "../../gateway/control-ui-links.js";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
 import { formatGatewayRestartHandoffDiagnostic } from "../../infra/restart-handoff.js";
 import { isWSLEnv } from "../../infra/wsl.js";
-import {
-  resolvePluginVersionDriftRegistryLag,
-  resolvePluginVersionDriftUpdateCommand,
-} from "../../plugins/plugin-version-drift.js";
 import { defaultRuntime } from "../../runtime.js";
 import { displayPath } from "../../utils.js";
 import { formatCliCommand } from "../command-format.js";
@@ -51,6 +47,7 @@ import {
   renderPortDiagnosticsForCli,
   resolvePortListeningAddresses,
 } from "./status.gather.js";
+import { printPluginVersionDriftStatus } from "./status.print-plugin-version-drift.js";
 
 export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; deep?: boolean }) {
   if (opts.json) {
@@ -639,80 +636,12 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
 
   const drift = status.pluginVersionDrift;
   if (drift && drift.drifts.length > 0) {
-    defaultRuntime.log(
-      warnText(
-        terminalText`Plugin version drift: ${drift.drifts.length} active official plugin${
-          drift.drifts.length === 1 ? "" : "s"
-        } not on gateway ${drift.gatewayVersion}`,
-      ),
-    );
-    if (opts.deep) {
-      for (const entry of drift.drifts) {
-        const sourceLabel = entry.source === "clawhub" ? "clawhub" : "npm";
-        const resolvedTarget =
-          entry.targetResolution?.status === "resolved"
-            ? `; ${sourceLabel} target ${entry.targetResolution.packageName}@${entry.targetResolution.version}`
-            : "";
-        // A registry-confirmed version is the only target an update can actually reach.
-        const expectedVersion =
-          entry.targetResolution?.status === "resolved"
-            ? entry.targetResolution.version
-            : drift.gatewayVersion;
-        defaultRuntime.log(
-          `- ${warnText(terminalText`${entry.pluginId}`)}${terminalText`: ${entry.installedVersion} (${sourceLabel}) → expected ${expectedVersion}${resolvedTarget}`}`,
-        );
-      }
-      const updateCommands: string[] = [];
-      const unresolvedRepairs: typeof drift.drifts = [];
-      for (const entry of drift.drifts) {
-        const command = resolvePluginVersionDriftUpdateCommand(entry);
-        const registryLag = resolvePluginVersionDriftRegistryLag(entry);
-        if (command) {
-          updateCommands.push(formatCliCommand(terminalText`${command}`));
-        } else if (!registryLag) {
-          unresolvedRepairs.push(entry);
-        }
-        if (registryLag) {
-          defaultRuntime.log(
-            terminalText`- ${entry.pluginId}: registry version ${registryLag.registryVersion} is already installed; no release reaches ${registryLag.expectedVersion} yet, so no update command applies.`,
-          );
-        }
-      }
-      if (unresolvedRepairs.length > 0) {
-        printError("Plugin repair target resolution failed:");
-        for (const entry of unresolvedRepairs) {
-          const targetResolution = entry.targetResolution;
-          const detail =
-            targetResolution?.status === "unresolved"
-              ? targetResolution.error
-              : "npm registry target was not resolved";
-          defaultRuntime.error(terminalText`- ${entry.pluginId}: ${detail}`);
-        }
-        printError(
-          "No install command was generated for unresolved plugin targets. Retry gateway status --deep after checking registry availability.",
-        );
-      }
-      if (updateCommands.length === 1 && unresolvedRepairs.length === 0) {
-        defaultRuntime.log(
-          `${label("Fix:")} ${updateCommands[0]} && ${formatCliCommand("openclaw gateway restart")}.`,
-        );
-      } else if (updateCommands.length > 0) {
-        defaultRuntime.log(`${label("Fix:")} update each drifted plugin:`);
-        for (const command of updateCommands) {
-          defaultRuntime.log(`- ${command}`);
-        }
-        if (unresolvedRepairs.length === 0) {
-          defaultRuntime.log(`Then run ${formatCliCommand("openclaw gateway restart")}.`);
-        }
-      }
-    } else {
-      defaultRuntime.log(
-        infoText(
-          `Run ${formatCliCommand("openclaw gateway status --deep")} for affected plugin ids and fix commands.`,
-        ),
-      );
-    }
-    spacer();
+    printPluginVersionDriftStatus(drift, {
+      deep: opts.deep,
+      styles: { label, infoText, warnText },
+      printError,
+      spacer,
+    });
   }
 
   if (extraServices.length > 0 && !isGatewayExternallySupervised(process.env)) {
