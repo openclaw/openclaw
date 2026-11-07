@@ -23,12 +23,31 @@ export type PluginSourceFile = {
   generated?: true;
 };
 
+type MemorySourceBuild = {
+  directory: string;
+  readSource: (filename: string) => string;
+  transformOutput: (
+    source: string,
+    code: string,
+    format: "module" | "commonjs",
+    url: string,
+  ) => string;
+};
+
 /** Compile captured source into a private namespace; native files stay with their capture owner. */
-export function buildPluginTypeScriptSource(root: string) {
+export function buildPluginTypeScriptSource(root: string, memory?: MemorySourceBuild) {
   if (!useNodeModuleHooks()) {
     throw new Error("Plugin source builds require Node module hooks");
   }
-  const directory = fs.mkdtempSync(path.join(path.dirname(root), ".source-"));
+  const directory = memory?.directory ?? fs.mkdtempSync(path.join(path.dirname(root), ".source-"));
+  const memoryOutputs = memory ? new Map<string, string>() : undefined;
+  const writeOutput = (filename: string, code: string) => {
+    if (memoryOutputs) {
+      memoryOutputs.set(filename, code);
+    } else {
+      fs.writeFileSync(filename, code, { flag: "wx", mode: 0o600 });
+    }
+  };
   const outputs = new Map<string, string>();
   const formats = new Map<string, "module" | "commonjs">();
   const failures = new Map<string, unknown>();
@@ -42,14 +61,18 @@ export function buildPluginTypeScriptSource(root: string) {
   }
   const dispose = () => {
     disposed = true;
-    fs.rmSync(directory, { recursive: true, force: true });
+    if (memoryOutputs) {
+      memoryOutputs.clear();
+    } else {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   };
   try {
     const compile = (input: string, destination: string, format: string | null | undefined) => {
       const { parse, parseExpression }: typeof import("@babel/parser") = require("@babel/parser");
       const { default: traverse }: typeof import("@babel/traverse") = require("@babel/traverse");
       const { default: generate }: typeof import("@babel/generator") = require("@babel/generator");
-      const sourceText = fs.readFileSync(input, "utf8");
+      const sourceText = memory ? memory.readSource(input) : fs.readFileSync(input, "utf8");
       const mode = sources.get(destination)?.mode;
       const transformOptions = {
         sourcefile: input,
@@ -64,7 +87,7 @@ export function buildPluginTypeScriptSource(root: string) {
       } satisfies import("esbuild").TransformOptions;
       const createImportHelper = () => {
         const helper = path.join(path.dirname(destination), `.import-meta-${randomUUID()}.mjs`);
-        fs.writeFileSync(
+        writeOutput(
           helper,
           `import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -141,7 +164,6 @@ export const resolve = (specifier, options) => {
   return JSON.parse(decodeURIComponent(import.meta.resolve(query).slice("data:application/json,".length))).value;
 };
 `,
-          { flag: "wx", mode: 0o600 },
         );
         helpers.set(helper, { source: input, generated: true, mode: "async" });
         return helper;
@@ -233,7 +255,11 @@ ${code}
 export { value as "openclaw:async-commonjs" };`
           : code;
         formats.set(destination, asynchronous ? "module" : "commonjs");
-        fs.writeFileSync(destination, emitted, { mode: 0o600 });
+        if (memory) {
+          writeOutput(destination, emitted);
+        } else {
+          fs.writeFileSync(destination, emitted, { mode: 0o600 });
+        }
         return;
       }
       const { transformSync }: typeof import("esbuild") = require("esbuild");
@@ -355,7 +381,11 @@ export { value as "openclaw:async-commonjs" };`
         ...transformOptions,
         format: esm ? "esm" : "cjs",
       });
-      fs.writeFileSync(destination, emitted.code, { mode: 0o600 });
+      if (memory) {
+        writeOutput(destination, emitted.code);
+      } else {
+        fs.writeFileSync(destination, emitted.code, { mode: 0o600 });
+      }
     };
     // The capture owner resolves inputs; this hook only compiles and labels owned outputs.
     const hooks = Module.registerHooks({
@@ -378,6 +408,22 @@ export { value as "openclaw:async-commonjs" };`
           throw failures.get(filename);
         }
         const format = filename && formats.get(filename);
+        if (memory && filename && memoryOutputs?.has(filename)) {
+          const entry = sources.get(filename) ?? helpers.get(filename);
+          if (entry) {
+            const outputFormat = format || "module";
+            return {
+              format: outputFormat,
+              source: memory.transformOutput(
+                entry.source,
+                memoryOutputs.get(filename)!,
+                outputFormat,
+                url,
+              ),
+              shortCircuit: true,
+            };
+          }
+        }
         return nextLoad(url, format ? { ...context, format } : context);
       },
     });
@@ -392,13 +438,13 @@ export { value as "openclaw:async-commonjs" };`
         if (
           !filename &&
           isPathInside(root, source) &&
-          !path.relative(root, source).split(path.sep).includes("node_modules") &&
+          (memory || !path.relative(root, source).split(path.sep).includes("node_modules")) &&
           (/\.[cm]?tsx?$/.test(source) || (jsx && source.endsWith(".jsx"))) &&
           !/\.d\.[cm]?ts$/.test(source)
         ) {
           // Resolve-only callers need an existing stable path, but no compilation or root walk.
           filename = path.join(directory, `module-${outputs.size}.js`);
-          fs.writeFileSync(filename, "", { flag: "wx", mode: 0o600 });
+          writeOutput(filename, "");
           outputs.set(source, filename);
           entry = { source };
           sources.set(filename, entry);

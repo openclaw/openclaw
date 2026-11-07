@@ -189,6 +189,31 @@ Ordinary plugin source captures use independent files, including copies reached 
 
 Managed installs record content and dependency-closure digests from unexecuted source capture. Eager snapshot publication is suspended while startup continues to prepare fresh runtime captures. Existing source snapshots remain owned by the installed index, bound to the install revision, content and dependency-closure digests, platform and ABI, capture format, and resolution options. Native admission, callbacks, and live instances remain independently owned. Install, update, uninstall, and rollback publication still retire displaced snapshots; active readers keep their generation until release.
 
+The shared-tree snapshot reader is under development and is not enabled. Its version-2
+format binds a read-only real tree to a sealed manifest containing file digests and
+package/configuration resolution facts. Admission verifies the manifest through a
+pinned guarded open and checks the tree root and owner without scanning every child.
+Each instance has its own module identity and evaluates verified module bytes. Native
+addons keep private, separately admitted companion namespaces. Real `__dirname`,
+`import.meta.url`, assets and helper paths remain available.
+
+The reader's full-tree scrub runs in bounded steps on the existing preparation worker
+pool after startup settles. It checks bytes, membership, type, owner, mode, link count
+and exact identities. Unused-file tampering and raw asset reads are detected later by
+this scrub; module verification must happen before evaluation. A validation failure
+retires that exact snapshot, records a path-bearing diagnostic, and leaves the current
+process running. The next start uses fresh capture. An obsolete format retires quietly.
+
+**Breaking change when this reader is enabled:** managed snapshot generations reject
+modules outside their install-time dependency closure, including dynamic `require`
+and re-anchored `createRequire`. `ERR_PLUGIN_SNAPSHOT_DEPENDENCY` names the module;
+declare the dependency and reinstall/update, or use a local development source.
+Local/dev sources keep their existing behavior. Existing installations qualify for
+lazy publication only when their persisted content and closure digests match a fresh
+capture; otherwise they keep fresh capture until reinstall/update. The first
+publication run finishes with its already prepared generation. Failure of optional
+publication keeps a valid fresh capture, while loss of install authority fails closed.
+
 Staging paths cannot be acquired, even with complete receipts. After an interrupted publication, cleanup reclaims staged source only after its writer's custody token is released; completed snapshots remain protected by the installed index and their readers. Before leaving staging, the installed-index SQLite owner journals the completed candidate, including on the first install. The index commit atomically takes ownership from that journal. If the installer exits before commit, lifecycle cleanup can reclaim the unreferenced candidate after writer custody releases.
 
 Source capture preserves referenced URL assets, including directory URLs that the plugin uses. Unused standalone URL calculations do not cause the surrounding directory to be copied into the plugin generation.

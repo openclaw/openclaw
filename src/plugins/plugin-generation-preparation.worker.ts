@@ -13,6 +13,7 @@ import {
   createPluginGenerationMetrics,
   withPluginGenerationMetrics,
 } from "./plugin-generation-metrics.js";
+import { createPluginSharedSnapshotGeneration } from "./plugin-generation-shared-snapshot.js";
 import {
   markPluginSourceCaptureOperation,
   type PluginRecoverySource,
@@ -37,9 +38,15 @@ import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.
 import { recordPluginNativeLoad } from "./plugin-source-capture-native-loads.js";
 import {
   acquirePluginSourceSnapshot,
+  acquirePluginSharedSourceSnapshot,
   pluginSourceSnapshotClosureDigest,
   stagePluginSourceSnapshot,
+  stagePluginSharedSourceSnapshot,
 } from "./plugin-source-snapshot-artifact.js";
+import type {
+  AcquiredPluginSharedSourceSnapshot,
+  PluginSourceSnapshotScrub,
+} from "./plugin-source-snapshot-shared.js";
 import type { PluginSourceSnapshotBinding } from "./plugin-source-snapshot.types.js";
 
 type Resource = { dispose(): void; disposeAsync(): Promise<void> };
@@ -54,6 +61,8 @@ function createPreparationSession(context: CaptureCommand) {
   const borrowedRootIds = new WeakMap<object, number>();
   const snapshotReaders = new Set<Awaited<ReturnType<typeof acquirePluginSourceSnapshot>>>();
   let forkSourceCustody: (() => PluginSourceCustodyFork) | undefined;
+  let sharedSource: AcquiredPluginSharedSourceSnapshot | undefined;
+  let scrub: PluginSourceSnapshotScrub | undefined;
 
   function borrowNativeRoot(root: PluginNativeAdmissionTransfer["roots"][number]): number {
     let id = borrowedRootIds.get(root);
@@ -246,6 +255,8 @@ function createPreparationSession(context: CaptureCommand) {
     );
   }
   async function close(): Promise<void> {
+    await scrub?.dispose();
+    scrub = undefined;
     await settlePluginNativeAdmissions();
     const outcomes = await Promise.allSettled(
       [...resources].map((resource) => resource.disposeAsync()),
@@ -318,7 +329,11 @@ function createPreparationSession(context: CaptureCommand) {
                 stage: markPluginSourceCaptureOperation(
                   async (binding: PluginSourceSnapshotBinding) =>
                     own(
-                      await stagePluginSourceSnapshot({
+                      await (
+                        publication.shared
+                          ? stagePluginSharedSourceSnapshot
+                          : stagePluginSourceSnapshot
+                      )({
                         stateDir: publication.stateDir,
                         capture,
                         binding,
@@ -333,21 +348,38 @@ function createPreparationSession(context: CaptureCommand) {
               failedCapture = snapshot;
               result = snapshot;
             } else {
-              const snapshot = command.sourceSnapshot
-                ? await acquirePluginSourceSnapshot({
-                    ...command.sourceSnapshot,
-                    // Index authority belongs to the host; the worker owns artifact validation.
-                    assertCurrent: () => {},
-                  })
-                : undefined;
+              const retainedShared =
+                command.sourceSnapshot?.shared && command.sourceCustodyId !== undefined
+                  ? sessions.get(command.sourceCustodyId)?.forkSharedSource()
+                  : undefined;
+              if (
+                command.sourceSnapshot?.shared &&
+                command.sourceCustodyId !== undefined &&
+                !retainedShared
+              ) {
+                throw new Error("Plugin shared source custody has closed");
+              }
+              const snapshot =
+                retainedShared ??
+                (command.sourceSnapshot
+                  ? await (
+                      command.sourceSnapshot.shared
+                        ? acquirePluginSharedSourceSnapshot
+                        : acquirePluginSourceSnapshot
+                    )({
+                      ...command.sourceSnapshot,
+                      // Index authority belongs to the host; the worker owns artifact validation.
+                      assertCurrent: () => {},
+                    })
+                  : undefined);
               if (snapshot) {
                 snapshotReaders.add(snapshot);
               }
               const retained =
-                command.sourceCustodyId === undefined
+                command.sourceCustodyId === undefined || command.sourceSnapshot?.shared
                   ? undefined
                   : sessions.get(command.sourceCustodyId)?.forkSourceCustody();
-              if (command.sourceCustodyId !== undefined && !retained) {
+              if (command.sourceCustodyId !== undefined && !retained && !retainedShared) {
                 throw new Error("Plugin preparation source custody has closed");
               }
               let artifact;
@@ -361,30 +393,37 @@ function createPreparationSession(context: CaptureCommand) {
                   }
                 }
                 artifact = own(
-                  snapshot
-                    ? capturePluginSnapshotGeneration(
-                        snapshot,
-                        command.entryFile,
-                        (run) => run(),
-                        (filename) => mapSource(command.captureId, filename),
+                  snapshot && command.sourceSnapshot?.shared
+                    ? createPluginSharedSnapshotGeneration(
+                        snapshot as AcquiredPluginSharedSourceSnapshot,
                       )
-                    : createPluginGenerationArtifact(
-                        command.rootDir,
-                        command.entryFile,
-                        (run) => run(),
-                        (filename) => mapSource(command.captureId, filename),
-                        undefined,
-                        undefined,
-                        command.bundledReloadSource,
-                        retained,
-                        command.retainSourceCustody,
-                      ),
+                    : snapshot
+                      ? capturePluginSnapshotGeneration(
+                          snapshot,
+                          command.entryFile,
+                          (run) => run(),
+                          (filename) => mapSource(command.captureId, filename),
+                        )
+                      : createPluginGenerationArtifact(
+                          command.rootDir,
+                          command.entryFile,
+                          (run) => run(),
+                          (filename) => mapSource(command.captureId, filename),
+                          undefined,
+                          undefined,
+                          command.bundledReloadSource,
+                          retained,
+                          command.retainSourceCustody,
+                        ),
                 );
               } catch (error) {
                 await retained?.source.disposeAsync();
                 throw error;
               }
               failedCapture = artifact;
+              if (artifact.sharedSnapshot) {
+                sharedSource = artifact.sharedSnapshot;
+              }
               snapshot?.assertCurrent();
               if (
                 command.sourceCustodyDigest !== undefined &&
@@ -395,7 +434,11 @@ function createPreparationSession(context: CaptureCommand) {
               if (command.retainSourceCustody) {
                 // Keep the admitted artifact pristine. Each consumer copies it once,
                 // with independent custody; no extra seed copy is needed.
-                forkSourceCustody = artifact.retainSourceCustody.bind(artifact);
+                if (artifact.sharedSnapshot) {
+                  sharedSource = artifact.sharedSnapshot;
+                } else {
+                  forkSourceCustody = artifact.retainSourceCustody.bind(artifact);
+                }
               }
               const captureRecovery = artifact.captureRecoverySource.bind(artifact);
               artifact.captureRecoverySource = markPluginSourceCaptureOperation(() =>
@@ -412,6 +455,17 @@ function createPreparationSession(context: CaptureCommand) {
               } else {
                 result = artifact;
               }
+            }
+          } else if (command.operation === "scrub") {
+            if (!sharedSource) {
+              throw new Error("Plugin shared source scrub is unavailable");
+            }
+            if (command.dispose) {
+              await scrub?.dispose();
+              scrub = undefined;
+            } else {
+              scrub ??= sharedSource.createScrub();
+              result = await scrub.step({ maxFiles: command.maxFiles, maxBytes: command.maxBytes });
             }
           } else {
             if (command.asynchronous) {
@@ -485,6 +539,9 @@ function createPreparationSession(context: CaptureCommand) {
         throw new Error("Plugin preparation source custody is unavailable");
       }
       return forkSourceCustody();
+    },
+    forkSharedSource() {
+      return sharedSource?.retain();
     },
     async close() {
       await scoped(close);

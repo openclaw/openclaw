@@ -1,0 +1,2 @@
+# Shared snapshot regressions cover authenticated module bytes, relative metadata, worker custody, independent native/child instances, lazy publication, retirement and cancellation.
+1600

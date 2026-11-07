@@ -34,8 +34,12 @@ export type GenerationWorkerInput = (
       sourceCustodyId?: number;
       sourceCustodyDigest?: string;
       inspection?: PluginGenerationInspection;
-      sourceSnapshot?: { descriptor: PluginSourceSnapshotDescriptor; stateDir: string };
-      snapshotPublication?: { stateDir: string };
+      sourceSnapshot?: {
+        descriptor: PluginSourceSnapshotDescriptor;
+        stateDir: string;
+        shared?: true;
+      };
+      snapshotPublication?: { stateDir: string; shared?: true };
       admission: Pick<
         AdmissionState,
         "owners" | "managedRoots" | "receipts" | "files" | "namespaces"
@@ -49,6 +53,13 @@ export type GenerationWorkerInput = (
       handle: number;
       args: GenerationWireValue[];
       asynchronous: boolean;
+    }
+  | {
+      operation: "scrub";
+      captureId: number;
+      dispose?: true;
+      maxFiles: number;
+      maxBytes: number;
     }
 ) & { nativeLoads?: string[] };
 export type GenerationWorkerReply = (

@@ -15,6 +15,7 @@ import { withProfile } from "./plugin-load-profile.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { nativeAdmissionStateFor } from "./plugin-native-admission-state.js";
 import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
+import { registerPluginSnapshotScrub } from "./plugin-source-snapshot-scrub.js";
 import { resolveBundledPluginStateOperationCapture } from "./plugin-state-operation-module-loader.js";
 import {
   getPluginRegistryInspectionResources,
@@ -185,6 +186,7 @@ export function createPluginModuleLoader(options: {
     standalone?: boolean;
     /** Installer-proven identity when the plugin source cannot change in place. */
     immutableInstallIdentity?: string;
+    managedSourceSnapshot?: boolean;
   };
   // Only uncached inspections of immutable installs may share evaluated code.
   const inspection = (owner: Owner) =>
@@ -245,7 +247,11 @@ export function createPluginModuleLoader(options: {
           pluginSdkResolution: captured.pluginSdkResolution,
           registry: owner.registry,
         });
-      if (!isMainThread || getPluginInstance(owner.record) || retained()) {
+      if (
+        !isMainThread ||
+        getPluginInstance(owner.record) ||
+        (!owner.managedSourceSnapshot && retained())
+      ) {
         return;
       }
       await withPluginCache(cache, async () => {
@@ -261,14 +267,32 @@ export function createPluginModuleLoader(options: {
           return;
         }
         const { preparePluginGenerationArtifact } = await import("./plugin-generation-worker.js");
-        const preparedArtifact = await preparePluginGenerationArtifact(
-          bundledCapture ?? {
-            rootDir: owner.rootDir,
-            source: modulePath,
-            standalone: owner.standalone,
-            bundledReload: bundledCodeReload,
-          },
-        );
+        const input = bundledCapture ?? {
+          rootDir: owner.rootDir,
+          source: modulePath,
+          standalone: owner.standalone,
+          bundledReload: bundledCodeReload,
+        };
+        const preparedArtifact = owner.managedSourceSnapshot
+          ? await (
+              await import("./plugin-source-snapshot-runtime.js")
+            ).prepareInstalledPluginGenerationArtifact({
+              pluginId: owner.record.id,
+              rootDir: owner.rootDir,
+              source: modulePath,
+              standalone: owner.standalone,
+              onWarning: (message, source) => {
+                owner.registry.diagnostics.push({
+                  level: "warn",
+                  pluginId: owner.record.id,
+                  source,
+                  code: "plugin-source-snapshot-invalid",
+                  message,
+                });
+                process.emitWarning(message);
+              },
+            })
+          : await preparePluginGenerationArtifact(input);
         if (cache.retirement || isPluginRegistryRetired(owner.registry)) {
           await preparedArtifact.artifact.disposeAsync();
           throw new PluginInventoryRetiredError();
@@ -277,9 +301,15 @@ export function createPluginModuleLoader(options: {
           // Reentrant loading may have installed this exact owner while acquisition
           // yielded, or a concurrent inspection retained the same native ESM artifact.
           // Never replace its module identity with a second capture.
-          if (getPluginInstance(owner.record) || retained()) {
+          if (getPluginInstance(owner.record) || (!owner.managedSourceSnapshot && retained())) {
             await preparedArtifact.artifact.disposeAsync();
             return;
+          }
+          if (
+            "assertCurrent" in preparedArtifact &&
+            typeof preparedArtifact.assertCurrent === "function"
+          ) {
+            await preparedArtifact.assertCurrent();
           }
           const instance = new PluginInstance(owner.record.id, owner);
           instance.run(() =>
@@ -288,6 +318,13 @@ export function createPluginModuleLoader(options: {
               preparedArtifact,
             }),
           );
+          if (preparedArtifact.startScrub) {
+            const startScrub = preparedArtifact.startScrub;
+            const removeScrub = registerPluginSnapshotScrub(owner.registry, () =>
+              startScrub(async () => {}),
+            );
+            instance.onModuleDispose(removeScrub);
+          }
         } catch (error) {
           await preparedArtifact.artifact.disposeAsync();
           throw error;

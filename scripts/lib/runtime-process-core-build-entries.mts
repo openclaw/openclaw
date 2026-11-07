@@ -70,6 +70,8 @@ export const standaloneRuntimeProcessBuildEntries = createRuntimeProcessBuildEnt
     "runtimeEntrypoint" in entry ? [runtimeProcessEntrypoints[entry.runtimeEntrypoint]] : [],
   ),
   runtimeProcessEntrypoints.pluginGenerationPreparation,
+  runtimeProcessEntrypoints.pluginSnapshotChild,
+  runtimeProcessEntrypoints.pluginSnapshotChildPreload,
   runtimeProcessEntrypoints.sqliteReadOnly,
   runtimeProcessEntrypoints.sqliteSourceRevision,
   runtimeProcessEntrypoints.stateRead,
