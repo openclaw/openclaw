@@ -1,6 +1,7 @@
 import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { registerTerminalEnglish } from "../../i18n/locales/en-terminal.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { createScrollStateRef } from "../../lib/reactive/scroll-state.ts";
 import { Icon } from "../solid/icon.tsx";
 import { PanelIconButton } from "../solid/panel-icon-button.tsx";
 import {
@@ -22,15 +23,60 @@ export function TerminalFind(props: { tab: Pick<TerminalPanelSessionTab, "contro
   }>({ query: "", matches: [], index: 0 });
   let input: HTMLInputElement | undefined;
   const selected = createMemo(() => result().matches[result().index]);
+  let highlight: HTMLElement | undefined;
+  const previewRef = createScrollStateRef(
+    (preview) => {
+      if (!highlight) {
+        return;
+      }
+      const region = preview.getBoundingClientRect();
+      const match = highlight.getBoundingClientRect();
+      if (match.left < region.left || match.width > region.width) {
+        preview.scrollLeft += match.left - region.left;
+      } else if (match.right > region.right) {
+        preview.scrollLeft += match.right - region.right;
+      }
+    },
+    { horizontal: true, trackScroll: false, presented: open, content: selected },
+  );
   function find(query: string, direction = 0) {
     const matches = findTerminalMatches(props.tab.controller.terminal, query);
-    const index =
-      direction && query === result().query && matches.length
-        ? (result().index + direction + matches.length) % matches.length
-        : 0;
+    const previous = result();
+    let index = 0;
+    if (direction && query === previous.query && matches.length) {
+      const anchor = previous.matches[previous.index];
+      const unchanged =
+        matches.length === previous.matches.length &&
+        matches.every((match, i) => {
+          const before = previous.matches[i];
+          return (
+            before !== undefined &&
+            match.row === before.row &&
+            match.start === before.start &&
+            match.line === before.line
+          );
+        });
+      const isAnchor = (match: TerminalFindMatch) =>
+        match.line === anchor?.line && match.start === anchor.start;
+      const first = matches.findIndex(isAnchor);
+      // Rows move after eviction/reflow. Keep a unique surviving occurrence, but do
+      // not guess between identical lines in a changed snapshot.
+      const current = unchanged
+        ? previous.index
+        : first === matches.findLastIndex(isAnchor)
+          ? first
+          : -1;
+      index =
+        current < 0
+          ? direction > 0
+            ? 0
+            : matches.length - 1
+          : (current + direction + matches.length) % matches.length;
+    }
     setResult({ query, matches, index });
-    if (matches[index]) {
-      revealTerminalMatch(props.tab.controller.terminal, matches[index]);
+    const match = matches[index];
+    if (match) {
+      revealTerminalMatch(props.tab.controller.terminal, match);
     }
   }
   function close() {
@@ -121,9 +167,13 @@ export function TerminalFind(props: { tab: Pick<TerminalPanelSessionTab, "contro
         </div>
         <Show when={selected()}>
           {(match) => (
-            <div class="tp-find__preview" title={match().line}>
+            <div ref={previewRef} class="tp-find__preview" title={match().line}>
               {match().line.slice(0, match().start)}
-              <mark>
+              <mark
+                ref={(element) => {
+                  highlight = element;
+                }}
+              >
                 {match().line.slice(match().start, match().start + result().query.length)}
               </mark>
               {match().line.slice(match().start + result().query.length)}

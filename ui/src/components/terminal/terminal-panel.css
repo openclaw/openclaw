@@ -169,7 +169,6 @@ openclaw-terminal-panel {
     margin-top: 4px;
     overflow: hidden;
     white-space: pre;
-    text-overflow: ellipsis;
     font-family: var(--mono);
   }
   .tp-find__preview mark {
