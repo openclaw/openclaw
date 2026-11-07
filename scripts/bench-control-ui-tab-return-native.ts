@@ -79,7 +79,6 @@ Object.assign(process.env, {
   TSX_TSCONFIG_PATH: path.join(root, "tsconfig.json"),
 });
 const { getFreePort } = await import("./lib/gateway-bench-probes.ts");
-const { withTestTimeout } = await import("../test/helpers/promise.ts");
 const { startScrollInferenceFixture } =
   await import("../ui/src/e2e/chat-collaborator-scroll.real-gateway.test-support.ts");
 const provider = await startScrollInferenceFixture();
@@ -404,7 +403,7 @@ try {
       const turn = provider.plan();
       await active.page.getByRole("button", { name: /^(Send|Queue) message$/ }).click();
       const prefix = "Native transport reply begins. ";
-      await withTestTimeout(turn.append(prefix), 60000, "Synthetic inference did not start");
+      await turn.append(prefix);
       await active.page
         .locator(".chat-bubble.streaming")
         .waitFor({ state: "visible", timeout: 60000 });

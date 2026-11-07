@@ -284,6 +284,8 @@ for (const engine of engines) {
   }
   for (const mode of modes) {
     for (const count of tabCounts) {
+      // Chromium tracing is browser-wide; concurrent tab measurements retain CPU counters only.
+      const trace = values.trace && (engine !== "chromium" || count === 1);
       for (const duration of minutes) {
         // Session and disconnect cases exercise the longest stream only; duration matrix belongs to stream.
         if (mode !== "stream" && duration !== minutes.at(-1)) {
@@ -329,6 +331,7 @@ for (const engine of engines) {
               bundle: bundle.name,
               hostLoad: os.loadavg(),
               browserVersion: browser.browser.version(),
+              trace,
               serviceWorkerObservation: engine === "webkit" ? "unsupported-blocked" : "enabled",
             };
             try {
@@ -434,9 +437,7 @@ for (const engine of engines) {
               await delay(idleMs);
               const before = await Promise.all(tabs.map(({ page }) => read(page, engine)));
               for (const tab of tabs) {
-                measurements.push(
-                  await startEngineMeasurement(tab.page, engine, { trace: values.trace }),
-                );
+                measurements.push(await startEngineMeasurement(tab.page, engine, { trace }));
               }
               const n = duration * 60;
               const suffix = `Tab return complete after ${n} updates.`;
@@ -646,7 +647,7 @@ for (const engine of engines) {
                 }
               }
               const returnMeasurement = await startEngineMeasurement(returning.page, engine, {
-                trace: values.trace,
+                trace,
               });
               if (engine === "webkit") {
                 await setControlUiWebKitTabVisibility(returning.page, "visible");
@@ -749,9 +750,7 @@ for (const engine of engines) {
               const peersBefore = await Promise.all(peers.map((tab) => read(tab.page, engine)));
               const peersMeasurement = [];
               for (const peer of peers) {
-                peersMeasurement.push(
-                  await startEngineMeasurement(peer.page, engine, { trace: values.trace }),
-                );
+                peersMeasurement.push(await startEngineMeasurement(peer.page, engine, { trace }));
               }
               const returnSwitch = {
                 id: "session-switch",
@@ -778,7 +777,7 @@ for (const engine of engines) {
                 const action = await returning.page.evaluateHandle(createEngineActionTiming, false);
                 await action.evaluate((value) => value.start());
                 const cpu = await startEngineMeasurement(returning.page, engine, {
-                  trace: values.trace,
+                  trace,
                 });
                 await scene.run(returning.page, returning.gateway);
                 await action.evaluate((value) => value.endScenario());

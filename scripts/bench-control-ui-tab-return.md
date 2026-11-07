@@ -19,6 +19,9 @@ For a performance change, use at least 20 rotated pairs with an A/A control;
 a setup smoke is not timing evidence. `--trace` collects WebKit elapsed script
 and layout intervals separately from untraced application latency. Chromium's
 ordinary metrics use renderer main-thread CPU (`threadTicks`).
+Chromium native tracing is browser-wide, so `--trace` applies only to one-tab
+Chromium cases; multi-tab cases keep per-tab CPU counters and record `trace: false`.
+WebKit tracing remains available per tab.
 
 Each simulated minute delivers 60 growing reply snapshots, with one completed
 tool per minute. MessageChannel task boundaries allow reactive settlement

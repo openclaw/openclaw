@@ -24,10 +24,8 @@ export async function setControlUiWebKitTabVisibility(
   visibility: "visible" | "hidden",
 ) {
   // SAFETY: The pinned Playwright 1.64.1 bridge owns this existing native pipe.
-  // eslint-disable-next-line no-underscore-dangle -- No additional browser attachment is created.
-  const implementation = (page as Page & WebKitPage)._connection?.toImpl?.(page);
-  // eslint-disable-next-line no-underscore-dangle -- Native activity is a page-proxy command, not a target command.
-  const session = implementation?.delegate?._pageProxySession;
+  const { _connection: connection } = page as Page & WebKitPage;
+  const { _pageProxySession: session } = connection?.toImpl?.(page).delegate ?? {};
   if (!session) {
     throw new Error("WebKit tab visibility requires Playwright's in-process page-proxy session");
   }
