@@ -9,6 +9,10 @@ import type { ResearchJobs } from "./jobs.js";
 import { managedClient } from "./managed.js";
 import { parseValue } from "./validation.js";
 
+// The whole start/resume envelope stays under the 32 KiB nested tool-activity limit, with headroom
+// for invocation provenance; beyond that limit the transcript drops the inline card.
+const RESULT_ENVELOPE_BYTES = 24_000;
+
 export function createResearchTool(
   api: OpenClawPluginApi,
   context: OpenClawPluginToolContext<2>,
@@ -80,15 +84,19 @@ export function createResearchTool(
             summary: `Deep research ${job.state}: ${job.progress}`,
           },
         );
-        const compact = {
+        const hint = 'Call action "result" with this jobId for the complete retained result.';
+        const envelope = (body: Record<string, unknown>) => ({
+          content: [{ type: "text" as const, text: JSON.stringify(body, null, 2) }],
+          details: { ...body, ...view.details },
+        });
+        const withResult = envelope({
           ...status,
           result: compactResult(job.result),
-          fullResult: 'Call action "result" with this jobId for retained source text.',
-        };
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(compact, null, 2) }],
-          details: { ...compact, ...view.details },
-        };
+          fullResult: hint,
+        });
+        return Buffer.byteLength(JSON.stringify(withResult)) <= RESULT_ENVELOPE_BYTES
+          ? withResult
+          : envelope({ ...status, fullResult: hint });
       });
     },
   };

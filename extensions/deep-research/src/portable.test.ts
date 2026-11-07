@@ -248,6 +248,31 @@ describe("portable research", () => {
     expect(vi.mocked(io.search).mock.calls.length).toBeLessThanOrEqual(4);
     expect(result.gaps.filter((gap) => gap.startsWith("open question"))).toHaveLength(8);
   });
+  it("rejects an audit that repeats a verdict instead of trimming away its contradiction", async () => {
+    const { io, evidence } = fixture();
+    const supported = { index: 0, verdict: "supported", reason: "Direct evidence" };
+    const responses = [
+      { questions: ["river length"] },
+      {
+        findings: [{ statement: "The river is 12 km long.", evidence: [evidence] }],
+        gaps: [],
+        queries: [],
+      },
+      {
+        verdicts: [
+          ...Array.from({ length: 12 }, (_, index) => ({ ...supported, index })),
+          { index: 0, verdict: "contradicted", reason: "Later measurement" },
+        ],
+        unanswered: [],
+      },
+    ];
+    io.complete = vi.fn(async () => ({ text: JSON.stringify(responses.shift()) }));
+    const result = await runPortableResearch({ question: "How long is the river?" }, io);
+    expect(result.findings).toEqual([]);
+    expect(result.gaps).toContain(
+      "Research response did not satisfy the evidence contract; no repair call was made.",
+    );
+  });
   it.each(["unsupported", "contradicted"])(
     "reaudits retained findings on later rounds without erasing them on an %s sample",
     async (verdict) => {
