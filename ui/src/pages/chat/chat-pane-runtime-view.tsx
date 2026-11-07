@@ -10,6 +10,7 @@ import {
   Show,
 } from "solid-js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.ts";
+import { bootComposerElement } from "../../app/boot-composer.ts";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import {
   availableLinkReaders,
@@ -192,7 +193,8 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         sessionKey: initialState.sessionKey,
       }),
     );
-    if (!initialCachedSession) {
+    // Only document boot has a retained composer frame; route handoffs must stay continuous.
+    if (!initialCachedSession && bootComposerElement()) {
       pendingLayout = yieldAfterLayout(runtime);
     }
     if (!pendingLayout) {

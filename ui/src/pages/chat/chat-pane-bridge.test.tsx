@@ -53,11 +53,18 @@ const composerSelector = ".agent-chat__composer-combobox textarea";
 it.each([false, true])(
   "holds DOM completion until the yielded pane mounts or retires (retire: %s)",
   async (retire) => {
+    const bootComposer = document.createElement("textarea");
+    bootComposer.id = "openclaw-boot-composer";
+    document.documentElement.setAttribute("data-openclaw-boot-chat", "");
+    document.body.append(bootComposer);
+    adoptBootComposer(true);
     const yielding = createDeferred();
     vi.stubGlobal("chrome", {});
     vi.stubGlobal("scheduler", { yield: () => yielding.promise });
     const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
     onTestFinished(() => {
+      retireBootComposer();
+      document.documentElement.removeAttribute("data-openclaw-boot-chat");
       yielding.resolve();
       hidden.mockRestore();
       vi.unstubAllGlobals();
@@ -91,8 +98,9 @@ it.each([false, true])(
   },
 );
 
-it("mounts immediately without the Chromium optimization marker", async () => {
+it("mounts route handoffs immediately without a retained boot composer", async () => {
   const yieldTask = vi.fn(() => Promise.resolve());
+  vi.stubGlobal("chrome", {});
   vi.stubGlobal("scheduler", { yield: yieldTask });
   onTestFinished(() => {
     vi.unstubAllGlobals();
