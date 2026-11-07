@@ -5,6 +5,16 @@ import { compareAscii } from "./canonical-json.mjs";
 /** @type {{ targetVersion: string, childRole: string, jobName: string, reason: string }[]} */
 export const RELEASE_VALIDATION_WAIVERS = [
   {
+    targetVersion: "2026.11.2",
+    childRole: "productPerformance",
+    jobName: "Kova mock provider performance",
+    reason:
+      "Dallin Romney authorized 2026.11.2-only Kova CPU/RSS threshold leniency on " +
+      "2026-11-07 at 00:28 UTC (FRV 42308858515, kova-261106-230743-bd1e4d). " +
+      "Retain raw failed performance evidence; crash, correctness, isolation, " +
+      "data-integrity, and install/update failures remain blocking.",
+  },
+  {
     targetVersion: "2026.11.1",
     childRole: "productPerformance",
     jobName: "Kova mock provider performance",
