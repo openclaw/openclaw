@@ -1,0 +1,2 @@
+# Coverage for the session current-turn walk and the opaque first-kept resolver.
+115
