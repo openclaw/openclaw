@@ -19,6 +19,7 @@ const WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES = 500;
 
 type WhatsAppGroupMetadataCacheEntry = {
   subject?: string;
+  desc?: string;
   expires: number;
 };
 
@@ -93,6 +94,7 @@ export function createWhatsAppGroupMetadataCacheOwner(params: GroupMetadataCache
     );
     return {
       subject: meta.subject,
+      desc: meta.desc,
       participants: participantEntries.map((entry) => entry.display).filter(Boolean),
       mentionParticipants: participantEntries.map((entry) => entry.mention),
       expires: Date.now() + GROUP_META_TTL_MS,
@@ -101,6 +103,7 @@ export function createWhatsAppGroupMetadataCacheOwner(params: GroupMetadataCache
 
   const summarizeForReconnect = (meta: GroupMetadata): WhatsAppGroupMetadataCacheEntry => ({
     subject: meta.subject,
+    desc: meta.desc,
     expires: Date.now() + GROUP_META_TTL_MS,
   });
 
@@ -155,6 +158,7 @@ export function createWhatsAppGroupMetadataCacheOwner(params: GroupMetadataCache
       }
       rememberGroupMetadataCacheEntry(reconnectCache, jid, {
         subject: entry.subject,
+        desc: entry.desc,
         expires: entry.expires,
       });
       rememberGroupMetadataCacheEntry(localCache, jid, entry);

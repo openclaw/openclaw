@@ -342,6 +342,11 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
         ["WhatsApp media", "media", enriched.nativeMedia],
         ["WhatsApp contact", enriched.contactContext?.kind, enriched.contactContext],
         ["WhatsApp external ad reply", "external_ad_reply", enriched.externalAdReplyContext],
+        [
+          "WhatsApp group description",
+          "group_description",
+          inbound.groupDesc ? { text: inbound.groupDesc } : undefined,
+        ],
       ] as const
     ).flatMap(([label, type, payload]) =>
       payload ? [{ label, source: "whatsapp", type, payload }] : [],
