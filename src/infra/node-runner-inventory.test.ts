@@ -28,12 +28,12 @@ const declaration = (host: unknown) => ({
   workerHost: host,
 });
 
-it.each([{ ...workerHost, capacity: { total: 2, available: 3 } }])(
-  "rejects invalid hosting capabilities or capacity: %j",
-  (host) => {
-    expect(parseNodeRunnerInventoryDeclaration(declaration(host))).toBeNull();
-  },
-);
+it.each([
+  { ...workerHost, capacity: { total: 2, available: 3 } },
+  { ...workerHost, preparedWorkspace: undefined, preparedWorkspaceDeferredVerification: true },
+])("rejects invalid hosting capabilities or capacity: %j", (host) => {
+  expect(parseNodeRunnerInventoryDeclaration(declaration(host))).toBeNull();
+});
 
 it("keeps retired dialect markers observational and empty declarations valid", () => {
   expect(parseNodeRunnerInventoryDeclaration({ protocolFeatures: [] })).toEqual({

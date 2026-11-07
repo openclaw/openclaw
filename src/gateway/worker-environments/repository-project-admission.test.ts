@@ -193,7 +193,49 @@ describe("repository project admission", () => {
     expect(result.snapshotStart === true).toBe(
       [undefined, "HEAD", "main", "refs/heads/main"].includes(ref),
     );
+    if (!result.snapshotStart) {
+      await expect(
+        result.isSnapshotBaseAncestor(commit, new AbortController().signal),
+      ).resolves.toBe(false);
+      expect(requestPaths().some((path) => path.includes("/compare/"))).toBe(false);
+    }
   });
+
+  it.each(["ancestor", "topic", "revoked", "replaced"])(
+    "qualifies snapshot ancestry through the admitted repository owner: %s",
+    async (scenario) => {
+      const admitted = await prepareRepositoryWorkerProjectSource(initial);
+      const candidate = "e".repeat(40);
+      const original = fetchImpl.getMockImplementation()!;
+      fetchImpl.mockImplementation(async (input, init) => {
+        const url = new URL(new Request(input).url);
+        if (url.pathname.includes("/compare/")) {
+          expect(url.pathname).toBe(`/repos/acme/project/compare/${candidate}...${commit}`);
+          expect(url.search).toBe("?per_page=1");
+          if (scenario === "revoked") {
+            selected = false;
+          }
+          if (scenario === "replaced") {
+            repositoryId = "R_replacement";
+          }
+          return new Response(
+            JSON.stringify({
+              status: scenario === "topic" ? "diverged" : "ahead",
+              base_commit: { sha: candidate },
+              merge_base_commit: { sha: scenario === "topic" ? "f".repeat(40) : candidate },
+            }),
+          );
+        }
+        return original(input, init);
+      });
+      const result = admitted.isSnapshotBaseAncestor(candidate, new AbortController().signal);
+      if (scenario === "revoked" || scenario === "replaced") {
+        await expect(result).rejects.toThrow(/identity changed|identity changed; retry/);
+      } else {
+        await expect(result).resolves.toBe(scenario === "ancestor");
+      }
+    },
+  );
 
   it("admits the declarative recipe before an executable fallback from immutable blobs", async () => {
     const blob = "e".repeat(40);

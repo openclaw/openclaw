@@ -7,7 +7,7 @@ const preparedWorkspaceChildScript = `
           import { closeOpenClawStateDatabaseAsync } from './src/state/openclaw-state-db.ts';
           import { drainGlobalSingletonLifecycleState } from './src/shared/global-singleton.ts';
           try {
-            const { action, input } = JSON.parse(fs.readFileSync(0, 'utf8'));
+            const { action, input, deferRegistrationVerification = true } = JSON.parse(fs.readFileSync(0, 'utf8'));
             if (action === 'capture') {
               const { manifest } = await readWorkspaceManifest(input.homeDir, input.preparedManifestRef);
               console.log(await captureManifest({
@@ -16,7 +16,7 @@ const preparedWorkspaceChildScript = `
                 baseManifestRef: input.sourceManifestRef, hashMemo: new Map(),
               }));
             } else {
-              await new NodeWorkerWorkspaceRuntime({ env: process.env, ephemeral: true }).prepare(input);
+              await new NodeWorkerWorkspaceRuntime({ env: process.env, ephemeral: true }).prepare(input, undefined, deferRegistrationVerification);
             }
           } catch (error) { console.error(error.message); process.exitCode = 1; }
           finally { await closeOpenClawStateDatabaseAsync(); await drainGlobalSingletonLifecycleState(); }

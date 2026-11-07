@@ -9,7 +9,7 @@ import { setupWorkerEnvironmentServiceSuite, testState } from "./service.test-su
 
 setupWorkerEnvironmentServiceSuite();
 
-it("gives first-bind content verification the full ten-minute budget", async () => {
+it("retains cold verification budgets for first binding and legacy node registration", async () => {
   const preparation: WorkerProjectPreparationIdentity = {
     key: "b".repeat(64),
     cacheKey: "c".repeat(64),
@@ -46,6 +46,19 @@ it("gives first-bind content verification the full ten-minute budget", async () 
     deliveredAtMs: 1,
   });
   const nodeTransport = transport();
+  const fixtureNode = await nodeTransport.getCurrentNode(record.nodeDeviceId!);
+  if (!fixtureNode) {
+    throw new Error("missing fixture node");
+  }
+  const node = {
+    ...fixtureNode,
+    workerHost: { ...fixtureNode.workerHost, preparedWorkspace: 1 as const },
+  };
+  const deferredNode = {
+    ...node,
+    workerHost: { ...node.workerHost, preparedWorkspaceDeferredVerification: true as const },
+  };
+  const lookup = vi.spyOn(nodeTransport, "getCurrentNode").mockResolvedValue(deferredNode);
   const workspace = {
     gatewayNamespace: "gateway",
     environmentId: record.environmentId,
@@ -67,7 +80,7 @@ it("gives first-bind content verification the full ten-minute budget", async () 
     gatewayNamespace: workspace.gatewayNamespace,
   });
   const signal = new AbortController().signal;
-  await expect(
+  const bind = () =>
     owner.bindPreparedWorkspace({
       environmentId: record.environmentId,
       preparationKey: preparation.key,
@@ -77,14 +90,50 @@ it("gives first-bind content verification the full ten-minute budget", async () 
       ownerEpoch: record.ownerEpoch,
       assertCurrent: () => {},
       signal,
-    }),
-  ).resolves.toEqual(workspace);
+    });
+  await expect(bind()).resolves.toEqual(workspace);
   expect(invoke).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({
       command: NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
       params: expect.objectContaining({ action: "bind" }),
       timeoutMs: 10 * 60_000 + 5_000,
       signal,
+    }),
+  );
+  lookup.mockResolvedValue(node);
+  invoke.mockClear();
+  await expect(bind()).resolves.toEqual(workspace);
+  expect(invoke).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ timeoutMs: 30_000 }));
+  record.state = "provisioning";
+  record.nodeSetupId = "setup-1";
+  record.attachedSessionIds = [];
+  invoke.mockClear();
+  await owner.registerPreparedWorkspace({
+    record,
+    deviceId: record.nodeDeviceId!,
+    workspace: { ...workspace, baseCommit: "a".repeat(40) },
+    assertCurrent() {},
+    signal,
+  });
+  expect(invoke).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      params: expect.objectContaining({ action: "register" }),
+      timeoutMs: 605_000,
+    }),
+  );
+  lookup.mockResolvedValue(deferredNode);
+  invoke.mockClear();
+  await owner.registerPreparedWorkspace({
+    record,
+    deviceId: record.nodeDeviceId!,
+    workspace: { ...workspace, baseCommit: "a".repeat(40) },
+    assertCurrent() {},
+    signal,
+  });
+  expect(invoke).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      timeoutMs: 30_000,
+      params: { action: "register", ...workspace },
     }),
   );
 });

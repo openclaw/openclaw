@@ -7,6 +7,7 @@ import { assert, expect, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import { NodeInvokeResultParamsSchema } from "../../packages/gateway-protocol/src/schema/nodes.js";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { NODE_WORKER_WORKSPACE_PREPARE_COMMAND } from "../infra/node-commands.js";
 import {
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
@@ -186,7 +187,12 @@ async function createPreparedNodeAcknowledgement(root: string, cleanup: AsyncDis
           enabled: true,
           capacity: { total: 1, available: 1 },
           environmentSession: 1,
-          ...(available ? { preparedWorkspace: NODE_WORKER_PREPARED_WORKSPACE_VERSION } : {}),
+          ...(available
+            ? {
+                preparedWorkspace: NODE_WORKER_PREPARED_WORKSPACE_VERSION,
+                preparedWorkspaceDeferredVerification: true,
+              }
+            : {}),
         },
       },
     });
@@ -227,10 +233,22 @@ async function createPreparedNodeAcknowledgement(root: string, cleanup: AsyncDis
     invoked.push(input);
     const controller = new AbortController();
     controllers.set(input.id, controller);
-    const invocation = handleInvoke(input, { request }, { current: async () => [] }, undefined, {
-      workerWorkspace: workspace,
-      signal: controller.signal,
-    });
+    const invocation = handleInvoke(
+      input,
+      {
+        request,
+        serverCapabilities: new Set([
+          GATEWAY_SERVER_CAPS.NODE_WORKER_PREPARED_WORKSPACE_BASE,
+          GATEWAY_SERVER_CAPS.NODE_WORKER_PREPARED_WORKSPACE_DEFERRED_VERIFICATION,
+        ]),
+      },
+      { current: async () => [] },
+      undefined,
+      {
+        workerWorkspace: workspace,
+        signal: controller.signal,
+      },
+    );
     pending.add(invocation);
     void invocation.finally(() => {
       pending.delete(invocation);

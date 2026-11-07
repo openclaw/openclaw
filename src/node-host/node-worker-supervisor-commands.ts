@@ -225,6 +225,9 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
       const prepared = await workspace?.prepare(
         parseNodeWorkerPreparedWorkspaceInput(paramsJSON),
         signal,
+        params.serverCapabilities?.has(
+          GATEWAY_SERVER_CAPS.NODE_WORKER_PREPARED_WORKSPACE_DEFERRED_VERIFICATION,
+        ) === true,
       );
       if (
         !prepared ||

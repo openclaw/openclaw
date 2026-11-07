@@ -92,6 +92,7 @@ const WorkerHost = z
       statusWait: z.literal(NODE_WORKER_STATUS_WAIT_VERSION).optional(),
       deviceFolders: z.literal(true).optional(),
       preparedWorkspace: z.literal(NODE_WORKER_PREPARED_WORKSPACE_VERSION).optional(),
+      preparedWorkspaceDeferredVerification: z.literal(true).optional(),
       capturedExecPolicy: z.literal(true).optional(),
       workspaceResultVersion: z.literal(NODE_WORKSPACE_RESULT_VERSION).optional(),
       workspaceQuiescence: z.literal(NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION).optional(),
@@ -102,6 +103,8 @@ const WorkerHost = z
       promptContext: z.literal(NODE_WORKER_PROMPT_CONTEXT_VERSION).optional(),
     }).refine(
       (host) =>
+        (host.preparedWorkspaceDeferredVerification === undefined ||
+          host.preparedWorkspace !== undefined) &&
         (host.bundleStatus === undefined || host.bundleRetention !== undefined) &&
         (host.capacity.reclaimableIdle === undefined || host.idleRetention === true),
     ),

@@ -30,6 +30,48 @@ async function prepare(f: Awaited<ReturnType<typeof fixture>>) {
 }
 
 describe("prepared repository snapshot bases", () => {
+  it("reprepares a topic-only snapshot sharing the default branch cache key", async () => {
+    const f = await fixture();
+    const main = f.project;
+    await requireGit(f.repository, ["branch", "-M", "main"]);
+    await requireGit(f.repository, ["checkout", "--quiet", "-b", "topic"]);
+    await fs.writeFile(path.join(f.repository, "topic-only.txt"), "not on main\n");
+    await requireGit(f.repository, ["add", "."]);
+    await requireGit(f.repository, ["commit", "--quiet", "-m", "topic only"]);
+    const topic = await snapshot(f.repository);
+    expect(topic.key).toBe(main.key);
+    const prepared = await f.preparedOperation(() => {}, { project: topic });
+    const first = await prepared.project.prepare(f);
+    prepared.close();
+    const owner = createWorkerProjectPreparation({
+      project: main,
+      namespace: "gateway",
+      preparation: {
+        key: "b".repeat(64),
+        cacheKey: "c".repeat(64),
+        purpose: "session",
+        demandAtMs: 1,
+      },
+      snapshotStart: true,
+      isSnapshotBaseAncestor: async (candidate) =>
+        (await requireGit(f.repository, ["merge-base", candidate, main.baseCommit])) === candidate,
+      requireCurrent() {},
+    });
+    try {
+      const result = await owner.project.prepare({ ...f, snapshotBaseCommit: topic.baseCommit });
+      expect(result.baseCommit).toBe(main.baseCommit);
+      expect(result.cacheHit).toBe(false);
+      expect(await requireGit(first.preparedWorkspace!.workspaceDir, ["rev-parse", "HEAD"])).toBe(
+        main.baseCommit,
+      );
+      await expect(
+        fs.stat(path.join(first.preparedWorkspace!.workspaceDir, "topic-only.txt")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      owner.close();
+    }
+  });
+
   it("refreshes a seed-only snapshot to the requested commit without running setup", async () => {
     const f = await fixture('#!/bin/sh\nprintf "setup\n" >> "$HOME/setup-count"\n');
     const initial = f.operation();
@@ -148,6 +190,9 @@ describe("prepared repository snapshot bases", () => {
       setupAuthorized: true,
       snapshotStart: true,
       revalidateRepositorySource: revalidate,
+      isSnapshotBaseAncestor: async (candidate) =>
+        (await requireGit(f.repository, ["merge-base", candidate, latest.baseCommit])) ===
+        candidate,
       prepareRepositoryGitPack: ({ temporaryRoot, signal }) =>
         prepareWorkerWorkspaceGitPack({
           root: f.repository,

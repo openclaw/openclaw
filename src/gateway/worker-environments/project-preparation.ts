@@ -129,6 +129,7 @@ export function createWorkerProjectPreparation(params: {
   };
   setupAuthorized?: boolean;
   snapshotStart?: true;
+  isSnapshotBaseAncestor?: (baseCommit: string, signal: AbortSignal) => Promise<boolean>;
   revalidateRepositorySource?: (signal: AbortSignal) => Promise<void>;
   prepareRepositoryGitPack?: (input: {
     temporaryRoot: string;
@@ -160,6 +161,7 @@ export function createWorkerProjectPreparation(params: {
   let active: Promise<PreparationResult> | undefined;
   let preparedWorkspace: PreparationResult["preparedWorkspace"];
   let mergedSetup: unknown;
+  let retainedSnapshot = false;
   // The serialized pre-enrollment producer invalidates completion before mutation.
   // Reuse verification only within this operation; replay starts with a fresh scan.
   let verifiedRetained: PreparedProjectVerification | null | undefined;
@@ -292,8 +294,7 @@ export function createWorkerProjectPreparation(params: {
     }
     if (
       preparationInput &&
-      params.snapshotStart &&
-      transport.snapshotBaseCommit &&
+      retainedSnapshot &&
       (!inspection.ready ||
         !inspection.preparedWorkspace ||
         verifiedRetained?.baseCommit !== sourceInput.baseCommit)
@@ -390,12 +391,20 @@ export function createWorkerProjectPreparation(params: {
       if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(transport.snapshotBaseCommit)) {
         throw new Error("Selected snapshot has an invalid repository base");
       }
-      // Activation fetches refs without changing this checkout; publication owns integration.
-      sourceInput.baseCommit = transport.snapshotBaseCommit;
-      sourceInput.seedKey = workerProjectSeedKey({
-        ...params.project,
-        baseCommit: sourceInput.baseCommit,
-      });
+      // Cache compatibility excludes refs. Only the admitted source owner can
+      // prove that a different snapshot revision belongs to the default history.
+      retainedSnapshot =
+        transport.snapshotBaseCommit === params.project.baseCommit ||
+        (await params.isSnapshotBaseAncestor?.(transport.snapshotBaseCommit, signal)) === true;
+      requireCurrent();
+      if (retainedSnapshot) {
+        // Activation fetches refs without changing this checkout; publication owns integration.
+        sourceInput.baseCommit = transport.snapshotBaseCommit;
+        sourceInput.seedKey = workerProjectSeedKey({
+          ...params.project,
+          baseCommit: sourceInput.baseCommit,
+        });
+      }
     }
     const result = await prepareSeed(transport);
     requireCurrent();

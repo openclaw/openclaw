@@ -480,15 +480,43 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     assertSource();
     identity = current;
   };
+  const snapshotStart =
+    !expected &&
+    !request.baseCommit &&
+    typeof metadata.defaultBranch === "string" &&
+    [metadata.defaultBranch, `heads/${metadata.defaultBranch}`].includes(requestedRef);
   return {
     project,
     // Only fresh default-branch requests can reuse a snapshot's completed revision.
-    ...(!expected &&
-    !request.baseCommit &&
-    typeof metadata.defaultBranch === "string" &&
-    [metadata.defaultBranch, `heads/${metadata.defaultBranch}`].includes(requestedRef)
-      ? { snapshotStart: true as const }
-      : {}),
+    ...(snapshotStart ? { snapshotStart: true as const } : {}),
+    isSnapshotBaseAncestor: async (candidate: string, signal: AbortSignal) => {
+      if (!snapshotStart || !GitObject.test(candidate)) {
+        return false;
+      }
+      await revalidate(signal);
+      const readIdentity = identity;
+      const assertSource = () => {
+        signal.throwIfAborted();
+        assertAdmission();
+        readIdentity.assertSelected();
+      };
+      // Compare immutable Git objects through the same repository/account owner
+      // that resolved the default ref. A cache key or branch label is not lineage.
+      const comparison = await read(
+        `/compare/${candidate}...${baseCommit}?per_page=1`,
+        readIdentity,
+        assertSource,
+        signal,
+      );
+      await revalidate(signal);
+      assertSource();
+      return (
+        isRecord(comparison) &&
+        ["ahead", "identical"].includes(String(comparison.status)) &&
+        objectSha(comparison.base_commit) === candidate &&
+        objectSha(comparison.merge_base_commit) === candidate
+      );
+    },
     setupRecipe,
     recipe,
     assertCurrent,

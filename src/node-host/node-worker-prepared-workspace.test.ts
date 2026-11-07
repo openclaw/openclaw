@@ -20,13 +20,16 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
-import type {
-  NodeWorkerPreparedWorkspaceBinding,
-  NodeWorkerPreparedWorkspaceInput,
-} from "../worker/node-workspace-prepared-protocol.js";
+import type { NodeWorkerPreparedWorkspaceInput } from "../worker/node-workspace-prepared-protocol.js";
 import { NODE_WORKSPACE_DRAIN_COMMAND } from "../worker/node-workspace-protocol.js";
 import { preparedWorkspaceChildArgs } from "./node-worker-prepared-script.test-support.js";
 import { NodeWorkerPreparedWorkspaceStore } from "./node-worker-prepared-workspace-store.js";
+import {
+  binding,
+  cacheKey,
+  preparationKey,
+  createPreparedWorkspaceFixture,
+} from "./node-worker-prepared-workspace.test-support.js";
 import { invokeNodeWorkerSupervisorCommand } from "./node-worker-supervisor-commands.js";
 import { waitForNodeWorkerTerminal } from "./node-worker-supervisor.fixture.test-support.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
@@ -47,128 +50,8 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 afterEach(() => vi.restoreAllMocks());
-const preparationKey = "a".repeat(64);
-const cacheKey = "c".repeat(64);
-const binding: NodeWorkerPreparedWorkspaceBinding = {
-  action: "bind",
-  gatewayNamespace: "gateway-prepared",
-  environmentId: "environment-prepared",
-  preparationKey,
-  cacheKey,
-  sessionId: "session-prepared",
-  sessionKey: "agent:main:prepared",
-  ownerEpoch: 2,
-};
-
-async function fixture(setupWrites = false, setupPath = "source.txt") {
-  const root = fs.realpathSync.native(tempDirs.make("node-prepared-workspace-"));
-  const ownerRoot = path.join(
-    root,
-    ".openclaw-worker",
-    "prepared",
-    binding.gatewayNamespace,
-    cacheKey,
-  );
-  const workspaceDir = path.join(ownerRoot, "workspace");
-  const homeDir = path.join(ownerRoot, "home");
-  // Match the private owner root created by project preparation, independent of host umask.
-  await fsp.mkdir(ownerRoot, { recursive: true, mode: 0o700 });
-  await Promise.all([
-    fsp.mkdir(workspaceDir, { recursive: true, mode: 0o700 }),
-    fsp.mkdir(homeDir, { recursive: true, mode: 0o700 }),
-  ]);
-  const git = async (...args: string[]) =>
-    (
-      await processExec.runExec("git", ["-C", workspaceDir, ...args], { timeoutMs: 10_000 })
-    ).stdout.trim();
-  await git("init", "--quiet");
-  await fsp.writeFile(path.join(workspaceDir, ".gitignore"), ".venv/\n");
-  await fsp.writeFile(path.join(workspaceDir, "source.txt"), "prepared source\n");
-  await fsp.mkdir(path.join(workspaceDir, "tracked-dir"));
-  await fsp.writeFile(path.join(workspaceDir, "tracked-dir", "input.txt"), "pristine child\n");
-  await git("add", ".");
-  await git(
-    "-c",
-    "user.name=Prepared Test",
-    "-c",
-    "user.email=prepared@example.test",
-    "-c",
-    "commit.gpgsign=false",
-    "commit",
-    "--quiet",
-    "-m",
-    "prepared source",
-  );
-  const baseCommit = await git("rev-parse", "HEAD");
-  const { manifestRef: sourceManifestRef, manifest } = await captureWorkspaceManifest({
-    root: workspaceDir,
-    baseCommit,
-  });
-  const manifests = path.join(homeDir, ".openclaw-worker", "manifests");
-  await fsp.mkdir(manifests, { recursive: true });
-  await fsp.writeFile(
-    path.join(manifests, `${sourceManifestRef.slice(7)}.json`),
-    serializeWorkerWorkspaceManifest(manifest),
-  );
-  // Setup output appears after the pristine source manifest, as in project preparation.
-  await fsp.mkdir(path.join(workspaceDir, ".venv"));
-  await fsp.writeFile(
-    path.join(workspaceDir, ".venv", "absolute-path"),
-    `${workspaceDir}\n${homeDir}`,
-  );
-  if (setupWrites) {
-    await fsp.writeFile(path.join(workspaceDir, setupPath), "setup changed source\n");
-    await fsp.writeFile(path.join(workspaceDir, "setup-output.txt"), "eligible setup output\n");
-  }
-  const prepared = await captureWorkspaceManifest({ root: workspaceDir, baseCommit });
-  await fsp.writeFile(
-    path.join(manifests, `${prepared.manifestRef.slice(7)}.json`),
-    serializeWorkerWorkspaceManifest(prepared.manifest),
-  );
-  const env = { ...process.env, HOME: root, OPENCLAW_STATE_DIR: path.join(root, "state") };
-  const options = { env, ephemeral: true };
-  const runtime = new NodeWorkerWorkspaceRuntime(options);
-  const registration = {
-    action: "register" as const,
-    gatewayNamespace: binding.gatewayNamespace,
-    environmentId: binding.environmentId,
-    preparationKey,
-    cacheKey,
-    workspaceDir,
-    homeDir,
-    sourceManifestRef,
-    preparedManifestRef: prepared.manifestRef,
-  };
-  const request = {
-    workspaceDir,
-    environmentId: binding.environmentId,
-    sessionId: binding.sessionId,
-    sessionKey: binding.sessionKey,
-    ownerEpoch: binding.ownerEpoch,
-  };
-  const command = {
-    gatewayNamespace: binding.gatewayNamespace,
-    environmentId: binding.environmentId,
-    sessionId: binding.sessionId,
-    sessionKey: binding.sessionKey,
-    preparationKey,
-    generation: binding.ownerEpoch,
-    argv: ["node", "-e", "process.stdout.write(process.cwd() + '\\n' + process.env.HOME)"],
-  };
-  return {
-    root,
-    ownerRoot,
-    workspaceDir,
-    homeDir,
-    env,
-    options,
-    runtime,
-    registration,
-    request,
-    command,
-    baseCommit,
-  };
-}
+const fixture = (setupWrites = false, setupPath = "source.txt") =>
+  createPreparedWorkspaceFixture(tempDirs.make("node-prepared-workspace-"), setupWrites, setupPath);
 
 async function serveManifest(raw: string | Buffer, blobs = new Map<string, Buffer>()) {
   const requests: string[] = [];
@@ -197,34 +80,89 @@ function manifestPath(homeDir: string, manifestRef: string) {
   return path.join(homeDir, ".openclaw-worker", "manifests", `${manifestRef.slice(7)}.json`);
 }
 
+async function runPreparedChild(
+  f: Awaited<ReturnType<typeof fixture>>,
+  action: "prepare" | "capture",
+  input: NodeWorkerPreparedWorkspaceInput = f.registration,
+  deferRegistrationVerification = true,
+) {
+  const reads = path.join(f.root, "content-reads");
+  await fsp.writeFile(reads, "");
+  const result = await processExec.runCommandWithTimeout(
+    [resolveTestNodeExecPath(), ...preparedWorkspaceChildArgs],
+    {
+      baseEnv: {
+        ...f.env,
+        OPENCLAW_PREPARED_TEST_WORKSPACE: f.workspaceDir,
+        OPENCLAW_PREPARED_TEST_READS: reads,
+      },
+      input: JSON.stringify({ action, input, deferRegistrationVerification }),
+      timeoutMs: 30_000,
+    },
+  );
+  const count = (await fsp.readFile(reads, "utf8")).split("\n").filter(Boolean).length;
+  return { result, count };
+}
+
 describe("prepared node workspace ownership", () => {
+  it("warms legacy first binding across processes under the registration verification contract", async () => {
+    const f = await fixture(true);
+    const registered = await runPreparedChild(f, "prepare", f.registration, false);
+    expect(registered.result.code, registered.result.stderr).toBe(0);
+    expect(registered.count).toBe(5);
+    const bound = await runPreparedChild(f, "prepare", binding, false);
+    expect(bound.result.code, bound.result.stderr).toBe(0);
+    expect(bound.count).toBe(0);
+    await fsp.writeFile(path.join(f.workspaceDir, "source.txt"), "private session edit\n");
+    const replay = await runPreparedChild(f, "prepare", binding, false);
+    expect(replay.result.code, replay.result.stderr).toBe(0);
+    expect(replay.count).toBe(0);
+    expect(await fsp.readFile(path.join(f.workspaceDir, "source.txt"), "utf8")).toBe(
+      "private session edit\n",
+    );
+  });
+
+  it.each(["legacy", "base-only", "deferred"])(
+    "negotiates the verification phase without changing legacy results: %s",
+    async (peer) => {
+      const f = await fixture(true);
+      const capture = vi.spyOn(workspaceCommands, "captureManifest");
+      const registered = await invokeNodeWorkerSupervisorCommand({
+        command: NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
+        paramsJSON: JSON.stringify(f.registration),
+        workspace: f.runtime,
+        serverCapabilities: new Set(
+          peer === "deferred"
+            ? [
+                GATEWAY_SERVER_CAPS.NODE_WORKER_PREPARED_WORKSPACE_BASE,
+                GATEWAY_SERVER_CAPS.NODE_WORKER_PREPARED_WORKSPACE_DEFERRED_VERIFICATION,
+              ]
+            : peer === "base-only"
+              ? [GATEWAY_SERVER_CAPS.NODE_WORKER_PREPARED_WORKSPACE_BASE]
+              : [],
+        ),
+      });
+      expect(registered).toMatchObject({ handled: true, ok: true });
+      expect(capture).toHaveBeenCalledTimes(peer === "deferred" ? 0 : 1);
+      if (peer === "legacy") {
+        const { action: _action, ...legacy } = f.registration;
+        expect(registered).toHaveProperty("payload", legacy);
+      }
+      await f.runtime.prepare(binding);
+      expect(capture).toHaveBeenCalledTimes(peer === "deferred" ? 1 : 2);
+    },
+  );
+
   it("defers registration hashing and reuses verified checkpoint memos across binding processes", async () => {
     const f = await fixture(true);
-    const reads = path.join(f.root, "content-reads");
     const memo = manifestPath(f.homeDir, f.registration.preparedManifestRef).replace(
       /\.json$/u,
       ".memo",
     );
-    const run = async (
+    const run = (
       action: "prepare" | "capture",
       input: NodeWorkerPreparedWorkspaceInput = f.registration,
-    ) => {
-      await fsp.writeFile(reads, "");
-      const result = await processExec.runCommandWithTimeout(
-        [resolveTestNodeExecPath(), ...preparedWorkspaceChildArgs],
-        {
-          baseEnv: {
-            ...f.env,
-            OPENCLAW_PREPARED_TEST_WORKSPACE: f.workspaceDir,
-            OPENCLAW_PREPARED_TEST_READS: reads,
-          },
-          input: JSON.stringify({ action, input }),
-          timeoutMs: 30_000,
-        },
-      );
-      const count = (await fsp.readFile(reads, "utf8")).split("\n").filter(Boolean).length;
-      return { result, count };
-    };
+    ) => runPreparedChild(f, action, input);
     const registered = await run("prepare");
     expect(registered.result.code, registered.result.stderr).toBe(0);
     expect(registered.count).toBe(0);
@@ -308,7 +246,7 @@ describe("prepared node workspace ownership", () => {
     const f = await fixture(true);
     expect(f.registration.preparedManifestRef).not.toBe(f.registration.sourceManifestRef);
     const capture = vi.spyOn(workspaceCommands, "captureManifest");
-    await f.runtime.prepare(f.registration);
+    await f.runtime.prepare(f.registration, undefined, true);
     expect(capture).not.toHaveBeenCalled();
     await expect(f.runtime.exec(f.command)).rejects.toThrow("does not own");
     await fsp.writeFile(path.join(f.workspaceDir, "source.txt"), "changed while ready\n");

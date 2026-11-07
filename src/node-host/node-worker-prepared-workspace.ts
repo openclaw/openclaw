@@ -88,6 +88,7 @@ export class NodeWorkerPreparedWorkspaceRuntime {
   async prepare(
     input: NodeWorkerPreparedWorkspaceInput,
     signal?: AbortSignal,
+    deferRegistrationVerification = false,
   ): Promise<NodeWorkerPreparedWorkspaceResult> {
     const { root, store, hashMemos } = this;
     if (!store) {
@@ -123,12 +124,34 @@ export class NodeWorkerPreparedWorkspaceRuntime {
         return source.baseCommit;
       };
       let baseCommit: string | undefined;
+      const verifyContents = async (workspace: ReturnType<typeof projectPreparedWorkspace>) => {
+        baseCommit = await readPreparedBase(workspace);
+        const hashMemo: WorkspaceHashMemo = hashMemos.get(ownerRoot) ?? new Map();
+        const captured = await captureManifest({
+          workspaceDir: workspace.workspaceDir,
+          manifestHome: workspace.homeDir,
+          baseCommit,
+          referenceManifestRef: workspace.preparedManifestRef,
+          baseManifestRef: workspace.sourceManifestRef,
+          hashMemo,
+          signal,
+        });
+        if (captured !== workspace.preparedManifestRef) {
+          throw new Error("INVALID_REQUEST: prepared workspace source does not match its manifest");
+        }
+        signal?.throwIfAborted();
+        hashMemos.set(ownerRoot, hashMemo);
+      };
       let row: NodeWorkerPreparedWorkspaceRow;
       if (input.action === "register") {
         assertNodePreparedWorkspacePaths(root, input);
-        // Registration cannot execute the workspace. Its first binding verifies content
-        // under this serializer, including changes made while capacity was idle.
-        baseCommit = await readPreparedBase(input);
+        // Legacy Gateways budget the cold scan at registration, not first bind.
+        // Defer only after the connection owner negotiated the new phase contract.
+        if (deferRegistrationVerification) {
+          baseCommit = await readPreparedBase(input);
+        } else {
+          await verifyContents(input);
+        }
         signal?.throwIfAborted();
         assertNodePreparedWorkspacePaths(root, input);
         row = await store.register(input, {
@@ -147,24 +170,7 @@ export class NodeWorkerPreparedWorkspaceRuntime {
         if (existing.state === "available") {
           // Ready capacity must still match completed setup at its first claim.
           // Exact bind replay belongs to the session and must preserve its later edits.
-          const hashMemo: WorkspaceHashMemo = new Map();
-          baseCommit = await readPreparedBase(registeredWorkspace);
-          const captured = await captureManifest({
-            workspaceDir: registeredWorkspace.workspaceDir,
-            manifestHome: registeredWorkspace.homeDir,
-            baseCommit,
-            referenceManifestRef: registeredWorkspace.preparedManifestRef,
-            baseManifestRef: registeredWorkspace.sourceManifestRef,
-            hashMemo,
-            signal,
-          });
-          if (captured !== registeredWorkspace.preparedManifestRef) {
-            throw new Error(
-              "INVALID_REQUEST: prepared workspace source does not match its manifest",
-            );
-          }
-          signal?.throwIfAborted();
-          hashMemos.set(ownerRoot, hashMemo);
+          await verifyContents(registeredWorkspace);
         }
         row = await store.bind(input, {
           assertCurrent: () => {
