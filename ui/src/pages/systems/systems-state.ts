@@ -452,6 +452,14 @@ export function createSystems(context: ApplicationContext) {
         ) {
           return;
         }
+        if (options.inventory) {
+          const patch =
+            source === "systemInfo"
+              ? { gatewaySystemInfo: null, gatewaySampledAtMs: null }
+              : { nodes: [] };
+          state.inventory = { ...state.inventory, ...patch };
+          state.rows = projectSystemsTelemetry(state.rows, patch);
+        }
         state.inventory = {
           ...state.inventory,
           errors: { ...state.inventory.errors, [source]: formatUiError(error) },
