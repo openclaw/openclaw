@@ -43,6 +43,7 @@ import {
 import { restoreNativeKnownChild } from "./native-subagent-known-child.js";
 import {
   prepareNativeModelToolInput,
+  canPrepareNativeReceiverChild,
   drainNativeChildModelAdmissions,
   RetiredNativeChildPaths,
 } from "./native-subagent-model-input.js";
@@ -102,6 +103,7 @@ import {
   type NativeParentRegistration,
 } from "./native-subagent-parent-owner.js";
 import { matchesNativeAssignmentLifecycle } from "./native-subagent-pending-assignments.js";
+import { reconcileOwnedNativeCompletionReceipts } from "./native-subagent-receipt-observation.js";
 import {
   CodexNativeSubagentRecoveryCoordinator,
   logRecoveryFailure,
@@ -523,6 +525,17 @@ class Monitor {
       assignments: this.assignments,
       closes: this.childCloses,
       deliverDetached: (state) => this.completionDelivery.deliverDetached(state),
+      reconcileDelivered: (state, owner, observation) =>
+        reconcileOwnedNativeCompletionReceipts({
+          client: this.client,
+          state,
+          owner,
+          children: this.childStates,
+          knownChildren: this.knownChildren,
+          isCurrent: () => !this.disposed && this.isCurrentParent(state),
+          delivery: this.completionDelivery,
+          observation,
+        }),
       drainAdmissions: (state, owner, turnId) =>
         this.drainPendingChildAdmissionEvidence(state, owner, turnId, true),
       clearAdmissions: () => this.clearUnconsumablePendingChildAdmissionEvidence(),
@@ -1561,42 +1574,17 @@ class Monitor {
     return known?.parent === state ? known.deliveryReceipts : state.deliveryReceipts;
   }
 
-  /** Read-only eligibility; transferring observation still needs fresh native lineage. */
   private canPrepareReceiverChild(state: ParentState, threadId: string): boolean {
     const child = this.knownChildren.get(threadId);
-    const previous = child?.parent ?? this.parentStates.get(threadId);
-    if (previous === state) {
-      return true;
-    }
-    if (
-      !this.isCurrentParent(state) ||
-      (child &&
-        (!child.assignment.terminal ||
-          child.pendingTurns.length > 0 ||
-          this.submissions.hasChildCustody(child.parent, threadId)))
-    ) {
-      return false;
-    }
-    if (!previous) {
-      return true;
-    }
-    if (
-      this.retiredParentStates.has(previous) ||
-      !state.requesterSessionKey ||
-      previous.requesterSessionKey !== state.requesterSessionKey ||
-      !previous.historyOwner ||
-      !state.historyOwner ||
-      !matchesNativeAssignmentLifecycle(previous.historyOwner, state.historyOwner) ||
-      ![...state.owners.values()].some((owner) => owner.completionCustody?.isCurrent())
-    ) {
-      return false;
-    }
-    try {
-      state.assignmentStore?.assertCurrent();
-      return true;
-    } catch {
-      return false;
-    }
+    return canPrepareNativeReceiverChild({
+      state,
+      threadId,
+      child,
+      previous: child?.parent ?? this.parentStates.get(threadId),
+      isCurrent: this.isCurrentParent(state),
+      retiredParents: this.retiredParentStates,
+      hasChildCustody: (parent, id) => this.submissions.hasChildCustody(parent, id),
+    });
   }
 
   private prepareReceiverChild(
