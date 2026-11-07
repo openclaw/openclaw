@@ -522,7 +522,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
         }
         if (!repository && loaded.root && update.file.workspacePath) {
           const { acknowledgeLocalWorkspaceConflict } =
-            await import("../worker-environments/local-workspace-projection.js");
+            await import("../worker-environments/local-workspace-conflict-acknowledgement.js");
           await acknowledgeLocalWorkspaceConflict({
             cwd: loaded.root,
             worktreeId: loaded.entry?.worktree?.id,

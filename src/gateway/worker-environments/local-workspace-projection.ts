@@ -368,8 +368,6 @@ export async function withSettledLocalWorkspacePath<T>(
     : await operation();
 }
 
-export { acknowledgeLocalWorkspaceConflict } from "./local-workspace-conflict-acknowledgement.js";
-
 /** An unchanged turn needs no filesystem effects and can leave its runtimes running. */
 export function reuseLocalWorkspaceProjection(
   owner: LocalWorkspaceOwner,
