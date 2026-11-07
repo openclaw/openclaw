@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { page } from "vitest/browser";
 import { observeResize } from "../../../lib/reactive/observers.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { stubResizeObserver } from "../../../test-helpers/resize-observer.ts";
 import { phase } from "../../../test-helpers/solid-menu.tsx";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
@@ -219,7 +220,7 @@ describe("chat Details presentation", () => {
   it.each([undefined, "desktop"] as const)(
     "reserves automatic Details before the first resize delivery (presentation: %s)",
     async (nativePresentation) => {
-      vi.stubGlobal("ResizeObserver", undefined);
+      stubResizeObserver();
       try {
         await page.viewport(1700, 900);
         const { conversation, panel } = await fixture(
@@ -384,25 +385,26 @@ describe("chat Details presentation", () => {
         createComponent(ChatDetailsDesktopBody, {
           presented: true,
           get children() {
-            return createComponent(ChatDetailsEnvironment, {
-              details: props({
-                detailsWorkspace: {
-                  root: "/workspace/details",
-                  label: null,
+            return () =>
+              createComponent(ChatDetailsEnvironment, {
+                details: props({
+                  detailsWorkspace: {
+                    root: "/workspace/details",
+                    label: null,
+                    branch: "feature/details",
+                  },
+                }),
+                presented: true,
+                onOpenUncommitted: openChanges,
+                uncommitted: {
+                  sessionKey: card.sessionKey,
                   branch: "feature/details",
+                  baseRef: "HEAD",
+                  files: [{ path: "example.ts", status: "modified", additions: 3, deletions: 1 }],
+                  additions: 3,
+                  deletions: 1,
                 },
-              }),
-              presented: true,
-              onOpenUncommitted: openChanges,
-              uncommitted: {
-                sessionKey: card.sessionKey,
-                branch: "feature/details",
-                baseRef: "HEAD",
-                files: [{ path: "example.ts", status: "modified", additions: 3, deletions: 1 }],
-                additions: 3,
-                deletions: 1,
-              },
-            });
+              });
           },
         }),
       { container: panel },

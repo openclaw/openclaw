@@ -495,7 +495,7 @@ describe("ModelProvidersPage agent scope", () => {
     expect(page.view.props.keyEditorProvider).toBeNull();
     expect(page.view.props.messages.openai).toEqual({
       kind: "success",
-      text: "API key saved.",
+      text: "API key saved and verified.",
       warning: "Authentication refresh failed. Provider refresh failed.",
     });
     await page.updateComplete;
@@ -563,7 +563,7 @@ describe("ModelProvidersPage agent scope", () => {
     const form = page.querySelector("[data-models-key-dialog]");
     expect(
       [...form!.querySelectorAll('[role="status"]')].map((message) => message.textContent?.trim()),
-    ).toEqual(["Added anthropic", "config.get failed after provider add"]);
+    ).toEqual(["Added anthropic. Access verified.", "config.get failed after provider add"]);
   });
 
   it.each([
@@ -602,7 +602,7 @@ describe("ModelProvidersPage agent scope", () => {
 
     expect(page.view.props.messages.add).toEqual({
       kind: "success",
-      text: "Added anthropic",
+      text: "Added anthropic. Access verified.",
       ...(warning ? { warning } : {}),
     });
     expect(page.view.props.addProviderOpen).toBe(Boolean(warning));
