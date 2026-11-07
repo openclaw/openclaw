@@ -578,6 +578,8 @@ describe("devices inventory rendering", () => {
     );
     expect(badges).toHaveLength(3);
     expect(facts).toHaveLength(3);
+    const versionBadge = expectDefined(badges[0], "version warning badge");
+    const versionFact = expectDefined(facts[0], "version warning fact");
 
     renderDevicesInto(container, { ...props, nodes: props.nodes.map((node) => ({ ...node })) });
 
@@ -592,14 +594,14 @@ describe("devices inventory rendering", () => {
         .every((fact, index) => fact === facts[index]),
     ).toBe(true);
     renderDevicesInto(container, { ...props, gatewayVersion: "2026.11.1" });
-    expect(row.querySelector(".device-entry__alerts > span")).toBe(badges[0]);
-    expect(badges[0].getAttribute("title")).toContain("2026.11.1");
-    expect(facts[0].textContent).toContain("2026.11.1");
+    expect(row.querySelector(".device-entry__alerts > span")).toBe(versionBadge);
+    expect(versionBadge.getAttribute("title")).toContain("2026.11.1");
+    expect(versionFact.textContent).toContain("2026.11.1");
     renderDevicesInto(container, { ...props, gatewayVersion: "2026.10.29" });
     const remaining = Array.from(row.querySelectorAll(".device-entry__alerts > span"));
     expect(remaining).toHaveLength(2);
     expect(remaining.every((badge, index) => badge === badges[index + 1])).toBe(true);
-    expect(badges[0].isConnected).toBe(false);
+    expect(versionBadge.isConnected).toBe(false);
   });
 
   it.each([true, false])(
