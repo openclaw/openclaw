@@ -28,6 +28,7 @@ import type { ResolvedSmsAccount } from "./types.js";
 
 const INVALID_REQUEST_MAX_REQUESTS = 300;
 const PRE_AUTH_MAX_IN_FLIGHT = 64;
+const PRE_AUTH_MAX_IN_FLIGHT_PER_CLIENT = 8;
 const INBOUND_DISPATCH_MAX_REQUESTS = 30;
 const DELIVERY_CALLBACK_MAX_REQUESTS = 3_000;
 const DELIVERY_CALLBACK_WINDOW_MS = 60_000;
@@ -115,6 +116,13 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
     maxTrackedKeys: 1,
   });
   const preAuthInFlightKey = accountRouteRateLimitKey(params.account);
+  // Bound pending bodies per source as well as per route. Shared provider egress
+  // still shares this reader budget; validated sender quotas remain separate.
+  const clientInFlightLimiter = createWebhookInFlightLimiter({
+    maxInFlightPerKey: PRE_AUTH_MAX_IN_FLIGHT_PER_CLIENT,
+    // Route admission happens first, so live client keys cannot exceed this cap.
+    maxTrackedKeys: PRE_AUTH_MAX_IN_FLIGHT,
+  });
   // Status persistence gets a separate route-level safety fuse. It stays much
   // looser than inbound quotas; overflow gets a visible 5xx instead of a false ack.
   const deliveryCallbackRateLimiter = createFixedWindowRateLimiter({
@@ -132,7 +140,11 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
     const clientAddressKey = rateLimitKey({ account: params.account, subject: clientAddress });
     const invalidRequestRateLimited = invalidRequestRateLimiter.isRateLimited(clientAddressKey);
 
-    if (!preAuthInFlightLimiter.tryAcquire(preAuthInFlightKey)) {
+    const routeAdmitted = preAuthInFlightLimiter.tryAcquire(preAuthInFlightKey);
+    if (!routeAdmitted || !clientInFlightLimiter.tryAcquire(clientAddressKey)) {
+      if (routeAdmitted) {
+        preAuthInFlightLimiter.release(preAuthInFlightKey);
+      }
       params.log?.warn?.("SMS webhook pre-authentication concurrency limit exceeded");
       await sendHttpRequestRejection(req, res, 429, "Rate limit exceeded", TWIML_CONTENT_TYPE);
       return true;
@@ -187,6 +199,7 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
         return rejectInvalidRequestRateLimit({ key: clientAddressKey, log: params.log, res });
       }
     } finally {
+      clientInFlightLimiter.release(clientAddressKey);
       preAuthInFlightLimiter.release(preAuthInFlightKey);
     }
 
