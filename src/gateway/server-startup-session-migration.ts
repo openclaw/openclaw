@@ -25,52 +25,63 @@ export type PreparedStartupSessionDatabase = {
   assertCurrent: () => void;
 };
 
-/** Each admitted database yields its writer and root work admission between batches. */
-export function scheduleGatewaySessionFactsBackfill(params: {
-  databases: readonly PreparedStartupSessionDatabase[];
+export type GatewaySessionFactsBackfillScheduler = (
+  databases: readonly PreparedStartupSessionDatabase[],
+) => void;
+
+/** Normal and deferred admission share one pass per physical database per Gateway. */
+export function createGatewaySessionFactsBackfillScheduler(params: {
   scheduler: GatewayScheduler;
   signal: AbortSignal;
   waitForReady?: () => Promise<void>;
   log: SessionStartupMigrationLogger;
-}): void {
-  for (const { database, assertCurrent } of params.databases) {
-    let complete = false;
-    let delayMs = 250;
-    let backfill: SessionTranscriptFactsBackfill | undefined;
-    scheduleGatewayIdleTask({
-      id: `maintenance:transcript-facts:${database.path}`,
-      scheduler: params.scheduler,
-      delayMs: 250,
-      repeatDelayMs: () => delayMs,
-      retryDelayMs: 1_000,
-      waitForReady: params.waitForReady,
-      isClosing: () => complete || params.signal.aborted,
-      isBusy: () => getQueueSize(CommandLane.RestartRecovery) > 0,
-      log: params.log,
-      errorMessage: "Transcript facts backfill failed",
-      run: async (signal) => {
-        signal.throwIfAborted();
-        params.signal.throwIfAborted();
-        assertCurrent();
-        if (!backfill) {
-          const { createSessionTranscriptFactsBackfill } =
-            await import("../config/sessions/session-transcript-facts-backfill.js");
-          backfill = createSessionTranscriptFactsBackfill({
-            database,
-            assertCurrent,
-            signal: AbortSignal.any([signal, params.signal]),
-            log: params.log,
-          });
-        }
-        // A foreground arrival can wait for this bounded transaction. One indivisible
-        // cold read can exceed its soft budget; the next delay limits writer duty cycle.
-        ({ complete, delayMs } = await backfill.runBatch());
-        if (complete) {
-          backfill = undefined;
-        }
-      },
-    });
-  }
+}): GatewaySessionFactsBackfillScheduler {
+  const scheduled = new Set<string>();
+  return (databases) => {
+    for (const { database, assertCurrent } of databases) {
+      if (scheduled.has(database.path)) {
+        continue;
+      }
+      // Same-ID jobs replace queued ticks, but cannot replace an already running pass.
+      scheduled.add(database.path);
+      let complete = false;
+      let delayMs = 250;
+      let backfill: SessionTranscriptFactsBackfill | undefined;
+      scheduleGatewayIdleTask({
+        id: `maintenance:transcript-facts:${database.path}`,
+        scheduler: params.scheduler,
+        delayMs: 250,
+        repeatDelayMs: () => delayMs,
+        retryDelayMs: 1_000,
+        waitForReady: params.waitForReady,
+        isClosing: () => complete || params.signal.aborted,
+        isBusy: () => getQueueSize(CommandLane.RestartRecovery) > 0,
+        log: params.log,
+        errorMessage: "Transcript facts backfill failed",
+        run: async (signal) => {
+          signal.throwIfAborted();
+          params.signal.throwIfAborted();
+          assertCurrent();
+          if (!backfill) {
+            const { createSessionTranscriptFactsBackfill } =
+              await import("../config/sessions/session-transcript-facts-backfill.js");
+            backfill = createSessionTranscriptFactsBackfill({
+              database,
+              assertCurrent,
+              signal: AbortSignal.any([signal, params.signal]),
+              log: params.log,
+            });
+          }
+          // A foreground arrival can wait for this bounded transaction. One indivisible
+          // cold read can exceed its soft budget; the next delay limits writer duty cycle.
+          ({ complete, delayMs } = await backfill.runBatch());
+          if (complete) {
+            backfill = undefined;
+          }
+        },
+      });
+    }
+  };
 }
 
 /** Normalize legacy outcomes before readiness; retain admitted stores for later transcript repair. */

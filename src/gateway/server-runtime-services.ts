@@ -40,6 +40,7 @@ import {
 } from "./server-maintenance-lifecycle.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import type { GatewayRuntimeServiceLogger } from "./server-runtime-service-shared.js";
+import type { GatewaySessionFactsBackfillScheduler } from "./server-startup-session-migration.js";
 import { measureStartup } from "./server-startup-trace.js";
 export { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 export { startGatewayChannelHealthMonitor } from "./server-runtime-startup-services.js";
@@ -98,7 +99,7 @@ export function scheduleGatewayPostReadyMaintenance(params: {
   delayMs: number;
   isClosing: () => boolean;
   waitForPostReadyWork: () => Promise<void>;
-  startupMethodsReady: Promise<void>;
+  scheduleSessionFactsBackfill?: GatewaySessionFactsBackfillScheduler;
   startupMaintenance: GatewayStartupMaintenance;
   startMaintenance: () => Promise<GatewayMaintenanceHandles | null>;
   applyMaintenance: (maintenance: GatewayMaintenanceHandles) => Promise<void> | void;
@@ -183,24 +184,14 @@ export function scheduleGatewayPostReadyMaintenance(params: {
       return runWithGatewayIndependentRootWorkAdmission(
         async () => {
           await params.waitForPostReadyWork();
-          if (params.isClosing()) {
+          if (params.isClosing() || params.signal.aborted) {
             return;
           }
           try {
-            const { scheduleGatewaySessionFactsBackfill } =
-              await import("./server-startup-session-migration.js");
-            if (params.isClosing() || params.signal.aborted) {
-              return;
-            }
             // Registration must not wait for optional globally idle maintenance.
-            scheduleGatewaySessionFactsBackfill({
-              databases: params.startupMaintenance.startupSessionDatabases,
-              scheduler: params.scheduler,
-              signal: params.signal,
-              // Recovery discovery must admit its inputs before an empty lane is meaningful.
-              waitForReady: () => params.startupMethodsReady,
-              log: params.log,
-            });
+            params.scheduleSessionFactsBackfill?.(
+              params.startupMaintenance.startupSessionDatabases,
+            );
             if (!params.isClosing()) {
               const maintenance = await params.startMaintenance();
               if (params.isClosing()) {

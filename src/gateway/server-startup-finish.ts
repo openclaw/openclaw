@@ -129,6 +129,17 @@ export async function finishGatewayStartup(params: {
   } = runtime;
   const databaseStartupAdmission = getAgentDatabaseStartupAdmission();
   const databasePreparationReady = createDeferredCore();
+  const scheduleSessionFactsBackfill =
+    minimalTestGateway || opts.updateCanary
+      ? undefined
+      : (
+          await import("./server-startup-session-migration.js")
+        ).createGatewaySessionFactsBackfillScheduler({
+          scheduler: runtime.scheduler,
+          signal: runtime.connectionWork.signal,
+          waitForReady: () => kernel.startupMethodsReady,
+          log,
+        });
   const getReadiness = runtime.createHttpTransportOptions().getReadiness;
   const { attachGatewayWsConnectionHandler } = await startupTrace.measure(
     "gateway.ws-imports",
@@ -183,7 +194,7 @@ export async function finishGatewayStartup(params: {
         context: gatewayRequestContext,
         preparationReady: databasePreparationReady.promise,
         waitForPostReadyWork: params.waitForPostReadyWork,
-        scheduler: runtime.scheduler,
+        scheduleSessionFactsBackfill,
         getConfig: getRuntimeConfig,
         getPluginRegistry: () => pluginRuntime.registry,
         getPluginMetadataSnapshot,
@@ -638,7 +649,7 @@ export async function finishGatewayStartup(params: {
       isClosing: () => lifecycle.closePreludeStarted,
       waitForPostReadyWork: params.waitForPostReadyWork,
       startupMaintenance: runtime,
-      startupMethodsReady: kernel.startupMethodsReady,
+      scheduleSessionFactsBackfill,
       startMaintenance: () =>
         earlyRuntime.startMaintenance(activeWorkInspectors, resolvePluginGatewayContext),
       applyMaintenance: async (maintenance) => {

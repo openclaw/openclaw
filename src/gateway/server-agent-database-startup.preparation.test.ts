@@ -16,7 +16,6 @@ import {
 } from "../state/agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { activateGatewayAgentDatabaseStartup } from "./server-agent-database-startup.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 
@@ -84,7 +83,6 @@ vi.mock("./server-startup-session-migration.js", () => ({
     return [];
   },
   runGatewaySessionStartupMaintenance: mocks.maintain,
-  scheduleGatewaySessionFactsBackfill: mocks.scheduleFacts,
 }));
 // mock-isolation: Native restart discovery/admission is covered by the real integrity suite.
 vi.mock("./session-restart-resume.js", () => ({
@@ -240,14 +238,13 @@ function createFleet(
           }),
         );
         const context = createContext([], () => cfg);
-        const scheduler = createTestGatewayScheduler();
         context.agentDatabaseStartup = admission.observation;
         activateGatewayAgentDatabaseStartup({
           admission,
           context,
           preparationReady,
           waitForPostReadyWork: () => postReadyWork,
-          scheduler,
+          scheduleSessionFactsBackfill: mocks.scheduleFacts,
           getConfig: () => cfg,
           getPluginRegistry: vi.fn(),
           getPluginMetadataSnapshot: () => undefined,
@@ -260,7 +257,6 @@ function createFleet(
           inspections.forEach((_, index) => inspect(index));
           gates.forEach((gate) => gate.resolve());
           await owner.stop();
-          await scheduler.stop();
         }
       }),
   };

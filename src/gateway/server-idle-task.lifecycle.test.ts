@@ -22,7 +22,7 @@ import { scheduleGatewayIdleTask } from "./server-idle-task.js";
 import * as lazyCoreHandlers from "./server-methods/lazy-core-handlers.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 import { scheduleGatewayHandlerPrewarm } from "./server-startup-handler-prewarm.js";
-import { scheduleGatewaySessionFactsBackfill } from "./server-startup-session-migration.js";
+import { createGatewaySessionFactsBackfillScheduler } from "./server-startup-session-migration.js";
 
 let clock: ReturnType<typeof createGatewaySchedulerClock>;
 let scheduler: GatewayScheduler;
@@ -93,15 +93,12 @@ it.each(["complete", "shutdown"] as const)(
     });
     const foreground = tryBeginGatewayIndependentRootWorkAdmission("test:foreground");
     expect(foreground).not.toBeNull();
-    scheduleGatewaySessionFactsBackfill({
-      databases: [
-        { database: { agentId: "main", path: "/synthetic/agent.sqlite" }, assertCurrent() {} },
-      ],
+    createGatewaySessionFactsBackfillScheduler({
       scheduler,
       signal: scheduler.signal,
       waitForReady: () => recoveryReady.promise,
       log: { info: vi.fn(), warn: vi.fn() },
-    });
+    })([{ database: { agentId: "main", path: "/synthetic/agent.sqlite" }, assertCurrent() {} }]);
     const initialTick = clock.advanceBy(250);
     await nextTurn();
     expect(runBatch).not.toHaveBeenCalled();
