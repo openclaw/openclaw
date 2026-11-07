@@ -1,6 +1,7 @@
 import "./discussions/session-authority.test-support.js";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   recordPendingDiscussionOpen,
@@ -106,35 +107,37 @@ describe("handleClickClackInbound", () => {
     expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
   }
 
-  it("logs and skips delivery when model mode produces no sendable text", async () => {
-    vi.mocked(runtime.llm.complete).mockResolvedValue({
-      text: "   ",
-      provider: "openai",
-      model: "gpt-5.4-mini",
-      agentId: "service-bot",
-      usage: {},
-      execution: {
-        mode: "direct-provider",
-        owner: { kind: "provider", id: "openai" },
-      },
-      audit: { caller: { kind: "plugin", id: "clickclack" } },
-    });
-    const account = createAgentAccount({
-      accountId: "service",
-      agentId: "service-bot",
-      replyMode: "model",
-    });
-    await dispatchInbound(account, {}, { body: "hello bot" });
+  it("prints a skipped empty model reply on the console, not only in the log file", async () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "compact" });
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      vi.mocked(runtime.llm.complete).mockResolvedValue({
+        text: "   ",
+        provider: "openai",
+        model: "gpt-5.4-mini",
+        agentId: "service-bot",
+        usage: {},
+        execution: {
+          mode: "direct-provider",
+          owner: { kind: "provider", id: "openai" },
+        },
+        audit: { caller: { kind: "plugin", id: "clickclack" } },
+      });
+      const account = createAgentAccount({
+        accountId: "service",
+        agentId: "service-bot",
+        replyMode: "model",
+      });
+      await dispatchInbound(account, {}, { body: "hello bot" });
 
-    expect(sendClickClackTextMock).not.toHaveBeenCalled();
-    expect(runtime.logging.getChildLogger).toHaveBeenCalledWith({
-      plugin: "clickclack",
-      feature: "model-reply",
-    });
-    const logger = vi.mocked(runtime.logging.getChildLogger).mock.results[0]?.value;
-    expect(logger?.warn).toHaveBeenCalledWith(
-      "[service] ClickClack model reply produced no sendable text",
-    );
+      expect(sendClickClackTextMock).not.toHaveBeenCalled();
+      expect(consoleWarn.mock.calls.flat().join("\n")).toMatch(
+        /\[service\] ClickClack model reply produced no sendable text/su,
+      );
+    } finally {
+      consoleWarn.mockRestore();
+      setLoggerOverride(null);
+    }
   });
 
   it("keeps native progress opt-in and durable activity independent", async () => {
