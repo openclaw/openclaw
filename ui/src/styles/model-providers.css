@@ -37,10 +37,7 @@
 }
 
 .model-providers__head {
-  display: flex;
-  align-items: center;
   justify-content: space-between;
-  gap: var(--space-4);
   min-width: 0;
   min-block-size: 2.75rem;
 }
@@ -403,7 +400,6 @@
 }
 
 .model-providers__defaults .settings-segmented > .settings-segmented__btn {
-  flex: 1 1 auto;
   white-space: normal;
 }
 
@@ -421,14 +417,7 @@
   }
 
   .model-providers__head {
-    align-items: flex-start;
     flex-wrap: wrap;
-  }
-
-  .model-providers__head > .settings-row__control {
-    flex: 1 1 100%;
-    justify-content: flex-start;
-    width: 100%;
   }
 }
 

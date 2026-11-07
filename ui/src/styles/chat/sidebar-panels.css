@@ -647,12 +647,10 @@ button.sidebar-image-view__image {
 
 .sidebar-file-view__edit-actions .btn:last-child:not(:disabled):hover {
   background: var(--primary-hover);
-  color: var(--primary-foreground);
 }
 
 .sidebar-file-view__edit-actions .btn:last-child:not(:disabled):active {
   background: var(--primary-active);
-  color: var(--primary-foreground);
 }
 
 .sidebar-file-view__compact-action {

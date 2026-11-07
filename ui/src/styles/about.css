@@ -175,10 +175,6 @@
   box-shadow: none;
 }
 
-.about-link {
-  text-decoration: none;
-}
-
 .about-link__icon {
   display: flex;
   flex: 0 0 auto;
