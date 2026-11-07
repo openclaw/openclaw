@@ -91,6 +91,8 @@ export function createTelegramDraftStream(params: {
   validateProviderMessage?: (message: Message) => Promise<void> | void;
   /** Called with Telegram's response after a new preview message becomes durable. */
   onProviderMessage?: (message: Message) => Promise<void> | void;
+  /** Called once Telegram confirms a superseded preview message was deleted. */
+  onPreviewRetired?: (messageId: number) => void;
   warn?: (message: string) => void;
 }) {
   const richMessages = params.richMessages === true;
@@ -641,6 +643,7 @@ export function createTelegramDraftStream(params: {
         if (replyTargetState.kind === "retained" && replyTargetState.messageId === messageId) {
           replyTargetState = { kind: "available" };
         }
+        params.onPreviewRetired?.(messageId);
       } catch (err) {
         params.warn?.(`telegram stream preview cleanup failed: ${formatErrorMessage(err)}`);
       }
