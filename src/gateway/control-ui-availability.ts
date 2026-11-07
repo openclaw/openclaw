@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { escapeHtml } from "../shared/html-escape.js";
+import { openClawMascotStyles, renderOpenClawMascot } from "../shared/openclaw-mascot.js";
 import { OPENCLAW_WORDMARK_SVG } from "../shared/openclaw-wordmark.js";
 import {
   applyControlUiSecurityHeaders,
@@ -98,6 +99,15 @@ const SHELL_SIDEBAR = `<aside class="sidebar" aria-hidden="true" data-window-dra
 <span class="rail-slot rail-avatar"><span></span><span></span></span></span>
 </div><div class="side" data-window-drag>${SIDEBAR_WORDMARK_SVG}<span class="skeleton-rows"><span><span></span><span></span></span><span><span></span><span></span></span><span><span></span><span></span></span><span><span></span><span></span></span></span></div></aside>`;
 
+// The page only ever waits, so the mascot's own motion is its busy indicator.
+const MASCOT = renderOpenClawMascot("openclaw-mascot-shell");
+const MASCOT_STYLES = openClawMascotStyles({
+  busy: ".mascot",
+  error: ".mascot[data-pose=error]",
+  phone:
+    "@media(max-width:768px),(max-width:932px) and (max-height:500px) and (orientation:landscape)",
+});
+
 /** Also usable by a disposable ingress fixture; the Gateway cannot serve a stopped listener. */
 export function renderControlUiUnavailableDocument(title: string): string {
   // Control UI default theme tokens and geometry (ui/src/styles); the fonts are app assets, so system faces stand in.
@@ -105,8 +115,8 @@ export function renderControlUiUnavailableDocument(title: string): string {
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="light dark"><title>OpenClaw — Temporarily unavailable</title>
 <style>
-:root{color-scheme:light;--bg:#f8f8f8;--text:#353535;--text-strong:#202020;--muted:#5e5e5e;--rail:#f0f0f0;--rail-edge:#ebebeb;--side:#f4f4f4;--side-edge:#ededed;--icon:rgb(53 53 53/.6);--current:#e5e5e5;--current-icon:#202020;--accent:#bd4531;--divider:rgb(0 0 0/.13);--placeholder:rgb(94 94 94/.16);--placeholder-strong:rgb(94 94 94/.2);--skeleton:rgb(94 94 94/.1);--skeleton-disc:rgb(94 94 94/.12);--presence:#92400e;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;line-height:1.55;letter-spacing:-.01em;color:var(--text);background:var(--bg);-webkit-font-smoothing:antialiased}
-@media(prefers-color-scheme:dark){:root{color-scheme:dark;--bg:#0e1015;--text:#bcbcc0;--text-strong:#f4f4f5;--muted:#8e8e97;--rail:#15171c;--rail-edge:#1f2126;--side:#121419;--side-edge:#1d1f24;--icon:rgb(188 188 192/.48);--current:#222429;--current-icon:#f4f4f5;--accent:#ff5c5c;--divider:rgb(255 255 255/.14);--placeholder:rgb(142 142 151/.16);--placeholder-strong:rgb(142 142 151/.2);--skeleton:rgb(142 142 151/.1);--skeleton-disc:rgb(142 142 151/.12);--presence:#f59e0b}}
+:root{color-scheme:light;--bg:#f8f8f8;--text:#353535;--text-strong:#202020;--muted:#5e5e5e;--rail:#f0f0f0;--rail-edge:#ebebeb;--side:#f4f4f4;--side-edge:#ededed;--icon:rgb(53 53 53/.6);--current:#e5e5e5;--current-icon:#202020;--accent:#bd4531;--divider:rgb(0 0 0/.13);--placeholder:rgb(94 94 94/.16);--placeholder-strong:rgb(94 94 94/.2);--skeleton:rgb(94 94 94/.1);--skeleton-disc:rgb(94 94 94/.12);--presence:#92400e;--mascot-ground:radial-gradient(closest-side,rgb(32 32 32/.16),rgb(32 32 32/.06) 60%,transparent);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;line-height:1.55;letter-spacing:-.01em;color:var(--text);background:var(--bg);-webkit-font-smoothing:antialiased}
+@media(prefers-color-scheme:dark){:root{color-scheme:dark;--bg:#0e1015;--text:#bcbcc0;--text-strong:#f4f4f5;--muted:#8e8e97;--rail:#15171c;--rail-edge:#1f2126;--side:#121419;--side-edge:#1d1f24;--icon:rgb(188 188 192/.48);--current:#222429;--current-icon:#f4f4f5;--accent:#ff5c5c;--divider:rgb(255 255 255/.14);--placeholder:rgb(142 142 151/.16);--placeholder-strong:rgb(142 142 151/.2);--skeleton:rgb(142 142 151/.1);--skeleton-disc:rgb(142 142 151/.12);--presence:#f59e0b;--mascot-ground:radial-gradient(closest-side,rgb(0 0 0/.42),rgb(0 0 0/.16) 60%,transparent)}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg)}
 .shell{display:flex;min-height:100svh}
 .sidebar{display:flex;flex:none;position:sticky;top:0;height:100svh}
@@ -131,18 +141,17 @@ export function renderControlUiUnavailableDocument(title: string): string {
 .topbar{display:none}
 .wordmark{display:block;width:140px;height:32px;color:var(--text-strong)}
 main{position:relative;flex:1;min-height:100svh}
-/* Every status page shares one anatomy: a left-aligned column whose title holds a fixed height a little above centre. */
-.body{position:absolute;top:34%;left:50%;width:min(440px,calc(100% - 48px));transform:translateX(-50%)}
+/* Every status page shares one anatomy: the mascot stands above a centred title, which holds a fixed height a little above centre. */
+.body{position:absolute;top:38%;left:50%;width:min(460px,calc(100% - 48px));transform:translateX(-50%);text-align:center}
 h1{position:relative;margin:0;color:var(--text-strong);font-size:22px;font-weight:600;line-height:28px;letter-spacing:-.01em;text-wrap:balance}
-.spin{position:absolute;top:7px;left:-26px;color:var(--accent)}.spin svg{display:block;width:14px;height:14px;animation:spin .9s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 p{margin:6px 0 0;color:var(--muted);font-size:14px;line-height:21px;text-wrap:pretty}
-@media(max-width:768px),(max-width:932px) and (max-height:500px) and (orientation:landscape){.sidebar{display:none}.content{padding:0 4px}.topbar{display:flex;align-items:flex-start;justify-content:center;padding:14.5px 12px 0}main{min-height:calc(100svh - 64px)}.body{top:30%;left:24px;right:24px;width:auto;transform:none}h1{font-size:20px;line-height:26px}.spin{display:none}}
-@media(prefers-reduced-motion:reduce){.spin svg{animation-duration:3s}}
+@media(max-width:768px),(max-width:932px) and (max-height:500px) and (orientation:landscape){.sidebar{display:none}.content{padding:0 4px}.topbar{display:flex;align-items:flex-start;justify-content:center;padding:14.5px 12px 0}main{min-height:calc(100svh - 64px)}.body{top:36%;left:24px;right:24px;width:auto;transform:none}h1{font-size:20px;line-height:26px}}
+${MASCOT_STYLES}
 </style></head><body>
 <div class="shell" data-window-drag>${SHELL_SIDEBAR}
 <div class="content" data-window-drag><header class="topbar" data-window-drag>${OPENCLAW_WORDMARK_SVG}</header>
 <main id="openclaw-maintenance" data-window-drag><div class="body" data-window-drag>
-<h1><span class="spin" aria-hidden="true"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="6.25" opacity=".2"/><circle cx="7" cy="7" r="6.25" pathLength="100" stroke-dasharray="26 74" stroke-linecap="round"/></svg></span>${escapeHtml(title)}</h1>
+<h1>${MASCOT}${escapeHtml(title)}</h1>
 <p role="status" aria-live="polite">Hang on while the Gateway gets ready.</p>
 </div></main></div></div><script>${recoveryScript}</script></body></html>`;
 }
