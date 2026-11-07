@@ -44,6 +44,21 @@ export function discardPrewarmedChatSnapshot(cacheKey?: string): void {
   }
 }
 
+export function chatDetailsDockingLayout(
+  layout: readonly [viewportWidth: number, ...facts: unknown[]],
+) {
+  return JSON.stringify(layout);
+}
+
+function matchesDockingViewport(layout: unknown): boolean {
+  try {
+    const tuple: unknown = JSON.parse(typeof layout === "string" ? layout : "null");
+    return Array.isArray(tuple) && tuple[0] === window.innerWidth;
+  } catch {
+    return false;
+  }
+}
+
 export function prewarmChatSnapshot(cacheKey: string): Promise<void> {
   discardPrewarmedChatSnapshot();
   const generation = snapshotStoreGeneration;
@@ -58,8 +73,8 @@ export function prewarmChatSnapshot(cacheKey: string): Promise<void> {
         const snapshot = asOptionalRecord(asOptionalRecord(record)?.snapshot);
         const details = asOptionalRecord(snapshot?.details);
         const docking = asOptionalRecord(details?.docking);
-        // Placement supplies this prefetch hint; validation still owns display admission.
-        if (docking?.wide === true) {
+        // Only the viewport identity is known before the pane supplies its other layout facts.
+        if (docking?.wide === true && matchesDockingViewport(docking.layout)) {
           void loadChatDetailsDesktopComposition().catch(() => undefined);
         }
         return record;
