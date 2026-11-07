@@ -348,6 +348,7 @@ describe("zalouser monitor group mention gating", () => {
 
   async function startMonitorForStartupResolution(
     accountConfig: ResolvedZalouserAccount["config"],
+    runtime = createRuntimeEnv(),
   ) {
     installRuntime();
     const abortController = new AbortController();
@@ -356,7 +357,7 @@ describe("zalouser monitor group mention gating", () => {
       await monitorZalouserProvider({
         account: createAccount(accountConfig),
         config: createConfig(),
-        runtime: createRuntimeEnv(),
+        runtime,
         abortSignal: abortController.signal,
         ingressQueue,
       });
@@ -646,6 +647,84 @@ describe("zalouser monitor group mention gating", () => {
         expect(lookup).not.toHaveBeenCalled();
       }
     }
+  });
+
+  it("resolves canonically equivalent startup names to ids", async () => {
+    const name = "Nguyễn Văn A";
+    const group = "Đội Ngũ Hỗ Trợ";
+    listZaloFriendsMock.mockResolvedValue([{ userId: "123", displayName: name.normalize("NFD") }]);
+    listZaloGroupsMock.mockResolvedValue([{ groupId: "g-trusted", name: group.normalize("NFD") }]);
+    const runtime = { ...createRuntimeEnv(), log: vi.fn() };
+
+    await startMonitorForStartupResolution(
+      {
+        dangerouslyAllowNameMatching: true,
+        dmPolicy: "allowlist",
+        allowFrom: [name],
+        groupPolicy: "allowlist",
+        groupAllowFrom: [name],
+        groups: {
+          [group]: { enabled: true },
+        },
+      },
+      runtime,
+    );
+
+    const lines = runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
+    expect(lines).toContain(`zalouser users resolved: ${name}->123`);
+    expect(lines).toContain(`zalouser group users resolved: ${name}->123`);
+    expect(lines).toContain(`zalouser groups resolved: ${group}→g-trusted`);
+    expect(lines).not.toContain("unresolved");
+  });
+
+  // Canonical name matching widens which senders the effective allowlist admits. The four
+  // outcomes below exercise the real monitor startup → resolveStable admission → dispatch
+  // boundary through an NFD-stored display name queried in NFC, mirroring how Zalo delivers
+  // the same person in a different Unicode form than the operator typed.
+  it.each([
+    {
+      name: "resolved canonical sender reaches dispatch",
+      allowFrom: ["Nguyễn Văn A"],
+      nameMatching: true,
+      senderId: "123",
+      dispatched: true,
+    },
+    {
+      name: "unlisted sender is rejected before dispatch",
+      allowFrom: ["Nguyễn Văn A"],
+      nameMatching: true,
+      senderId: "999",
+      dispatched: false,
+    },
+    {
+      name: "name stays unauthorized when opt-in is off",
+      allowFrom: ["Nguyễn Văn A"],
+      nameMatching: false,
+      senderId: "123",
+      dispatched: false,
+    },
+    {
+      name: "grant removed after restart no longer dispatches",
+      allowFrom: [],
+      nameMatching: true,
+      senderId: "123",
+      dispatched: false,
+    },
+  ])("$name", async ({ allowFrom, nameMatching, senderId, dispatched }) => {
+    const name = "Nguyễn Văn A";
+    listZaloFriendsMock.mockResolvedValue([{ userId: "123", displayName: name.normalize("NFD") }]);
+    const { dispatchReply } = installRuntime();
+
+    await processMessageThroughMonitor({
+      message: createDmMessage({ senderId, msgId: "m-strict" }),
+      account: createAccount({
+        ...(nameMatching ? { dangerouslyAllowNameMatching: true } : {}),
+        dmPolicy: "allowlist",
+        allowFrom,
+      }),
+    });
+
+    expect(dispatchReply).toHaveBeenCalledTimes(dispatched ? 1 : 0);
   });
 
   it("surfaces quote metadata in inbound reply context", async () => {

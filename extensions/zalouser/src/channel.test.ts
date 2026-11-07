@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   checkZaloAuthenticatedMock,
   listZaloFriendsMatchingMock,
+  listZaloGroupsMatchingMock,
   sendZaloReactionMock,
   startZaloQrLoginMock,
   waitForZaloQrLoginMock,
@@ -221,6 +222,7 @@ describe("zalouser channel policies", () => {
 describe("zalouser account adapter routing", () => {
   beforeEach(() => {
     listZaloFriendsMatchingMock.mockReset();
+    listZaloGroupsMatchingMock.mockReset();
     startZaloQrLoginMock.mockReset();
     waitForZaloQrLoginMock.mockReset();
   });
@@ -247,6 +249,34 @@ describe("zalouser account adapter routing", () => {
         id: "42",
         name: "Work User",
         note: undefined,
+      },
+    ]);
+  });
+
+  it("picks the canonically equal group name over an earlier prefix match", async () => {
+    const resolveTargets = required(resolver.resolveTargets);
+    const name = "Đội Ngũ Hỗ Trợ";
+    const stored = name.normalize("NFD");
+
+    listZaloGroupsMatchingMock.mockResolvedValue([
+      { groupId: "g-other", name: `${name} Cũ` } as never,
+      { groupId: "g-target", name: stored } as never,
+    ]);
+
+    const result = await resolveTargets({
+      cfg: workConfig,
+      inputs: [name],
+      kind: "group",
+      runtime: createNonExitingRuntimeEnv(),
+    });
+
+    expect(result).toEqual([
+      {
+        input: name,
+        resolved: true,
+        id: "g-target",
+        name: stored,
+        note: "multiple matches; chose first",
       },
     ]);
   });

@@ -74,6 +74,7 @@ const zaloJsMocks = vi.hoisted((): ZaloJsMocks => ({
 export const listZaloFriendsMock = zaloJsMocks.listZaloFriendsMock;
 export const listZaloFriendsMatchingMock = zaloJsMocks.listZaloFriendsMatchingMock;
 export const listZaloGroupsMock = zaloJsMocks.listZaloGroupsMock;
+export const listZaloGroupsMatchingMock = zaloJsMocks.listZaloGroupsMatchingMock;
 export const checkZaloAuthenticatedMock = zaloJsMocks.checkZaloAuthenticatedMock;
 export const logoutZaloProfileMock = zaloJsMocks.logoutZaloProfileMock;
 export const resolveZaloAllowFromEntriesMock = zaloJsMocks.resolveZaloAllowFromEntriesMock;
