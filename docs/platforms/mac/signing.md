@@ -85,5 +85,7 @@ Choose **About OpenClaw** to select **About** in the native Connection window. I
 
 ## Related
 
+- [Experimental macOS delta updates](/platforms/mac/delta-updates)
+
 - [macOS app](/platforms/macos)
 - [macOS permissions](/platforms/mac/permissions)
