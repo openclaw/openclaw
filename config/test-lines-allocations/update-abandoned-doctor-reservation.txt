@@ -1,2 +1,2 @@
-# Regressions: a Doctor killed between reserving and binding a command no longer fences repair forever; a live marked child still does.
-30
+# Regressions: a Doctor killed between reserving and binding a command no longer fences repair forever; a live process born at reservation time still does.
+59

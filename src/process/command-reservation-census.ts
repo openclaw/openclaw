@@ -48,27 +48,18 @@ function readLinuxProcessBirths(): ProcessBirth[] {
   return births;
 }
 
-/** The sealed update helper has no native addon; ps is the Darwin census it can always run. */
-function readDarwinProcessBirths(): ProcessBirth[] {
-  const census = spawnSync("/bin/ps", ["-A", "-o", "pid=,ppid=,uid=,stat=,lstart="], {
-    encoding: "utf8",
-    env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
-    timeout: 5_000,
-    maxBuffer: 16 * 1024 * 1024,
-  });
-  if (census.error || census.status !== 0) {
-    throw new Error("Darwin process census is unavailable");
-  }
+/** Parses `ps -o pid=,ppid=,uid=,stat=,lstart=`; accounts such as nobody print a negative uid. */
+export function parseDarwinProcessBirths(stdout: string): ProcessBirth[] {
   const uid = process.getuid?.();
-  return census.stdout.split("\n").flatMap((line) => {
-    const row = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.+?)\s*$/.exec(line);
+  return stdout.split("\n").flatMap((line) => {
+    const row = /^\s*(\d+)\s+(\d+)\s+(-?\d+)\s+(\S+)\s+(.+?)\s*$/.exec(line);
     if (!row) {
       if (line.trim()) {
         throw new Error("Darwin process census is unreadable");
       }
       return [];
     }
-    if (Number(row[3]) !== uid || Number(row[1]) === census.pid) {
+    if (Number(row[3]) !== uid) {
       return [];
     }
     const bornAtMs = Date.parse(`${row[5]} UTC`);
@@ -81,6 +72,20 @@ function readDarwinProcessBirths(): ProcessBirth[] {
       },
     ];
   });
+}
+
+/** The sealed update helper has no native addon; ps is the Darwin census it can always run. */
+function readDarwinProcessBirths(): ProcessBirth[] {
+  const census = spawnSync("/bin/ps", ["-A", "-o", "pid=,ppid=,uid=,stat=,lstart="], {
+    encoding: "utf8",
+    env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
+    timeout: 5_000,
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  if (census.error || census.status !== 0) {
+    throw new Error("Darwin process census is unavailable");
+  }
+  return parseDarwinProcessBirths(census.stdout).filter(({ pid }) => pid !== census.pid);
 }
 
 /**
@@ -100,7 +105,8 @@ export function findCommandReservationCandidates(reservedAtMs: number): number[]
     throw new Error(`Command reservation census is unavailable on ${process.platform}.`);
   }
   // The inspector's launchers and its own workers are not the reserved command: a dead
-  // spawner's orphan never reparents beneath the process settling its custody.
+  // spawner's orphan never reparents beneath the process settling its custody, unless
+  // that process is init, which adopts every orphan.
   const byPid = new Map(births.map((birth) => [birth.pid, birth]));
   const ancestry = (pid: number) => {
     const chain = new Set<number>();
@@ -117,7 +123,7 @@ export function findCommandReservationCandidates(reservedAtMs: number): number[]
         // A zombie leader may retain live Linux threads.
         !(zombie && isPidDefinitelyDead(pid)) &&
         !inspector.has(pid) &&
-        !ancestry(pid).has(process.pid) &&
+        (process.pid === 1 || !ancestry(pid).has(process.pid)) &&
         (bornAtMs === undefined ||
           (bornAtMs >= reservedAtMs - CLOCK_SLACK_MS &&
             bornAtMs <= reservedAtMs + BORN_AFTER_RESERVATION_MS)),
