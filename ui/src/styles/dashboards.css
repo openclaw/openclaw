@@ -700,6 +700,9 @@ a.dashboard-row__main:hover {
     flex: 1;
     width: auto;
   }
+  .dashboards-header .dashboards-search:not(:has(.oc-icon-button)) {
+    padding-inline-end: var(--space-3);
+  }
   .dashboards-gallery {
     padding-top: var(--space-4);
   }
