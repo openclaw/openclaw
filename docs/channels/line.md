@@ -528,6 +528,8 @@ LINE supports ACP (Agent Communication Protocol) conversation bindings:
 
 - `/acp spawn <agent> --bind here` binds the current LINE chat to an ACP session without creating a child thread.
 - Configured ACP bindings and active conversation-bound ACP sessions work on LINE like other conversation channels.
+- LINE reads the same thread-binding policy as other channels: `channels.line.threadBindings`, or `channels.line.accounts.<id>.threadBindings` for one account, overrides `session.threadBindings.*`. Accepted keys: `enabled` (default `true`), `idleHours`, `maxAgeHours`, `spawnSessions` (default `true`), and `defaultSpawnContext` (`isolated` or `fork`, default `fork`). See [Thread-bound sessions](/tools/subagents/thread-bound-sessions) for what each key controls.
+- `enabled: false` is the LINE-side switch for that policy: ordinary LINE messages keep working, while `/acp spawn --bind here` and thread-bound spawns on LINE are refused with an error naming the key. LINE chats have no native threads, so `--bind here` is the binding form LINE supports.
 
 See [ACP agents](/tools/acp-agents) for details.
 
