@@ -12,6 +12,7 @@ import {
 } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { CronJobsPagination } from "../../components/cron-jobs-pagination.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   SettingsEmpty,
@@ -56,9 +57,9 @@ function CronReadBoundary(props: {
           <Errored
             fallback={(error) =>
               props.reportError ? (
-                <div class="callout danger" role={props.errorRole}>
+                <InlineAlert tone="danger" role={props.errorRole}>
                   {formatUiError(error())}
-                </div>
+                </InlineAlert>
               ) : (
                 props.children(false)
               )
@@ -108,7 +109,9 @@ export function AgentCron(
         {() => undefined}
       </CronReadBoundary>
       <CronReadBoundary read={params.read().command} reportError>
-        {(_pending, message) => (message ? <div class="callout danger">{message}</div> : undefined)}
+        {(_pending, message) =>
+          message ? <InlineAlert tone="danger">{message}</InlineAlert> : undefined
+        }
       </CronReadBoundary>
       <Show when={params.read().command && params.readState().cronNotice}>
         {(notice) => (
@@ -167,7 +170,10 @@ export function AgentCron(
         <CronReadBoundary read={params.read().jobs} reportError errorRole="alert">
           {() => undefined}
         </CronReadBoundary>
-        {params.readState().cronJobs.length === 0 ? (
+        {!params.readState().cronLoading &&
+        !params.readState().cronJobsError &&
+        params.readState().cronJobs.length === 0 &&
+        params.readState().cronJobsSnapshotRevision !== null ? (
           <SettingsEmpty message={t("agents.cronPanel.noJobs")} />
         ) : (
           <>
@@ -213,16 +219,18 @@ export function AgentCron(
               }}
             </For>
             <CronReadBoundary read={params.read().jobs}>
-              {(pending) => (
-                <CronJobsPagination
-                  jobsShown={params.readState().cronJobs.length}
-                  jobsTotal={params.readState().cronJobsTotal}
-                  hasMore={params.readState().cronJobsHasMore}
-                  loading={pending && !params.read().jobs?.append}
-                  loadingMore={pending && params.read().jobs?.append === true}
-                  onLoadMore={params.onLoadMore}
-                />
-              )}
+              {(pending) =>
+                params.readState().cronJobsSnapshotRevision === null ? undefined : (
+                  <CronJobsPagination
+                    jobsShown={params.readState().cronJobs.length}
+                    jobsTotal={params.readState().cronJobsTotal}
+                    hasMore={params.readState().cronJobsHasMore}
+                    loading={pending && !params.read().jobs?.append}
+                    loadingMore={pending && params.read().jobs?.append === true}
+                    onLoadMore={params.onLoadMore}
+                  />
+                )
+              }
             </CronReadBoundary>
           </>
         )}

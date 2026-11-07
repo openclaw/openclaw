@@ -38,6 +38,8 @@ export type Authority =
 /** Stable verification failure codes. Callers match codes, never detail text. */
 export type VerifyErrorCode =
   | "malformed"
+  /** A well-formed envelope or descriptor version this build does not implement: update required. */
+  | "unsupported_version"
   | "bad_signature"
   | "wrong_signer"
   | "not_an_owner"
@@ -45,6 +47,13 @@ export type VerifyErrorCode =
   | "caps_escalation"
   | "not_yet_valid"
   | "root_mismatch"
+  /**
+   * The pinned root was replaced by an owner reset that the claw's K_gw vouched for. Not an
+   * attack: the client dials nothing, keeps no pin and asks the user to set the browser up again.
+   */
+  | "owner_reset"
+  /** A root reset whose new binding does not keep K_srv, K_gw and the reset's binding_seq. */
+  | "reset_mismatch"
   | "wrong_claw"
   | "host_mismatch"
   | "rollback"
@@ -155,6 +164,26 @@ export async function verifyMembershipSnapshot(
   }
   if (statement.body.claw_id !== binding.claw_id) {
     return failure("wrong_claw", "snapshot is for another claw");
+  }
+  return { ok: true, statement, authority: { kind: "gateway" } };
+}
+
+/**
+ * Verifies a RootReset's signature against a verified ServerBinding: signed by that binding's
+ * K_gw, for the same claw. `verifyRootReset` (reset.ts) checks the rest of the succession.
+ */
+export async function verifyRootResetSignature(
+  statement: SignedStatement<"RootReset">,
+  binding: ServerBindingBody,
+): Promise<VerifyResult<"RootReset">> {
+  if (statement.signer !== binding.k_gw) {
+    return failure("wrong_signer", "root reset is not signed by the binding's K_gw");
+  }
+  if (!(await hasValidSignature(statement))) {
+    return failure("bad_signature", "envelope signature does not verify");
+  }
+  if (statement.body.claw_id !== binding.claw_id) {
+    return failure("wrong_claw", "root reset is for another claw");
   }
   return { ok: true, statement, authority: { kind: "gateway" } };
 }

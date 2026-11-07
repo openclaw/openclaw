@@ -21,6 +21,12 @@ vi.mock("./in-process-gateway.js", async (importOriginal) => ({
 }));
 
 const caller = { agentId: "main", sessionKey: "agent:main:host-owned" };
+
+it("does not prescribe switching to a bound session", () => {
+  expect(createGitHubPublishTool().description).not.toMatch(
+    /Select an existing bound session|separately authorize supported binding\/adoption/,
+  );
+});
 const publication = {
   requestId: "publication-1",
   status: "requested" as const,

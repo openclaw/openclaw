@@ -79,83 +79,75 @@ it.each([false, true])(
     const failure = createDeferred<ChannelsStatusSnapshot>();
     const recovery = createDeferred<ChannelsStatusSnapshot>();
     const f = mountChannels(cached ? [seed, failure, recovery] : [failure, recovery]);
+    const { container } = f;
+    const find = (selector: string) => container.querySelector(selector);
     let card: HTMLButtonElement | undefined;
-    let dialog: HTMLElement | null = null;
+    let dialog: Element | null = null;
     if (cached) {
       const initial = f.channels.refresh();
       seed.resolve(snapshot("Slack", true));
       await initial;
-      await waitForSolid(() =>
-        expect(f.container.textContent).toContain("Slack probe unavailable"),
-      );
-      card = Array.from(
-        f.container.querySelectorAll<HTMLButtonElement>("button.channels-item"),
-      ).find((button) => button.textContent?.includes("Slack"))!;
+      await waitForSolid(() => expect(container.textContent).toContain("Slack probe unavailable"));
+      card = Array.from(container.querySelectorAll<HTMLButtonElement>("button.channels-item")).find(
+        (button) => button.textContent?.includes("Slack"),
+      )!;
       expect(card).toBeDefined();
       card.focus();
     }
     const failed = f.channels.refresh(cached);
     await waitForSolid(() => {
-      expect(f.container.querySelector(".channels-item__detail")).not.toBeNull();
-      expect(f.container.querySelector(".settings-loading-skeleton")).toBeNull();
+      expect(find(".settings-loading-skeleton")).toBeNull();
       if (cached) {
-        expect(
-          f.container.querySelector(".settings-control__sr-label[role='status']"),
-        ).not.toBeNull();
+        expect(find(".channels-item__detail")).not.toBeNull();
+        expect(find(".settings-control__sr-label[role='status']")).not.toBeNull();
         expect(document.activeElement).toBe(card);
+      } else {
+        expect(find(".lazy-view-state--loading")).not.toBeNull();
+        expect(find(".channels-item__detail")).toBeNull();
       }
     });
-    const recommended = f.container.querySelector(".channels-item__detail");
     failure.reject(new Error("Status unavailable"));
     await failed;
     await waitForSolid(() =>
-      expect(f.container.querySelector(".callout.danger")?.textContent).toBe("Status unavailable"),
+      expect(find(".callout.danger")?.textContent).toBe("Status unavailable"),
     );
+    const recommended = find(".channels-item__detail");
+    expect(recommended).not.toBeNull();
     if (card) {
       expect(document.activeElement).toBe(card);
       card.click();
-      await waitForSolid(() =>
-        expect(f.container.querySelector("openclaw-modal-dialog")).not.toBeNull(),
-      );
-      dialog = f.container.querySelector("openclaw-modal-dialog");
+      await waitForSolid(() => expect(find("openclaw-modal-dialog")).not.toBeNull());
+      dialog = find("openclaw-modal-dialog");
     }
     const recovered = f.channels.refresh();
     await waitForSolid(() => {
-      expect(f.container.querySelector(".callout.danger")?.textContent).toBe("Status unavailable");
+      expect(find(".callout.danger")?.textContent).toBe("Status unavailable");
       if (cached) {
-        expect(
-          Array.from(f.container.querySelectorAll(".callout"), (node) => node.className).slice(
-            0,
-            2,
-          ),
-        ).toEqual(["callout warn", "callout danger"]);
-        expect(
-          f.container.querySelector(".settings-control__sr-label[role='status']"),
-        ).not.toBeNull();
-        expect(f.container.querySelector(".callout.warn")?.textContent).toContain(
-          "Slack probe unavailable",
-        );
-        expect(f.container.querySelector("openclaw-modal-dialog")).toBe(dialog);
+        const callouts = [...container.querySelectorAll(".callout")].map((el) => el.className);
+        expect(callouts.slice(0, 2)).toEqual(["callout warn", "callout danger"]);
+        expect(find(".settings-control__sr-label[role='status']")).not.toBeNull();
+        expect(find(".callout.warn")?.textContent).toContain("Slack probe unavailable");
+        expect(find("openclaw-modal-dialog")).toBe(dialog);
       } else {
-        expect(f.container.querySelector(".settings-control__sr-label[role='status']")).toBeNull();
-        expect(f.container.querySelector(".settings-loading-skeleton")).toBeNull();
-        expect(f.container.querySelector(".channels-item__detail")).toBe(recommended);
+        expect(find(".settings-control__sr-label[role='status']")).toBeNull();
+        expect(find(".settings-loading-skeleton")).toBeNull();
+        expect(find(".channels-item__detail")).toBe(recommended);
       }
     });
     recovery.resolve(snapshot("Slack recovered"));
     await recovered;
     await waitForSolid(() => {
-      expect(f.container.querySelector(".callout.danger")).toBeNull();
-      expect(f.container.textContent).not.toContain("Slack probe unavailable");
+      expect(find(".callout.danger")).toBeNull();
+      expect(container.textContent).not.toContain("Slack probe unavailable");
       if (card) {
         expect(card.textContent).toContain("Slack recovered");
       }
     });
     if (card) {
-      expect(f.container.contains(card)).toBe(true);
-      expect(f.container.querySelector("openclaw-modal-dialog")).toBe(dialog);
+      expect(container.contains(card)).toBe(true);
+      expect(find("openclaw-modal-dialog")).toBe(dialog);
     } else {
-      expect(f.container.querySelector(".channels-item__detail")).toBe(recommended);
+      expect(find(".channels-item__detail")).toBe(recommended);
     }
   },
 );
@@ -234,7 +226,9 @@ it("recovers an initial read failure and hides a retired retry after pairing acc
     hello: gatewayHelloForMethods(["channels.pairing.list"], []),
   });
   await waitForSolid(() => {
-    expect(f.container.textContent).toContain("operator.pairing access");
+    expect(f.container.textContent).toContain(
+      "You don’t have permission to review DM access requests.",
+    );
     expect(f.container.querySelector(".settings-loading-skeleton")).toBeNull();
   });
   retired.resolve(pairingSnapshot());

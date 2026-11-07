@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { deserialize } from "node:v8";
 import { zstdDecompressSync } from "node:zlib";
 import { requestGitWorkerEffect } from "../../infra/git-worker-context.js";
-import { ownedWorkerBytes } from "../../infra/worker-transfer-bytes.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { decodeLocalWorkspaceTree } from "./local-workspace-cas.js";
 import type { LocalWorkspaceManifestRecord } from "./local-workspace-manifest-tree.js";
@@ -202,13 +201,41 @@ export async function executeWorkspaceManifestComputation(
         return result.results;
       });
     }
+    case "workspace.manifest.result":
     case "workspace.manifest.staged": {
-      const { loadStagedWorkerWorkspace } = await import("./workspace-result-inventory.runtime.js");
+      const { loadStagedWorkerWorkspace, materializeStagedWorkerWorkspace } =
+        await import("./workspace-result-inventory.runtime.js");
       const { nodes, ...snapshot } = await loadStagedWorkerWorkspace(
         command.input.root,
         command.input.ref,
         command.input.buildCacheInputs,
+        command.input.reconciliation,
       );
+      const reconciliation = command.input.reconciliation;
+      if (
+        command.input.verifyContents ||
+        (command.input.stagingRoot &&
+          (!reconciliation ||
+            (!reconciliation.alreadyAccepted &&
+              reconciliation.baseManifestRef === snapshot.baseManifestRef)))
+      ) {
+        await materializeStagedWorkerWorkspace(
+          command.input.root,
+          command.input.stagingRoot,
+          snapshot,
+        );
+      }
+      if (command.type === "workspace.manifest.result") {
+        return {
+          gitHistory: snapshot.gitHistory,
+          baseManifestRef: snapshot.baseManifestRef,
+          currentManifestRef: snapshot.currentManifestRef,
+          base: { baseCommit: snapshot.base.baseCommit },
+          current: { baseCommit: snapshot.current.baseCommit },
+          changed: snapshot.changed,
+          changedEntryCount: snapshot.changedEntries.length,
+        };
+      }
       return {
         ...snapshot,
         reconciliation: prepareWorkspaceReconciliation(snapshot.base, snapshot.current, nodes),
@@ -222,11 +249,6 @@ export async function executeWorkspaceManifestComputation(
     case "workspace.manifest.tree-input": {
       const { buildWorkspaceTreeInput } = await import("./workspace-result-preparation.runtime.js");
       return await buildWorkspaceTreeInput(decodeManifestValue(command), assertBeforeMutation);
-    }
-    case "workspace.manifest.entries": {
-      const { readStagedWorkerWorkspaceEntries } =
-        await import("./workspace-result-inventory.runtime.js");
-      return ownedWorkerBytes(await readStagedWorkerWorkspaceEntries(command.input));
     }
     case "workspace.manifest.capture":
     case "workspace.manifest.snapshot":
@@ -261,6 +283,18 @@ export async function executeWorkspaceManifestComputation(
       return await withHashes(input.hashes, () =>
         readWorkspaceFileSnapshotWithLimit(input.path, input.maxBytes, input.root),
       );
+    }
+    case "workspace.reconcile.diff": {
+      const { readWorkspacePatch } = await import("./workspace-reconcile-recovery.js");
+      return await readWorkspacePatch(
+        command.input.root,
+        command.input.baseTree,
+        command.input.currentTree,
+      );
+    }
+    case "workspace.reconcile.patch": {
+      const { createWorkspacePatch } = await import("./workspace-reconcile-recovery.js");
+      return await createWorkspacePatch(decodeManifestValue(command));
     }
     case "workspace.reconcile.preflight": {
       const { preflightWorkspaceApplyImpl } = await import("./workspace-reconcile-preflight.js");
@@ -315,7 +349,7 @@ export async function executeWorkspaceManifestComputation(
         command.input.currentRef,
         command.input.buildCacheInputs,
       );
-      const compared = parseChangedWorkspaceResult(base, current);
+      const compared = parseChangedWorkspaceResult(base, current, false);
       return { base, current, ...compared, paths: compared.entries.map((entry) => entry.path) };
     }
   }

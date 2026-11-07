@@ -107,7 +107,7 @@ it("replaces the memory-import link with an admin-required note", () => {
   const container = renderInto({ canImportMemory: false });
 
   expect(container.querySelector('a[href="/memory-import"]')).toBeNull();
-  expect(container.textContent).toContain("Memory import requires operator.admin access.");
+  expect(container.textContent).toContain("You need admin access to import memory.");
 });
 
 it("keeps a configured missing engine selected and labels it unavailable", () => {

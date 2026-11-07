@@ -16,23 +16,23 @@ describe("sidebar agent creation access", () => {
     {
       name: "read-only browser",
       hello: gatewayHelloForMethods(["agents.create"], ["operator.read"]),
-      reason: "You need operator.admin to perform this action",
+      reason: "You need admin access to create an agent.",
     },
     {
       name: "missing method",
       hello: gatewayHelloForMethods([]),
-      reason: "This Gateway does not support agent creation",
+      reason: "This Gateway doesn’t support agent creation.",
     },
     {
       name: "disconnected browser with a previous handshake",
       hello: gatewayHelloForMethods(["agents.create"]),
       phase: "reconnecting" as const,
-      reason: "Connect to the Gateway to perform this action",
+      reason: "Reconnect to create an agent.",
     },
     {
       name: "unpaired browser",
       hello: null,
-      reason: "Connect to the Gateway to perform this action",
+      reason: "Reconnect to create an agent.",
     },
   ])("explains $name and recovers", async ({ hello, phase, reason }) => {
     const request = vi.fn().mockResolvedValue({});

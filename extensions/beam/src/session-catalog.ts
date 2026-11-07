@@ -157,6 +157,7 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
             canContinue: Boolean(session.handoffId),
             ...(!session.handoffId
               ? {
+                  continuationUnavailableReasonCode: "source-handoff-required" as const,
                   continuationUnavailableReason:
                     "This Beam is a read-only snapshot. Its authenticated original publisher must run beam handoff before you can continue here.",
                 }

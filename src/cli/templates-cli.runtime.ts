@@ -239,7 +239,7 @@ export async function runTemplatesAddCommand(
         diagnostics: result.diagnostics,
         context: {
           config,
-          ...(opts.agentId ? { agentId: opts.agentId } : {}),
+          agentId: opts.agentId,
           ...(opts.workspace ? { workspace: opts.workspace } : {}),
           existingAgentIds,
           existingWorkspacePaths: existingAgentIds.map((agentId) =>

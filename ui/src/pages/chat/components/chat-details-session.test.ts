@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { createComponent, createSignal } from "solid-js";
+import { Loading, createComponent, createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
@@ -39,10 +39,19 @@ async function mount(overrides: Partial<ChatDetailsProps> = {}, context?: Applic
     ...overrides,
   };
   const view = mountSolid(
-    () => createComponent(ChatDetailsSession, { props: value, presented: true }),
+    () =>
+      createComponent(Loading, {
+        get children() {
+          return createComponent(ChatDetailsSession, { props: value, presented: true });
+        },
+      }),
     { wrapper: context ? createSolidApplicationContextProvider(context).wrapper : undefined },
   );
-  const element = view.container.querySelector("openclaw-chat-details-session")!;
+  const element = await waitForSolid(() => {
+    const host = view.container.querySelector("openclaw-chat-details-session");
+    expect(host).not.toBeNull();
+    return host!;
+  });
   await element.updateComplete;
   return element;
 }
@@ -91,7 +100,10 @@ it("hides only the authenticated viewer's complete self-only desktop People sect
     },
   });
   await waitForSolid(() => expect(section()).toBeNull());
+  // sessions.describe omits the owner from participants and omits empty metadata on the wire.
+  await select({ owner: { actor }, createdActor: actor }, false);
   await select({ owner: { actor }, participants: [], participantCount: 0 }, false);
+  await select({ ...onlySelf, participantCount: undefined }, false);
   await select({ ...onlySelf, participants: [self, { ...self, label: "Duplicate self" }] }, false);
   const other = { identity: { type: "profile", id: "other" }, label: "Alex" } as const;
   await select(
@@ -100,7 +112,6 @@ it("hides only the authenticated viewer's complete self-only desktop People sect
   );
   await select({ ...onlySelf, expandedParticipants: [self, other], participantCount: 2 }, true);
   for (const facts of [
-    { ...onlySelf, participantCount: undefined },
     { ...onlySelf, participantCount: 2 },
     { ...onlySelf, owner: { actor: { type: "human" as const, id: "alex", label: "Alex" } } },
     { ...onlySelf, createdActor: { type: "human" as const, id: "alex", label: "Alex" } },
@@ -408,10 +419,10 @@ it("groups every direct subagent with counts, live activity first, and a bounded
       (segment) => segment.dataset.state,
     ),
   ).toEqual(["done", "failed", "stopped", "running", "queued"]);
-  await waitForSolid(() =>
-    expect(lane.querySelector("openclaw-chat-subagent-activity")).not.toBeNull(),
-  );
+  // Load the lazy live activity first: a cold CI import can outlast a polling budget.
+  await vi.dynamicImportSettled();
   const live = lane.querySelector<ChatSubagentActivityLive>("openclaw-chat-subagent-activity")!;
+  expect(live).not.toBeNull();
   await live.updateComplete;
   expect(live.rows[0]?.session).toBe(active);
   expect(live.querySelector(".chat-details__agent-avatar")?.getAttribute("style")).toContain(
@@ -454,7 +465,9 @@ it("groups every direct subagent with counts, live activity first, and a bounded
     subagentSessions: [child("done", { status: "done" })],
   });
   const finished = element.querySelector('[data-details-group="subagents"]')!;
-  expect(finished.querySelector(".chat-details__tally-summary")?.textContent).toBe("1 done");
+  await waitForSolid(() =>
+    expect(finished.querySelector(".chat-details__tally-summary")?.textContent).toBe("1 done"),
+  );
   expect(finished.querySelector(".chat-details__more")).toBeNull();
   await waitForSolid(() =>
     expect(finished.querySelector("openclaw-chat-subagent-activity")).not.toBeNull(),

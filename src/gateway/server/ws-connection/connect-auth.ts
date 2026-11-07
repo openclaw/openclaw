@@ -23,6 +23,10 @@ import { captureGatewayAuthPolicy } from "../../auth-policy.js";
 import { AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult } from "../../auth.js";
 import { getRemoteControlUiIngressContext } from "../../ingress-attribution.js";
+import {
+  checkDeviceTokenPeer,
+  openclawIdPeerKeyOf,
+} from "../../openclaw-id/device-token-binding.js";
 import { withSerializedCredentialFallbackAttempt } from "../../rate-limit-attempt-serialization.js";
 import { formatForLog, formatPeerTextForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
@@ -418,10 +422,20 @@ async function authenticateGatewayConnectCore(
         clientIp: browserRateLimitClientIp,
         verifyBootstrapToken: verifyDeviceBootstrapToken,
         async verifyDeviceToken(paramsLocal) {
-          return await verifyDeviceToken({
+          const verified = await verifyDeviceToken({
             ...paramsLocal,
             requiredSharedGatewaySessionGeneration: getRequiredSharedGatewaySessionGeneration?.(),
           });
+          if (!verified.ok) {
+            return verified;
+          }
+          // OpenClaw ID binds tunnel-issued tokens to the device key that obtained them.
+          const peer = await checkDeviceTokenPeer({
+            deviceId: paramsLocal.deviceId,
+            role: paramsLocal.role,
+            peerKey: openclawIdPeerKeyOf(context.handler.ingressAttribution),
+          });
+          return peer.ok ? verified : { ok: false, reason: peer.reason };
         },
       });
   ({ authResult, authOk, authMethod } = authDecision);

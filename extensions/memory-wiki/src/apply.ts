@@ -181,15 +181,16 @@ async function writeWikiPage(params: {
   body: string;
 }): Promise<boolean> {
   const root = await fsRoot(params.rootDir);
+  const existing = await readExistingWikiPage(
+    () => root.readText(params.relativePath),
+    isMissingWikiPageError,
+  );
   const rendered = withTrailingNewline(
     renderWikiMarkdown({
       frontmatter: params.frontmatter,
       body: params.body,
+      original: existing,
     }),
-  );
-  const existing = await readExistingWikiPage(
-    () => root.readText(params.relativePath),
-    isMissingWikiPageError,
   );
   if (existing === rendered) {
     return false;

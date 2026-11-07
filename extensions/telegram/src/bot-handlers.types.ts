@@ -74,7 +74,6 @@ export type TelegramNativeCommandCallbackDispatcher = (params: {
 
 type TelegramHandlerLogger = {
   info: (fields: Record<string, unknown>, message: string) => void;
-  warn: (fields: Record<string, unknown>, message: string) => void;
 };
 
 export type RegisterTelegramHandlerParams = {

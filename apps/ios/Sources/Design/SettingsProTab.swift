@@ -114,8 +114,8 @@ struct SettingsProTab: View {
 
     private var settingsNavigationContent: some View {
         List {
-            self.gatewayDestination
             self.offlineDeviceSection
+            self.gatewayDestination
         }
         .accessibilityIdentifier("SettingsHub.Fallback")
         .font(OpenClawType.body)

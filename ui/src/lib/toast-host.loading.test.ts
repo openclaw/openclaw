@@ -20,10 +20,15 @@ it("can retry a failed toast import and dismiss the recovered notice", async () 
   const host = document.createElement("openclaw-toast-host");
   document.body.append(host);
   const dismissed = vi.fn();
-  showToast({ message: "Synthetic saved notice", onDismiss: dismissed, durationMs: 60_000 });
+  showToast({
+    severity: "success",
+    message: "Synthetic saved notice",
+    onDismiss: dismissed,
+    durationMs: 60_000,
+  });
 
   await waitForSolid(() => expect(getByRole(host, "button", { name: "Retry" })).toBeTruthy());
-  expect(getByRole(host, "alert").textContent).toContain("Panel failed to load");
+  expect(getByRole(host, "alert").textContent).toContain("Couldn’t load this panel.");
   expect(getByRole(host, "button", { name: "Dismiss" })).toBeTruthy();
   vi.doUnmock("./toast-view.tsx");
   getByRole(host, "button", { name: "Retry" }).click();

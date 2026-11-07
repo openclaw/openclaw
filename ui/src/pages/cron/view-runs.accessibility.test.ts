@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { i18n } from "../../i18n/index.ts";
+import { loadLazyLocaleTranslation } from "../../i18n/lib/registry.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
@@ -38,8 +39,8 @@ describe("cron run filter accessibility", () => {
     ]);
     expectFilters(
       { runsStatuses: ["error", "ok"], runsDeliveryStatuses: ["not-delivered", "delivered"] },
-      ["Status OK, Error", "Delivery Delivered, Not delivered"],
-      ["OK, Error", "Delivered, Not delivered"],
+      ["Status Completed, Error", "Delivery Delivered, Not delivered"],
+      ["Completed, Error", "Delivered, Not delivered"],
     );
     expectFilters(
       {
@@ -47,21 +48,36 @@ describe("cron run filter accessibility", () => {
         runsDeliveryStatuses: ["delivered", "not-delivered", "unknown"],
       },
       [
-        "Status OK +2 (OK, Error, and Skipped)",
+        "Status Completed +2 (Completed, Error, and Skipped)",
         "Delivery Delivered +2 (Delivered, Not delivered, and Unknown)",
       ],
-      ["OK +2", "Delivered +2"],
+      ["Completed +2", "Delivered +2"],
     );
   });
 
   it("formats translated filter selections using the active app locale", async () => {
     const restoreI18nState = captureI18nStateForTesting();
+    const german = await loadLazyLocaleTranslation("de");
     try {
+      i18n.registerTranslation("de", {
+        cron: {
+          runs: {
+            status: "Status",
+            delivery: "Zustellung",
+            runStatusOk: "Erledigt",
+            runStatusError: "Fehler",
+            runStatusSkipped: "Übersprungen",
+            deliveryDelivered: "Zugestellt",
+            deliveryNotDelivered: "Nicht zugestellt",
+            deliveryUnknown: "Unbekannt",
+          },
+        },
+      });
       await i18n.setLocale("de");
       expectFilters(
         { runsStatuses: ["error", "ok"], runsDeliveryStatuses: ["not-delivered", "delivered"] },
-        ["Status OK, Fehler", "Zustellung Zugestellt, Nicht zugestellt"],
-        ["OK, Fehler", "Zugestellt, Nicht zugestellt"],
+        ["Status Erledigt, Fehler", "Zustellung Zugestellt, Nicht zugestellt"],
+        ["Erledigt, Fehler", "Zugestellt, Nicht zugestellt"],
       );
       expectFilters(
         {
@@ -69,11 +85,12 @@ describe("cron run filter accessibility", () => {
           runsDeliveryStatuses: ["delivered", "not-delivered", "unknown"],
         },
         [
-          "Status OK +2 (OK, Fehler und Übersprungen)",
+          "Status Erledigt +2 (Erledigt, Fehler und Übersprungen)",
           "Zustellung Zugestellt +2 (Zugestellt, Nicht zugestellt und Unbekannt)",
         ],
       );
     } finally {
+      i18n.registerTranslation("de", german ?? {});
       await restoreI18nState();
     }
   });

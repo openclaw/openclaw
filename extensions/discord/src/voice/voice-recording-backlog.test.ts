@@ -4,7 +4,6 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
 const voiceAudio = await import("./audio.js");
-const { CAPTURE_FINALIZE_GRACE_MS } = await import("./session.js");
 const silence = Buffer.from([0xf8, 0xff, 0xfe]);
 
 defineDiscordVoiceTests((h) => {
@@ -50,7 +49,7 @@ defineDiscordVoiceTests((h) => {
       const stream = new PassThrough({ objectMode: true });
       streams.push(stream);
       const receiver = h.getSessionConnection(target).receiver;
-      // Keep speaking until the recording budget rejects input, not the silence timer.
+      // Feed ongoing packets until the recording budget rejects input.
       receiver.speaking.users.set("guest", Date.now());
       stream.once("close", () => receiver.speaking.users.delete("guest"));
       receiver.subscribe.mockReturnValueOnce(stream);
@@ -70,10 +69,8 @@ defineDiscordVoiceTests((h) => {
         if (!(await Promise.race([created.promise, first.receiving]))) {
           break;
         }
-        if (chunk === 0) {
-          await vi.advanceTimersByTimeAsync(CAPTURE_FINALIZE_GRACE_MS + 1);
-          expect(first.stream.destroyed).toBe(false);
-        }
+        await vi.advanceTimersByTimeAsync(100);
+        expect(first.stream.destroyed).toBe(false);
       }
       first.stream.end();
       await first.receiving;

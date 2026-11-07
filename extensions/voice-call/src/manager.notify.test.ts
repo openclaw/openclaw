@@ -166,7 +166,7 @@ describe("CallManager notify and mapping", () => {
     const warn = captureWarning();
     const { provider, attempts } = failProvider(
       "startListening",
-      "twilio",
+      "telnyx",
       "synthetic start listening failure",
       true,
     );

@@ -107,11 +107,14 @@ describe("session catalog schemas", () => {
         canContinue: false,
         canArchive: false,
         continuationUnavailableReason: "Release this source before continuing.",
+        continuationUnavailableReasonCode: "source-handoff-required",
       },
       [
         { continuationUnavailableReason: "" },
         { continuationUnavailableReason: "x".repeat(385) },
         { continuationUnavailableReason: true },
+        { continuationUnavailableReasonCode: "unknown" },
+        { continuationUnavailableReasonCode: true },
       ],
     );
   });
