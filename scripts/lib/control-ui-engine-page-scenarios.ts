@@ -2115,28 +2115,26 @@ export function createEnginePageScenarios(
         prepare: enter,
         run: async (page) => {
           const advanced = page.locator(".config-advanced-disclosure");
-          const fields = advanced.locator(":scope > .settings-group > .settings-row");
+          const fields = advanced.locator(":scope > .settings-row--stacked-on-narrow");
           const inputs = advanced.locator("input, select, textarea, button");
           assert.equal(await advanced.getAttribute("open"), null);
           const mountedFieldsBefore = await fields.count();
           await advanced.locator(":scope > summary").click();
-          // The base schema has three numeric fields and the native-search object (ten controls).
           await page.waitForFunction(() => {
             const details = document.querySelector<HTMLDetailsElement>(
               ".config-advanced-disclosure",
             );
-            return (
-              details?.open &&
-              details.querySelectorAll(":scope > .settings-group > .settings-row").length === 4 &&
-              details.querySelectorAll("input, select, textarea, button").length === 10
-            );
+            return details?.open && details.querySelectorAll("input, select, textarea").length > 0;
           });
           await frames(page);
+          const mounted = { fields: await fields.count(), inputs: await inputs.count() };
+          // Native-search object leaves now have their own rows alongside the three numbers.
+          assert.deepEqual(mounted, { fields: 11, inputs: 14 });
           return {
             opened: true,
             mountedFieldsBefore,
-            mountedFields: await fields.count(),
-            mountedInputs: await inputs.count(),
+            mountedFields: mounted.fields,
+            mountedInputs: mounted.inputs,
           };
         },
       };
