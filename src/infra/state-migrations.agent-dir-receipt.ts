@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { isMissingPathError } from "./errno.js";
-import { allowDrvfsRenameRecovery } from "./fs-safe-drvfs.js";
 import { isPathInside } from "./path-guards.js";
 
 export const LEGACY_AGENT_DIR_RECEIPT = ".legacy-agent-dir-migration.json";
@@ -43,7 +42,6 @@ export function recordCompletedLegacyAgentDirMigration(sourceRoot: string, targe
   };
   requireMissingReceipt();
   replaceFileAtomicSync({
-    allowDrvfsRenameRecovery: allowDrvfsRenameRecovery(targetRoot),
     filePath,
     content,
     mode: 0o600,

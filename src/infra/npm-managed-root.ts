@@ -9,7 +9,6 @@ import { filterStringEntries } from "@openclaw/normalization-core/string-normali
 import { parse as parseYaml } from "yaml";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { ignoreMissingPath } from "./errno.js";
-import { allowDrvfsRenameRecovery } from "./fs-safe-drvfs.js";
 import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import type { NpmSpecResolution } from "./install-source-utils.js";
 import { JsonFileReadError, readJson, readJsonIfExists, writeJson } from "./json-files.js";
@@ -739,7 +738,6 @@ export async function syncManagedNpmRootPeerDependencies(params: {
   const changed = JSON.stringify(next) !== JSON.stringify(manifest);
   if (changed) {
     await replaceFileAtomic({
-      allowDrvfsRenameRecovery: allowDrvfsRenameRecovery(params.npmRoot),
       filePath: manifestPath,
       assertBeforeMutation: params.beforePersistentApply,
       content: `${JSON.stringify(next, null, 2)}\n`,

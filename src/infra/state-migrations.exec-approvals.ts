@@ -24,7 +24,6 @@ import {
   serializeExecApprovals,
   writeExecApprovalsConfigRow,
 } from "./exec-approvals-sqlite.js";
-import { allowDrvfsRenameRecovery } from "./fs-safe-drvfs.js";
 import { pathMayExistSync } from "./path-existence.js";
 import { isPostgresSqlConnection, type EngineConnection } from "./sql-connection.js";
 import {
@@ -594,7 +593,6 @@ export async function migrateLegacyExecApprovals(params: {
     retryGuidance: `Stop the Gateway and node hosts holding ${params.stateDir}.`,
     run: async (env) => {
       const stateRoot = await root(params.stateDir, {
-        allowDrvfsRenameRecovery: allowDrvfsRenameRecovery(params.stateDir),
         hardlinks: "reject",
         maxBytes: MAX_LEGACY_EXEC_APPROVALS_BYTES,
         symlinks: "reject",

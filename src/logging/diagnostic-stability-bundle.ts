@@ -16,7 +16,6 @@ import {
   isMissingPathError,
 } from "../infra/errors.js";
 import { setFatalErrorHook } from "../infra/fatal-error-hooks.js";
-import { allowDrvfsRenameRecovery } from "../infra/fs-safe-drvfs.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import { readMemoryUsage } from "./diagnostic-memory-bundle.js";
 import {
@@ -844,7 +843,6 @@ export function writeDiagnosticStabilityBundleForFailureSync(
       `${BUNDLE_PREFIX}${formatDiagnosticFilenameTimestamp(now)}-${process.pid}-${normalizedReason}${BUNDLE_SUFFIX}`,
     );
     replaceFileAtomicSync({
-      allowDrvfsRenameRecovery: allowDrvfsRenameRecovery(dir),
       filePath: file,
       content: `${JSON.stringify(bundle, null, 2)}\n`,
       dirMode: 0o700,
