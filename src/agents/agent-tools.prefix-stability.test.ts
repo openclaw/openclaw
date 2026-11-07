@@ -12,6 +12,7 @@ import { inspectOpenDictionaryToolSchemas } from "../plugins/tool-schema-diagnos
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import { isAgentToolExecutionAvailable } from "./agent-tool-availability.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import {
   applyCodeModeCatalog,
@@ -20,6 +21,7 @@ import {
 } from "./code-mode.js";
 import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import { buildAgentSystemPrompt } from "./system-prompt.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-search-catalog.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
@@ -61,6 +63,33 @@ function surface(tools: ReturnType<typeof createOpenClawCodingTools>) {
     JSON.stringify({ name: tool.name, description: tool.description, parameters: tool.parameters }),
   );
 }
+
+it("keeps message declarations and prompt bytes when execution is disabled for a turn", async () => {
+  const normal = createOpenClawCodingTools(userTurn);
+  const disabled = createOpenClawCodingTools({ ...userTurn, disableMessageTool: true });
+  const resumed = createOpenClawCodingTools(userTurn);
+  const render = (tools: typeof normal) =>
+    buildAgentSystemPrompt({
+      workspaceDir: session.workspaceDir!,
+      toolNames: tools.map((tool) => tool.name),
+      runtimeInfo: { sessionKey: session.sessionKey, channel: "telegram" },
+    });
+  expect(normal.map((tool) => tool.name)).toContain("message");
+  expect(surface(disabled)).toEqual(surface(normal));
+  expect(surface(resumed)).toEqual(surface(normal));
+  expect(render(disabled)).toBe(render(normal));
+  expect(render(resumed)).toBe(render(normal));
+  const message = disabled.find((tool) => tool.name === "message");
+  expect(message).toBeDefined();
+  expect(isAgentToolExecutionAvailable(message!)).toBe(false);
+  await expect(
+    message!.execute("disabled-message", {
+      action: "send",
+      target: "telegram:owner",
+      message: "must not be delivered",
+    }),
+  ).resolves.toMatchObject({ details: { gated: true } });
+});
 
 async function webchatSession(clientKind: "browser" | "cli" | "acp" = "browser") {
   const sessionKey = "agent:main:dashboard:prefix-proof";
