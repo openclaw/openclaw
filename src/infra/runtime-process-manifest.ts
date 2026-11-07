@@ -89,6 +89,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     spawnBroker: runtimeProcessEntrypoint("process/spawn-broker/worker"),
     cronStreamMatcher: runtimeProcessEntrypoint("gateway/cron-stream-matcher.worker"),
     controlUiFile: runtimeProcessEntrypoint("gateway/control-ui-file.worker"),
+    workspaceIcon: runtimeProcessEntrypoint("gateway/workspace-icon.worker"),
     publicSessionCard: runtimeProcessEntrypoint("gateway/control-ui-public-session-card.worker"),
     nodeBootstrapArtifact: runtimeProcessEntrypoint(
       "gateway/worker-environments/node-bootstrap-artifact.worker",
