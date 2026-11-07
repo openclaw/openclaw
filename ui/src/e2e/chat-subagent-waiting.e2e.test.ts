@@ -107,6 +107,8 @@ suite.define(() => {
           await writeFile(path.join(artifactDir, name), frame.png);
         };
         await capture("initial-wide.png");
+        // The lazy fallback has inert rows until live observation is mounted.
+        await activity.locator("button.chat-subagent-activity__row").first().waitFor();
         const emit = (text: string, runId = "child-run-0", revision = 1) =>
           gateway.emitGatewayEvent("session.observer", {
             sessionKey: children[0]!.key,

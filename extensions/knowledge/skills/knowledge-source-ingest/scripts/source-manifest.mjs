@@ -40,9 +40,9 @@ const canonical = (value) => {
   if (value && typeof value === "object") {
     return (
       "{" +
-      Object.entries(value)
-        .toSorted(([a], [b]) => a.localeCompare(b))
-        .map(([key, child]) => JSON.stringify(key) + ":" + canonical(child))
+      Object.keys(value)
+        .toSorted()
+        .map((key) => JSON.stringify(key) + ":" + canonical(value[key]))
         .join(",") +
       "}"
     );
