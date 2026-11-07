@@ -96,51 +96,60 @@ async function loadOcPathFile(
   params: { requireUtf8?: boolean } = {},
 ): Promise<OcAst | null> {
   const kind = inferKind(fileName);
-  // A blocking open can hang on a FIFO before stat can reject it. O_NONBLOCK
-  // preserves regular-file and symlink reads while making that check reachable.
-  const handle = await fs.open(absPath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
   let raw: string;
   try {
-    const stat = await handle.stat();
-    if (!stat.isFile()) {
-      emitError(mode, `not a regular file: ${absPath}`, "OC_PATH_FILE_NOT_REGULAR");
-      process.exitCode = 2;
-      return null;
+    // A blocking open can hang on a FIFO before stat can reject it. O_NONBLOCK
+    // preserves regular-file and symlink reads while making that check reachable.
+    const handle = await fs.open(absPath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+    try {
+      const stat = await handle.stat();
+      if (!stat.isFile()) {
+        emitError(mode, `not a regular file: ${absPath}`, "OC_PATH_FILE_NOT_REGULAR");
+        process.exitCode = 2;
+        return null;
+      }
+      // `end` is inclusive, so a raced growth can return at most the cap plus one byte.
+      const bytes =
+        stat.size > MAX_OC_PATH_INPUT_BYTES
+          ? null
+          : Buffer.concat(
+              await handle
+                .createReadStream({ autoClose: false, end: MAX_OC_PATH_INPUT_BYTES, start: 0 })
+                .toArray(),
+            );
+      if (bytes === null || bytes.length > MAX_OC_PATH_INPUT_BYTES) {
+        emitError(
+          mode,
+          `input exceeds ${MAX_OC_PATH_INPUT_BYTES} bytes${stat.size > MAX_OC_PATH_INPUT_BYTES ? `; got ${stat.size}` : ""}`,
+          kind === "jsonc" ? "OC_JSONC_INPUT_TOO_LARGE" : "OC_PATH_INPUT_TOO_LARGE",
+        );
+        process.exitCode = 2;
+        return null;
+      }
+      // Only the editing verb re-emits the whole file, so only it asks for strict
+      // admission: replacement decoding there would rewrite bytes the edit never
+      // touched. The read-only verbs keep their existing decode contract.
+      if (params.requireUtf8 === true && !isUtf8(bytes)) {
+        emitError(
+          mode,
+          `input is not valid UTF-8; the file was left unchanged: ${absPath}. ` +
+            `Convert or repair a backed-up copy as UTF-8, then retry.`,
+          "OC_PATH_INPUT_NOT_UTF8",
+        );
+        process.exitCode = 2;
+        return null;
+      }
+      raw = bytes.toString("utf8");
+    } finally {
+      await handle.close();
     }
-    // `end` is inclusive, so a raced growth can return at most the cap plus one byte.
-    const bytes =
-      stat.size > MAX_OC_PATH_INPUT_BYTES
-        ? null
-        : Buffer.concat(
-            await handle
-              .createReadStream({ autoClose: false, end: MAX_OC_PATH_INPUT_BYTES, start: 0 })
-              .toArray(),
-          );
-    if (bytes === null || bytes.length > MAX_OC_PATH_INPUT_BYTES) {
-      emitError(
-        mode,
-        `input exceeds ${MAX_OC_PATH_INPUT_BYTES} bytes${stat.size > MAX_OC_PATH_INPUT_BYTES ? `; got ${stat.size}` : ""}`,
-        kind === "jsonc" ? "OC_JSONC_INPUT_TOO_LARGE" : "OC_PATH_INPUT_TOO_LARGE",
-      );
-      process.exitCode = 2;
-      return null;
-    }
-    // Only the editing verb re-emits the whole file, so only it asks for strict
-    // admission: replacement decoding there would rewrite bytes the edit never
-    // touched. The read-only verbs keep their existing decode contract.
-    if (params.requireUtf8 === true && !isUtf8(bytes)) {
-      emitError(
-        mode,
-        `input is not valid UTF-8; the file was left unchanged: ${absPath}. ` +
-          `Convert or repair a backed-up copy as UTF-8, then retry.`,
-        "OC_PATH_INPUT_NOT_UTF8",
-      );
-      process.exitCode = 2;
-      return null;
-    }
-    raw = bytes.toString("utf8");
-  } finally {
-    await handle.close();
+  } catch (err) {
+    // fs failures (ENOENT/EACCES/EISDIR/EMFILE/...) escape the domain paths above;
+    // keep them in the documented error envelope so the cause stays visible.
+    const message = err instanceof Error ? err.message : String(err);
+    emitError(mode, `failed to read ${absPath}: ${message}`, "OC_PATH_FILE_UNREADABLE");
+    process.exitCode = 2;
+    return null;
   }
   if (kind === "jsonc") {
     const result = parseJsonc(raw);
@@ -397,7 +406,15 @@ export function registerPathCli(program: Command): void {
       );
       return;
     }
-    await fs.writeFile(fsPath, newBytes, "utf-8");
+    try {
+      await fs.writeFile(fsPath, newBytes, "utf-8");
+    } catch (err) {
+      // Write failures (ENOSPC/EACCES/...) stay in the documented envelope too.
+      const message = err instanceof Error ? err.message : String(err);
+      emitError(mode, `failed to write ${fsPath}: ${message}`, "OC_PATH_WRITE_FAILED");
+      process.exitCode = 2;
+      return;
+    }
     emit(
       mode,
       { ok: true, dryRun: false, bytesWritten: byteLength, fsPath },
