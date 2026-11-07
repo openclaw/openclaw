@@ -1,6 +1,4 @@
 import {
-  runAgentHarnessAfterCompactionHook,
-  runAgentHarnessBeforeCompactionHook,
   projectProgressCardChannelUpdate,
   type AgentMessage,
   type AgentHarnessUserInputQuestion,
@@ -8,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { persistCodexContextCompactionActivity } from "./context-compaction-activity.js";
+import { runCodexCompactionHook } from "./event-projector-compaction-hooks.js";
 import {
   matchesCodexSnapshotTurn,
   shouldClearTerminalPresentationForNativeItem,
@@ -412,6 +411,20 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     return !this.projectionClosed && !this.aborted && !this.options.runAbortSignal?.aborted;
   }
 
+  private runCompactionHook(
+    hook: "before_compaction" | "after_compaction",
+    isActive: () => boolean,
+  ): Promise<void> {
+    return runCodexCompactionHook({
+      hook,
+      isActive,
+      readMessages: () =>
+        this.toolTranscriptProjection.readMirroredSessionMessages(this.options.runAbortSignal),
+      sessionFile: this.params.sessionFile,
+      ctx: this.options.agentHookContext ?? {},
+    });
+  }
+
   private async handleItemStarted(params: JsonObject): Promise<void> {
     const item = readItem(params.item);
     await this.settlement.project("media_projection", () =>
@@ -455,17 +468,9 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       if (!this.isCompactionProjectionActive() || !this.activeCompactionItemIds.has(itemId)) {
         return;
       }
-      const messages = await this.toolTranscriptProjection.readMirroredSessionMessages(
-        this.options.runAbortSignal,
-      );
-      if (!this.isCompactionProjectionActive() || !this.activeCompactionItemIds.has(itemId)) {
-        return;
-      }
-      await runAgentHarnessBeforeCompactionHook({
-        sessionFile: this.params.sessionFile,
-        messages,
-        ctx: this.options.agentHookContext ?? {},
-      });
+      const isActive = () =>
+        this.isCompactionProjectionActive() && this.activeCompactionItemIds.has(itemId);
+      await this.runCompactionHook("before_compaction", isActive);
       if (!this.isCompactionProjectionActive() || !this.activeCompactionItemIds.has(itemId)) {
         return;
       }
@@ -534,18 +539,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       if (!this.isCompactionProjectionActive()) {
         return;
       }
-      const messages = await this.toolTranscriptProjection.readMirroredSessionMessages(
-        this.options.runAbortSignal,
-      );
-      if (!this.isCompactionProjectionActive()) {
-        return;
-      }
-      await runAgentHarnessAfterCompactionHook({
-        sessionFile: this.params.sessionFile,
-        messages,
-        compactedCount: -1,
-        ctx: this.options.agentHookContext ?? {},
-      });
+      await this.runCompactionHook("after_compaction", () => this.isCompactionProjectionActive());
       if (!this.isCompactionProjectionActive()) {
         return;
       }

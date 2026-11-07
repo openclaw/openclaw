@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   complete,
   notify,
@@ -7,6 +7,7 @@ import {
   start,
 } from "./event-projector.compact.test-support.js";
 import { registerCodexEventProjectorTestLifecycle } from "./event-projector.test-harness.js";
+import * as sessionHistory from "./session-history.js";
 
 registerCodexEventProjectorTestLifecycle();
 
@@ -21,6 +22,7 @@ const responseUsage = {
 it.each([321, 0, undefined])(
   "replaces context after compaction with %s while preserving billing",
   async (tokensAfter) => {
+    const readHistory = vi.spyOn(sessionHistory, "readCodexMirroredSessionHistoryMessages");
     const { projector } = await observe();
     await notify(projector, "rawResponse/completed", {
       responseId: "before",
@@ -59,6 +61,8 @@ it.each([321, 0, undefined])(
     await start(projector, next);
     await complete(projector, next);
     expect(result(projector).attemptUsage?.contextUsage).toEqual({ state: "unavailable" });
+    // No compaction hook is registered, so the history-sized read is skipped.
+    expect(readHistory).not.toHaveBeenCalled();
   },
 );
 
