@@ -34,6 +34,7 @@ it.each(["cmd", "wscript"] as const)(
     bindWindowsTaskLauncher(launcher);
     expect(native.bind).toHaveBeenCalledExactlyOnceWith(
       processes.get(launcher === "cmd" ? 101 : 102),
+      { allowBreakaway: true },
     );
     expect(native.identity).toHaveBeenCalledExactlyOnceWith(process.pid);
     expect(native.open.mock.calls).toEqual(
