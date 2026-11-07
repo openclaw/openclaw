@@ -8,6 +8,7 @@ import { hasNativeBrowserBridge } from "../../app/native-browser-host.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
 import { localizedHintForPath } from "../../components/config-form.shared.ts";
 import {
+  SettingsPage,
   SettingsPageHeader,
   LearnMoreLink,
   SettingsToggleRow,
@@ -19,6 +20,8 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createConfigPage } from "./config-page-state.ts";
 import { defaultConfigSelection, type ConfigPageId } from "./config-sections.ts";
+import { createConfigGatewayAuth } from "./gateway-auth-draft.ts";
+import { GatewayAuthSettings } from "./gateway-auth-settings.tsx";
 import { mcpSettingsSchema, readMcpAppsEnabled } from "./mcp-schema.ts";
 import { memorySettingsSchema } from "./memory-schema.ts";
 import type { ConfigRouteData } from "./route-data.ts";
@@ -113,8 +116,20 @@ function ConfigBody(props: {
   configObject: Record<string, unknown>;
 }) {
   const context = () => props.state.application();
+  // Owns staged gateway.auth edits for this page; they never ride the autosaved draft.
+  const gatewayAuth = createConfigGatewayAuth(context());
   const renderSection = (editor: JSX.Element) => (
     <>
+      {/* Its own section above the schema form, not a row inside the form's card. */}
+      <Show when={props.config.activeSection === "gateway" && props.config.formValue}>
+        <SettingsPage>
+          <GatewayAuthSettings
+            auth={gatewayAuth.card(props.config.formValue)}
+            disabled={props.state.mutationDisabled()}
+            onPatch={(path, value) => gatewayAuth.stage(path, { value })}
+          />
+        </SettingsPage>
+      </Show>
       <Show
         when={props.pageId === "communications" && props.config.activeSection === "transcripts"}
         fallback={
@@ -145,23 +160,29 @@ function ConfigBody(props: {
     </>
   );
   const prelude = (
-    <Show
-      when={
-        props.config.activeSection === "browser" &&
-        isBrowserPanelAvailable(context().gateway.snapshot) &&
-        !hasNativeBrowserBridge()
-      }
-    >
-      <SettingsToggleRow
-        title={t("browserLinkPreferences.openInControlUi")}
-        checked={props.config.openLinksInControlUiBrowser === true}
-        onChange={(enabled) =>
-          props.config.onAppearanceChange({ openLinksInControlUiBrowser: enabled })
+    <>
+      <Show
+        when={
+          props.config.activeSection === "browser" &&
+          isBrowserPanelAvailable(context().gateway.snapshot) &&
+          !hasNativeBrowserBridge()
         }
-      />
-    </Show>
+      >
+        <SettingsToggleRow
+          title={t("browserLinkPreferences.openInControlUi")}
+          checked={props.config.openLinksInControlUiBrowser === true}
+          onChange={(enabled) =>
+            props.config.onAppearanceChange({ openLinksInControlUiBrowser: enabled })
+          }
+        />
+      </Show>
+    </>
   );
-  const config = createMemo(() => ({ ...props.config, renderSection, sectionPrelude: prelude }));
+  const config = createMemo(() => ({
+    ...gatewayAuth.bindForm(props.config),
+    renderSection,
+    sectionPrelude: prelude,
+  }));
   const editor = (section: string, label: string, schema = config().schema) => (
     <Config
       {...config()}

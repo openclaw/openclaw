@@ -316,3 +316,102 @@ describe("config shared auth disconnects", () => {
     expect(restartSentinelMocks.writeRestartSentinel).not.toHaveBeenCalled();
   });
 });
+
+describe("config writes that change gateway auth", () => {
+  beforeEach(() => {
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  const passwordWithoutSecret: OpenClawConfig = { gateway: { auth: { mode: "password" } } };
+
+  it.each([
+    { method: "config.patch", raw: { gateway: { auth: { mode: "password" } } } },
+    { method: "config.set", raw: passwordWithoutSecret },
+    { method: "config.apply", raw: passwordWithoutSecret },
+  ] as const)("$method rejects password mode without a password", async ({ method, raw }) => {
+    mockPreviousConfig(tokenAuthConfig("old-token"));
+
+    const { respond } = await runWrite(method, raw);
+
+    expectRpcError(respond, {
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("no password was configured"),
+      details: { reason: "gateway-auth-unusable" },
+    });
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects trusted-proxy auth without a trusted proxy address", async () => {
+    mockPreviousConfig(tokenAuthConfig("old-token"));
+
+    const { respond } = await runWrite("config.patch", {
+      gateway: {
+        auth: { mode: "trusted-proxy", token: null, trustedProxy: { userHeader: "x-user" } },
+      },
+    });
+
+    expectRpcError(respond, { message: expect.stringContaining("gateway.trustedProxies") });
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects trusted-proxy auth that keeps a shared token without echoing it", async () => {
+    mockPreviousConfig({
+      gateway: { ...tokenAuthConfig("old-token").gateway, trustedProxies: ["10.0.0.1"] },
+    });
+
+    const { respond } = await runWrite("config.patch", {
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          token: "submitted-secret-value",
+          trustedProxy: { userHeader: "x-user" },
+        },
+      },
+    });
+
+    expectRpcError(respond, { message: expect.stringContaining("mutually exclusive") });
+    const error = respond.mock.calls[0]?.[2] as { message?: string } | undefined;
+    expect(error?.message).not.toContain("submitted-secret-value");
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts password mode backed by OPENCLAW_GATEWAY_PASSWORD", async () => {
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "env-backed-password-value");
+    mockPreviousConfig(tokenAuthConfig("old-token"));
+
+    const { respond } = await runWrite("config.patch", { gateway: { auth: { mode: "password" } } });
+
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
+    expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts password mode whose SecretRef resolves through the write", async () => {
+    const passwordRef = { source: "env", provider: "default", id: "GATEWAY_PASSWORD" };
+    mockPreviousConfig(tokenAuthConfig("old-token"));
+    prepareSecretsRuntimeSnapshotMock.mockImplementationOnce(
+      async ({ config }: { config: OpenClawConfig }) => ({
+        config: {
+          ...config,
+          gateway: { auth: { mode: "password", password: "resolved-password-value" } },
+        },
+      }),
+    );
+
+    const { respond } = await runWrite("config.patch", {
+      gateway: { auth: { mode: "password", password: passwordRef, token: null } },
+    });
+
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
+  });
+
+  it("does not block unrelated writes on an already incomplete auth config", async () => {
+    mockPreviousConfig(passwordWithoutSecret);
+
+    const { respond } = await runWrite("config.patch", { messages: { ackReaction: "!" } });
+
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
+    expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
+  });
+});
