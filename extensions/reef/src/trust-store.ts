@@ -14,11 +14,7 @@ import {
 } from "./friend-types.js";
 import type { ReefTrustStateOperations } from "./trust-state-operation.js";
 import { createReefPeerAssertion, type ReefTrustOperationState } from "./trust-store-authority.js";
-import {
-  createReefRejectionRecovery,
-  prepareReefOutboundDelivery,
-  readReefOutboundDelivery,
-} from "./trust-store-delivery.js";
+import { createReefRejectionRecovery, readReefOutboundDelivery } from "./trust-store-delivery.js";
 import {
   REEF_TRUST_STORE_OPTIONS,
   REEF_DELIVERY_STORE_OPTIONS,
@@ -31,7 +27,6 @@ import {
   type ReefPeerStateSnapshot,
   type ReefOutboundDelivery,
 } from "./trust-store-format.js";
-import { LegacyReefTrustStore } from "./trust-store.legacy.js";
 import type { ReefDeliveryRejection, ReefRejectionNoticeState, RelayFriend } from "./types.js";
 
 export {
@@ -41,21 +36,22 @@ export {
   resolveReefTrustStoreKey,
   ReefPeerTrustChangedError,
 } from "./trust-store-format.js";
-export type ReefTrustStore = WorkerReefTrustStore | LegacyReefTrustStore;
 const operationHandler = {
   moduleName: "trust-state-operation-api.js",
   exportName: "runReefTrustStateOperation",
 };
 
-function openStores(openStore: PluginRuntime["state"]["openKeyedStore"]) {
+function openStores(openStore: PluginRuntime["state"]["openKeyedStoreV2"]) {
   return {
     peers: openStore<ReefPeerStateSnapshot>(REEF_TRUST_STORE_OPTIONS),
     deliveries: openStore<ReefOutboundDelivery>(REEF_DELIVERY_STORE_OPTIONS),
   };
 }
 
-class WorkerReefTrustStore {
+export class ReefTrustStore {
   readonly #prefix: string;
+  #readOperation?: PluginStateOperation<ReefTrustStateOperations>;
+  #peerReadOperation?: PluginStateOperation<ReefTrustStateOperations>;
   readonly operationState: ReefTrustOperationState;
 
   constructor(
@@ -68,15 +64,21 @@ class WorkerReefTrustStore {
     this.operationState = { ...stores, identityScope, assertCurrent: () => assertActive?.() };
   }
 
-  #operation(assertOwnerCurrent?: () => void): PluginStateOperation<ReefTrustStateOperations> {
+  #operation(
+    assertOwnerCurrent?: () => void,
+    isAdmitted?: () => boolean,
+    peerOnly = false,
+  ): PluginStateOperation<ReefTrustStateOperations> {
     const state = this.operationState;
     return state.peers.createOperation!<ReefTrustStateOperations>(
-      [state.peers, state.deliveries],
+      peerOnly ? [state.peers] : [state.peers, state.deliveries],
       operationHandler,
       {
         assertCurrent: () => {
-          state.assertCurrent();
-          assertOwnerCurrent?.();
+          if (!isAdmitted?.()) {
+            state.assertCurrent();
+            assertOwnerCurrent?.();
+          }
         },
       },
     );
@@ -87,11 +89,22 @@ class WorkerReefTrustStore {
     input: ReefTrustStateOperations[Type]["input"],
     missingValue: ReefTrustStateOperations[Type]["output"],
     watchStores: readonly number[] = [0],
+    ifEmptyStore?: number,
   ): Promise<PluginStateOperationReceipt<ReefTrustStateOperations[Type]["output"]>> {
-    const operation = this.#operation();
+    // Peer reads must not ship the retained delivery namespace to the worker.
+    const operation =
+      watchStores.length === 1
+        ? (this.#peerReadOperation ??= this.#operation(undefined, undefined, true))
+        : (this.#readOperation ??= this.#operation());
     const receipt = await operation.execute(
       { type, input },
-      { writeStores: [], watchStores, missingValue },
+      {
+        writeStores: [],
+        watchStores,
+        missingValue,
+        ifEmpty:
+          ifEmptyStore === undefined ? undefined : { store: ifEmptyStore, value: missingValue },
+      },
     );
     receipt.assertCurrent();
     return receipt;
@@ -151,20 +164,8 @@ class WorkerReefTrustStore {
 
   async beginRemoval(peer: string, assertOwnerCurrent?: () => void): Promise<() => Promise<void>> {
     const key = this.#key(peer);
-    const state = this.operationState;
     let admitted = false;
-    const operation = state.peers.createOperation!<ReefTrustStateOperations>(
-      [state.peers, state.deliveries],
-      operationHandler,
-      {
-        assertCurrent: () => {
-          if (!admitted) {
-            state.assertCurrent();
-            assertOwnerCurrent?.();
-          }
-        },
-      },
-    );
+    const operation = this.#operation(assertOwnerCurrent, () => admitted);
     const revoke = () =>
       operation.execute({ type: "remove", input: { key } }, { writeStores: [0] });
     await revoke();
@@ -234,20 +235,8 @@ class WorkerReefTrustStore {
   ): Promise<ReefRequestSettlement> {
     const requestId = randomUUID();
     const key = this.#key(peer);
-    const state = this.operationState;
     let admitted = false;
-    const operation = state.peers.createOperation!<ReefTrustStateOperations>(
-      [state.peers, state.deliveries],
-      operationHandler,
-      {
-        assertCurrent: () => {
-          if (!admitted) {
-            state.assertCurrent();
-            assertOwnerCurrent?.();
-          }
-        },
-      },
-    );
+    const operation = this.#operation(assertOwnerCurrent, () => admitted);
     await operation.execute(
       { type: "beginRequest", input: { key, requestId, requestedAt } },
       { writeStores: [0] },
@@ -294,14 +283,16 @@ class WorkerReefTrustStore {
     return this.#write("removeRequest", { key: this.#key(peer), requestId }, [0]);
   }
 
-  prepareOutboundDelivery(peer: string, id: string) {
-    const input = this.#delivery(peer, id);
-    return prepareReefOutboundDelivery(this.#operation(), input);
-  }
-
   async overdueOutboundDeliveries(olderThanMs: number, now = Date.now()) {
+    // Deliveries arriving after the empty read are picked up by the next periodic reconciliation.
     return (
-      await this.#read("overdueDeliveries", { prefix: this.#prefix, olderThanMs, now }, [], [0, 1])
+      await this.#read(
+        "overdueDeliveries",
+        { prefix: this.#prefix, olderThanMs, now },
+        [],
+        [0, 1],
+        1,
+      )
     ).value;
   }
 
@@ -322,10 +313,10 @@ class WorkerReefTrustStore {
   }
 
   async pendingOutboundRejections(): Promise<ReefDeliveryRejection[]> {
-    const operation = this.#operation();
+    const operation = (this.#readOperation ??= this.#operation());
     const receipt = await operation.execute(
       { type: "pendingRejections", input: { prefix: this.#prefix } },
-      { writeStores: [], missingValue: [], watchStores: [0, 1] },
+      { writeStores: [], missingValue: [], watchStores: [0, 1], ifEmpty: { store: 1, value: [] } },
     );
     receipt.assertCurrent();
     return receipt.value.map((entry) =>
@@ -359,10 +350,8 @@ class WorkerReefTrustStore {
   }
 }
 
-export function getReefTrustOperationState(
-  trust: ReefTrustStore,
-): ReefTrustOperationState | undefined {
-  return trust instanceof WorkerReefTrustStore ? trust.operationState : undefined;
+export function getReefTrustOperationState(trust: ReefTrustStore): ReefTrustOperationState {
+  return trust.operationState;
 }
 
 export function openReefTrustStore(
@@ -370,9 +359,6 @@ export function openReefTrustStore(
   config: ReefChannelConfig,
   assertCurrent?: () => void,
 ): ReefTrustStore {
-  const stores = openStores(runtime.state.openKeyedStore);
-  if (!stores.peers.createOperation) {
-    return new LegacyReefTrustStore(runtime, config, assertCurrent);
-  }
-  return new WorkerReefTrustStore(stores, config, assertCurrent);
+  const stores = openStores(runtime.state.openKeyedStoreV2);
+  return new ReefTrustStore(stores, config, assertCurrent);
 }

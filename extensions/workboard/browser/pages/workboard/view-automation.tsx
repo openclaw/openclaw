@@ -1,13 +1,14 @@
 /** @jsxImportSource @solidjs/web */
 import type { CronJob } from "@openclaw/gateway-protocol";
 import type { WorkboardMetadata } from "@openclaw/workboard-contract";
-import { Show, createEffect } from "solid-js";
+import { Show, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.tsx";
 import { workboardHost } from "../../host.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatDurationCompact } from "../../lib/format.ts";
+import { listen } from "../../lib/listener.ts";
 import { automationNextRunTime } from "./view-card-time.tsx";
 import { formatUpdatedTime, type BoardAutomationState } from "./view-helpers.tsx";
 import { workboardPopoverRef } from "./view-popover.ts";
@@ -38,6 +39,9 @@ function automationSchedule(job: CronJob): string {
     return t("workboard.automationAt", {
       time: formatUpdatedTime(Date.parse(schedule.at)) || schedule.at,
     });
+  }
+  if (schedule.kind === "event") {
+    return t("workboard.automationEvent", { source: schedule.source });
   }
   if (schedule.kind === "on-exit") {
     return t("workboard.automationOnExit", { command: schedule.command });
@@ -151,9 +155,11 @@ function BoardAutomationHeadingContent(props: {
                 <dd>{automationSchedule(loaded())}</dd>
                 <dt>{t("workboard.automationNextRunLabel")}</dt>
                 <dd>
-                  {loaded().enabled && loaded().state.nextRunAtMs
-                    ? formatUpdatedTime(loaded().state.nextRunAtMs)
-                    : t("workboard.automationNotScheduled")}
+                  {loaded().enabled && loaded().schedule.kind === "event"
+                    ? t("workboard.automationWaitingForEvent")
+                    : loaded().enabled && loaded().state.nextRunAtMs
+                      ? formatUpdatedTime(loaded().state.nextRunAtMs)
+                      : t("workboard.automationNotScheduled")}
                 </dd>
                 <dt>{t("workboard.detailUpdated")}</dt>
                 <dd>{formatUpdatedTime(loaded().updatedAtMs)}</dd>
@@ -231,6 +237,8 @@ function BoardAutomationContent(props: {
                 <span>{automationSchedule(loaded())}</span>
                 {!loaded().enabled ? (
                   <small>{t("workboard.automationPaused")}</small>
+                ) : loaded().schedule.kind === "event" ? (
+                  <small>{t("workboard.automationWaitingForEvent")}</small>
                 ) : loaded().state.nextRunAtMs ? (
                   <small>
                     {t("workboard.automationNextRun", {
@@ -262,17 +270,8 @@ function BoardAutomationLink(props: {
   onNavigate?: (event: MouseEvent) => void;
 }) {
   let link!: HTMLAnchorElement;
-  createEffect(
-    () => props.onNavigate,
-    (navigate) => {
-      if (!navigate) {
-        return undefined;
-      }
-      // Navigation admission must precede native listeners and the browser's default action.
-      link.addEventListener("click", navigate);
-      return () => link.removeEventListener("click", navigate);
-    },
-  );
+  // Navigation admission must precede native listeners and the browser's default action.
+  onSettled(() => listen(link, "click", (event) => props.onNavigate?.(event)));
   return (
     <a
       ref={(element) => {

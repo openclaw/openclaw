@@ -4,6 +4,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { registerAgentWorkspaceAccess } from "openclaw/plugin-sdk/agent-workspace-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { describe, expect, it, vi } from "vitest";
 import {
   createStartedThreadHarness,
@@ -45,6 +46,7 @@ describe("Codex source-bound pending input", () => {
       agents: { entries: { main: {}, ops: {} } },
       session: { scope: "global" },
     };
+    setRuntimeConfigSnapshot(params.config);
     const run = runCodexAppServerAttempt(params);
     await run.waitForTurnAccepted();
     try {

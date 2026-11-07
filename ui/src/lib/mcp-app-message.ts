@@ -1,10 +1,7 @@
 import type { ContentBlock } from "@modelcontextprotocol/client";
 import type { ApplicationContext } from "../app/context.ts";
-import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
-import type { McpAppMessageEventDetail } from "../components/mcp-app-security.ts";
 import { t } from "../i18n/index.ts";
 import { registerMcpAppEnglish } from "../i18n/locales/en-mcp-app.ts";
-import { buildChatApiAttachments } from "../pages/chat/attachment-api.ts";
 import {
   releaseChatAttachmentPayloads,
   registerChatAttachmentPayload,
@@ -16,12 +13,9 @@ import {
 } from "../pages/chat/components/chat-attachment-admission.ts";
 import { encodeTextAsDataUrl } from "../pages/chat/components/chat-attachment-text.ts";
 import { chatAttachmentFromDataUrl } from "../pages/chat/components/chat-attachments.ts";
-import { completeInitialSessionTurn } from "../pages/new-session/initial-session-turn-handoff.ts";
-import { StartedSessionNavigation } from "../pages/new-session/started-session-navigation.ts";
 import { base64ToBytes } from "./bytes-base64.ts";
 import type { ChatAttachment } from "./chat/chat-types.ts";
 import { mcpAppMessageText } from "./mcp-app-message-content.ts";
-import { uploadsEnabled, uploadsDisabledMessage } from "./uploads.ts";
 
 registerMcpAppEnglish();
 
@@ -111,63 +105,5 @@ export function mcpAppMessageInput(
   } catch (error) {
     releaseChatAttachmentPayloads(attachments);
     throw error;
-  }
-}
-
-export async function sendMcpAppNewConversation(
-  context: ApplicationContext,
-  agentId: string,
-  detail: McpAppMessageEventDetail,
-): Promise<boolean> {
-  const client = context.gateway.snapshot.client;
-  if (!client || context.gateway.snapshot.phase !== "connected") {
-    return false;
-  }
-  const scope = gatewayPresentationScope(context.gateway).key;
-  const location = context.router.getState().location;
-  const intent = context.agentSelection.intentRevision;
-  const turn = mcpAppMessageInput(detail.content, context);
-  if (turn.attachments.length && !uploadsEnabled(context.config)) {
-    releaseChatAttachmentPayloads(turn.attachments);
-    throw new Error(uploadsDisabledMessage());
-  }
-  const current = () =>
-    context.gateway.snapshot.client === client &&
-    gatewayPresentationScope(context.gateway).key === scope &&
-    context.router.getState().location === location &&
-    context.agentSelection.intentRevision === intent;
-  let released = false;
-  try {
-    const result = await context.sessions.createResult({
-      agentId,
-      message: turn.text,
-      attachments: buildChatApiAttachments(turn.attachments),
-    });
-    if (!result) {
-      return false;
-    }
-    await completeInitialSessionTurn({
-      context,
-      client,
-      agentId,
-      result,
-      turn,
-      navigation: new StartedSessionNavigation(),
-      instant: undefined,
-      isCurrent: current,
-      clearDraft: async (release) => {
-        released = true;
-        if (release) {
-          releaseChatAttachmentPayloads(turn.attachments);
-        }
-      },
-      completeInBackground: () => false,
-      finishNavigation: () => {},
-    });
-    return result.initialRun.status === "started";
-  } finally {
-    if (!released) {
-      releaseChatAttachmentPayloads(turn.attachments);
-    }
   }
 }

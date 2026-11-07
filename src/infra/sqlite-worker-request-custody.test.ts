@@ -2,7 +2,7 @@ import { serialize } from "node:v8";
 import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { failSqliteWorkerSlot, receiveSqliteWorkerReply } from "./sqlite-worker-broker-reply.js";
-import type { Actor, Job, Slot } from "./sqlite-worker-broker.types.js";
+import type { Job } from "./sqlite-worker-broker.types.js";
 import {
   readSqliteWorkerRequestCustody,
   SqliteWorkerSlotCustody,
@@ -44,6 +44,7 @@ function currentJob(slot: SqliteWorkerSlotCustody): Job {
     observation: { started() {}, completed() {} },
     request: { type: "execute", id: 1, actor: 1, input: new Uint8Array() },
     bytes: 0,
+    result: new Promise(() => {}),
     resolve: vi.fn(),
     reject: vi.fn(),
     detach: vi.fn(),
@@ -83,14 +84,7 @@ it("revokes before failure observers and retains accepted work until native reti
 it("retires a completed job before its successor can reuse the same request ID", () => {
   const custody = new SqliteWorkerSlotCustody();
   const current = currentJob(custody);
-  const slot: Pick<Slot, "current"> & {
-    actors: Set<Pick<Actor, "id" | "closeReceipt">>;
-    worker: Pick<Slot["worker"], "postMessage">;
-  } = {
-    current,
-    actors: new Set<Pick<Actor, "id" | "closeReceipt">>(),
-    worker: { postMessage() {} },
-  };
+  const slot = { current, actors: new Set<never>(), worker: { postMessage() {} } };
   const finish = vi.fn(() => {
     expect(readSqliteWorkerRequestCustody(current.custody.descriptor)).toBe(false);
   });

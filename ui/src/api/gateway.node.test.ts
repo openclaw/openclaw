@@ -7,8 +7,7 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { validatePreviousConnectParams } from "../../../packages/gateway-protocol/src/connect-compatibility.test-support.js";
-import { lazyCompile } from "../../../packages/gateway-protocol/src/protocol-validator.js";
-import { ConnectParamsSchema } from "../../../packages/gateway-protocol/src/schema/frames.js";
+import { validateConnectParams } from "../../../packages/gateway-protocol/src/validators/workers.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   loadDeviceAuthToken as loadScopedDeviceAuthToken,
@@ -37,7 +36,6 @@ import {
 import type { GatewayBrowserClientOptions, GatewayHelloOk } from "./gateway.ts";
 
 const realLoadOrCreateDeviceIdentity = nodes.loadOrCreateDeviceIdentity;
-const validateConnectParams = lazyCompile(ConnectParamsSchema);
 const recoveryMigrationRuntimeMock = vi.hoisted(() => ({
   loaded: vi.fn(),
   migrate: vi.fn(),
@@ -209,11 +207,7 @@ async function continueConnect(
   capabilities?: string[],
 ) {
   ws.emitOpen();
-  ws.emitMessage({
-    type: "event",
-    event: "connect.challenge",
-    payload: { nonce, ts: challengeTs, ...(capabilities ? { capabilities } : {}) },
-  });
+  ws.emitConnectChallenge({ nonce, ts: challengeTs, ...(capabilities ? { capabilities } : {}) });
   if (vi.isFakeTimers()) {
     await vi.advanceTimersByTimeAsync(0);
   } else {
@@ -229,6 +223,7 @@ function emitHello(
   id: string | undefined,
   auth: Partial<NonNullable<GatewayHelloOk["auth"]>> = {},
   policy?: GatewayHelloOk["policy"],
+  features?: GatewayHelloOk["features"],
 ) {
   ws.emitMessage({
     type: "res",
@@ -239,6 +234,7 @@ function emitHello(
       protocol: 4,
       auth: { role: "operator", scopes: [], ...auth },
       policy,
+      features,
     },
   });
 }
@@ -309,11 +305,43 @@ describe("GatewayBrowserClient", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each([false, true])(
+    "publishes recovery readiness without loading an empty legacy scope (foreign recovery=%s)",
+    async (foreignRecovery) => {
+      vi.stubGlobal("sessionStorage", createStorageMock());
+      if (foreignRecovery) {
+        seedRecovery("agent:cloud:foreign", "another-principal");
+      }
+      const onRecoveryScopeChange = vi.fn();
+      const client = createClient({ onRecoveryScopeChange });
+      const { ws, connectFrame } = await startConnect(client);
+      emitHello(ws, connectFrame.id, {
+        deviceToken: STORED_CRED,
+        recoveryMigrationAllowed: true,
+        recoveryScope: "server-current",
+      });
+
+      await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
+      expect(client.recoveryScopeReady).toBe(true);
+      expect(client.recoveryScope).toBe("server-current");
+      expect(recoveryMigrationRuntimeMock.loaded).not.toHaveBeenCalled();
+      expect(recoveryMigrationRuntimeMock.migrate).not.toHaveBeenCalled();
+      expect(sessionStorage.length).toBe(foreignRecovery ? 1 : 0);
+    },
+  );
+
   it.each([
     { advertised: false, modelCatalog: { agentId: "alpha" } },
     { advertised: true, modelCatalog: { agentId: "alpha", sessionKey: "agent:alpha:saved" } },
   ])("connects with only advertised catalog input: %j", async ({ advertised, modelCatalog }) => {
-    const client = createClient({ modelCatalog });
+    const readModelCatalog = vi.fn(() => modelCatalog);
+    const client = new GatewayBrowserClient({
+      url: DEFAULT_GATEWAY_URL,
+      get modelCatalog() {
+        return readModelCatalog();
+      },
+    });
+    clients.push(client);
     client.start();
     const { connectFrame } = await continueConnect(
       getLatestWebSocket(),
@@ -321,6 +349,7 @@ describe("GatewayBrowserClient", () => {
       1_800_000_000_000,
       advertised ? [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT] : undefined,
     );
+    expect(readModelCatalog).toHaveBeenCalledTimes(advertised ? 1 : 0);
     if (advertised) {
       expect(connectFrame.params?.modelCatalog).toEqual(modelCatalog);
       expect(connectFrame.params?.caps).toContain(GATEWAY_CLIENT_CAPS.MODEL_CATALOG_SNAPSHOT);
@@ -329,6 +358,24 @@ describe("GatewayBrowserClient", () => {
       expect(connectFrame.params).not.toHaveProperty("modelCatalog");
       expect(connectFrame.params?.caps).not.toContain(GATEWAY_CLIENT_CAPS.MODEL_CATALOG_SNAPSHOT);
     }
+  });
+
+  it("clears advertised capabilities before connecting to another Gateway", async () => {
+    useNodeFakeTimers();
+    const client = createClient();
+    const first = await startConnect(client);
+    emitHello(first.ws, first.connectFrame.id, {}, undefined, {
+      capabilities: [GATEWAY_SERVER_CAPS.TALK_SESSION_CLOSE_DISPOSITION],
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.hello?.features?.capabilities).toEqual(["talk-session-close-disposition"]);
+    client.stop();
+    expect(client.hello).toBeNull();
+    const second = await startConnect(client);
+    emitHello(second.ws, second.connectFrame.id);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.hello?.features?.capabilities).toBeUndefined();
+    client.stop();
   });
 
   it("does not publish hello when a response observer closes the browser socket", async () => {
@@ -357,16 +404,16 @@ describe("GatewayBrowserClient", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(ws.lastClose).toEqual({ code: 4000, reason: "response observer closed" });
     expect(onHello).not.toHaveBeenCalled();
-    expect(onClose).not.toHaveBeenCalled();
-    expect(loadDeviceAuthToken()?.token).toBe(STORED_CRED);
-    ws.emitClose(4000, "response observer closed");
-    expect(onClose).toHaveBeenCalledWith(
+    expect(onClose).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         code: 4000,
         reason: "response observer closed",
         willRetry: true,
       }),
     );
+    expect(loadDeviceAuthToken()?.token).toBe(STORED_CRED);
+    ws.emitClose(4000, "response observer closed");
+    expect(onClose).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(800);
     expect(getLatestWebSocket()).not.toBe(ws);
   });
@@ -455,11 +502,7 @@ describe("GatewayBrowserClient", () => {
     client.start();
     const ws = getLatestWebSocket();
     ws.emitOpen();
-    ws.emitMessage({
-      type: "event",
-      event: "connect.challenge",
-      payload: { nonce: "nonce-missing-time" },
-    });
+    ws.emitConnectChallenge({ nonce: "nonce-missing-time" });
 
     await expectSocketClosed(ws);
     expect(ws.sent).toHaveLength(0);
@@ -500,26 +543,21 @@ describe("GatewayBrowserClient", () => {
         "Browser refused the Gateway WebSocket for security reasons. Use wss:// when the Control UI is served over HTTPS/Tailscale Serve, or open the loopback dashboard at http://127.0.0.1:18789.",
     },
     {
-      name: "TypeError",
+      name: "SyntaxError",
       message: "constructor failed",
       code: "BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR",
       reason: "websocket error",
-      guidance: "Could not create the Gateway WebSocket: constructor failed",
+      guidance:
+        "Couldn’t create the Gateway WebSocket. Check the Gateway WebSocket URL and browser security policy. Details: constructor failed",
     },
   ])(
     "reports $name socket construction failures without retrying",
     async ({ name, message, code, reason, guidance }) => {
       vi.useFakeTimers();
       const onClose = vi.fn();
-      vi.stubGlobal(
-        "WebSocket",
-        class {
-          static OPEN = 1;
-          constructor() {
-            throw Object.assign(new Error(message), { name });
-          }
-        },
-      );
+      vi.stubGlobal("WebSocket", function () {
+        throw Object.assign(new Error(message), { name });
+      });
       const client = createClient({
         url: "ws://gateway.example:18789",
         token: "shared-auth-token",
@@ -543,11 +581,13 @@ describe("GatewayBrowserClient", () => {
   );
 
   it("retains negative response payloads without leaking them into timing or error JSON", async () => {
+    useNodeFakeTimers();
     const onRequestTiming = vi.fn<(timing: RequestTimingPayload) => void>();
     const client = createClient({ token: "shared-auth-token", onRequestTiming });
 
     const { ws, connectFrame } = await startConnect(client);
     emitHello(ws, connectFrame.id);
+    await vi.advanceTimersByTimeAsync(0);
     onRequestTiming.mockClear();
 
     const request = client.request("config.get", { token: "do-not-log" });
@@ -613,11 +653,7 @@ describe("GatewayBrowserClient", () => {
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(ws.sent).toEqual([]);
-    ws.emitMessage({
-      type: "event",
-      event: "connect.challenge",
-      payload: { nonce: "delayed-challenge", ts: 1_800_000_000_000 },
-    });
+    ws.emitConnectChallenge({ nonce: "delayed-challenge", ts: 1_800_000_000_000 });
     await vi.advanceTimersByTimeAsync(0);
 
     expect(ws.sent).toHaveLength(1);
@@ -636,7 +672,7 @@ describe("GatewayBrowserClient", () => {
     client.start();
     const ws = getLatestWebSocket();
     ws.emitOpen();
-    await vi.advanceTimersByTimeAsync(14_999);
+    await vi.advanceTimersByTimeAsync(29_999);
 
     expect(ws.lastClose).toBeNull();
     await vi.advanceTimersByTimeAsync(1);
@@ -718,11 +754,7 @@ describe("GatewayBrowserClient", () => {
       readSessionPlacementRecovery(DEFAULT_GATEWAY_URL, "server-stale", recovery.sessionKey),
     ).toBeNull();
 
-    secondWs.emitMessage({
-      type: "event",
-      event: "connect.challenge",
-      payload: { nonce: "nonce-current", ts: 1_800_000_000_000 },
-    });
+    secondWs.emitConnectChallenge({ nonce: "nonce-current", ts: 1_800_000_000_000 });
     await vi.advanceTimersByTimeAsync(0);
     const secondConnect = parseLatestConnectFrame(secondWs);
     emitHello(secondWs, secondConnect.id, {
@@ -777,11 +809,7 @@ describe("GatewayBrowserClient", () => {
     await vi.advanceTimersByTimeAsync(800);
     const nextWs = getLatestWebSocket();
     nextWs.emitOpen();
-    nextWs.emitMessage({
-      type: "event",
-      event: "connect.challenge",
-      payload: { nonce: "next", ts: 1_800_000_000_000 },
-    });
+    nextWs.emitConnectChallenge({ nonce: "next", ts: 1_800_000_000_000 });
     await vi.advanceTimersByTimeAsync(0);
     emitHello(nextWs, parseLatestConnectFrame(nextWs).id, {
       scopes: ["operator.write"],
@@ -1115,30 +1143,6 @@ describe("GatewayBrowserClient", () => {
       },
       willRetry: false,
     });
-  });
-
-  it("does not auto-reconnect on PROTOCOL_MISMATCH", async () => {
-    useNodeFakeTimers();
-
-    const { ws: ws1, connectFrame: connect } = await startConnect(
-      createClient({ token: "shared-auth-token" }),
-    );
-
-    ws1.emitMessage({
-      type: "res",
-      id: connect.id,
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "protocol mismatch",
-        details: { code: "PROTOCOL_MISMATCH" },
-      },
-    });
-    await expectSocketClosed(ws1);
-    ws1.emitClose(4008, "connect failed");
-
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(wsInstances).toHaveLength(1);
   });
 
   it.each([

@@ -79,7 +79,6 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
   if (needsPreflightTranscription) {
     if (params.abortSignal?.aborted) {
       return {
-        hasAudioAttachment,
         hasTypedText,
       };
     }
@@ -100,7 +99,6 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
   }
 
   return {
-    hasAudioAttachment,
     hasTypedText,
     transcript,
   };

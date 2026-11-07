@@ -6,7 +6,10 @@ import {
   type NodeWorkerWorkspaceQuiescenceInput,
 } from "../../worker/node-workspace-protocol.js";
 import type { WorkerWorkspaceCommand, WorkerWorkspaceQuiescence } from "./tunnel-contract.js";
-import { workspaceQuiescenceArgv } from "./workspace-quiescence-scripts.js";
+import {
+  legacyWindowsWorkspaceQuiescenceAcquireArgv,
+  workspaceQuiescenceArgv,
+} from "./workspace-quiescence-scripts.js";
 import {
   waitForQuiescenceRenewal,
   workerWorkspaceCommandSucceeded,
@@ -21,27 +24,33 @@ export function createWorkerWorkspaceQuiescence(params: {
   sharedHost: boolean;
   nativeWatchdog?: () => Promise<boolean>;
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>;
-}): (remoteWorkspaceDir: string) => Promise<WorkerWorkspaceQuiescence> {
-  return async (remoteWorkspaceDir) => {
+}): (remoteWorkspaceDir: string, authorize?: () => void) => Promise<WorkerWorkspaceQuiescence> {
+  return async (remoteWorkspaceDir, authorize) => {
     const posixAbsolute = path.posix.isAbsolute(remoteWorkspaceDir);
     const windowsAbsolute = path.win32.isAbsolute(remoteWorkspaceDir);
+    const windowsOnlyAbsolute = !posixAbsolute && windowsAbsolute;
     if (!posixAbsolute && !windowsAbsolute) {
       throw new Error("Worker workspace quiescence path must be absolute");
     }
-    if (!posixAbsolute && windowsAbsolute && !params.sharedHost) {
+    if (windowsOnlyAbsolute && !params.sharedHost) {
       throw new Error("Windows worker workspace quiescence requires a shared host");
     }
     const hostMode = params.sharedHost ? "shared-host" : "dedicated";
     // Pin one dialect for the lease; a reconnect must not reinterpret its nonce/custody.
     const nativeWatchdog = (await params.nativeWatchdog?.()) ?? false;
     params.ownerSignal.throwIfAborted();
+    authorize?.();
     const nativeNonce = randomBytes(16).toString("hex");
     const run = async (operation: NodeWorkerWorkspaceQuiescenceInput) => {
       const result = await params.runWorkspaceCommand({
         transportRetry: "never",
+        // Releasing acquired cleanup custody remains necessary after caller revocation.
+        assertCurrent: operation.action === "release" ? undefined : authorize,
         argv: nativeWatchdog
           ? [NODE_WORKSPACE_QUIESCENCE_COMMAND, remoteWorkspaceDir]
-          : workspaceQuiescenceArgv(remoteWorkspaceDir, operation, hostMode),
+          : windowsOnlyAbsolute && operation.action === "acquire"
+            ? legacyWindowsWorkspaceQuiescenceAcquireArgv(remoteWorkspaceDir, operation, hostMode)
+            : workspaceQuiescenceArgv(remoteWorkspaceDir, operation, hostMode),
         ...(nativeWatchdog ? { quiescence: operation } : { legacyQuiescence: true }),
       });
       if (!workerWorkspaceCommandSucceeded(result)) {

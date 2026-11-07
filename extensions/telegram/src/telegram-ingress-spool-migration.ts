@@ -65,7 +65,7 @@ async function listSpoolSources(stateDir: string): Promise<SpoolSource[]> {
     const spoolDir = path.join(telegramDir, directory.name);
     const byName = new Map<string, SpoolSource>();
     for (const candidate of (await fs.readdir(spoolDir)).toSorted()) {
-      const name = migrationSdk.resolveLegacyMigrationSourcePath?.(candidate) ?? candidate;
+      const name = migrationSdk.resolveLegacyMigrationSourcePath(candidate);
       const match = /^(\d{16})\.json(?:\.(processing|failed))?$/.exec(name);
       if (match) {
         const source = byName.get(name) ?? {
@@ -172,7 +172,7 @@ export const telegramIngressSpoolMigration = {
     let hasRefusal = false;
     const access = context.channelIngressQueues?.find((entry) => entry.channelId === "telegram");
     const { backupLegacyStateSource } = migrationSdk;
-    if (!access?.importLegacyEntries || !access.assertCurrent || !backupLegacyStateSource) {
+    if (!access?.importLegacyEntries || !access.assertCurrent) {
       return {
         changes,
         warnings: [
@@ -231,7 +231,7 @@ export const telegramIngressSpoolMigration = {
           ],
         });
         if (result.conflicts.length) {
-          throw new Error("canonical SQLite ingress contains a different event; kept both copies");
+          throw new Error("current SQLite ingress contains a different event; kept both copies");
         }
         const imported = result.imported.includes(entry.id);
         if (!imported && !result.present.includes(entry.id)) {
@@ -263,7 +263,7 @@ export const telegramIngressSpoolMigration = {
         const outcome = imported
           ? `Imported Telegram spool ${first.accountId}/${first.id} as ${entry.status}`
           : removedSources === backups.length
-            ? `Retired redundant Telegram spool source ${first.accountId}/${first.id}; preserved canonical ingress state and import history`
+            ? `Retired redundant Telegram spool source ${first.accountId}/${first.id}; preserved current ingress state and import history`
             : `Confirmed prior Telegram spool import ${first.accountId}/${first.id}; source cleanup remains pending`;
         if (!stale) {
           changes.push(

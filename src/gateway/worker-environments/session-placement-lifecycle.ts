@@ -440,7 +440,7 @@ export async function ensureWorkerSessionPlacement(params: {
   dispatch: WorkerPlacementDispatchContract["dispatch"];
   startDispatch: (
     ...args: Parameters<WorkerPlacementDispatchContract["dispatch"]>
-  ) => Promise<WorkerSessionPlacementRecord>;
+  ) => Promise<{ release: () => void }>;
   waitForInitialPlacement: (
     placement: WorkerSessionPlacementRecord,
     signal?: AbortSignal,
@@ -456,8 +456,13 @@ export async function ensureWorkerSessionPlacement(params: {
 }): Promise<{ assertCurrent: () => void; release: () => void }> {
   const { request } = params;
   const prepared = await params.placements.prepareSessionPlacement(request.sessionId);
+  let releaseRequestedHandoff: (() => void) | undefined;
+  const release = () => {
+    prepared.release();
+    releaseRequestedHandoff?.();
+  };
   try {
-    const read = () => {
+    const readPlacement = () => {
       params.signal?.throwIfAborted();
       params.assertCurrent();
       const placement = prepared.current();
@@ -472,6 +477,13 @@ export async function ensureWorkerSessionPlacement(params: {
         throw new Error(
           "The existing placement conflicts with worker execution; repair its recorded owner before retrying.",
         );
+      }
+      return placement;
+    };
+    const read = () => {
+      const placement = readPlacement();
+      if (!placement || placement.state === "local") {
+        return placement;
       }
       const environment = placement.environmentId
         ? params.environments.get(placement.environmentId)
@@ -512,6 +524,17 @@ export async function ensureWorkerSessionPlacement(params: {
           environmentService: params.environments,
         }));
     const useRecorded = async () => {
+      const pending = readPlacement();
+      if (
+        params.waitForReady !== false &&
+        pending &&
+        ["requested", "provisioning", "syncing", "starting"].includes(pending.state)
+      ) {
+        // Setup owns the changing inventory. Join it before validating its environment.
+        await params.waitForInitialPlacement(pending, params.signal);
+        assertReady();
+        return true;
+      }
       const placement = read();
       if (!placement || canStartDispatch(placement)) {
         return false;
@@ -526,9 +549,6 @@ export async function ensureWorkerSessionPlacement(params: {
         });
         assertReady();
       } else if (params.waitForReady !== false) {
-        if (["requested", "provisioning", "syncing", "starting"].includes(placement.state)) {
-          await params.waitForInitialPlacement(placement, params.signal);
-        }
         assertReady();
       }
       return true;
@@ -537,7 +557,7 @@ export async function ensureWorkerSessionPlacement(params: {
       read();
     };
     if (await useRecorded()) {
-      return { assertCurrent: assertDestinationCurrent, release: prepared.release };
+      return { assertCurrent: assertDestinationCurrent, release };
     }
     await params.prepareWorkspace(() => {
       const placement = read();
@@ -547,37 +567,48 @@ export async function ensureWorkerSessionPlacement(params: {
       return canStartDispatch(placement);
     });
     if (await useRecorded()) {
-      return { assertCurrent: assertDestinationCurrent, release: prepared.release };
+      return { assertCurrent: assertDestinationCurrent, release };
     }
     const placement = read();
     const previousEnvironment =
       placement?.state === "failed" && placement.environmentId
         ? params.environments.get(placement.environmentId)
         : undefined;
-    const dispatch = params.waitForReady === false ? params.startDispatch : params.dispatch;
-    await dispatch(
-      {
-        ...request,
-        ...(previousEnvironment
-          ? {
-              inheritedProfile: {
-                providerId: previousEnvironment.providerId,
-                profileSnapshot: previousEnvironment.profileSnapshot,
-              },
-            }
-          : {}),
-      },
-      params.onTransition,
-      params.authorizeDispatch,
-      params.signal,
-    );
+    const dispatchRequest = {
+      ...request,
+      ...(previousEnvironment
+        ? {
+            inheritedProfile: {
+              providerId: previousEnvironment.providerId,
+              profileSnapshot: previousEnvironment.profileSnapshot,
+            },
+          }
+        : {}),
+    };
+    if (params.waitForReady === false) {
+      const handoff = await params.startDispatch(
+        dispatchRequest,
+        params.onTransition,
+        params.authorizeDispatch,
+        params.signal,
+      );
+      // Keep the requested postimage stable through the caller's final publication.
+      releaseRequestedHandoff = handoff.release;
+    } else {
+      await params.dispatch(
+        dispatchRequest,
+        params.onTransition,
+        params.authorizeDispatch,
+        params.signal,
+      );
+    }
     read();
     if (params.waitForReady !== false) {
       assertReady();
     }
-    return { assertCurrent: assertDestinationCurrent, release: prepared.release };
+    return { assertCurrent: assertDestinationCurrent, release };
   } catch (error) {
-    prepared.release();
+    release();
     throw error;
   }
 }

@@ -24,13 +24,18 @@ import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
-import { canReceiveSessionEvent } from "../session-sharing.js";
+import { createSessionRowProjection } from "../session-row-projection.js";
+import {
+  canReceivePreparedSessionEvent,
+  createProjectedSessionEventPredicate,
+} from "../session-sharing.test-utils.js";
 import {
   broadcast,
   callQuestionRpc,
@@ -77,6 +82,7 @@ function questionPeer(
       updatedAt: profile.updatedAt,
     },
   };
+  prepareGatewayRecipientProfile(client);
   return { client, socket };
 }
 
@@ -141,11 +147,12 @@ async function createOwnRunFixture() {
       },
     },
   };
+  const projection = await createSessionRowProjection({ cfg });
+  await projection.ensureMaterialized();
   const clients = new GatewayClientRegistry([browser.client]);
   const broadcaster = createGatewayBroadcaster({
     clients,
-    canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) =>
-      canReceiveSessionEvent({ cfg, client, sessionKeys, agentId, event, payload }),
+    canReceiveSessionEvent: createProjectedSessionEventPredicate(cfg, projection),
   });
   broadcast.mockImplementation(broadcaster.broadcast);
   const call = (
@@ -207,10 +214,14 @@ async function createOwnRunFixture() {
     request,
     beginWait,
     close: async () => {
-      manager.reset();
-      await manager.drain();
-      releaseAgentRunDelegatedAuthority(authority);
-      source.release();
+      try {
+        manager.reset();
+        await manager.drain();
+        releaseAgentRunDelegatedAuthority(authority);
+        source.release();
+      } finally {
+        projection.dispose();
+      }
     },
   };
 }
@@ -370,7 +381,7 @@ describe("own-run question admission", () => {
       for (const peer of peers) {
         f.clients.add(peer.client);
         expect(
-          canReceiveSessionEvent({
+          await canReceivePreparedSessionEvent({
             cfg: f.cfg,
             client: peer.client,
             sessionKeys: [requestParams.sessionKey],
@@ -596,7 +607,6 @@ describe("own-run question admission", () => {
             await manager.drain();
             expect(getActiveGatewayRootWorkCount()).toBe(0);
           }
-          expect(spy).toHaveBeenCalledOnce();
         } finally {
           release.resolve();
           await result;

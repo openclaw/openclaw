@@ -1,24 +1,35 @@
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 
 type SessionTitleTarget = {
   storePath: string;
   sessionKey: string;
   sessionId: string;
-  incarnation?: string;
 };
 const requestKey = (target: SessionTitleTarget) =>
-  `${target.storePath}\0${target.sessionKey}\0${target.sessionId}${target.incarnation ? `\0${target.incarnation}` : ""}`;
+  `${target.storePath}\0${target.sessionKey}\0${target.sessionId}`;
 
-// One request per session generation; callers share settlement and pending requests
+// One request per session; callers share settlement and pending requests
 // always leave the registry, including model failures and timeouts.
 const pending = new Map<string, Promise<boolean>>();
 export const sessionTitleRequests = {
   get(target: SessionTitleTarget) {
     return pending.get(requestKey(target));
   },
-  run(target: SessionTitleTarget, create: () => Promise<boolean>) {
-    return getOrCreatePromise(pending, requestKey(target), create, { evictOnSettled: true });
+  run(target: SessionTitleTarget, create: () => Promise<boolean>, onStateChanged?: () => void) {
+    const key = requestKey(target);
+    const existing = pending.get(key);
+    if (existing) {
+      return existing;
+    }
+    const request = getOrCreatePromise(pending, key, create, { evictOnSettled: true });
+    // Register after the cache eviction handlers so either outcome publishes the
+    // settled state, not the just-completed request still present in the registry.
+    if (onStateChanged) {
+      void request.then(onStateChanged, onStateChanged);
+      onStateChanged();
+    }
+    return request;
   },
 };
 

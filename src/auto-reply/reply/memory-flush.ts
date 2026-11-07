@@ -15,35 +15,17 @@ import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TranscriptTokenEstimate } from "./agent-runner-memory-transcript-context.js";
 
-function resolveEffectivePromptTokens(
-  basePromptTokens?: number,
-  lastOutputTokens?: number,
-  promptTokenEstimate?: number,
-): number {
-  const base = Math.max(0, basePromptTokens ?? 0);
-  const output = Math.max(0, lastOutputTokens ?? 0);
-  const estimate = Math.max(0, promptTokenEstimate ?? 0);
-  // Flush gating projects the next input context by adding the previous
-  // completion and the current user prompt estimate.
-  return base + output + estimate;
-}
+export { resolveCompactionThreshold } from "../../../packages/agent-core/src/harness/compaction/compaction-threshold.js";
 
 export function resolveProjectedPromptTokens(
   persistedPromptTokens: number | undefined,
   promptTokenEstimate: number | undefined,
   transcript: TranscriptTokenEstimate | undefined,
 ): number {
-  const project = (promptTokens: number | undefined, outputTokens: number | undefined) =>
-    typeof promptTokens === "number"
-      ? resolveEffectivePromptTokens(promptTokens, outputTokens, promptTokenEstimate)
-      : 0;
-  return Math.max(
-    project(persistedPromptTokens, transcript?.outputTokens),
-    project(
-      transcript?.promptTokens,
-      transcript?.promptIncludesOutput ? undefined : transcript?.outputTokens,
-    ),
-  );
+  const contextTokens = persistedPromptTokens ?? transcript?.contextTokens;
+  return contextTokens === undefined
+    ? 0
+    : Math.max(0, contextTokens) + Math.max(0, promptTokenEstimate ?? 0);
 }
 
 export function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
@@ -52,18 +34,7 @@ export function estimatePromptTokensForMemoryFlush(prompt?: string): number | un
     return undefined;
   }
   const message: AgentMessage = { role: "user", content: trimmed, timestamp: Date.now() };
-  const tokens = asPositiveFiniteNumber(estimateMessagesTokens([message]));
-  return tokens === undefined ? undefined : Math.ceil(tokens);
-}
-
-export function resolveCompactionThreshold(params: {
-  contextWindowTokens: number;
-  reserveTokensFloor: number;
-  minimumThresholdTokens?: number;
-}): number {
-  const contextWindow = Math.max(1, Math.floor(params.contextWindowTokens));
-  const reserveTokens = Math.max(0, Math.floor(params.reserveTokensFloor));
-  return Math.max(0, contextWindow - reserveTokens, Math.floor(params.minimumThresholdTokens ?? 0));
+  return Math.ceil(estimateMessagesTokens([message]));
 }
 
 export function resolveResponsesServerCompactionThreshold(params: {
@@ -125,26 +96,6 @@ export function resolveResponsesServerCompactionThreshold(params: {
   ).threshold;
 }
 
-export function shouldRunMemoryFlush(params: {
-  entry?: Pick<
-    SessionEntry,
-    "totalTokens" | "totalTokensFresh" | "totalTokensVersion" | "compactionCount" | "memoryFlush"
-  >;
-  /**
-   * Optional token count override for flush gating. When provided, this value is
-   * treated as a fresh context snapshot and used instead of the cached
-   * SessionEntry.totalTokens (which may be stale/unknown).
-   */
-  tokenCount?: number;
-  threshold: number;
-}): boolean {
-  return Boolean(
-    shouldRunPreflightCompaction(params) &&
-    params.entry &&
-    !hasAlreadyFlushedForCurrentCompaction(params.entry),
-  );
-}
-
 export function shouldRunPreflightCompaction(params: {
   entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh" | "totalTokensVersion">;
   /**
@@ -163,12 +114,7 @@ export function shouldRunPreflightCompaction(params: {
     projectedTokens === undefined
       ? resolveFreshSessionTotalTokens(params.entry)
       : Math.floor(projectedTokens);
-  return (
-    typeof totalTokens === "number" &&
-    totalTokens > 0 &&
-    params.threshold > 0 &&
-    totalTokens >= params.threshold
-  );
+  return totalTokens !== undefined && params.threshold > 0 && totalTokens >= params.threshold;
 }
 
 /** One flush per compaction cycle, regardless of token or transcript-size trigger. */
@@ -176,6 +122,5 @@ export function hasAlreadyFlushedForCurrentCompaction(
   entry: Pick<SessionEntry, "compactionCount" | "memoryFlush">,
 ): boolean {
   const compactionCount = entry.compactionCount ?? 0;
-  const lastFlushAt = entry.memoryFlush?.compactionCount;
-  return typeof lastFlushAt === "number" && lastFlushAt === compactionCount;
+  return entry.memoryFlush?.compactionCount === compactionCount;
 }

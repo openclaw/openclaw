@@ -208,7 +208,7 @@ test.each([
 ] as const)(
   "$method ($scope) retains visible results without decoding saved prompts",
   async ({ method, sessionKeys }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const { opts, storePath } = await seedMetadataReads(method === "sessions.preview");
       const parse = JSON.parse;
       let decodedPromptBytes = 0;
@@ -338,7 +338,7 @@ test.each([
     restrict: "config",
   },
 ] as const)("sessions.preview rechecks $change before publishing the batch", async (scenario) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const { opts, storePath, viewerId, restrictRuntimeConfig } = await seedMetadataReads(true);
     const firstRead = createDeferred();
     const read = transcriptPreview.readSessionPreviewItemsFromTranscriptAsync;

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -10,7 +10,7 @@ const operation = source.match(/^prepare_release\(\) \{[\s\S]*?^\}/m)?.[0];
 assert.ok(operation);
 const quote = value => "'" + String(value).replaceAll("'", "'\\''") + "'";
 
-test("sealing retains executable modes and symlinks and refuses a failed durability barrier", t => {
+test("sealing persists only its tree, retains modes and links, and refuses failed fsyncs", t => {
   const root = mkdtempSync(join(tmpdir(), "team-seal-"));
   t.after(() => {
     spawnSync("chmod", ["-R", "u+w", root]);
@@ -25,13 +25,40 @@ test("sealing retains executable modes and symlinks and refuses a failed durabil
   symlinkSync("nested/data", join(release, "link"));
   writeFileSync(join(bin, "sync"), "#!/bin/sh\nexit 74\n", { mode: 0o755 });
   const args = [new URL("./release-lib.mjs", import.meta.url).pathname, "seal-tree", release];
-  const failed = spawnSync(process.execPath, args, {
+  const sealed = spawnSync(process.execPath, args, {
     encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
   });
-  assert.notEqual(failed.status, 0, "a failed sync cannot admit a durable release");
-  assert.match(failed.stderr, /cannot sync sealed release filesystem/);
-  const retried = spawnSync(process.execPath, args, { encoding: "utf8" });
+  assert.equal(sealed.status, 0, "unrelated filesystem flushes must not gate sealing: " + sealed.stderr);
+  const trace = join(root, "fsyncs"), preload = join(root, "fsync.mjs");
+  writeFileSync(preload, `
+    import fs from "node:fs/promises";
+    import { appendFileSync } from "node:fs";
+    import { syncBuiltinESMExports } from "node:module";
+    const open = fs.open;
+    fs.open = async (...args) => {
+      const handle = await open(...args), sync = handle.sync.bind(handle);
+      handle.sync = async () => {
+        if (args[0] === process.env.FAIL_FSYNC) throw new Error("fixture fsync failure");
+        await sync();
+        appendFileSync(${JSON.stringify(trace)}, args[0] + "\\n");
+      };
+      return handle;
+    };
+    syncBuiltinESMExports();
+  `);
+  for (const pathname of [file, join(release, "nested")]) {
+    const failed = spawnSync(process.execPath, ["--import", preload, ...args], {
+      encoding: "utf8", env: { ...process.env, FAIL_FSYNC: pathname },
+    });
+    assert.notEqual(failed.status, 0, "file and directory fsync failures must refuse sealing");
+    assert.match(failed.stderr, /fixture fsync failure/);
+  }
+  writeFileSync(trace, "");
+  const retried = spawnSync(process.execPath, ["--import", preload, ...args], { encoding: "utf8" });
   assert.equal(retried.status, 0, retried.stderr);
+  const persisted = readFileSync(trace, "utf8").trim().split("\n");
+  assert.deepEqual(new Set(persisted), new Set([file, executable, release, join(release, "nested")]));
+  assert.ok(persisted.indexOf(file) < persisted.indexOf(release), "file data precedes directory persistence");
   for (const directory of [release, join(release, "nested")]) {
     assert.equal(statSync(directory).mode & 0o777, 0o555);
   }
@@ -77,6 +104,7 @@ test("publishes standalone exact-commit releases with an inode-independent reusa
   writeFileSync(join(repository, "pnpm-workspace.yaml"), "packages: []\n");
   writeFileSync(join(repository, "fixture-build.cjs"), `
     const fs = require('node:fs');
+    if (process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD !== '1') throw new Error('release build must skip DTS');
     const head = require('node:child_process').execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim();
     fs.mkdirSync('dist/control-ui/assets', {recursive:true});
     for (const name of ['.buildstamp', '.runtime-postbuildstamp']) fs.writeFileSync('dist/'+name, JSON.stringify({head}));
@@ -173,34 +201,6 @@ publish_release "$1" "$mirror"
   assert.deepEqual(readdirSync(join(serving, "staging")), []);
 });
 
-test("builds historical checkouts through their existing runtime selector and package script", t => {
-  const root = mkdtempSync(join(tmpdir(), "team-historical-build-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
-  const bin = join(root, "bin"), resultPath = join(root, "result.json");
-  mkdirSync(bin);
-  writeFileSync(join(root, "package.json"), JSON.stringify({ scripts: { build: "historical build" } }));
-  const pnpm = join(bin, "pnpm");
-  writeFileSync(pnpm, `#!/bin/sh\nexec ${quote(process.execPath)} -e ${quote(`
-    const fs = require("node:fs");
-    const args = process.argv.slice(1);
-    const scripts = JSON.parse(fs.readFileSync(args[1] + "/package.json")).scripts;
-    if (!scripts[args[2]]) throw new Error("Unknown historical package script: " + args[2]);
-    fs.writeFileSync(process.env.RESULT_PATH, JSON.stringify({ args, skipDts: process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD }));
-  `)} -- "$@"\n`);
-  chmodSync(pnpm, 0o755);
-  const build = source.replace(/\\\r?\n\s*/g, " ").split("\n")
-    .find(line => line.includes('pnpm -C "$build_directory" build'));
-  assert.ok(build, "controller package build invocation");
-  const result = spawnSync("bash", ["-c", `set -euo pipefail
-build_directory=${quote(root)}; build_budget=30; cache_environment=()
-bounded_build() { shift; "$@"; }
-${build}
-`], { encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, RESULT_PATH: resultPath } });
-  assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(readFileSync(resultPath, "utf8")), {
-    args: ["-C", root, "build"], skipDts: "1",
-  });
-});
 
 function prepare(t, scenario) {
   const root = mkdtempSync(join(tmpdir(), "team-prepare-release-"));

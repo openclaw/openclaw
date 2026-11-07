@@ -11,7 +11,7 @@ import {
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
 import { readSessionRuntimeOwnershipAsync } from "../../agents/harness/session-runtime-ownership.js";
 import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../../agents/prepared-model-catalog.js";
-import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
+import { isPreparedModelRuntimeMissingOwnerError } from "../../agents/prepared-model-runtime.errors.js";
 import { applyRemoteModelCatalogUpdate } from "../../agents/prepared-model-runtime.js";
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
@@ -27,12 +27,13 @@ import { resolveChatMetadataReadParams } from "./chat-metadata-handler.js";
 import { projectSessionModelCatalog } from "./chat-metadata-session-projection.js";
 import { UnknownModelCatalogProviderError } from "./models-list-capabilities.js";
 import { buildModelsListResult } from "./models-list-result.js";
+import { projectModelsProviderPresentation } from "./models-provider-presentation.js";
 import { createPreparedReadHandler } from "./prepared-read.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
 import { assertValidParams } from "./validation.js";
 
-// Native catalog demand precedes projection; provider inventory keeps its refresh lifecycle.
+// Ordinary reads serve published rows while the catalog owner acquires native inventory.
 export const modelsHandlers: GatewayRequestHandlers = {
   "models.list": createPreparedReadHandler(
     async (options) => {
@@ -114,10 +115,9 @@ export const modelsHandlers: GatewayRequestHandlers = {
             agentId: resolved.agentId,
             config: cfg,
           });
-          owner?.recheckNativeLogin?.();
+          void owner?.recheckNativeLogin?.();
           if (!params.preparedOnly && params.view !== "provider-config") {
-            await owner?.loadNativeModelCatalog?.();
-            assertCurrent();
+            void owner?.loadNativeModelCatalog?.().catch(() => undefined);
           }
         }
         return {
@@ -166,6 +166,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
                             sessionModelRevision: sessionModelRevision(
                               scope.sessionEntry,
                               scope.workerInference,
+                              runtimeOwnership ?? null,
                             ),
                           }
                         : {}),
@@ -184,7 +185,16 @@ export const modelsHandlers: GatewayRequestHandlers = {
               })?.forAgent(resolved.agentId, projected.models);
               respond(
                 true,
-                projectModelFastModeCatalog(policy ? policy.catalog(projected) : projected, client),
+                projectModelsProviderPresentation(
+                  projectModelFastModeCatalog(
+                    policy ? policy.catalog(projected) : projected,
+                    client,
+                  ),
+                  currentConfig,
+                  // Settings reads the configured catalog; only unrestricted whole-catalog
+                  // reads may also disclose configured providers with no model rows.
+                  params.view !== "all" && !params.provider && !scope && !policy,
+                ),
                 undefined,
               );
             };
@@ -215,7 +225,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
         failure = errorShape(ErrorCodes.INVALID_REQUEST, error.message);
       } else if (error instanceof SessionMutationAuthorizationChangedError) {
         failure = error.error;
-      } else if (error instanceof PreparedModelRuntimePublicationSupersededError) {
+      } else if (isPreparedModelRuntimeMissingOwnerError(error)) {
         failure = errorShape(ErrorCodes.UNAVAILABLE, error.message, {
           retryable: true,
           retryAfterMs: 0,

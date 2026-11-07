@@ -4,17 +4,13 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   matchesReefPeerIdentity,
+  sameReefPeerIdentity,
+  ReefAutonomySchema,
+  ReefPeerTrustSchema,
+  type ReefAutonomy,
   type ReefPeerIdentity,
   type ReefPeerTrust,
 } from "./friend-types.js";
-import {
-  overdueReefDeliveries,
-  pendingReefRejections,
-  rejectReefDelivery,
-  reserveReefRejection,
-} from "./trust-delivery-transition.js";
-import { transitionReefPeer, type ReefPeerMutations } from "./trust-peer-transition.js";
-import { validateReefPeerIdentity } from "./trust-store-authority.js";
 import {
   currentReefDeliveries,
   listReefPeerTrust,
@@ -22,16 +18,188 @@ import {
   mergeReefRejectionNotice,
   parseReefPeerState,
   ReefOutboundDeliverySchema,
-  ReefPeerTrustChangedError,
+  ReefOutboundRejectionSchema,
+  ReefPeerStateSchema,
   ReefRejectionNoticeStateSchema,
   reefOutboundRequestStatus,
+  withoutReefOutboundRequest,
   type ReefOutboundDelivery,
   type ReefOutboundDeliveryBinding,
   type ReefPeerStateSnapshot,
 } from "./trust-store-format.js";
-import type { ReefDeliveryRejection, ReefRejectionNoticeState } from "./types.js";
+import type { ReefDeliveryRejection, ReefRejectionNoticeState, RelayFriend } from "./types.js";
 
 type PeerKey = { key: string };
+type ReefPeerMutations = {
+  set: { input: PeerKey & { trust: ReefPeerTrust }; output: void };
+  remove: { input: PeerKey; output: boolean };
+  setAutonomy: { input: PeerKey & { autonomy: ReefAutonomy }; output: boolean };
+  markSafetyNumberChanged: { input: PeerKey & { expectedRevision: number }; output: boolean };
+  commitPeerTrust: {
+    input: PeerKey & {
+      friend: RelayFriend;
+      expectedRevision: number;
+      expectedOutboundRequestId?: string;
+      approvedAt: number;
+    };
+    output: boolean;
+  };
+  beginRequest: { input: PeerKey & { requestId: string; requestedAt: number }; output: void };
+  removeRequest: { input: PeerKey & { requestId?: string }; output: boolean };
+};
+/** Shared policy; native and worker adapters own their respective atomic writes. */
+function transitionReefPeer(
+  command: PluginStateOperationCommand<ReefPeerMutations>,
+  current: ReefPeerStateSnapshot,
+): ReefPeerStateSnapshot | undefined {
+  switch (command.type) {
+    case "set":
+      return {
+        ...current,
+        revision: current.revision + 1,
+        trust: ReefPeerTrustSchema.parse(command.input.trust),
+      };
+    case "remove":
+      return { revision: current.revision + 1 };
+    case "setAutonomy":
+      return current.trust
+        ? {
+            ...current,
+            trust: { ...current.trust, autonomy: ReefAutonomySchema.parse(command.input.autonomy) },
+          }
+        : undefined;
+    case "markSafetyNumberChanged":
+      return current.revision === command.input.expectedRevision && current.trust
+        ? {
+            ...current,
+            revision: current.revision + 1,
+            trust: { ...current.trust, safetyNumberChanged: true },
+          }
+        : undefined;
+    case "commitPeerTrust": {
+      const { friend, expectedRevision, expectedOutboundRequestId, approvedAt } = command.input;
+      if (
+        current.revision !== expectedRevision ||
+        (expectedOutboundRequestId !== undefined &&
+          current.outboundRequests?.[expectedOutboundRequestId] === undefined)
+      ) {
+        return undefined;
+      }
+      return {
+        revision: current.revision + 1,
+        trust: ReefPeerTrustSchema.parse({
+          autonomy: current.trust?.autonomy ?? "bounded",
+          ed25519PublicKey: friend.ed25519_pub,
+          x25519PublicKey: friend.x25519_pub,
+          keyEpoch: friend.key_epoch,
+          safetyNumberChanged: false,
+          approvedAt,
+        }),
+        ...(current.rejectionNotice ? { rejectionNotice: current.rejectionNotice } : {}),
+      };
+    }
+    case "beginRequest":
+      return ReefPeerStateSchema.parse({
+        ...current,
+        outboundRequests: {
+          ...current.outboundRequests,
+          [command.input.requestId]: command.input.requestedAt,
+        },
+      });
+    case "removeRequest":
+      return withoutReefOutboundRequest(current, command.input.requestId);
+  }
+  return command satisfies never;
+}
+
+function rejectReefDelivery(
+  value: unknown,
+  expected: ReefOutboundDeliveryBinding,
+  category: string | undefined,
+  rejectedAt: number,
+) {
+  const parsed = ReefOutboundDeliverySchema.safeParse(value);
+  if (!parsed.success || !matchesReefDeliveryBinding(parsed.data, expected)) {
+    return undefined;
+  }
+  return {
+    changed: parsed.data.rejection === undefined,
+    delivery: parsed.data.rejection
+      ? parsed.data
+      : {
+          ...parsed.data,
+          rejection: ReefOutboundRejectionSchema.parse({
+            ...(category ? { category } : {}),
+            ...(parsed.data.resendDisabled ? { notice: { lastRejectionAt: rejectedAt } } : {}),
+          }),
+        },
+  };
+}
+
+function reserveReefRejection(
+  value: unknown,
+  recipient: ReefPeerIdentity,
+  notice: ReefRejectionNoticeState,
+) {
+  const parsed = ReefOutboundDeliverySchema.safeParse(value);
+  if (
+    !parsed.success ||
+    !parsed.data.rejection ||
+    !sameReefPeerIdentity(parsed.data.recipient, recipient)
+  ) {
+    return undefined;
+  }
+  const existing = parsed.data.rejection.notice;
+  return {
+    delivery: existing
+      ? parsed.data
+      : {
+          ...parsed.data,
+          rejection: {
+            ...parsed.data.rejection,
+            notice: ReefRejectionNoticeStateSchema.parse(notice),
+          },
+        },
+    outcome: existing
+      ? ({ kind: "existing", state: existing } as const)
+      : ({ kind: "reserved" } as const),
+  };
+}
+
+function overdueReefDeliveries(
+  deliveries: ReturnType<typeof currentReefDeliveries>,
+  olderThanMs: number,
+  now: number,
+) {
+  return deliveries.flatMap(({ peer, id, delivery }) =>
+    delivery.rejection ||
+    delivery.overdueNotifiedAt !== undefined ||
+    delivery.sentAt === undefined ||
+    delivery.sentAt + olderThanMs > now
+      ? []
+      : [{ peer, id, sentAt: delivery.sentAt }],
+  );
+}
+
+function pendingReefRejections(
+  deliveries: ReturnType<typeof currentReefDeliveries>,
+): Omit<ReefDeliveryRejection, "recovery">[] {
+  return deliveries.flatMap(({ peer, id, delivery }) =>
+    delivery.rejection
+      ? [
+          {
+            peer,
+            id,
+            recipient: delivery.recipient,
+            ...(delivery.textHash ? { textHash: delivery.textHash } : {}),
+            ...(delivery.rejection.category ? { category: delivery.rejection.category } : {}),
+            ...(delivery.rejection.notice ? { reservedNotice: delivery.rejection.notice } : {}),
+          },
+        ]
+      : [],
+  );
+}
+
 export type ReefDeliveryOperationInput = {
   peer: string;
   peerKey: string;
@@ -52,11 +220,6 @@ export type ReefTrustStateOperations = ReefPeerMutations & {
   requestStatus: {
     input: PeerKey & { requestId: string };
     output: "current" | "superseded" | "revoked";
-  };
-  prepareDelivery: { input: ReefDeliveryOperationInput; output: ReefPeerTrust | undefined };
-  recordDelivery: {
-    input: ReefDeliveryOperationInput & { delivery: ReefOutboundDelivery };
-    output: "recorded" | "peer-changed" | "duplicate";
   };
   readDelivery: { input: ReefDeliveryOperationInput; output: DeliveryRead | undefined };
   consumeDelivery: {
@@ -101,53 +264,19 @@ function readReefPeerState(
   return parseReefPeerState(tx.lookup(0, key));
 }
 
-class ReefDuplicateOutboundDeliveryError extends Error {
-  constructor(id: string) {
-    super(`Duplicate outbound Reef delivery id ${id}`);
-    this.name = "ReefDuplicateOutboundDeliveryError";
-  }
-}
-
-export function recordReefOutboundDelivery(
-  tx: PluginStateOperationTransaction,
-  params: {
-    peers: number;
-    deliveries: number;
-    peerKey: string;
-    deliveryKey: string;
-    peer: string;
-    delivery: ReefOutboundDelivery;
-  },
-  prepared?: { peerState: ReefPeerStateSnapshot; delivery: unknown },
-): void {
-  // A composing worker may reuse facts read earlier in this same synchronous transaction.
-  const current =
-    prepared ??
-    (() => {
-      const [peerValue, delivery] = tx.lookupMany([
-        { store: params.peers, key: params.peerKey },
-        { store: params.deliveries, key: params.deliveryKey },
-      ]);
-      return { peerState: parseReefPeerState(peerValue), delivery };
-    })();
-  const delivery = ReefOutboundDeliverySchema.parse(params.delivery);
-  validateReefPeerIdentity(current.peerState.trust, params.peer, delivery.recipient);
-  if (current.delivery !== undefined) {
-    const id = params.deliveryKey.slice(params.deliveryKey.lastIndexOf(":") + 1);
-    throw new ReefDuplicateOutboundDeliveryError(id);
-  }
-  tx.set(params.deliveries, params.deliveryKey, delivery);
-}
-
 function deliveriesForCurrentPeers(
   tx: PluginStateOperationTransaction,
   prefix: string,
   requireValid = false,
 ) {
+  const deliveries = tx.entries(1);
+  if (deliveries.length === 0) {
+    return [];
+  }
   const peers = new Map(
     listReefPeerTrust(tx.entries(0), prefix).map(({ peer, trust }) => [peer, trust]),
   );
-  return currentReefDeliveries(tx.entries(1), prefix, (peer) => peers.get(peer), requireValid);
+  return currentReefDeliveries(deliveries, prefix, (peer) => peers.get(peer), requireValid);
 }
 
 export function runReefTrustStateOperation(
@@ -177,21 +306,6 @@ export function runReefTrustStateOperation(
         readReefPeerState(tx, command.input.key),
         command.input.requestId,
       );
-    case "prepareDelivery":
-      return readReefPeerState(tx, command.input.peerKey).trust;
-    case "recordDelivery":
-      try {
-        recordReefOutboundDelivery(tx, { peers: 0, deliveries: 1, ...command.input });
-        return "recorded";
-      } catch (error) {
-        if (error instanceof ReefPeerTrustChangedError) {
-          return "peer-changed";
-        }
-        if (error instanceof ReefDuplicateOutboundDeliveryError) {
-          return "duplicate";
-        }
-        throw error;
-      }
     case "readDelivery": {
       const [peer, value] = tx.lookupMany([
         { store: 0, key: command.input.peerKey },

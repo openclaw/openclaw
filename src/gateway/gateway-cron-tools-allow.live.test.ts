@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { storeLiveApiKeyProfile } from "../../test/helpers/live-api-key-profile.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -44,7 +45,6 @@ describeLive("cron tool allowlists through live harnesses", () => {
           ...Object.fromEntries(
             listKnownProviderAuthEnvVarNamesCore().map((name) => [name, undefined]),
           ),
-          OPENAI_API_KEY: process.env.OPENAI_API_KEY,
           OPENAI_BASE_URL: undefined,
           OPENAI_API_BASE: undefined,
           OPENCLAW_AGENT_RUNTIME: undefined,
@@ -81,13 +81,11 @@ describeLive("cron tool allowlists through live harnesses", () => {
               entries: { probe: { workspace } },
             },
             tools: { exec: { host: "gateway", security: "full", ask: "off" } },
-            secrets: { providers: { default: { source: "env" } } },
             models: {
               mode: "merge",
               providers: {
                 openai: {
                   api: "openai-responses",
-                  apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
                   baseUrl: "https://api.openai.com/v1",
                   models: [],
                 },
@@ -96,6 +94,11 @@ describeLive("cron tool allowlists through live harnesses", () => {
           };
           await instance.state.writeConfig(config);
           await instance.startGateway();
+          const profileId = await storeLiveApiKeyProfile(instance, {
+            provider: "openai",
+            apiKey: process.env.OPENAI_API_KEY,
+            agentId: "probe",
+          });
 
           const addArgs = [
             "cron",
@@ -106,6 +109,8 @@ describeLive("cron tool allowlists through live harnesses", () => {
             new Date(Date.now() + 86_400_000).toISOString(),
             "--agent",
             "probe",
+            "--model",
+            `${MODEL_KEY}@${profileId}`,
             "--session",
             "isolated",
             "--no-deliver",

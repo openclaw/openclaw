@@ -162,23 +162,25 @@ class SidebarShellLogicTest {
   @Test
   fun sidebarPresentationRestoresSnoozedPinsAtTheirDeadline() {
     val rows = listOf(session("sleeping", activity = 20, pinned = true).copy(snoozedUntil = 100L), session("active", activity = 10))
-    val before = sidebarSessionPresentation(rows, emptyList(), expanded = false, currentSessionKey = "sleeping", nowMs = 99L)
-    val after = sidebarSessionPresentation(rows, emptyList(), expanded = false, currentSessionKey = "sleeping", nowMs = 100L)
+    val before = sidebarSessionPresentation(rows, emptyList(), currentSessionKey = "sleeping", nowMs = 99L)
+    val after = sidebarSessionPresentation(rows, emptyList(), currentSessionKey = "sleeping", nowMs = 100L)
 
     assertEquals(emptyList<ChatSessionEntry>(), before.pinned)
-    assertEquals(listOf("active"), before.recentSections.flatMap { it.entries }.map { it.key })
+    assertEquals(listOf("active"), before.recent.map { it.key })
     assertEquals(listOf("sleeping"), after.pinned.map { it.key })
-    assertEquals(before.recentSections, after.recentSections)
+    assertEquals(before.recent, after.recent)
   }
 
   @Test
-  fun collapsedSessionPresentationKeepsAllPinsAndGroupsEightRecentRows() {
+  fun sessionPresentationKeepsEveryFolderMemberAndEmptyKnownFolder() {
     val presentation =
       sidebarSessionPresentation(
         sessions =
           listOf(
             session("pinned", activity = 1, pinned = true),
             session("archived", activity = 100, archived = true),
+            session("channel", activity = 12).copy(kind = "group"),
+            session("filed-channel", activity = 11, category = "Work").copy(kind = "group"),
           ) +
             (1L..10L).map { activity ->
               session(
@@ -188,31 +190,39 @@ class SidebarShellLogicTest {
               )
             },
         knownGroups = listOf("Personal"),
-        expanded = false,
       )
 
-    val recentKeys = presentation.recentSections.flatMap { it.entries }.map(ChatSessionEntry::key)
+    val recentKeys = presentation.recent.map(ChatSessionEntry::key)
     assertEquals(listOf("pinned"), presentation.pinned.map(ChatSessionEntry::key))
-    assertEquals(8, recentKeys.size)
-    assertEquals(setOf("session-10", "session-9", "session-8", "session-7", "session-6", "session-5", "session-4", "session-3"), recentKeys.toSet())
-    assertEquals(listOf("Work", "Ungrouped"), presentation.recentSections.map { it.title })
-    assertTrue(presentation.recentSections.all { it.entries.isNotEmpty() })
-    assertTrue(presentation.canExpandRecent)
+    assertEquals(listOf("Personal", "Work"), presentation.groups.map { it.name })
+    assertTrue(
+      presentation.groups
+        .first()
+        .entries
+        .isEmpty(),
+    )
+    assertEquals(
+      listOf("filed-channel", "session-10", "session-8", "session-6", "session-4", "session-2"),
+      presentation.groups
+        .last()
+        .entries
+        .map { it.key },
+    )
+    assertEquals(listOf("channel"), presentation.chatGroups.map { it.key })
+    assertEquals(listOf("session-9", "session-7", "session-5", "session-3", "session-1"), recentKeys)
   }
 
   @Test
-  fun expandedSessionPresentationRevealsAllRowsAndCollapsesToTheSameResult() {
-    val sessions = (1L..12L).map { activity -> session("session-$activity", activity = activity) }
-
-    val collapsed = sidebarSessionPresentation(sessions, knownGroups = emptyList(), expanded = false)
-    val expanded = sidebarSessionPresentation(sessions, knownGroups = emptyList(), expanded = true)
-
-    assertEquals(8, collapsed.recentSections.flatMap { it.entries }.size)
-    assertEquals(12, expanded.recentSections.flatMap { it.entries }.size)
-    assertFalse(collapsed.recentSections.flatMap { it.entries }.any { it.key == "session-1" })
-    assertTrue(expanded.recentSections.flatMap { it.entries }.any { it.key == "session-1" })
-    assertTrue(expanded.canExpandRecent)
-    assertEquals(collapsed, sidebarSessionPresentation(sessions, knownGroups = emptyList(), expanded = false))
+  fun sectionWindowPagesWithoutHidingTheActiveSession() {
+    val entries = (1L..35L).map { session("session-$it", activity = it) }
+    val first = sidebarSectionWindow(entries, 10, "session-35")
+    assertEquals(11, first.rows.size)
+    assertEquals("session-35", first.rows.last().key)
+    assertTrue(first.canShowMore)
+    val expanded = sidebarSectionWindow(entries, 40, "session-35")
+    assertEquals(entries, expanded.rows)
+    assertFalse(expanded.canShowMore)
+    assertTrue(expanded.canShowLess)
   }
 
   @Test
@@ -223,15 +233,13 @@ class SidebarShellLogicTest {
       sidebarSessionPresentation(
         sessions = sessions,
         knownGroups = emptyList(),
-        expanded = false,
         excludedSessionKeys = setOf("session-10", "session-9"),
       )
 
     assertEquals(
       listOf("session-8", "session-7", "session-6", "session-5", "session-4", "session-3", "session-2", "session-1"),
-      presentation.recentSections.flatMap { it.entries }.map(ChatSessionEntry::key),
+      presentation.recent.map(ChatSessionEntry::key),
     )
-    assertFalse(presentation.canExpandRecent)
   }
 
   @Test
@@ -247,7 +255,6 @@ class SidebarShellLogicTest {
             session("visible-recent", activity = 10),
           ),
         knownGroups = emptyList(),
-        expanded = true,
         excludedSessionKeys = setOf("catalog-pinned", "catalog-recent"),
       )
 
@@ -257,7 +264,7 @@ class SidebarShellLogicTest {
     )
     assertEquals(
       listOf("visible-recent"),
-      presentation.recentSections.flatMap { it.entries }.map(ChatSessionEntry::key),
+      presentation.recent.map(ChatSessionEntry::key),
     )
   }
 
@@ -366,9 +373,6 @@ class SidebarShellLogicTest {
     activity: Long,
     pinned: Boolean = false,
     archived: Boolean = false,
-    displayName: String? = null,
-    label: String? = null,
-    owner: String? = null,
     category: String? = null,
   ): ChatSessionEntry =
     ChatSessionEntry(
@@ -377,9 +381,6 @@ class SidebarShellLogicTest {
       lastActivityAt = activity,
       pinned = pinned,
       archived = archived,
-      displayName = displayName,
-      label = label,
-      ownerAgentId = owner,
       category = category,
     )
 }

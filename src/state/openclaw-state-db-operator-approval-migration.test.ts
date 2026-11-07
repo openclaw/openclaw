@@ -9,22 +9,18 @@ import {
   repairOperatorApprovalSchema,
 } from "./openclaw-state-db-operator-approval-migration.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import { LEGACY_TWO_KIND_CREATE_SQL } from "./operator-approval-schema.test-support.js";
 
 function canonicalOperatorApprovalCreateSql(): string {
   const marker = "CREATE TABLE IF NOT EXISTS operator_approvals (";
   const tableTerminator = "\n) STRICT;";
   const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker);
-  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
-    `${tableTerminator}\n\nCREATE INDEX IF NOT EXISTS idx_operator_approvals_status_expiry`,
-    start,
-  );
+  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(tableTerminator, start);
   return OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + tableTerminator.length);
 }
 
 function legacyTwoKindCreateSql(): string {
-  return canonicalOperatorApprovalCreateSql()
-    .replace(/\) STRICT;$/u, ");")
-    .replace(/'exec',\s*'plugin',\s*'system-agent'/, "'exec', 'plugin'");
+  return LEGACY_TWO_KIND_CREATE_SQL.replace(/\) STRICT;$/u, ");");
 }
 
 function withoutResolutionRefColumn(sql: string): string {
@@ -83,10 +79,14 @@ function expectAlterAppendedLegacyRepair(strict: boolean): void {
 }
 
 describe("repairOperatorApprovalKinds", () => {
-  it("migrates the exact legacy two-kind schema and preserves rows", () => {
+  it("migrates the pre-v22 legacy schema and preserves issued cursor identities", () => {
     const db = openNodeSqliteDatabase(":memory:");
     db.exec(legacyTwoKindCreateSql());
-    seedRow(db, "exec");
+    seedRow(db, "exec", RESOLUTION_REF, "z-first");
+    seedRow(db, "exec", RESOLUTION_REF, "deleted-middle");
+    const lastResolutionRef = "last".padEnd(43, "0");
+    seedRow(db, "plugin", lastResolutionRef, "a-last");
+    db.exec("DELETE FROM operator_approvals WHERE approval_id = 'deleted-middle'");
     admitSqliteSchema(db);
     expect(() => assertCanonicalOperatorApprovalKinds(db, ":memory:")).toThrow(
       "legacy operator approval schema",
@@ -98,9 +98,17 @@ describe("repairOperatorApprovalKinds", () => {
 
     expect(() => assertCanonicalOperatorApprovalKinds(db, ":memory:")).not.toThrow();
     const rows = db
-      .prepare("SELECT approval_id, kind, resolution_ref FROM operator_approvals")
+      .prepare(
+        "SELECT cursor_id, approval_id, kind, resolution_ref FROM operator_approvals ORDER BY cursor_id",
+      )
       .all();
-    expect(rows).toEqual([{ approval_id: "a1", kind: "exec", resolution_ref: RESOLUTION_REF }]);
+    expect(rows).toEqual([
+      { cursor_id: 1, approval_id: "z-first", kind: "exec", resolution_ref: RESOLUTION_REF },
+      { cursor_id: 3, approval_id: "a-last", kind: "plugin", resolution_ref: lastResolutionRef },
+    ]);
+    expect(() =>
+      db.exec("UPDATE operator_approvals SET cursor_id = 1 WHERE approval_id = 'a-last'"),
+    ).toThrow("UNIQUE constraint failed: operator_approvals.cursor_id");
     expect(
       db.prepare("SELECT strict FROM pragma_table_list WHERE name = 'operator_approvals'").get(),
     ).toEqual({ strict: 1 });

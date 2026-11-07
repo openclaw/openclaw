@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { root } from "@openclaw/fs-safe";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
+import { ignoreMissingPath as ignoreMissingUpdateCandidateFile } from "./errno.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
   detectLegacyExecApprovals,
@@ -11,7 +12,6 @@ import {
   MAX_LEGACY_EXEC_APPROVALS_BYTES,
 } from "./state-migrations.exec-approvals.js";
 import { resolveLegacyMigrationSourceKey } from "./state-migrations.receipts.js";
-import { ignoreMissingUpdateCandidateFile } from "./update-candidate-files.js";
 
 /** Project retired policy inputs and their receipt authority into the private rehearsal copy. */
 export function createUpdateCandidateExecApprovalsProjection(

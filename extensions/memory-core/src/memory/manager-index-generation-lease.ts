@@ -1,10 +1,10 @@
 // Memory Core coordinates published-index readers with atomic shadow publication.
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-fs";
 type Waiter = {
   kind: "read" | "write";
   resolve: (release: () => void) => void;
 };
-type GenerationLeaseKind = Waiter["kind"] | "mutation";
 
 type GenerationLeaseState = {
   readers: number;
@@ -12,7 +12,9 @@ type GenerationLeaseState = {
   queue: Waiter[];
 };
 
-const states = new Map<string, GenerationLeaseState>();
+const states = resolveGlobalMap<string, GenerationLeaseState>(
+  Symbol.for("openclaw.memoryCore.indexGenerationLeases"),
+);
 
 function createGenerationLeaseAbortError(signal?: AbortSignal): Error {
   return new Error("Memory index generation lease acquisition aborted", { cause: signal?.reason });
@@ -57,14 +59,9 @@ function drain(key: string, state: GenerationLeaseState): void {
     });
     return;
   }
-  // Admit the full consecutive group before resolving any caller: an aborted
-  // caller can release synchronously and must not let a writer overtake siblings.
-  const readers: Waiter[] = [];
   while (state.queue[0]?.kind === "read") {
-    readers.push(state.queue.shift()!);
-  }
-  state.readers += readers.length;
-  for (const reader of readers) {
+    const reader = state.queue.shift()!;
+    state.readers += 1;
     reader.resolve(() => {
       state.readers -= 1;
       drain(key, state);
@@ -72,11 +69,12 @@ function drain(key: string, state: GenerationLeaseState): void {
   }
 }
 
-async function acquireLocal(
-  key: string,
+async function acquire(
+  databasePath: string,
   kind: Waiter["kind"],
   signal?: AbortSignal,
 ): Promise<() => void> {
+  const key = resolveUserPath(databasePath);
   throwIfGenerationLeaseAborted(signal);
   const state = stateFor(key);
   return await new Promise<() => void>((resolve, reject) => {
@@ -84,11 +82,6 @@ async function acquireLocal(
       kind,
       resolve: (release) => {
         signal?.removeEventListener("abort", onAbort);
-        if (signal?.aborted) {
-          release();
-          reject(createGenerationLeaseAbortError(signal));
-          return;
-        }
         resolve(release);
       },
     };
@@ -104,22 +97,8 @@ async function acquireLocal(
     };
     signal?.addEventListener("abort", onAbort, { once: true });
     state.queue.push(waiter);
-    if (signal?.aborted) {
-      onAbort();
-      return;
-    }
     drain(key, state);
   });
-}
-
-async function acquire(
-  databasePath: string,
-  kind: GenerationLeaseKind,
-  signal?: AbortSignal,
-): Promise<() => Promise<void>> {
-  const key = resolveUserPath(databasePath);
-  const release = await acquireLocal(key, kind === "write" ? "write" : "read", signal);
-  return async () => release();
 }
 
 export async function acquireMemoryIndexReadGeneration(
@@ -127,7 +106,8 @@ export async function acquireMemoryIndexReadGeneration(
   signal?: AbortSignal,
 ): Promise<() => Promise<void>> {
   // One Gateway owns this database; simultaneous foreign processes are unsupported.
-  return await acquire(databasePath, "read", signal);
+  const release = await acquire(databasePath, "read", signal);
+  return async () => release();
 }
 
 export async function withMemoryIndexGeneration<T>(
@@ -135,10 +115,10 @@ export async function withMemoryIndexGeneration<T>(
   kind: "mutation" | "write",
   run: () => Promise<T>,
 ): Promise<T> {
-  const release = await acquire(databasePath, kind);
+  const release = await acquire(databasePath, kind === "write" ? "write" : "read");
   try {
     return await run();
   } finally {
-    await release();
+    release();
   }
 }

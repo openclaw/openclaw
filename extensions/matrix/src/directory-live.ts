@@ -142,7 +142,8 @@ export async function listMatrixDirectoryGroupsLive(
   }
 
   const client = await createMatrixDirectoryClient(params);
-  const queryLower = normalizeLowercaseStringOrEmpty(query);
+  // Canonical forms compare equal here; directory entries keep their original spelling.
+  const queryLower = normalizeLowercaseStringOrEmpty(query).normalize("NFC");
   const limit = resolveMatrixDirectoryLimit(params.limit);
 
   if (directTarget?.startsWith("#")) {
@@ -172,7 +173,7 @@ export async function listMatrixDirectoryGroupsLive(
       `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state/m.room.name`,
       "name",
     );
-    if (!name || !normalizeLowercaseStringOrEmpty(name).includes(queryLower)) {
+    if (!name || !normalizeLowercaseStringOrEmpty(name).normalize("NFC").includes(queryLower)) {
       continue;
     }
     results.push({

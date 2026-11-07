@@ -22,6 +22,7 @@ import {
   type UPDATE_PREFLIGHT_DETAILS,
 } from "../../infra/update-preflight-details.js";
 import type { UpdateRequester } from "../../infra/update-requester-authority.js";
+import { getUpdateRunAsync as getUpdateRun } from "../../infra/update-run-reader.js";
 import { summarizeUpdateStepFailure, type UpdateRunRecord } from "../../infra/update-run-record.js";
 import {
   recordUpdateRunDiagnosticsAsync as recordUpdateRunDiagnostics,
@@ -168,8 +169,9 @@ export function retainUpdateRequesterAuthority(
 
 export async function resolveGatewayUpdateAdmission(runId: string, timeoutMs?: number) {
   await recordUpdateRunStep(runId, { step: "installation-inspection", status: "in_progress" });
-  const { root, status } = await currentUpdateCheckLifecycle().run((signal) =>
-    resolveStartupInstallStatus(false, signal),
+  const lifecycle = currentUpdateCheckLifecycle();
+  const { root, status } = await lifecycle.run((signal) =>
+    resolveStartupInstallStatus(false, signal, lifecycle.installStatus),
   );
   if (status.error?.timeoutMs) {
     throw new Error(status.error.message);
@@ -188,6 +190,9 @@ export async function resolveGatewayUpdateAdmission(runId: string, timeoutMs?: n
   const installSurface = await resolveUpdateInstallSurface({
     root,
     installKind: status.installKind,
+    ...(status.installKind === "package" && status.packageManager !== "unknown"
+      ? { packageManager: status.packageManager }
+      : {}),
     timeoutMs,
   });
   await recordUpdateRunPhase(runId, "requested", {
@@ -257,8 +262,13 @@ export async function recordHandoffFailure(
     undefined,
     "managed-service",
   );
+  const completed = await getUpdateRun(runId).catch(() => undefined);
   const reason =
-    error instanceof UpdatePreMutationError ? error.reason : "managed-service-handoff-failed";
+    completed?.status === "failed" && completed.reason
+      ? completed.reason
+      : error instanceof UpdatePreMutationError
+        ? error.reason
+        : "managed-service-handoff-failed";
   const failureFacts = [
     ...(error instanceof UpdatePreMutationError ? error.failureFacts : [cause]).slice(0, 4),
     ...classified.failureFacts,

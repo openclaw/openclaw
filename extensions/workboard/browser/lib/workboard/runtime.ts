@@ -9,22 +9,20 @@ export type WorkboardHost = object;
 export type WorkboardClientContext = {
   host: WorkboardHost;
   client: GatewayBrowserClient | null;
-  requestUpdate?: () => void;
 };
 
 type WorkboardLiveRefreshEntry = {
   client: GatewayBrowserClient | null;
-  requestUpdate?: () => void;
   refresh?: () => Promise<boolean>;
   shouldDefer?: () => boolean;
 };
 
 type WorkboardRuntime = {
+  listeners?: Set<() => void>;
   state?: WorkboardUiState;
   cardsRevision?: WorkboardChange | null;
   loadPromise?: Promise<boolean>;
   loadClient?: GatewayBrowserClient;
-  loadCatalogOnly?: boolean;
   loadError?: string;
   liveLastChange?: WorkboardChange;
   liveRefreshPending?: boolean;
@@ -34,6 +32,19 @@ type WorkboardRuntime = {
 };
 
 const workboardRuntimes = new WeakMap<WorkboardHost, WorkboardRuntime>();
+export function subscribeWorkboard(host: WorkboardHost, listener: () => void) {
+  const runtime = getWorkboardRuntime(host);
+  const listeners = (runtime.listeners ??= new Set());
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+export function notifyWorkboard(host: WorkboardHost) {
+  for (const listener of getWorkboardRuntime(host).listeners ?? []) {
+    listener();
+  }
+}
+
 export function invalidateWorkboardLoads(host: WorkboardHost) {
   const runtime = getWorkboardRuntime(host);
   const state = runtime.state;
@@ -50,7 +61,6 @@ export function invalidateWorkboardLoads(host: WorkboardHost) {
   delete runtime.cardsRevision;
   delete runtime.loadPromise;
   delete runtime.loadClient;
-  delete runtime.loadCatalogOnly;
 }
 
 export function stopWorkboardLiveRefresh(host: WorkboardHost): void {
@@ -95,6 +105,7 @@ function createDefaultState(): WorkboardUiState {
     mutationReadiness: "ready",
     error: null,
     cards: [],
+    nextCursor: null,
     boards: [],
     statuses: WORKBOARD_STATUSES,
     lastDispatchSummary: null,

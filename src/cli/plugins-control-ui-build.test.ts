@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,10 +7,13 @@ import { pathToFileURL } from "node:url";
 import { JSDOM } from "jsdom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as backoff from "../infra/backoff.js";
 import {
   CONTROL_UI_PLUGIN_MAX_ASSETS,
   readPluginControlUiAssets,
 } from "../plugins/control-ui-assets.js";
+import { loadPluginManifest } from "../plugins/manifest.js";
+import { resetPluginCache } from "../plugins/plugin-cache.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { execNodeEvalSync } from "../test-utils/node-process.js";
 import {
@@ -19,8 +23,23 @@ import {
 import { buildPluginControlUi, writePluginBuildManifest } from "./plugins-control-ui-build.js";
 
 const directories: string[] = [];
+const readText = (root: string, file: string) => fs.readFile(path.join(root, file), "utf8");
+const readJson = async (root: string, file: string) => JSON.parse(await readText(root, file));
+const write = (root: string, file: string, contents: string) =>
+  fs.writeFile(path.join(root, file), contents);
+const browserModule = (root: string, entry: string) =>
+  import(pathToFileURL(path.join(root, entry)).href);
+
+async function writeFiles(root: string, files: Record<string, string>) {
+  for (const [file, contents] of Object.entries(files)) {
+    await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
+    await write(root, file, contents);
+  }
+}
+
 afterEach(async () => {
   vi.restoreAllMocks();
+  resetPluginCache();
   vi.unstubAllGlobals();
   await Promise.all(
     directories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
@@ -30,22 +49,19 @@ afterEach(async () => {
 async function fixture() {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-build-"));
   directories.push(directory);
-  await fs.writeFile(
-    path.join(directory, "package.json"),
-    JSON.stringify({ name: "ui-build-fixture", type: "module" }),
+  await fs.mkdir(path.join(directory, "node_modules"));
+  await fs.symlink(
+    path.resolve("node_modules/esbuild"),
+    path.join(directory, "node_modules/esbuild"),
+    "dir",
   );
-  await fs.symlink(path.resolve("node_modules"), path.join(directory, "node_modules"), "dir");
-  await fs.writeFile(
-    path.join(directory, "index.ts"),
-    'import "./style.css"; export const message = "first";',
-  );
-  await fs.writeFile(path.join(directory, "style.css"), ".fixture { color: var(--text); }");
-  await fs.writeFile(path.join(directory, "lazy.js"), 'export const value = "literal dependency";');
-  await fs.mkdir(path.join(directory, "localized"));
-  await fs.writeFile(
-    path.join(directory, "localized/value.js"),
-    'export const value = "glob dependency";',
-  );
+  await writeFiles(directory, {
+    "package.json": JSON.stringify({ name: "ui-build-fixture", type: "module" }),
+    "index.ts": 'import "./style.css"; export const message = "first";',
+    "style.css": ".fixture { color: var(--text); }",
+    "lazy.js": 'export const value = "literal dependency";',
+    "localized/value.js": 'export const value = "glob dependency";',
+  });
   await fs.appendFile(
     path.join(directory, "index.ts"),
     '\nexport async function loadDependencies(name: string) { return [(await import("./lazy.js")).value, (await import("./localized/" + name + ".js")).value]; }\n',
@@ -84,33 +100,120 @@ console.log(JSON.stringify({ mode: (await fs.stat(manifest)).mode & 0o7777, cont
 });
 
 describe("native plugin browser builds", () => {
-  it("preserves esbuild's existing non-Solid JSX compilation", async () => {
+  it.each([true, false, "settings-only", "channel-settings"])(
+    "builds runtime browser artifacts without changing authored plugin metadata (authored UI: %s)",
+    async (authoredUi) => {
+      const project = await fixture();
+      const packagePath = path.join(project.rootDir, "package.json");
+      const packageJson = await readJson(project.rootDir, "package.json");
+      packageJson.openclaw = { controlUi: project.source };
+      await fs.writeFile(packagePath, JSON.stringify(packageJson));
+      const manifestPath = path.join(project.rootDir, "openclaw.plugin.json");
+      const settingsViews =
+        authoredUi === "channel-settings"
+          ? [{ section: "channels", panel: "detail", channelId: "custom" }]
+          : authoredUi === "settings-only"
+            ? [
+                { section: "memory", panel: "overview" },
+                { section: "memory", panel: "memories" },
+              ]
+            : undefined;
+      const authored = {
+        id: "fixture",
+        ...(authoredUi === "channel-settings" ? { channels: ["custom"] } : {}),
+        configSchema: { type: "object", properties: { token: { type: "string" } } },
+        activation: { onStartup: true },
+        ...(authoredUi
+          ? {
+              controlUi: {
+                entry: "dist/control-ui/authored/index.js",
+                panelIcon: "assets/panel.svg",
+                ...(settingsViews
+                  ? {
+                      activation: "settings-only",
+                      settingsViews,
+                    }
+                  : {}),
+              },
+            }
+          : {}),
+      };
+      const original = JSON.stringify(authored, null, 2);
+      await fs.writeFile(manifestPath, original);
+      execFileSync(
+        process.execPath,
+        [
+          "--import",
+          path.resolve("scripts/tsx.mjs"),
+          path.resolve("scripts/build-plugin-control-ui.mts"),
+          project.rootDir,
+        ],
+        { timeout: 10_000 },
+      );
+      expect(await fs.readFile(manifestPath, "utf8")).toBe(original);
+      const generatedPath = path.join(project.rootDir, "dist/openclaw.plugin.json");
+      const generated = await readJson(project.rootDir, "dist/openclaw.plugin.json");
+      expect(generated.controlUi.activation).toBe(settingsViews ? "settings-only" : undefined);
+      expect(generated.controlUi.settingsViews).toEqual(settingsViews);
+      expect(generated.controlUi.panelIcon).toBe(authoredUi ? "assets/panel.svg" : undefined);
+      expect(await buildPluginControlUi({ ...project, check: true })).toEqual(generated.controlUi);
+      generated.id = "previous-name";
+      generated.configSchema = { type: "object", properties: {} };
+      generated.activation = { onStartup: false };
+      await fs.writeFile(generatedPath, JSON.stringify(generated));
+      const loaded = loadPluginManifest(project.rootDir);
+      expect(loaded).toMatchObject({
+        ok: true,
+        manifest: { ...authored, controlUi: generated.controlUi },
+      });
+      const assets = await readPluginControlUiAssets(project.rootDir, generated.controlUi);
+      expect(assets.entryName).toBe("index.js");
+      const built = await browserModule(project.rootDir, generated.controlUi.entry);
+      expect(built.message).toBe("first");
+    },
+  );
+
+  it("requires author-installed compilers without replacing existing builds", async () => {
+    const missing = await fixture();
+    await fs.unlink(path.join(missing.rootDir, "node_modules/esbuild"));
+    const failure = buildPluginControlUi(missing);
+    await expect(failure).rejects.toHaveProperty("humanOutput");
+    await expect(failure).rejects.toHaveProperty("cause.code", "MODULE_NOT_FOUND");
     const project = await fixture();
-    await fs.writeFile(
-      path.join(project.rootDir, "renderer.js"),
-      "export const createElement = (tag, props, ...children) => ({ tag, props, children });",
-    );
-    await fs.writeFile(
-      path.join(project.rootDir, "view.tsx"),
-      'import * as React from "./renderer.js"; export const view = <p>Existing JSX</p>;',
-    );
-    await fs.writeFile(path.join(project.rootDir, project.source), 'export * from "./view.tsx";');
+    await writeFiles(project.rootDir, {
+      "renderer.js":
+        "export const createElement = (tag, props, ...children) => ({ tag, props, children });",
+      "view.tsx":
+        'import * as React from "./renderer.js"; export const view = <p>Existing JSX</p>;',
+      [project.source]: 'export * from "./view.tsx";',
+    });
     const declaration = await buildPluginControlUi(project);
-    const built = await import(pathToFileURL(path.join(project.rootDir, declaration.entry)).href);
+    const built = await browserModule(project.rootDir, declaration.entry);
     expect(built.view).toEqual({ tag: "p", props: null, children: ["Existing JSX"] });
+    await writeFiles(project.rootDir, {
+      "view.tsx": "/** @jsxImportSource @solidjs/web */\nexport const view = <p>Ready</p>;",
+      [project.source]: 'export * from "./view.tsx";',
+    });
+    await expect(buildPluginControlUi(project)).rejects.toThrow(
+      "Install @solidjs/compiler in this plugin's devDependencies",
+    );
+    expect(await fs.readdir(path.join(project.rootDir, "dist/control-ui"))).toEqual([
+      path.basename(path.dirname(declaration.entry)),
+    ]);
   });
 
   it("bundles a Solid TSX view with reactive updates and owned disposal", async () => {
     const project = await fixture();
     const dependencies = path.join(project.rootDir, "node_modules");
-    await fs.unlink(dependencies);
+    await fs.rm(dependencies, { recursive: true });
     await fs.mkdir(path.join(dependencies, "@solidjs"), { recursive: true });
     for (const name of ["esbuild", "solid-js", "@solidjs/web", "@solidjs/compiler"]) {
       const owner = name === "esbuild" ? "node_modules" : "ui/node_modules";
       await fs.symlink(path.resolve(owner, name), path.join(dependencies, name), "dir");
     }
-    await fs.writeFile(
-      path.join(project.rootDir, "view.tsx"),
+    await write(
+      project.rootDir,
+      "view.tsx",
       `/** @jsxImportSource @solidjs/web */
 import { createSignal, flush, onCleanup } from "solid-js";
 import { render } from "@solidjs/web";
@@ -132,12 +235,12 @@ export { flush };
 `,
     );
     // A plain TS entry must also discover TSX modules imported by the plugin.
-    await fs.writeFile(path.join(project.rootDir, project.source), 'export * from "./view.tsx";');
+    await write(project.rootDir, project.source, 'export * from "./view.tsx";');
     const declaration = await buildPluginControlUi(project);
     const dom = new JSDOM("<body><main></main></body>");
     vi.stubGlobal("document", dom.window.document);
     try {
-      const built = await import(pathToFileURL(path.join(project.rootDir, declaration.entry)).href);
+      const built = await browserModule(project.rootDir, declaration.entry);
       const container = dom.window.document.querySelector("main")!;
       const view = built.mount(container, { props: { label: "first" } });
       try {
@@ -163,51 +266,26 @@ export { flush };
     }
   });
 
-  it("requires the author-installed Solid compiler only for opted-in TSX", async () => {
-    const project = await fixture();
-    const first = await buildPluginControlUi(project);
-    await fs.writeFile(
-      path.join(project.rootDir, "view.tsx"),
-      "/** @jsxImportSource @solidjs/web */\nexport const view = <p>Ready</p>;",
-    );
-    await fs.writeFile(path.join(project.rootDir, project.source), 'export * from "./view.tsx";');
-    await expect(buildPluginControlUi(project)).rejects.toThrow(
-      "Install @solidjs/compiler in this plugin's devDependencies",
-    );
-    expect(await fs.readdir(path.join(project.rootDir, "dist/control-ui"))).toEqual([
-      path.basename(path.dirname(first.entry)),
-    ]);
-  });
-
   it("removes unused dependency loaders without treating text as imports", async () => {
     const project = await fixture();
-    await fs.writeFile(
-      path.join(project.rootDir, "dependency.js"),
-      'export const message = "import(variable)"; export const unused = (specifier) => import(specifier);',
-    );
-    await fs.writeFile(
-      path.join(project.rootDir, project.source),
-      '// import(anotherVariable)\nexport { message } from "./dependency.js";',
-    );
+    await writeFiles(project.rootDir, {
+      "dependency.js":
+        'export const message = "import(variable)"; export const unused = (specifier) => import(specifier);',
+      [project.source]: '// import(anotherVariable)\nexport { message } from "./dependency.js";',
+    });
     const result = await buildPluginControlUi(project);
-    const built = await import(pathToFileURL(path.join(project.rootDir, result.entry)).href);
+    const built = await browserModule(project.rootDir, result.entry);
     expect(built.message).toBe("import(variable)");
   });
 
   it("rejects a retained computed import in a split output chunk", async () => {
     const project = await fixture();
-    await fs.writeFile(
-      path.join(project.rootDir, "page.js"),
-      "export const load = (specifier) => import(specifier);",
-    );
-    await fs.writeFile(
-      path.join(project.rootDir, project.source),
-      'export const loadPage = () => import("./page.js");',
-    );
+    await writeFiles(project.rootDir, {
+      "page.js": "export const load = (specifier) => import(specifier);",
+      [project.source]: 'export const loadPage = () => import("./page.js");',
+    });
     await expect(buildPluginControlUi(project)).rejects.toThrow("will not be bundled");
-    await expect(fs.access(path.join(project.rootDir, "dist/control-ui"))).rejects.toThrow(
-      "ENOENT",
-    );
+    await expect(fs.readdir(project.rootDir)).resolves.not.toContain("dist");
   });
 
   it.each([
@@ -218,13 +296,12 @@ export { flush };
     },
   ])("rejects a retained external $name", async ({ source }) => {
     const project = await fixture();
-    await fs.writeFile(path.join(project.rootDir, project.source), source);
-    await expect(buildPluginControlUi(project)).rejects.toThrow(
-      "must bundle their browser dependencies",
-    );
-    await expect(fs.access(path.join(project.rootDir, "dist/control-ui"))).rejects.toThrow(
-      "ENOENT",
-    );
+    await write(project.rootDir, project.source, source);
+    const reason = "must bundle their browser dependencies";
+    const failed = buildPluginControlUi(project);
+    await expect(failed).rejects.toThrow(reason);
+    await expect(failed).rejects.toHaveProperty("humanOutput", expect.stringContaining(reason));
+    await expect(fs.readdir(project.rootDir)).resolves.not.toContain("dist");
   });
 
   it("publishes complete immutable generations and detects stale source", async () => {
@@ -240,21 +317,16 @@ export { flush };
     expect(chunks.length).toBeGreaterThan(0);
     const admitted = await readPluginControlUiAssets(project.rootDir, first);
     expect(chunks.every((name) => admitted.assets.has(name))).toBe(true);
-    const built = await import(pathToFileURL(path.join(project.rootDir, first.entry)).href);
+    const built = await browserModule(project.rootDir, first.entry);
     expect(await built.loadDependencies("value")).toEqual([
       "literal dependency",
       "glob dependency",
     ]);
     const original = await fs.readFile(path.join(project.rootDir, first.entry), "utf8");
-    await fs.writeFile(
-      path.join(project.rootDir, "lazy.js"),
-      'export const value = "updated dependency";',
-    );
+    await write(project.rootDir, "lazy.js", 'export const value = "updated dependency";');
     const changedChunk = await buildPluginControlUi(project);
     expect(changedChunk.entry).not.toBe(first.entry);
-    const changed = await import(
-      pathToFileURL(path.join(project.rootDir, changedChunk.entry)).href
-    );
+    const changed = await browserModule(project.rootDir, changedChunk.entry);
     expect(await changed.loadDependencies("value")).toEqual([
       "updated dependency",
       "glob dependency",
@@ -267,20 +339,14 @@ export { flush };
         ),
       ),
     ).toEqual(["literal dependency", "glob dependency"]);
-    await fs.writeFile(
-      path.join(project.rootDir, project.source),
-      'export const message = "second";',
-    );
+    await write(project.rootDir, project.source, 'export const message = "second";');
     await expect(buildPluginControlUi({ ...project, check: true })).rejects.toThrow(
       "missing or stale",
     );
     const next = await buildPluginControlUi(project);
     expect(next.entry).not.toBe(first.entry);
     expect(await fs.readFile(path.join(project.rootDir, first.entry), "utf8")).toBe(original);
-    expect(
-      JSON.parse(await fs.readFile(path.join(project.rootDir, "openclaw.plugin.json"), "utf8"))
-        .controlUi,
-    ).toEqual(first);
+    expect((await readJson(project.rootDir, "openclaw.plugin.json")).controlUi).toEqual(first);
   });
 
   it("rejects a split build that the asset reader cannot admit", async () => {
@@ -303,11 +369,52 @@ export { flush };
     );
   });
 
+  it.each(["EPERM", "EBUSY", "EACCES"])(
+    "publishes a complete generation after a transient Windows %s rename denial",
+    async (code) => {
+      const project = { ...(await fixture()), platform: "win32" as const };
+      const denial = Object.assign(new Error("scanner holds staging"), { code });
+      vi.spyOn(fs, "rename").mockRejectedValueOnce(denial);
+      const sleep = vi.spyOn(backoff, "sleepWithAbort").mockResolvedValue();
+
+      const published = await buildPluginControlUi(project);
+      expect(await buildPluginControlUi({ ...project, check: true })).toEqual(published);
+      expect(await fs.readdir(path.join(project.rootDir, "dist/control-ui"))).toEqual([
+        path.basename(path.dirname(published.entry)),
+      ]);
+      expect(sleep.mock.calls).toEqual([[100]]);
+    },
+  );
+
+  it.each([
+    { platform: "win32", code: "EPERM", attempts: 6 },
+    { platform: "win32", code: "EBUSY", attempts: 6 },
+    { platform: "win32", code: "EACCES", attempts: 6 },
+    { platform: "win32", code: "ENOSPC", attempts: 1 },
+    { platform: "linux", code: "EPERM", attempts: 1 },
+    { platform: "linux", code: "EBUSY", attempts: 1 },
+    { platform: "darwin", code: "EACCES", attempts: 1 },
+  ] as const)(
+    "cleans staging and preserves $platform $code after $attempts attempts",
+    async ({ platform, code, attempts }) => {
+      const project = { ...(await fixture()), platform };
+      const denial = Object.assign(new Error("rename denied"), { code });
+      const rename = vi.spyOn(fs, "rename").mockRejectedValue(denial);
+      const sleep = vi.spyOn(backoff, "sleepWithAbort").mockResolvedValue();
+
+      await expect(buildPluginControlUi(project)).rejects.toBe(denial);
+      expect(await fs.readdir(path.join(project.rootDir, "dist/control-ui"))).toEqual([]);
+      expect(rename).toHaveBeenCalledTimes(attempts);
+      expect(sleep.mock.calls).toEqual(attempts === 6 ? [[100], [200], [400], [800], [1600]] : []);
+    },
+  );
+
   it("reuses a Windows build collision only when every asset matches", async () => {
-    const project = await fixture();
+    const project = { ...(await fixture()), platform: "win32" as const };
     const first = await buildPluginControlUi(project);
     const collision = Object.assign(new Error("directory already exists"), { code: "EPERM" });
     vi.spyOn(fs, "rename").mockRejectedValue(collision);
+    const sleep = vi.spyOn(backoff, "sleepWithAbort").mockResolvedValue();
 
     expect(await buildPluginControlUi(project)).toEqual(first);
     assert.ok(first.styles?.[0]);
@@ -339,6 +446,7 @@ export { flush };
     expect(await fs.readdir(path.join(project.rootDir, "dist/control-ui"))).toEqual([
       path.basename(path.dirname(first.entry)),
     ]);
+    expect(sleep).not.toHaveBeenCalled();
   });
 
   // Windows chmod only toggles the read-only attribute, so exact POSIX mode bits
@@ -353,13 +461,12 @@ export { flush };
       const first = await buildPluginControlUi(project);
       const generation = path.join(project.rootDir, path.dirname(first.entry));
       const modeOf = async (target: string) => ((await fs.stat(target)).mode & 0o777).toString(8);
-      expect(await modeOf(generations)).toBe("755");
-      expect(await modeOf(generation)).toBe("755");
       assert.ok(first.styles?.[0]);
       const script = path.join(project.rootDir, first.entry);
       const stylesheet = path.join(project.rootDir, first.styles[0]);
-      expect(await modeOf(script)).toBe("644");
-      expect(await modeOf(stylesheet)).toBe("644");
+      const paths = [generations, generation, script, stylesheet];
+      const modes = () => Promise.all(paths.map(modeOf));
+      expect(await modes()).toEqual(["755", "755", "644", "644"]);
       const assets = (await fs.readdir(generation)).map((name) => path.join(generation, name));
       const originalAssets = await Promise.all(assets.map((file) => fs.readFile(file)));
       expect(await Promise.all(assets.map(modeOf))).toEqual(assets.map(() => "644"));
@@ -369,17 +476,9 @@ export { flush };
       await fs.chmod(generation, 0o700);
       await Promise.all(assets.map((file) => fs.chmod(file, 0o600)));
       expect(await buildPluginControlUi({ ...project, check: true })).toEqual(first);
-      expect(await Promise.all([generations, generation, script, stylesheet].map(modeOf))).toEqual([
-        "700",
-        "700",
-        "600",
-        "600",
-      ]);
+      expect(await modes()).toEqual(["700", "700", "600", "600"]);
       expect(await buildPluginControlUi(project)).toEqual(first);
-      expect(await modeOf(generations)).toBe("755");
-      expect(await modeOf(generation)).toBe("755");
-      expect(await modeOf(script)).toBe("644");
-      expect(await modeOf(stylesheet)).toBe("644");
+      expect(await modes()).toEqual(["755", "755", "644", "644"]);
       expect(await Promise.all(assets.map(modeOf))).toEqual(assets.map(() => "644"));
       expect(await Promise.all(assets.map((file) => fs.readFile(file)))).toEqual(originalAssets);
       expect(await modeOf(project.rootDir)).toBe("700");
@@ -396,25 +495,19 @@ export { flush };
         fs.mkdir(path.join(sdkRoot, dir), { recursive: true }),
       ),
     );
-    await fs.writeFile(
-      path.join(sdkRoot, "package.json"),
-      JSON.stringify({
+    await writeFiles(sdkRoot, {
+      "package.json": JSON.stringify({
         name: "openclaw",
         type: "module",
         bin: { openclaw: "openclaw.mjs" },
         exports: { "./plugin-sdk/control-ui": { default: "./dist/plugin-sdk/control-ui.js" } },
       }),
-    );
-    await fs.writeFile(
-      path.join(sdkRoot, "src/plugin-sdk/control-ui.ts"),
-      'export const origin = "source";',
-    );
-    await fs.writeFile(
-      path.join(sdkRoot, "dist/plugin-sdk/control-ui.js"),
-      'export const origin = "stale dist";',
-    );
-    await fs.writeFile(
-      path.join(project.rootDir, project.source),
+      "src/plugin-sdk/control-ui.ts": 'export const origin = "source";',
+      "dist/plugin-sdk/control-ui.js": 'export const origin = "stale dist";',
+    });
+    await write(
+      project.rootDir,
+      project.source,
       'export { origin } from "openclaw/plugin-sdk/control-ui";',
     );
     const build = (nodeEnv: string | undefined) =>
@@ -426,7 +519,7 @@ export { flush };
     const production = await build("production");
 
     expect(production).toEqual(development);
-    const built = await import(pathToFileURL(path.join(project.rootDir, production.entry)).href);
+    const built = await browserModule(project.rootDir, production.entry);
     expect(built.origin).toBe("source");
   });
 
@@ -453,7 +546,9 @@ export { flush };
       path.join(project.rootDir, project.source),
       `export { loadDependency } from "./runtime/${file}";\n`,
     );
-    await expect(buildPluginControlUi(project)).rejects.toThrow(diagnostic);
+    const failed = buildPluginControlUi(project);
+    await expect(failed).rejects.toThrow(diagnostic);
+    await expect(failed).rejects.toHaveProperty("humanOutput", expect.stringContaining(diagnostic));
     expect(await fs.readFile(manifestPath, "utf8")).toBe(manifest);
     expect(await fs.readdir(path.join(project.rootDir, "dist/control-ui"))).toEqual([
       path.basename(path.dirname(first.entry)),
@@ -464,16 +559,16 @@ export { flush };
     const project = await fixture();
     const first = await buildPluginControlUi(project);
     await writePluginBuildManifest(project.rootDir, { id: "fixture", controlUi: first });
-    const manifest = await fs.readFile(path.join(project.rootDir, "openclaw.plugin.json"), "utf8");
-    await fs.writeFile(
-      path.join(project.rootDir, project.source),
-      'import fs from "node:fs"; export default fs;',
-    );
+    const manifest = await readText(project.rootDir, "openclaw.plugin.json");
+    await write(project.rootDir, project.source, 'import fs from "node:fs"; export default fs;');
     await expect(buildPluginControlUi(project)).rejects.toThrow();
-    expect(await fs.readFile(path.join(project.rootDir, "openclaw.plugin.json"), "utf8")).toBe(
-      manifest,
-    );
-    expect(await fs.readFile(path.join(project.rootDir, first.entry), "utf8")).toContain("first");
+    expect(await readText(project.rootDir, "openclaw.plugin.json")).toBe(manifest);
+    const retained = await browserModule(project.rootDir, first.entry);
+    expect(retained.message).toBe("first");
+    expect(await retained.loadDependencies("value")).toEqual([
+      "literal dependency",
+      "glob dependency",
+    ]);
   });
 
   it("rejects source entries outside the authoring package", async () => {

@@ -383,16 +383,16 @@ struct MacNodeHostWorkerTests {
         #expect(nativeCatalogEnabledReads.withLock { $0 } == 1)
     }
 
-    @Test(arguments: [
-        (
-            OpenClawComputerCommand.act.rawValue,
-            "COMPUTER_DISABLED: enable Computer Control in Settings"),
-    ])
-    func `worker cannot bypass native capability consent`(command: String, expectedMessage: String) async {
+    @Test func `worker cannot bypass native capability consent`() async {
+        let command = OpenClawComputerCommand.act.rawValue
         let worker = StubMacNodeHostWorker(commands: [command])
-        let runtime = MacNodeRuntime(
+        let services = await MainActor.run { MacNodeRuntimeTests.MainActorServicesProbe() }
+        let runtime = await MacNodeRuntime(
             nodeHostWorker: worker,
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services },
             computerControlEnabled: { false },
+            computerControlProvider: { .cua },
             codexThreadCatalogEnabled: { false })
 
         let response = await runtime.handleInvoke(BridgeInvokeRequest(
@@ -400,8 +400,8 @@ struct MacNodeHostWorkerTests {
             command: command))
 
         #expect(!response.ok)
-        #expect(response.error?.code == .unavailable)
-        #expect(response.error?.message == expectedMessage)
+        #expect(response.error?.code == .permissionMissing)
+        #expect(response.error?.details == .init(capabilities: ["computerControl"], state: .disabledInOpenClaw))
         #expect(await worker.invokedCommands().isEmpty)
     }
 
@@ -420,8 +420,8 @@ struct MacNodeHostWorkerTests {
                 command: command))
 
             #expect(!response.ok)
-            #expect(response.error?.code == .unavailable)
-            #expect(response.error?.message == "CANVAS_DISABLED: enable Canvas in Settings")
+            #expect(response.error?.code == .permissionMissing)
+            #expect(response.error?.details == .init(capabilities: ["canvas"], state: .disabledInOpenClaw))
             #expect(await worker.invokedCommands().isEmpty)
         }
     }

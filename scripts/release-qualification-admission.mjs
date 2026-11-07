@@ -21,6 +21,10 @@ import {
 } from "./lib/qualification-admission-baselines.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import {
+  releaseQualificationExemptions,
+  validateQualificationExemptions,
+} from "./lib/release-validation-waivers.mjs";
+import {
   QUALIFICATION_COVERAGE_PATH,
   resolveQualificationCoverage,
   validateQualificationCoverage,
@@ -405,6 +409,139 @@ function verifyProducerContract(producer, runGh) {
   );
 }
 
+// Supporting evidence describes the old target only. Its exact reviewed bytes
+// authorize a not-run disposition; they never qualify the new candidate.
+function validateQualificationExemptionEvidence(exemption, runGh, downloadArchive = runGh) {
+  const evidence = exemption.supportingEvidence;
+  const expected = {
+    repository: REPOSITORY,
+    runId: evidence.runId,
+    runAttempt: evidence.runAttempt,
+    workflowSha: evidence.targetSha,
+    workflowHeadBranch: evidence.workflowRef,
+    workflowPath: ".github/workflows/openclaw-performance.yml",
+    workflowEvent: "workflow_dispatch",
+    artifactId: evidence.artifactId,
+    artifactName:
+      "full-release-child-evidence-" +
+      evidence.targetSha +
+      "-productPerformance-" +
+      evidence.runId +
+      "-" +
+      evidence.runAttempt,
+    artifactDigest: evidence.artifactDigest,
+    artifactSizeBytes: evidence.artifactSizeBytes,
+    runStatePolicy: "completed-success-or-failure",
+  };
+  const runPath = "actions/runs/" + evidence.runId;
+  const run = api(REPOSITORY, runPath, runGh);
+  const metadata = api(REPOSITORY, "actions/artifacts/" + evidence.artifactId, runGh);
+  validateActionsArtifactBinding({ expected, artifactMetadata: metadata, workflowRun: run });
+  requireValue(
+    run.conclusion === "failure" && Date.parse(metadata.expires_at) > Date.now(),
+    "Historical exemption evidence is not the retained failed attempt",
+  );
+  const archive = downloadArchive(
+    apiArgs(REPOSITORY, "actions/artifacts/" + evidence.artifactId + "/zip"),
+  );
+  requireValue(
+    archive instanceof Uint8Array &&
+      archive.byteLength === evidence.artifactSizeBytes &&
+      digest(archive) === evidence.artifactDigest,
+    "Historical exemption archive digest mismatch",
+  );
+  const files = inspectActionsArtifactZipWithPolicy(archive, {
+    expectedEntries: ["full-release-child-evidence.json"],
+    maxArchiveBytes: MAX_ARCHIVE_BYTES,
+    maxCompressedEntryBytes: () => MAX_ARCHIVE_BYTES,
+    maxEntryBytes: () => MAX_BYTES,
+    maxExpandedBytes: MAX_BYTES,
+  });
+  const receipt = json(
+    files.get("full-release-child-evidence.json"),
+    "historical exemption receipt",
+  );
+  const { sha256, ...payload } = receipt;
+  requireValue(
+    sha256 === evidence.receiptSha256 &&
+      digest(canonical(payload)) === "sha256:" + sha256 &&
+      receipt.schema === "openclaw.full-release-child-evidence/v1" &&
+      receipt.repository === REPOSITORY &&
+      receipt.role === "productPerformance" &&
+      receipt.targetSha === evidence.targetSha &&
+      receipt.workflowSha === evidence.targetSha &&
+      receipt.workflowRef === evidence.workflowRef &&
+      receipt.runId === String(evidence.runId) &&
+      receipt.effectiveRunAttempt === evidence.runAttempt &&
+      receipt.sourceParentRunId === evidence.sourceParentRunId &&
+      receipt.sourceParentAttempt === evidence.sourceParentAttempt &&
+      receipt.workloadConclusion === "failure" &&
+      receipt.inputs.publish_reports === "false",
+    "Historical exemption receipt identity or digest mismatch",
+  );
+  const jobs = api(
+    REPOSITORY,
+    runPath + "/attempts/" + evidence.runAttempt + "/jobs?per_page=100",
+    runGh,
+  );
+  const producer = {
+    ...expected,
+    runStatePolicy: "completed-producer-success",
+    producerJobName: "Seal full release child evidence / Seal child receipt",
+  };
+  for (const producerStepName of [
+    "Checkout trusted child evidence tooling",
+    "Seal exact child attempt evidence",
+    "Upload sealed child evidence",
+  ]) {
+    validateActionsArtifactProducerJob({
+      expected: { ...producer, producerStepName },
+      workflowJobs: jobs,
+    });
+  }
+  requireValue(
+    jobs.jobs.every(
+      (job) =>
+        job.status === "completed" &&
+        job.run_id === evidence.runId &&
+        job.run_attempt === evidence.runAttempt &&
+        job.head_sha === evidence.targetSha &&
+        (["success", "skipped", "neutral"].includes(job.conclusion) ||
+          (job.name === "Kova mock provider performance" && job.conclusion === "failure")),
+    ) &&
+      receipt.jobs.every(
+        (recorded) =>
+          jobs.jobs.filter(
+            (job) =>
+              job.name === recorded.name &&
+              job.conclusion === recorded.conclusion &&
+              job.html_url === recorded.url,
+          ).length === 1,
+      ),
+    "Historical exemption job evidence changed or has another failure",
+  );
+  const parent = api(
+    REPOSITORY,
+    "actions/runs/" + evidence.sourceParentRunId + "/attempts/" + evidence.sourceParentAttempt,
+    runGh,
+  );
+  requireValue(
+    String(parent.id) === evidence.sourceParentRunId &&
+      parent.run_attempt === evidence.sourceParentAttempt &&
+      parent.head_sha === evidence.targetSha &&
+      parent.head_branch === evidence.workflowRef &&
+      String(parent.path).split("@", 1)[0] === QUALIFICATION_WORKFLOW &&
+      parent.event === "workflow_dispatch" &&
+      parent.repository?.full_name === REPOSITORY &&
+      parent.head_repository?.full_name === REPOSITORY,
+    "Historical exemption source parent changed",
+  );
+  // A rerun during acquisition must not replace the reviewed failed attempt.
+  const current = api(REPOSITORY, runPath, runGh);
+  validateActionsArtifactBinding({ expected, artifactMetadata: metadata, workflowRun: current });
+  requireValue(current.conclusion === "failure", "Historical exemption attempt changed");
+}
+
 export function produceQualificationAdmission({
   request,
   producer,
@@ -431,7 +568,7 @@ export function produceQualificationAdmission({
     QUALIFICATION_COVERAGE_PATH,
     runGh,
   );
-  const coverage = resolveQualificationCoverage(
+  let coverage = resolveQualificationCoverage(
     json(policyBytes, "qualification policy"),
     request.inputs,
   );
@@ -445,6 +582,28 @@ export function produceQualificationAdmission({
       runGh,
     ),
   );
+  const exemptions = releaseQualificationExemptions(
+    baselinePolicy.candidateVersion,
+    coverage.profile,
+  );
+  if (exemptions.length) {
+    requireValue(
+      /^ {2}FULL_RELEASE_QUALIFICATION_EXEMPTION_CONTRACT: "1"$/mu.test(workflow.toString("utf8")),
+      "Q does not support admitted qualification exemptions",
+    );
+    requireValue(
+      coverage.children.some((child) => child.key === "productPerformance"),
+      "Exempt performance coverage is missing from Q",
+    );
+    for (const exemption of exemptions) {
+      validateQualificationExemptionEvidence(exemption, runGh);
+    }
+    coverage = validateQualificationCoverage({
+      ...coverage,
+      children: coverage.children.filter((child) => child.key !== "productPerformance"),
+      exemptions,
+    });
+  }
   const final = verifyProducer(producer, runGh, false);
   requireValue(
     isDeepStrictEqual(initial.operator, final.operator) &&
@@ -489,6 +648,13 @@ function validateReceipt(receipt) {
   producerIdentity(receipt.producer);
   validateQualificationBaselinePolicy(receipt.request, receipt.baselinePolicy);
   const coverage = validateQualificationCoverage(receipt.coverage);
+  if (coverage.exemptions !== undefined) {
+    validateQualificationExemptions(
+      coverage.exemptions,
+      receipt.baselinePolicy.candidateVersion,
+      coverage.profile,
+    );
+  }
   requireValue(
     receipt.inputsDigest === digest(canonical(receipt.request.inputs)) &&
       DIGEST.test(receipt.workflowSourceDigest) &&
@@ -511,24 +677,30 @@ function validateArtifact(descriptor, metadata, run, jobs) {
       Date.parse(metadata.expires_at) > Date.now(),
     "Qualification admission expired; recover retained original evidence or obtain a new admission, never substitute another run",
   );
+  const job = jobs.jobs.find((item) => item.name === QUALIFICATION_ADMISSION_JOB);
+  const steps = Array.isArray(job?.steps) ? job.steps : [];
+  const upload = steps.find((item) => item.name === QUALIFICATION_ADMISSION_UPLOAD);
+  const successfulJobWithoutSteps = job?.conclusion === "success" && steps.length === 0;
   validateActionsArtifactProducerJob({
     expected: {
       ...descriptor,
       runStatePolicy: "same-run-producer-success",
       consumerRunAttempt: descriptor.runAttempt,
       producerJobName: QUALIFICATION_ADMISSION_JOB,
-      producerStepName: QUALIFICATION_ADMISSION_UPLOAD,
+      ...(successfulJobWithoutSteps ? {} : { producerStepName: QUALIFICATION_ADMISSION_UPLOAD }),
     },
     workflowJobs: jobs,
   });
-  const job = jobs.jobs.find((item) => item.name === QUALIFICATION_ADMISSION_JOB);
-  const upload = job.steps.find((item) => item.name === QUALIFICATION_ADMISSION_UPLOAD);
   const created = Date.parse(metadata.created_at);
-  requireValue(
-    job.conclusion === "success" &&
+  const createdByProducer = [upload, job].some(
+    (interval) =>
+      interval &&
       Number.isFinite(created) &&
-      created >= Date.parse(upload.started_at) &&
-      created <= Date.parse(upload.completed_at),
+      created >= Date.parse(interval.started_at) &&
+      created <= Date.parse(interval.completed_at),
+  );
+  requireValue(
+    job.conclusion === "success" && createdByProducer,
     "Admission artifact was not created by its exact successful upload job",
   );
 }
@@ -652,16 +824,19 @@ export function revalidateQualificationAdmissionAuthority({
   );
 }
 
-export function verifyQualificationAdmission({
-  descriptor,
-  repository,
-  candidateSha,
-  qualificationSha,
-  workflowRef,
-  inputs,
-  runGh = runQualificationAdmissionGh,
-  downloadArchive = runQualificationAdmissionGh,
-}) {
+function readQualificationAdmission(
+  {
+    descriptor,
+    repository,
+    candidateSha,
+    qualificationSha,
+    workflowRef,
+    inputs,
+    runGh = runQualificationAdmissionGh,
+    downloadArchive = runQualificationAdmissionGh,
+  },
+  verifySupportingEvidence,
+) {
   requireValue(
     repository === REPOSITORY && SHA.test(candidateSha) && candidateSha === qualificationSha,
     "Qualification admission requires the canonical C=Q identity",
@@ -694,6 +869,11 @@ export function verifyQualificationAdmission({
   const receipt = validateReceipt(
     json(files.get(QUALIFICATION_ADMISSION_FILE), "qualification admission"),
   );
+  if (verifySupportingEvidence) {
+    for (const exemption of receipt.coverage.exemptions ?? []) {
+      validateQualificationExemptionEvidence(exemption, runGh, downloadArchive);
+    }
+  }
   const request = receipt.request;
   requireValue(
     isDeepStrictEqual(receipt.producer, producer) &&
@@ -718,6 +898,19 @@ export function verifyQualificationAdmission({
     "Admission authority changed during acquisition",
   );
   return receipt;
+}
+
+// Acquisition only: authenticate the P receipt and return its bounded historical
+// locators, never a qualification verdict. The final verifier below still checks
+// the historical bytes and rereads both operators after all evidence acquisition.
+export function qualificationAdmissionSupportingEvidence(params) {
+  return (readQualificationAdmission(params, false).coverage.exemptions ?? []).map(
+    ({ supportingEvidence }) => supportingEvidence,
+  );
+}
+
+export function verifyQualificationAdmission(params) {
+  return readQualificationAdmission(params, true);
 }
 
 function main() {

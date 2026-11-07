@@ -1,7 +1,6 @@
 // Cron observations use the registry's worker snapshot and existing query policies.
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import {
-  countActiveDescendantRunsFromRuns,
   hasDescendantRunAwaitingSettleFromRuns,
   listDescendantRunsForRequesterFromRuns,
 } from "../../agents/subagents/registry/subagent-registry-queries.js";
@@ -11,6 +10,7 @@ import {
 } from "../../agents/subagents/registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import { collectSubagentSessionReadKeys } from "../../agents/subagents/registry/subagent-session-read-scope.js";
+import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 
 function withCronDescendantRuns<T>(
   sessionKey: string,
@@ -32,17 +32,6 @@ function withCronDescendantRuns<T>(
   );
 }
 
-export function readDescendantExecutionState(sessionKey: string, runStartedAt: number) {
-  return withCronDescendantRuns(sessionKey, (runs) => ({
-    hasFreshDescendants: listDescendantRunsForRequesterFromRuns(runs, sessionKey).some((entry) => {
-      const descendantStartedAt =
-        typeof entry.execution.startedAt === "number" ? entry.execution.startedAt : entry.createdAt;
-      return typeof descendantStartedAt === "number" && descendantStartedAt >= runStartedAt;
-    }),
-    hasActiveDescendants: countActiveDescendantRunsFromRuns(runs, sessionKey) > 0,
-  }));
-}
-
 export function listDescendantRunsForRequester(sessionKey: string): Promise<SubagentRunRecord[]> {
   return withCronDescendantRuns(sessionKey, (runs) =>
     listDescendantRunsForRequesterFromRuns(runs, sessionKey),
@@ -56,8 +45,11 @@ export function hasUnsettledCronDescendants(sessionKey: string): Promise<boolean
 }
 
 /** Retain live parent policy alongside the worker's durable deletion comparison. */
-export async function prepareCronDescendantDeletion(sessionKeys: readonly string[]) {
-  const prepared = await prepareSubagentRunsSnapshotForSessions(subagentRuns, sessionKeys);
+export async function prepareCronDescendantDeletion(
+  sessionKeys: readonly string[],
+  context?: OpenClawStateWorkerContext,
+) {
+  const prepared = await prepareSubagentRunsSnapshotForSessions(subagentRuns, sessionKeys, context);
   return {
     hasUnsettled(sessionKey: string) {
       const current = prepared.consume((runs) =>

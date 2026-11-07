@@ -51,8 +51,15 @@ export const en = {
       modelAlias: "Model alias (optional)",
       modelAliasPlaceholder: "e.g. local, ollama",
       modelId: "Model ID",
+      modelIdManual: "Enter a model ID manually",
+      modelDiscoveryUnavailable:
+        "Could not discover models from this endpoint. Check the base URL and credentials, or enter a model ID manually.",
       modelIdPlaceholder: "e.g. llama3, claude-3-7-sonnet",
       modelIdRequired: "Model ID is required",
+      noAuthConfirm:
+        "No API key entered. Use no-auth mode for this endpoint (requests send no Authorization header)?",
+      noAuthCompatKeyRequired:
+        "No-auth mode supports OpenAI Chat Completions endpoints only. Enter an API key (a placeholder works if the server ignores keys).",
       retryChoice: "What would you like to change?",
       verifying: "Verifying...",
       verificationFailedError: "Verification failed: {error}",
@@ -200,6 +207,8 @@ export const en = {
       installedPlugin: "Installed {plugin} plugin",
       installingPlugin: "Installing {plugin} plugin…",
       installTitle: "Plugin install",
+      invalidInteger: "Enter a JSON integer.",
+      invalidNumber: "Enter a valid JSON number.",
       noRemoteInstallSource:
         "No remote install source is available for {plugin}. Returning to selection.",
       officialInstall: "Install optional plugins",
@@ -224,8 +233,11 @@ export const en = {
       currentNotInCatalog: "current (not in catalog)",
       allowed: "allowed",
       allowedNotInCatalog: "allowed (not in catalog)",
+      fallbackText: "Fallback models (comma-separated provider/model; blank to keep current)",
+      fallbackPicker: "Fallback models (multi-select)",
       allowlistPicker: "Models in /model picker (multi-select)",
       allowlistText: "Allowlist models (comma-separated provider/model; blank to keep current)",
+      clearFallbacks: "Remove these models from fallbacks?",
       clearAllowlist: "Clear the model allowlist? (shows all models)",
       configured: "configured",
       configuredNotInCatalog: "configured (not in catalog)",
@@ -326,10 +338,10 @@ export const en = {
       laneQuickHint: "Find AI access, choose a connection to verify, then open the web dashboard.",
       laneCustomLabel: "Custom setup",
       laneCustomHint: "Walk through every setup option.",
+      quickstartKeepRunningQuestion: "Keep OpenClaw running in the background?",
       quickstartDashboard: "Dashboard: {url}",
       quickstartForeground: "Gateway is running in the foreground. Press Ctrl+C to stop.",
-      quickstartBackground:
-        "To keep the Gateway running in the background later: openclaw gateway install",
+      quickstartBackground: "To keep the Gateway running in the background later: {command}",
       quickstartReopen:
         "Run openclaw to open the TUI, or openclaw dashboard to reopen the web dashboard.",
       quickstartBrowserUnavailable:
@@ -1190,8 +1202,8 @@ export const en = {
       daemonRuntime: "Gateway service runtime",
       daemonRuntimeNode: "Node (recommended)",
       daemonRuntimeNodeHint: "Primary and recommended runtime for managed services.",
-      daemonRuntimeBun: "Bun 1.4+",
-      daemonRuntimeBunHint: "Requires Bun 1.4 or newer with WAL-reset-safe node:sqlite.",
+      daemonRuntimeBun: "Bun 1.4.4+",
+      daemonRuntimeBunHint: "Requires Bun 1.4.4 or newer with WAL-reset-safe node:sqlite.",
       editBootstrap: "Edit BOOTSTRAP.md later to change how the agent introduces itself.",
       bootstrapHatchMessage: "Wake up, my friend!",
       firstTerminalChat: 'The first Terminal chat run will send: "Wake up, my friend!"',

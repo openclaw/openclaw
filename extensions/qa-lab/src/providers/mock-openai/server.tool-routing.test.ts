@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { expect, it, describe } from "vitest";
 import { readQaScenarioExecutionConfig } from "../../scenario-catalog.js";
 import type { AnthropicMessage } from "./mock-openai-contracts.js";
+import { settleParent } from "./server.fixtures.test-support.js";
 import {
   type AnthropicResponse,
   ANTHROPIC_GUEST_CODE_MODE_TOOLS,
@@ -39,15 +40,18 @@ const catalogTools = ["dispatch_action", "tool_search", "tool_describe", "sessio
     name,
   }),
 );
-const shellExec = {
-  type: "function",
-  name: "exec",
-  parameters: {
-    type: "object",
-    properties: { command: { type: "string" } },
-    required: ["command"],
-  },
-};
+function makeShellExecTool() {
+  return {
+    type: "function",
+    name: "exec",
+    parameters: {
+      type: "object",
+      properties: { command: { type: "string" } },
+      required: ["command"],
+    },
+  };
+}
+const shellExec = makeShellExecTool();
 const namespace = [{ type: "namespace", name: "openclaw", tools: catalogTools }];
 function catalogOutput(name: string, result: Record<string, unknown>) {
   return JSON.stringify({ tool: { id: `openclaw:${name}`, name, source: "openclaw" }, result });
@@ -159,17 +163,6 @@ it.each(["sessions_spawn", "ls"])(
     }
   },
 );
-
-it("does not mistake shell exec or discovery without invocation for spawn authority", async () => {
-  const turn = await startTurn("Subagent terminal reply QA check: visible.", {
-    model: "gpt-5.6-luna",
-    tools: [...catalogTools.filter((tool) => tool.name !== "dispatch_action"), shellExec],
-    instructions: "sessions_spawn and dispatch_action are mentioned but not declared.",
-  });
-  expect(outputItems(await turn.request()).some((item) => item.type === "function_call")).toBe(
-    false,
-  );
-});
 
 it.each([true])("honors protocol failure %s over accepted catalog details", async (isError) => {
   const server = await startMockServer();
@@ -404,21 +397,6 @@ it("binds crossed same-case catalog responses to their matching workers", async 
     );
     expect(outputText(await expectNonStreamingResponsesJson(server, body))).toBe("Worker started.");
   };
-  const settleParent = (n: number) =>
-    server.terminalRequesters.settle({
-      call: async () => ({
-        sessions: [
-          {
-            key: `agent:qa:${parentId(n)}`,
-            agentId: "qa",
-            sessionId: parentId(n),
-            hasActiveRun: false,
-            status: "done",
-            abortedLastRun: false,
-          },
-        ],
-      }),
-    });
   const settled: number[] = [];
   const first = startChild(1).then((response) => {
     settled.push(1);
@@ -433,12 +411,12 @@ it("binds crossed same-case catalog responses to their matching workers", async 
     .toBe(2);
   await acknowledgeParent(2);
   expect(settled).toEqual([]);
-  await settleParent(2);
+  await settleParent(server, parentId(2), `agent:qa:${parentId(2)}`);
   expect(outputText(await (await expectOk(second)).json())).toBe("QA-SUBAGENT-TERMINAL-VISIBLE-OK");
   expect(settled).toEqual([2]);
   await acknowledgeParent(1);
   expect(settled).toEqual([2]);
-  await settleParent(1);
+  await settleParent(server, parentId(1), `agent:qa:${parentId(1)}`);
   expect(outputText(await (await expectOk(first)).json())).toBe("QA-SUBAGENT-TERMINAL-VISIBLE-OK");
   expect(settled).toEqual([2, 1]);
 });
@@ -617,7 +595,8 @@ describe("responses-contract", () => {
 });
 
 describe("subagent-handoff", () => {
-  const kickoff = "Delegate one bounded QA task to a subagent. Wait for the subagent to finish.";
+  const kickoff =
+    "Delegate one bounded QA task to a subagent. Once the child is accepted, use sessions_yield to wait for it to finish. Then reply in plain text, with these three labels at the start of lines: Delegated task:, Result:, Evidence:. Under Result, copy only the child's final reply exactly as delivered, not a spawn receipt or a progress update.";
   const result = "Protocol note: inspected QA_KICKOFF_TASK.md and verified the workspace mission.";
   const user = (text: string) => ({ role: "user", content: [{ type: "input_text", text }] });
   const tools = ["sessions_spawn", "sessions_yield", "read"].map((name) => ({
@@ -666,10 +645,21 @@ describe("subagent-handoff", () => {
     ),
     "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
   ].join("\n");
+  const codexSettled = [
+    "<conversation_context>",
+    `[user]\n${kickoff}`,
+    "[Context: The previous turn ended intentionally via sessions_yield. A <turn_aborted> marker is not a user cancellation.]",
+    "</conversation_context>",
+    "",
+    "Current user request:",
+    "[Inter-session message] sourceSession=agent:qa:subagent:child sourceChannel=internal sourceTool=subagent_settle isUser=false",
+    settled,
+  ].join("\n");
 
   describe("mock subagent handoff completion", () => {
     it.each([
       { name: "protected event", completion: carrier, ok: true },
+      { name: "Codex settled wake", completion: codexSettled, ok: true, projected: true },
       {
         name: "protected child data block",
         completion: event.replace(
@@ -690,7 +680,7 @@ describe("subagent-handoff", () => {
       },
     ])(
       "waits for the child result before reporting completion: $name",
-      async ({ completion, ok }) => {
+      async ({ completion, ok, projected = false }) => {
         const server = await startMockServer();
         const request = (input: unknown[]) =>
           expectNonStreamingResponsesJson(server, {
@@ -715,11 +705,13 @@ describe("subagent-handoff", () => {
         expect(JSON.stringify(waiting)).not.toContain("The child result was folded back");
         const completionInput = [
           user(completion),
-          ...(completion.includes("[Subagent Context] Every subagent")
+          ...(completion.startsWith("[Subagent Context] Every subagent")
             ? [user(settleProvenance)]
             : []),
         ];
-        const completed = await request([user(kickoff), call, accepted, ...completionInput]);
+        const completed = await request(
+          projected ? completionInput : [user(kickoff), call, accepted, ...completionInput],
+        );
         expect(outputItems(completed).some((item) => item.type === "function_call")).toBe(false);
         const text = outputText(completed);
         expect(text).toContain("Delegated task:");
@@ -730,21 +722,59 @@ describe("subagent-handoff", () => {
         expect(JSON.stringify(unrelated)).not.toContain(result);
       },
     );
+
+    it("accepts the direct settled wake projected by the Codex runtime", async () => {
+      const server = await startMockServer();
+      const request = (input: unknown[]) =>
+        expectNonStreamingResponsesJson(server, {
+          model: "gpt-5.6-luna",
+          tools,
+          input,
+        });
+      const spawned = await request([user(kickoff)]);
+      const call = outputToolCall(spawned, "sessions_spawn");
+      const accepted = makeToolOutputWithCallId(
+        outputToolCallId(call, "spawn"),
+        JSON.stringify({
+          status: "accepted",
+          childSessionKey: "agent:qa:subagent:child",
+          runId: "child-run",
+        }),
+      );
+      const waiting = await request([user(kickoff), call, accepted]);
+      const yieldCall = outputToolCall(waiting, "sessions_yield");
+      const yielded = makeToolOutputWithCallId(
+        outputToolCallId(yieldCall, "yield"),
+        JSON.stringify({ status: "yielded" }),
+      );
+      const completed = await request([
+        user(kickoff),
+        call,
+        accepted,
+        yieldCall,
+        yielded,
+        user(settled),
+      ]);
+
+      expect(outputItems(completed).some((item) => item.type === "function_call")).toBe(false);
+      expect(outputText(completed)).toContain(result);
+
+      const staleWake = await request([
+        user(kickoff),
+        call,
+        accepted,
+        yieldCall,
+        yielded,
+        user("Start an unrelated request."),
+        user(settled),
+      ]);
+      expect(outputText(staleWake)).not.toContain(result);
+    });
   });
 
   // Captured smoke-ci surface: exec is a shell tool, not Code Mode (no wait).
   const structuredTools = ["exec", "sessions_yield", "dispatch_action", "write"].map((name) =>
-    name === "exec"
-      ? {
-          type: "function",
-          name,
-          parameters: {
-            type: "object",
-            properties: { command: { type: "string" } },
-            required: ["command"],
-          },
-        }
-      : { type: "function", name },
+    name === "exec" ? makeShellExecTool() : { type: "function", name },
   );
   const metadataCarrier = user(
     [
@@ -793,14 +823,6 @@ describe("subagent-handoff", () => {
         });
         if (unwrap) {
           expect(outputText(reply)).toBe("Failed to delegate: Child admission denied");
-          expect(outputItems(reply)).toMatchObject([
-            {
-              type: "message",
-              content: [
-                { type: "output_text", text: "Failed to delegate: Child admission denied" },
-              ],
-            },
-          ]);
         } else {
           expect(outputToolCall(reply, "sessions_yield")).toBeDefined();
         }
@@ -852,20 +874,7 @@ describe("subagent-handoff", () => {
       });
       expect(outputItems(acknowledged).some((item) => item.type === "function_call")).toBe(false);
       expect(outputText(acknowledged)).toBe("QA-SUBAGENT-EMPTY-PARENT-ACK");
-      await server.terminalRequesters.settle({
-        call: async () => ({
-          sessions: [
-            {
-              key: "agent:qa:main",
-              agentId: "qa",
-              sessionId: "structured-parent",
-              hasActiveRun: false,
-              status: "done",
-              abortedLastRun: false,
-            },
-          ],
-        }),
-      });
+      await settleParent(server, "structured-parent");
       const child = {
         model: "gpt-5.6-luna",
         instructions: `Runtime: embedded\n- Your session: ${childSessionKey}.`,

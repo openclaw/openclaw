@@ -9,6 +9,10 @@ import {
   type OpenClawConfig,
 } from "../config/config.js";
 import {
+  getOwnedSessionTranscriptWriterFence,
+  withOwnedSessionTranscriptWrites,
+} from "../config/sessions/transcript-write-context.js";
+import {
   areDiagnosticsEnabledForProcess,
   getInternalDiagnosticEventSequence,
   onInternalDiagnosticEvent,
@@ -19,7 +23,6 @@ import {
   withPluginRuntimePluginScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
-import { createBackgroundWorkOwner } from "../process/background-work.js";
 import * as commandQueue from "../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
 import { CommandLane } from "../process/lanes.js";
@@ -33,7 +36,7 @@ import {
   createGatewaySubagentRuntime,
   resolvePluginSubagentOverridePolicies,
 } from "./server-plugin-subagent-runtime.js";
-
+import { createParentTranscriptWriteContext } from "./server-plugin-transcript.test-support.js";
 const isolated = vi.hoisted(() => vi.fn<typeof runIsolatedCompletion>());
 const normalizeProviderModelIdWithRuntime = vi.hoisted(() =>
   vi.fn<(params: { provider: string; context: { modelId: string } }) => string | undefined>(
@@ -44,13 +47,11 @@ vi.mock("../agents/isolated-completion.js", () => ({ runIsolatedCompletion: isol
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime,
 }));
-
 const PLUGIN_ID = "test-completion";
 type CompleteParams = Parameters<PluginRuntime["subagent"]["complete"]>[0];
 let config: OpenClawConfig;
 let context: GatewayRequestContext | undefined;
 let lifetime: AbortController;
-
 function createRuntime() {
   return createGatewaySubagentRuntime(
     () => context,
@@ -58,13 +59,11 @@ function createRuntime() {
     lifetime.signal,
   );
 }
-
 function complete(runtime: PluginRuntime["subagent"], params: Partial<CompleteParams> = {}) {
   return withPluginRuntimePluginScope({ pluginId: PLUGIN_ID }, () =>
     runtime.complete({ agentId: "research", message: "Review these notes", ...params }),
   );
 }
-
 function completeScoped(
   client: GatewayRequestOptions["client"],
   params: Partial<CompleteParams> = {},
@@ -75,14 +74,12 @@ function completeScoped(
     () => runtime.complete({ agentId: "research", message: "Review these notes", ...params }),
   );
 }
-
 const operatorProfile = {
   profileId: "completion-operator",
   displayName: "Completion operator",
   hasAvatar: false,
   updatedAt: 1,
 };
-
 function restrictOperatorAgents() {
   config.gateway = {
     roles: {
@@ -93,7 +90,6 @@ function restrictOperatorAgents() {
     },
   };
 }
-
 function blockSubagentSlots(count: number) {
   const gate = createDeferred();
   const work = Array.from({ length: count }, () =>
@@ -134,16 +130,41 @@ afterEach(() => {
 });
 
 describe("plugin background completions", () => {
+  it("isolates completion from its caller transcript writer", async () => {
+    isolated.mockImplementationOnce(async (params) => {
+      expect(getOwnedSessionTranscriptWriterFence()).toBeUndefined();
+      return {
+        text: "Independent completion",
+        provider: params.provider,
+        model: params.model,
+        owner: { kind: "harness", id: "test-runtime" },
+      };
+    });
+    await withOwnedSessionTranscriptWrites(createParentTranscriptWriteContext(), async () => {
+      await expect(complete(createRuntime())).resolves.toEqual({
+        text: "Independent completion",
+      });
+      expect(getOwnedSessionTranscriptWriterFence()).toMatchObject({
+        expectedWriterRunId: "parent-run",
+      });
+    });
+  });
+
   it("queues plugin completions behind the configured subagent cap", async () => {
     commandQueue.setCommandLaneConcurrency(CommandLane.Subagent, 1);
     const slot = createDeferred();
     const active = commandQueue.enqueueCommandInLane(CommandLane.Subagent, () => slot.promise);
-    const background = createBackgroundWorkOwner({
-      owner: "core:completion-test",
-      maxConcurrent: 3,
+    const background = "background:core:completion-test";
+    commandQueue.publishLaneConfiguration({
+      lanes: { [background]: 3 },
+      groups: { "background-work": { budget: 3, members: [background] } },
     });
     const backgroundWork = Promise.all(
-      Array.from({ length: 3 }, () => background.enqueue(() => slot.promise)),
+      Array.from({ length: 3 }, () =>
+        commandQueue.enqueueCommandInLane(background, () => slot.promise, {
+          priority: "background",
+        }),
+      ),
     );
     const enqueued = createDeferred();
     const diagnosticsEnabled = areDiagnosticsEnabledForProcess();

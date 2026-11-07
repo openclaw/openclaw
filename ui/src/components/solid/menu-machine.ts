@@ -1,49 +1,47 @@
+import { createEffect, createMemo, createSignal, onSettled } from "solid-js";
 import {
-  machine,
-  connect,
-  type Props as MenuProps,
-  type Service as MenuService,
-  type Api,
-} from "@zag-js/menu";
-import { isPointInPolygon } from "@zag-js/rect-utils";
-import { VanillaMachine, normalizeProps } from "@zag-js/vanilla";
-import { createEffect, createSignal, onSettled, untrack } from "solid-js";
+  isStaleChunkImportError,
+  retryControlUiImport,
+  retryStaleChunkReloadWhenReachable,
+} from "../../app/stale-chunk-reload.ts";
+import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { focusProgrammatically } from "../../lib/programmatic-focus.ts";
+import { elementRef } from "../../lib/reactive/element-ref.ts";
 import type { Overlay } from "../overlay-lifecycle.ts";
 import { containsComposed } from "../overlay-registry.ts";
+import { MENU_FORM_CONTROL_SELECTOR } from "./menu-form-controls.ts";
+import type { MenuNavigationOptions, MenuRuntime } from "./menu-runtime.ts";
 
-// Focus events use bubbling DOM names; all other listener names stay canonical.
-const normalize = (props: object) => {
-  const out: Record<string, unknown> = Object.fromEntries(Object.entries(props));
-  for (const [from, to] of [
-    ["onFocus", "onFocusIn"],
-    ["onBlur", "onFocusOut"],
-  ] as const) {
-    if (from in out) {
-      out[to] = out[from];
-      delete out[from];
-    }
-  }
-  return out;
+export type { MenuNavigationOptions } from "./menu-runtime.ts";
+
+export type MenuControls = {
+  readonly elements: ReadonlySet<HTMLElement>;
+  ref(this: void): (element: HTMLElement) => void;
 };
-const normalizer: Parameters<typeof connect>[1] = {
-  element: normalize,
-  button: normalize,
-  input: normalize,
-  label: normalize,
-  circle: normalize,
-  img: normalize,
-  output: normalize,
-  path: normalize,
-  select: normalize,
-  svg: normalize,
-  textarea: normalize,
-  rect: normalize,
-  style: normalizeProps.style,
-};
+
+/** One tree's controls or items, registered by their rendering owners. */
+export function createMenuControls(): MenuControls {
+  const elements = new Set<HTMLElement>();
+  return {
+    elements,
+    ref() {
+      return elementRef((element: HTMLElement) => {
+        elements.add(element);
+        return () => elements.delete(element);
+      });
+    },
+  };
+}
+
 export type MenuBinding = {
-  service: MenuService;
-  read(): Api;
-  pointerDelta(x: number): number;
+  isOpen(): boolean;
+  itemRef(): (element: HTMLElement) => void;
+  items(ordered?: boolean): HTMLElement[];
+  highlightedValue(): string | null;
+  highlightedValueNow(): string | null;
+  setHighlightedValue(value: string | null): void;
+  typeahead(key: string): void;
+  itemId(value: string): string;
   item(
     value: string,
     disabled?: boolean,
@@ -52,295 +50,407 @@ export type MenuBinding = {
     label?: string,
   ): Record<string, unknown>;
   trigger(parentBinding?: MenuBinding, disabled?: boolean): Record<string, unknown>;
-  content(): Record<string, unknown>;
+  content(): Record<string, unknown> & { onKeyDown(event: KeyboardEvent): void };
+  keydown(event: KeyboardEvent): void;
+  error(): unknown;
+  retry(): void;
+  /** Nested menus share the loaded navigation runtime, never its loading state. */
+  runtime(): MenuRuntime | undefined;
 };
 
+/** Native admission, DOM identity, and activation remain available before navigation loads. */
 export function useMenuMachine(
   overlay: Overlay,
   direction: () => "ltr" | "rtl",
   onSelect: (value: string) => void,
-  parent?: MenuService,
+  parent?: MenuBinding,
+  options: MenuNavigationOptions = {},
 ): MenuBinding {
-  let lastPointerX: number | undefined;
-  let focusFromKeyboard = false;
-  const focusItem = (service: MenuService) => {
-    if (!overlay.open) {
-      return;
-    }
-    const id = service.computed("highlightedId");
-    const node = id ? service.scope.getById(id) : undefined;
-    const active = service.scope.getActiveElement();
-    if (
-      active instanceof HTMLElement &&
-      active.matches("input, textarea, select") &&
-      !focusFromKeyboard
-    ) {
-      return;
-    }
-    for (const item of overlay.surface.querySelectorAll<HTMLElement>("[data-menu-item]")) {
-      if (item.closest('[role="menu"]') === overlay.surface) {
-        item.tabIndex = item === node ? 0 : -1;
-      }
-    }
-    if (
-      node &&
-      focusFromKeyboard &&
-      ![...overlay.children].some((child) => child.open && containsComposed(child.surface, active))
-    ) {
-      node.focus({ preventScroll: true });
-      node.scrollIntoView({ block: "nearest", inline: "nearest" });
-    }
-  };
-  const adapted: typeof machine = {
-    ...machine,
-    implementations: {
-      ...machine.implementations,
-      effects: {
-        ...machine.implementations?.effects,
-        // The native host owns geometry and dismissal, so no Floating UI or duplicate listeners.
-        trackPositioning() {},
-        trackInteractOutside() {},
-        scrollToHighlightedItem() {},
-        // A fixed 100 ms close defeats slow diagonal travel inside the safe polygon.
-        // Pointer movement and MENU_POINTERENTER already settle this live branch.
-        waitForCloseDelay() {},
-      },
-      actions: {
-        ...machine.implementations?.actions,
-        reposition() {},
-        focusTrigger() {},
-        focusMenu() {},
-        focusParentMenu() {},
-        setIntentPolygon(params) {
-          const trigger = overlay.trigger;
-          if (!trigger) {
-            return;
-          }
-          // Geometry reads serve pointer intent only; CSS owns every placement write.
-          const box = overlay.surface.getBoundingClientRect();
-          const anchor = trigger.getBoundingClientRect();
-          params.context.set("currentPlacement", box.x < anchor.x ? "left-start" : "right-start");
-          machine.implementations?.actions?.setIntentPolygon?.(params);
-        },
-      },
-    },
-  };
-  const props: MenuProps = {
-    id: overlay.id,
-    getRootNode: () => {
-      // The connector reads initial props before the DOM refs are bound.
-      const surface = overlay.surface;
-      const root = surface?.getRootNode();
-      return root instanceof ShadowRoot ? root : (surface?.ownerDocument ?? document);
-    },
-    dir: untrack(direction),
-    open: false,
-    loopFocus: true,
-    closeOnSelect: false,
-    "aria-label": overlay.id,
-    onOpenChange({ open }) {
-      const restore = !open && containsComposed(overlay.surface, service.scope.getActiveElement());
-      // Native sibling dismissal must not leave focus behind in the retired branch.
-      const handoff =
-        open &&
-        [...(overlay.parent?.children ?? [])].some(
-          (sibling) => sibling !== overlay && sibling.open && sibling.containsFocus(),
-        );
-      if (
-        !overlay.request(
-          open,
-          open && (focusFromKeyboard || handoff) ? "first" : restore ? "return" : "none",
+  const { elements: itemNodes, ref: itemRef } = createMenuControls();
+  const ownsTarget = (target: HTMLElement) =>
+    ![...overlay.children].some((child) => child.open && containsComposed(child.surface, target)) &&
+    (options.surface === "listbox"
+      ? overlay.surface.contains(target)
+      : target.closest('[role="menu"]') === overlay.surface);
+  const items = (ordered = true) => {
+    const connected = [...itemNodes].filter((item) => item.isConnected && ownsTarget(item));
+    return ordered
+      ? connected.toSorted((left, right) =>
+          left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
         )
-      ) {
-        service.send({ type: overlay.open ? "CONTROLLED.OPEN" : "CONTROLLED.CLOSE" });
-      }
-    },
-    onSelect: ({ value }) => onSelect(value),
+      : connected;
   };
-  const service = new VanillaMachine(adapted, props);
-  createEffect(direction, (dir) => service.updateProps({ ...props, dir, open: overlay.open }));
+  const parentRuntime = createMemo(() => parent?.runtime());
+  let hover: PointerEvent | undefined;
+  let runtime: MenuRuntime | undefined;
+  let virtualized = false;
+  let stopRuntime: (() => void) | undefined;
+  let mounted = false;
+  let loading = false;
+  let pending: Array<{
+    run: (loaded: MenuRuntime) => void;
+    keyboard?: boolean;
+    highlightedValue?: string | null;
+  }> = [];
   const [revision, setRevision] = createSignal(0);
-  const read = () => {
+  const [error, setError] = createSignal<unknown>();
+  const notify = () => setRevision((value) => value + 1);
+  const current = () => {
     revision();
-    return connect(service.service, normalizer);
+    return runtime;
+  };
+  // Highlights refresh presentation without resynchronizing unchanged widget inputs.
+  const inputRuntime = createMemo(current);
+  // Rows share one rendered snapshot; imperative navigation still reads the live machine.
+  const presentation = createMemo(
+    () => {
+      const loaded = current();
+      return loaded ? { runtime: loaded, api: loaded.read() } : undefined;
+    },
+    { lazy: true },
+  );
+  const run = (intent: (loaded: MenuRuntime) => void, highlightedValue?: string | null) => {
+    if (runtime) {
+      intent(runtime);
+    } else if (overlay.open && loading) {
+      pending.push({ run: intent, highlightedValue });
+    }
+  };
+  const load = async () => {
+    if (!mounted || runtime || loading) {
+      return;
+    }
+    loading = true;
+    setError(undefined);
+    try {
+      const { createMenuRuntime } = await retryControlUiImport(() => import("./menu-runtime.ts"));
+      if (!mounted) {
+        return;
+      }
+      runtime = createMenuRuntime(
+        overlay,
+        direction,
+        parentRuntime()?.service,
+        { ...options, virtualized: () => virtualized },
+        items,
+        notify,
+        onSelect,
+      );
+      stopRuntime = runtime.start();
+      if (hover && overlay.trigger?.matches(":hover") && overlay.parent?.open) {
+        runtime.trigger(parentRuntime()).onPointerMove(hover);
+      }
+      hover = undefined;
+      // Native entry already chose focus while the module was loading. Adopt it
+      // before replaying subsequent keyboard input instead of focusing twice.
+      if (overlay.open && options.surface !== "listbox") {
+        const focused = items().find((item) => item.matches(":focus"));
+        if (focused?.dataset.value) {
+          runtime.read().setHighlightedValue(focused.dataset.value);
+        }
+      }
+      loading = false;
+      notify();
+      while (pending.length) {
+        pending.shift()?.run(runtime);
+        // Vanilla queues the transition; Home/End queue the highlight again,
+        // whose store notification publishes roving focus. Drain both before replay.
+        await new Promise<void>((resolve) => {
+          queueMicrotask(() => queueMicrotask(resolve));
+        });
+      }
+    } catch (reason) {
+      if (!mounted) {
+        return;
+      }
+      stopRuntime?.();
+      stopRuntime = undefined;
+      runtime = undefined;
+      loading = false;
+      pending = [];
+      setError(reason);
+      notify();
+    }
   };
   onSettled(() => {
-    const unsubscribe = service.subscribe((state) => {
-      setRevision((n) => n + 1);
-      focusItem(state);
-    });
+    mounted = true;
     const stopOpen = overlay.subscribe((open) => {
-      service.updateProps({ ...props, dir: untrack(direction), open });
-      if (!open) {
-        service.send({ type: "CONTROLLED.CLOSE" });
+      notify();
+      if (open) {
+        void load();
+      } else {
+        pending = [];
       }
     });
-    service.start();
-    if (parent) {
-      read().setParent(parent);
-      connect(parent, normalizer).setChild(service.service);
+    if (overlay.open || parentRuntime()) {
+      void load();
     }
     return () => {
-      unsubscribe();
+      mounted = false;
+      pending = [];
       stopOpen();
-      service.stop();
-      if (parent) {
-        const children = { ...parent.refs.get("children") };
-        delete children[overlay.id];
-        parent.refs.set("children", children);
-      }
+      stopRuntime?.();
     };
   });
-  return {
-    service: service.service,
-    read,
-    pointerDelta(x) {
-      const delta = lastPointerX === undefined ? 0 : x - lastPointerX;
-      lastPointerX = x;
-      return delta;
+  // Zag is an imperative widget; retain one live input snapshot once admitted.
+  createEffect(
+    () =>
+      [
+        inputRuntime(),
+        direction(),
+        options.items?.(),
+        options.value?.(),
+        options.virtualized?.() ?? false,
+        parentRuntime(),
+      ] as const,
+    ([loaded, dir, catalog, selected, nextVirtualized, loadedParent]) => {
+      virtualized = nextVirtualized;
+      if (loaded) {
+        loaded.updateInputs(dir, catalog, selected);
+      } else if (loadedParent) {
+        void load();
+      }
     },
-    item(
-      value: string,
-      disabled = false,
-      type?: "checkbox" | "radio",
-      checked = false,
-      label = value,
+  );
+  const deferKey = (event: KeyboardEvent, target: "content" | "input" | "trigger") => {
+    if (
+      event.defaultPrevented ||
+      event.isComposing ||
+      !overlay.open ||
+      !loading ||
+      !(event.target instanceof HTMLElement) ||
+      (target === "content" && !ownsTarget(event.target))
     ) {
-      const api = read();
-      const result = type
-        ? api.getOptionItemProps({
-            value,
-            valueText: label,
-            type,
-            checked,
-            disabled,
-            closeOnSelect: false,
-          })
-        : api.getItemProps({ value, valueText: label, disabled, closeOnSelect: false });
+      return;
+    }
+    const editing =
+      event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
+    if (event.key === "Escape") {
+      // A child can retain focus on its parent trigger before navigation loads, too.
+      if (![...overlay.children].some((child) => child.open)) {
+        overlay.keydown(event);
+      }
+      return;
+    }
+    if (
+      target === "content" &&
+      options.surface !== "listbox" &&
+      event.target.matches(MENU_FORM_CONTROL_SELECTOR) &&
+      !(event.target.matches("input[data-search]") && ["ArrowDown", "Enter"].includes(event.key)) &&
+      !(event.target instanceof HTMLButtonElement && ["ArrowDown", "ArrowUp"].includes(event.key))
+    ) {
+      return;
+    }
+    if (
+      event.key === "Tab" ||
+      (event.key.length !== 1 &&
+        ![
+          "ArrowDown",
+          "ArrowUp",
+          "ArrowLeft",
+          "ArrowRight",
+          "Home",
+          "End",
+          "Enter",
+          "Backspace",
+        ].includes(event.key)) ||
+      (editing && !["ArrowDown", "ArrowUp", "Enter"].includes(event.key)) ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.altKey
+    ) {
+      return;
+    }
+    const originalTarget = event.target;
+    const currentTarget = event.currentTarget;
+    event.preventDefault();
+    event.stopPropagation();
+    if (
+      target === "content" &&
+      options.surface !== "listbox" &&
+      ["Enter", " "].includes(event.key) &&
+      itemNodes.has(originalTarget) &&
+      !originalTarget.hasAttribute("aria-haspopup") &&
+      !pending.some((intent) => intent.keyboard)
+    ) {
+      // Leaf activation already has a native owner; only prior navigation needs replay.
+      originalTarget.click();
+      return;
+    }
+    pending.push({
+      keyboard: true,
+      run: (loaded) => {
+        const replay = new KeyboardEvent(event.type, event);
+        Object.defineProperties(replay, {
+          target: {
+            value: target === "content" ? loaded.service.scope.getActiveElement() : originalTarget,
+          },
+          currentTarget: { value: currentTarget },
+        });
+        if (target === "content") {
+          loaded.content().onKeyDown(replay);
+        } else if (target === "trigger") {
+          loaded.trigger(parentRuntime()).onKeyDown(replay);
+        } else {
+          loaded.keydown(replay);
+        }
+      },
+    });
+  };
+  const keydown = (event: KeyboardEvent) =>
+    runtime ? runtime.keydown(event) : deferKey(event, "input");
+  const setHighlightedValue = (value: string | null) =>
+    run((loaded) => loaded.service.send({ type: "HIGHLIGHTED.SET", value }), value);
+  return {
+    isOpen: () => {
+      revision();
+      return overlay.open;
+    },
+    runtime: current,
+    items,
+    itemRef,
+    highlightedValue: () => presentation()?.api.highlightedValue ?? null,
+    highlightedValueNow: () => runtime?.service.context.get("highlightedValue") ?? null,
+    setHighlightedValue,
+    typeahead: (key) => run((loaded) => loaded.service.send({ type: "TYPEAHEAD", key })),
+    itemId: (value) => `${overlay.id}:${value}`,
+    keydown,
+    error,
+    retry: () => {
+      if (isStaleChunkImportError(error())) {
+        void retryStaleChunkReloadWhenReachable({ canReload: () => mounted && overlay.open });
+      } else {
+        void load();
+      }
+    },
+    item(value, disabled, type, checked = false, label = value) {
+      const rendered = presentation();
       return {
-        ...result,
-        onPointerMove: (event: PointerEvent) => {
-          if (event.movementX === 0 && event.movementY === 0) {
+        id: `${overlay.id}:${value}`,
+        "data-scope": "menu",
+        "data-part": "item",
+        "data-ownedby": overlay.id,
+        "data-menu-item": overlay.id,
+        "data-disabled": disabled ? "" : undefined,
+        "data-value": value,
+        "data-valuetext": label,
+        tabIndex: -1,
+        ...rendered?.runtime.item(rendered.api, value, disabled, type, checked, label),
+        // A repeated cold focus must not replay an old highlight after queued keys.
+        // Keep distinct focus changes ordered, including entry focus before returning to the trigger.
+        onFocusIn: () => {
+          const highlighted = runtime
+            ? runtime.service.context.get("highlightedValue")
+            : pending.findLast((intent) => intent.highlightedValue !== undefined)?.highlightedValue;
+          if (highlighted !== value) {
+            setHighlightedValue(value);
+          }
+        },
+        onClick: (event: MouseEvent) => {
+          if (disabled || !overlay.open) {
+            event.preventDefault();
             return;
           }
-          focusFromKeyboard = false;
-          result.onPointerMove?.(event);
+          const anchor = event.currentTarget;
+          if (anchor instanceof HTMLAnchorElement) {
+            if (
+              !shouldHandleNavigationClick(event) ||
+              (anchor.target !== "" && anchor.target !== "_self") ||
+              anchor.hasAttribute("download")
+            ) {
+              return;
+            }
+            event.preventDefault();
+          }
+          onSelect(value);
         },
-        tabIndex: api.highlightedValue === value ? 0 : -1,
-        onFocusIn: () => {
-          if (api.highlightedValue !== value) {
-            api.setHighlightedValue(value);
+        onContextMenu: (event: MouseEvent) => {
+          if (event.currentTarget instanceof HTMLAnchorElement) {
+            event.stopPropagation();
           }
         },
       };
     },
-    trigger(parentBinding?: MenuBinding, disabled = false) {
-      const api = read();
-      const result = parentBinding
-        ? parentBinding.read().getTriggerItemProps(api)
-        : api.getTriggerProps();
+    trigger(parentBinding, disabled = false) {
+      const loaded = current();
+      if (loaded) {
+        return loaded.trigger(parentBinding?.runtime(), disabled);
+      }
       return {
-        ...result,
+        "data-scope": "menu",
+        "data-part": parentBinding ? "trigger-item" : "trigger",
+        "data-menu-item": parentBinding ? overlay.parent?.id : undefined,
+        "data-state": overlay.open ? "open" : "closed",
         "aria-disabled": disabled ? "true" : undefined,
         "data-disabled": disabled ? "" : undefined,
-        onClick: (event: MouseEvent) => {
-          if (disabled) {
+        onPointerDown: (event: PointerEvent) => {
+          if (
+            disabled ||
+            event.button === 2 ||
+            (event.button === 0 && event.ctrlKey && /^Mac/i.test(navigator.platform))
+          ) {
             return;
           }
-          focusFromKeyboard = true;
-          result.onClick?.(event);
+          // Match Zag: focus can settle an animated ancestor and move the trigger before pointerup.
+          event.preventDefault();
         },
-        onKeyDown: (e: KeyboardEvent) => {
-          if (disabled || e.key === "Escape") {
+        onClick: (event: MouseEvent) => {
+          if (disabled || event.defaultPrevented) {
             return;
           }
-          if (parentBinding && ["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) {
-            return;
+          const focus = event.detail === 0 || options.pointerFocus?.() !== "trigger";
+          if (!focus && overlay.trigger) {
+            focusProgrammatically(overlay.trigger, { preventScroll: true });
           }
-          focusFromKeyboard = true;
-          result.onKeyDown?.(e);
+          overlay.request(parentBinding ? true : !overlay.open, focus ? "first" : "none");
         },
         onPointerMove: (event: PointerEvent) => {
-          const trigger = overlay.trigger;
-          if (disabled || !parentBinding || !trigger || event.pointerType !== "mouse") {
+          if (disabled || !parentBinding || event.pointerType !== "mouse") {
             return;
           }
-          focusFromKeyboard = false;
-          const target = event.currentTarget;
-          const point = { x: event.clientX, y: event.clientY };
-          const deltaX = parentBinding.pointerDelta(point.x);
-          const protectedTravel =
-            parent &&
-            Object.values(parent.refs.get("children")).some((child) => {
-              const polygon = child.context.get("intentPolygon");
-              return (
-                child.scope.id !== overlay.id &&
-                child.state.hasTag("open") &&
-                (child.context.get("currentPlacement")?.startsWith("left")
-                  ? deltaX < 0
-                  : deltaX > 0) &&
-                polygon &&
-                isPointInPolygon(polygon, point)
-              );
-            });
-          // A leave can lock the parent before the child's document tracker is installed.
-          // A sibling's first move must release that stale lock unless its point is protected.
-          if (parent && !protectedTravel) {
-            parent.refs.set("pointerRoutingLocked", false);
-            parent.context.set("pointerRoutingMode", "interactive");
-          }
-          const item = parentBinding.read().getItemProps({ value: trigger.id });
-          item.onPointerMove?.(event);
-          // The document pointer listener releases the old child's corridor lock.
-          // Decide child opening after that same event, rather than dropping it.
-          queueMicrotask(() => {
-            if (parent?.refs.get("pointerRoutingLocked")) {
-              return;
-            }
-            service.send({ type: "TRIGGER_POINTERMOVE", target, point });
+          hover = new PointerEvent(event.type, event);
+          Object.defineProperties(hover, {
+            target: { value: event.target },
+            currentTarget: { value: event.currentTarget },
           });
+        },
+        onPointerLeave: () => {
+          hover = undefined;
+        },
+        onKeyDown: (event: KeyboardEvent) => {
+          if (disabled || event.defaultPrevented || event.isComposing) {
+            return;
+          }
+          if (parentBinding && ["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+            return;
+          }
+          if (overlay.open) {
+            deferKey(event, "trigger");
+            return;
+          }
+          const forward = direction() === "rtl" ? "ArrowLeft" : "ArrowRight";
+          if (
+            ["ArrowDown", "ArrowUp", "Enter", " ", ...(parentBinding ? [forward] : [])].includes(
+              event.key,
+            )
+          ) {
+            event.preventDefault();
+            overlay.request(true, event.key === "ArrowUp" ? "last" : "first");
+          }
         },
       };
     },
     content() {
-      const result = read().getContentProps();
-      const {
-        hidden: _hidden,
-        tabIndex: _tabIndex,
-        style: _style,
-        "aria-activedescendant": _active,
-        ...rest
-      } = result;
       return {
-        ...rest,
+        id: options.ids?.content ?? `${overlay.id}:content`,
+        "data-scope": "menu",
+        "data-part": "content",
+        "data-state": overlay.open ? "open" : "closed",
+        "aria-labelledby": options.ids?.trigger ?? `${overlay.id}:trigger`,
         tabIndex: -1,
-        onPointerMove: (event: PointerEvent) => {
-          lastPointerX = event.clientX;
-        },
-        onKeyDown: (e: KeyboardEvent) => {
-          const target = e.target;
-          if (
-            !(target instanceof HTMLElement) ||
-            target.closest('[role="menu"]') !== overlay.surface
-          ) {
-            return;
-          }
-          if (
-            e.key === "Tab" ||
-            e.key === "Escape" ||
-            target.matches("input,textarea,select,[data-form-control]")
-          ) {
-            return;
-          }
-          focusFromKeyboard = true;
-          const value = target.dataset.value;
-          if (value && value !== read().highlightedValue) {
-            read().setHighlightedValue(value);
-          }
-          result.onKeyDown?.(e);
-          // End/Home can keep the same highlight after the user scrolls it out of view.
-          focusItem(service.service);
-        },
+        ...current()?.content(),
+        onKeyDown: (event: KeyboardEvent) =>
+          runtime ? runtime.content().onKeyDown(event) : deferKey(event, "content"),
       };
     },
   };

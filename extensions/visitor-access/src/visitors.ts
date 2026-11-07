@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { z } from "zod";
 import type {
   PluginGatewayAccessAuthority,
   PluginLogger,
@@ -10,75 +9,33 @@ import type { ReadVisitorGatewayAccess } from "./access.js";
 import { visitorTargetKey, type VisitorTarget, type VisitorPolicyClient } from "./cloudflare.js";
 import type { VisitorAccessConfig } from "./config.js";
 import { VisitorAccessError } from "./errors.js";
+import {
+  compareAndSetGrantOnboarding,
+  invitationMetadata,
+  visitorGrantTarget,
+  type ActiveVisitorInvitation,
+  visitorIdentityKeys,
+  type VisitorGrant,
+  type VisitorInvitationContext,
+  type VisitorOnboardingCompareAndSet,
+  type VisitorOnboardingUpdate,
+} from "./grant-record.js";
+import { accountSeatsText, expiryText, visitorInviteResult } from "./invite-result.js";
 import type {
   VisitorInviteDetails,
   VisitorListDetails,
   VisitorRevokeDetails,
 } from "./tool-results.js";
+import { grantIdSchema, inviteSchema, parseVisitorInput, revokeSchema } from "./visitor-input.js";
 
-export type VisitorGrant = ({ email: string } | { githubAccountId: number }) & {
-  grantId?: string;
-  githubLogin?: string;
-  invitedVia?: string;
-  createdAt: number;
-  expiresAt: number | null;
-};
-
-function visitorGrantTarget(grant: VisitorGrant): VisitorTarget {
-  return "email" in grant ? grant.email : grant.githubAccountId;
-}
-
-const emailSchema = z
-  .string()
-  .trim()
-  .max(254)
-  .pipe(z.email())
-  .transform((email) => email.toLowerCase());
-const identityFields = {
-  github: z
-    .string()
-    .trim()
-    .min(1)
-    .transform((login) => login.toLowerCase())
-    .optional(),
-  email: emailSchema.optional(),
-};
-const revokeSchema = z.strictObject({
-  ...identityFields,
-  profileId: z.string().trim().min(1).max(128).optional(),
-  grantId: z.uuid().optional(),
-});
-const inviteSchema = z
-  .strictObject({
-    ...identityFields,
-    days: z.number().int().min(1).max(3650).optional(),
-    forever: z.boolean().optional(),
-  })
-  .refine((input) => (input.email !== undefined) !== (input.github !== undefined));
-const grantIdSchema = z.uuid();
 const DAY_MS = 86_400_000;
 const LIST_MAX_CHARS = 12_000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
-const SIGN_IN_URL = "https://team.openclaw.ai";
 
 type LiveVisitorGrant = {
   grant: VisitorGrant;
   controller: AbortController;
 };
-
-function parseVisitorInput<T>(schema: z.ZodType<T>, raw: unknown): T {
-  const result = schema.safeParse(raw);
-  if (!result.success) {
-    throw new VisitorAccessError(
-      "Invalid visitor input. Use a valid email or GitHub login, days from 1 to 3650, or forever: true.",
-    );
-  }
-  return result.data;
-}
-
-function expiryText(expiresAt: number | null): string {
-  return expiresAt === null ? "never (explicit forever grant)" : new Date(expiresAt).toISOString();
-}
 
 export class VisitorAccessService {
   private pending: Promise<unknown> = Promise.resolve();
@@ -89,7 +46,7 @@ export class VisitorAccessService {
   private closed = false;
 
   constructor(
-    private readonly config: VisitorAccessConfig,
+    private readonly readLimits: () => Pick<VisitorAccessConfig, "maxVisitors" | "defaultTtlDays">,
     private readonly store: PluginStateKeyedStore<VisitorGrant>,
     private readonly policy: VisitorPolicyClient,
     private readonly logger: PluginLogger,
@@ -154,29 +111,68 @@ export class VisitorAccessService {
     return this.readAuthority(emails, grantId, githubAccountIds);
   }
 
-  private readAuthority(
-    emails: readonly string[],
-    grantId?: string,
-    githubAccountIds: readonly number[] = [],
-  ): PluginGatewayAccessAuthority | undefined {
+  /** The first current grant among target keys, optionally with an exact grantId. */
+  private findActiveGrant(keys: Iterable<string>, grantId?: string): LiveVisitorGrant | undefined {
     this.assertOpen();
     if (!this.ready) {
       throw new VisitorAccessError("Visitor access is starting; retry shortly.");
     }
     const now = Date.now();
-    const state = [
-      ...emails.map((email) => email.trim().toLowerCase()),
-      ...githubAccountIds.map(visitorTargetKey),
-    ]
-      .map((key) => this.grants.get(key))
-      .find(
-        (entry) =>
-          entry &&
-          grantIdSchema.safeParse(entry.grant.grantId).success &&
-          (grantId === undefined || entry.grant.grantId === grantId) &&
-          !entry.controller.signal.aborted &&
-          (entry.grant.expiresAt === null || entry.grant.expiresAt > now),
-      );
+    for (const key of keys) {
+      const entry = this.grants.get(key);
+      if (
+        entry !== undefined &&
+        (grantId === undefined || entry.grant.grantId === grantId) &&
+        grantIdSchema.safeParse(entry.grant.grantId).success &&
+        !entry.controller.signal.aborted &&
+        (entry.grant.expiresAt === null || entry.grant.expiresAt > now)
+      ) {
+        return entry;
+      }
+    }
+    return undefined;
+  }
+
+  /** Plugin-internal onboarding API; see README "Onboarding record". */
+  findActiveInvitation(grantId: string): ActiveVisitorInvitation | undefined {
+    const state = this.findActiveGrant(this.grants.keys(), grantId);
+    return state && { ...structuredClone(state.grant), grantId };
+  }
+
+  /** Plugin-internal onboarding API; see README "Onboarding record". */
+  compareAndSetOnboarding(params: VisitorOnboardingCompareAndSet) {
+    return this.serialize(async (): Promise<VisitorOnboardingUpdate> => {
+      const state = this.findActiveGrant(this.grants.keys(), params.grantId);
+      if (!state) {
+        return { applied: false, reason: "inactive" };
+      }
+      const key = visitorTargetKey(visitorGrantTarget(state.grant));
+      const store = this.actionStore(() => {
+        params.assertCurrent?.();
+        if (!this.findActiveGrant([key], params.grantId)) {
+          throw new VisitorAccessError(
+            "Visitor access ended during onboarding. Invite again to retry.",
+          );
+        }
+      });
+      const current = await store.lookup(key);
+      if (!current || current.grantId !== params.grantId) {
+        return { applied: false, reason: "inactive" };
+      }
+      const result = compareAndSetGrantOnboarding(current, params, Date.now());
+      if (result.applied) {
+        await this.registerGrant({ ...current, onboarding: result.onboarding }, store);
+      }
+      return structuredClone(result);
+    }, params.assertCurrent);
+  }
+
+  private readAuthority(
+    emails: readonly string[],
+    grantId?: string,
+    githubAccountIds: readonly number[] = [],
+  ): PluginGatewayAccessAuthority | undefined {
+    const state = this.findActiveGrant(visitorIdentityKeys({ emails, githubAccountIds }), grantId);
     if (!state) {
       return undefined;
     }
@@ -354,7 +350,7 @@ export class VisitorAccessService {
 
   invite(
     raw: unknown,
-    { invitedVia, assertCurrent }: { invitedVia?: string; assertCurrent: () => void },
+    { invitedVia, invitedBy, signInUrl, assertCurrent }: VisitorInvitationContext,
   ): Promise<{ text: string; details: VisitorInviteDetails }> {
     return this.serialize(async () => {
       const store = this.actionStore(assertCurrent);
@@ -362,7 +358,7 @@ export class VisitorAccessService {
       if (input.forever && input.days !== undefined) {
         throw new VisitorAccessError("Choose days or forever: true, not both.");
       }
-      const days = input.days ?? this.config.defaultTtlDays;
+      const days = input.days ?? this.readLimits().defaultTtlDays;
       let expiresAt: number | null = null;
       if (!input.forever) {
         if (!days) {
@@ -385,9 +381,12 @@ export class VisitorAccessService {
         ...(typeof target === "string" ? { email: target } : { githubAccountId: target }),
         ...(githubLogin ? { githubLogin } : {}),
         ...(provenance ? { invitedVia: provenance } : {}),
+        ...invitationMetadata(previous, { invitedBy, note: input.note }, now),
         createdAt: previous?.createdAt ?? now,
         expiresAt,
       };
+      // Observe before effects: a completed grant must still settle if authority closes afterward.
+      const accountSeats = await this.policy.readAccountSeats(assertCurrent);
       let gatewayAccess = "";
       await this.policy.update(async (targets) => {
         const entries = await store.entries();
@@ -395,9 +394,10 @@ export class VisitorAccessService {
           ...targets.map(visitorTargetKey),
           ...entries.map((entry) => entry.key),
         ]);
-        if (!known.has(key) && known.size >= this.config.maxVisitors) {
+        const { maxVisitors } = this.readLimits();
+        if (!known.has(key) && known.size >= maxVisitors) {
           throw new VisitorAccessError(
-            `Visitor limit (${this.config.maxVisitors}) reached. Revoke an existing visitor before inviting another.`,
+            `Visitor limit (${maxVisitors}) reached. Revoke an existing visitor before inviting another.`,
           );
         }
         const access = await this.readAccess(typeof target === "number" ? [target] : []);
@@ -416,6 +416,10 @@ export class VisitorAccessService {
         (previous.expiresAt === null || previous.expiresAt > Date.now());
       const grantId = continuous ? grantIdSchema.parse(previous.grantId) : randomUUID();
       grant.grantId = grantId;
+      if (!continuous) {
+        // Welcome setup belongs to one grant; a new invitation after an ended one starts over.
+        grant.onboarding = { state: "pending", updatedAt: now };
+      }
       await this.registerGrant(
         grant,
         continuous
@@ -429,24 +433,15 @@ export class VisitorAccessService {
             })
           : store,
       );
-      const who =
-        typeof target === "number"
-          ? `@${grant.githubLogin} (GitHub account ${target})`
-          : grant.githubLogin
-            ? `@${grant.githubLogin} (${target})`
-            : target;
-      return {
-        text: `${previous ? "Renewed" : "Invited"} ${who}. Invitation ID: ${grantId}. Visitor grant expires: ${expiryText(grant.expiresAt)}. ${gatewayAccess}. Sign in at ${SIGN_IN_URL} using Team's existing login with ${typeof target === "number" ? "this GitHub account" : "this email"}. The link itself does not grant access.`,
-        details: {
-          outcome: previous ? "renewed" : "invited",
-          grantId,
-          ...(typeof target === "string" ? { email: target } : { githubAccountId: target }),
-          ...(grant.githubLogin ? { githubLogin: grant.githubLogin } : {}),
-          expiresAt: grant.expiresAt === null ? null : new Date(grant.expiresAt).toISOString(),
-          gatewayAccess,
-          signInUrl: SIGN_IN_URL,
-        },
-      };
+      return visitorInviteResult({
+        accountSeats,
+        renewed: previous !== undefined,
+        target,
+        grant: { ...grant, grantId },
+        gatewayAccess,
+        signInUrl,
+        noteSupplied: input.note !== undefined,
+      });
     }, assertCurrent);
   }
 
@@ -488,7 +483,7 @@ export class VisitorAccessService {
       }
       if (input.profileId && !profile) {
         throw new VisitorAccessError(
-          "Profile not found. Use the current canonical profileId from visitor_list.",
+          "Profile not found. Use the current profileId from visitor_list.",
         );
       }
       const access =
@@ -580,26 +575,30 @@ export class VisitorAccessService {
       const policy = await this.policy.read(assertCurrent);
       const policyTargets = policy?.targets ?? [];
       const targetKeys = new Set(policyTargets.map(visitorTargetKey));
-      const entries = await this.store.entries();
+      const entries = (await this.store.entries()).toSorted((left, right) =>
+        left.key.localeCompare(right.key),
+      );
       assertCurrent();
       const managed = new Set(entries.map((entry) => entry.key));
       const unmanaged = policyTargets
         .filter((target) => !managed.has(visitorTargetKey(target)))
         .toSorted((left, right) => visitorTargetKey(left).localeCompare(visitorTargetKey(right)));
+      const { maxVisitors } = this.readLimits();
       const displayedTargets = [
-        ...entries
-          .toSorted((left, right) => left.key.localeCompare(right.key))
-          .map(({ value }) => visitorGrantTarget(value)),
+        ...entries.map(({ value }) => visitorGrantTarget(value)),
         ...unmanaged,
-      ].slice(0, this.config.maxVisitors);
+      ].slice(0, maxVisitors);
       const access = await this.readAccess([
         ...new Set(displayedTargets.filter((target) => typeof target === "number")),
       ]);
       assertCurrent();
       const missing = entries.filter((entry) => !targetKeys.has(entry.key)).length;
+      const accountSeats = await this.policy.readAccountSeats(assertCurrent);
+      this.assertOpen();
       const summary = `Visitors: ${entries.length} recorded; ${targetKeys.size} in policy. Drift: ${unmanaged.length} unmanaged, ${missing} missing from policy.`;
-      const lines = [summary];
+      const lines = [summary, accountSeatsText(accountSeats)];
       const details: VisitorListDetails = {
+        accountSeats,
         counts: {
           recorded: entries.length,
           inPolicy: targetKeys.size,
@@ -613,35 +612,44 @@ export class VisitorAccessService {
       const rows: Array<
         | { line: string; grant: VisitorListDetails["grants"][number] }
         | { line: string; unmanaged: VisitorListDetails["unmanaged"][number] }
-      > = entries
-        .toSorted((a, b) => a.key.localeCompare(b.key))
-        .map(({ value: grant }) => {
-          const target = visitorGrantTarget(grant);
-          const profileId = access.profileId(target);
-          const missingFromPolicy = !targetKeys.has(visitorTargetKey(target));
-          const expired = grant.expiresAt !== null && grant.expiresAt <= Date.now();
-          const state = missingFromPolicy
-            ? "MISSING FROM POLICY"
-            : expired
-              ? "EXPIRED; provider cleanup pending"
-              : "managed";
-          const gatewayAccess = access.describe(target);
-          const githubLogin = access.githubLogin(target);
-          const github = `Verified GitHub: ${githubLogin ? `@${githubLogin}` : "unavailable"}`;
-          return {
-            line: `${visitorTargetKey(target)} | ${github}${profileId ? ` | profileId ${profileId}` : ""}${grant.grantId ? ` | grantId ${grant.grantId}` : ""} | invited ${new Date(grant.createdAt).toISOString()} | grant expires ${expiryText(grant.expiresAt)} | ${state} | ${gatewayAccess}`,
-            grant: {
-              ...(typeof target === "string" ? { email: target } : { githubAccountId: target }),
-              ...(grant.grantId ? { grantId: grant.grantId } : {}),
-              ...(profileId ? { profileId } : {}),
-              ...(githubLogin ? { githubLogin } : {}),
-              invitedAt: new Date(grant.createdAt).toISOString(),
-              expiresAt: grant.expiresAt === null ? null : new Date(grant.expiresAt).toISOString(),
-              state: missingFromPolicy ? "missing_from_policy" : expired ? "expired" : "managed",
-              gatewayAccess,
-            },
-          };
-        });
+      > = entries.map(({ value: grant }) => {
+        const target = visitorGrantTarget(grant);
+        const profileId = access.profileId(target);
+        const missingFromPolicy = !targetKeys.has(visitorTargetKey(target));
+        const expired = grant.expiresAt !== null && grant.expiresAt <= Date.now();
+        const state = missingFromPolicy
+          ? "MISSING FROM POLICY"
+          : expired
+            ? "EXPIRED; provider cleanup pending"
+            : "managed";
+        const gatewayAccess = access.describe(target);
+        const githubLogin = access.githubLogin(target);
+        const github = `Verified GitHub: ${githubLogin ? `@${githubLogin}` : "unavailable"}`;
+        // Grants recorded before onboarding metadata have no welcome progress until first sign-in.
+        const welcome = grant.onboarding && {
+          state: grant.onboarding.state,
+          ...(grant.onboarding.welcomeSessionKey
+            ? { sessionKey: grant.onboarding.welcomeSessionKey }
+            : {}),
+        };
+        const welcomeText = welcome
+          ? ` | welcome ${welcome.state}${welcome.sessionKey ? ` ${welcome.sessionKey}` : ""}`
+          : "";
+        return {
+          line: `${visitorTargetKey(target)} | ${github}${profileId ? ` | profileId ${profileId}` : ""}${grant.grantId ? ` | grantId ${grant.grantId}` : ""} | invited ${new Date(grant.createdAt).toISOString()} | grant expires ${expiryText(grant.expiresAt)} | ${state}${welcomeText} | ${gatewayAccess}`,
+          grant: {
+            ...(typeof target === "string" ? { email: target } : { githubAccountId: target }),
+            ...(grant.grantId ? { grantId: grant.grantId } : {}),
+            ...(profileId ? { profileId } : {}),
+            ...(githubLogin ? { githubLogin } : {}),
+            invitedAt: new Date(grant.createdAt).toISOString(),
+            expiresAt: grant.expiresAt === null ? null : new Date(grant.expiresAt).toISOString(),
+            state: missingFromPolicy ? "missing_from_policy" : expired ? "expired" : "managed",
+            ...(welcome ? { welcome } : {}),
+            gatewayAccess,
+          },
+        };
+      });
       rows.push(
         ...unmanaged.map((target) => {
           const gatewayAccess = access.describe(target);
@@ -654,9 +662,9 @@ export class VisitorAccessService {
           };
         }),
       );
-      let length = summary.length;
+      let length = lines.join("\n").length;
       let shown = 0;
-      for (const row of rows.slice(0, this.config.maxVisitors)) {
+      for (const row of rows.slice(0, maxVisitors)) {
         if (length + row.line.length + 1 > LIST_MAX_CHARS - 120) {
           break;
         }

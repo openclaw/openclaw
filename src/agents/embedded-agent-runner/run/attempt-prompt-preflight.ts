@@ -4,6 +4,7 @@ import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outc
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import type { FixedRequestTokenPressure } from "../../sessions/context-token-pressure.js";
 import type { SessionManager } from "../../sessions/index.js";
 import { log } from "../logger.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
@@ -16,7 +17,6 @@ import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   buildPrePromptContextBudgetStatus,
-  formatPrePromptPrecheckLog,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
@@ -145,6 +145,7 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
   includeBoundaryTimestamp: boolean;
   promptForPrecheck: string;
   pendingInputTokens?: number;
+  fixedTokenPressure?: FixedRequestTokenPressure;
   reserveTokens: number;
   sessionMessageCount: number;
   state: AttemptPromptPreflightState;
@@ -190,6 +191,7 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
       messages: input.hookMessagesForCurrentPrompt,
       unwindowedMessages: unwindowedLlmBoundaryMessagesForPrecheck,
       systemPrompt: input.systemPrompt,
+      fixedTokenPressure: input.fixedTokenPressure,
       prompt: input.promptForPrecheck,
       contextTokenBudget: input.contextTokenBudget,
       reserveTokens: input.reserveTokens,
@@ -226,13 +228,6 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
     ...(unwindowedMessages ? { unwindowedMessageCount: unwindowedMessages.length } : {}),
   };
   const contextBudgetStatus = buildPrePromptContextBudgetStatus(precheckSummary);
-  log.debug(
-    formatPrePromptPrecheckLog({
-      ...precheckSummary,
-      ...(attempt.sessionKey ? { sessionKey: attempt.sessionKey } : {}),
-      ...(attempt.sessionFile ? { sessionFile: attempt.sessionFile } : {}),
-    }),
-  );
   const checkpointPressure = preemptiveCompaction.compactionReplay;
   if (
     checkpointPressure &&

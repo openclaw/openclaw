@@ -1,5 +1,6 @@
-import type { HumanMention } from "@openclaw/gateway-protocol";
+import type { HumanMention, SessionPermissionMode } from "@openclaw/gateway-protocol";
 import type { MediaKind } from "@openclaw/media-core/constants";
+import type { ChatAppContextAttachment } from "../../../../packages/gateway-protocol/src/chat-app-context.js";
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
 import type { NodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
 import type {
@@ -10,9 +11,11 @@ import type {
 import type { extractCanvasFromText } from "../../../../src/chat/canvas-render.js";
 import type { MessageClientSource } from "../../../../src/chat/message-client-source.js";
 import type { ClawHubRecommendation } from "../../../../src/shared/clawhub-recommendations.js";
+import type { RunFailureNotice } from "../../../../src/shared/run-failure-notice.js";
 import type { SkillWorkshopChangeNotice } from "../../../../src/shared/skill-workshop-change-notice.js";
+import type { CyberAccessProgram } from "../../api/types.ts";
 import type { BrowserTabTarget } from "../../components/browser/browser-target.ts";
-import type { toolIcons } from "../../components/icons-tools.ts";
+import type { IconName } from "../../components/icon-data.ts";
 import type { SenderIdentity } from "./sender-label.ts";
 
 export type { HumanMention };
@@ -82,6 +85,8 @@ export type DurableDraftModelSelection = {
   model: string;
   agentRuntime?: string;
   thinkingLevel: string;
+  cyberAccessProgram?: CyberAccessProgram;
+  daybreakAccessProgram?: Exclude<CyberAccessProgram, "standard">;
 };
 
 export type DurableComposerDraft = {
@@ -91,8 +96,11 @@ export type DurableComposerDraft = {
   goalMode?: ChatGoalDraftMode;
   replyTarget?: ChatReplyTarget;
   modelSelection?: DurableDraftModelSelection;
+  permissionMode?: SessionPermissionMode;
   attachments: DurableComposerDraftAttachment[];
   questionDrafts?: DurableQuestionDraft[];
+  /** Context-only comments have no uploaded file payload. */
+  selectionAnnotations?: ChatSelectionAnnotation[];
 };
 
 export type ChatComposerDraftRetry = {
@@ -108,7 +116,7 @@ export type ChatReplyTarget = {
 };
 
 export type ChatGoalDraftMode = { sessionId?: string } & (
-  | { action: "start" }
+  | { action: "start"; fromCommand?: true }
   | { action: "edit"; goalId: string; previousDraft: string }
 );
 
@@ -122,7 +130,7 @@ export type ChatGoalAction = "pause" | "resume" | "clear";
 export type ChatGoalRecovery = {
   pending: boolean;
   goalId?: string;
-  action?: ChatGoalAction | "edit" | "complete" | "block";
+  action?: ChatGoalAction | "edit" | "replace" | "complete" | "block";
   retired?: "expired" | "invalid";
   onCheck: () => Promise<boolean>;
 };
@@ -163,6 +171,7 @@ export type ChatQueueItem = {
   storageScope?: string;
   /** UI question associated with this input; delivery and retry stay outbox-owned. */
   asyncQuestionItemId?: string;
+  appContext?: ChatAppContextAttachment[];
   workContext?: ChatWorkContext;
   workContextUnavailable?: true;
   text: string;
@@ -198,7 +207,6 @@ export type ChatQueueItem = {
     | "executing-command"
     | "sending"
     | "waiting-reconnect"
-    | "unconfirmed"
     // Provider review requires a new operator decision even if delivery has prior attempts.
     | "held"
     | "failed";
@@ -214,7 +222,6 @@ export type ChatItem =
       kind: "message";
       key: string;
       message: unknown;
-      duplicateCount?: number;
       /** A distinct input remains a presentation boundary before execution starts. */
       startsTurn?: true;
     }
@@ -223,26 +230,36 @@ export type ChatItem =
       key: string;
       text: string;
       timestamp: number;
-      icon?: keyof typeof toolIcons;
+      icon?: IconName;
       label?: string;
+      modelChange?: { from: string; to: string };
       startsTurn?: true;
       boundaryId?: string;
       tone?: "danger";
+      /** Informational source-owned event eligible for timeline folding. */
+      systemEvent?: "info";
       /** Collapse the body behind a disclosure; the label line stays visible. */
       collapsedBody?: true;
+      showTimestamp?: true;
       /** Structural only: separates a handed-off run from its resumption. Never rendered. */
       handoffBoundary?: true;
       /** A background skill review's changes; rendered as a native row instead of `text`. */
       skillChanges?: SkillWorkshopChangeNotice;
+      runError?: RunFailureNotice;
+      /** Total identical failures represented by the latest display notice. */
+      repeatCount?: number;
       permissionMissing?: NodePermissionRequest;
+      /** Retained cancelled input that may be dismissed. */
+      retiredPendingInput?: { id: string; preview: string };
     }
   | {
       kind: "divider";
       key: string;
       compaction?: "active" | "complete";
       compactionId?: string;
+      systemEvent?: "info";
       label: string;
-      icon?: keyof typeof toolIcons;
+      icon?: IconName;
       metric?: string;
       description?: string;
       timestamp: number;
@@ -256,6 +273,7 @@ export type ChatItem =
       isStreaming: boolean;
       replyToSender?: SenderIdentity;
       replyToMessage?: MessageGroup["replyToMessage"];
+      replyPreviousMessageId?: string;
       runId?: string;
       boundaryId?: string;
     }
@@ -276,6 +294,13 @@ export type ChatItem =
     }
   | { kind: "question"; key: string; questionId: string; startedAt: number };
 
+export type SystemEventItem = Extract<ChatItem, { kind: "notice" | "divider" }>;
+export type SystemEventGroup = {
+  kind: "system-event-group";
+  key: string;
+  events: SystemEventItem[];
+};
+
 export type ChatStreamSegment = {
   /** Input observed when live commentary first arrived; omitted for history replay. */
   afterUserSendId?: string;
@@ -288,11 +313,13 @@ export type ChatStreamSegment = {
   itemId?: string;
 };
 
-export function streamSegmentHasItemId(segment: { itemId?: unknown }): boolean {
-  return typeof segment.itemId === "string" && segment.itemId.trim().length > 0;
+export function streamSegmentHasItemId(segment: Pick<ChatStreamSegment, "itemId">): boolean {
+  return Boolean(segment.itemId?.trim());
 }
 
-export function streamSegmentUsesAccumulatedText(segment: { itemId?: unknown }): boolean {
+export function streamSegmentUsesAccumulatedText(
+  segment: Pick<ChatStreamSegment, "itemId">,
+): boolean {
   return !streamSegmentHasItemId(segment);
 }
 
@@ -342,6 +369,8 @@ export type MessageGroup = {
   sourceClients?: MessageClientSource[];
   replyToSender?: SenderIdentity;
   replyToMessage?: { message: unknown; key: string };
+  /** Last visible message before this group, even when search hides that row. */
+  replyPreviousMessageId?: string;
   /** Reply context: more than one person speaks in the conversation. */
   replyShared?: true;
   /** Assistant reply context: the user prompt that opened this turn. */
@@ -351,7 +380,6 @@ export type MessageGroup = {
   messages: Array<{
     message: unknown;
     key: string;
-    duplicateCount?: number;
     replyTarget?: NormalizedMessage["replyTarget"];
     /** Rendered reply content, excluding assistant thinking tags. */
     hasVisibleContent: boolean;
@@ -377,6 +405,7 @@ export type MessageImageSource = {
 };
 
 export type MessageContentItem =
+  | import("../../../../src/shared/plugin-inline-view.js").PluginInlineViewBlock
   | ClawHubRecommendation
   | {
       type: "image";
@@ -422,7 +451,12 @@ export type MessageContentItem =
   | {
       type: "attachment_error";
       attachment: {
-        code: "file-not-found" | "unsupported-format" | "delivery-failed" | "invalid-reference";
+        code:
+          | "file-not-found"
+          | "unsupported-format"
+          | "file-too-large"
+          | "delivery-failed"
+          | "invalid-reference";
         kind: Exclude<MediaKind, "sticker" | "unknown">;
         label: string;
         mimeType?: string;
@@ -476,6 +510,8 @@ export type ToolCard = {
   resultMessageId?: string;
   /** Gateway display projection omitted content; the durable result may still be complete. */
   outputTruncated?: boolean;
+  /** Bounded external preview; does not authorize full-message recovery. */
+  catalogTruncated?: boolean;
   toolOutput?: ToolOutputMetadata;
   /** Structured tool result details (e.g. the edit tool's precomputed diff). */
   details?: unknown;
@@ -506,4 +542,11 @@ export type ToolCardOutcome =
   | "failed"
   | "blocked"
   | "skipped"
+  | "unrecorded"
   | "unknown";
+
+export type ChatGoalMutationAction = { goalId: string } & (
+  | { action: ChatGoalAction }
+  | { action: "edit"; objective: string }
+  | { action: "replace"; objective: string; expectedRunId: string; expectedGoalUpdatedAt: number }
+);

@@ -29,15 +29,15 @@ type PendingUploadChunkRecord = {
   dataBase64: string;
 };
 
-function createMetaStore(): PluginStateKeyedStore<PendingUploadMetaRecord> {
-  return getMSTeamsRuntime().state.openKeyedStore<PendingUploadMetaRecord>({
+function createMetaStore(): PluginStateKeyedStore<PendingUploadMetaRecord, 2> {
+  return getMSTeamsRuntime().state.openKeyedStoreV2<PendingUploadMetaRecord>({
     namespace: PENDING_UPLOAD_META_NAMESPACE,
     maxEntries: PENDING_UPLOAD_META_MAX_ENTRIES,
   });
 }
 
-function createChunkStore(): PluginStateKeyedStore<PendingUploadChunkRecord> {
-  return getMSTeamsRuntime().state.openKeyedStore<PendingUploadChunkRecord>({
+function createChunkStore(): PluginStateKeyedStore<PendingUploadChunkRecord, 2> {
+  return getMSTeamsRuntime().state.openKeyedStoreV2<PendingUploadChunkRecord>({
     namespace: PENDING_UPLOAD_CHUNKS_NAMESPACE,
     maxEntries: MAX_PENDING_UPLOAD_CHUNK_ROWS,
   });
@@ -53,18 +53,6 @@ function buildMetaKey(id: string): string {
 
 function buildChunkKey(id: string, index: number): string {
   return `${buildUploadKey(id)}:chunk:${String(index).padStart(4, "0")}`;
-}
-
-function recordToUpload(record: PendingUploadMetaRecord, buffer: Buffer): PendingUpload {
-  return {
-    id: record.id,
-    buffer,
-    filename: record.filename,
-    contentType: record.contentType,
-    conversationId: record.conversationId,
-    consentCardActivityId: record.consentCardActivityId,
-    createdAt: record.createdAt,
-  };
 }
 
 async function deleteUploadRows(
@@ -99,14 +87,11 @@ async function registerUploadRows(
   await pruneUploadStore(metaStore, chunkStore, chunkCount);
   for (let index = 0; index < chunkCount; index += 1) {
     const chunk = buffer.subarray(index * RAW_CHUNK_BYTES, (index + 1) * RAW_CHUNK_BYTES);
-    await chunkStore.register(
-      buildChunkKey(record.id, index),
-      toPluginJsonValue({
-        id: record.id,
-        index,
-        dataBase64: chunk.toString("base64"),
-      }),
-    );
+    await chunkStore.register(buildChunkKey(record.id, index), {
+      id: record.id,
+      index,
+      dataBase64: chunk.toString("base64"),
+    });
   }
   await metaStore.register(
     buildMetaKey(record.id),
@@ -126,7 +111,7 @@ async function registerUploadRows(
 async function readUploadRows(
   id: string,
   metaStore: PluginStateKeyedStore<PendingUploadMetaRecord>,
-  chunkStore: PluginStateKeyedStore<PendingUploadChunkRecord>,
+  chunkStore: PluginStateKeyedStore<PendingUploadChunkRecord, 2>,
 ): Promise<PendingUpload | undefined> {
   const meta = await metaStore.lookup(buildMetaKey(id));
   if (!meta) {
@@ -139,23 +124,31 @@ async function readUploadRows(
   ) {
     return undefined;
   }
-  // Published Teams packages retain support for hosts with point reads only.
-  const records = await chunkStore.lookupMany?.(
+  const records = await chunkStore.lookupMany(
     Array.from({ length: meta.chunkCount }, (_, index) => buildChunkKey(id, index)),
   );
   const chunks: Buffer[] = [];
   for (let index = 0; index < meta.chunkCount; index += 1) {
-    const result = records?.[index];
+    const result = records[index];
     if (result && !result.ok) {
       throw result.error;
     }
-    const chunk = records ? result?.value : await chunkStore.lookup(buildChunkKey(id, index));
+    const chunk = result?.value;
     if (!chunk || chunk.id !== id || chunk.index !== index) {
       return undefined;
     }
     chunks.push(Buffer.from(chunk.dataBase64, "base64"));
   }
-  return recordToUpload(meta, Buffer.concat(chunks, meta.byteLength));
+  const buffer = Buffer.concat(chunks, meta.byteLength);
+  return {
+    id: meta.id,
+    buffer,
+    filename: meta.filename,
+    contentType: meta.contentType,
+    conversationId: meta.conversationId,
+    consentCardActivityId: meta.consentCardActivityId,
+    createdAt: meta.createdAt,
+  };
 }
 
 async function pruneUploadStore(
@@ -262,9 +255,6 @@ export async function setPendingUploadActivityIdFs(id: string, activityId: strin
     if (!record || Date.now() - record.createdAt > PENDING_UPLOAD_TTL_MS) {
       return;
     }
-    await metaStore.register(
-      buildMetaKey(id),
-      toPluginJsonValue({ ...record, consentCardActivityId: activityId }),
-    );
+    await metaStore.register(buildMetaKey(id), { ...record, consentCardActivityId: activityId });
   });
 }

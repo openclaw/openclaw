@@ -50,7 +50,7 @@ const agentLifecycleBinding = strictRecord({
   agentId,
   provenance: strictRecord({
     agentId,
-    createdVia: z.enum(["operator", "agent", "claw"]),
+    createdVia: z.enum(["operator", "agent", "template"]),
     creatorAgentId: agentId.nullable(),
     createdAtMs: timestamp,
   }).nullable(),
@@ -110,6 +110,7 @@ const oauthRecordSchema = strictRecord({
   createdAtMs: timestamp,
   pendingInitial: pendingInitialSchema.optional(),
   pendingRefresh: z.literal(true).optional(),
+  refreshClaim: z.string().uuid().optional(),
   refreshFailure: z.enum(["expired", "failed"]).optional(),
 }).refine(
   (record) =>
@@ -137,7 +138,6 @@ export function createGitHubOAuthRecord(params: {
   tokens: GitHubOAuthTokenPair;
   now: number;
   pendingInitial?: GitHubOAuthPendingInitial;
-  pendingRefresh?: true;
 }): GitHubOAuthRecord {
   return {
     version: 1,
@@ -152,7 +152,6 @@ export function createGitHubOAuthRecord(params: {
     scopes: params.tokens.scopes,
     createdAtMs: params.now,
     ...(params.pendingInitial ? { pendingInitial: params.pendingInitial } : {}),
-    ...(params.pendingRefresh ? { pendingRefresh: true } : {}),
   };
 }
 
@@ -226,26 +225,39 @@ export async function listGitHubDeviceAuthorizationRecords(): Promise<
     record: GitHubDeviceAuthorizationRecord | undefined;
   }>
 > {
-  return (await listHiddenGitHubSecretRecords({ prefix: "github-device" })).flatMap(
-    ({ name, value }) => {
-      if (!DEVICE_REQUEST_ID_PATTERN.test(name)) {
-        return [];
-      }
-      const record = parseGitHubRecord(value, deviceRecordSchema);
-      return [{ requestId: name, record: record?.requestId === name ? record : undefined }];
-    },
-  );
+  return parseDeviceRecords(await listHiddenGitHubSecretRecords({ prefix: "github-device" }));
 }
 
-export async function writeGitHubOAuthRecord(record: GitHubOAuthRecord): Promise<void> {
-  const parsed = parseGitHubRecord(JSON.stringify(record), oauthRecordSchema);
+function parseDeviceRecords(rows: Array<{ name: string; value: string }>) {
+  return rows.flatMap(({ name, value }) => {
+    if (!DEVICE_REQUEST_ID_PATTERN.test(name)) {
+      return [];
+    }
+    return [{ requestId: name, record: parseGitHubDeviceAuthorizationRecord(value, name) }];
+  });
+}
+
+export async function writeGitHubOAuthRecord(
+  record: GitHubOAuthRecord,
+  expected?: GitHubOAuthRecord,
+): Promise<void> {
+  const parsed = parseGitHubOAuthRecord(JSON.stringify(record), record.profileId);
   if (!parsed || parsed.profileId !== record.profileId) {
     throw new Error("GitHub OAuth record is invalid.");
   }
   await writeHiddenGitHubSecretRecord({
     name: githubOAuthRecordName(record.profileId),
     value: JSON.stringify(parsed),
+    ...(expected ? { expectedValue: JSON.stringify(oauthRecordSchema.parse(expected)) } : {}),
   });
+}
+
+export function parseGitHubOAuthRecord(
+  raw: string | undefined,
+  profileId: string,
+): GitHubOAuthRecord | undefined {
+  const record = raw === undefined ? undefined : parseGitHubRecord(raw, oauthRecordSchema);
+  return record?.profileId === profileId ? record : undefined;
 }
 
 export async function inspectGitHubOAuthRecord(
@@ -257,8 +269,8 @@ export async function inspectGitHubOAuthRecord(
   if (raw === undefined) {
     return { state: "missing" };
   }
-  const record = parseGitHubRecord(raw, oauthRecordSchema);
-  return record?.profileId === profileId ? { state: "valid", record } : { state: "invalid" };
+  const record = parseGitHubOAuthRecord(raw, profileId);
+  return record ? { state: "valid", record } : { state: "invalid" };
 }
 
 export async function deleteGitHubOAuthRecord(profileId: string): Promise<void> {
@@ -271,14 +283,17 @@ export async function listGitHubOAuthRecords(): Promise<
     record: GitHubOAuthRecord | undefined;
   }>
 > {
-  return (await listHiddenGitHubSecretRecords({ prefix: "github-oauth" })).flatMap(
-    ({ name, value }) => {
-      const profileId = parseGitHubOAuthProfileId(name);
-      if (!profileId) {
-        return [];
-      }
-      const record = parseGitHubRecord(value, oauthRecordSchema);
-      return [{ profileId, record: record?.profileId === profileId ? record : undefined }];
-    },
-  );
+  return parseOAuthRecords(await listHiddenGitHubSecretRecords({ prefix: "github-oauth" }));
+}
+
+function parseOAuthRecords(rows: Array<{ name: string; value: string }>) {
+  return rows.flatMap(({ name, value }) => {
+    const profileId = parseGitHubOAuthProfileId(name);
+    return profileId ? [{ profileId, record: parseGitHubOAuthRecord(value, profileId) }] : [];
+  });
+}
+
+export async function listGitHubAuthorizationRecords() {
+  const rows = await listHiddenGitHubSecretRecords({});
+  return { deviceRecords: parseDeviceRecords(rows), oauthRecords: parseOAuthRecords(rows) };
 }

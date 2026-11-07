@@ -25,6 +25,7 @@ type ExternalPluginLocalDistParams = {
   repoRoot?: string;
   env?: NodeJS.ProcessEnv;
   logLevel?: "silent" | "warn";
+  controlUiAssetsPrepared?: boolean;
 };
 
 /** Lists external first-party packages that need source-checkout dist output. */
@@ -84,19 +85,21 @@ export async function buildExternalPluginLocalDist(
     }
     const target = `dist/extensions/${plan.pluginDir}`;
     const browserOutput = `${packageDir}/dist/control-ui`;
-    // Manifest writers run before compilation. Their fresh manifest fingerprints
-    // browser dependencies; the runtime cache must not restore over that owner.
-    const earlyAssets = generatedAssets.includes(`${packageDir}/openclaw.plugin.json`);
+    const browserManifest = `${packageDir}/dist/openclaw.plugin.json`;
+    // Browser dependencies are outside the backend graph. Their fresh declaration
+    // fingerprints complete browser bytes; cached backends must not replace it.
+    const earlyAssets = generatedAssets.includes(browserManifest);
     const sourceOutputs = earlyAssets
       ? []
       : generatedAssets.filter(
           (asset) => asset.startsWith(`${packageDir}/`) && !asset.includes("/node_modules/"),
         );
-    const step: BuildCacheStep = {
+    const step = {
       label: `tsdown:external-plugin:${plan.pluginDir}`,
       cache: {
         inputs: [
           { path: packageDir, excludeDirectories: ["dist", "node_modules", ".artifacts", ".git"] },
+          ...(earlyAssets ? [browserManifest] : []),
           ...plan.bundledSdkSourceFiles,
         ],
         env: ["NODE_ENV", "SOURCE_DATE_EPOCH"],
@@ -105,7 +108,7 @@ export async function buildExternalPluginLocalDist(
           path.posix.join(target, output.replace(/^\.\/dist\//u, "")),
         ),
       },
-    };
+    } satisfies BuildCacheStep;
     const cacheParams = {
       rootDir: repoRoot,
       env,
@@ -168,6 +171,7 @@ export async function buildExternalPluginLocalDist(
     const result = await buildPluginNpmRuntime({
       repoRoot,
       packageDir,
+      controlUiAssetsPrepared: earlyAssets && params.controlUiAssetsPrepared,
       // Standalone package validation owns its existing bundler warnings; this
       // root build still surfaces errors and validates every emitted host import.
       logLevel: params.logLevel ?? "error",
@@ -180,7 +184,7 @@ export async function buildExternalPluginLocalDist(
     for (const entry of fs.readdirSync(result.outDir)) {
       // Source-discovered plugins serve these assets in place; plugins:assets:copy
       // also stages them at their manifest-relative path, without flattening dist/.
-      if (entry === "control-ui") {
+      if (entry === "control-ui" || entry === "openclaw.plugin.json") {
         continue;
       }
       const source = path.join(result.outDir, entry);
@@ -206,7 +210,9 @@ export async function buildExternalPluginLocalDist(
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {
-    const result = await buildExternalPluginLocalDist();
+    const result = await buildExternalPluginLocalDist({
+      controlUiAssetsPrepared: process.argv.includes("--control-ui-assets-prepared"),
+    });
     console.log(
       `[external-plugin-local-dist] built ${result.pluginDirs.length} plugins in ${Math.round(result.durationMs)}ms`,
     );

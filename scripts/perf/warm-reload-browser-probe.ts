@@ -1,0 +1,846 @@
+import type { ApplicationContext } from "../../ui/src/app/context.ts";
+import type { installPaneChromeProbe } from "../lib/control-ui-pane-chrome-probe.ts";
+import type { ReloadAnimationSample } from "./warm-reload-frames.ts";
+
+export const proofRegions = {
+  sidebar: "aside.sidebar",
+  header: ".chat-pane__header",
+  transcript: ".chat-thread-viewport, .chat-thread",
+  details: ".chat-details",
+  composer: ".agent-chat__input, .agent-chat__disabled-banner--replacement",
+  dashboard: "openclaw-board-view",
+};
+
+/** Summarize the existing pane-chrome sampler after its first populated Details frame. */
+export function summarizeDetailsGeometry(
+  frames: ReturnType<ReturnType<typeof installPaneChromeProbe>["read"]>["detailsFrames"],
+) {
+  const firstIndex = frames.findIndex((frame) => frame.sections.some((row) => row.height > 0));
+  const populated = firstIndex < 0 ? [] : frames.slice(firstIndex);
+  let topMovementPx = 0;
+  let heightMovementPx = 0;
+  let sectionInsertions = 0;
+  let sectionRemovals = 0;
+  const sectionTopMovementPx: Record<string, number> = {};
+  let environmentHeightMovementPx = 0;
+  let outputsTopMovementPx = 0;
+  let automationsTopMovementPx = 0;
+  for (let index = 1; index < populated.length; index++) {
+    const before = new Map(populated[index - 1]!.sections.map((row) => [row.section, row]));
+    const after = new Map(populated[index]!.sections.map((row) => [row.section, row]));
+    for (const id of new Set([...before.keys(), ...after.keys()])) {
+      const from = before.get(id);
+      const to = after.get(id);
+      if (from && to) {
+        const movement = Math.abs(to.top - from.top);
+        topMovementPx += movement;
+        sectionTopMovementPx[id] = (sectionTopMovementPx[id] ?? 0) + movement;
+        if (id === "outputs") {
+          outputsTopMovementPx += movement;
+        }
+        if (id === "automations") {
+          automationsTopMovementPx += movement;
+        }
+      } else if (to) {
+        sectionInsertions++;
+      } else {
+        sectionRemovals++;
+      }
+      heightMovementPx += Math.abs((to?.height ?? 0) - (from?.height ?? 0));
+      if (id === "environment") {
+        environmentHeightMovementPx += Math.abs((to?.height ?? 0) - (from?.height ?? 0));
+      }
+    }
+  }
+  const first = populated[0];
+  const firstEnvironment = first?.sections.find((row) => row.section === "environment");
+  return {
+    firstPopulatedMs: first?.at ?? null,
+    firstHasAutomations: first?.sections.some((row) => row.section === "automations") ?? false,
+    firstProcessHeightPx: first?.sections.find((row) => row.section === "processes")?.height ?? 0,
+    firstSubagentHeightPx: first?.sections.find((row) => row.section === "subagents")?.height ?? 0,
+    finalSubagentHeightPx:
+      populated.at(-1)?.sections.find((row) => row.section === "subagents")?.height ?? 0,
+    sectionTopMovementPx,
+    firstEnvironmentHeightPx: firstEnvironment?.height ?? null,
+    firstEnvironmentBranchVisible: firstEnvironment?.environmentBranchVisible ?? null,
+    lastEnvironmentHeightPx:
+      populated.at(-1)?.sections.find((row) => row.section === "environment")?.height ?? null,
+    environmentHeightMovementPx,
+    outputsTopMovementPx,
+    automationsTopMovementPx,
+    topMovementPx,
+    heightMovementPx,
+    totalVerticalMovementPx: topMovementPx + heightMovementPx,
+    sectionInsertions,
+    sectionRemovals,
+    frames: populated,
+  };
+}
+
+/** Serialized into the top document before its application modules execute. */
+export function installWarmReloadBrowserProbe(
+  route: string,
+  transcriptLatePaint = false,
+  composerContext = false,
+) {
+  if (window !== window.top) {
+    return undefined;
+  }
+  const data = {
+    firstAppDomMs: null as number | null,
+    firstMainDomMs: null as number | null,
+    firstTranscriptDomMs: null as number | null,
+    firstDashboardContentDomMs: null as number | null,
+    boardWidgetSkeletonMs: null as number | null,
+    allBoardWidgetsVisibleMs: null as number | null,
+    cachedBoardLayoutMs: null as number | null,
+    firstPaintedRowsMs: null as number | null,
+    firstDetailsDomMs: null as number | null,
+    firstDetailsPaintMs: null as number | null,
+    detailsFrames: [] as Array<{
+      atMs: number;
+      populated: boolean;
+      docked: boolean;
+      height: number;
+      sections: number;
+    }>,
+    bottomParagraphPaintMs: null as number | null,
+    transcriptTextPaintMs: null as number | null,
+    pluginsCompleteMs: null as number | null,
+    textPaints: [] as Array<{ atMs: number; tag: string }>,
+    pluginMarks: [] as Array<{ atMs: number; name: string }>,
+    pluginStates: [] as Array<{
+      atMs: number;
+      status: string;
+      pages: number;
+      panels: number;
+      accessories: number;
+      widgets: number;
+      replacements: number;
+      selected: string[];
+      errors: number;
+    }>,
+    transcriptGeometry: [] as Array<{
+      atMs: number;
+      scrollTop: number;
+      distanceFromEnd: number;
+      width: number;
+      height: number;
+      rowHeight: number;
+      bottomVisible: boolean;
+    }>,
+    finalRowsDomMs: null as number | null,
+    helloPublishedMs: null as number | null,
+    helloHandledMs: null as number | null,
+    fcpMs: null as number | null,
+    cls: 0,
+    loafBlockingMs: 0,
+    loaf: [] as Array<{ atMs: number; durationMs: number; blockingMs: number }>,
+    indexedDb: [] as Array<{
+      store: string;
+      operation: string;
+      atMs: number;
+      completedAtMs: number | null;
+      outcome?: "success" | "error";
+      found?: boolean;
+    }>,
+    shifts: [] as Array<{ atMs: number; value: number }>,
+    domStates: [] as Array<{ atMs: number; rows: number; sidebarRows: number; board: boolean }>,
+    sidebarFrames: [] as Array<{
+      atMs: number;
+      host: boolean;
+      frame: boolean;
+      state: string | null;
+      saved: string | null;
+      rows: number;
+      sections: number;
+    }>,
+    textStates: [] as Array<{
+      atMs: number;
+      hash: string;
+      characters: number;
+      truncated: boolean;
+      height: number;
+      width: number;
+    }>,
+    animationSamples: [] as ReloadAnimationSample[],
+    contextRingFrames: [] as Array<{
+      atMs: number;
+      composer: { x: number; y: number; width: number; height: number };
+      controls: Array<{ selector: string; x: number; width: number; text: string }>;
+      ring: {
+        label: string | null;
+        opacity: string;
+        dashOffset: string | null;
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+      } | null;
+    }>,
+    animationProbeMs: 0,
+    animationPolicy:
+      "Recognized skeleton shimmer or opacity/visibility-only fades with at most 64 elements; fades containing images, canvas, video or iframes are excluded. Signatures retain content, attributes, appearance and geometry, except intermediate opacity. No whole-page animation mask.",
+    masks: [] as Array<{
+      name: string;
+      reason: string;
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    }>,
+    maskPolicy: {
+      caret:
+        "A collapsed editable selection is masked at its measured caret rectangle; empty inputs use their padded text origin.",
+      animation: "Only small spinner/icon rectangles; skeletons and content remain visible.",
+    },
+    stopped: false,
+  };
+  Reflect.set(window, "__warmReloadProof", data);
+  if (transcriptLatePaint) {
+    for (const operation of ["get", "getAll", "getAllKeys", "put"] as const) {
+      const original = IDBObjectStore.prototype[operation];
+      Object.defineProperty(IDBObjectStore.prototype, operation, {
+        configurable: true,
+        value(this: IDBObjectStore, ...args: unknown[]) {
+          const request = Reflect.apply(original, this, args) as IDBRequest;
+          if (!data.stopped && this.transaction.db.name === "openclaw-chat-snapshots") {
+            const entry: (typeof data.indexedDb)[number] = {
+              store: this.name,
+              operation,
+              atMs: performance.now(),
+              completedAtMs: null,
+            };
+            data.indexedDb.push(entry);
+            for (const outcome of ["success", "error"] as const) {
+              request.addEventListener(
+                outcome,
+                () => {
+                  entry.completedAtMs = performance.now();
+                  entry.outcome = outcome;
+                  if (outcome === "success" && operation === "get") {
+                    entry.found = request.result !== undefined;
+                  }
+                },
+                { once: true },
+              );
+            }
+          }
+          return request;
+        },
+      });
+    }
+  }
+  window.addEventListener("message", (event: MessageEvent<unknown>) => {
+    if (
+      typeof event.data === "object" &&
+      event.data !== null &&
+      "type" in event.data &&
+      event.data.type === "warm-reload-proof:dashboard-content-ready"
+    ) {
+      data.firstDashboardContentDomMs ??= performance.now();
+      if (
+        route === "dashboard" &&
+        document
+          .querySelector("openclaw-board-view")
+          ?.closest("[data-region]")
+          ?.getAttribute("data-region") === "main"
+      ) {
+        data.firstMainDomMs ??= data.firstDashboardContentDomMs;
+      }
+    }
+  });
+  const observe = (type: string, handle: (entry: PerformanceEntry) => void) => {
+    if (PerformanceObserver.supportedEntryTypes.includes(type)) {
+      new PerformanceObserver((entries) => entries.getEntries().forEach(handle)).observe({
+        type,
+        buffered: true,
+      });
+    }
+  };
+  observe("paint", (entry) => {
+    if (entry.name === "first-contentful-paint") {
+      data.fcpMs = entry.startTime;
+    }
+  });
+  observe("element", (entry) => {
+    const identifier: unknown = Reflect.get(entry, "identifier");
+    const renderTime: unknown = Reflect.get(entry, "renderTime");
+    if (identifier === "openclaw-transcript" && typeof renderTime === "number" && renderTime > 0) {
+      data.firstPaintedRowsMs ??= renderTime;
+    }
+    if (identifier === "openclaw-details" && typeof renderTime === "number" && renderTime > 0) {
+      data.firstDetailsPaintMs ??= renderTime;
+    }
+    if (
+      identifier === "openclaw-transcript-bottom" &&
+      typeof renderTime === "number" &&
+      renderTime > 0
+    ) {
+      data.bottomParagraphPaintMs ??= renderTime;
+    }
+  });
+  observe("largest-contentful-paint", (entry) => {
+    const element: unknown = Reflect.get(entry, "element");
+    if (element instanceof Element && element.matches(".chat-text p, .chat-text p *")) {
+      data.transcriptTextPaintMs ??= entry.startTime;
+      data.textPaints.push({ atMs: entry.startTime, tag: element.tagName });
+    }
+  });
+  observe("mark", (entry) => {
+    if (entry.name.startsWith("warm-reload-plugin:")) {
+      data.pluginMarks.push({ atMs: entry.startTime, name: entry.name });
+    }
+  });
+  let firstShift = 0;
+  let lastShift = 0;
+  let shiftValue = 0;
+  observe("layout-shift", (entry) => {
+    if (Reflect.get(entry, "hadRecentInput")) {
+      return;
+    }
+    const value = Number(Reflect.get(entry, "value"));
+    data.shifts.push({ atMs: entry.startTime, value });
+    if (
+      lastShift === 0 ||
+      entry.startTime - firstShift >= 5000 ||
+      entry.startTime - lastShift >= 1000
+    ) {
+      firstShift = entry.startTime;
+      shiftValue = 0;
+    }
+    lastShift = entry.startTime;
+    shiftValue += value;
+    data.cls = Math.max(data.cls, shiftValue);
+  });
+  observe("long-animation-frame", (entry) => {
+    const blockingMs = Number(Reflect.get(entry, "blockingDuration"));
+    data.loaf.push({ atMs: entry.startTime, durationMs: entry.duration, blockingMs });
+    data.loafBlockingMs += blockingMs;
+  });
+  let stopGateway: (() => void) | undefined;
+  let stopPlugins: (() => void) | undefined;
+  const receiveContext = (event: Event) => {
+    const provider = event as Event & { context?: unknown; contextTarget?: HTMLElement };
+    if (provider.context !== "openclaw.application" || !provider.contextTarget) {
+      return;
+    }
+    const consumer = document.createElement("span");
+    provider.contextTarget.append(consumer);
+    try {
+      consumer.dispatchEvent(
+        Object.assign(new Event("context-request", { bubbles: true, composed: true }), {
+          context: "openclaw.application",
+          contextTarget: consumer,
+          subscribe: false,
+          callback: (context: ApplicationContext) => {
+            stopGateway = context.gateway.subscribe((snapshot) => {
+              if (snapshot.phase === "connected" && data.helloPublishedMs === null) {
+                data.helloPublishedMs = performance.now();
+                queueMicrotask(() => {
+                  data.helloHandledMs = performance.now();
+                });
+              }
+            });
+            let previous = "";
+            const plugins = () => {
+              const runtime = context.plugins;
+              const state = {
+                status: runtime.registryStatus,
+                pages: runtime.registrations("pages").length,
+                panels: runtime.registrations("panels").length,
+                accessories: runtime.registrations("accessories").length,
+                widgets: runtime.registrations("widgets").length,
+                replacements: runtime.registrations("replacements").length,
+                selected: (
+                  ["transcript", "workspace", "composer", "session-list"] as const
+                ).flatMap((surface) => (runtime.selectedReplacement(surface) ? [surface] : [])),
+                errors: runtime.errors.length,
+              };
+              const signature = JSON.stringify(state);
+              if (signature !== previous) {
+                data.pluginStates.push({ atMs: performance.now(), ...state });
+                previous = signature;
+              }
+              if (state.status === "complete") {
+                data.pluginsCompleteMs ??= performance.now();
+              }
+            };
+            stopPlugins = context.plugins.subscribe(plugins);
+            plugins();
+          },
+        }),
+      );
+    } finally {
+      consumer.remove();
+    }
+    window.removeEventListener("context-provider", receiveContext);
+  };
+  window.addEventListener("context-provider", receiveContext);
+  window.addEventListener(
+    "pagehide",
+    () => {
+      stopGateway?.();
+      stopPlugins?.();
+    },
+    { once: true },
+  );
+  let domVersion = 0;
+  const textObserver = new MutationObserver((records) => {
+    domVersion++;
+    for (const record of records) {
+      for (const node of record.addedNodes) {
+        const element = node instanceof Element ? node : node.parentElement;
+        if (
+          !element ||
+          (!element.closest(".chat-virtual-row, .chat-details-session") &&
+            !element.querySelector(".chat-virtual-row, .chat-details-session"))
+        ) {
+          continue;
+        }
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+        let text: Node | null;
+        while ((text = walker.nextNode())) {
+          const parent = text.parentElement;
+          if (
+            text.textContent?.trim() &&
+            parent?.closest(".chat-virtual-row, .chat-details-session") &&
+            !parent.hasAttribute("elementtiming")
+          ) {
+            parent.setAttribute(
+              "elementtiming",
+              parent.closest(".chat-details-session") ? "openclaw-details" : "openclaw-transcript",
+            );
+          }
+        }
+      }
+    }
+    const bottom = [...document.querySelectorAll(".chat-group.assistant .chat-text p")].at(-1);
+    if (
+      bottom?.textContent?.startsWith("Synthetic paragraph 18.") &&
+      bottom.getAttribute("elementtiming") !== "openclaw-transcript-bottom"
+    ) {
+      bottom.setAttribute("elementtiming", "openclaw-transcript-bottom");
+    }
+  });
+  textObserver.observe(document, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    characterData: true,
+  });
+  document.fonts.addEventListener("loadingdone", () => domVersion++);
+  const hash = (text: string) => {
+    let value = 2166136261;
+    for (let index = 0; index < text.length; index++) {
+      value = Math.imul(value ^ text.charCodeAt(index), 16777619);
+    }
+    return (value >>> 0).toString(16);
+  };
+  const trackedAnimations = new Map<
+    Animation,
+    {
+      target: Element;
+      key: string;
+      kind: "shimmer" | "fade";
+      version?: number;
+      value?: ReloadAnimationSample["animations"][number];
+    }
+  >();
+  let nextAnimationId = 0;
+  let previousAnimationSample = "";
+  const sampleAnimations = () => {
+    const started = performance.now();
+    for (const animation of document.getAnimations()) {
+      if (
+        trackedAnimations.has(animation) ||
+        !(animation.effect instanceof KeyframeEffect) ||
+        !(animation.effect.target instanceof Element)
+      ) {
+        continue;
+      }
+      const target = animation.effect.target;
+      const properties = new Set(
+        animation.effect
+          .getKeyframes()
+          .flatMap((frame) =>
+            Object.keys(frame).filter(
+              (key) => !["offset", "computedOffset", "easing", "composite"].includes(key),
+            ),
+          ),
+      );
+      const shimmer =
+        animation instanceof CSSAnimation &&
+        /shimmer/u.test(animation.animationName) &&
+        /skeleton/u.test(target.className);
+      const fade =
+        properties.size > 0 &&
+        [...properties].every((key) => key === "opacity" || key === "visibility");
+      if (
+        (!shimmer && !fade) ||
+        target.querySelectorAll("*").length > 63 ||
+        target.matches("img,canvas,video,iframe") ||
+        target.querySelector("img,canvas,video,iframe")
+      ) {
+        continue;
+      }
+      trackedAnimations.set(animation, {
+        target,
+        key: hash(`${performance.timeOrigin}:${nextAnimationId++}`),
+        kind: shimmer ? "shimmer" : "fade",
+      });
+    }
+    const animations: ReloadAnimationSample["animations"] = [];
+    for (const [animation, tracked] of trackedAnimations) {
+      if (!tracked.target.isConnected) {
+        trackedAnimations.delete(animation);
+        continue;
+      }
+      const active = animation.playState === "running" || animation.pending;
+      if (!tracked.value || active || tracked.value.active || tracked.version !== domVersion) {
+        const elements = [tracked.target, ...tracked.target.querySelectorAll("*")];
+        const box = tracked.target.getBoundingClientRect();
+        const appearance = elements
+          .map((element) => {
+            const rect = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            return (
+              [rect.x, rect.y, rect.width, rect.height].map((value) => value.toFixed(2)).join(",") +
+              [
+                style.display,
+                style.visibility,
+                Number(style.opacity) > 0,
+                style.color,
+                style.backgroundColor,
+                style.backgroundImage,
+                style.font,
+                style.letterSpacing,
+                style.lineHeight,
+                style.textDecoration,
+                style.borderColor,
+                style.borderWidth,
+                style.borderRadius,
+                style.padding,
+                style.boxShadow,
+                style.filter,
+                style.outline,
+                style.fill,
+                style.stroke,
+              ].join(";")
+            );
+          })
+          .join("|");
+        tracked.value = {
+          name: tracked.kind,
+          key: tracked.key,
+          signature: hash(tracked.target.outerHTML + appearance),
+          kind: tracked.kind,
+          active,
+          x: Math.floor(box.x),
+          y: Math.floor(box.y),
+          width: Math.ceil(box.width),
+          height: Math.ceil(box.height),
+        };
+        tracked.version = domVersion;
+      }
+      animations.push(tracked.value);
+    }
+    const serialized = JSON.stringify(animations);
+    if (serialized !== previousAnimationSample) {
+      data.animationSamples.push({ atMs: performance.now(), animations });
+      previousAnimationSample = serialized;
+    }
+    data.animationProbeMs += performance.now() - started;
+  };
+  const maskKeys = new Set<string>();
+  const addMask = (
+    name: string,
+    reason: string,
+    box: { x: number; y: number; width: number; height: number },
+  ) => {
+    const mask = {
+      name,
+      reason,
+      x: Math.floor(box.x),
+      y: Math.floor(box.y),
+      width: Math.ceil(box.width),
+      height: Math.ceil(box.height),
+    };
+    const key = JSON.stringify(mask);
+    if (!maskKeys.has(key)) {
+      data.masks.push(mask);
+      maskKeys.add(key);
+    }
+  };
+  let previous = "";
+  let previousRows = "";
+  let previousContextRing = "";
+  let previousDetails = "";
+  const sample = () => {
+    if (data.stopped) {
+      stopGateway?.();
+      stopPlugins?.();
+      textObserver.disconnect();
+      return;
+    }
+    Reflect.get(window, "__paneChrome").sample(performance.now());
+    sampleAnimations();
+    if (composerContext) {
+      const composer = document.querySelector(".agent-chat__input");
+      const box = composer?.getBoundingClientRect();
+      if (
+        composer &&
+        box &&
+        box.width > 0 &&
+        box.height > 0 &&
+        box.bottom > 0 &&
+        box.top < innerHeight &&
+        composer.checkVisibility({ checkOpacity: true, visibilityProperty: true })
+      ) {
+        const ring = composer.querySelector(".context-ring");
+        const ringBox = ring?.getBoundingClientRect();
+        const state = {
+          composer: { x: box.x, y: box.y, width: box.width, height: box.height },
+          controls: [
+            ".agent-chat__composer-lead",
+            ".agent-chat__composer-trail",
+            ".agent-chat__composer-controls",
+            ".context-usage",
+            "[data-chat-model-select]",
+            "[data-chat-thinking-select]",
+            "[data-chat-permission-select]",
+            ".agent-chat__composer-actions",
+            ".agent-chat__input-btn--attach",
+            ".chat-send-btn--voice",
+            ".chat-send-btn--stop",
+            ".chat-send-btn--send",
+          ].flatMap((selector) => {
+            const element = composer.querySelector(selector);
+            const rect = element?.getBoundingClientRect();
+            return element && rect?.width
+              ? [
+                  {
+                    selector,
+                    x: rect.x,
+                    width: rect.width,
+                    text: element.textContent?.trim() ?? "",
+                  },
+                ]
+              : [];
+          }),
+          ring:
+            ring && ringBox
+              ? {
+                  label: ring.getAttribute("aria-label"),
+                  opacity: getComputedStyle(ring).opacity,
+                  dashOffset:
+                    ring.querySelector(".context-ring__fill")?.getAttribute("stroke-dashoffset") ??
+                    null,
+                  x: ringBox.x,
+                  y: ringBox.y,
+                  width: ringBox.width,
+                  height: ringBox.height,
+                }
+              : null,
+        };
+        const signature = JSON.stringify(state);
+        if (signature !== previousContextRing) {
+          data.contextRingFrames.push({ atMs: performance.now(), ...state });
+          previousContextRing = signature;
+        }
+      }
+    }
+    const answer = transcriptLatePaint
+      ? [...document.querySelectorAll(".chat-group.assistant .chat-text")].at(-1)
+      : undefined;
+    if (answer) {
+      const text = answer.textContent ?? "";
+      const box = answer.getBoundingClientRect();
+      const textHash = hash(text);
+      const previousText = data.textStates.at(-1);
+      if (
+        box.width > 0 &&
+        box.height > 0 &&
+        (previousText?.hash !== textHash ||
+          previousText.height !== box.height ||
+          previousText.width !== box.width)
+      ) {
+        data.textStates.push({
+          atMs: performance.now(),
+          hash: textHash,
+          characters: text.length,
+          truncated: text.includes("...(truncated)..."),
+          height: box.height,
+          width: box.width,
+        });
+      }
+    }
+    const rowElements = [...document.querySelectorAll(".chat-virtual-row")];
+    const lastAssistant = [...document.querySelectorAll(".chat-group.assistant")].at(-1);
+    const scroller = lastAssistant?.closest<HTMLElement>(".chat-thread");
+    if (
+      scroller &&
+      lastAssistant &&
+      lastAssistant.checkVisibility({ checkOpacity: true, visibilityProperty: true })
+    ) {
+      const rowBox = lastAssistant.getBoundingClientRect();
+      const box = scroller.getBoundingClientRect();
+      const bottom = [...lastAssistant.querySelectorAll(".chat-text p")]
+        .at(-1)
+        ?.getBoundingClientRect();
+      data.transcriptGeometry.push({
+        atMs: performance.now(),
+        scrollTop: scroller.scrollTop,
+        distanceFromEnd: scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop,
+        width: box.width,
+        height: box.height,
+        rowHeight: rowBox.height,
+        bottomVisible: Boolean(bottom && bottom.bottom > box.top && bottom.top < box.bottom),
+      });
+    }
+    const rows = rowElements.length;
+    const panel = document.querySelector(".chat-pane-cache__pane--active .chat-details");
+    if (panel) {
+      const session = panel.querySelector(".chat-details-session");
+      const populated = Boolean(
+        session?.textContent?.trim() &&
+        session.checkVisibility({ checkOpacity: true, visibilityProperty: true }),
+      );
+      const details = {
+        populated,
+        docked: panel.classList.contains("chat-details--docked"),
+        height: populated ? session!.getBoundingClientRect().height : 0,
+        sections: panel.querySelectorAll("[data-details-group]").length,
+      };
+      const signature = JSON.stringify(details);
+      if (signature !== previousDetails) {
+        data.detailsFrames.push({ atMs: performance.now(), ...details });
+        previousDetails = signature;
+      }
+      if (populated) {
+        data.firstDetailsDomMs ??= performance.now();
+      }
+    }
+    const sidebarRowElements = [
+      ...document.querySelectorAll("openclaw-app-sidebar [data-session-key]"),
+    ];
+    const sidebarRows = sidebarRowElements.length;
+    const board = Boolean(document.querySelector("openclaw-board-view iframe"));
+    const sidebar = document.querySelector("aside.sidebar");
+    data.sidebarFrames.push({
+      atMs: performance.now(),
+      host: Boolean(document.querySelector("openclaw-app-sidebar")),
+      frame: Boolean(sidebar),
+      state: sidebar?.getAttribute("data-snapshot-state") ?? null,
+      saved: sidebar?.getAttribute("data-snapshot-saved") ?? null,
+      rows: new Set(sidebarRowElements.map((row) => row.getAttribute("data-session-key"))).size,
+      sections: document.querySelectorAll("openclaw-app-sidebar [data-session-section]").length,
+    });
+    if (document.querySelector("openclaw-app-shell")) {
+      data.firstAppDomMs ??= performance.now();
+    }
+    const visibleTranscriptRows = rowElements.filter((row) => {
+      const box = row.getBoundingClientRect();
+      return (
+        box.bottom > 0 &&
+        box.y < innerHeight &&
+        box.width > 0 &&
+        row.checkVisibility({ checkOpacity: true, visibilityProperty: true }) &&
+        Boolean(row.querySelector(".chat-text")?.textContent?.trim())
+      );
+    });
+    if (visibleTranscriptRows.length > 0) {
+      data.firstTranscriptDomMs ??= performance.now();
+    }
+    if (
+      visibleTranscriptRows.some(
+        (row) => row.closest("[data-region]")?.getAttribute("data-region") === "main",
+      )
+    ) {
+      data.firstMainDomMs ??= performance.now();
+    }
+    const rowSignature = rowElements
+      .map(
+        (row) =>
+          `${row.getAttribute("data-virtual-row-key")}:${row.getBoundingClientRect().height}:${row.textContent?.length}`,
+      )
+      .join("|");
+    if (rows > 0 && rowSignature !== previousRows) {
+      data.finalRowsDomMs = performance.now();
+    }
+    previousRows = rowSignature;
+    const state = `${rows}/${sidebarRows}/${board}`;
+    if (state !== previous) {
+      data.domStates.push({ atMs: performance.now(), rows, sidebarRows, board });
+      previous = state;
+    }
+    for (const [selector, name, reason, maxWidth] of [
+      [
+        ".session-run-spinner, .btn__spinner, .desktop-spinner, .activity-pill__spinner, .chat-details-subagents__spinner, .icon--spin, .spinner",
+        "spinner",
+        "Small animated loading indicator",
+        40,
+      ],
+      [
+        ".chat-pane__connection-state, .sidebar-identity-card__status",
+        "reconnect",
+        "Permitted reconnect indicator",
+        240,
+      ],
+      [
+        ".chat-working-indicator__elapsed, .chat-subagents__elapsed, .subagents-desktop__elapsed",
+        "clock",
+        "Live elapsed clock",
+        100,
+      ],
+    ] as const) {
+      for (const element of document.querySelectorAll(selector)) {
+        const box = element.getBoundingClientRect();
+        if (box.width <= 0 || box.width > maxWidth || box.height <= 0 || box.height > 40) {
+          continue;
+        }
+        addMask(name, reason, box);
+      }
+    }
+    const active = document.activeElement;
+    if (
+      active instanceof HTMLElement &&
+      (active.isContentEditable ||
+        active instanceof HTMLTextAreaElement ||
+        active instanceof HTMLInputElement)
+    ) {
+      const selection = window.getSelection();
+      const range =
+        selection?.isCollapsed && selection.rangeCount ? selection.getRangeAt(0) : undefined;
+      const rect = range?.getBoundingClientRect();
+      if (rect && rect.height > 0 && rect.height <= 40 && rect.width <= 2) {
+        addMask("caret", "Collapsed editable selection", {
+          x: rect.x,
+          y: rect.y,
+          width: 2,
+          height: rect.height,
+        });
+      } else if (
+        !active.textContent &&
+        (!(active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) ||
+          !active.value)
+      ) {
+        const style = getComputedStyle(active);
+        const box = active.getBoundingClientRect();
+        addMask("caret", "Empty editable text origin", {
+          x: box.x + Number.parseFloat(style.paddingLeft),
+          y: box.y + Number.parseFloat(style.paddingTop),
+          width: 2,
+          height: Math.min(
+            40,
+            Number.parseFloat(style.lineHeight) || Number.parseFloat(style.fontSize),
+          ),
+        });
+      }
+    }
+    requestAnimationFrame(sample);
+  };
+  requestAnimationFrame(sample);
+  return data;
+}

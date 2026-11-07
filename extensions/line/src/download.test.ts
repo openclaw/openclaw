@@ -1,70 +1,28 @@
-// Line tests cover download plugin behavior.
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const fetchMock = vi.hoisted(() => vi.fn());
+const fetchMock = vi.hoisted(() => vi.fn<typeof fetch>());
 const delayMock = vi.hoisted(() => vi.fn());
 const saveMediaStreamMock = vi.hoisted(() => vi.fn());
-
-vi.mock("node:timers/promises", () => ({
-  setTimeout: delayMock,
-}));
-
-function responseWithChunks(status: number, parts: Buffer[]): Response {
-  return new Response(Buffer.concat(parts), { status });
+vi.mock("node:timers/promises", () => ({ setTimeout: delayMock }));
+const savedMedia = { path: "/saved-media", contentType: "image/jpeg" };
+const maxBytes = 10 * 1024 * 1024;
+function responseBody(start: UnderlyingDefaultSource<Uint8Array>["start"]) {
+  return new Response(new ReadableStream<Uint8Array>({ start }));
 }
-
-function cancellableResponse(
-  status: number,
-  parts: Buffer[] = [],
-): {
-  response: Response;
-  cancel: ReturnType<typeof vi.fn>;
-} {
+function cancellableResponse(status: number) {
   const cancel = vi.fn();
-  const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      for (const part of parts) {
-        controller.enqueue(part);
-      }
-    },
-    cancel,
-  });
-  return { response: new Response(body, { status }), cancel };
+  return { response: new Response(new ReadableStream<Uint8Array>({ cancel }), { status }), cancel };
 }
 
-vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
-  createSubsystemLogger: () => {
-    const logger = {
-      debug: () => {},
-      info: () => {},
-      warn: () => {},
-      error: () => {},
-      child: () => logger,
-    };
-    return logger;
-  },
-  logVerbose: () => {},
-}));
-
-vi.mock("openclaw/plugin-sdk/media-store", () => ({
-  saveMediaStream: saveMediaStreamMock,
-}));
+// mock-isolation: Consume synthetic streams without writing to the real media store.
+vi.mock("openclaw/plugin-sdk/media-store", () => ({ saveMediaStream: saveMediaStreamMock }));
 
 let downloadLineMedia: typeof import("./download.js").downloadLineMedia;
-let isRetryableLineInboundMediaError: typeof import("./download.js").isRetryableLineInboundMediaError;
-let storedContentType: string;
+let isRetryable: typeof import("./download.js").isRetryableLineInboundMediaError;
 
-function saveMediaStreamCall(): unknown[] {
-  const call = saveMediaStreamMock.mock.calls.at(0);
-  if (!call) {
-    throw new Error("Expected saveMediaStream call");
-  }
-  return call;
-}
-
-function expectMediaFetchError(err: unknown): MediaFetchError {
-  expect(err).toBeInstanceOf(MediaFetchError);
+async function downloadError(id: string) {
+  const err = await downloadLineMedia(id, "token").catch((e: unknown) => e);
   if (!(err instanceof MediaFetchError)) {
     throw new Error("expected a MediaFetchError");
   }
@@ -73,241 +31,149 @@ function expectMediaFetchError(err: unknown): MediaFetchError {
 
 describe("downloadLineMedia", () => {
   beforeAll(async () => {
-    ({ downloadLineMedia, isRetryableLineInboundMediaError } = await import("./download.js"));
+    ({ downloadLineMedia, isRetryableLineInboundMediaError: isRetryable } =
+      await import("./download.js"));
   });
 
   afterAll(() => {
     vi.doUnmock("node:timers/promises");
-    vi.doUnmock("openclaw/plugin-sdk/runtime-env");
     vi.doUnmock("openclaw/plugin-sdk/media-store");
     vi.unstubAllGlobals();
     vi.resetModules();
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+  afterEach(() => vi.useRealTimers());
 
   beforeEach(() => {
-    vi.restoreAllMocks();
     vi.stubGlobal("fetch", fetchMock);
     fetchMock.mockReset();
     delayMock.mockReset().mockResolvedValue(undefined);
-    storedContentType = "image/jpeg";
-    saveMediaStreamMock.mockReset();
-    saveMediaStreamMock.mockImplementation(async (stream: AsyncIterable<Buffer>) => {
-      const chunksLocal: Buffer[] = [];
-      // Consume the adapter stream so body failures, deadlines, and reader cleanup remain observable.
+    saveMediaStreamMock.mockReset().mockImplementation(async (stream: AsyncIterable<Buffer>) => {
       for await (const chunk of stream) {
-        chunksLocal.push(Buffer.from(chunk));
+        void chunk; // Drain through EOF so body errors and cleanup remain observable.
       }
-      return {
-        path: "/home/user/.openclaw/media/inbound/saved-media",
-        contentType: storedContentType,
-        size: Buffer.concat(chunksLocal).length,
-      };
+      return savedMedia;
     });
   });
 
-  it("does not pass the external messageId as a media filename", async () => {
-    const messageId = "a/../../../../etc/passwd";
-    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0x00]);
-    fetchMock.mockResolvedValueOnce(responseWithChunks(200, [jpeg]));
+  it.each([undefined, "voice-note.m4a"])(
+    "saves media safely with filename %s",
+    async (originalFilename) => {
+      const messageId = "a/../../../../etc/passwd";
+      fetchMock.mockResolvedValueOnce(new Response("unknown-audio-bytes"));
+      const result = await downloadLineMedia(messageId, "token", maxBytes, {
+        originalFilename,
+      });
 
-    const result = await downloadLineMedia(messageId, "token");
+      expect(fetchMock.mock.calls[0]?.[0]).toBe(
+        "https://api-data.line.me/v2/bot/message/a%2F..%2F..%2F..%2F..%2Fetc%2Fpasswd/content",
+      );
+      expect(result).toEqual(savedMedia);
+      expect(saveMediaStreamMock.mock.calls[0]?.slice(3)).toEqual([maxBytes, originalFilename]);
+      expect(saveMediaStreamMock.mock.calls[0]?.join("\n")).not.toContain(messageId);
+    },
+  );
 
-    expect(fetchMock.mock.calls[0]?.[0]).toBe(
-      "https://api-data.line.me/v2/bot/message/a%2F..%2F..%2F..%2F..%2Fetc%2Fpasswd/content",
+  it.each([202, 404])("cancels HTTP %s without masking the error", async (status) => {
+    const attempts = Array.from({ length: status === 202 ? 6 : 1 }, () =>
+      cancellableResponse(status),
     );
-    expect(result.size).toBe(jpeg.length);
-    expect(result.contentType).toBe("image/jpeg");
-    for (const arg of saveMediaStreamCall()) {
-      if (typeof arg === "string") {
-        expect(arg).not.toContain(messageId);
-      }
+    if (status === 404) {
+      attempts[0]!.cancel.mockRejectedValueOnce(new Error("cancel failed"));
     }
-  });
-
-  it("passes original filenames to the media store for extension fallback", async () => {
-    fetchMock.mockResolvedValueOnce(responseWithChunks(200, [Buffer.from("unknown-audio-bytes")]));
-
-    await downloadLineMedia("mid-file-audio", "token", 10 * 1024 * 1024, {
-      originalFilename: "voice-note.m4a",
-    });
-
-    const call = saveMediaStreamCall();
-    expect(call[3]).toBe(10 * 1024 * 1024);
-    expect(call[4]).toBe("voice-note.m4a");
-  });
-
-  it("cancels every response when content never becomes ready", async () => {
-    const attempts = Array.from({ length: 6 }, () => cancellableResponse(202));
     for (const attempt of attempts) {
       fetchMock.mockResolvedValueOnce(attempt.response);
     }
 
-    const err = expectMediaFetchError(
-      await downloadLineMedia("mid-stuck", "token").catch((error: unknown) => error),
+    const err = await downloadError("mid-unavailable");
+    expect(err).toMatchObject({ code: "http_error", status });
+    expect(isRetryable(err)).toBe(status === 202);
+    expect(delayMock.mock.calls.map((call) => call[0])).toEqual(
+      status === 202 ? [500, 1000, 2000, 4000, 4000] : [],
     );
-    expect(err.message).toMatch(/still preparing/i);
-    expect(err).toMatchObject({ code: "http_error", status: 202 });
-    expect(isRetryableLineInboundMediaError(err)).toBe(true);
-
-    expect(fetchMock).toHaveBeenCalledTimes(6);
-    expect(delayMock).toHaveBeenCalledTimes(5);
-    expect(delayMock.mock.calls.map((call) => call[0])).toEqual([500, 1000, 2000, 4000, 4000]);
     for (const attempt of attempts) {
       expect(attempt.cancel).toHaveBeenCalledTimes(1);
     }
     expect(saveMediaStreamMock).not.toHaveBeenCalled();
   });
 
-  it("preserves a permanent HTTP error when response cancellation fails", async () => {
-    const response = cancellableResponse(404);
-    response.cancel.mockRejectedValueOnce(new Error("cancel failed"));
-    fetchMock.mockResolvedValueOnce(response.response);
-
-    const err = expectMediaFetchError(
-      await downloadLineMedia("mid-missing", "token").catch((e: unknown) => e),
-    );
-
-    expect(err.code).toBe("http_error");
-    expect(err.status).toBe(404);
-    expect(isRetryableLineInboundMediaError(err)).toBe(false);
-    expect(saveMediaStreamMock).not.toHaveBeenCalled();
+  it.each(["network", "stream"])("propagates a %s failure for durable retry", async (stage) => {
+    const cause = new Error(`${stage} reset`);
+    if (stage === "network") {
+      fetchMock.mockRejectedValueOnce(cause);
+    } else {
+      fetchMock.mockResolvedValueOnce(responseBody((controller) => controller.error(cause)));
+    }
+    const err = await downloadError(`mid-${stage}`);
+    expect(err.code).toBe("fetch_failed");
+    expect(err.cause).toBe(cause);
+    expect(isRetryable(err)).toBe(true);
+    if (stage === "network") {
+      expect(saveMediaStreamMock).not.toHaveBeenCalled();
+    }
   });
 
-  it("aborts a hung content request at the total readiness deadline", async () => {
+  it.each(["headers", "body"])("bounds stalled %s and permits retry", async (stage) => {
+    let stalledBody: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let stalledResponse: Response | undefined;
     let requestSignal: AbortSignal | undefined;
-    fetchMock.mockImplementation(
-      async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-        requestSignal = init?.signal ?? undefined;
+    fetchMock.mockImplementationOnce(async (_input, init) => {
+      requestSignal = init?.signal ?? undefined;
+      if (stage === "headers") {
         return await new Promise<Response>((_resolve, reject) => {
           requestSignal?.addEventListener("abort", () => reject(new Error("fetch aborted")), {
             once: true,
           });
         });
-      },
-    );
-
-    vi.useFakeTimers();
-    const pending = downloadLineMedia("mid-hung", "token");
-    const rejection = expect(pending).rejects.toThrow(/did not download within 15 seconds/i);
-    await vi.advanceTimersByTimeAsync(15_000);
-    await rejection;
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(requestSignal?.aborted).toBe(true);
-    expect(saveMediaStreamMock).not.toHaveBeenCalled();
-  });
-
-  it("wraps an ordinary network failure for durable retry", async () => {
-    const cause = new Error("socket reset");
-    fetchMock.mockRejectedValueOnce(cause);
-
-    const err = expectMediaFetchError(
-      await downloadLineMedia("mid-network", "token").catch((e: unknown) => e),
-    );
-
-    expect(err.code).toBe("fetch_failed");
-    expect(err.cause).toBe(cause);
-    expect(isRetryableLineInboundMediaError(err)).toBe(true);
-    expect(saveMediaStreamMock).not.toHaveBeenCalled();
-  });
-
-  it("propagates a response-stream failure for durable retry", async () => {
-    const failure = new Error("response stream reset");
-    fetchMock.mockResolvedValueOnce(
-      new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.error(failure);
-          },
-        }),
-        { status: 200 },
-      ),
-    );
-
-    const err = expectMediaFetchError(
-      await downloadLineMedia("mid-stream", "token").catch((e: unknown) => e),
-    );
-
-    expect(err.code).toBe("fetch_failed");
-    expect(err.cause).toBe(failure);
-    expect(isRetryableLineInboundMediaError(err)).toBe(true);
-  });
-
-  it("uses one deadline across headers and body, then permits an identical retry", async () => {
-    let stalledBody: ReadableStreamDefaultController<Uint8Array> | undefined;
-    let stalledResponse: Response | undefined;
-    let requestSignal: AbortSignal | undefined;
-    fetchMock.mockImplementationOnce(
-      async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-        requestSignal = init?.signal ?? undefined;
-        stalledResponse = new Response(
-          new ReadableStream<Uint8Array>({
-            start(controller) {
-              stalledBody = controller;
-              controller.enqueue(Buffer.from("partial"));
-              init?.signal?.addEventListener("abort", () => controller.error(init.signal?.reason), {
-                once: true,
-              });
-            },
-          }),
-          { status: 200 },
-        );
-        return stalledResponse;
-      },
-    );
-
-    vi.useFakeTimers();
-    let settledAtDeadline = false;
-    const pending = downloadLineMedia("mid-body-stall", "token")
-      .catch((error: unknown) => error)
-      .finally(() => {
-        settledAtDeadline = true;
+      }
+      stalledResponse = responseBody((controller) => {
+        stalledBody = controller;
+        controller.enqueue(Buffer.from("partial"));
+        init?.signal?.addEventListener("abort", () => controller.error(init.signal?.reason), {
+          once: true,
+        });
       });
-    await vi.waitFor(() => expect(saveMediaStreamMock).toHaveBeenCalledTimes(1));
+      return stalledResponse;
+    });
+
+    vi.useFakeTimers();
+    let atDeadline: MediaFetchError | undefined;
+    const pending = downloadError("mid-body-stall").then((err) => {
+      atDeadline = err;
+      return err;
+    });
+    const started = stage === "body" ? saveMediaStreamMock : fetchMock;
+    await vi.waitFor(() => expect(started).toHaveBeenCalledTimes(1));
     await vi.advanceTimersByTimeAsync(15_000);
     await Promise.resolve();
-    const observedAtDeadline = settledAtDeadline;
-    if (!settledAtDeadline) {
+    const observedAtDeadline = atDeadline;
+    if (!atDeadline) {
       stalledBody?.error(new Error("pre-fix test cleanup"));
     }
-    const err = expectMediaFetchError(await pending);
+    const err = await pending;
 
-    expect(observedAtDeadline).toBe(true);
+    expect(observedAtDeadline).toBe(err);
     expect(err.code).toBe("fetch_failed");
+    expect(err.message).toMatch(/did not download within 15 seconds/i);
     expect(err).toBe(requestSignal?.reason);
     expect(requestSignal?.aborted).toBe(true);
-    expect(stalledResponse?.body?.locked).toBe(false);
-    expect(isRetryableLineInboundMediaError(err)).toBe(true);
+    if (stage === "body") {
+      expect(stalledResponse?.body?.locked).toBe(false);
+    } else {
+      expect(saveMediaStreamMock).not.toHaveBeenCalled();
+    }
+    expect(isRetryable(err)).toBe(true);
 
-    const healthy = Buffer.from("healthy retry");
-    fetchMock.mockResolvedValueOnce(responseWithChunks(200, [healthy]));
-    await expect(downloadLineMedia("mid-body-stall", "token")).resolves.toMatchObject({
-      size: healthy.length,
-    });
+    fetchMock.mockResolvedValueOnce(new Response("healthy retry"));
+    await expect(downloadLineMedia("mid-body-stall", "token")).resolves.toEqual(savedMedia);
   });
 
   it("classifies media failures for durable retry", () => {
-    expect(
-      isRetryableLineInboundMediaError(new MediaFetchError("http_error", "x", { status: 202 })),
-    ).toBe(true);
-    expect(
-      isRetryableLineInboundMediaError(new MediaFetchError("http_error", "x", { status: 408 })),
-    ).toBe(true);
-    expect(
-      isRetryableLineInboundMediaError(new MediaFetchError("http_error", "x", { status: 429 })),
-    ).toBe(true);
-    expect(
-      isRetryableLineInboundMediaError(new MediaFetchError("http_error", "x", { status: 503 })),
-    ).toBe(true);
-    expect(isRetryableLineInboundMediaError(new MediaFetchError("fetch_failed", "x"))).toBe(false);
-    expect(
-      isRetryableLineInboundMediaError(new MediaFetchError("http_error", "x", { status: 404 })),
-    ).toBe(false);
-    expect(isRetryableLineInboundMediaError(new MediaFetchError("max_bytes", "x"))).toBe(false);
-    expect(isRetryableLineInboundMediaError(new Error("Media exceeds 0MB limit"))).toBe(false);
+    for (const status of [408, 429, 503]) {
+      expect(isRetryable(new MediaFetchError("http_error", "x", { status }))).toBe(true);
+    }
+    expect(isRetryable(new MediaFetchError("fetch_failed", "x"))).toBe(false);
+    expect(isRetryable(new MediaFetchError("max_bytes", "x"))).toBe(false);
+    expect(isRetryable(new Error("Media exceeds 0MB limit"))).toBe(false);
   });
 });

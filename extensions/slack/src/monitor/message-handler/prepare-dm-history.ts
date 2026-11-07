@@ -1,4 +1,5 @@
 import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -35,7 +36,7 @@ export async function resolveSlackDmHistoryContext(params: {
     typeof import("openclaw/plugin-sdk/channel-inbound").resolveEnvelopeFormatOptions
   >;
 }): Promise<{ body: string | undefined; inboundHistory: SlackDmHistoryEntry[] | undefined }> {
-  const maxMessages = Math.max(0, Math.floor(params.limit));
+  const maxMessages = params.limit;
   if (maxMessages <= 0) {
     return { body: undefined, inboundHistory: undefined };
   }
@@ -59,37 +60,46 @@ export async function resolveSlackDmHistoryContext(params: {
         return body ? [{ message, body }] : [];
       })
       .slice(0, maxMessages)
-      .toReversed();
+      // oxlint-disable-next-line unicorn/no-array-reverse -- slice creates a private array.
+      .reverse();
 
     if (messages.length === 0) {
       return { body: undefined, inboundHistory: undefined };
     }
 
-    const userNames = new Map<string, string>();
-    const resolveUserLabel = async (userId: string): Promise<string> => {
-      const cached = userNames.get(userId);
-      if (cached) {
-        return cached;
-      }
-      const resolved = normalizeOptionalString(
-        (await params.ctx.resolveUserName(userId, params.eventScope)).name,
-      );
-      const label = resolved ?? userId;
-      userNames.set(userId, label);
-      return label;
-    };
+    const isCurrentBot = (message: (typeof messages)[number]["message"]) =>
+      (params.ctx.botUserId && message.user === params.ctx.botUserId) ||
+      (params.ctx.botId && message.bot_id === params.ctx.botId);
+    const userIds = [
+      ...new Set(
+        messages.flatMap(({ message }) =>
+          !isCurrentBot(message) && message.user ? [message.user] : [],
+        ),
+      ),
+    ];
+    // Match thread history's bounded lookups; repeated authors share one request.
+    const users = await runTasksWithConcurrency({
+      tasks: userIds.map((userId) => async () => {
+        const user = await params.ctx.resolveUserName(userId, params.eventScope);
+        return [userId, normalizeOptionalString(user.name) ?? userId] as const;
+      }),
+      limit: 4,
+      errorMode: "stop",
+    });
+    if (users.hasError) {
+      throw users.firstError;
+    }
+    const userNames = new Map(users.results);
 
     const entries: SlackDmHistoryEntry[] = [];
     const formatted: string[] = [];
     for (const { message, body } of messages) {
-      const isCurrentBot =
-        (params.ctx.botUserId && message.user === params.ctx.botUserId) ||
-        (params.ctx.botId && message.bot_id === params.ctx.botId);
-      const role = isCurrentBot || message.bot_id ? "assistant" : "user";
-      const senderBase = isCurrentBot
+      const currentBot = isCurrentBot(message);
+      const role = currentBot || message.bot_id ? "assistant" : "user";
+      const senderBase = currentBot
         ? "Assistant"
         : message.user
-          ? await resolveUserLabel(message.user)
+          ? userNames.get(message.user)!
           : (normalizeOptionalString(message.username) ?? (message.bot_id ? "Bot" : "Unknown"));
       const sender = `${senderBase} (${role})`;
       const timestamp = resolveSlackTimestampMs(message.ts);

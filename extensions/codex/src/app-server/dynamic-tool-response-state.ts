@@ -19,6 +19,8 @@ export type CodexDynamicToolRuntimeResponse = CodexDynamicToolCallResponse & {
   replaySafe?: boolean;
   sideEffectEvidence?: boolean;
   terminate?: boolean;
+  /** Committed source delivery survives failed result presentation or siblings. */
+  finalSourceReplyDelivered?: true;
   /** Candidate reply, committed only when the entire tool batch can complete. */
   toolAuthoredSourceReply?: ReturnType<typeof captureToolAuthoredSourceReply>;
   transcriptDetails?: unknown;

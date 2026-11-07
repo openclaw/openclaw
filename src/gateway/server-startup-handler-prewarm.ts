@@ -27,7 +27,6 @@ function gatewayPrewarmItems(getConfig: () => OpenClawConfig): GatewayHandlerPre
         }
       },
     },
-    { name: "connection", load: () => import("./server/ws-connection/message-handler.js") },
     ...["chat.history", "chat.send", "sessions.list"].map((method): GatewayHandlerPrewarmItem => ({
       name: method,
       load: async (isCancelled) => {
@@ -69,9 +68,9 @@ function gatewayPrewarmItems(getConfig: () => OpenClawConfig): GatewayHandlerPre
           return;
         }
         const { prewarmMemorySearchWorker } = loadBundledPluginPublicArtifactModuleSync<{
-          prewarmMemorySearchWorker: () => Promise<void>;
+          prewarmMemorySearchWorker: (config: OpenClawConfig) => Promise<void>;
         }>({ dirName: "memory-core", artifactBasename: "prewarm-api.js" });
-        await prewarmMemorySearchWorker();
+        await prewarmMemorySearchWorker(getConfig());
       },
     },
     {
@@ -91,19 +90,21 @@ export function scheduleGatewayHandlerPrewarm(params: {
   getConfig: () => OpenClawConfig;
   startupTrace?: Pick<GatewayStartupTrace, "measure">;
   log: { warn: (msg: string) => void };
-  items?: readonly GatewayHandlerPrewarmItem[];
   waitForPostReadyWork?: () => Promise<void>;
 }): GatewayIdleTaskHandle {
   let stopped = false;
   const startedAt = params.scheduler.now();
   // Warm code and local facts without executing requests or acquiring live provider catalogs.
-  const items = params.items ?? gatewayPrewarmItems(params.getConfig);
+  const items = gatewayPrewarmItems(params.getConfig);
   let nextIndex = 0;
   let currentItemName = "unknown";
   let idleTask: GatewayIdleTaskHandle | undefined;
 
   const scheduleNext = () => {
-    if (stopped || nextIndex >= items.length) {
+    if (stopped) {
+      return;
+    }
+    if (nextIndex >= items.length) {
       return;
     }
     void (async () => {
@@ -152,6 +153,7 @@ export function scheduleGatewayHandlerPrewarm(params: {
   scheduleNext();
 
   return {
+    name: "handler-prewarm",
     stop: () => {
       stopped = true;
       return idleTask?.stop();

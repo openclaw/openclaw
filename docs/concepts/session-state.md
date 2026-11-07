@@ -92,7 +92,7 @@ When a notify-eligible event lands and a watcher's cursor is behind, the watcher
 Session "agent:main:subagent:child" changed (other actor). Reconcile before acting: session_status sessionKey "agent:main:subagent:child" changesSince 12.
 ```
 
-Main-session watchers are also woken immediately via a heartbeat wake. Nested sub-agent watchers get the notice on their next turn.
+Live notices for explicit watchers coalesce for 20 seconds before starting a session event. Nested sub-agent and ambient group watchers receive context on their next ordinary turn.
 
 The protocol is deliberately anti-spam:
 
@@ -100,7 +100,7 @@ The protocol is deliberately anti-spam:
 - **Frozen watermark.** The cursor freezes its notified position when a notice is queued. Further material events advance only the material watermark. They do not re-notify.
 - **Acknowledge on drain, reopen only for interleaved work.** When the watcher's turn consumes the notice, the cursor advances. If more material events arrived between queueing and draining, exactly one fresh notice is opened for the remainder.
 - **Self-suppression.** A watcher never gets notified about events it caused itself.
-- **Restart recovery.** Pending notices live in an in-memory queue. A startup sweep re-materializes them from durable cursors after a gateway restart.
+- **Restart recovery.** A startup sweep restores pending notices from durable cursors as context for the next ordinary turn. It does not start model turns or outbound delivery for the recovered notices. Repeated sweeps retain one notice per watcher/target pair; the ordinary turn acknowledges the cursor when it consumes the notice. Until then, later changes to that already-pending notice remain passive and advance its material watermark. Newly created live notices still use active coalescing.
 
 ## Reconciling
 

@@ -355,6 +355,30 @@ enum OpenClawType {
         relativeTo textStyle: UIFont.TextStyle,
         maximumPointSize: CGFloat? = nil) -> UIFont
     {
+        // The scale follows Dynamic Type; weight and family include every variable-font axis below.
+        let category = UITraitCollection.current.preferredContentSizeCategory.rawValue
+        let key = "\(family)|\(weight)|\(size)|\(textStyle.rawValue)|\(maximumPointSize ?? 0)|\(category)" as NSString
+        if let font = self.scaledFontCache.object(forKey: key) { return font }
+        let font = self.makeScaledVariableUIFont(
+            family, weight: weight, size: size, relativeTo: textStyle, maximumPointSize: maximumPointSize)
+        self.scaledFontCache.setObject(font, forKey: key)
+        return font
+    }
+
+    /// NSCache is thread-safe and releases fonts under memory pressure.
+    private nonisolated(unsafe) static let scaledFontCache: NSCache<NSString, UIFont> = {
+        let cache = NSCache<NSString, UIFont>()
+        cache.countLimit = 128
+        return cache
+    }()
+
+    private static func makeScaledVariableUIFont(
+        _ family: VariableFont,
+        weight: CGFloat,
+        size: CGFloat,
+        relativeTo textStyle: UIFont.TextStyle,
+        maximumPointSize: CGFloat?) -> UIFont
+    {
         let name = family == .display ? Display.postScriptName : Body.postScriptName
         var variations = [self.fontWeightAxis: weight]
         if family == .body {
@@ -390,8 +414,9 @@ enum OpenClawType {
     {
         let metrics = UIFontMetrics(forTextStyle: textStyle)
         if let maximumPointSize {
-            return metrics.scaledFont(for: base, maximumPointSize: maximumPointSize)
+            return metrics.scaledFont(
+                for: base, maximumPointSize: maximumPointSize, compatibleWith: UITraitCollection.current)
         }
-        return metrics.scaledFont(for: base)
+        return metrics.scaledFont(for: base, compatibleWith: UITraitCollection.current)
     }
 }

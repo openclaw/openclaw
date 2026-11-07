@@ -1,8 +1,8 @@
 import type { SessionsListResult } from "../api/types.ts";
 import { sessionParticipantIdentityKey } from "../lib/chat/sender-label.ts";
+import { sessionSelfOwner, type SessionOwnerOption } from "../lib/session-owner.ts";
 import { findSidebarSessionInTree } from "./app-sidebar-session-navigation-logic.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-import { sessionSelfOwner, type SessionOwnerOption } from "./session-owner-chip.ts";
 
 function hasMultipleSidebarSessionIdentities(
   ownerOptions: readonly SessionOwnerOption[],
@@ -72,10 +72,9 @@ export function applySidebarSessionOwnerFilter(input: {
   };
   // An absent facet is unresolved during hydration. A present facet is the
   // Gateway's complete owner inventory, even when rows are owner-filtered.
-  const selectedOwnerId = input.selectedOwnerId?.trim() || null;
   // A complete facet may omit an owner with no rows. That means an empty
   // filtered list, never permission to broaden the selected owner to everyone.
-  const activeOwnerId = selectedOwnerId;
+  const activeOwnerId = input.selectedOwnerId?.trim() || null;
   const filterTree = (treeRows: readonly SidebarRecentSession[]): SidebarRecentSession[] => {
     const filtered: SidebarRecentSession[] = [];
     for (const row of treeRows) {

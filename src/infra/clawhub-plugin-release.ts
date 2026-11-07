@@ -9,10 +9,7 @@ import {
   readRequiredClawHubStringField,
   readRequiredClawHubNumberField,
 } from "./clawhub-client.js";
-import {
-  parseClawHubPackageSecurityResponse,
-  type ClawHubPackageSecurityResponse,
-} from "./clawhub-packages.js";
+import { parseClawHubPackageSecurityResponse } from "./clawhub-packages.js";
 export type ClawHubPluginSecurity = {
   status: string;
   auditUrl?: string;
@@ -21,27 +18,6 @@ export type ClawHubPluginSecurity = {
   guidance?: string;
   checkedAt?: number;
 };
-
-function projectSecurity(value: ClawHubPackageSecurityResponse): ClawHubPluginSecurity {
-  const trust = value.trust;
-  const moderationStatus =
-    trust.moderationState && trust.moderationState !== "approved"
-      ? trust.moderationState
-      : undefined;
-  const status = trust.blockedFromDownload
-    ? "blocked"
-    : trust.pending
-      ? "pending"
-      : trust.stale
-        ? "stale"
-        : (moderationStatus ?? trust.scanStatus ?? "unknown");
-  return {
-    status,
-    ...(value.verdict ? { verdict: value.verdict } : {}),
-    auditUrl: value.securityAuditUrl,
-    summary: value.overview,
-  };
-}
 
 /** Project exact release facts; listing and artifact URLs cannot prove stored download bytes. */
 export async function readClawHubPluginReleaseFacts(params: {
@@ -104,10 +80,34 @@ export async function readClawHubPluginReleaseFacts(params: {
       ) {
         throw new Error("ClawHub security metadata does not describe the selected release.");
       }
-      security = projectSecurity(parsedSecurity);
       const { assessClawHubTrust } = await import("./clawhub-install-trust.js");
+      const disposition = assessClawHubTrust(parsedSecurity);
+      const securityTrust = parsedSecurity.trust;
+      const moderationStatus =
+        securityTrust.moderationState && securityTrust.moderationState !== "approved"
+          ? securityTrust.moderationState
+          : undefined;
+      const trustStatus = securityTrust.pending
+        ? "pending"
+        : securityTrust.stale
+          ? "stale"
+          : (moderationStatus ?? securityTrust.scanStatus ?? "unknown");
+      const normalizedTrustStatus = trustStatus.trim().toLowerCase();
+      const status =
+        disposition === "blocked"
+          ? "blocked"
+          : disposition !== "clean" &&
+              (normalizedTrustStatus === "clean" || normalizedTrustStatus === "benign")
+            ? "review"
+            : trustStatus;
+      security = {
+        status,
+        ...(parsedSecurity.verdict ? { verdict: parsedSecurity.verdict } : {}),
+        auditUrl: parsedSecurity.securityAuditUrl,
+        summary: parsedSecurity.overview,
+      };
       trust = {
-        disposition: assessClawHubTrust(parsedSecurity.trust),
+        disposition,
         reasons: parsedSecurity.trust.reasons,
         pending: parsedSecurity.trust.pending,
         stale: parsedSecurity.trust.stale,

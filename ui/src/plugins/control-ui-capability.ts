@@ -15,6 +15,8 @@ import type {
 export type ControlUiRegistration<T> = {
   key: `${string}/${string}`;
   pluginId: string;
+  /** Host-admitted passive SVG data URL from the owning plugin manifest. */
+  panelIcon?: string;
   value: T;
   host: ControlUiHost;
   signal: AbortSignal;
@@ -27,17 +29,39 @@ export type ControlUiContributions = {
   actions: ControlUiAction;
   accessories: ControlUiAccessory;
   widgets: ControlUiWidget;
+  inlineViews: Parameters<ControlUiHost["ui"]["registerInlineView"]>[0];
   replacements: ControlUiReplacement;
 };
 
 // Application consumers use the registry contract; construction and activation
 // ownership stay in the runtime without a dependency back through app context.
 export type ControlUiPluginCapability = {
+  loadSettingsView: {
+    (
+      placement: import("../../../src/plugin-sdk/control-ui-settings.js").ControlUiSettingsView["placement"],
+      signal: AbortSignal,
+    ): Promise<{
+      view: import("../../../src/plugin-sdk/control-ui-settings.js").ControlUiSettingsView;
+      signal: AbortSignal;
+      dispose: () => void;
+    }>;
+    (
+      placement: import("../../../src/plugin-sdk/control-ui-settings.js").ControlUiChannelSettingsView["placement"],
+      signal: AbortSignal,
+    ): Promise<{
+      view: import("../../../src/plugin-sdk/control-ui-settings.js").ControlUiChannelSettingsView;
+      signal: AbortSignal;
+      dispose: () => void;
+    }>;
+  };
   readonly errors: readonly PluginControlUiDiagnostic[];
   readonly hasPlugins: boolean;
+  /** Advances before notifications, including plugin-owned presentation mutations. */
+  readonly revision: number;
   readonly registryStatus: "pending" | "complete" | "failed";
   readonly canReload: boolean;
   isLoading: (pluginId: string) => boolean;
+  inlineViewLabel: (key: string) => string | undefined;
   reload: () => Promise<void>;
   refresh: () => Promise<void>;
   subscribe: (listener: () => void) => ControlUiDisposer;

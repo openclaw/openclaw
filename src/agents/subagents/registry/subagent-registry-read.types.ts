@@ -58,9 +58,6 @@ export type SubagentCompletionDeliveryState = {
   windowStartedAt?: number;
   deadlineAt?: number;
   nextAttemptAt?: number;
-  steeringLeaseId?: string;
-  steeringLeasedAt?: number;
-  steeringInjectedAt?: number;
   suspendedAt?: number;
   suspendedReason?: "expiry" | "permanent_failure";
   dismissedAt?: number;
@@ -80,6 +77,7 @@ export type SubagentCompletionDeliveryState = {
     | "sink_unavailable"
     | "steer_dropped"
     | "message_tool_delivery_missing"
+    | "visible_reply_missing"
     | "dedupe"
     | "waiting_for_requester_turn";
 };
@@ -125,8 +123,7 @@ export type SubagentRunReadRecord = {
   delivery?: SubagentCompletionDeliveryState;
   execution: {
     status: "queued" | "running" | "interrupted" | "terminal";
-    /** Retained after restart settlement; an interrupted execution is not a task failure. */
-    interruptionReason?: "gateway-restart";
+    /** Recorded execution timing remains readable for retained task history. */
     startedAt?: number;
     endedAt?: number;
     outcome?: SubagentRunOutcome;

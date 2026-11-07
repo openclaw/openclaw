@@ -21,7 +21,7 @@ successful friend reconciliation (normally every 30 seconds), rather than owning
 separate retry timers. An interrupted dispatch or completion retries with
 stop-and-wait guidance, never another automatic resend grant.
 
-The deterministic secret scan recognizes full 40-character hexadecimal Git
+The rule-based secret scan recognizes full 40-character hexadecimal Git
 object IDs in HTTPS `github.com/<owner>/<repo>/{commit,blob,tree}/<id>` paths.
 Only that ID occurrence is excluded from the entropy heuristic; credentials,
 query/fragment values, other path segments, and the rest of the message remain

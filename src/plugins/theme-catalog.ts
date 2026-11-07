@@ -19,8 +19,8 @@ function pluginThemes(plugin: PluginManifestRecord): ThemeCatalogEntry[] {
   }
   const themes: ThemeCatalogEntry[] = [];
   for (const { id, definition, artwork } of plugin.themeDefinitions ?? []) {
-    const resourceUrl = (kind: "icon" | "hat" | "critter", artId: string, svg: string) => {
-      const hash = createHash("sha256").update(svg).digest("hex").slice(0, 12);
+    const resourceUrl = (kind: PluginThemeArtworkKind, artId: string, content: string) => {
+      const hash = createHash("sha256").update(content).digest("hex").slice(0, 12);
       return `${buildControlUiResourcePath("pluginThemeArt", "", plugin.id, [id, kind, artId])}?v=${hash}`;
     };
     const projected: ThemeArtwork | undefined = artwork
@@ -51,6 +51,16 @@ function pluginThemes(plugin: PluginManifestRecord): ThemeCatalogEntry[] {
                   Object.entries(artwork.critters).map(([artId, { svg, ...metadata }]) => [
                     artId,
                     { url: resourceUrl("critter", artId, svg), ...metadata },
+                  ]),
+                ),
+              }
+            : {}),
+          ...(artwork.backgrounds
+            ? {
+                backgrounds: Object.fromEntries(
+                  Object.entries(artwork.backgrounds).map(([mode, { base64 }]) => [
+                    mode,
+                    { url: resourceUrl("background", mode, base64) },
                   ]),
                 ),
               }
@@ -87,13 +97,15 @@ function pluginThemes(plugin: PluginManifestRecord): ThemeCatalogEntry[] {
   return themes;
 }
 
+export type PluginThemeArtworkKind = "icon" | "hat" | "critter" | "background";
+
 /** Returns captured bytes from the enabled owner's current published generation. */
 export function resolvePluginThemeArtwork(
   pluginId: string,
   themeId: string,
-  kind: "icon" | "hat" | "critter",
+  kind: PluginThemeArtworkKind,
   artId: string,
-): string | undefined {
+): { sourceName: string; body: Buffer } | undefined {
   const snapshot = currentSnapshot();
   if (!snapshot?.index.plugins.some((plugin) => plugin.pluginId === pluginId && plugin.enabled)) {
     return undefined;
@@ -101,13 +113,22 @@ export function resolvePluginThemeArtwork(
   const theme = snapshot.plugins
     .find((plugin) => plugin.id === pluginId)
     ?.themeDefinitions?.find((entry) => entry.id === themeId);
+  if (kind === "background") {
+    const background =
+      artId === "light" || artId === "dark" ? theme?.artwork?.backgrounds?.[artId] : undefined;
+    // The route sniffs raster bytes; the name only keeps them off the SVG path.
+    return background
+      ? { sourceName: "theme-background", body: Buffer.from(background.base64, "base64") }
+      : undefined;
+  }
   const artwork =
     kind === "icon"
       ? theme?.artwork?.icons
       : kind === "hat"
         ? theme?.artwork?.hats
         : theme?.artwork?.critters;
-  return artwork && Object.hasOwn(artwork, artId) ? artwork[artId]?.svg : undefined;
+  const svg = artwork && Object.hasOwn(artwork, artId) ? artwork[artId]?.svg : undefined;
+  return svg ? { sourceName: "theme-art.svg", body: Buffer.from(svg, "utf8") } : undefined;
 }
 
 /** Reads the published inventory only; explicit plugin lifecycle operations replace its palettes. */

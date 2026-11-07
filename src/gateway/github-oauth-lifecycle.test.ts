@@ -5,7 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   inspectGitHubOAuthRecord,
   listGitHubDeviceAuthorizationRecords,
-  listGitHubOAuthRecords,
+  listGitHubAuthorizationRecords,
   readGitHubDeviceAuthorizationRecord,
   writeGitHubDeviceAuthorizationRecord,
   writeGitHubOAuthRecord,
@@ -18,9 +18,14 @@ import {
 } from "../agents/github-tool-identity.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
+import * as hiddenSecrets from "../secrets/store/secret-store-hidden-github.js";
 import { writeHiddenGitHubSecretRecord } from "../secrets/store/secret-store.js";
 import { createDeferredCore as deferred } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -40,15 +45,23 @@ const mocks = vi.hoisted(() => ({
   writeOAuthRecord:
     vi.fn<
       (
-        write: (record: GitHubOAuthRecord) => Promise<void>,
+        write: typeof writeGitHubOAuthRecord,
         record: GitHubOAuthRecord,
+        expected?: GitHubOAuthRecord,
       ) => Promise<void>
+    >(),
+  listAuthorizationRecords:
+    vi.fn<
+      (
+        read: typeof listGitHubAuthorizationRecords,
+      ) => ReturnType<typeof listGitHubAuthorizationRecords>
     >(),
   resolveStatus: vi.fn(),
   updateConfig: vi.fn(),
 }));
 
-vi.mock("../agents/github-oauth-client.js", () => ({
+vi.mock("../agents/github-oauth-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/github-oauth-client.js")>()),
   clearGitHubCredentialVerificationCache: mocks.clearVerificationCache,
   verifyGitHubCredential: mocks.verifyCredential,
   requestGitHubOAuthDeviceCode: mocks.requestDeviceCode,
@@ -60,8 +73,10 @@ vi.mock("../agents/github-oauth-records.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../agents/github-oauth-records.js")>();
   return {
     ...actual,
-    writeGitHubOAuthRecord: (record: GitHubOAuthRecord) =>
-      mocks.writeOAuthRecord(actual.writeGitHubOAuthRecord, record),
+    listGitHubAuthorizationRecords: () =>
+      mocks.listAuthorizationRecords(actual.listGitHubAuthorizationRecords),
+    writeGitHubOAuthRecord: (record: GitHubOAuthRecord, expected?: GitHubOAuthRecord) =>
+      mocks.writeOAuthRecord(actual.writeGitHubOAuthRecord, record, expected),
   };
 });
 
@@ -87,7 +102,7 @@ vi.mock("./github-cli-preflight.js", async (importOriginal) => {
 });
 
 import { GitHubCliUnavailableError } from "./github-cli-preflight.js";
-import { configuredOAuthIdentities } from "./github-oauth-lifecycle-helpers.js";
+import { createGitHubOAuthInventoryReader } from "./github-oauth-lifecycle-helpers.js";
 import {
   createGitHubOAuthLifecycle,
   installActiveGitHubOAuthLifecycle,
@@ -109,8 +124,29 @@ import {
 } from "./github-oauth-lifecycle.test-support.js";
 
 type GitHubOAuthLifecycle = ReturnType<typeof createGitHubOAuthLifecycle>;
+type AuthorizedTokens = { status: "authorized"; tokens: typeof TOKENS };
+type RefreshedTokens = { status: "refreshed"; tokens: typeof TOKENS };
+
+function holdTokenExchange<T>(mock: typeof mocks.pollDeviceToken) {
+  const upstream = deferred<T>();
+  const started = deferred();
+  mock.mockImplementation(() => {
+    started.resolve();
+    return upstream.promise;
+  });
+  return {
+    upstream,
+    waitFor: (operation: Promise<unknown>) =>
+      awaitGateBeforeSettlement(
+        started.promise,
+        operation,
+        "Token exchange settled before dispatch",
+      ),
+  };
+}
 
 const DEVICE_CODE = "d".repeat(40);
+const SETUP_FAILED = { status: "failed", reason: "setup_failed" };
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -153,6 +189,18 @@ async function startAuthorization(lifecycle: GitHubOAuthLifecycle, scope: GitHub
   return await lifecycle.startAuthorization({ scope, agentId: "main" });
 }
 
+async function refreshFixture(record: Partial<GitHubOAuthRecord> = {}, author = true) {
+  const configured = identity(OLD_PROFILE, { oauth: true, author });
+  currentConfig = configForScope("system", configured);
+  await writeGitHubOAuthRecord(oauthRecord(OLD_PROFILE, record));
+  mocks.refreshToken.mockResolvedValue({ status: "refreshed", tokens: TOKENS });
+  return { configured, lifecycle: createLifecycle() };
+}
+
+async function expectStoredOAuth(profileId: string, record: Record<string, unknown>) {
+  expect(await inspectGitHubOAuthRecord(profileId)).toMatchObject({ state: "valid", record });
+}
+
 async function advanceToPoll(requestId: string): Promise<void> {
   const record = await readGitHubDeviceAuthorizationRecord(requestId);
   if (!record) {
@@ -184,11 +232,13 @@ beforeEach(() => {
   });
   mocks.createProfileId.mockReturnValue(NEW_PROFILE);
   mocks.removeProfile.mockResolvedValue(undefined);
-  mocks.refreshProfile.mockImplementation(async ({ token }) => {
+  mocks.refreshProfile.mockImplementation(async ({ token, assertCurrent }) => {
+    assertCurrent?.();
     refreshedTokens.push(token);
     return ACCOUNT;
   });
-  mocks.writeOAuthRecord.mockImplementation((write, record) => write(record));
+  mocks.writeOAuthRecord.mockImplementation((write, record, expected) => write(record, expected));
+  mocks.listAuthorizationRecords.mockImplementation((read) => read());
   mocks.resolveStatus.mockImplementation(async ({ selectedScope }) => statusResult(selectedScope));
   mocks.installProfile.mockImplementation(async ({ token, commitConfig }) => {
     installedTokens.push(token);
@@ -300,26 +350,18 @@ describe("GitHub OAuth authorization lifecycle", () => {
       .mockResolvedValueOnce({ status: "slow_down", intervalSeconds: 20 })
       .mockResolvedValueOnce({ status: "slow_down", intervalSeconds: 12 });
 
-    await advanceToPoll(started.requestId);
-    await expect(lifecycle.pollAuthorization(started.requestId)).resolves.toEqual({
-      status: "pending",
-      retryAfterMs: 5_000,
-    });
-    await advanceToPoll(started.requestId);
-    await expect(lifecycle.pollAuthorization(started.requestId)).resolves.toEqual({
-      status: "slow_down",
-      retryAfterMs: 10_000,
-    });
-    await advanceToPoll(started.requestId);
-    await expect(lifecycle.pollAuthorization(started.requestId)).resolves.toEqual({
-      status: "slow_down",
-      retryAfterMs: 20_000,
-    });
-    await advanceToPoll(started.requestId);
-    await expect(lifecycle.pollAuthorization(started.requestId)).resolves.toEqual({
-      status: "slow_down",
-      retryAfterMs: 25_000,
-    });
+    for (const [status, retryAfterMs] of [
+      ["pending", 5_000],
+      ["slow_down", 10_000],
+      ["slow_down", 20_000],
+      ["slow_down", 25_000],
+    ]) {
+      await advanceToPoll(started.requestId);
+      await expect(lifecycle.pollAuthorization(started.requestId)).resolves.toEqual({
+        status,
+        retryAfterMs,
+      });
+    }
     expect(await readGitHubDeviceAuthorizationRecord(started.requestId)).toMatchObject({
       pollIntervalMs: 25_000,
       nextPollAtMs: NOW + 65_000,
@@ -418,22 +460,15 @@ describe("GitHub OAuth authorization lifecycle", () => {
   it("singleflights concurrent polls for one request", async () => {
     const lifecycle = createLifecycle();
     const started = await startAuthorization(lifecycle, "system");
-    const upstream = deferred<{ status: "authorization_pending" }>();
-    const pollStarted = deferred();
-    mocks.pollDeviceToken.mockImplementation(() => {
-      pollStarted.resolve();
-      return upstream.promise;
-    });
+    const { upstream, waitFor } = holdTokenExchange<{
+      status: "authorization_pending";
+    }>(mocks.pollDeviceToken);
     await advanceToPoll(started.requestId);
 
     const first = lifecycle.pollAuthorization(started.requestId);
     const second = lifecycle.pollAuthorization(started.requestId);
     expect(second).toBe(first);
-    await awaitGateBeforeSettlement(
-      pollStarted.promise,
-      first,
-      "Device poll settled before exchange",
-    );
+    await waitFor(first);
     expect(mocks.pollDeviceToken).toHaveBeenCalledOnce();
     upstream.resolve({ status: "authorization_pending" });
     await expect(first).resolves.toMatchObject({ status: "pending" });
@@ -442,20 +477,11 @@ describe("GitHub OAuth authorization lifecycle", () => {
   it("fences an in-flight token exchange after the operator cancels", async () => {
     const lifecycle = createLifecycle();
     const started = await startAuthorization(lifecycle, "system");
-    const upstream = deferred<{ status: "authorized"; tokens: typeof TOKENS }>();
-    const pollStarted = deferred();
-    mocks.pollDeviceToken.mockImplementation(() => {
-      pollStarted.resolve();
-      return upstream.promise;
-    });
+    const { upstream, waitFor } = holdTokenExchange<AuthorizedTokens>(mocks.pollDeviceToken);
     await advanceToPoll(started.requestId);
 
     const result = lifecycle.pollAuthorization(started.requestId);
-    await awaitGateBeforeSettlement(
-      pollStarted.promise,
-      result,
-      "Device poll settled before exchange",
-    );
+    await waitFor(result);
     expect(await lifecycle.cancelAuthorizationAsync(started.requestId)).toBe(true);
     upstream.resolve({ status: "authorized", tokens: TOKENS });
 
@@ -553,10 +579,7 @@ describe("GitHub OAuth authorization lifecycle", () => {
       }
       await advanceToPoll(started.requestId);
 
-      await expect(lifecycle.pollAuthorization(started.requestId)).resolves.toEqual({
-        status: "failed",
-        reason: "setup_failed",
-      });
+      await expect(lifecycle.pollAuthorization(started.requestId)).resolves.toEqual(SETUP_FAILED);
       expect(await readGitHubDeviceAuthorizationRecord(started.requestId)).toBeUndefined();
       expect(await inspectGitHubOAuthRecord(NEW_PROFILE)).toEqual({ state: "missing" });
       expect(selectedIdentity("system")).toBeUndefined();
@@ -617,21 +640,12 @@ describe("GitHub OAuth authorization lifecycle", () => {
     });
     await advanceToPoll(started.requestId);
 
-    await expect(lifecycle.pollAuthorization(started.requestId)).resolves.toEqual({
-      status: "failed",
-      reason: "setup_failed",
-    });
+    await expect(lifecycle.pollAuthorization(started.requestId)).resolves.toEqual(SETUP_FAILED);
     expect(currentConfig).toEqual(runtimeBefore);
-    expect(await inspectGitHubOAuthRecord(NEW_PROFILE)).toMatchObject({
-      state: "valid",
-      record: { pendingInitial: { requestId: started.requestId } },
-    });
+    await expectStoredOAuth(NEW_PROFILE, { pendingInitial: { requestId: started.requestId } });
 
     await lifecycle.maintain();
-    expect(await inspectGitHubOAuthRecord(NEW_PROFILE)).toMatchObject({
-      state: "valid",
-      record: { pendingInitial: { requestId: started.requestId } },
-    });
+    await expectStoredOAuth(NEW_PROFILE, { pendingInitial: { requestId: started.requestId } });
 
     persistedReadable = true;
     await lifecycle.maintain();
@@ -736,42 +750,80 @@ describe("GitHub OAuth authorization lifecycle", () => {
 });
 
 describe("GitHub OAuth refresh and maintenance", () => {
-  it("bounds roster reads while preserving ordered identities and fresh configuration", () => {
-    const count = 128;
-    const entries: Record<string, { tools: { github?: GitHubToolIdentityConfig } }> = {};
-    for (let index = count; index > 0; index -= 1) {
-      entries[`agent-${String(index).padStart(3, "0")}`] = { tools: {} };
+  it("discovers device and OAuth records in one owner read and reuses the inventory", async () => {
+    await writeGitHubOAuthRecord(oauthRecord(OLD_PROFILE));
+    const reads = vi.spyOn(hiddenSecrets, "listHiddenGitHubSecretRecords");
+    const inventory = createGitHubOAuthInventoryReader(() => {});
+    try {
+      const first = await inventory.read();
+      expect(first.oauthRecords.map(({ profileId }) => profileId)).toEqual([OLD_PROFILE]);
+      expect(first.deviceRecords).toEqual([]);
+      expect(await inventory.read()).toBe(first);
+      expect(reads).toHaveBeenCalledTimes(1);
+    } finally {
+      inventory.close();
     }
-    let reads = 0;
-    const observed = new Proxy(entries, {
-      get(target, key, receiver) {
-        reads += typeof key === "string" && Object.hasOwn(target, key) ? 1 : 0;
-        return Reflect.get(target, key, receiver);
-      },
-    });
-    const config: OpenClawConfig = { agents: { entries: observed } };
-    expect(configuredOAuthIdentities(config)).toEqual([]);
-    // Idle maintenance should traverse a large roster a bounded number of times.
-    expect(reads).toBeLessThanOrEqual(count * 4);
+  });
 
-    const system = identity(OLD_PROFILE, { oauth: true, author: true });
-    const agent = identity(NEW_PROFILE, { oauth: true, author: true });
-    config.tools = { github: system };
-    entries["agent-128"] = { tools: { github: agent } };
-    entries["agent-064"] = { tools: { github: system } };
-    entries["agent-001"] = { tools: { github: identity(OTHER_PROFILE) } };
-    expect(configuredOAuthIdentities(config)).toEqual([
-      { scope: "system", agentId: "system", identity: system },
-      { scope: "agent", agentId: "agent-064", identity: system },
-      { scope: "agent", agentId: "agent-128", identity: agent },
-    ]);
-    entries["agent-001"] = { tools: { github: agent } };
-    delete entries["agent-128"];
-    expect(configuredOAuthIdentities(config)).toEqual([
-      { scope: "system", agentId: "system", identity: system },
-      { scope: "agent", agentId: "agent-001", identity: agent },
-      { scope: "agent", agentId: "agent-064", identity: system },
-    ]);
+  it("keeps OAuth inventory through unrelated writes and retains writes during an awaited scan", async () => {
+    const inventory = createGitHubOAuthInventoryReader(() => {});
+    const scanned = deferred();
+    const release = deferred();
+    try {
+      expect((await inventory.read()).oauthRecords).toEqual([]);
+      const scans = mocks.listAuthorizationRecords.mock.calls.length;
+      writeConfigMachineState("test.oauth-unrelated", true);
+      expect((await inventory.read()).oauthRecords).toEqual([]);
+      expect(mocks.listAuthorizationRecords).toHaveBeenCalledTimes(scans);
+
+      await writeGitHubOAuthRecord(oauthRecord(OLD_PROFILE));
+      mocks.listAuthorizationRecords.mockImplementationOnce(async (read) => {
+        const rows = await read();
+        scanned.resolve();
+        await release.promise;
+        return rows;
+      });
+      const pending = inventory.read();
+      await awaitGateBeforeSettlement(
+        scanned.promise,
+        pending,
+        "OAuth inventory read settled before reaching the scan barrier",
+      );
+      await writeGitHubOAuthRecord(oauthRecord(NEW_PROFILE));
+      release.resolve();
+      await pending;
+      expect((await inventory.read()).oauthRecords.map(({ profileId }) => profileId)).toEqual([
+        OLD_PROFILE,
+        NEW_PROFILE,
+      ]);
+      const scansBeforeClose = mocks.listAuthorizationRecords.mock.calls.length;
+      await closeOpenClawStateDatabaseAsync();
+      expect((await inventory.read()).oauthRecords.map(({ profileId }) => profileId)).toEqual([
+        OLD_PROFILE,
+        NEW_PROFILE,
+      ]);
+      expect(mocks.listAuthorizationRecords).toHaveBeenCalledTimes(scansBeforeClose + 1);
+    } finally {
+      release.resolve();
+      inventory.close();
+    }
+  });
+
+  it("refreshes overdue tokens after sleep and rebuilds their deadline after restart", async () => {
+    const { lifecycle } = await refreshFixture({ accessExpiresAtMs: NOW + 3_600_000 }, false);
+    lifecycle.start();
+    await time.wake();
+    expect(mocks.refreshToken).not.toHaveBeenCalled();
+    time.setTime(NOW + 3_600_000);
+    await time.wake();
+    expect(mocks.refreshToken).toHaveBeenCalledOnce();
+    await lifecycle.stop();
+    closeOpenClawStateDatabaseForTest();
+    time.setTime(NOW + 10 * 3_600_000);
+    const restarted = createLifecycle();
+    restarted.start();
+    await time.wake();
+    expect(mocks.refreshToken).toHaveBeenCalledTimes(2);
   });
 
   it("respects refresh skew and marks transient and terminal refresh failures", async () => {
@@ -788,38 +840,20 @@ describe("GitHub OAuth refresh and maintenance", () => {
     await writeGitHubOAuthRecord(oauthRecord(OLD_PROFILE));
     mocks.refreshToken.mockRejectedValueOnce(new Error("network unavailable"));
     await lifecycle.refreshEffectiveIdentity("main");
-    expect(await inspectGitHubOAuthRecord(OLD_PROFILE)).toMatchObject({
-      state: "valid",
-      record: { refreshFailure: "failed" },
-    });
+    await expectStoredOAuth(OLD_PROFILE, { refreshFailure: "failed" });
 
     await writeGitHubOAuthRecord(oauthRecord(OLD_PROFILE));
     mocks.refreshToken.mockResolvedValueOnce({ status: "error", code: "bad_refresh_token" });
     await lifecycle.refreshEffectiveIdentity("main");
-    expect(await inspectGitHubOAuthRecord(OLD_PROFILE)).toMatchObject({
-      state: "valid",
-      record: { refreshFailure: "expired" },
-    });
+    await expectStoredOAuth(OLD_PROFILE, { refreshFailure: "expired" });
   });
 
-  it("finishes an accepted refresh for already-admitted runs after config changes", async () => {
-    const configured = identity(OLD_PROFILE, { oauth: true, author: true });
-    currentConfig = configForScope("system", configured);
-    await writeGitHubOAuthRecord(oauthRecord(OLD_PROFILE));
-    const upstream = deferred<{ status: "refreshed"; tokens: typeof TOKENS }>();
-    const refreshStarted = deferred();
-    mocks.refreshToken.mockImplementation(() => {
-      refreshStarted.resolve();
-      return upstream.promise;
-    });
-    const lifecycle = createLifecycle();
+  it("preserves an accepted rotation without publishing a superseded profile after config changes", async () => {
+    const { lifecycle } = await refreshFixture();
+    const { upstream, waitFor } = holdTokenExchange<RefreshedTokens>(mocks.refreshToken);
 
     const refresh = lifecycle.refreshEffectiveIdentity("main");
-    await awaitGateBeforeSettlement(
-      refreshStarted.promise,
-      refresh,
-      "Refresh settled before exchange",
-    );
+    await waitFor(refresh);
     expect(mocks.refreshToken).toHaveBeenCalledOnce();
     setSelectedIdentity("system", "main", identity(OTHER_PROFILE, { oauth: true }));
     upstream.resolve({ status: "refreshed", tokens: TOKENS });
@@ -829,164 +863,93 @@ describe("GitHub OAuth refresh and maintenance", () => {
     expect(mocks.refreshProfile).toHaveBeenCalledWith(
       expect.objectContaining({ profileDir: expect.stringContaining(OLD_PROFILE) }),
     );
-    expect(await inspectGitHubOAuthRecord(OLD_PROFILE)).toMatchObject({
-      state: "valid",
-      record: { refreshToken: TOKENS.refreshToken },
+    expect(refreshedTokens).toEqual([]);
+    await expectStoredOAuth(OLD_PROFILE, {
+      refreshToken: TOKENS.refreshToken,
+      pendingRefresh: true,
     });
   });
 
   it("rejects a refreshed credential for a different durable account", async () => {
-    const configured = identity(OLD_PROFILE, { oauth: true, author: true });
-    currentConfig = configForScope("system", configured);
-    await writeGitHubOAuthRecord(oauthRecord(OLD_PROFILE));
-    mocks.refreshToken.mockResolvedValue({ status: "refreshed", tokens: TOKENS });
+    const { configured, lifecycle } = await refreshFixture();
     mocks.refreshProfile.mockRejectedValue(
       new GitHubAccountMismatchError("GitHub OAuth refresh returned a different account."),
     );
-    const lifecycle = createLifecycle();
 
     await lifecycle.refreshEffectiveIdentity("main");
 
     expect(selectedIdentity("system")).toEqual(configured);
-    expect(await inspectGitHubOAuthRecord(OLD_PROFILE)).toMatchObject({
-      state: "valid",
-      record: {
-        accountId: ACCOUNT.accountId,
-        login: ACCOUNT.login,
-        refreshFailure: "expired",
-      },
+    await expectStoredOAuth(OLD_PROFILE, {
+      accountId: ACCOUNT.accountId,
+      login: ACCOUNT.login,
+      refreshFailure: "expired",
     });
   });
 
   it("retries the first durable write from lifecycle-owned memory", async () => {
-    const configured = identity(OLD_PROFILE, { oauth: true, author: true });
-    currentConfig = configForScope("system", configured);
-    await writeGitHubOAuthRecord(oauthRecord(OLD_PROFILE));
-    mocks.refreshToken.mockResolvedValue({ status: "refreshed", tokens: TOKENS });
-    mocks.writeOAuthRecord.mockImplementationOnce(() => {
-      throw new Error("SQLite temporarily unavailable");
+    const { lifecycle } = await refreshFixture();
+    let failed = false;
+    mocks.writeOAuthRecord.mockImplementation((write, record, expected) => {
+      if (record.pendingRefresh && !failed) {
+        failed = true;
+        throw new Error("SQLite temporarily unavailable");
+      }
+      return write(record, expected);
     });
-    const lifecycle = createLifecycle();
 
     await lifecycle.refreshEffectiveIdentity("main");
     expect(mocks.refreshProfile).not.toHaveBeenCalled();
-    expect(await inspectGitHubOAuthRecord(OLD_PROFILE)).toMatchObject({
-      state: "valid",
-      record: { refreshToken: "refresh-token-current" },
-    });
+    await expectStoredOAuth(OLD_PROFILE, { refreshToken: "refresh-token-current" });
 
     await lifecycle.maintain();
 
     expect(mocks.refreshToken).toHaveBeenCalledOnce();
     expect(mocks.refreshProfile).toHaveBeenCalledOnce();
-    expect(await inspectGitHubOAuthRecord(OLD_PROFILE)).toMatchObject({
-      state: "valid",
-      record: { refreshToken: TOKENS.refreshToken },
-    });
+    await expectStoredOAuth(OLD_PROFILE, { refreshToken: TOKENS.refreshToken });
   });
 
-  it("singleflights refresh and ignores calls after the active lifecycle disconnects", async () => {
-    const configured = identity(OLD_PROFILE, { oauth: true });
-    currentConfig = configForScope("system", configured);
-    await writeGitHubOAuthRecord(oauthRecord(OLD_PROFILE));
-    const upstream = deferred<{ status: "error"; code: "bad_refresh_token" }>();
-    const refreshStarted = deferred();
-    mocks.refreshToken.mockImplementation(() => {
-      refreshStarted.resolve();
-      return upstream.promise;
-    });
-    const lifecycle = createLifecycle();
-    const uninstall = installActiveGitHubOAuthLifecycle(lifecycle);
-
-    const first = requestCurrentGitHubOAuthRefresh("main");
-    const second = requestCurrentGitHubOAuthRefresh("main");
-    await awaitGateBeforeSettlement(
-      refreshStarted.promise,
-      first,
-      "Refresh settled before exchange",
-    );
-    expect(mocks.refreshToken).toHaveBeenCalledOnce();
-    upstream.resolve({ status: "error", code: "bad_refresh_token" });
-    await Promise.all([first, second]);
-
-    uninstall();
-    await requestCurrentGitHubOAuthRefresh("main");
-    expect(mocks.refreshToken).toHaveBeenCalledOnce();
-  });
-
-  it("recovers a durable pending refresh after profile replacement fails", async () => {
-    const configured = identity(OLD_PROFILE, { oauth: true, author: true });
-    currentConfig = configForScope("system", configured);
-    await writeGitHubOAuthRecord(oauthRecord(OLD_PROFILE));
-    mocks.refreshToken.mockResolvedValue({ status: "refreshed", tokens: TOKENS });
-    mocks.refreshProfile.mockRejectedValueOnce(new Error("disk temporarily unavailable"));
-    const lifecycle = createLifecycle();
-
-    await lifecycle.refreshEffectiveIdentity("main");
-    expect(await inspectGitHubOAuthRecord(OLD_PROFILE)).toMatchObject({
-      state: "valid",
-      record: { pendingRefresh: true, refreshToken: TOKENS.refreshToken },
-    });
-
-    await lifecycle.maintain();
-
-    expect(mocks.refreshToken).toHaveBeenCalledTimes(2);
-    expect(mocks.refreshProfile).toHaveBeenCalledTimes(2);
-    expect(selectedIdentity("system")).toEqual(configured);
-    expect(await inspectGitHubOAuthRecord(OLD_PROFILE)).toEqual({
-      state: "valid",
-      record: expect.not.objectContaining({ pendingRefresh: expect.anything() }),
-    });
-  });
-
-  it("recovers a durable pending refresh after final metadata write fails", async () => {
-    const configured = identity(OLD_PROFILE, { oauth: true, author: true });
-    currentConfig = configForScope("system", configured);
-    await writeGitHubOAuthRecord(oauthRecord(OLD_PROFILE));
-    mocks.refreshToken.mockResolvedValue({ status: "refreshed", tokens: TOKENS });
-    let writes = 0;
-    mocks.writeOAuthRecord.mockImplementation((write, record) => {
-      writes += 1;
-      if (writes === 2) {
-        throw new Error("final metadata write failed");
+  it.each(["profile replacement", "final metadata write"] as const)(
+    "recovers a durable pending refresh after %s fails",
+    async (failure) => {
+      const { configured, lifecycle } = await refreshFixture();
+      if (failure === "profile replacement") {
+        mocks.refreshProfile.mockRejectedValueOnce(new Error("disk temporarily unavailable"));
+      } else {
+        let failed = false;
+        mocks.writeOAuthRecord.mockImplementation((write, record, expected) => {
+          if (record.refreshToken === TOKENS.refreshToken && !record.pendingRefresh && !failed) {
+            failed = true;
+            throw new Error("final metadata write failed");
+          }
+          return write(record, expected);
+        });
       }
-      return write(record);
-    });
-    const lifecycle = createLifecycle();
-
-    await lifecycle.refreshEffectiveIdentity("main");
-    expect(await inspectGitHubOAuthRecord(OLD_PROFILE)).toMatchObject({
-      state: "valid",
-      record: { pendingRefresh: true, refreshToken: TOKENS.refreshToken },
-    });
-
-    await lifecycle.maintain();
-
-    expect(mocks.refreshToken).toHaveBeenCalledTimes(2);
-    expect(await inspectGitHubOAuthRecord(OLD_PROFILE)).toEqual({
-      state: "valid",
-      record: expect.not.objectContaining({ pendingRefresh: expect.anything() }),
-    });
-  });
+      await lifecycle.refreshEffectiveIdentity("main");
+      await expectStoredOAuth(OLD_PROFILE, {
+        pendingRefresh: true,
+        refreshToken: TOKENS.refreshToken,
+      });
+      await lifecycle.maintain();
+      expect(mocks.refreshToken).toHaveBeenCalledTimes(2);
+      if (failure === "profile replacement") {
+        expect(mocks.refreshProfile).toHaveBeenCalledTimes(2);
+        expect(selectedIdentity("system")).toEqual(configured);
+      }
+      expect(await inspectGitHubOAuthRecord(OLD_PROFILE)).toEqual({
+        state: "valid",
+        record: expect.not.objectContaining({ pendingRefresh: expect.anything() }),
+      });
+    },
+  );
 
   it("drains a non-idempotent refresh before shutdown completes", async () => {
-    const configured = identity(OLD_PROFILE, { oauth: true, author: true });
-    currentConfig = configForScope("system", configured);
-    await writeGitHubOAuthRecord(oauthRecord(OLD_PROFILE));
-    const upstream = deferred<{ status: "refreshed"; tokens: typeof TOKENS }>();
-    const refreshStarted = deferred();
-    mocks.refreshToken.mockImplementation(() => {
-      refreshStarted.resolve();
-      return upstream.promise;
-    });
-    const lifecycle = createLifecycle();
+    const { configured, lifecycle } = await refreshFixture();
+    const { upstream, waitFor } = holdTokenExchange<RefreshedTokens>(mocks.refreshToken);
+    const uninstall = installActiveGitHubOAuthLifecycle(lifecycle);
 
-    const refresh = lifecycle.refreshEffectiveIdentity("main");
-    await awaitGateBeforeSettlement(
-      refreshStarted.promise,
-      refresh,
-      "Refresh settled before exchange",
-    );
+    const refresh = requestCurrentGitHubOAuthRefresh("main");
+    const joined = requestCurrentGitHubOAuthRefresh("main");
+    await waitFor(refresh);
     expect(mocks.refreshToken).toHaveBeenCalledOnce();
     let stopped = false;
     const stop = lifecycle.stop().then(() => {
@@ -995,7 +958,7 @@ describe("GitHub OAuth refresh and maintenance", () => {
     await Promise.resolve();
     expect(stopped).toBe(false);
     upstream.resolve({ status: "refreshed", tokens: TOKENS });
-    await Promise.all([refresh, stop]);
+    await Promise.all([refresh, joined, stop]);
 
     expect(stopped).toBe(true);
     expect(mocks.clearVerificationCache).toHaveBeenCalledOnce();
@@ -1004,15 +967,16 @@ describe("GitHub OAuth refresh and maintenance", () => {
       profileDir: expect.stringContaining(OLD_PROFILE),
       token: TOKENS.accessToken,
       expectedAccountId: ACCOUNT.accountId,
+      assertCurrent: expect.any(Function),
     });
     expect(selectedIdentity("system")).toEqual(configured);
     expect(mocks.updateConfig).not.toHaveBeenCalled();
     expect(mocks.createProfileId).not.toHaveBeenCalled();
     expect(refreshedTokens).toEqual([TOKENS.accessToken]);
-    expect(await inspectGitHubOAuthRecord(OLD_PROFILE)).toMatchObject({
-      state: "valid",
-      record: { refreshToken: TOKENS.refreshToken },
-    });
+    await expectStoredOAuth(OLD_PROFILE, { refreshToken: TOKENS.refreshToken });
+    uninstall();
+    await requestCurrentGitHubOAuthRefresh("main");
+    expect(mocks.refreshToken).toHaveBeenCalledOnce();
   });
 
   it("cleans expired device state, orphan OAuth metadata, and corrupt hidden records", async () => {
@@ -1042,6 +1006,6 @@ describe("GitHub OAuth refresh and maintenance", () => {
     await lifecycle.maintain();
 
     expect(await listGitHubDeviceAuthorizationRecords()).toEqual([]);
-    expect(await listGitHubOAuthRecords()).toEqual([]);
+    expect(await listGitHubAuthorizationRecords()).toEqual({ deviceRecords: [], oauthRecords: [] });
   });
 });

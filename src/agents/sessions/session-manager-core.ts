@@ -18,11 +18,13 @@ import {
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import {
+  buildSessionTree,
   isIndexedSessionEntry,
   migrateToCurrentVersion,
   parseOpaqueLeafEntry,
   parseParentLinkedOpaqueEntry,
   partitionSessionFileEntries,
+  reuseResidentSessionEntryStrings,
 } from "./session-manager-codec.js";
 import { createManagedSessionId, generateSessionEntryId } from "./session-manager-id.js";
 import {
@@ -31,7 +33,8 @@ import {
   installSessionManagerIncognitoBinding,
 } from "./session-manager-incognito-scope.js";
 import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
-import { consumeSessionManagerReload, readSessionManagerReload } from "./session-manager-reload.js";
+import { consumeSessionManagerReload } from "./session-manager-reload.js";
+import { readSessionManagerReload } from "./session-manager-reload.kernel.js";
 import type {
   FileEntry,
   NewSessionOptions,
@@ -50,6 +53,7 @@ import type {
   SessionManagerBoundedView,
   SessionManagerTranscriptCohort,
 } from "./session-manager-view-types.js";
+import { shareSessionSystemPrompt } from "./system-prompt-pool.js";
 
 /** @internal Fresh payload adoption and metadata consumption share one history admission. */
 export const sessionManagerReloadTranscriptCohort = Symbol.for(
@@ -60,6 +64,9 @@ export const sessionManagerReloadTranscriptCohort = Symbol.for(
 export const sessionManagerOpenTranscriptCohort = Symbol.for(
   "openclaw.session-manager.open-transcript-cohort",
 );
+
+/** @internal Compaction planning retains its transcript and metadata from one read snapshot. */
+export const sessionManagerOpenCompaction = Symbol.for("openclaw.session-manager.open-compaction");
 
 export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
   migrated = false;
@@ -110,7 +117,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     }
   }
 
-  /** @deprecated Runtime callers should await setSessionTargetAsync; removed in the next Plugin SDK major. */
+  /** @deprecated Await setSessionTargetAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   setSessionTarget(target: SessionTranscriptRuntimeTarget): void {
     prepareSessionManagerSync("setSessionTarget", target, this);
     this.setSessionTargetSync(target);
@@ -155,6 +162,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     this.assertTranscriptViewAvailable();
     const capturedTarget = captureSessionTranscriptTargetBinding(target);
     const hydration = prepareSessionManagerHydration(capturedTarget, {
+      caller: complete ? "model-complete" : "model-reload",
       limits: complete ? undefined : this.boundedContextLimits,
       signal,
       manager: this,
@@ -175,7 +183,6 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
       signal?.throwIfAborted();
       assertOwned();
       hydration.assertCurrent();
-      this.assertTranscriptViewAvailable();
       const current = this.captureTranscriptView();
       if (
         revision !== this.hydrationRevision ||
@@ -280,7 +287,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     }
     this.persistenceHeaderPending = false;
     this.persistenceTarget = target ? captureSessionTranscriptTargetBinding(target) : undefined;
-    this.fileEntries = partitioned.fileEntries;
+    this.fileEntries = partitioned.fileEntries.map(shareSessionSystemPrompt);
     this.opaqueFileEntries = partitioned.opaqueEntries;
     this.sessionId = header?.id ?? target?.sessionId ?? createManagedSessionId();
     this.migrated = migrateToCurrentVersion(
@@ -327,27 +334,23 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
   }
 
   /** The loaded view only: bounded managers must never hydrate inactive history for a rewrite. */
-  protected captureTranscriptView(copy = false) {
+  protected captureTranscriptView() {
     this.assertTranscriptViewAvailable();
     return {
       sessionId: this.sessionId,
       transcriptVersion: this.transcriptVersion,
       persistenceHeaderPending: this.persistenceHeaderPending,
       migrated: this.migrated,
-      fileEntries: copy ? [...this.fileEntries] : this.fileEntries,
-      opaqueFileEntries: copy
-        ? this.opaqueFileEntries.map((entry) => ({ ...entry }))
-        : this.opaqueFileEntries,
-      byId: copy ? new Map(this.byId) : this.byId,
-      opaqueParentsById: copy ? new Map(this.opaqueParentsById) : this.opaqueParentsById,
-      logicalParentsById: copy ? new Map(this.logicalParentsById) : this.logicalParentsById,
-      invalidLeafControlIds: copy
-        ? new Set(this.invalidLeafControlIds)
-        : this.invalidLeafControlIds,
-      labelsById: copy ? new Map(this.labelsById) : this.labelsById,
-      labelTimestampsById: copy ? new Map(this.labelTimestampsById) : this.labelTimestampsById,
-      boundedFirstKeptById: copy ? new Map(this.boundedFirstKeptById) : this.boundedFirstKeptById,
-      boundedParentIds: copy ? new Map(this.boundedParentIds) : this.boundedParentIds,
+      fileEntries: this.fileEntries,
+      opaqueFileEntries: this.opaqueFileEntries,
+      byId: this.byId,
+      opaqueParentsById: this.opaqueParentsById,
+      logicalParentsById: this.logicalParentsById,
+      invalidLeafControlIds: this.invalidLeafControlIds,
+      labelsById: this.labelsById,
+      labelTimestampsById: this.labelTimestampsById,
+      boundedFirstKeptById: this.boundedFirstKeptById,
+      boundedParentIds: this.boundedParentIds,
       cacheTtlProjectionPrefixes: this.cacheTtlProjectionPrefixes,
       boundedContextIncomplete: this.boundedContextIncomplete,
       boundedContextLimits: this.boundedContextLimits,
@@ -361,7 +364,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     };
   }
 
-  /** @deprecated Runtime callers should await reloadPersistedTranscriptAsync; removed in the next Plugin SDK major. */
+  /** @deprecated Await reloadPersistedTranscriptAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   reloadPersistedTranscript(): void {
     prepareSessionManagerSync("reloadPersistedTranscript", this.persistenceTarget, this);
     this.reloadPersistedTranscriptSync();
@@ -435,6 +438,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
         );
       }
     }
+    reuseResidentSessionEntryStrings(candidate.fileEntries, this.byId);
     Object.assign(this, candidate.captureTranscriptView());
     this.persistenceTarget = candidate.persistenceTarget;
   }
@@ -606,34 +610,12 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
   }
 
   getTree(): SessionTreeNode[] {
-    const entries = this.getEntries();
-    const nodeMap = new Map<string, SessionTreeNode>();
-    const roots: SessionTreeNode[] = [];
-    for (const entry of entries) {
-      nodeMap.set(entry.id, {
-        entry,
-        children: [],
-        label: this.labelsById.get(entry.id),
-        labelTimestamp: this.labelTimestampsById.get(entry.id),
-      });
-    }
-    for (const entry of entries) {
-      const node = nodeMap.get(entry.id)!;
-      const parentId = this.resolveCanonicalParentId(entry.parentId);
-      const parent = parentId !== null && parentId !== entry.id ? nodeMap.get(parentId) : undefined;
-      if (parent) {
-        parent.children.push(node);
-      } else {
-        roots.push(node);
-      }
-    }
-    for (const node of nodeMap.values()) {
-      node.children.sort(
-        (left, right) =>
-          new Date(left.entry.timestamp).getTime() - new Date(right.entry.timestamp).getTime(),
-      );
-    }
-    return roots;
+    return buildSessionTree(
+      this.getEntries(),
+      this.labelsById,
+      this.labelTimestampsById,
+      (parentId) => this.resolveCanonicalParentId(parentId),
+    );
   }
 
   getLeafId(): string | null {
@@ -767,3 +749,21 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     return target ? { ...target, ...(target.env ? { env: { ...target.env } } : {}) } : undefined;
   }
 }
+
+export type ReadonlySessionManager = Pick<
+  SessionManagerCore,
+  | "getCwd"
+  | "getSessionId"
+  | "getSessionTarget"
+  | "getLeafId"
+  | "getAppendParentId"
+  | "getAppendMode"
+  | "getLeafEntry"
+  | "getEntry"
+  | "getLabel"
+  | "getBranch"
+  | "getHeader"
+  | "getEntries"
+  | "getTree"
+  | "getSessionName"
+>;

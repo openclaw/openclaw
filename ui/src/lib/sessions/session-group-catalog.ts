@@ -1,14 +1,12 @@
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import type {
+  SessionsGroupsDefaultsResult,
+  SessionsGroupsListResult,
+} from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { formatUiError } from "../format-error.ts";
-import { isGatewayMethodAdvertised } from "../gateway-methods.ts";
 import { readSessionMethodAccess } from "../session-method-access.ts";
-import {
-  readSessionCustomGroups,
-  readSidebarSectionOrder,
-  mergeSessionGroupDefaults,
-  type SessionGroupSettings,
-} from "./custom-groups.ts";
+import { mergeSessionGroupDefaults, type SessionGroupSettings } from "./custom-groups.ts";
 import type {
   SessionConnectionOwner,
   SessionConnectionScope,
@@ -16,7 +14,7 @@ import type {
   SessionGroupDefaultsStatus,
   SessionGroupMutationResult,
   SessionState,
-} from "./session-capability.ts";
+} from "./session-types.ts";
 
 type SessionGroupCatalogHost = {
   connection: SessionConnectionOwner;
@@ -38,6 +36,7 @@ function readLegacyStoredGroups(): string[] {
     );
     return normalizeUniqueTrimmedStringList(parsed);
   } catch {
+    // Malformed optional browser data must not block the canonical Gateway catalog.
     return [];
   }
 }
@@ -76,26 +75,18 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     host.publish({
       ...host.readState(),
       groups: groupSettings.map((group) => group.name),
-      groupSettings: [...groupSettings],
-      sectionOrder: [...sectionOrder],
+      groupSettings,
+      sectionOrder,
     });
   };
 
-  const finishLoadFailure = (
-    scope: SessionConnectionScope,
-    error: unknown,
-    retry: boolean,
-    isCurrentLoad: () => boolean,
-  ) => {
-    if (!host.connection.isCurrent(scope) || !isCurrentLoad()) {
+  const finishLoadFailure = (scope: SessionConnectionScope, error: unknown) => {
+    if (!host.connection.isCurrent(scope)) {
       return null;
     }
     if (defaultsStatus !== "unavailable") {
       defaultsStatus = "unavailable";
       host.publish({ ...host.readState() });
-    }
-    if (!retry) {
-      return null;
     }
     loadedEpoch = -1;
     const delay = host.retryDelayMs(error);
@@ -110,18 +101,14 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     return null;
   };
 
-  const loadAttempt = async (
-    scope: SessionConnectionScope,
-    advertised: boolean | null,
-    isCurrentLoad: () => boolean,
-  ) => {
+  const loadAttempt = async (scope: SessionConnectionScope, isCurrentLoad: () => boolean) => {
     try {
-      const listed = await scope.client.request(GROUPS_LIST_METHOD, {});
-      if (!host.connection.isCurrent(scope) || !isCurrentLoad()) {
+      const listed = await scope.client.request<SessionsGroupsListResult>(GROUPS_LIST_METHOD, {});
+      if (!host.connection.isCurrent(scope)) {
         return null;
       }
-      let settings = readSessionCustomGroups(listed);
-      let sectionOrder = readSidebarSectionOrder(listed);
+      let settings = listed.groups;
+      let sectionOrder = listed.sectionOrder ?? [];
       // Browser-local catalogs predate the gateway store and migrate exactly once.
       const legacy = readLegacyStoredGroups();
       if (
@@ -132,12 +119,18 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
         }).allowed
       ) {
         if (settings.length === 0) {
-          const put = await scope.client.request("sessions.groups.put", { names: legacy });
-          if (!host.connection.isCurrent(scope) || !isCurrentLoad()) {
+          // Import replaces persisted groups, so an invalidated read cannot authorize it.
+          if (!isCurrentLoad()) {
             return null;
           }
-          settings = readSessionCustomGroups(put);
-          sectionOrder = readSidebarSectionOrder(put);
+          const put = await scope.client.request<SessionsGroupsListResult>("sessions.groups.put", {
+            names: legacy,
+          });
+          if (!host.connection.isCurrent(scope)) {
+            return null;
+          }
+          settings = put.groups;
+          sectionOrder = put.sectionOrder ?? [];
         }
         try {
           getSafeLocalStorage()?.removeItem(LEGACY_GROUPS_STORAGE_KEY);
@@ -145,12 +138,10 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
           // The gateway catalog is canonical even when browser cleanup fails.
         }
       }
-      const defaultsAllowed =
-        isGatewayMethodAdvertised(host.snapshot(), GROUPS_DEFAULTS_METHOD) === true &&
-        readSessionMethodAccess(host.snapshot(), {
-          method: GROUPS_DEFAULTS_METHOD,
-          requiredScope: "operator.write",
-        }).allowed;
+      const defaultsAllowed = readSessionMethodAccess(host.snapshot(), {
+        method: GROUPS_DEFAULTS_METHOD,
+        requiredScope: "operator.write",
+      }).allowed;
       if (!defaultsAllowed) {
         publishCatalog(settings, sectionOrder, "ready");
         return settings;
@@ -158,24 +149,22 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       // The path-free catalog is independently useful to the sidebar. Defaults
       // readiness only gates group-target routes and must not erase those names.
       publishCatalog(settings, sectionOrder, "loading");
-      try {
-        const defaults = await scope.client.request(GROUPS_DEFAULTS_METHOD, {});
-        if (!host.connection.isCurrent(scope) || !isCurrentLoad()) {
-          return null;
-        }
-        settings = mergeSessionGroupDefaults(settings, defaults);
-      } catch (error) {
-        return finishLoadFailure(scope, error, true, isCurrentLoad);
+      const defaults = await scope.client.request<SessionsGroupsDefaultsResult>(
+        GROUPS_DEFAULTS_METHOD,
+        {},
+      );
+      if (!host.connection.isCurrent(scope)) {
+        return null;
       }
+      settings = mergeSessionGroupDefaults(settings, defaults.defaults);
       publishCatalog(settings, sectionOrder, "ready");
       return settings;
     } catch (error) {
-      // Gateways without feature metadata retain the legacy one-shot probe.
-      return finishLoadFailure(scope, error, advertised === true, isCurrentLoad);
+      return finishLoadFailure(scope, error);
     }
   };
 
-  /** Group consumers may probe once per connection; explicitly absent features never probe. */
+  /** Share catalog loads per connection. */
   const load = async (): Promise<readonly SessionGroupSettings[] | null> => {
     const scope = host.connection.capture();
     if (!scope) {
@@ -184,38 +173,21 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     if (loadedEpoch === scope.epoch) {
       return pendingLoad ?? host.readState().groupSettings;
     }
-    const advertised = isGatewayMethodAdvertised(host.snapshot(), GROUPS_LIST_METHOD);
     clearRetry();
     loadedEpoch = scope.epoch;
     if (defaultsStatus !== "loading") {
       defaultsStatus = "loading";
       host.publish({ ...host.readState() });
     }
-    if (advertised === false) {
-      publishCatalog([], [], "ready");
-      return [];
-    }
-    // Only the retained load may publish after a mutation or catalog invalidation.
+    // Concurrent catalog edits settle best effort until the next refresh or reconnect.
     const promise: Promise<readonly SessionGroupSettings[] | null> = loadAttempt(
       scope,
-      advertised,
       () => pendingLoad === promise,
-    )
-      .then((result) => {
-        // Bootstrap coalesces invalidations into this task. Start a successor only
-        // when no other consumer has already loaded or retained the replacement.
-        return host.connection.isCurrent(scope) &&
-          pendingLoad === null &&
-          loadedEpoch === -1 &&
-          defaultsStatus === "loading"
-          ? load()
-          : result;
-      })
-      .finally(() => {
-        if (pendingLoad === promise) {
-          pendingLoad = null;
-        }
-      });
+    ).finally(() => {
+      if (pendingLoad === promise) {
+        pendingLoad = null;
+      }
+    });
     pendingLoad = promise;
     return promise;
   };
@@ -231,17 +203,16 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     void load();
   };
 
-  const mutate = async (
-    method: string,
-    params: unknown,
-    apply: (result: unknown) => void,
+  const mutate = async <T>(
+    request: (client: SessionConnectionScope["client"]) => Promise<T>,
+    apply: (result: T) => void,
   ): Promise<SessionGroupMutationResult> => {
     const scope = host.connection.capture();
     if (!scope) {
       return "stale";
     }
     try {
-      const result = await scope.client.request(method, params);
+      const result = await request(scope.client);
       if (!host.connection.isCurrent(scope)) {
         return "stale";
       }
@@ -256,50 +227,67 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     }
   };
 
-  const applyCatalogMutation = (result: unknown, defaults = host.readState().groupSettings) => {
+  const applyCatalogMutation = (
+    result: SessionsGroupsListResult,
+    defaults = host.readState().groupSettings,
+  ) => {
     publishPathFreeMutation(
-      mergeSessionGroupDefaults(readSessionCustomGroups(result), { defaults }),
-      readSidebarSectionOrder(result),
+      mergeSessionGroupDefaults(result.groups, defaults),
+      result.sectionOrder ?? [],
     );
   };
 
   const put = (names: readonly string[], sectionOrder?: readonly string[]) =>
     mutate(
-      "sessions.groups.put",
-      {
-        names: [...names],
-        ...(sectionOrder === undefined ? {} : { sectionOrder: [...sectionOrder] }),
-      },
+      (client) =>
+        client.request<SessionsGroupsListResult>("sessions.groups.put", {
+          names,
+          ...(sectionOrder === undefined ? {} : { sectionOrder }),
+        }),
       applyCatalogMutation,
     );
 
   const rename = (from: string, to: string) =>
-    mutate("sessions.groups.rename", { name: from, to }, (result) => {
-      const current = host.readState().groupSettings;
-      const targetExists = current.some((group) => group.name === to);
-      const renamedDefaults = current.flatMap((group) =>
-        group.name === from ? (targetExists ? [] : [{ ...group, name: to }]) : [group],
-      );
-      applyCatalogMutation(result, renamedDefaults);
-      // Mutation response commits before a background member-row reconciliation.
-      void host.refreshRows();
-    });
+    mutate(
+      (client) =>
+        client.request<SessionsGroupsListResult>("sessions.groups.rename", { name: from, to }),
+      (result) => {
+        const current = host.readState().groupSettings;
+        const targetExists = current.some((group) => group.name === to);
+        const renamedDefaults = current.flatMap((group) =>
+          group.name === from ? (targetExists ? [] : [{ ...group, name: to }]) : [group],
+        );
+        applyCatalogMutation(result, renamedDefaults);
+        // Mutation response commits before a background member-row reconciliation.
+        void host.refreshRows();
+      },
+    );
 
   const remove = (name: string) =>
-    mutate("sessions.groups.delete", { name }, (result) => {
-      applyCatalogMutation(result);
-      void host.refreshRows();
-    });
+    mutate(
+      (client) => client.request<SessionsGroupsListResult>("sessions.groups.delete", { name }),
+      (result) => {
+        applyCatalogMutation(result);
+        void host.refreshRows();
+      },
+    );
 
   const update = (name: string, defaults: { cwd: string | null; worktree: boolean }) =>
-    mutate("sessions.groups.update", { name, ...defaults }, (result) => {
-      const state = host.readState();
-      publishCatalog(
-        mergeSessionGroupDefaults(state.groupSettings, result),
-        state.sectionOrder,
-        "ready",
-      );
-    });
+    mutate(
+      (client) =>
+        client.request<SessionsGroupsDefaultsResult>("sessions.groups.update", {
+          name,
+          ...defaults,
+        }),
+      (result) => {
+        const state = host.readState();
+        publishCatalog(
+          mergeSessionGroupDefaults(state.groupSettings, result.defaults),
+          state.sectionOrder,
+          "ready",
+        );
+      },
+    );
 
   return {
     delete: remove,

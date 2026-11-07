@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/memory-host-search";
 import { normalizePluginsConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { buildPromptPrefix } from "./prompt.js";
 import { buildMemoryAudienceCacheIdentity } from "./recall-state.js";
 
@@ -25,11 +26,16 @@ const MAX_TRIGGER_CONTEXT_CHARS = 1800;
 // for promoted entries; lowering it below ~0.6 starts admitting topic drift.
 const STRONG_TRIGGER_MATCH_SCORE = 0.65;
 const WORD_RE = /[\p{L}\p{N}_]+/gu;
+// These scripts do not separate words with spaces (Hangul attaches particles),
+// so a trigger word containing them matches anywhere in the message. Accepted
+// tradeoff: without word segmentation it can also match inside a longer word.
+const UNSPACED_SCRIPT_RE =
+  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 
 type TriggerRecallMatch = MemorySearchHit & { matchScore: number };
 
-function normalizeWords(value: string): string[] {
-  return (value.toLowerCase().match(WORD_RE) ?? []).filter((word) => word.length > 1);
+function splitWords(lowercased: string): string[] {
+  return (lowercased.match(WORD_RE) ?? []).filter((word) => word.length > 1);
 }
 
 function splitTriggerPhrases(value: string): string[] {
@@ -40,17 +46,24 @@ function splitTriggerPhrases(value: string): string[] {
 }
 
 function prepareTriggerScorer(message: string): (entry: MemorySearchHit) => number {
+  let messageText: string | undefined;
   let messageWordSet: Set<string> | undefined;
+  const messageHas = (word: string): boolean => {
+    messageText ??= message.toLowerCase();
+    messageWordSet ??= new Set(splitWords(messageText));
+    return (
+      messageWordSet.has(word) || (UNSPACED_SCRIPT_RE.test(word) && messageText.includes(word))
+    );
+  };
   const scorePhrase = (phrase: string): number => {
-    const triggerWords = [...new Set(normalizeWords(phrase))];
+    const triggerWords = [...new Set(splitWords(phrase.toLowerCase()))];
     if (triggerWords.length === 0) {
       return 0;
     }
-    const words = (messageWordSet ??= new Set(normalizeWords(message)));
     if (triggerWords.length === 1) {
-      return words.has(triggerWords[0] ?? "") ? 0.85 : 0;
+      return messageHas(triggerWords[0] ?? "") ? 0.85 : 0;
     }
-    const overlap = triggerWords.filter((word) => words.has(word)).length;
+    const overlap = triggerWords.filter(messageHas).length;
     if (overlap === 0) {
       return 0;
     }
@@ -170,7 +183,7 @@ async function loadNativeTriggerRecallCandidates(
 ) {
   const activeProjectKeys = params.activeProjectKeys ?? [];
   context.assertCurrent();
-  const lookup = await waitForTriggerLookup(
+  const lookup = await racePromiseWithAbortSignal(
     getActiveMemoryProvider({
       cfg: params.cfg,
       agentId: params.agentId,
@@ -183,6 +196,7 @@ async function loadNativeTriggerRecallCandidates(
       },
     }),
     params.signal,
+    (signal) => signal.reason,
   );
   if (!lookup.provider) {
     params.debug?.(
@@ -205,7 +219,7 @@ async function loadNativeTriggerRecallCandidates(
     const projectFilter = lookup.provider.capabilities.projectFilter
       ? { activeProjectKeys: [...activeProjectKeys] }
       : {};
-    const [retrieved, triggerCandidates] = await waitForTriggerLookup(
+    const [retrieved, triggerCandidates] = await racePromiseWithAbortSignal(
       Promise.all([
         lookup.provider
           .search({
@@ -233,6 +247,7 @@ async function loadNativeTriggerRecallCandidates(
           }),
       ]),
       params.signal,
+      (signal) => signal.reason,
     );
     context.assertCurrent();
     const entries = new Map<string, MemorySearchHit>();
@@ -291,17 +306,19 @@ function toLegacyTriggerRecallHit(entry: MemorySearchResult, providerId: string)
 // replaces its unscored trigger candidate.
 async function loadLegacyTriggerRecallCandidates(params: TriggerLookupParams) {
   const activeProjectKeys = params.activeProjectKeys ?? [];
-  const lookup = await waitForTriggerLookup(
+  const lookup = await racePromiseWithAbortSignal(
     getActiveMemorySearchManager({
       cfg: params.cfg,
       agentId: params.agentId,
     }),
     params.signal,
+    (signal) => signal.reason,
   );
   if (!lookup.manager?.listTriggerCandidates) {
     return [];
   }
   const lookupWork = Promise.all([
+    // Either optional source can supply trigger recall when the other is unavailable.
     lookup.manager
       .search(params.query, {
         maxResults: TRIGGER_CANDIDATE_LIMIT,
@@ -318,7 +335,11 @@ async function loadLegacyTriggerRecallCandidates(params: TriggerLookupParams) {
       .listTriggerCandidates({ activeProjectKeys: [...activeProjectKeys] })
       .catch(() => []),
   ]);
-  const [retrieved, triggerCandidates] = await waitForTriggerLookup(lookupWork, params.signal);
+  const [retrieved, triggerCandidates] = await racePromiseWithAbortSignal(
+    lookupWork,
+    params.signal,
+    (signal) => signal.reason,
+  );
   const providerId = normalizePluginsConfig(params.cfg.plugins).slots.memory ?? "memory";
   return [
     ...new Map(
@@ -385,9 +406,10 @@ export async function resolveTriggerRecall(
   params.signal?.throwIfAborted();
   assertTriggerSourceCurrent(params.source);
   const activeProjectKeys = params.activeProjectKeys ?? [];
-  const candidates = await waitForTriggerLookup(
+  const candidates = await racePromiseWithAbortSignal(
     resolveTriggerRecallCandidates(params),
     params.signal,
+    (signal) => signal.reason,
   );
   assertTriggerSourceCurrent(params.source);
   const matches = selectStrongTriggerMatches(params.message, candidates, activeProjectKeys);
@@ -407,36 +429,6 @@ export function forgetTriggerRecallRun(runId: string | undefined): void {
       }
     }
   }
-}
-
-export function resetTriggerRecallRunsForTests(): void {
-  triggerRecallRuns.clear();
-}
-
-function waitForTriggerLookup<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) {
-    return work;
-  }
-  signal.throwIfAborted();
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () =>
-      reject(
-        signal.reason instanceof Error
-          ? signal.reason
-          : new Error("active-memory trigger recall aborted", { cause: signal.reason }),
-      );
-    signal.addEventListener("abort", onAbort, { once: true });
-    void work.then(
-      (value) => {
-        signal.removeEventListener("abort", onAbort);
-        resolve(value);
-      },
-      (error: unknown) => {
-        signal.removeEventListener("abort", onAbort);
-        reject(error instanceof Error ? error : new Error(String(error)));
-      },
-    );
-  });
 }
 
 export { MAX_TRIGGER_CONTEXT_CHARS };

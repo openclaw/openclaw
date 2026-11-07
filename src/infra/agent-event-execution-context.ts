@@ -14,7 +14,6 @@ type Routing = Pick<
   | "mainSessionRestartRecovery"
   | "lifecycleStartedAt"
   | "lifecycleGeneration"
-  | "isHeartbeat"
   | "verboseLevel"
   | "registeredAt"
   | "eventState"
@@ -45,25 +44,24 @@ export function recordAgentEventRouting(
   if (!scope || scope.lifecycleGeneration !== context.lifecycleGeneration) {
     return;
   }
-  const routing = {
-    agentId: context.agentId,
-    sessionKey: context.sessionKey,
-    sessionId: context.sessionId,
-    completionSource: context.completionSource,
-    isControlUiVisible: context.isControlUiVisible,
-    projectSessionLifecycle: context.projectSessionLifecycle,
-    projectSessionMessages: context.projectSessionMessages,
-    mainSessionRestartRecovery: context.mainSessionRestartRecovery,
-    lifecycleStartedAt: context.lifecycleStartedAt,
-    lifecycleGeneration: context.lifecycleGeneration,
-    isHeartbeat: context.isHeartbeat,
-    verboseLevel: context.verboseLevel,
-    registeredAt: context.registeredAt,
-    eventState: context.eventState,
-  };
   const routingByRun = (scope.routingByRun ??= new Map());
   const record = routingByRun.get(runId);
   const previousOwner = record?.owner.deref();
+  // Refresh the retained facts without allocating a snapshot for each streamed delta.
+  const routing: Routing = record && previousOwner === context ? record.routing : {};
+  routing.agentId = context.agentId;
+  routing.sessionKey = context.sessionKey;
+  routing.sessionId = context.sessionId;
+  routing.completionSource = context.completionSource;
+  routing.isControlUiVisible = context.isControlUiVisible;
+  routing.projectSessionLifecycle = context.projectSessionLifecycle;
+  routing.projectSessionMessages = context.projectSessionMessages;
+  routing.mainSessionRestartRecovery = context.mainSessionRestartRecovery;
+  routing.lifecycleStartedAt = context.lifecycleStartedAt;
+  routing.lifecycleGeneration = context.lifecycleGeneration;
+  routing.verboseLevel = context.verboseLevel;
+  routing.registeredAt = context.registeredAt;
+  routing.eventState = context.eventState;
   if (
     record &&
     (previousOwner === context ||

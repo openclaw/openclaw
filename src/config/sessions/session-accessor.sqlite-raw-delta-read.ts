@@ -1,12 +1,19 @@
 import { sql } from "kysely";
-import { getNodeSqliteKysely, executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import {
+  getNodeSqliteKysely,
+  executeSqliteQuerySync,
+  iterateSqliteQuerySync,
+} from "../../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type {
   SessionTranscriptRawDeltaLimits,
   SessionTranscriptRawDeltaResult,
 } from "./session-accessor.sqlite-contract.js";
-import type { CurrentTranscriptProjection } from "./session-accessor.sqlite-projection-read.js";
+import {
+  readProjectionTranscriptPayload,
+  type CurrentTranscriptProjection,
+} from "./session-accessor.sqlite-projection-read.js";
 import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
 import { readSessionTranscriptHotWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
 import {
@@ -20,7 +27,6 @@ import {
   resolveSqliteSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
 } from "./session-transcript-read-fence.js";
-import { transcriptEventJsonSql } from "./transcript-payload.js";
 
 /** Read inside the caller's validated projection snapshot on its exact connection. */
 export function readTranscriptRawDeltaFromProjection(
@@ -39,19 +45,27 @@ export function readTranscriptRawDeltaFromProjection(
     maxEvents,
     maxBytes,
     beforeEventSeq,
-    { generation: projection.generation, indexedSeq: projection.state.indexedSeq },
+    {
+      generation: projection.generation,
+      indexedSeq: projection.state.indexedSeq,
+      readColdPayload: projection.readColdPayload,
+    },
   );
 }
 
 /** The caller owns this synchronous snapshot and any already-captured frontier. */
 export function readRawDeltaInTransaction(
-  database: import("node:sqlite").DatabaseSync,
+  database: import("../../infra/sql-connection.js").EngineConnection,
   scope: ResolvedTranscriptReadScope,
   encodedCursor: string | undefined,
   maxEvents: number,
   maxBytes: number,
   beforeEventSeq: number | undefined,
-  snapshot?: { generation: string | undefined; indexedSeq: number },
+  snapshot?: {
+    generation: string | undefined;
+    indexedSeq: number;
+    readColdPayload?: (seq: number) => string;
+  },
 ): SessionTranscriptRawDeltaResult {
   const watermark = snapshot
     ? undefined
@@ -135,20 +149,24 @@ export function readRawDeltaInTransaction(
       }
     }
   }
+  const payloadSource = snapshot ?? {};
   const rows =
     selectedCount === 0
       ? []
-      : executeSqliteQuerySync(
-          database,
-          transcript
-            .select([transcriptEventJsonSql(database).as("event_json"), "seq"])
-            .where("seq", ">", cursor.lastSeq)
-            .where("seq", "<=", lastSeq)
-            .orderBy("seq", "asc"),
-        ).rows.map((row) => ({
-          event: JSON.parse(row.event_json),
-          seq: sqliteNumber(row.seq),
-        }));
+      : Array.from(
+          iterateSqliteQuerySync(
+            database,
+            transcript
+              .select(["event_json", "event_zstd", "event_utf8_bytes", "seq"])
+              .where("seq", ">", cursor.lastSeq)
+              .where("seq", "<=", lastSeq)
+              .orderBy("seq", "asc"),
+          ),
+          (row) => ({
+            event: JSON.parse(readProjectionTranscriptPayload(payloadSource, row, row.seq)),
+            seq: sqliteNumber(row.seq),
+          }),
+        );
   const nextCursor = encodeRawTranscriptCursor({ ...cursor, lastSeq });
   return {
     kind: "page",

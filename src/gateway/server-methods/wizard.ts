@@ -20,11 +20,7 @@ import {
 } from "../../wizard/session.js";
 import { canAccessWizardSession } from "../server-wizard-sessions.js";
 import { formatForLog } from "../ws-log.js";
-import {
-  createAdmittedWizardSession,
-  respondSetupAdmissionBusy,
-  whenAdmittedWizardSessionSettled,
-} from "./setup-admission.js";
+import { startGatewayWizard, whenAdmittedWizardSessionSettled } from "./setup-admission.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler, type Validator } from "./validation.js";
 
@@ -107,7 +103,8 @@ function wizardSessionHandler<T extends { sessionId: string }>(
 }
 
 export const wizardHandlers: GatewayRequestHandlers = {
-  "wizard.start": async ({ params, respond, context }) => {
+  "wizard.start": async (request) => {
+    const { params, respond, context } = request;
     if (!assertValidParams(params, validateWizardStartParams, "wizard.start", respond)) {
       return;
     }
@@ -141,20 +138,22 @@ export const wizardHandlers: GatewayRequestHandlers = {
               ),
         ),
       );
-    const session = await createAdmittedWizardSession(createSession, flow === "setup");
-    if (!session) {
-      respondSetupAdmissionBusy(respond);
-      return;
-    }
-    context.wizardSessions.set(sessionId, session);
-    const result = await session.next();
-    if (result.done) {
-      // Let the runner release setup admission before the terminal response,
-      // so an immediate replacement wizard is not rejected as still busy.
-      await whenAdmittedWizardSessionSettled(session);
-      context.purgeWizardSession(sessionId);
-    }
-    respond(true, { sessionId, ...sanitizeWizardResultForClient(result) }, undefined);
+    await startGatewayWizard({
+      request,
+      sessionId,
+      lockSetupTarget: flow === "setup",
+      createSession,
+      respondStarted: async (session) => {
+        const result = await session.next();
+        if (result.done) {
+          // Let the runner release setup admission before the terminal response,
+          // so an immediate replacement wizard is not rejected as still busy.
+          await whenAdmittedWizardSessionSettled(session);
+          context.purgeWizardSession(sessionId);
+        }
+        respond(true, { sessionId, ...sanitizeWizardResultForClient(result) }, undefined);
+      },
+    });
   },
   "wizard.next": wizardSessionHandler(
     "wizard.next",

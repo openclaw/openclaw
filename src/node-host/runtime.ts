@@ -1,7 +1,6 @@
-/** Transport-independent CLI node-host runtime shared by Gateway and app workers. */
-import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { NODE_CLAUDE_SKILLS_MESSAGE_BYTES } from "../infra/node-claude-skill-protocol.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
@@ -17,11 +16,12 @@ import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node
 import { BoundedBuffer } from "../shared/bounded-buffer.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
-import { throwNodeHostCleanupErrors } from "./cleanup-errors.js";
+import type { NodeWorkerProcessesChanged } from "../worker/worker-process-observation.js";
 import { createNodeInvokeResponder, type NodeHostClient } from "./client.js";
 import { resolveNodeDesktopHostConfig } from "./desktop-stream-command.js";
 import { requestsClaudeNodeSkillRuntime } from "./invoke-agent-cli-claude-params.js";
 import { handleInvoke, type NodeInvokeRequestPayload } from "./invoke.js";
+import { listEnabledNodeHostMcpServers } from "./mcp-server-config.js";
 import { startNodeHostMcpManager, type NodeHostMcpManager } from "./mcp.js";
 import { buildNodeEventParams } from "./node-event-params.js";
 import {
@@ -33,8 +33,14 @@ import { createNodeInvokeProgressWriter } from "./node-invoke-progress.js";
 import { NodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
 import { resolveNodeWorkerContainerEngine } from "./node-worker-container-engine.js";
 import { NodeWorkerContainerContextMismatchError } from "./node-worker-container-lifecycle.js";
+import {
+  captureNodeWorkerManagedIdentityTransport,
+  captureNodeWorkerPlatformTrust,
+} from "./node-worker-environment.js";
+import { NodeWorkerMcpPolicy } from "./node-worker-mcp.js";
 import { snapshotNodeWorkerNativeInference } from "./node-worker-native-inference.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
+import type { NodeWorkerTransferGateway } from "./node-worker-transfer-client.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 import {
   ensureNodeHostPluginRegistry,
@@ -45,6 +51,7 @@ import {
   watchRegisteredNodeHostCommandAvailability,
 } from "./plugin-node-host.js";
 import {
+  requireRequestedCommands,
   buildNodeHostManifest,
   createNodeHostInventory,
   sameNodeHostManifest,
@@ -52,12 +59,43 @@ import {
   type NodeHostInventory,
 } from "./runtime-manifest.js";
 import { resolveExecutableTrustPathFromEnv, SkillBinsCache } from "./runtime-skill-bins.js";
-import { createNodeHostUpdatePause } from "./runtime-update-pause.js";
 import { scanNodeHostedSkills } from "./skills.js";
 export type { NodeHostInventory } from "./runtime-manifest.js";
 
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const WORKER_INITIALIZATION_RETRY_MS = 5_000;
+
+function createNodeHostUpdatePause(params: {
+  hasLocalActiveWork: () => boolean;
+  hasWorkerActiveWork: () => Promise<boolean> | undefined;
+}) {
+  let updatePause = false;
+  return {
+    get isPaused() {
+      return updatePause;
+    },
+    async tryPauseForUpdate(this: void) {
+      if (updatePause || params.hasLocalActiveWork()) {
+        return false;
+      }
+      // The update loop awaits this check before resuming; close invoke admission first.
+      updatePause = true;
+      let admitted = false;
+      try {
+        const workerBusy = await params.hasWorkerActiveWork();
+        admitted = !workerBusy && !params.hasLocalActiveWork();
+        return admitted;
+      } finally {
+        if (!admitted) {
+          updatePause = false;
+        }
+      }
+    },
+    resumeAfterUpdate(this: void) {
+      updatePause = false;
+    },
+  };
+}
 
 type ActiveNodeInvoke = {
   controller: AbortController;
@@ -68,7 +106,7 @@ type ActiveNodeInvoke = {
 const MAX_PENDING_INVOKE_INPUT_BYTES = 64 * 1024;
 
 function ensureNodePathEnv(): string {
-  ensureOpenClawCliOnPath({ pathEnv: process.env.PATH ?? "" });
+  ensureOpenClawCliOnPath();
   const current = process.env.PATH ?? "";
   if (current.trim()) {
     return current;
@@ -82,14 +120,17 @@ async function settleNodeHostCleanup(owners: Array<Promise<unknown> | undefined>
   const errors = [
     ...new Set(results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []))),
   ];
-  throwNodeHostCleanupErrors(errors, "node-host runtime cleanup failed");
+  throwCollectedErrors(errors, "node-host runtime cleanup failed");
 }
 
+/** Transport-independent CLI node-host runtime shared by Gateway and app workers. */
 export async function prepareNodeHostRuntime(params?: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   /** The embedded app worker never advertises native agent runs. */
   enableAgentRuns?: boolean;
+  /** This transport delivers Gateway permission changes to the worker MCP client. */
+  receivesLocalMcpPolicy?: true;
   /** Process-scoped worker hosting for environment-managed disposable nodes. */
   forceWorkerRuns?: boolean;
   /** Disposable cloud nodes expose computer control only through the private carrier. */
@@ -97,7 +138,6 @@ export async function prepareNodeHostRuntime(params?: {
   installedAppsSharingEnabled?: boolean;
   desktopSharingEnabled?: boolean;
   commands?: readonly string[];
-  platform?: NodeJS.Platform;
 }) {
   const commandAllowlist = params?.commands === undefined ? undefined : new Set(params.commands);
   if (!commandAllowlist) {
@@ -105,7 +145,7 @@ export async function prepareNodeHostRuntime(params?: {
   }
   const config = params?.config ?? (await captureRuntimeConfigAsyncReader()());
   const env = params?.env ?? process.env;
-  const platform = params?.platform ?? process.platform;
+  const platform = process.platform;
   await ensureNodeHostPluginRegistry({ config, env, commandAllowlist });
   const pathEnv = ensureNodePathEnv();
   env.PATH = pathEnv;
@@ -133,13 +173,29 @@ export async function prepareNodeHostRuntime(params?: {
   let workerRunsEnabled =
     !commandAllowlist &&
     (params?.forceWorkerRuns === true || config.nodeHost?.workerRuns?.enabled === true);
-  const workspaceOptions = { env, ephemeral: params?.ephemeral };
+  // Provider transport belongs to this dedicated node, not the Gateway or a paired host.
+  const dedicatedNodeExecution =
+    workerRunsEnabled &&
+    params?.ephemeral === true &&
+    config.nodeHost?.workerRuns?.isolation !== "container";
+  const managedIdentityTransport = dedicatedNodeExecution
+    ? captureNodeWorkerManagedIdentityTransport(env)
+    : undefined;
+  const platformTrust = dedicatedNodeExecution ? captureNodeWorkerPlatformTrust(env) : undefined;
+  const workspaceOptions = {
+    env,
+    ephemeral: params?.ephemeral,
+    managedIdentityTransport,
+    platformTrust,
+    folders: config.nodeHost?.workerRuns?.folders,
+  };
   let preparedWorkerWorkspace: NodeWorkerWorkspaceRuntime | undefined;
   let preparedContainerSupervisor: ReturnType<typeof createNodeWorkerSupervisor> | undefined;
   let preparedContainerCapacity: NodeWorkerCapacitySnapshot | undefined;
   let preparedContainerInitialized = false;
   let workerCleanupIncomplete = false;
   let publishContainerCapacity: ((capacity: NodeWorkerCapacitySnapshot) => void) | undefined;
+  let publishProcessChanges: ((binding: NodeWorkerProcessesChanged) => void) | undefined;
   let workerHostingDisabledReason: string | undefined;
   const disablePreparedWorkerHosting = async (error: unknown) => {
     let failure = error;
@@ -186,6 +242,7 @@ export async function prepareNodeHostRuntime(params?: {
           preparedContainerCapacity = capacity;
           publishContainerCapacity?.(capacity);
         },
+        onProcessesChanged: (binding) => publishProcessChanges?.(binding),
       });
       try {
         // Container ownership and orphan cleanup must precede positive capacity publication.
@@ -202,10 +259,14 @@ export async function prepareNodeHostRuntime(params?: {
       await disablePreparedWorkerHosting(error);
     }
   }
+  const subprocessWorkers =
+    workerRunsEnabled && config.nodeHost?.workerRuns?.isolation !== "container";
+  const localMcpEnabled =
+    params?.receivesLocalMcpPolicy === true &&
+    subprocessWorkers &&
+    listEnabledNodeHostMcpServers(config.nodeHost?.mcp?.servers).length > 0;
   const nativeInferenceSnapshot =
-    workerRunsEnabled &&
-    platform !== "win32" &&
-    config.nodeHost?.workerRuns?.isolation !== "container"
+    subprocessWorkers && platform !== "win32"
       ? snapshotNodeWorkerNativeInference(config, env, platform)
       : undefined;
   const skills =
@@ -220,34 +281,33 @@ export async function prepareNodeHostRuntime(params?: {
       ephemeral: params?.ephemeral === true,
       pathEnv,
     });
-  const manifest = buildManifest(pluginNodeHost);
-  if (commandAllowlist && manifest.commands.length === 0) {
-    const requested = [...commandAllowlist].toSorted().join(", ") || "(empty allowlist)";
-    throw new Error(
-      `Node command allowlist retained no available commands. Unknown or unavailable ids: ${requested}. Check --commands and enable the plugin that provides each command.`,
-    );
-  }
-  const initialInventory = createNodeHostInventory(skills, pluginNodeHost.nodePluginTools);
+  const manifest = requireRequestedCommands(buildManifest(pluginNodeHost), commandAllowlist);
 
   return {
     manifest,
     workerHostingEnabled: workerRunsEnabled,
+    ...(workerRunsEnabled && workspaceOptions.folders?.length !== 0
+      ? { deviceFoldersEnabled: true as const }
+      : {}),
     preparedWorkspacesEnabled: workerRunsEnabled && params?.ephemeral === true,
+    ...(localMcpEnabled ? { localMcpEnabled: true as const } : {}),
     nativeInferenceEnabled: workerRunsEnabled && nativeInferenceSnapshot !== undefined,
     ...(commandAllowlist ? { restrictedSurface: true as const } : {}),
     ...(workerHostingDisabledReason ? { workerHostingDisabledReason } : {}),
-    initialInventory,
+    initialInventory: createNodeHostInventory(skills, pluginNodeHost.nodePluginTools),
     start({
       client,
       onInventoryChanged,
       onManifestChanged,
       onRunnerCapacityChanged,
+      onProcessesChanged,
       onWorkerHostingDisabled,
     }: {
       client: NodeHostClient;
       onInventoryChanged?: (inventory: NodeHostInventory) => void;
       onManifestChanged?: (manifest: NodeHostManifest) => void;
       onRunnerCapacityChanged?: (capacity: NodeWorkerCapacitySnapshot) => void;
+      onProcessesChanged?: (binding: NodeWorkerProcessesChanged) => void;
       onWorkerHostingDisabled?: (reason: string) => void;
     }) {
       const mcpAbort = new AbortController();
@@ -257,10 +317,13 @@ export async function prepareNodeHostRuntime(params?: {
       let supervisorClose: Promise<void> | undefined;
       let mcpClose: Promise<void> | undefined;
       let initializationRetry: ReturnType<typeof setTimeout> | undefined;
+      publishProcessChanges = onProcessesChanged;
       const workerWorkspace = preparedWorkerWorkspace;
       const workerBundleInstaller = workerRunsEnabled
         ? new NodeWorkerBundleInstaller({ env })
         : undefined;
+      let manager: NodeHostMcpManager | undefined;
+      const localMcpPolicy = localMcpEnabled ? new NodeWorkerMcpPolicy() : undefined;
       let workerSupervisor =
         preparedContainerSupervisor ??
         (workerRunsEnabled
@@ -268,7 +331,10 @@ export async function prepareNodeHostRuntime(params?: {
               env,
               capacity: config.nodeHost?.workerRuns?.capacity,
               nativeInferenceSnapshot,
+              managedIdentityTransport,
+              platformTrust,
               onCapacityChanged: onRunnerCapacityChanged,
+              onProcessesChanged: publishProcessChanges,
               workspace: workerWorkspace,
             })
           : undefined);
@@ -328,14 +394,7 @@ export async function prepareNodeHostRuntime(params?: {
       };
       let currentPluginNodeHost = pluginNodeHost;
       let currentManifest = manifest;
-      let gatewayConnection:
-        | {
-            url: string;
-            tlsFingerprint?: string;
-            cloudflareAccess?: CloudflareAccessCredentials;
-          }
-        | undefined;
-      let manager: NodeHostMcpManager | undefined;
+      let gatewayConnection: NodeWorkerTransferGateway | undefined;
       let mcpStartupComplete = Boolean(commandAllowlist);
       const publishInventory = () =>
         onInventoryChanged?.(
@@ -348,6 +407,7 @@ export async function prepareNodeHostRuntime(params?: {
       const startup = commandAllowlist
         ? Promise.resolve(undefined)
         : startNodeHostMcpManager(config.nodeHost?.mcp?.servers, {
+            ...(config.mcp?.apps?.enabled === true ? { elicitationClient: client } : {}),
             signal: mcpAbort.signal,
             onDescriptorsChanged: () => {
               if (!closing && manager) {
@@ -420,6 +480,8 @@ export async function prepareNodeHostRuntime(params?: {
           // not release update ownership before the original command settles.
           const settled = createDeferredCore();
           pendingInvokes.add(settled.promise);
+          // A queued launch cannot inherit a later generation's MCP permission.
+          const localMcp = localMcpPolicy?.sessionForCommand(frame.command, manager);
           try {
             const generation = connectionGeneration;
             try {
@@ -537,6 +599,7 @@ export async function prepareNodeHostRuntime(params?: {
                 ...(claudePath ? { claudePath } : {}),
                 signal: controller.signal,
                 pluginCommandIo,
+                localMcp,
                 flushPluginCommandIo: framedIo?.drain,
                 canReportAbortedFailure: (error) =>
                   controller.signal.aborted &&
@@ -553,7 +616,6 @@ export async function prepareNodeHostRuntime(params?: {
                 desktopHostConfig,
                 ...(progress ? { emitProgress: (text) => progress.write(text) } : {}),
                 installedAppsSharingEnabled,
-                installedAppsPlatform: platform,
                 pluginCommandContext,
                 ...(params?.ephemeral === true && !commandAllowlist
                   ? { workerComputer: { capabilities: () => resolvePluginNodeHost().computerUse } }
@@ -584,8 +646,10 @@ export async function prepareNodeHostRuntime(params?: {
         cancel(invokeId: string) {
           activeInvokes.get(invokeId)?.controller.abort();
         },
+        setLocalMcpAllowed: (allowed: boolean) => localMcpPolicy?.setAllowed(allowed),
         cancelAll() {
           connectionGeneration += 1;
+          localMcpPolicy?.setAllowed(false);
           // Retired refreshes may still finish; their cache must never serve the next connection.
           skillBins = new SkillBinsCache(client, pathEnv);
           // Close can reenter from an abort listener and must see this cleanup barrier.

@@ -1,4 +1,5 @@
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
+import { BROWSER_ACT_KIND_FACTS, isActKind } from "../act-kinds.js";
 import { DEFAULT_OPENCLAW_BROWSER_COLOR } from "../constants.js";
 import { createLightpandaCdpNormalizer } from "./lightpanda-cdp.js";
 import type { BrowserEngineAdapter } from "./types.js";
@@ -20,17 +21,6 @@ const SEMANTIC_ROUTES = new Set([
   "/snapshot",
   "/act",
 ]);
-const SEMANTIC_ACT_KINDS = new Set([
-  "click",
-  "type",
-  "press",
-  "select",
-  "fill",
-  "wait",
-  "evaluate",
-  "close",
-]);
-
 export const lightpandaEngine: BrowserEngineAdapter = {
   descriptor: {
     id: "lightpanda",
@@ -49,7 +39,11 @@ export const lightpandaEngine: BrowserEngineAdapter = {
       return false;
     }
     if (path === "/act") {
-      return !actionSelector && (actionKind === undefined || SEMANTIC_ACT_KINDS.has(actionKind));
+      return (
+        !actionSelector &&
+        (actionKind === undefined ||
+          (isActKind(actionKind) && BROWSER_ACT_KIND_FACTS[actionKind].lightpanda === true))
+      );
     }
     return (
       !snapshot ||
@@ -72,7 +66,6 @@ export const lightpandaEngine: BrowserEngineAdapter = {
       usesChromeMcp: false,
       usesPersistentPlaywright: true,
       supportsPerTabWs: false,
-      supportsJsonTabEndpoints: false,
       supportsReset: false,
       supportsManagedTabLimit: false,
       supportsBatchActions: false,
@@ -86,10 +79,7 @@ export const lightpandaEngine: BrowserEngineAdapter = {
       supportsVisualActions: false,
       supportsUploads: false,
       supportsDialogs: false,
-      supportsStorage: false,
-      supportsScreencast: false,
       supportsConsole: false,
-      supportsMultipleTabs: false,
       supportsNativeSnapshots: false,
       requiresCompleteTargetEnumeration: false,
     };

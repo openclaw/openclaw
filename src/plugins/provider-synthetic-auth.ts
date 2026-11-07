@@ -69,13 +69,28 @@ export function readPreparedSyntheticAuthFact(
 
 /** Read-only workers receive a closed generation: missing facts never start external work. */
 export function restorePreparedSyntheticAuthFacts(
-  config: object,
   facts: PreparedSyntheticAuthFacts,
-  options: ScopeOptions = {},
+  targets: readonly (ScopeOptions & { config: object })[],
 ): void {
-  const scope = scopeFor(config, options, true)!;
-  restoredConfigs.add(config);
-  scope.restored = new Map(facts.map((fact) => [normalizeProviderId(fact.providerRef), fact]));
+  const restored = new Map(facts.map((fact) => [normalizeProviderId(fact.providerRef), fact]));
+  for (const { config, ...options } of targets) {
+    const scope = scopeFor(config, options, true)!;
+    restoredConfigs.add(config);
+    scope.restored = restored;
+  }
+}
+
+/** Policy overlays and registration captures share their admission's closed scopes. */
+export function inheritPreparedSyntheticAuthScope(
+  source: object | undefined,
+  derived: object | undefined,
+): void {
+  if (!source || !derived || !restoredConfigs.has(source)) {
+    return;
+  }
+  // Share scopes, not the current facts map: later refreshes must reach retained callbacks.
+  scopes.set(derived, scopes.get(source)!);
+  restoredConfigs.add(derived);
 }
 
 export function resolveSyntheticAuthWithProvider(
@@ -145,7 +160,7 @@ export async function prepareSyntheticAuthWithProvider(
         })
         .then((prepared) => {
           options.signal?.throwIfAborted();
-          return (current.result = prepared ? Object.freeze({ ...prepared }) : null);
+          return (current.result = prepared ?? null);
         })
         .finally(() => {
           current.pending.delete(options.signal);

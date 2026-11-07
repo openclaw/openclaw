@@ -96,8 +96,7 @@ export function resolveWorkspaceQualifiedSlackTarget(
   }
 }
 
-function isUnambiguousSlackUserId(rawId: string): boolean {
-  const id = rawId.trim();
+function isUnambiguousSlackUserId(id: string): boolean {
   return /^[UW][A-Z0-9]+$/.test(id) || /^[uw][0-9][a-z0-9]{7,}$/.test(id);
 }
 

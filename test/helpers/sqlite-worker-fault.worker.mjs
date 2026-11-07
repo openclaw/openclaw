@@ -25,9 +25,18 @@ function install(statement) {
   if (!prepared) {
     return () => {};
   }
-  const selected = faults.filter(
-    (fault, index) => Atomics.load(enabled, index) && fault.match.test(prepared.sql),
-  );
+  const selected = faults.filter((fault, index) => {
+    if (!Atomics.load(enabled, index) || !fault.match.test(prepared.sql)) {
+      return false;
+    }
+    if ("exitOnMatch" in fault) {
+      if (Atomics.sub(enabled, index, 1) === 1) {
+        process.exit(1);
+      }
+      return false;
+    }
+    return true;
+  });
   // TEMP triggers affect the actual write without invalidating the admitted main schema.
   for (const fault of selected) {
     prepared.database.exec(fault.sql);
@@ -53,7 +62,13 @@ const iterate = StatementSync.prototype.iterate;
 StatementSync.prototype.iterate = function* (...args) {
   const restore = install(this);
   try {
-    yield* Reflect.apply(iterate, this, args);
+    const iterator = Reflect.apply(iterate, this, args);
+    try {
+      yield* iterator;
+    } finally {
+      // yield* does not close its delegate when next() throws; reset the native statement.
+      iterator.return?.();
+    }
   } finally {
     restore();
   }

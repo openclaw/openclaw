@@ -32,6 +32,37 @@ the Gateway port does not forward portals. Use [managed private Serve or wildcar
 portal ingress](/gateway/portals#remote-access); the browser and application must
 use the service's returned portal URLs without replacing their host or port.
 
+## OpenClaw ID alongside existing access
+
+OpenClaw ID remote access is an additional entrance, not a replacement for
+Tailscale, Cloudflare Access, or the Gateway's token/password. Each entrance
+keeps its own authentication and permissions:
+
+- OpenClaw ID tunnel requests use the admitted device's owner, operator, or
+  viewer role. Proxy identity headers and other Gateway credentials cannot
+  widen that role. Viewers remain read-only; members cannot manage People.
+- Tailscale Serve and Cloudflare Access users keep their existing Gateway
+  permissions. Arriving through a proxy on `127.0.0.1` does not make them the
+  local machine owner. A direct tailnet connection is remote too.
+- Turning on remote access requires an authenticated direct-loopback
+  connection without proxy or identity headers. People, owner
+  devices, and invites are available to that local operator or an active
+  OpenClaw ID owner device, not merely to any proxy-authenticated administrator.
+  Recovery-kit secrets are generated and exported in the browser, not downloaded
+  from the Gateway.
+
+**Removing someone in People revokes their OpenClaw ID access only.** It closes
+their OpenClaw ID connections, cancels their active or queued runs from those
+connections, and revokes the associated device tokens. It does not remove them
+from your tailnet or Cloudflare Access policy, or rotate a shared Gateway token
+or password. Revoke those independent permissions separately if they must lose
+all access. Likewise, someone independently given a stronger credential can
+still use its permissions through its own entrance.
+
+A headerless SSH port forward is indistinguishable from a local process to the
+Gateway. Treat SSH access to the host as local-machine authority; do not expose
+an unmarked TCP forward to untrusted users.
+
 ## Command flow (what runs where)
 
 One Gateway owns state and channels; nodes are peripherals. Example (Telegram message routed to a node tool):
@@ -290,7 +321,7 @@ Keep the Gateway **loopback-only** unless you are sure you need a bind.
 - **Non-loopback binds** (`lan`/`tailnet`/`custom`, or `auto` when loopback is unavailable) must use Gateway auth: token, password, or an identity-aware reverse proxy with `gateway.auth.mode: "trusted-proxy"`.
 - `gateway.remote.token` / `.password` are client credential sources; they do not configure server auth by themselves.
 - Local call paths can use `gateway.remote.*` as a fallback only when `gateway.auth.*` is unset.
-- If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote fallback masking).
+- If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution stops with an error instead of falling back to remote credentials.
 - `gateway.remote.tlsFingerprint` pins the remote TLS cert for `wss://`, including both operator/control traffic and the companion node in macOS direct mode. Without a stored pin, macOS pins on first use only after normal system trust passes; self-signed or private-CA Gateways need an explicit fingerprint or Remote over SSH.
 - **Tailscale Serve** can authenticate Control UI/WebSocket traffic via identity headers when `gateway.auth.allowTailscale: true`. HTTP API endpoints do not use that header auth and instead follow the Gateway's normal HTTP auth mode. This tokenless flow assumes the Gateway host is trusted; set it to `false` for shared-secret auth everywhere.
 - **Trusted-proxy** auth expects a non-loopback identity-aware proxy by default. Same-host loopback reverse proxies require explicit `gateway.auth.trustedProxy.allowLoopback = true`.

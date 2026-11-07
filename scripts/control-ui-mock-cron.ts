@@ -1,11 +1,12 @@
 import type {
   CronJob,
   CronJobsListResult,
-  CronRunLogEntry,
   CronRunsResult,
   CronStatus,
 } from "../ui/src/api/types.ts";
 import { cronListResponseFixture } from "../ui/src/test-helpers/cron.ts";
+
+type CronRunLogEntry = CronRunsResult["entries"][number];
 
 const CRON_LIST_SNAPSHOT_REVISION = "control-ui-mock-cron";
 
@@ -49,7 +50,12 @@ function singleJobListCases(jobs: CronJob[], match: Record<string, unknown>) {
 
 export function buildCronMocks(
   baseTime: number,
-  options: { richAttention?: boolean; secondAgentId?: string } = {},
+  options: {
+    failedBacklog?: number;
+    richAttention?: boolean;
+    secondAgentId?: string;
+    sessionKey?: string;
+  } = {},
 ) {
   const richAttention = options.richAttention === true;
   const minute = 60_000;
@@ -220,8 +226,62 @@ export function buildCronMocks(
       lastDeliveryStatus: "delivered",
     },
   };
-  const jobs = [overdueJob, ...extraOverdueJobs, healthyJob, failedJob, ...extraFailedJobs];
-  const failedJobs = [failedJob, ...extraFailedJobs];
+  const backlogTasks = ["Sync", "Back up", "Reconcile", "Export", "Refresh"];
+  const backlogTargets = [
+    "billing ledger",
+    "support queue",
+    "docs index",
+    "staging metrics",
+    "vendor invoices",
+    "uptime report",
+    "search index",
+    "audit log",
+    "release notes",
+  ];
+  const backlogFailedJobs = Array.from(
+    { length: options.failedBacklog ?? 0 },
+    (_, index): CronJob => {
+      const task = backlogTasks[index % backlogTasks.length];
+      const target = backlogTargets[index % backlogTargets.length];
+      return {
+        id: `mock-cron-backlog-${index}`,
+        agentId: "main",
+        name: `${task} ${target}`,
+        enabled: true,
+        createdAtMs: baseTime - 12 * day,
+        updatedAtMs: baseTime - (40 + index * 7) * minute,
+        schedule: { kind: "every", everyMs: hour, anchorMs: baseTime - 12 * day },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: `${task} the ${target}.` },
+        delivery: { mode: "none" },
+        state: {
+          nextRunAtMs: baseTime + 20 * minute,
+          lastRunAtMs: baseTime - (40 + index * 7) * minute,
+          lastRunStatus: "error",
+          lastError: "The upstream service returned HTTP 503 after three retries.",
+          lastDurationMs: 18_400,
+          consecutiveErrors: 2,
+          lastDeliveryStatus: "not-requested",
+        },
+      };
+    },
+  );
+  const jobs = [
+    overdueJob,
+    ...extraOverdueJobs,
+    healthyJob,
+    failedJob,
+    ...extraFailedJobs,
+    ...backlogFailedJobs,
+  ];
+  // A native delivery/wake lane also binds these jobs to the session's automation panel.
+  if (options.sessionKey) {
+    for (const job of jobs) {
+      job.sessionKey = options.sessionKey;
+    }
+  }
+  const failedJobs = [failedJob, ...extraFailedJobs, ...backlogFailedJobs];
   const failedRuns: CronRunLogEntry[] = failedJobs.map((job, index) => ({
     ts: baseTime - (5 + index * 4) * minute,
     runAtMs: baseTime - (5 + index * 4) * minute,
@@ -261,7 +321,7 @@ export function buildCronMocks(
       durationMs: overdueJob.state?.lastDurationMs,
       summary: "Classified 23 messages and prepared 6 replies.",
       deliveryStatus: "not-requested",
-      deliverySuppressionReason: "Delivery mode is none for this inbox-only automation.",
+      deliverySuppressionReason: "silent",
       model: "gpt-5",
       provider: "openai",
     },
@@ -317,6 +377,23 @@ export function buildCronMocks(
 
   return {
     "cron.status": status,
+    "cron.get": {
+      cases: [
+        ...jobs.flatMap((job) => [
+          { match: { id: job.id }, response: job },
+          { match: { jobId: job.id }, response: job },
+        ]),
+        {
+          response: {
+            __mockError: {
+              code: "INVALID_REQUEST",
+              message:
+                "cron job not found in preview fixtures. List automations and retry with a current job id.",
+            },
+          },
+        },
+      ],
+    },
     "cron.list": cronListResponseFixture([
       // Cases mirror the concrete queries today's Cron UI issues. Unknown combinations fall back
       // to the full fixture list; dynamic evaluation is intentionally out of scope because the

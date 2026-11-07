@@ -166,6 +166,45 @@ struct GatewayChannelRequestTests {
         return lifetime
     }
 
+    @Test(arguments: [false, true])
+    func `request error context retains its causal chain and metadata`(isURLError: Bool) async throws {
+        let cause = NSError(domain: "fixture.storage", code: 13)
+        let original = NSError(
+            domain: isURLError ? URLError.errorDomain : "fixture.identity",
+            code: isURLError ? URLError.Code.cannotConnectToHost.rawValue : 2,
+            userInfo: [
+                NSLocalizedDescriptionKey: "synthetic admission failure",
+                NSUnderlyingErrorKey: cause,
+                "fixture-marker": "synthetic",
+            ])
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { _, _, sendIndex in
+                if sendIndex == 1 { throw original }
+            })
+        })
+        let channel = try GatewayChannelActor(
+            url: #require(URL(string: "ws://example.invalid")),
+            token: nil,
+            session: WebSocketSessionBox(session: session),
+            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
+        var received: NSError?
+        do {
+            _ = try await channel.request(method: "provenance", params: nil, timeoutMs: 5000)
+            Issue.record("Expected the synthetic send failure")
+        } catch {
+            received = error as NSError
+        }
+        await channel.shutdown()
+
+        let contextual = try #require(received)
+        #expect(contextual.domain == original.domain)
+        #expect(contextual.code == original.code)
+        #expect(contextual.localizedDescription == "gateway send provenance: synthetic admission failure")
+        #expect(contextual.userInfo["fixture-marker"] as? String == "synthetic")
+        let underlying = try #require(contextual.userInfo[NSUnderlyingErrorKey] as? NSError)
+        #expect(underlying === cause)
+    }
+
     @Test func `request timeout then send failure does not double resume`() async throws {
         let timedOut = AsyncTestGate()
         let sendFailed = AsyncTestGate()

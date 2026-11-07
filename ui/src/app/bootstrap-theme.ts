@@ -2,13 +2,10 @@ import {
   BUILTIN_THEMES,
   resolveThemeBranding,
 } from "../../../packages/gateway-protocol/src/theme.ts";
-import { registerListener } from "../../../src/shared/listeners.js";
-import type {
-  ApplicationGateway,
-  ApplicationTheme,
-  ApplicationThemePalette,
-  ApplicationThemeServerSelection,
-} from "./context.ts";
+import { createChangeListeners } from "../../../src/shared/listeners.js";
+import { formatUiError } from "../lib/format-error.ts";
+import { listen } from "../lib/reactive/listener.ts";
+import type { ApplicationGateway, ApplicationTheme, ApplicationThemePalette } from "./context.ts";
 import { applyControlUiAccent, syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { backgroundPreferenceStorageKey } from "./settings-background.ts";
@@ -20,6 +17,7 @@ import {
   type UiPreferences,
   type UiSettings,
 } from "./settings.ts";
+import { syncThemeBackgroundArtwork } from "./theme-background-artwork.ts";
 import { currentThemeBranding, setCurrentThemeBranding } from "./theme-branding.ts";
 import type { CatalogTheme, createThemeCatalog, ThemeCatalogSnapshot } from "./theme-catalog.ts";
 import { resolveTheme, syncThemePaletteStylesheet, type ThemeMode } from "./theme.ts";
@@ -37,20 +35,8 @@ function themeBranding(settings: UiPreferences, catalogTheme?: CatalogTheme) {
   );
 }
 
-function subscribeMediaQuery(query: string, onChange: () => void): (() => void) | undefined {
-  if (typeof globalThis.matchMedia !== "function") {
-    return undefined;
-  }
-  const mediaQuery = globalThis.matchMedia(query);
-  if (typeof mediaQuery.addEventListener === "function") {
-    mediaQuery.addEventListener("change", onChange);
-    return () => mediaQuery.removeEventListener("change", onChange);
-  }
-  if (typeof mediaQuery.addListener === "function") {
-    mediaQuery.addListener(onChange);
-    return () => mediaQuery.removeListener(onChange);
-  }
-  return undefined;
+function subscribeMediaQuery(query: string, onChange: () => void): () => void {
+  return listen(globalThis.matchMedia(query), "change", onChange);
 }
 
 function applyThemePresentation(settings: UiPreferences, catalogTheme?: CatalogTheme): void {
@@ -62,10 +48,12 @@ function applyThemePresentation(settings: UiPreferences, catalogTheme?: CatalogT
   const effectiveTheme = dynamic && !catalogTheme ? "claw" : settings.theme;
   const mode = catalogTheme?.mode ?? settings.themeMode;
   const resolvedTheme = resolveTheme(effectiveTheme, mode);
+  const resolvedMode = resolvedTheme.endsWith("light") ? "light" : "dark";
   root.dataset.themeId = effectiveTheme;
   root.dataset.theme = resolvedTheme;
-  root.dataset.themeMode = resolvedTheme.endsWith("light") ? "light" : "dark";
+  root.dataset.themeMode = resolvedMode;
   const branding = themeBranding(settings, catalogTheme);
+  syncThemeBackgroundArtwork(root, branding, resolvedMode, settings.background?.visibility);
   root.dataset.themeMascot = branding.mascot;
   if (branding.avatarHat) {
     root.dataset.themeAvatarHat = branding.avatarHat;
@@ -75,8 +63,6 @@ function applyThemePresentation(settings: UiPreferences, catalogTheme?: CatalogT
   // Plugin semantic styles select on [data-theme-resolved]; keep it in lockstep
   // with data-theme-mode before their lazy stylesheet loads.
   root.dataset.themeResolved = root.dataset.themeMode;
-  root.classList.toggle("wa-light", root.dataset.themeMode === "light");
-  root.classList.toggle("wa-dark", root.dataset.themeMode === "dark");
   root.style.colorScheme = root.dataset.themeMode;
   root.style.setProperty("--control-ui-text-scale", `${(settings.textScale ?? 100) / 100}`);
   const typefaces = resolveTypefaces(effectiveTheme, settings.fontUi, settings.fontChat);
@@ -101,16 +87,28 @@ function livePreferencesKey(settings: UiPreferences): string {
   return JSON.stringify(preferences);
 }
 
+function appearanceKey(settings: UiPreferences): string {
+  return JSON.stringify([
+    settings.theme,
+    settings.themeMode,
+    settings.accent,
+    settings.fontUi,
+    settings.fontChat,
+    settings.textScale,
+    settings.customTheme,
+    settings.background?.visibility,
+  ]);
+}
+
 export function createApplicationTheme(
   initialSettings: UiSettings,
   gateway: ApplicationGateway,
 ): ApplicationTheme & { dispose: () => void } {
   const { token: _token, ...initialPreferences } = initialSettings;
   let settings: UiPreferences = initialPreferences;
-  let serverSelection: ApplicationThemeServerSelection | null = null;
   let appliedPalette: ApplicationThemePalette | null = null;
   let systemThemeCleanup: (() => void) | undefined;
-  const listeners = new Set<() => void>();
+  const listeners = createChangeListeners();
 
   let presentationGeneration = 0;
   let catalog: ReturnType<typeof createThemeCatalog> | undefined;
@@ -139,9 +137,7 @@ export function createApplicationTheme(
       // Computed-style consumers need the applied palette, not just the new
       // preference. Synchronous application shares the publication below.
       if (preferencesPublished) {
-        for (const listener of listeners) {
-          listener();
-        }
+        listeners.publish();
       }
       if (
         typeof document !== "undefined" &&
@@ -162,9 +158,7 @@ export function createApplicationTheme(
     // Live preferences cannot wait for a palette download. Presentation keeps
     // its own generation fence; subscribers consume the new snapshot now.
     preferencesPublished = true;
-    for (const listener of listeners) {
-      listener();
-    }
+    listeners.publish();
   };
 
   const loadCatalog = async () => {
@@ -181,14 +175,25 @@ export function createApplicationTheme(
     try {
       const { createThemeCatalog } = await import("./theme-catalog.ts");
       if (!disposed) {
-        catalog = createThemeCatalog(gateway, publish);
+        catalog = createThemeCatalog(
+          gateway,
+          () => {
+            // Built-in and locally imported palettes do not depend on the server catalog.
+            if (settings.theme.includes("/")) {
+              publish();
+            } else {
+              listeners.publish();
+            }
+          },
+          listeners.publish,
+        );
         catalogLoadError = undefined;
       }
     } catch (error) {
       if (!disposed) {
         catalogLoadError = {
           themes: [],
-          error: error instanceof Error ? error.message : String(error),
+          error: formatUiError(error),
         };
         publish();
       }
@@ -222,17 +227,18 @@ export function createApplicationTheme(
   const refresh = (options?: { notify?: boolean }) => {
     const next = loadUiPreferences(gateway.connection.gatewayUrl);
     const changed = livePreferencesKey(next) !== livePreferencesKey(settings);
+    const appearanceChanged = appearanceKey(next) !== appearanceKey(settings);
     settings = next;
-    if (!changed) {
-      // Readiness can change without changing the stored preference values.
-      if (options?.notify) {
-        publish();
-      }
-      return;
+    if (changed) {
+      void loadCatalog();
     }
-    void loadCatalog();
-    publish();
-    syncSystemThemeListener();
+    if (appearanceChanged) {
+      publish();
+      syncSystemThemeListener();
+    } else if (changed || options?.notify) {
+      // Navigation and profile readiness do not reapply or retire the palette.
+      listeners.publish();
+    }
   };
   const stopPreferences = bindUiPreferences({
     gatewayUrl: () => gateway.connection.gatewayUrl,
@@ -247,7 +253,11 @@ export function createApplicationTheme(
       refresh();
     }
   };
-  globalThis.addEventListener?.("storage", onStorage);
+  const stopStorage =
+    typeof globalThis.addEventListener === "function"
+      ? listen(globalThis, "storage", onStorage)
+      : undefined;
+  // Connection changes refresh scoped preferences and the document's theme owner.
   const stopGateway = gateway.subscribe(() => {
     void loadCatalog();
     if (settings.gatewayUrl !== gateway.connection.gatewayUrl) {
@@ -279,16 +289,10 @@ export function createApplicationTheme(
       const mode = catalog?.theme(settings.theme)?.mode ?? settings.themeMode;
       return resolveTheme(settings.theme, mode).endsWith("light") ? "light" : "dark";
     },
-    get serverSelection() {
-      return serverSelection;
-    },
     get appliedPalette() {
       return appliedPalette;
     },
-    recordServerSelection(theme, scope) {
-      serverSelection = { revision: (serverSelection?.revision ?? 0) + 1, scope, theme };
-      publish();
-    },
+    recordServerSelection: listeners.publish,
     setMode(mode: ThemeMode) {
       patchSettings({ themeMode: mode });
     },
@@ -296,16 +300,16 @@ export function createApplicationTheme(
     retryCatalog() {
       void (catalog?.refresh() ?? loadCatalog());
     },
-    subscribe: (listener) => registerListener(listeners, listener),
+    subscribe: listeners.subscribe,
     dispose() {
       disposed = true;
       catalog?.dispose();
       stopPreferences();
-      globalThis.removeEventListener?.("storage", onStorage);
+      stopStorage?.();
       stopGateway();
       presentationGeneration += 1;
       detachSystemThemeListener();
-      chromeBreakpointCleanup?.();
+      chromeBreakpointCleanup();
       listeners.clear();
     },
   };

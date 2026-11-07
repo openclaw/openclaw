@@ -175,13 +175,7 @@ export function isLobsterTwinLoad(seed: number): boolean {
   return mulberry32((seed ^ 0x7715) >>> 0)() < 0.04;
 }
 
-export type LobsterPasserPlan = {
-  kind: LobsterPasserKind;
-  atMs: number;
-  direction: 1 | -1;
-  floor: boolean;
-  hops: boolean;
-};
+export type LobsterPasserPlan = NonNullable<ReturnType<typeof planLobsterPasser>>;
 
 export type LobsterPasserOptions = {
   critters?: readonly string[];
@@ -203,7 +197,7 @@ export function resolveLobsterPasserCrossMs(
 export function planLobsterPasser(
   seed: number,
   { critters = [], strangers = true }: LobsterPasserOptions = {},
-): LobsterPasserPlan | null {
+) {
   const rng = mulberry32((seed ^ 0xcab) >>> 0);
   const roll = rng() * 1000;
   const weights: Array<readonly [LobsterPasserKind, number]> = [

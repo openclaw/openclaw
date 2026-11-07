@@ -1,5 +1,13 @@
 import type { GatewaySessionRow } from "../api/types.ts";
 import { isSubagentSessionKey } from "../lib/sessions/session-key.ts";
+import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
+
+/** Unloaded worker branches stay out of childSessionKeys but keep a load parent. */
+export function sidebarSessionHasArchiveDescendants(
+  session: Pick<SidebarRecentSession, "childSessionKeys" | "childLoadParentKeys">,
+): boolean {
+  return session.childSessionKeys.length > 0 || (session.childLoadParentKeys?.length ?? 0) > 0;
+}
 
 /** Unknown worker branches keep discovery available; known empty branches do not. */
 export function hasSessionArchiveDescendants(

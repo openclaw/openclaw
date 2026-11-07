@@ -1,243 +1,154 @@
-import { setImmediate } from "node:timers/promises";
-import { queryObjects } from "node:v8";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
-import { PluginInstance } from "./plugin-instance.js";
-import { createEmptyPluginRegistry } from "./registry-empty.js";
-import { adoptPluginRegistryRecords } from "./registry-lifecycle.js";
-import type { PluginRecord } from "./registry-types.js";
-import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
-import { createPluginRecord } from "./status.test-helpers.js";
+import {
+  createOwnedTestInstance,
+  expectLiveObjects,
+  readRegistryLabel,
+  selectRegistry,
+  throwing,
+} from "./plugin-instance.test-support.js";
+import { getPluginRuntimeGatewayRequestScope as getScope } from "./runtime/gateway-request-scope.js";
 
-function createOwnedInstance(origin: PluginRecord["origin"] = "bundled") {
-  const registry = createEmptyPluginRegistry();
-  const record = createPluginRecord({ id: "direct-values", origin });
-  registry.plugins.push(record);
-  return new PluginInstance(record.id, { record, registry });
-}
-
-describe("admitted plugin values", () => {
-  it.each(["ordinary", "consumer"] as const)(
-    "retains an adopted registry through idle and pending %s iteration, then releases it",
-    async (custody) => {
-      class StreamRegistry {
-        readonly fixtureLabel = "StreamRegistry";
-      }
-      const instance = createOwnedInstance();
-      const record = instance.owner!.record;
-      const consumer = custody === "consumer" ? instance.retainConsumer() : undefined;
-      const resume = createDeferredCore();
-      const observed: Array<string | undefined> = [];
-      const first = Object.freeze({ done: false, value: "first" });
-      const second = Object.freeze({ done: false, value: "second" });
-      const terminal = Object.freeze({ done: true, value: "closed" });
-      const observe = () => {
-        observed.push(
-          getPluginRuntimeGatewayRequestScope()?.pluginRegistry?.coreGatewayMethodNames[0],
-        );
-      };
-      class Stream {
-        calls = 0;
-        [Symbol.asyncIterator]() {
-          return this;
-        }
-        async next() {
-          observe();
-          if (++this.calls === 1) {
-            return first;
-          }
-          await resume.promise;
-          observe();
-          return second;
-        }
-        async return() {
-          observe();
-          return terminal;
-        }
-      }
-      const successor = createEmptyPluginRegistry();
-      successor.plugins.push(record);
-      successor.coreGatewayMethodNames.push("successor");
-      const iterator = (() => {
-        const selected = Object.assign(new StreamRegistry(), createEmptyPluginRegistry());
-        selected.plugins.push(record);
-        selected.coreGatewayMethodNames.push("selected");
-        adoptPluginRegistryRecords(selected);
-        const wrapped = (consumer ?? instance).wrap(new Stream());
-        const admitted = wrapped[Symbol.asyncIterator]();
-        adoptPluginRegistryRecords(successor);
-        return admitted;
-      })();
-      let pending: ReturnType<typeof iterator.next> | undefined;
+it.each(["ordinary", "consumer"] as const)(
+  "retains an adopted registry through idle and pending %s iteration, then releases it",
+  async (custody) => {
+    class StreamRegistry {
+      readonly fixtureLabel = "StreamRegistry";
+    }
+    const instance = createOwnedTestInstance("direct-values", "bundled");
+    const record = instance.owner!.record;
+    const consumer = custody === "consumer" ? instance.retainConsumer() : undefined;
+    const resume = createDeferredCore();
+    const observed: Array<string | undefined> = [];
+    const observe = () => observed.push(readRegistryLabel());
+    async function* stream() {
       try {
-        await setImmediate();
-        expect(queryObjects(StreamRegistry)).toBe(1);
-        expect(instance.ordinaryCallCount).toBe(custody === "consumer" ? 0 : 1);
-        expect(await iterator.next()).toBe(first);
-        pending = iterator.next();
-        await setImmediate();
-        expect(queryObjects(StreamRegistry)).toBe(1);
-        resume.resolve();
-        expect(await pending).toBe(second);
-        await setImmediate();
-        expect(queryObjects(StreamRegistry)).toBe(1);
-        expect(await iterator.return()).toBe(terminal);
-        await setImmediate();
-        expect(queryObjects(StreamRegistry)).toBe(0);
-        expect(observed).toEqual(["selected", "selected", "selected", "selected"]);
-        expect(
-          (consumer ?? instance).run(
-            () => getPluginRuntimeGatewayRequestScope()?.pluginRegistry?.coreGatewayMethodNames[0],
-          ),
-        ).toBe("successor");
+        observe();
+        yield "first";
+        observe();
+        await resume.promise;
+        observe();
+        yield "second";
       } finally {
-        resume.resolve();
-        await pending?.catch(() => {});
-        await iterator.return().catch(() => {});
-        consumer?.release();
-        await instance.dispose();
+        observe();
       }
-    },
-  );
+    }
+    selectRegistry(record, "selected", new StreamRegistry());
+    const iterator = (consumer ?? instance).wrap(stream())[Symbol.asyncIterator]();
+    selectRegistry(record, "successor");
+    let pending: ReturnType<typeof iterator.next> | undefined;
+    try {
+      await expectLiveObjects(StreamRegistry, 1);
+      expect(await iterator.next()).toEqual({ done: false, value: "first" });
+      pending = iterator.next();
+      await expectLiveObjects(StreamRegistry, 1);
+      resume.resolve();
+      expect(await pending).toEqual({ done: false, value: "second" });
+      await expectLiveObjects(StreamRegistry, 1);
+      expect(await iterator.return()).toEqual({ done: true, value: undefined });
+      await expectLiveObjects(StreamRegistry, 0);
+      expect(observed).toEqual(["selected", "selected", "selected", "selected"]);
+      expect((consumer ?? instance).run(readRegistryLabel)).toBe("successor");
+    } finally {
+      resume.resolve();
+      await pending?.catch(() => {});
+      await iterator.return().catch(() => {});
+      consumer?.release();
+      await instance.dispose();
+    }
+  },
+);
 
-  it.each(
-    (["bundled", "global", "workspace"] as const).flatMap((origin) =>
-      (["hook", "async tool"] as const).map((kind) => ({ origin, kind })),
-    ),
-  )(
-    "passes $origin $kind data by reference without inspecting nested values",
-    async ({ origin, kind }) => {
-      const instance = createOwnedInstance(origin);
-      const opaque = new Proxy(
-        {},
-        {
-          get() {
-            throw new Error("Nested payload must not be inspected");
-          },
-          ownKeys() {
-            throw new Error("Nested payload must not be traversed");
-          },
-          getPrototypeOf() {
-            throw new Error("Nested payload must not be classified");
-          },
-        },
-      );
-      const handle = instance.wrap({ read: () => "handle" });
-      const input = Object.freeze({ handle, opaque });
-      const payload = Object.freeze({
-        content: Object.freeze([{ text: "chunk" }]),
-        read: () => "payload",
-        opaque,
-      });
-      const operation = instance.wrap((argument: typeof input) => {
+it.each(["hook", "async tool"] as const)(
+  "passes %s data by reference without inspecting nested values",
+  async (kind) => {
+    const instance = createOwnedTestInstance("direct-values", "bundled");
+    const deny = throwing(new Error("Nested payload must not be inspected"));
+    const opaque = new Proxy({}, { get: deny, ownKeys: deny, getPrototypeOf: deny });
+    const handle = instance.wrap({ read: () => "handle" });
+    const input = Object.freeze({ handle, opaque });
+    const payload = Object.freeze({
+      read: () => "payload",
+      opaque,
+    });
+    const operation = instance.wrap(
+      (argument: typeof input, callback: (value: typeof payload) => void) => {
         expect(instance.hasActiveCall).toBe(true);
         expect(argument).toBe(input);
-        expect(argument.handle).toBe(handle);
+        callback(payload);
         return kind === "async tool" ? Promise.resolve(payload) : payload;
-      });
-      try {
-        const result = await operation(input);
-        expect(result).toBe(payload);
-        expect(result.opaque).toBe(opaque);
-        await instance.dispose();
-        expect(result.read()).toBe("payload");
-        expect(result.content[0]?.text).toBe("chunk");
-      } finally {
-        await instance.dispose();
-      }
-    },
-  );
-
-  it("passes callback payloads by reference while the callback keeps invocation admission", async () => {
-    const instance = createOwnedInstance();
-    const payload = Object.freeze({ read: () => "callback payload" });
-    const invoke = instance.wrap((callback: (value: typeof payload) => void) => callback(payload));
+      },
+    );
     let received: typeof payload | undefined;
-    try {
-      invoke((value) => {
-        expect(instance.hasActiveCall).toBe(true);
-        expect(getPluginRuntimeGatewayRequestScope()?.pluginId).toBe(instance.pluginId);
-        received = value;
-      });
-      expect(received).toBe(payload);
-      await instance.dispose();
-      expect(received?.read()).toBe("callback payload");
-    } finally {
-      await instance.dispose();
-    }
-  });
-
-  it("keeps exact nested stream results and one scoped private-field receiver across protocol calls", async () => {
-    const instance = createOwnedInstance();
-    const inner = instance.retainConsumer();
-    const outer = instance.retainConsumer();
-    const scopes: Array<ReturnType<typeof getPluginRuntimeGatewayRequestScope>> = [];
-    const results = [
-      Object.freeze({ done: false, value: Object.freeze({ read: () => "first" }) }),
-      Object.freeze({ done: false, value: Object.freeze({ read: () => "recovered" }) }),
-      Object.freeze({ done: true, value: Object.freeze({ read: () => "closed" }) }),
-    ];
-    const failure = new Error("recoverable stream error");
-    const observeScope = () => {
-      const scope = getPluginRuntimeGatewayRequestScope();
+    const result = await operation(input, (value) => {
       expect(instance.hasActiveCall).toBe(true);
-      expect(scope?.pluginId).toBe(instance.pluginId);
-      scopes.push(scope);
-    };
-    class Stream {
-      #index = 0;
+      expect(getScope()?.pluginId).toBe(instance.pluginId);
+      received = value;
+    });
+    expect(result).toBe(payload);
+    expect(received).toBe(payload);
+    await instance.dispose();
+    expect(result.read()).toBe("payload");
+  },
+);
 
-      [Symbol.asyncIterator]() {
-        expect(instance.hasActiveCall).toBe(true);
-        return this;
-      }
+it("keeps exact nested stream results and one scoped private-field receiver across protocol calls", async () => {
+  const instance = createOwnedTestInstance("direct-values", "bundled");
+  const inner = instance.retainConsumer();
+  const outer = instance.retainConsumer();
+  const scopes: Array<ReturnType<typeof getScope>> = [];
+  const results = [
+    Object.freeze({ done: false, value: Object.freeze({ read: () => "first" }) }),
+    Object.freeze({ done: false, value: Object.freeze({ read: () => "recovered" }) }),
+    Object.freeze({ done: true, value: Object.freeze({ read: () => "closed" }) }),
+  ];
+  const failure = new Error("recoverable stream error");
+  const observeScope = () => {
+    const scope = getScope();
+    expect(instance.hasActiveCall).toBe(true);
+    expect(scope?.pluginId).toBe(instance.pluginId);
+    scopes.push(scope);
+  };
+  class Stream {
+    #index = 0;
 
-      async next() {
-        observeScope();
-        await Promise.resolve();
-        observeScope();
-        return results[this.#index++]!;
-      }
-
-      async throw(error: unknown) {
-        expect(error).toBe(failure);
-        observeScope();
-        await Promise.resolve();
-        observeScope();
-        return results[this.#index++]!;
-      }
-
-      async return() {
-        observeScope();
-        await Promise.resolve();
-        observeScope();
-        return results[this.#index++]!;
-      }
+    [Symbol.asyncIterator]() {
+      expect(instance.hasActiveCall).toBe(true);
+      return this;
     }
-    const source = instance.wrap(() => new Stream())();
-    const iterator = outer.wrap(inner.wrap(source))[Symbol.asyncIterator]();
-    try {
-      expect(await iterator.next()).toBe(results[0]);
-      expect(await iterator.throw(failure)).toBe(results[1]);
-      expect(await iterator.return()).toBe(results[2]);
-      expect(scopes).toHaveLength(6);
-      for (const scope of scopes) {
-        expect(scope).toBe(scopes[0]);
-      }
-      expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
-      inner.release();
-      outer.release();
-      await instance.dispose();
-      expect(results.map((result) => result.value.read())).toEqual([
-        "first",
-        "recovered",
-        "closed",
-      ]);
-    } finally {
-      await iterator.return();
-      inner.release();
-      outer.release();
-      await instance.dispose();
+
+    async next() {
+      observeScope();
+      await Promise.resolve();
+      observeScope();
+      return results[this.#index++]!;
     }
-  });
+
+    throw(error: unknown) {
+      expect(error).toBe(failure);
+      return this.next();
+    }
+
+    return() {
+      return this.next();
+    }
+  }
+  const source = instance.wrap(() => new Stream())();
+  const iterator = outer.wrap(inner.wrap(source))[Symbol.asyncIterator]();
+  try {
+    expect(await iterator.next()).toBe(results[0]);
+    expect(await iterator.throw(failure)).toBe(results[1]);
+    expect(await iterator.return()).toBe(results[2]);
+    expect(scopes.every((scope) => scope === scopes[0])).toBe(true);
+    expect(getScope()).toBeUndefined();
+    inner.release();
+    outer.release();
+    await instance.dispose();
+    expect(results.map((result) => result.value.read())).toEqual(["first", "recovered", "closed"]);
+  } finally {
+    await iterator.return();
+    inner.release();
+    outer.release();
+    await instance.dispose();
+  }
 });

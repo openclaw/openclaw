@@ -22,10 +22,6 @@ export type ModelCallLifecycleDiagnosticEvent = Extract<
   DiagnosticEventPayload,
   { type: "model.call.completed" | "model.call.error" }
 >;
-export type ModelFailoverDiagnosticEvent = Extract<
-  DiagnosticEventPayload,
-  { type: "model.failover" }
->;
 export type HarnessRunDiagnosticEvent = Extract<
   DiagnosticEventPayload,
   { type: "harness.run.started" | "harness.run.completed" | "harness.run.error" }
@@ -38,6 +34,4 @@ export type SessionRecoveryDiagnosticEvent = Extract<
   DiagnosticEventPayload,
   { type: "session.recovery.requested" | "session.recovery.completed" }
 >;
-export type TalkDiagnosticEvent = Extract<DiagnosticEventPayload, { type: "talk.event" }>;
 export type SecuritySeverityText = "FATAL" | "ERROR" | "WARN" | "INFO";
-export type TrustedSpanAliasOwner = { kind: "run"; id: string };

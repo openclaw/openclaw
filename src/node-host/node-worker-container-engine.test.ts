@@ -69,3 +69,22 @@ it.each([
     );
   },
 );
+
+it("mounts an explicit private HOME without using the device folder for internal state", async () => {
+  vi.mocked(runExec)
+    .mockResolvedValueOnce({ stdout: "synthetic-daemon\n", stderr: "" })
+    .mockResolvedValueOnce({ stdout: `${"a".repeat(64)}\n`, stderr: "" });
+  await createNodeWorkerContainer(containerEngine("docker"), {
+    ...launch,
+    homeDir: "/synthetic/private/session-home",
+  });
+  expect(runExec).toHaveBeenLastCalledWith(
+    expect.any(String),
+    expect.arrayContaining([
+      "type=bind,source=/synthetic/private/session-home,target=/synthetic/private/session-home",
+      "HOME=/synthetic/private/session-home",
+      "type=bind,source=/synthetic/workspace,target=/synthetic/workspace",
+    ]),
+    expect.any(Object),
+  );
+});

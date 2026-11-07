@@ -95,7 +95,7 @@ export type DevicePairingApprovalOptions = {
   accessMetadata?: DevicePairingAccessMetadata;
   approvedVia?: Extract<
     PairedDeviceApprovalKind,
-    "owner" | "silent" | "trusted-cidr" | "trusted-proxy" | "ssh-verified"
+    "owner" | "silent" | "trusted-cidr" | "trusted-proxy" | "remote-ingress" | "ssh-verified"
   >;
   /** Revalidate automatic approval against current policy after all pairing-lock awaits. */
   isApprovalCurrent?: (state: {
@@ -103,7 +103,7 @@ export type DevicePairingApprovalOptions = {
     existing: Readonly<PairedDevice> | undefined;
   }) => boolean;
   /**
-   * Replace pending scopes for a new operator device, or a trusted-proxy
+   * Replace pending scopes for a new operator device, or a trusted ingress
    * same-key upgrade. The live role set is rechecked under the pairing lock.
    */
   autoApproveNewDeviceScopes?: readonly string[];

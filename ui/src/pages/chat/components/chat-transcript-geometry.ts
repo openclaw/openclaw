@@ -1,9 +1,8 @@
 import { measureElement, type Virtualizer } from "@tanstack/virtual-core";
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { captureChatSessionScrollPosition, type ChatSessionScrollPosition } from "../scroll.ts";
 import type { TranscriptViewportMeasurement } from "./chat-transcript-scroll-events.ts";
 
-export const POSITION_RAIL_MARKER_HEIGHT = 12;
+export const POSITION_RAIL_MARKER_HEIGHT = 10;
 const POSITION_RAIL_MARKER_OVERSCAN = 6;
 
 export function positionRailWindowIndexes(
@@ -121,9 +120,26 @@ export function initialTranscriptRect() {
   };
 }
 
+export function isTranscriptRangeCommitted(
+  inner: HTMLElement | null,
+  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+): boolean {
+  return virtualizer.getVirtualItems().every((row) => {
+    const node = virtualizer.elementsCache.get(row.key);
+    return (
+      node !== undefined &&
+      inner?.contains(node) === true &&
+      // This records the committed size without feeding it back into the row's styles.
+      (node.dataset.streamingRow === "true" ||
+        Math.abs(Number.parseFloat(node.dataset.rowSize ?? "") - row.size) < 1)
+    );
+  });
+}
+
 export function readConnectedTranscriptRows(
   scrollElement: HTMLDivElement | null,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  rowElements: Iterable<HTMLElement>,
 ): (() => boolean) | null {
   const rect = scrollElement?.getBoundingClientRect();
   if (
@@ -137,7 +153,13 @@ export function readConnectedTranscriptRows(
   // Width changes and retired smooth commands can have undelivered sizes.
   // Ordinary row refs stay on TanStack's observer path; never clear its cache.
   const measurements: Array<{ index: number; height: number }> = [];
-  for (const row of scrollElement.querySelectorAll<HTMLElement>(".chat-virtual-row")) {
+  // Refs can arrive out of order during prepends; preserve DOM-order corrections.
+  const rows = [...rowElements]
+    .filter((row) => scrollElement.contains(row) && row.dataset.preparedRow !== "true")
+    .toSorted(
+      (left, right) => virtualizer.indexFromElement(left) - virtualizer.indexFromElement(right),
+    );
+  for (const row of rows) {
     const index = virtualizer.indexFromElement(row);
     // Rows are border-boxes; read their fractional layout height, not a scaled
     // client rect when a containing board or sidebar is transitioning.
@@ -161,16 +183,20 @@ export function measureTranscriptRow(
   entry: ResizeObserverEntry | undefined,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
 ): number {
-  if (entry || !virtualizer.targetWindow?.ResizeObserver) {
+  const parked =
+    element.dataset.preparedRow === "true" && !element.hasAttribute("data-preparing-row");
+  if (!parked && (entry || !virtualizer.targetWindow?.ResizeObserver)) {
     // Rounded row heights accumulate when skipped overscan uses those measurements.
-    const size =
-      entry?.borderBoxSize?.[0]?.blockSize ?? measureElement(element, entry, virtualizer);
-    if (size !== 0 || virtualizer.scrollElement?.clientHeight !== 0) {
+    const box = entry?.borderBoxSize?.[0];
+    const size = box?.blockSize ?? measureElement(element, entry, virtualizer);
+    // A deferred zero can describe a hidden pane or an earlier parked row.
+    // Preserve that geometry even if the pane or row is visible again.
+    if (size !== 0 || (box?.inlineSize !== 0 && virtualizer.scrollElement?.clientHeight !== 0)) {
       return size;
     }
   }
-  // Lit registration waits for the observer's first layout; hidden panels retain
-  // their last measurement instead of replacing it with zero and moving the viewport.
+  // Parked rows have no layout box. Retain their geometry until preparation or
+  // presentation resumes, also while a whole pane is hidden or awaiting layout.
   const index = virtualizer.indexFromElement(element);
   return (
     virtualizer.itemSizeCache.get(virtualizer.options.getItemKey(index)) ??
@@ -179,44 +205,49 @@ export function measureTranscriptRow(
 }
 
 export function maxTranscriptScrollOffset(element: HTMLElement | null): number | null {
-  return element && element.clientHeight > 0
-    ? Math.max(0, element.scrollHeight - element.clientHeight)
-    : null;
+  if (!element) {
+    return null;
+  }
+  const clientHeight = element.clientHeight;
+  return clientHeight > 0 ? Math.max(0, element.scrollHeight - clientHeight) : null;
 }
 
-export class PositionRailGutterController implements ReactiveController {
-  private resizeObserver: ResizeObserver | null = null;
-  private viewport: HTMLDivElement | null = null;
-  private innerElement: HTMLDivElement | null = null;
-  private region: HTMLElement | null = null;
+export function createPositionRailGutter(
+  scrollElement: () => HTMLDivElement | null,
+  innerElement: () => HTMLDivElement | null,
+  columnElement: () => HTMLDivElement | undefined,
+) {
+  let resizeObserver: ResizeObserver | null = null;
+  let observedViewport: HTMLDivElement | null = null;
+  let observedInner: HTMLDivElement | null = null;
+  let observedRegion: HTMLElement | null = null;
 
-  constructor(
-    private readonly host: ReactiveControllerHost & {
-      readonly scrollElement: HTMLDivElement | null;
-    },
-    private readonly inner: () => HTMLDivElement | null,
-  ) {
-    host.addController(this);
-  }
+  const disconnect = () => {
+    resizeObserver?.disconnect();
+    resizeObserver = null;
+    observedViewport = null;
+    observedInner = null;
+    observedRegion = null;
+  };
 
-  hostUpdated(): void {
-    const viewport = this.host.scrollElement;
-    const inner = this.inner();
+  const update = () => {
+    const viewport = scrollElement();
+    const inner = innerElement();
     const region = viewport?.closest<HTMLElement>(".chat-main__conversation") ?? viewport;
-    if (viewport === this.viewport && inner === this.innerElement && region === this.region) {
+    if (viewport === observedViewport && inner === observedInner && region === observedRegion) {
       return;
     }
-    this.hostDisconnected();
-    if (!viewport?.isConnected || inner?.parentElement !== viewport || !region) {
+    disconnect();
+    const column = columnElement();
+    if (!viewport?.isConnected || inner?.parentElement !== viewport || !region || !column) {
       return;
     }
-    this.viewport = viewport;
-    this.innerElement = inner;
-    this.region = region;
-    const column = inner.querySelector<HTMLElement>(":scope > .chat-virtual-sizer") ?? inner;
+    observedViewport = viewport;
+    observedInner = inner;
+    observedRegion = region;
     let innerWidth: number | undefined;
     let regionHeight: number | undefined;
-    this.resizeObserver = new ResizeObserver((entries) => {
+    resizeObserver = new ResizeObserver((entries) => {
       let changed = false;
       for (const entry of entries) {
         if (entry.target === column) {
@@ -230,26 +261,18 @@ export class PositionRailGutterController implements ReactiveController {
         }
       }
       if (changed) {
-        this.sync();
+        sync();
       }
     });
     // The virtual column has no flow height. Observing the owned range instead
     // feeds row measurements back into shallower ResizeObserver delivery.
-    this.resizeObserver.observe(column, { box: "border-box" });
-    this.resizeObserver.observe(region, { box: "border-box" });
-  }
+    resizeObserver.observe(column, { box: "border-box" });
+    resizeObserver.observe(region, { box: "border-box" });
+  };
 
-  hostDisconnected(): void {
-    this.resizeObserver?.disconnect();
-    this.resizeObserver = null;
-    this.viewport = null;
-    this.innerElement = null;
-    this.region = null;
-  }
-
-  read() {
-    const viewport = this.host.scrollElement;
-    const inner = this.inner();
+  const read = () => {
+    const viewport = scrollElement();
+    const inner = innerElement();
     if (!viewport?.isConnected || inner?.parentElement !== viewport) {
       return null;
     }
@@ -260,9 +283,9 @@ export class PositionRailGutterController implements ReactiveController {
     const columnWidth = inner.clientWidth;
     const region = viewport.closest<HTMLElement>(".chat-main__conversation") ?? viewport;
     return { viewport, gutter, columnWidth, regionHeight: region.clientHeight };
-  }
+  };
 
-  sync(geometry = this.read()): void {
+  const sync = (geometry = read()) => {
     if (!geometry) {
       return;
     }
@@ -275,5 +298,7 @@ export class PositionRailGutterController implements ReactiveController {
     // Reserve room for the compact left rail and breathing space, including
     // when a saved width fills the pane.
     viewport.toggleAttribute("data-position-rail-gutter", gutter >= 68);
-  }
+  };
+
+  return { update, disconnect, read, sync };
 }

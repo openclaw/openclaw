@@ -4,6 +4,7 @@ import {
   assertMemoryAudienceCurrent,
   assertMemoryAudienceSession,
 } from "../plugins/memory-audience.js";
+import { readSessionForkSource } from "../sessions/input-provenance.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
 import { modelKey } from "./model-ref-shared.js";
@@ -15,6 +16,7 @@ export type OpenClawPluginToolOptions = Pick<
   | "agentSessionKey"
   | "runSessionKey"
   | "runId"
+  | "inputProvenance"
   | "assertInvocationCurrent"
   | "assertInputCommitAllowed"
   | "agentChannel"
@@ -23,6 +25,7 @@ export type OpenClawPluginToolOptions = Pick<
   | "currentMessagingTarget"
   | "currentChannelId"
   | "agentThreadId"
+  | "approvalReviewerDeviceIds"
   | "nativeChannelId"
   | "messageActionTurnCapability"
   | "agentDir"
@@ -31,6 +34,7 @@ export type OpenClawPluginToolOptions = Pick<
   | "fsPolicy"
   | "modelProvider"
   | "modelId"
+  | "modelContextWindowTokens"
   | "requesterSenderId"
   | "senderIsOwner"
   | "memoryAudience"
@@ -39,13 +43,25 @@ export type OpenClawPluginToolOptions = Pick<
   | "requesterAgentIdOverride"
   | "sessionId"
   | "conversationRecall"
+  | "skillLibraryAuthoring"
   | "oneShotCliRun"
   | "sandboxBrowserBridgeUrl"
   | "allowHostBrowserControl"
+  | "allowLocalBrowserLoopback"
+  | "assertLocalBrowserLoopbackCurrent"
   | "sandboxed"
   | "allowGatewaySubagentBinding"
   | "toolBindings"
-> & { activeProjectKeys?: readonly string[] };
+  | "sandbox"
+  | "abortSignal"
+  | "pluginExecutionSkillsSnapshot"
+  | "pluginExecutionAuthority"
+> & {
+  activeProjectKeys?: readonly string[];
+  approvalReviewerDeviceId?: string;
+  /** Plugin whose runtime tool grant this run carries (a plugin-started fork). */
+  runtimePluginToolOwnerId?: string;
+};
 
 export function resolveOpenClawPluginToolInputs(params: {
   options?: OpenClawPluginToolOptions;
@@ -87,6 +103,7 @@ export function resolveOpenClawPluginToolInputs(params: {
     threadId: options?.agentThreadId,
   });
 
+  const forkSource = readSessionForkSource(options?.inputProvenance);
   return {
     context: {
       config: options?.config,
@@ -99,6 +116,24 @@ export function resolveOpenClawPluginToolInputs(params: {
       agentId: sessionAgentId,
       sessionKey,
       sessionId: options?.sessionId,
+      runId: options?.runId,
+      inputProvenance: options?.inputProvenance,
+      ...(forkSource
+        ? {
+            backgroundRun: {
+              sourceSessionKey: forkSource,
+              // Only a plugin's own fork carries its tool grant; core forks have no plugin owner.
+              ...(options?.runtimePluginToolOwnerId
+                ? { ownerPluginId: options.runtimePluginToolOwnerId }
+                : {}),
+            },
+          }
+        : {}),
+      approvalReviewerDeviceIds: options?.approvalReviewerDeviceIds
+        ? [...options.approvalReviewerDeviceIds]
+        : options?.approvalReviewerDeviceId
+          ? [options.approvalReviewerDeviceId]
+          : undefined,
       toolBindings: options?.toolBindings,
       activeProjectKeys: options?.activeProjectKeys,
       conversationRecall: options?.conversationRecall,
@@ -106,6 +141,12 @@ export function resolveOpenClawPluginToolInputs(params: {
       browser: {
         sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
         allowHostControl: options?.allowHostBrowserControl,
+        ...(options?.assertLocalBrowserLoopbackCurrent
+          ? { assertLocalLoopbackCurrent: options.assertLocalBrowserLoopbackCurrent }
+          : {}),
+        ...(options?.allowLocalBrowserLoopback !== undefined
+          ? { allowLocalLoopback: options.allowLocalBrowserLoopback }
+          : {}),
       },
       messageChannel: options?.agentChannel,
       agentAccountId: options?.agentAccountId,

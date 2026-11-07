@@ -1,10 +1,11 @@
 import path from "node:path";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
+import type { JsonObject } from "./protocol.js";
 import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
-import * as attemptActiveTurn from "./run-attempt-active-turn.js";
+import { observeAttemptProjectionReady } from "./run-attempt-lifecycle.test-support.js";
 import {
   createParams,
+  createTestParams,
   createStartedThreadHarness,
   runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
@@ -18,79 +19,70 @@ import {
 
 setupRunAttemptTestHooks();
 
+function agentMessage(id: string, phase: string, text: string) {
+  return { type: "agentMessage", id, phase, text };
+}
+function commandExecution(id: string, aggregatedOutput: string) {
+  return {
+    type: "commandExecution",
+    id,
+    command: "transcript",
+    status: "completed",
+    aggregatedOutput,
+    exitCode: 0,
+  };
+}
+
+async function checkpointParams() {
+  const params = createTestParams();
+  await attachSqliteSessionTarget(params, path.join(tempDir, "sessions.sqlite"), params.sessionId);
+  return params;
+}
+
 async function startCheckpointAttempt(params: ReturnType<typeof createParams>) {
   // Keep the attempt budget controlled while the real SQLite workers progress.
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-  const activate = attemptActiveTurn.activateCodexAttemptTurn;
-  const activated = createDeferred<ReturnType<typeof activate>>();
-  vi.spyOn(attemptActiveTurn, "activateCodexAttemptTurn").mockImplementation((...args) => {
-    const turn = activate(...args);
-    activated.resolve(turn);
-    return turn;
-  });
+  const waitForProjection = observeAttemptProjectionReady();
   const harness = createStartedThreadHarness();
   const run = runCodexAppServerAttempt(params);
-  const turn = await Promise.race([
-    activated.promise,
+  await Promise.race([
+    waitForProjection(),
     run.then(() => {
       throw new Error("Codex attempt ended before projection activation");
     }),
   ]);
   // A turn/start request precedes the prompt mirror and notification binding.
   // Once ready, awaited notifications include their canonical checkpoint work.
-  await turn.ready;
-  return { harness, run };
+  return {
+    harness,
+    run,
+    raw: (item: JsonObject) => harness.notify(rawItemCompleted(item)),
+    completed: (item: JsonObject) => harness.notify(itemNotification("item/completed", item)),
+  };
 }
 
 describe("runCodexAppServerAttempt", () => {
   it("persists completed commentary and final once when native item IDs change after streaming", async () => {
-    const params = createParams(
-      path.join(tempDir, "identity-drift.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
-    await attachSqliteSessionTarget(
-      params,
-      path.join(tempDir, "identity-drift-sessions.json"),
-      "identity-drift-session",
-    );
-    const { harness, run } = await startCheckpointAttempt(params);
+    const params = await checkpointParams();
+    const { harness, run, completed } = await startCheckpointAttempt(params);
     // Captured from pinned rust-v0.154.0: deltas retain the started ID,
     // item/completed has a new ID, and the terminal summary repeats that new ID.
     for (const phase of ["commentary", "final_answer"] as const) {
       const text = phase === "commentary" ? "Checking the workspace." : "The work is complete.";
       await harness.notify(
-        itemNotification("item/started", {
-          type: "agentMessage",
-          id: `${phase}-preview`,
-          phase,
-          text: "",
-        }),
+        itemNotification("item/started", agentMessage(`${phase}-preview`, phase, "")),
       );
       await harness.notify({
         method: "item/agentMessage/delta",
         params: { threadId: "thread-1", turnId: "turn-1", itemId: `${phase}-preview`, delta: text },
       });
-      await harness.notify(
-        itemNotification("item/completed", {
-          type: "agentMessage",
-          id: `${phase}-completed`,
-          phase,
-          text,
-        }),
-      );
+      await completed(agentMessage(`${phase}-completed`, phase, text));
     }
     await harness.notify(
       turnCompleted({
         id: "turn-1",
         status: "completed",
-        items: [
-          {
-            type: "agentMessage",
-            id: "final_answer-completed",
-            phase: "final_answer",
-            text: "The work is complete.",
-          },
-        ],
+        items: [agentMessage("final_answer-completed", "final_answer", "The work is complete.")],
       }),
     );
     await run;
@@ -101,55 +93,122 @@ describe("runCodexAppServerAttempt", () => {
       [{ type: "text", text: "Checking the workspace." }],
       [{ type: "text", text: "The work is complete." }],
     ]);
-    expect(messages).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          __openclaw: expect.objectContaining({
-            mirrorIdentity: expect.stringContaining("preview"),
-          }),
-        }),
-      ]),
+    expect(messages).not.toContainEqual(
+      expect.objectContaining({
+        __openclaw: expect.objectContaining({ mirrorIdentity: expect.stringContaining("preview") }),
+      }),
     );
   });
 
+  it("checkpoints individual reasoning occurrences around work and retains them once after settlement", async () => {
+    const params = await checkpointParams();
+    const { harness, run, raw, completed } = await startCheckpointAttempt(params);
+    const reasoning = (id: string, text: string) => ({
+      type: "reasoning",
+      id,
+      summary: [text],
+      content: [],
+    });
+    await harness.notify(itemNotification("item/started", reasoning("reason-1", "")));
+    await harness.notify({
+      method: "item/reasoning/summaryTextDelta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "reason-1",
+        summaryIndex: 0,
+        delta: "Draft",
+      },
+    });
+    await completed(reasoning("reason-1", "Checking the boundaries."));
+    expect((await readTranscriptMessagesByIdentity(params)).at(-1)).toMatchObject({
+      content: [{ type: "thinking", thinking: "Checking the boundaries." }],
+      __openclaw: { mirrorIdentity: "turn-1:reasoning:reason-1" },
+    });
+    // Native stream recovery can leave an earlier reasoning item unfinished.
+    // Optional reasoning must never block completed work from reaching disk.
+    await harness.notify(itemNotification("item/started", reasoning("orphan", "")));
+    await harness.notify({
+      method: "item/reasoning/summaryTextDelta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "orphan",
+        summaryIndex: 0,
+        delta: "Interrupted check.",
+      },
+    });
+    await harness.notify({
+      method: "error",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        willRetry: true,
+        error: { message: "Stream interrupted", codexErrorInfo: "other" },
+      },
+    });
+    await completed(agentMessage("commentary-1", "commentary", "Running the check."));
+    await raw({
+      type: "function_call",
+      call_id: "check",
+      name: "exec_command",
+      arguments: '{"cmd":"check"}',
+    });
+    await completed(commandExecution("check", "OK"));
+    await raw({ type: "function_call_output", call_id: "check", output: "OK" });
+    // Equal text belongs to distinct native occurrences; completion-only text
+    // must use the same live/history handoff as streamed text.
+    await completed(reasoning("reason-2", "Checking the boundaries."));
+    const checkpoint = await readTranscriptMessagesByIdentity(params);
+    expect(checkpoint.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "assistant",
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
+    expect(checkpoint.at(-1)).toMatchObject({
+      content: [{ type: "thinking", thinking: "Checking the boundaries." }],
+      __openclaw: { mirrorIdentity: "turn-1:reasoning:reason-2" },
+    });
+    await harness.notify(
+      turnCompleted({
+        id: "turn-1",
+        status: "completed",
+        items: [
+          reasoning("reason-1", "Checking the boundaries."),
+          reasoning("reason-2", "Checking the boundaries."),
+          agentMessage("answer", "final_answer", "Done."),
+        ],
+      }),
+    );
+    await run;
+    const messages = await readTranscriptMessagesByIdentity(params);
+    expect(messages.slice(0, checkpoint.length)).toEqual(checkpoint);
+    expect(messages.slice(checkpoint.length)).toMatchObject([
+      { content: [{ type: "thinking", thinking: "Interrupted check." }] },
+      { content: [{ type: "text", text: "Done." }] },
+    ]);
+  });
+
   it("checkpoints the complete native response, not the earlier execution preview", async () => {
-    const params = createParams(
-      path.join(tempDir, "output.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
-    await attachSqliteSessionTarget(
-      params,
-      path.join(tempDir, "output-sessions.json"),
-      "output-session",
-    );
+    const params = await checkpointParams();
     // Prepare the history reader before the attempt budget starts.
     await readCodexMirroredSessionHistoryMessages(params);
-    const { harness, run } = await startCheckpointAttempt(params);
-    await harness.notify(
-      rawItemCompleted({
-        type: "function_call",
-        call_id: "long-command",
-        name: "exec_command",
-        arguments: JSON.stringify({ cmd: "transcript", max_output_tokens: 24_000 }),
-      }),
-    );
-    await harness.notify(
-      itemNotification("item/completed", {
-        type: "commandExecution",
-        id: "long-command",
-        command: "transcript",
-        status: "completed",
-        aggregatedOutput: "RAW STDOUT",
-        exitCode: 0,
-      }),
-    );
+    const { harness, run, raw, completed } = await startCheckpointAttempt(params);
+    await raw({
+      type: "function_call",
+      call_id: "long-command",
+      name: "exec_command",
+      arguments: JSON.stringify({ cmd: "transcript", max_output_tokens: 24_000 }),
+    });
+    await completed(commandExecution("long-command", "RAW STDOUT"));
     expect((await readTranscriptMessagesByIdentity(params)).map((message) => message.role)).toEqual(
       ["user", "assistant"],
     );
     const output = " \r\n" + "transcript 😀\n".repeat(12_000) + "END OF RESPONSE\r\n ";
-    await harness.notify(
-      rawItemCompleted({ type: "function_call_output", call_id: "long-command", output }),
-    );
+    await raw({ type: "function_call_output", call_id: "long-command", output });
     const checkpoint = await readTranscriptMessagesByIdentity(params);
     expect(checkpoint[2]).toMatchObject({
       role: "toolResult",
@@ -157,24 +216,13 @@ describe("runCodexAppServerAttempt", () => {
       content: [{ type: "text", text: output }],
       __openclaw: { toolOutput: { source: "provider-response", modelInput: "unverified" } },
     });
-    await harness.notify(
-      rawItemCompleted({
-        type: "custom_tool_call",
-        call_id: "outer-exec",
-        name: "exec",
-        input: "text(await tools.exec_command({cmd: 'transcript'}))",
-      }),
-    );
-    await harness.notify(
-      itemNotification("item/completed", {
-        type: "commandExecution",
-        id: "nested-command",
-        command: "transcript",
-        status: "completed",
-        aggregatedOutput: "nested stdout",
-        exitCode: 0,
-      }),
-    );
+    await raw({
+      type: "custom_tool_call",
+      call_id: "outer-exec",
+      name: "exec",
+      input: "text(await tools.exec_command({cmd: 'transcript'}))",
+    });
+    await completed(commandExecution("nested-command", "nested stdout"));
     // Nested native execution has no model-response ID of its own. It must
     // checkpoint without waiting for the outer Code Mode response.
     expect(await readTranscriptMessagesByIdentity(params)).toContainEqual(
@@ -186,9 +234,7 @@ describe("runCodexAppServerAttempt", () => {
         }),
       }),
     );
-    await harness.notify(
-      rawItemCompleted({ type: "custom_tool_call_output", call_id: "outer-exec", output }),
-    );
+    await raw({ type: "custom_tool_call_output", call_id: "outer-exec", output });
     expect(await readTranscriptMessagesByIdentity(params)).toContainEqual(
       expect.objectContaining({
         role: "toolResult",
@@ -204,62 +250,38 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("checkpoints raw patch output and network provenance without persisting commentary", async () => {
-    const params = createParams(
-      path.join(tempDir, "checkpoint.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
-    await attachSqliteSessionTarget(
-      params,
-      path.join(tempDir, "checkpoint-sessions.json"),
-      "checkpoint-session",
-    );
-    params.config = {
-      ...params.config,
-      ui: { prefs: { chatPersistCommentary: false } },
-    };
-    const { harness, run } = await startCheckpointAttempt(params);
+    const params = await checkpointParams();
+    params.config = { ...params.config, ui: { prefs: { chatPersistCommentary: false } } };
+    const { harness, run, raw, completed } = await startCheckpointAttempt(params);
     const patchId = "patch-1";
-    await harness.notify(
-      rawItemCompleted({
-        type: "custom_tool_call",
-        call_id: patchId,
-        name: "apply_patch",
-        input: "*** Begin Patch\n*** Add File: example.txt\n+saved\n*** End Patch\n",
-      }),
-    );
-    await harness.notify(
-      itemNotification("item/completed", {
-        type: "fileChange",
-        id: patchId,
-        status: "completed",
-        changes: [{ path: "example.txt", kind: { type: "add" } }],
-      }),
-    );
+    await raw({
+      type: "custom_tool_call",
+      call_id: patchId,
+      name: "apply_patch",
+      input: "*** Begin Patch\n*** Add File: example.txt\n+saved\n*** End Patch\n",
+    });
+    await completed({
+      type: "fileChange",
+      id: patchId,
+      status: "completed",
+      changes: [{ path: "example.txt", kind: { type: "add" } }],
+    });
     const beforeRawOutput = await readTranscriptMessagesByIdentity(params);
     expect(beforeRawOutput.map((message) => message.role)).toEqual(["user", "assistant"]);
-    await harness.notify(
-      itemNotification("item/completed", {
-        type: "webSearch",
-        id: "search-1",
-        status: "completed",
-        query: "saved file",
-      }),
-    );
+    await completed({
+      type: "webSearch",
+      id: "search-1",
+      status: "completed",
+      query: "saved file",
+    });
     expect(await readTranscriptMessagesByIdentity(params)).toEqual(beforeRawOutput);
-    await harness.notify(
-      rawItemCompleted({
-        type: "custom_tool_call_output",
-        call_id: patchId,
-        output: "Success. Updated the following files:\nA example.txt",
-      }),
-    );
-    await harness.notify(
-      itemNotification("item/completed", {
-        type: "agentMessage",
-        id: "network-commentary",
-        phase: "commentary",
-        text: "The search confirms the result.",
-      }),
+    await raw({
+      type: "custom_tool_call_output",
+      call_id: patchId,
+      output: "Success. Updated the following files:\nA example.txt",
+    });
+    await completed(
+      agentMessage("network-commentary", "commentary", "The search confirms the result."),
     );
     const checkpoint = await readTranscriptMessagesByIdentity(params);
     expect(checkpoint.map((message) => message.role)).toEqual([
@@ -274,11 +296,9 @@ describe("runCodexAppServerAttempt", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
     const finalMessages = await readTranscriptMessagesByIdentity(params);
-    for (const message of checkpoint) {
-      expect(
-        finalMessages.filter((candidate) => candidate.idempotencyKey === message.idempotencyKey),
-      ).toEqual([message]);
-    }
+    expect(new Set(finalMessages.map((message) => message.idempotencyKey)).size).toBe(
+      checkpoint.length,
+    );
     expect(finalMessages).toEqual(checkpoint);
   });
 });

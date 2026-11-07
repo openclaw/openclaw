@@ -27,7 +27,7 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 import { ensureCodexAppServerClientRuntime } from "./src/app-server/client-runtime.js";
 import { createNativeSubagentAssignmentStore } from "./src/app-server/native-subagent-assignment-store.js";
@@ -478,6 +478,12 @@ describe("Codex native Task assignment upgrade", () => {
               description: "Recover accepted native work",
               parameters: Type.Object({}),
               execute: async () => {
+                const bindingGuard = await fixture.runtime.prepareNativeSubagentGuard(
+                  identity,
+                  currentOwner,
+                );
+                assert(bindingGuard);
+                onTestFinished(() => bindingGuard.release());
                 registered.resolve(
                   await codexNativeSubagentMonitorRuntime.register({
                     client: client.client,
@@ -487,6 +493,7 @@ describe("Codex native Task assignment upgrade", () => {
                     historyOwner: currentOwner,
                     assignmentStore: createNativeSubagentAssignmentStore({
                       bindingStore: fixture.runtime,
+                      assertBindingCurrent: bindingGuard.assertCurrent,
                       identity,
                       owner: currentOwner,
                     }),

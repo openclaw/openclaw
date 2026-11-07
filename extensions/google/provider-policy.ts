@@ -2,16 +2,25 @@ import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/core";
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
+import type {
+  ModelProviderConfig,
+  ProviderFastModePolicyContext,
+} from "openclaw/plugin-sdk/provider-model-types";
 import {
   isGoogleGemini3ProModel,
   isGoogleGemini3ThinkingLevelModel,
 } from "openclaw/plugin-sdk/provider-thinking-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeFastMode,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeAntigravityModelId, normalizeGoogleModelId } from "./model-id.js";
+import { isGoogleGeminiTextModelId } from "./provider-models.js";
 import {
   isGoogleGenerativeAiApi,
   isGoogleVertexBaseUrl,
+  isOfficialGoogleAiStudioBaseUrl,
   normalizeGoogleApiBaseUrl,
   normalizeGoogleGenerativeAiBaseUrl,
 } from "./src/google-api-base-url.js";
@@ -99,7 +108,7 @@ function normalizeProviderModels(
   normalizeId: (id: string) => string,
 ): ModelProviderConfig {
   const models = provider.models;
-  if (!Array.isArray(models) || models.length === 0) {
+  if (!models?.length) {
     return provider;
   }
 
@@ -161,4 +170,56 @@ export function resolveGoogleThinkingProfile({
     levels,
     ...(isGemini3ThinkingModel ? { preserveWhenCatalogReasoningFalse: true } : {}),
   };
+}
+
+export type GoogleServiceTier = "standard" | "flex" | "priority";
+
+function normalizeGoogleServiceTier(value: unknown): GoogleServiceTier | undefined {
+  const normalized = normalizeOptionalString(value)?.toLowerCase();
+  return normalized === "standard" || normalized === "flex" || normalized === "priority"
+    ? normalized
+    : undefined;
+}
+
+export function resolveGoogleServiceTier(
+  extraParams?: Record<string, unknown>,
+): GoogleServiceTier | undefined {
+  const explicitTier = normalizeGoogleServiceTier(
+    extraParams?.serviceTier ?? extraParams?.service_tier,
+  );
+  if (explicitTier) {
+    return explicitTier;
+  }
+  const rawFastMode = extraParams?.fastMode ?? extraParams?.fast_mode;
+  const resolvedFastMode = normalizeFastMode(
+    // SAFETY: the runtime passes per-request Fast mode as a zero-argument resolver.
+    typeof rawFastMode === "function" ? (rawFastMode as () => unknown)() : rawFastMode,
+  );
+  return resolvedFastMode === true || resolvedFastMode === "ultrafast" ? "priority" : undefined;
+}
+
+export function resolveGoogleFastModeSupport(
+  ctx: ProviderFastModePolicyContext,
+): boolean | undefined {
+  if (ctx.runtimeId !== undefined && ctx.runtimeId !== "auto" && ctx.runtimeId !== "openclaw") {
+    return false;
+  }
+  if (normalizeLowercaseStringOrEmpty(ctx.provider) !== "google") {
+    return false;
+  }
+  if (!ctx.api) {
+    return undefined;
+  }
+  const isInteractionsRoute =
+    ctx.api === "google-interactions" ||
+    (ctx.api === "google-generative-ai" &&
+      isOfficialGoogleAiStudioBaseUrl(ctx.baseUrl) &&
+      isGoogleGeminiTextModelId(ctx.modelId));
+  if (!isInteractionsRoute || isGoogleVertexBaseUrl(ctx.baseUrl)) {
+    return false;
+  }
+  if (normalizeGoogleServiceTier(ctx.params?.serviceTier ?? ctx.params?.service_tier)) {
+    return false;
+  }
+  return true;
 }

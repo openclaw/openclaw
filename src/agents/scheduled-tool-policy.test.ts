@@ -1,178 +1,72 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
-  resolveScheduledToolCallerContext,
-  resolveScheduledToolPolicyContext,
+  resolveScheduledToolCallerContext as callerContext,
+  resolveScheduledToolPolicyContext as resolvePolicy,
 } from "./scheduled-tool-policy.js";
 
-describe("resolveScheduledToolPolicyContext", () => {
-  it("requires both a persisted cap and valid server provenance", () => {
-    expect(
-      resolveScheduledToolPolicyContext({
-        scheduledToolPolicy: { version: 1, mode: "trusted" },
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveScheduledToolPolicyContext({
-        toolsAllow: ["write"],
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveScheduledToolPolicyContext({
-        toolsAllow: ["write"],
-        scheduledToolPolicy: { version: 2, mode: "trusted" },
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveScheduledToolPolicyContext({ toolsAllow: ["write"], scheduledToolPolicy: {} }),
-    ).toBeUndefined();
-  });
+const account = {
+  version: 1,
+  mode: "account",
+  ownerSessionKey: "agent:main:main",
+  ownerAccountId: "creator",
+} as const;
+const policy = (params: Parameters<typeof resolvePolicy>[0] = {}) =>
+  resolvePolicy({ toolsAllow: ["exec"], scheduledToolPolicy: account, ...params });
 
-  it("normalizes account provenance for explicitly capped runs", () => {
-    expect(
-      resolveScheduledToolPolicyContext({
-        toolsAllow: [],
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey: " agent:main:discord:group:ops ",
-          ownerAccountId: " work ",
-        },
-        callerOrigin: { kind: "external", channel: " Discord " },
-      }),
-    ).toEqual({
-      version: 1,
-      mode: "account",
-      ownerSessionKey: "agent:main:discord:group:ops",
-      ownerAccountId: "work",
-      ownerOrigin: { kind: "external", channel: "discord" },
-    });
-  });
-
-  it("preserves explicit local account provenance without inventing a channel", () => {
-    expect(
-      resolveScheduledToolPolicyContext({
-        toolsAllow: [],
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey: "agent:main:main",
-          ownerAccountId: "work",
-        },
-        callerOrigin: { kind: "local" },
-      }),
-    ).toEqual({
-      version: 1,
-      mode: "account",
-      ownerSessionKey: "agent:main:main",
-      ownerAccountId: "work",
-      ownerOrigin: { kind: "local" },
-    });
-  });
-
-  it("keeps missing account provenance explicitly unknown", () => {
-    expect(
-      resolveScheduledToolPolicyContext({
-        toolsAllow: [],
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey: "agent:main:main",
-          ownerAccountId: "work",
-        },
-      }),
-    ).toEqual({
-      version: 1,
-      mode: "account",
-      ownerSessionKey: "agent:main:main",
-      ownerAccountId: "work",
-      ownerOrigin: { kind: "unknown" },
-    });
-  });
+it("requires both a persisted cap and valid server provenance", () => {
+  for (const params of [
+    { scheduledToolPolicy: { version: 1, mode: "trusted" } },
+    { toolsAllow: ["write"] },
+    { toolsAllow: ["write"], scheduledToolPolicy: { version: 2, mode: "trusted" } },
+    { toolsAllow: ["write"], scheduledToolPolicy: {} },
+  ]) {
+    expect(resolvePolicy(params)).toBeUndefined();
+  }
 });
 
-describe("resolveScheduledToolCallerContext", () => {
-  it("uses account-bound creator identity without changing delivery identity", () => {
-    expect(
-      resolveScheduledToolCallerContext({
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey: "agent:main:discord:group:ops",
-          ownerAccountId: "creator",
-          ownerOrigin: { kind: "external", channel: "discord" },
-        },
-        accountId: "delivery",
-        channel: "telegram",
-      }),
-    ).toEqual({ accountId: "creator", channel: "discord", scheduled: true });
-  });
-
-  it("makes an unprovable account-bound channel explicitly unavailable", () => {
-    expect(
-      resolveScheduledToolCallerContext({
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey: "agent:main:main",
-          ownerAccountId: "creator",
-          ownerOrigin: { kind: "unknown" },
-        },
-        accountId: "delivery",
-        channel: "telegram",
-      }),
-    ).toEqual({ accountId: "creator", channel: null, scheduled: true });
-  });
-
-  it("keeps explicitly local scheduled authority on the local tool surface", () => {
-    expect(
-      resolveScheduledToolCallerContext({
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey: "agent:main:main",
-          ownerAccountId: "creator",
-          ownerOrigin: { kind: "local" },
-        },
-        accountId: "delivery",
-        channel: "discord",
-      }),
-    ).toEqual({ accountId: "creator", channel: undefined, local: true, scheduled: true });
-  });
-
-  it("preserves the pin when re-resolving an already-resolved context", () => {
-    const first = resolveScheduledToolPolicyContext({
-      toolsAllow: ["exec"],
+it.each([
+  [{ kind: "external", channel: " Discord " }, { kind: "external", channel: "discord" }, "discord"],
+  [{ kind: "local" }, { kind: "local" }, undefined],
+  [undefined, { kind: "unknown" }, null],
+] as const)(
+  "normalizes provenance %j and preserves creator authority",
+  (origin, ownerOrigin, channel) => {
+    const sessionKey = channel ? "agent:main:discord:group:ops" : account.ownerSessionKey;
+    const resolved = policy({
+      toolsAllow: [],
+      callerOrigin: origin,
       scheduledToolPolicy: {
-        version: 1,
-        mode: "account",
-        ownerSessionKey: "agent:main:main",
-        ownerAccountId: "creator",
+        ...account,
+        ownerSessionKey: ` ${sessionKey} `,
+        ownerAccountId: " creator ",
       },
-      execTarget: { version: 1, host: "gateway", ask: "always" },
     });
-    expect(first?.execTarget).toEqual({ host: "gateway", ask: "always" });
-    const again = resolveScheduledToolPolicyContext({
-      toolsAllow: ["exec"],
-      scheduledToolPolicy: first,
-      execTarget: first?.execTarget,
+    expect(resolved).toEqual({ ...account, ownerSessionKey: sessionKey, ownerOrigin });
+    expect(
+      callerContext({ scheduledToolPolicy: resolved, accountId: "delivery", channel: "telegram" }),
+    ).toEqual({
+      accountId: "creator",
+      channel,
+      scheduled: true,
+      ...(ownerOrigin.kind === "local" ? { local: true } : {}),
     });
-    expect(again?.execTarget).toEqual({ host: "gateway", ask: "always" });
-  });
+  },
+);
 
-  it("ignores invalid exec pin shapes instead of widening or failing", () => {
-    for (const execTarget of [
-      { version: 2, host: "gateway" },
-      { version: 1, host: "node" },
-      "gateway",
-      null,
-    ]) {
-      expect(
-        resolveScheduledToolPolicyContext({
-          toolsAllow: ["exec"],
-          scheduledToolPolicy: { version: 1, mode: "trusted" },
-          execTarget,
-        })?.execTarget,
-      ).toBeUndefined();
-    }
-  });
+it("preserves the pin when re-resolving an already-resolved context", () => {
+  const pin = { host: "gateway", ask: "always" } as const;
+  const first = policy({ execTarget: { version: 1, ...pin } });
+  expect(first?.execTarget).toEqual(pin);
+  expect(policy({ scheduledToolPolicy: first, execTarget: first?.execTarget })?.execTarget).toEqual(
+    pin,
+  );
 });
+
+it.each([{ version: 2, host: "gateway" }, { version: 1, host: "node" }, "gateway", null])(
+  "ignores invalid exec pin %j instead of widening or failing",
+  (execTarget) => {
+    expect(
+      policy({ scheduledToolPolicy: { version: 1, mode: "trusted" }, execTarget })?.execTarget,
+    ).toBeUndefined();
+  },
+);

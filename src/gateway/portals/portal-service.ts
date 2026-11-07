@@ -19,9 +19,11 @@ import {
 import type { GatewayPortalIngressConfig } from "../../config/types.gateway.js";
 import { resolveAdvertisedLanHostCore } from "../../infra/advertised-lan-host.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
+import { closeHttpServers } from "../../infra/http-server-lifecycle.js";
 import { claimTailscaleServePort, type TailscaleRouteClaim } from "../../infra/tailscale.js";
 import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
 import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
+import { isLoopbackHost } from "../net.js";
 import { listenGatewayHttpServer } from "../server/http-listen.js";
 import { getTailscalePublishedOrigin } from "../tailscale-published-origin.js";
 import {
@@ -29,11 +31,7 @@ import {
   handlePortalProxyUpgrade,
   type PortalTarget,
 } from "./portal-http-proxy.js";
-import { createPortalIngress, portalIngressHostname } from "./portal-ingress.js";
-import { closePortalServers, removePortalServers } from "./portal-listeners.js";
 import { resolvePortalTlsHostname } from "./portal-tls-hostname.js";
-
-const PORTAL_PORT_ALLOCATION_ATTEMPTS = 10;
 
 type PortalEntry = {
   id: string;
@@ -62,6 +60,15 @@ type PortalRuntimeEntry = {
   revoked?: boolean;
   responses: Set<ServerResponse>;
 };
+
+function removePortalServers(shared: HttpServer[], owned: readonly HttpServer[]): void {
+  for (const server of owned) {
+    const index = shared.indexOf(server);
+    if (index >= 0) {
+      shared.splice(index, 1);
+    }
+  }
+}
 
 type GatewayPortalOpenParams = {
   targetPort: number;
@@ -116,7 +123,8 @@ export function createPortalOperations(
   };
   return {
     list,
-    async close(id: string) {
+    async close(rawId: string) {
+      const id = rawId.trim();
       if (owner && !list().portals.some((portal) => portal.id === id)) {
         throw new Error(owner.ownershipError);
       }
@@ -180,6 +188,66 @@ async function formatPortalHost(host: string): Promise<string> {
       : null;
   const openableHost = lanHost ?? (host === "0.0.0.0" ? "127.0.0.1" : host === "::" ? "::1" : host);
   return openableHost.includes(":") ? `[${openableHost}]` : openableHost;
+}
+
+/** Dedicated loopback ingress; registry lookup remains owned by the portal service. */
+function createPortalIngress(params: {
+  port: number;
+  httpServers: HttpServer[];
+  request: (req: IncomingMessage, res: ServerResponse) => void;
+  upgrade: (req: IncomingMessage, socket: Duplex, head: Buffer) => void;
+}): { start: () => Promise<number>; close: () => Promise<void> } {
+  const server = createHttpServer(params.request);
+  server.on("upgrade", params.upgrade);
+  let startup: Promise<number> | undefined;
+  let closed = false;
+  return {
+    start: () => {
+      if (closed) {
+        return Promise.reject(new Error("Portal ingress is closed"));
+      }
+      // Registration and memoization precede binding, so concurrent opens share one listener.
+      if (!startup) {
+        params.httpServers.push(server);
+        startup = (async () => {
+          try {
+            await listenGatewayHttpServer({
+              httpServer: server,
+              bindHost: "127.0.0.1",
+              port: params.port,
+              retryEaddrinuse: false,
+              serviceName: "portal ingress",
+              endpointScheme: "http",
+            });
+            const address = server.address();
+            if (!address || typeof address === "string") {
+              throw new Error("Portal ingress did not resolve its listener port");
+            }
+            return address.port;
+          } catch (error) {
+            removePortalServers(params.httpServers, [server]);
+            throw error;
+          }
+        })();
+      }
+      return startup;
+    },
+    close: async () => {
+      closed = true;
+      // Settle binding before closing: close during startup must not leave a late listener alive.
+      await startup?.catch(() => undefined);
+      removePortalServers(params.httpServers, [server]);
+      await closeHttpServers([server], { force: true });
+    },
+  };
+}
+
+/** Match only a single DNS hostname authority; forwarded headers never select a portal. */
+function portalIngressHostname(host: string | undefined): string | undefined {
+  if (!host || !/^[a-z0-9.-]+(?::443)?$/iu.test(host)) {
+    return undefined;
+  }
+  return host.toLowerCase().replace(/:443$/u, "");
 }
 
 function createPortalProxyHandlers(
@@ -284,6 +352,16 @@ export function createGatewayPortalService(params: {
       tokenQuery,
       url: openableUrl.toString(),
       publicUrl,
+      exposure: {
+        // A DNS/TLS name does not expose a direct listener bound only to loopback.
+        // Ingress can expose a loopback backend, but never proves viewer access.
+        kind:
+          isLoopbackHost(openableUrl.hostname) ||
+          (!ingress && !params.managedTailscale && params.httpBindHosts.every(isLoopbackHost))
+            ? "loopback-only"
+            : "non-loopback",
+        browserReachability: "unverified",
+      },
       ...(portal.path ? { path: portal.path } : {}),
       ...(portal.description ? { description: portal.description } : {}),
       ...(portal.origin ? { origin: portal.origin } : {}),
@@ -313,7 +391,7 @@ export function createGatewayPortalService(params: {
     runtime.detachOwner?.();
     // Release every owned resource even if a route owner reports a teardown error.
     const cleanup = await Promise.allSettled([
-      closePortalServers(runtime.servers),
+      closeHttpServers(runtime.servers, { force: true }),
       Promise.resolve().then(() => runtime.claim?.stop()),
       Promise.resolve().then(() => runtime.onClose?.()),
     ]);
@@ -445,29 +523,23 @@ export function createGatewayPortalService(params: {
               if (!primaryServer || !primaryHost) {
                 throw new Error("Missing primary portal HTTP server");
               }
-              for (let attempt = 0; attempt < PORTAL_PORT_ALLOCATION_ATTEMPTS; attempt += 1) {
-                await listenGatewayHttpServer({
-                  httpServer: primaryServer,
-                  bindHost: primaryHost,
-                  port: 0,
-                  retryEaddrinuse: false,
-                  serviceName: "portal",
-                  endpointScheme: tlsOptions ? "https" : "http",
-                });
-                const address = primaryServer.address();
-                if (!address || typeof address === "string") {
-                  throw new Error("Portal listener failed to resolve its port");
-                }
-                if (target.kind === "worker" || address.port !== targetPort) {
-                  portal.listenPort = address.port;
-                  break;
-                }
-                // A proxy cannot share its target port: it would dial itself and fail auth.
-                await closePortalServers([primaryServer]);
+              await listenGatewayHttpServer({
+                httpServer: primaryServer,
+                bindHost: primaryHost,
+                port: 0,
+                retryEaddrinuse: false,
+                serviceName: "portal",
+                endpointScheme: tlsOptions ? "https" : "http",
+              });
+              const address = primaryServer.address();
+              if (!address || typeof address === "string") {
+                throw new Error("Portal listener failed to resolve its port");
               }
-              if (portal.listenPort === 0) {
+              // A rare allocation of an inactive target's port fails without self-dialing.
+              if (target.kind === "local" && address.port === targetPort) {
                 throw new Error(`Portal listener repeatedly allocated target port ${targetPort}`);
               }
+              portal.listenPort = address.port;
               for (const [index, host] of bindHosts.entries()) {
                 if (index === 0) {
                   continue;
@@ -535,7 +607,7 @@ export function createGatewayPortalService(params: {
             for (const socket of upgradedSockets) {
               socket.destroy();
             }
-            await Promise.all([closePortalServers(servers), claim?.stop()]);
+            await Promise.all([closeHttpServers(servers, { force: true }), claim?.stop()]);
             throw error;
           }
           const runtime: PortalRuntimeEntry = {
@@ -593,12 +665,11 @@ export function createGatewayPortalService(params: {
             (resourceOwnerKey === undefined || portal.resourceOwnerKey === resourceOwnerKey),
         ),
       ),
-    close: async (id: string, assertCurrent?: () => void) => {
-      await serialize(id, () => {
+    close: (id: string, assertCurrent?: () => void) =>
+      serialize(id, () => {
         assertCurrent?.();
         return closeEntry(id);
-      });
-    },
+      }),
     closeWorkerPortals: async (environmentId: string, ownerEpoch?: number) => {
       const environmentSuffix = `-worker-${sha256HexPrefixCore(environmentId, 32)}-`;
       // Include in-flight opens so teardown fences a listener still awaiting its bind.

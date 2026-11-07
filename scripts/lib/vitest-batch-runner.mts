@@ -1,17 +1,17 @@
 // Runs grouped batches through the repository's installed Vitest entrypoint.
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { assertTestHomeSelection, type TestHomeSelection } from "../../test/test-home-policy.mts";
 import { installVitestProcessGroupCleanup } from "../vitest-process-group.mts";
 import { signalExitCode } from "./managed-child-process.mts";
 import { resolveVitestCliEntry } from "./vitest-build-prerequisites.mts";
 import { resolveExplicitVitestMode } from "./vitest-cli-mode.mts";
 import { resolveVitestHomeSelection } from "./vitest-home-selection.mts";
+import { resolveVitestNodeArgs } from "./vitest-node-args.mts";
 import {
   VITEST_INFRASTRUCTURE_EXIT_CODE,
   vitestInfrastructureExitCode,
 } from "./vitest-outcome.mts";
-import { resolveVitestNodeArgs } from "./vitest-process-env.mts";
 import { exitVitestBySignal, spawnOwnedVitestProcess } from "./vitest-process.mts";
 import type { VitestReportOutcome } from "./vitest-report-owner.mts";
 import { resolveVitestTestCommand } from "./vitest-test-runtime.mts";
@@ -108,7 +108,7 @@ export async function runVitestBatch(params: VitestBatchRunParams): Promise<numb
     outcome.code = vitestInfrastructureExitCode(outcome.code);
   } finally {
     try {
-      await workers?.dispose().catch((error: unknown) => {
+      await workers?.dispose({ interrupted: Boolean(interrupted) }).catch((error: unknown) => {
         console.error(error);
         outcome.code = vitestInfrastructureExitCode(outcome.code);
       });
@@ -123,12 +123,4 @@ export async function runVitestBatch(params: VitestBatchRunParams): Promise<numb
   outcome.signal = interrupted ?? outcome.signal;
   params.onComplete?.(outcome);
   return outcome.code;
-}
-
-/**
- * Checks whether a module URL is the current direct script entrypoint.
- */
-export function isDirectScriptRun(metaUrl: string): boolean {
-  const entryHref = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : "";
-  return metaUrl === entryHref;
 }

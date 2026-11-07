@@ -16,7 +16,7 @@ plugins](/plugins/sdk-channel-plugins) guide.
 
 If your platform stores extra scope inside conversation ids, keep that parsing
 in the plugin with `messaging.resolveSessionConversation(...)`. That is the
-canonical hook for mapping `rawId` to the base conversation id, optional
+primary hook for mapping `rawId` to the base conversation id, optional
 thread id, explicit `baseConversationId`, and any
 `parentConversationCandidates`. When you return `parentConversationCandidates`,
 order them from the narrowest parent to the broadest/base conversation.
@@ -25,7 +25,7 @@ order them from the narrowest parent to the broadest/base conversation.
 compatibility fallback for plugins that only need parent fallbacks on top of
 the generic/raw id. If both hooks exist, core uses
 `resolveSessionConversation(...).parentConversationCandidates` first and only
-falls back to `resolveParentConversationCandidates(...)` when the canonical
+falls back to `resolveParentConversationCandidates(...)` when the primary
 hook omits them.
 
 Bundled plugins that need the same parsing before the channel registry boots
@@ -87,7 +87,7 @@ unreleased synchronous `prepareConversationRouteOwners` hook has been removed; s
 Set `conversationBindings.supportsCurrentConversationBinding` when the channel
 supports generic current-conversation bindings. `createChatChannelPlugin(...)`
 sets this static capability to `true` by default. Channels whose monitor owns a custom binding
-adapter must also set `bindingStore: "adapter"`; core then fails closed while
+adapter must also set `bindingStore: "adapter"`; core then blocks binding operations while
 that adapter is unavailable instead of reading or writing generic binding rows.
 Older `createManager`-only plugins retain the same adapter-owned behavior.
 
@@ -153,3 +153,32 @@ agent-owned targets before resolving an agent.
 For agent-owned targets with an unscoped session key such as `global`, preserve
 `metadata.agentId` so routing keeps the binding's owner. An agent-scoped target
 key remains authoritative over conflicting metadata.
+
+## Native conversation forks
+
+Implement the optional conversationBindings.prepareFork(params) capability
+when your platform can create an independently routed sibling of an existing
+thread. Core owns command authorization, source-session selection, the ordinary
+session copy, history cut, visible three-message recap, and literal outbound
+delivery. Reuse the session fork service; do not create a second transcript-copy
+engine or treat the child as an ACP session or subagent.
+
+The plugin qualifies the native source before the copy, then returns a
+create(targetSessionKey) operation. Create the sibling in the same parent
+audience, bind its observed identity to that ordinary session through the
+existing binding service, and return the committed binding. The optional
+url is a continuation link, not an invitation; notice explains an explicit
+audience restriction. formatRecap may encode provider-native literal text and
+disable mentions/unfurls; it must not select different history or add media.
+
+Retain the supplied assertCurrent and call it after awaited preparation and
+immediately before native creation and binding publication. Respect cancellation
+and provider-owned account/access checks. Core closes this command capability
+when the invocation settles; do not retain it as a background service handle.
+Return the prepared channel-owned assertCurrent callback as well, so recap
+delivery rechecks live account and installation authority after creation.
+Unsupported top-level chats, missing rights, or unqualified source identities
+return { ok: false, reason } without copying a session. Never fall back from
+a private source to a public destination. If native creation succeeded but
+binding failed, retain and report the observed native identity; do not blindly
+create a second destination or delete the copied session.

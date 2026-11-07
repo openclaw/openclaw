@@ -22,6 +22,7 @@ import {
   createEmptyPluginRegistry,
   disposePluginRegistryInstances,
   getActivePluginRegistry,
+  runInHarnessToolAuthorityForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
@@ -70,8 +71,10 @@ import {
   useAutoCleanupTempDirTracker,
   type CodexTestAppServerClientFactory,
 } from "./test-support.js";
-import { createCodexLifecycleTurnHarness } from "./thread-lifecycle.test-fixtures.js";
-import { CODEX_APP_SERVER_VERSION } from "./version.js";
+import {
+  createCodexLifecycleTurnHarness,
+  createLeasedCodexLifecycleHarness,
+} from "./thread-lifecycle.test-fixtures.js";
 import { codexWorkspaceDirCache } from "./workspace-dir-cache.js";
 
 export {
@@ -140,6 +143,9 @@ type RunCodexAppServerAttemptOptions = Omit<
   "bindingStore"
 > & {
   bindingStore?: NonNullable<Parameters<typeof runCodexAppServerAttemptImpl>[1]>["bindingStore"];
+  registeredHarness?: NonNullable<
+    Parameters<typeof runInHarnessToolAuthorityForTest>[3]
+  >["registeredHarness"];
 };
 
 export function queueActiveRunMessageForTest(
@@ -234,12 +240,30 @@ export function runCodexAppServerAttempt(
     }
   };
   trackedParams.onExecutionPhase = observeExecutionPhase;
-  const promise = runCodexAppServerAttemptImpl(trackedParams, {
-    ...options,
-    startupTimeoutFloorMs: options.startupTimeoutFloorMs ?? 30_000,
-    bindingStore: options.bindingStore ?? testCodexAppServerBindingStore,
-    ...(clientFactory ? { clientFactory } : {}),
-  }).finally(() => {
+  const { registeredHarness, ...attemptOptions } = options;
+  const runAdmitted = async (admitted: EmbeddedRunAttemptParams) => {
+    // Steering callers retain the original params even when cancellation adds a copy.
+    params.toolAuthorityFingerprint = admitted.toolAuthorityFingerprint;
+    try {
+      return await runCodexAppServerAttemptImpl(admitted, {
+        ...attemptOptions,
+        startupTimeoutFloorMs: attemptOptions.startupTimeoutFloorMs ?? 30_000,
+        bindingStore: attemptOptions.bindingStore ?? testCodexAppServerBindingStore,
+        ...(clientFactory ? { clientFactory } : {}),
+      });
+    } finally {
+      if (params.toolAuthorityFingerprint === admitted.toolAuthorityFingerprint) {
+        delete params.toolAuthorityFingerprint;
+      }
+    }
+  };
+  // Gateway runs reach the harness inside an admitted session turn.
+  const promise = runInHarnessToolAuthorityForTest(
+    trackedParams,
+    "codex",
+    runAdmitted,
+    registeredHarness ? { registeredHarness } : undefined,
+  ).finally(() => {
     if (trackedParams.onExecutionPhase === observeExecutionPhase) {
       trackedParams.onExecutionPhase = onExecutionPhase;
     }
@@ -305,7 +329,7 @@ async function drainActiveAppServerAttemptsForTest(): Promise<boolean> {
   }
 }
 
-function createHarnessConfig() {
+function createRunAttemptTestConfig(): NonNullable<EmbeddedRunAttemptParams["config"]> {
   return { tools: { web: { search: { enabled: false } } } };
 }
 
@@ -345,7 +369,7 @@ export function createParams(
     },
     thinkLevel: "medium",
     disableTools: false,
-    config: createHarnessConfig(),
+    config: createRunAttemptTestConfig(),
     timeoutMs: 5_000,
     authStorage: {} as never,
     authProfileStore: { version: 1, profiles: {} },
@@ -406,60 +430,27 @@ export async function bindProductionHarnessHostCapabilitiesForTest(
   return close;
 }
 
-export {
-  setCodexTestModelSupportsTools,
-  createCodexRuntimePlanFixture,
-} from "./thread-lifecycle.test-fixtures.js";
-
-export function assistantMessage(text: string, timestamp: number) {
-  return {
-    role: "assistant" as const,
-    content: [{ type: "text" as const, text }],
-    api: "openai-chatgpt-responses",
-    provider: "openai",
-    model: "gpt-5.4-codex",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop" as const,
-    timestamp,
-  };
-}
-
-export function userMessage(text: string, timestamp: number) {
-  return {
-    role: "user" as const,
-    content: [{ type: "text" as const, text }],
-    timestamp,
-  };
-}
-
-export function mockCall(mock: unknown, label: string, index = 0): unknown[] {
-  const call = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls?.at(index);
-  if (!call) {
-    throw new Error(`Expected ${label} call ${index + 1}`);
-  }
-  return call;
-}
-
-export function getMockRuntimeIdentity() {
-  return { serverVersion: CODEX_APP_SERVER_VERSION };
-}
+export { assistantMessage, createCodexRuntimePlanFixture } from "./test-support.js";
+export { setCodexTestModelSupportsTools } from "./thread-lifecycle.test-fixtures.js";
 
 export {
+  getMockRuntimeIdentity,
+  mockCall,
   mockClientRuntimeMethods,
   rateLimitsUpdated,
   turnStartResult,
+  userMessage,
 } from "./codex-app-server.test-fixtures.js";
 
+/** Leases a lifecycle harness whose shared-client key is this test's agent directory. */
+export function createAgentLifecycleHarness(
+  options: Omit<Parameters<typeof createLeasedCodexLifecycleHarness>[0], "agentDir">,
+) {
+  return createLeasedCodexLifecycleHarness({ ...options, agentDir: path.join(tempDir, "agent") });
+}
+
 export function threadStartResult(threadId = "thread-1", options: { cwd?: string } = {}) {
-  const cwd = options.cwd ?? tempDir ?? "/tmp/openclaw-codex-test";
-  return createThreadStartResult(threadId, cwd);
+  return createThreadStartResult(threadId, options.cwd ?? tempDir ?? "/tmp/openclaw-codex-test");
 }
 
 export function createAppServerHarness(
@@ -469,7 +460,8 @@ export function createAppServerHarness(
     options?: { signal?: AbortSignal },
   ) => Promise<unknown>,
   options: {
-    persistedThreads?: string[];
+    codexHome?: string;
+    persistedThreads?: Parameters<typeof createCodexLifecycleTurnHarness>[0]["persistedThreads"];
     onStart?: (
       authProfileId: string | undefined,
       agentDir: string | undefined,
@@ -482,6 +474,7 @@ export function createAppServerHarness(
       respond: requestImpl,
       persistedThreads: options.persistedThreads,
       agentDir: path.join(tempDir, "wire-agent"),
+      codexHome: options.codexHome,
     });
     setCodexAppServerClientFactoryForTest(
       async (_start, auth, agentDir, _config, clientOptions) => {
@@ -609,6 +602,7 @@ export function createStartedThreadHarness(
 export function createResumeHarness(
   threadId = "thread-existing",
   requestImpl: Parameters<typeof createAppServerHarness>[0] = async () => undefined,
+  persistedThread?: ReturnType<typeof threadStartResult> & { thread: { model?: string | null } },
 ) {
   return createAppServerHarness(
     async (method, params, requestOptions) => {
@@ -617,8 +611,6 @@ export function createResumeHarness(
         return override;
       }
       if (method === "thread/resume") {
-        // Resume must echo the requested thread; a different id is rejected as
-        // an unsafe subscription.
         const resumeParams = params as { threadId?: string; modelProvider?: string };
         return {
           ...threadStartResult(resumeParams.threadId ?? "thread-existing"),
@@ -627,7 +619,7 @@ export function createResumeHarness(
       }
       return defaultAttemptHarnessResponse(method);
     },
-    { persistedThreads: [threadId] },
+    { persistedThreads: [persistedThread ?? threadId] },
   );
 }
 
@@ -704,7 +696,7 @@ export function setupRunAttemptTestHooks(
       vi.stubEnv("HOME", nativeSkillTestHome);
       vi.stubEnv("CODEX_HOME", "");
     }
-    setRuntimeConfigSnapshot(createHarnessConfig());
+    setRuntimeConfigSnapshot(createRunAttemptTestConfig());
     await context.codexAttemptRuntime.start();
     // createParams models an ordinary durable session; seeded native bindings
     // must have the same authoritative core owner as a real resumed conversation.

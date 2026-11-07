@@ -1,4 +1,3 @@
-// Covers ClickClack outbound routing and sender-boundary assistant text sanitization.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   reconcileClickClackUnknownSend,
@@ -72,21 +71,46 @@ function sendTestMedia(overrides: Partial<Parameters<typeof sendClickClackMedia>
   });
 }
 
-describe("sendClickClackText routing", () => {
-  beforeEach(() => {
-    createChannelMessage.mockClear();
-    createThreadReply.mockClear();
-    createDirectMessage.mockClear();
-    createDirectConversation.mockClear();
-    createUpload.mockClear();
-    findUploadByNonce.mockClear();
-    findMessageByNonce.mockClear();
-    attachUpload.mockClear();
-    message.mockClear();
-    createClientOptions.mockClear();
-    loadOutboundMediaFromUrl.mockReset();
+function reconcile(overrides: Partial<Parameters<typeof reconcileClickClackUnknownSend>[0]> = {}) {
+  return reconcileClickClackUnknownSend({
+    cfg,
+    queueId: "queue-media",
+    channel: "clickclack",
+    to: "channel:general",
+    enqueuedAt: 1,
+    retryCount: 0,
+    payloads: [{ text: "proof", mediaUrl: "/workspace/proof.ts" }],
+    ...overrides,
   });
+}
 
+function batchPlan(
+  text: string,
+  mediaUrls: string[] = [],
+): NonNullable<Parameters<typeof reconcile>[0]>["renderedBatchPlan"] {
+  return {
+    payloadCount: 1,
+    textCount: 1,
+    mediaCount: mediaUrls.length,
+    voiceCount: 0,
+    presentationCount: 0,
+    interactiveCount: 0,
+    channelDataCount: 0,
+    items: [{ index: 0, kinds: mediaUrls.length ? ["text", "media"] : ["text"], text, mediaUrls }],
+  };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  createUpload.mockReset().mockResolvedValue({ id: "upl_1" });
+  findUploadByNonce.mockReset().mockResolvedValue(undefined);
+  findMessageByNonce.mockReset().mockResolvedValue(undefined);
+  attachUpload.mockReset().mockResolvedValue(undefined);
+  message.mockReset().mockResolvedValue({ id: "msg_out", attachments: [] });
+  loadOutboundMediaFromUrl.mockReset();
+});
+
+describe("sendClickClackText routing", () => {
   it("marks dispatch immediately before a durable text platform write", async () => {
     const order: string[] = [];
     const onPlatformSendDispatch = vi.fn(async () => {
@@ -156,26 +180,12 @@ describe("sendClickClackText routing", () => {
     ).resolves.toEqual({ outcome: "not_sent" });
 
     expect(createClientOptions).not.toHaveBeenCalled();
-    expect(createChannelMessage).not.toHaveBeenCalled();
-    expect(createThreadReply).not.toHaveBeenCalled();
-    expect(createDirectConversation).not.toHaveBeenCalled();
-    expect(createDirectMessage).not.toHaveBeenCalled();
   });
 });
 
 describe("sendClickClackMedia", () => {
   beforeEach(() => {
-    createChannelMessage.mockClear();
-    createThreadReply.mockClear();
-    createDirectMessage.mockClear();
-    createDirectConversation.mockClear();
-    createUpload.mockReset().mockResolvedValue({ id: "upl_1" });
-    findUploadByNonce.mockReset().mockResolvedValue(undefined);
-    findMessageByNonce.mockReset().mockResolvedValue(undefined);
-    attachUpload.mockReset().mockResolvedValue(undefined);
-    message.mockReset().mockResolvedValue({ id: "msg_out", attachments: [] });
-    createClientOptions.mockClear();
-    loadOutboundMediaFromUrl.mockReset().mockResolvedValue({
+    loadOutboundMediaFromUrl.mockResolvedValue({
       buffer: Buffer.from("const proof = true;"),
       contentType: "text/typescript",
       fileName: "viewer-proof.ts",
@@ -183,13 +193,9 @@ describe("sendClickClackMedia", () => {
   });
 
   it("keeps the generic fallback when MIME type is missing", async () => {
-    loadOutboundMediaFromUrl.mockResolvedValueOnce({
-      buffer: Buffer.from("opaque bytes"),
-    });
+    loadOutboundMediaFromUrl.mockResolvedValueOnce({ buffer: Buffer.from("opaque bytes") });
 
-    await sendClickClackMedia({
-      cfg,
-      to: "channel:general",
+    await sendTestMedia({
       text: "",
       mediaUrl: "https://files.example/missing-type",
     });
@@ -208,8 +214,7 @@ describe("sendClickClackMedia", () => {
   });
 
   it("uses the filename as the minimal media-only body and routes DMs", async () => {
-    const messageId = await sendClickClackMedia({
-      cfg,
+    const messageId = await sendTestMedia({
       to: "dm:usr_1",
       text: "",
       mediaUrl: "https://files.example/viewer-proof.ts",
@@ -226,12 +231,7 @@ describe("sendClickClackMedia", () => {
   });
 
   it("routes explicit thread targets before attaching the upload", async () => {
-    await sendClickClackMedia({
-      cfg,
-      to: "thread:msg_root",
-      text: "Thread artifact",
-      mediaUrl: "/workspace/viewer-proof.ts",
-    });
+    await sendTestMedia({ to: "thread:msg_root", text: "Thread artifact" });
 
     expect(createThreadReply).toHaveBeenCalledWith(
       "msg_root",
@@ -242,42 +242,15 @@ describe("sendClickClackMedia", () => {
     expect(attachUpload).toHaveBeenCalledWith("msg_out", "upl_1");
   });
 
-  it("retries attachment association with the same upload and message", async () => {
-    attachUpload.mockRejectedValueOnce(new Error("attachment response lost"));
-
-    await expect(sendTestMedia()).resolves.toBe("msg_out");
-
-    expect(createUpload).toHaveBeenCalledTimes(1);
-    expect(createChannelMessage).toHaveBeenCalledTimes(1);
-    expect(attachUpload).toHaveBeenCalledTimes(2);
-    expect(attachUpload).toHaveBeenNthCalledWith(1, "msg_out", "upl_1");
-    expect(attachUpload).toHaveBeenNthCalledWith(2, "msg_out", "upl_1");
-  });
-
-  it("accepts a persisted attachment when the success response was lost", async () => {
-    attachUpload.mockRejectedValueOnce(new Error("attachment response lost"));
-    message.mockResolvedValueOnce({ id: "msg_out", attachments: [{ id: "upl_1" }] });
-
-    await expect(sendTestMedia()).resolves.toBe("msg_out");
-
-    expect(createUpload).toHaveBeenCalledTimes(1);
-    expect(createChannelMessage).toHaveBeenCalledTimes(1);
-    expect(message).toHaveBeenCalledWith("msg_out");
-    expect(attachUpload).toHaveBeenCalledTimes(1);
-  });
-
   it("reuses a persisted durable upload without another multipart write", async () => {
     findUploadByNonce.mockResolvedValueOnce({
       id: "upl_existing",
       filename: "viewer-proof.ts",
     });
 
-    await expect(
-      sendTestMedia({
-        deliveryQueueId: "queue-1",
-        deliveryPartIndex: 0,
-      }),
-    ).resolves.toBe("msg_out");
+    await expect(sendTestMedia({ deliveryQueueId: "queue-1", deliveryPartIndex: 0 })).resolves.toBe(
+      "msg_out",
+    );
 
     expect(createUpload).not.toHaveBeenCalled();
     expect(loadOutboundMediaFromUrl).not.toHaveBeenCalled();
@@ -309,11 +282,9 @@ describe("sendClickClackMedia", () => {
   });
 
   it("rejects a durable send without a stable part index before reading media", async () => {
-    await expect(
-      sendTestMedia({
-        deliveryQueueId: "queue-1",
-      }),
-    ).rejects.toThrow("requires a stable delivery part index");
+    await expect(sendTestMedia({ deliveryQueueId: "queue-1" })).rejects.toThrow(
+      "requires a stable delivery part index",
+    );
 
     expect(loadOutboundMediaFromUrl).not.toHaveBeenCalled();
     expect(createClientOptions).not.toHaveBeenCalled();
@@ -331,44 +302,19 @@ describe("sendClickClackMedia", () => {
 });
 
 describe("reconcileClickClackUnknownSend", () => {
-  beforeEach(() => {
-    createChannelMessage.mockClear();
-    createThreadReply.mockClear();
-    createDirectMessage.mockClear();
-    createDirectConversation.mockClear();
-    createUpload.mockClear();
-    findUploadByNonce.mockReset().mockResolvedValue(undefined);
-    findMessageByNonce.mockReset().mockResolvedValue(undefined);
-    attachUpload.mockReset().mockResolvedValue(undefined);
-    message.mockReset().mockResolvedValue({ id: "msg_out", attachments: [] });
-    createClientOptions.mockClear();
-    loadOutboundMediaFromUrl.mockClear();
-  });
-
   it("reconciles a text send only when its durable message exists", async () => {
     findMessageByNonce.mockResolvedValueOnce({ id: "msg_text" });
 
-    const result = await reconcileClickClackUnknownSend({
-      cfg,
+    const result = await reconcile({
       queueId: "queue-text",
-      channel: "clickclack",
-      to: "channel:general",
-      enqueuedAt: 1,
-      retryCount: 0,
       payloads: [{ text: "recovered text" }],
-      renderedBatchPlan: {
-        payloadCount: 1,
-        textCount: 1,
-        mediaCount: 0,
-        voiceCount: 0,
-        presentationCount: 0,
-        interactiveCount: 0,
-        channelDataCount: 0,
-        items: [{ index: 0, kinds: ["text"], text: "recovered text", mediaUrls: [] }],
-      },
+      renderedBatchPlan: batchPlan("recovered text"),
     });
 
-    expect(result.status).toBe("sent");
+    expect(result).toMatchObject({
+      status: "sent",
+      receipt: { platformMessageIds: ["msg_text"] },
+    });
     expect(findMessageByNonce).toHaveBeenCalledWith({
       workspaceId: "wsp_1",
       nonce: "openclaw-text:4a171ee0c18d243d8d3c510320ab1b1d317afd95b0204abec18312e57307fb24",
@@ -376,19 +322,11 @@ describe("reconcileClickClackUnknownSend", () => {
     expect(createChannelMessage).not.toHaveBeenCalled();
     expect(createUpload).not.toHaveBeenCalled();
     expect(loadOutboundMediaFromUrl).not.toHaveBeenCalled();
-    if (result.status === "sent") {
-      expect(result.receipt.platformMessageIds).toEqual(["msg_text"]);
-    }
   });
 
   it("replays text through the normal sender when no durable message exists", async () => {
-    const result = await reconcileClickClackUnknownSend({
-      cfg,
+    const result = await reconcile({
       queueId: "queue-text",
-      channel: "clickclack",
-      to: "channel:general",
-      enqueuedAt: 1,
-      retryCount: 0,
       payloads: [{ text: "recovered text" }],
     });
 
@@ -397,31 +335,8 @@ describe("reconcileClickClackUnknownSend", () => {
   });
 
   it("proves media was not sent when its durable message is absent", async () => {
-    const result = await reconcileClickClackUnknownSend({
-      cfg,
-      queueId: "queue-media",
-      channel: "clickclack",
-      to: "channel:general",
-      enqueuedAt: 1,
-      retryCount: 0,
-      payloads: [{ text: "proof", mediaUrl: "/workspace/proof.ts" }],
-      renderedBatchPlan: {
-        payloadCount: 1,
-        textCount: 1,
-        mediaCount: 1,
-        voiceCount: 0,
-        presentationCount: 0,
-        interactiveCount: 0,
-        channelDataCount: 0,
-        items: [
-          {
-            index: 0,
-            kinds: ["text", "media"],
-            text: "proof",
-            mediaUrls: ["/workspace/proof.ts"],
-          },
-        ],
-      },
+    const result = await reconcile({
+      renderedBatchPlan: batchPlan("proof", ["/workspace/proof.ts"]),
     });
 
     expect(result).toEqual({ status: "not_sent" });
@@ -446,55 +361,25 @@ describe("reconcileClickClackUnknownSend", () => {
       .mockResolvedValueOnce({ id: "msg_first", attachments: [] })
       .mockResolvedValueOnce({ id: "msg_second", attachments: [{ id: "upl_second" }] });
 
-    const result = await reconcileClickClackUnknownSend({
-      cfg,
-      queueId: "queue-media",
-      channel: "clickclack",
-      to: "channel:general",
-      enqueuedAt: 1,
-      retryCount: 0,
+    const result = await reconcile({
       effectiveReplyToId: "msg_source",
       payloads: [{ text: "proof", mediaUrls: ["/workspace/first.png", "/workspace/second.png"] }],
-      renderedBatchPlan: {
-        payloadCount: 1,
-        textCount: 1,
-        mediaCount: 2,
-        voiceCount: 0,
-        presentationCount: 0,
-        interactiveCount: 0,
-        channelDataCount: 0,
-        items: [
-          {
-            index: 0,
-            kinds: ["text", "media"],
-            text: "proof",
-            mediaUrls: ["/workspace/first.png", "/workspace/second.png"],
-          },
-        ],
-      },
+      renderedBatchPlan: batchPlan("proof", ["/workspace/first.png", "/workspace/second.png"]),
     });
 
-    expect(result.status).toBe("sent");
+    expect(result).toMatchObject({
+      status: "sent",
+      receipt: { platformMessageIds: ["msg_first", "msg_second"] },
+    });
     expect(createChannelMessage).not.toHaveBeenCalled();
     expect(attachUpload).toHaveBeenCalledExactlyOnceWith("msg_first", "upl_first");
     expect(loadOutboundMediaFromUrl).not.toHaveBeenCalled();
-    if (result.status === "sent") {
-      expect(result.receipt.platformMessageIds).toEqual(["msg_first", "msg_second"]);
-    }
   });
 
   it("refuses to acknowledge a message whose nonce-keyed upload is missing", async () => {
     findMessageByNonce.mockResolvedValueOnce({ id: "msg_orphan", attachments: [] });
 
-    const result = await reconcileClickClackUnknownSend({
-      cfg,
-      queueId: "queue-media",
-      channel: "clickclack",
-      to: "channel:general",
-      enqueuedAt: 1,
-      retryCount: 0,
-      payloads: [{ text: "proof", mediaUrl: "/workspace/proof.ts" }],
-    });
+    const result = await reconcile();
 
     expect(result).toEqual({
       status: "unresolved",

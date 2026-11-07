@@ -8,6 +8,67 @@ import WebKit
 @Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardExperienceTests {
+    @Test(arguments: [false, true], [false, true])
+    func `first run owns its dashboard handoff across controller replacement`(
+        existingDashboard: Bool, cancelled: Bool) async throws
+    {
+        _ = AppKitTestSupport.application
+        let gate = DashboardWindowOwnershipPresentationGate()
+        let server = try await DashboardHTTPFixture.start(
+            html: """
+            <!doctype html><html><body><script>
+            window.addEventListener('openclaw:native-navigate', event => {
+              history.replaceState({}, '', event.detail.path + (event.detail.search || ''));
+              event.preventDefault();
+            });
+            window.__OPENCLAW_NATIVE_COMMANDS_READY__ = true;
+            window.dispatchEvent(new Event('openclaw:native-commands-state'));
+            </script></body></html>
+            """,
+            contentSecurityPolicy: "default-src 'none'; script-src 'unsafe-inline'",
+            beforeResponse: { _ = await gate.waitForRelease() })
+        defer { server.stop() }
+        let endpoint = GatewayConnection.EndpointSnapshot(
+            config: (url: server.websocketURL(), token: "fixture", password: nil), routeAuthority: nil)
+        let manager = DashboardManager._testMake(primaryEndpointProvider: { _ in endpoint })
+        defer { manager.close() }
+        if existingDashboard { manager._testSetController(self.makeController(server: server)) }
+        let opening = Task {
+            await manager.show(
+                atPath: DashboardRouteMap.custodianPagePath,
+                search: DashboardRouteMap.custodianOnboardingSearch,
+                target: .primary, waitForLoad: true, reportErrors: false)
+        }
+        do {
+            await gate.waitUntilRequested()
+            let original = try #require(manager._testController())
+            let window = try #require(original.window)
+            await manager.handleEndpointState(.ready(
+                mode: .local, url: server.websocketURL(), token: "renewed", password: nil, routeRevision: 2))
+            let replacement = try #require(manager._testController())
+            #expect(replacement !== original)
+            #expect(replacement.window === window)
+            if cancelled {
+                opening.cancel()
+                await #expect(throws: CancellationError.self) { try await opening.value.get() }
+                await gate.release()
+                #expect(manager.openWindowCount(for: .primary) == 0)
+            } else {
+                await gate.release()
+                try await opening.value.get()
+                try await DashboardTestWait.document(replacement, "onboarding route after replacement") {
+                    try await replacement.webView.evaluateJavaScript("location.pathname === '/custodian'") as? Bool == true
+                }
+                #expect(manager.openWindowCount(for: .primary) == 1)
+            }
+        } catch {
+            opening.cancel()
+            await gate.release()
+            _ = await opening.value
+            throw error
+        }
+    }
+
     @Test func `cancelling a dashboard handoff retires its pending navigation and window`() async throws {
         let gate = DashboardWindowOwnershipPresentationGate()
         let server = try await DashboardHTTPFixture.start(beforeResponse: {
@@ -137,6 +198,29 @@ struct DashboardExperienceTests {
         #expect(primaryWindow.isVisible && !primaryWindow.isExcludedFromWindowsMenu)
     }
 
+    @Test func `reopening returns to the last focused Dashboard window`() async throws {
+        _ = AppKitTestSupport.application
+        let server = try await DashboardHTTPFixture.start()
+        defer { server.stop() }
+        let endpoint = GatewayConnection.EndpointSnapshot(
+            config: (url: server.websocketURL(), token: "fixture", password: nil), routeAuthority: nil)
+        let manager = DashboardManager._testMake(primaryEndpointProvider: { _ in endpoint })
+        defer { manager.close() }
+        try await manager.show()
+        let main = try #require(manager._testController())
+        await manager.openNewDashboardWindow(for: .primary).value
+        let focused = try #require(manager._testAuxiliaryWindows().first?.controller)
+        #expect(manager.frontmostDashboard()?.controller === focused)
+
+        // Dock reopen and Open Dashboard both enter here; the joined presentation must not raise the main window.
+        manager.presentDashboard()
+        try await manager.show()
+
+        #expect(manager.frontmostDashboard()?.controller === focused)
+        #expect(manager._testController() === main)
+        #expect(manager.openWindowCount(for: .primary) == 2)
+    }
+
     @Test(arguments: ["navigation", "new-window", "focus", "picker"])
     func `hiding windows fences pending opens and target changes`(_ action: String) async throws {
         let server = try await DashboardHTTPFixture.start()
@@ -244,10 +328,9 @@ struct DashboardExperienceTests {
 
         await manager.show(atPath: "/settings/devices", target: .primary)
         let primary = try #require(manager._testAuxiliaryWindows().first { $0.target == .primary }?.controller)
-        try await DashboardTestWait.document(primary, "primary handoff document") {
-            try await primary.webView.evaluateJavaScript("document.readyState === 'complete'") as? Bool == true
+        try await TestWait.state("primary handoff route") {
+            try await primary.webView.evaluateJavaScript("window.routes") as? [String] == ["/settings/devices"]
         }
-        #expect(try await primary.webView.evaluateJavaScript("window.routes") as? [String] == ["/settings/devices"])
         #expect(manager._testMainTarget() == .profile("saved"))
         #expect(manager._testController() === saved)
         #expect(try await saved.webView.evaluateJavaScript("window.fixtureDraft") as? String == "Saved Gateway draft")

@@ -26,7 +26,7 @@ defined, OpenClaw discovers models from `http://127.0.0.1:11434`:
 | Capability detection | Best-effort `/api/show` reads `contextWindow`, `num_ctx` Modelfile parameters, and capabilities (vision/tools/thinking)                                                                                                                                                                                                                                                              |
 | Vision models        | A `vision` capability from `/api/show` marks the model image-capable (`input: ["text", "image"]`)                                                                                                                                                                                                                                                                                    |
 | Reasoning detection  | Uses the `thinking` capability from `/api/show` when available; falls back to a name heuristic (`r1`, `reason`, `reasoning`, `think`) when Ollama omits capabilities. `glm-5.2:cloud`, `glm-5.3:cloud`, `glm-5.3-flash:cloud`, `kimi-k3:cloud`, `deepseek-v4-flash\|pro:cloud`, and `deepseek-v4.1-flash:cloud` are always treated as reasoning regardless of reported capabilities. |
-| Token limits         | `maxTokens` defaults to OpenClaw's Ollama max-token cap                                                                                                                                                                                                                                                                                                                              |
+| Token limits         | `maxTokens` defaults to half of the 32,768-token local context cap (16,384), or less for smaller windows; Ollama Cloud models use their documented output limit                                                                                                                                                                                                                      |
 | Costs                | All costs are `0`                                                                                                                                                                                                                                                                                                                                                                    |
 
 ```bash
@@ -125,7 +125,7 @@ cloud key may not authorize `/api/embed`):
 export OLLAMA_API_KEY='<your-ollama-cloud-api-key>'
 OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_OLLAMA=1 \
 OPENCLAW_LIVE_OLLAMA_BASE_URL=https://ollama.com \
-OPENCLAW_LIVE_OLLAMA_MODEL=glm-5.1:cloud \
+OPENCLAW_LIVE_OLLAMA_MODEL=glm-5.2:cloud \
 OPENCLAW_LIVE_OLLAMA_WEB_SEARCH=1 \
 pnpm test:live -- extensions/ollama/ollama.live.test.ts
 ```

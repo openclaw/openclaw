@@ -5,18 +5,16 @@ import { parseSecretRef } from "../config/types.secrets.js";
 import { hasUsableOAuthCredential } from "./auth-profiles/credential-state.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 
-export type RuntimeCredentialOverlay = {
-  overlay: (profileId: string, credential: AuthProfileCredential) => AuthProfileCredential;
-  /** Profiles whose secret value came from the runtime snapshot. */
-  hydratedProfileIds: ReadonlySet<string>;
-};
-
 /** Overlays prepared runtime secrets onto persisted profiles with the same secret ref. */
 export function createRuntimeCredentialOverlay(params: {
   cfg: OpenClawConfig;
   runtimeStore: Pick<AuthProfileStore, "profiles"> | undefined;
   now: number;
-}): RuntimeCredentialOverlay {
+}): {
+  overlay: (profileId: string, credential: AuthProfileCredential) => AuthProfileCredential;
+  /** Profiles whose secret value came from the runtime snapshot. */
+  hydratedProfileIds: ReadonlySet<string>;
+} {
   const hydratedProfileIds = new Set<string>();
   const overlay = (profileId: string, credential: AuthProfileCredential): AuthProfileCredential => {
     const runtime = params.runtimeStore?.profiles[profileId];

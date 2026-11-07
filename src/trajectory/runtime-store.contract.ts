@@ -14,11 +14,18 @@ export type SerializedTrajectoryEvent = Pick<TrajectoryEvent, "runId" | "ts"> & 
   line: string;
 };
 
+export type TrajectoryRuntimeWindowFacts = {
+  nextSeq: number;
+  retainedBytes: number;
+};
+
 export type SqliteTrajectoryRuntimeAppend = Pick<
   SqliteTrajectoryRuntimeScope,
   "sessionId" | "maxRuntimeBytes" | "maxGlobalRuntimeBytes"
 > & {
   events: readonly SerializedTrajectoryEvent[];
+  /** Facts supplied by the host inside the existing physical-store writer FIFO. */
+  windowFacts?: TrajectoryRuntimeWindowFacts;
   /** The queued prefix exceeded this session's rolling window before admission. */
   discardPrevious?: boolean;
 };

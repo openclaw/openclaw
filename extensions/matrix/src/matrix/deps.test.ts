@@ -1,8 +1,7 @@
-// Matrix tests cover deps plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureMatrixSdkInstalled } from "./deps.js";
 
 const cryptoRequire = vi.hoisted(() =>
@@ -21,51 +20,36 @@ vi.mock("node:module", async (importOriginal) => {
 });
 
 function resolveTestNativeBindingFilename(): string | null {
-  switch (process.platform) {
-    case "darwin":
-      return process.arch === "arm64"
-        ? "matrix-sdk-crypto.darwin-arm64.node"
-        : process.arch === "x64"
-          ? "matrix-sdk-crypto.darwin-x64.node"
-          : null;
-    case "linux": {
-      const report = process.report?.getReport?.() as
-        | { header?: { glibcVersionRuntime?: string } }
-        | undefined;
-      const isMusl = !report?.header?.glibcVersionRuntime;
-      if (process.arch === "x64") {
-        return isMusl
-          ? "matrix-sdk-crypto.linux-x64-musl.node"
-          : "matrix-sdk-crypto.linux-x64-gnu.node";
-      }
-      if (process.arch === "arm64" && !isMusl) {
-        return "matrix-sdk-crypto.linux-arm64-gnu.node";
-      }
-      if (process.arch === "arm") {
-        return "matrix-sdk-crypto.linux-arm-gnueabihf.node";
-      }
-      if (process.arch === "s390x") {
-        return "matrix-sdk-crypto.linux-s390x-gnu.node";
-      }
-      return null;
-    }
-    case "win32":
-      return process.arch === "x64"
-        ? "matrix-sdk-crypto.win32-x64-msvc.node"
-        : process.arch === "ia32"
-          ? "matrix-sdk-crypto.win32-ia32-msvc.node"
-          : process.arch === "arm64"
-            ? "matrix-sdk-crypto.win32-arm64-msvc.node"
-            : null;
-    default:
-      return null;
-  }
+  const report = process.platform === "linux" ? process.report?.getReport?.() : undefined;
+  const isMusl = !(report as { header?: { glibcVersionRuntime?: string } } | undefined)?.header
+    ?.glibcVersionRuntime;
+  const suffixes: Record<string, string | null> = {
+    "darwin-arm64": "darwin-arm64",
+    "darwin-x64": "darwin-x64",
+    "linux-x64": `linux-x64-${isMusl ? "musl" : "gnu"}`,
+    "linux-arm64": isMusl ? null : "linux-arm64-gnu",
+    "linux-arm": "linux-arm-gnueabihf",
+    "linux-s390x": "linux-s390x-gnu",
+    "win32-x64": "win32-x64-msvc",
+    "win32-ia32": "win32-ia32-msvc",
+    "win32-arm64": "win32-arm64-msvc",
+  };
+  const suffix = suffixes[`${process.platform}-${process.arch}`];
+  return suffix ? `matrix-sdk-crypto.${suffix}.node` : null;
 }
 
 describe("ensureMatrixCryptoRuntime", () => {
   let ensureMatrixCryptoRuntime: typeof import("./deps.js").ensureMatrixCryptoRuntime;
+  let tmpDir: string;
+
+  function writeBootstrap(lines: string[]) {
+    const scriptPath = path.join(tmpDir, "download-lib.js");
+    fs.writeFileSync(scriptPath, ['const fs = require("node:fs");', ...lines].join("\n"));
+    cryptoRequire.resolve.mockReturnValue(scriptPath);
+  }
 
   beforeEach(async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-crypto-"));
     vi.resetModules();
     cryptoRequire.mockReset().mockReturnValue({});
     cryptoRequire.resolve.mockReset().mockImplementation(() => {
@@ -74,39 +58,42 @@ describe("ensureMatrixCryptoRuntime", () => {
     ({ ensureMatrixCryptoRuntime } = await import("./deps.js"));
   });
 
-  it("shares one bootstrap of missing crypto runtime and retries matrix SDK load", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-crypto-bootstrap-"));
-    const scriptPath = path.join(tmpDir, "download-lib.js");
-    const markerPath = path.join(tmpDir, "bootstrapped");
-    fs.writeFileSync(
-      scriptPath,
-      [
-        'const fs = require("node:fs");',
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  it.each(["missing", "truncated"] as const)(
+    "bootstraps a %s runtime once, sharing concurrent loads",
+    async (mode) => {
+      const filename = mode === "missing" ? "bootstrapped" : resolveTestNativeBindingFilename();
+      if (!filename) {
+        return;
+      }
+      const artifact = path.join(tmpDir, filename);
+      const bytes = mode === "missing" ? 2 : 1_000_000;
+      writeBootstrap([
         `if (fs.realpathSync(process.cwd()) !== ${JSON.stringify(fs.realpathSync(tmpDir))}) process.exit(2);`,
         'if (process.env.COREPACK_ENABLE_DOWNLOAD_PROMPT !== "0") process.exit(3);',
-        `fs.writeFileSync(${JSON.stringify(markerPath)}, "ok");`,
-      ].join("\n"),
-    );
-    cryptoRequire.resolve.mockReturnValue(scriptPath);
-    cryptoRequire.mockImplementation(() => {
-      if (!fs.existsSync(markerPath)) {
-        throw new Error(
-          "Cannot find module '@matrix-org/matrix-sdk-crypto-nodejs-linux-x64-gnu' (required by matrix sdk)",
-        );
+        `fs.writeFileSync(${JSON.stringify(artifact)}, Buffer.alloc(${bytes}));`,
+      ]);
+      if (mode === "truncated") {
+        fs.writeFileSync(artifact, Buffer.alloc(16));
       }
-      return {};
-    });
-
-    try {
+      const bindingSizes: number[] = [];
+      cryptoRequire.mockImplementation(() => {
+        const size = fs.existsSync(artifact) ? fs.statSync(artifact).size : 0;
+        bindingSizes.push(size);
+        if (size !== bytes) {
+          throw new Error(
+            "Cannot find module '@matrix-org/matrix-sdk-crypto-nodejs-linux-x64-gnu' (required by matrix sdk)",
+          );
+        }
+        return {};
+      });
       await Promise.all([ensureMatrixCryptoRuntime(), ensureMatrixCryptoRuntime()]);
       await ensureMatrixCryptoRuntime();
-
-      expect(fs.readFileSync(markerPath, "utf8")).toBe("ok");
-      expect(cryptoRequire).toHaveBeenCalledTimes(2);
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
-  });
+      expect(fs.readFileSync(artifact)).toEqual(Buffer.alloc(bytes));
+      expect(bindingSizes).toEqual([0, bytes]);
+    },
+  );
 
   it("rethrows non-crypto module errors and allows a later load to retry", async () => {
     cryptoRequire.mockImplementationOnce(() => {
@@ -120,55 +107,13 @@ describe("ensureMatrixCryptoRuntime", () => {
 
     expect(cryptoRequire).toHaveBeenCalledTimes(2);
   });
-
-  it("removes an incomplete native binding before loading the matrix SDK", async () => {
-    const nativeBindingFilename = resolveTestNativeBindingFilename();
-    if (!nativeBindingFilename) {
-      return;
-    }
-
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-crypto-runtime-"));
-    const scriptPath = path.join(tmpDir, "download-lib.js");
-    const nativeBindingPath = path.join(tmpDir, nativeBindingFilename);
-    fs.writeFileSync(
-      scriptPath,
-      [
-        'const fs = require("node:fs");',
-        `fs.writeFileSync(${JSON.stringify(nativeBindingPath)}, Buffer.alloc(1_000_000));`,
-      ].join("\n"),
-    );
-    fs.writeFileSync(nativeBindingPath, Buffer.alloc(16));
-
-    const bindingSizes: number[] = [];
-    cryptoRequire.resolve.mockReturnValue(scriptPath);
-    cryptoRequire.mockImplementation(() => {
-      const size = fs.existsSync(nativeBindingPath) ? fs.statSync(nativeBindingPath).size : 0;
-      bindingSizes.push(size);
-      if (size < 1_000_000) {
-        throw new Error(
-          "Cannot find module '@matrix-org/matrix-sdk-crypto-nodejs-linux-x64-gnu' (required by matrix sdk)",
-        );
-      }
-      return {};
-    });
-
-    try {
-      await ensureMatrixCryptoRuntime();
-
-      expect(cryptoRequire).toHaveBeenCalledTimes(2);
-      expect(fs.statSync(nativeBindingPath).size).toBe(1_000_000);
-      expect(bindingSizes).toEqual([0, 1_000_000]);
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
-  });
 });
 
 describe("ensureMatrixSdkInstalled", () => {
   it("returns without error when all required packages resolve", async () => {
-    const resolveFn = vi.fn((_id: string) => "/fake/path");
-    await expect(ensureMatrixSdkInstalled({ resolveFn })).resolves.toBeUndefined();
-    expect(resolveFn).toHaveBeenCalled();
+    await expect(
+      ensureMatrixSdkInstalled({ resolveFn: () => "/fake/path" }),
+    ).resolves.toBeUndefined();
   });
 
   it("lists missing packages without prompting for installation (regression: #80758)", async () => {

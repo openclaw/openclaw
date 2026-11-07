@@ -27,8 +27,8 @@ export const backgroundWorkFixture = {
   nextReply: "This reply belongs to the new instruction.",
 };
 
-export function createBackgroundWorkInstance(port: number, notifyOnExit = false) {
-  return createOpenClawTestInstance({
+export async function createBackgroundWorkInstance(port: number, notifyOnExit = false) {
+  const instance = await createOpenClawTestInstance({
     name: "background-work",
     env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
     config: {
@@ -44,6 +44,7 @@ export function createBackgroundWorkInstance(port: number, notifyOnExit = false)
       agents: {
         ownership: "explicit",
         defaults: {
+          workspace: "${OPENCLAW_WORKSPACE_DIR}",
           model: "background-fixture/parent",
           modelPolicy: { allow: ["background-fixture/*"] },
         },
@@ -66,6 +67,8 @@ export function createBackgroundWorkInstance(port: number, notifyOnExit = false)
       plugins: { allow: [] },
     },
   });
+  instance.env.OPENCLAW_WORKSPACE_DIR = instance.state.path("public-workspace");
+  return instance;
 }
 
 function toolEvents(name: string, args: Record<string, unknown>) {
@@ -335,6 +338,14 @@ export function observeBackgroundWorkRpc(page: Page, signal: AbortSignal) {
   });
   return {
     completed,
+    diagnostics: () => ({
+      pending: [...pending.values()].map(({ method }) => method),
+      completed: completed.slice(-16).map(({ request, response }) => ({
+        method: request.method,
+        ok: response.ok,
+        errorCode: response.error?.code,
+      })),
+    }),
     async waitFor(matches: (rpc: BackgroundWorkRpc) => boolean, after = 0) {
       const found = createDeferred<BackgroundWorkRpc>();
       const check = () => {

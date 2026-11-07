@@ -1,22 +1,32 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { escapeHtml } from "../shared/html-escape.js";
+import { isOpenClawIdEnabled } from "../shared/openclaw-id-policy.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import {
   buildControlUiRootAssetPath,
   CONTROL_UI_BASE_PATH_ATTRIBUTE,
+  CONTROL_UI_ID_LABS_ATTRIBUTE,
   CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE,
   CONTROL_UI_BUILD_ID_ATTRIBUTE,
   CONTROL_UI_ENVIRONMENT_ATTRIBUTE,
   CONTROL_UI_ROOT_PUBLIC_ASSETS,
   CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
+  controlUiPublicAssetVersion,
   isControlUiVersionedPublicAsset,
-  type ControlUiEnvironment,
   type ControlUiBootstrapConfig,
 } from "./control-ui-contract.js";
 import { buildControlUiCspHeader, computeInlineScriptHashes } from "./control-ui-csp.js";
-import { selectControlUiRoutePreloads } from "./control-ui-route-preloads.js";
+import {
+  controlUiPreloadLinks,
+  selectControlUiRoutePreloads,
+} from "./control-ui-route-preloads.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { sendControlUiHtmlBody } from "./control-ui-static.js";
+import {
+  getRemoteControlUiIngressContext,
+  assertRemoteControlUiIngressCurrent,
+} from "./ingress-attribution.js";
 
 /** Anchors bundled assets before deep-linked documents begin preloading. */
 function rewriteControlUiIndexHtmlAssetHrefs(
@@ -31,7 +41,9 @@ function rewriteControlUiIndexHtmlAssetHrefs(
   ]);
   for (const asset of CONTROL_UI_ROOT_PUBLIC_ASSETS) {
     const version =
-      buildId && isControlUiVersionedPublicAsset(asset) ? `?v=${encodeURIComponent(buildId)}` : "";
+      buildId && isControlUiVersionedPublicAsset(asset)
+        ? `?v=${encodeURIComponent(controlUiPublicAssetVersion(buildId))}`
+        : "";
     const assetHref = `href="${buildControlUiRootAssetPath(normalized, asset)}${version}"`;
     // Vite's portable ./ base emits relative hrefs, which the browser starts
     // resolving against a nested route before the UI can correct them.
@@ -40,8 +52,19 @@ function rewriteControlUiIndexHtmlAssetHrefs(
     replacements.set(`href="${buildControlUiRootAssetPath(normalized, asset)}"`, assetHref);
   }
   // Copy the document once instead of once per matching asset.
-  const pattern = new RegExp([...replacements.keys()].map(escapeRegExp).join("|"), "g");
-  return html.replace(pattern, (match) => replacements.get(match) ?? match);
+  const pattern = new RegExp(
+    [
+      '<script\\b[^>]*\\btype="importmap"[^>]*>[\\s\\S]*?</script>',
+      ...Array.from(replacements.keys(), escapeRegExp),
+    ].join("|"),
+    "g",
+  );
+  return html.replace(pattern, (match) =>
+    match.startsWith("<script")
+      ? // Root both map keys and targets before the document's CSP hashes are computed.
+        match.replaceAll('"./assets/', JSON.stringify(`${normalized}/assets/`).slice(0, -1))
+      : (replacements.get(match) ?? match),
+  );
 }
 
 export async function serveControlUiIndexHtml(
@@ -51,13 +74,15 @@ export async function serveControlUiIndexHtml(
   uiPath: string,
   basePath?: string,
   allowWasm?: boolean,
-  environment?: ControlUiEnvironment,
+  config?: OpenClawConfig,
   buildId?: string,
   sessionEntryPath?: string,
   isSessionEntryCurrent?: () => boolean,
   proxySessionEntry = false,
   bootstrapConfig?: ControlUiBootstrapConfig,
 ) {
+  const ingress = getRemoteControlUiIngressContext(req);
+  const environment = config?.gateway?.controlUi?.environment;
   const normalizedBasePath = normalizeControlUiBasePath(basePath);
   const preloadRoute =
     uiPath === "/chat" || uiPath.startsWith("/chat/")
@@ -76,6 +101,10 @@ export async function serveControlUiIndexHtml(
   const bootstrapAttribute = bootstrapConfig
     ? ` ${CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE}="${escapeHtml(JSON.stringify(bootstrapConfig))}"`
     : "";
+  // Popup navigations are anonymous even when their opener authenticated with a token.
+  const idAttribute = isOpenClawIdEnabled(config?.gateway?.openclawId)
+    ? ` ${CONTROL_UI_ID_LABS_ATTRIBUTE}="true"`
+    : "";
   const environmentAttributes = environment
     ? ` ${CONTROL_UI_ENVIRONMENT_ATTRIBUTE}="${escapeHtml(JSON.stringify(environment))}"`
     : "";
@@ -92,7 +121,7 @@ export async function serveControlUiIndexHtml(
       .replace(
         /<html\b/i,
         () =>
-          `<html${basePathAttribute}${proxySessionEntry ? ' data-openclaw-proxy-session-entry="true"' : ""} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"${environmentAttributes}${buildAttribute}${bootstrapAttribute}`,
+          `<html${basePathAttribute}${ingress ? ' data-openclaw-remote-ingress="true"' : ""}${proxySessionEntry ? ' data-openclaw-proxy-session-entry="true"' : ""} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"${environmentAttributes}${buildAttribute}${bootstrapAttribute}${idAttribute}`,
       ),
   );
   const document = sessionEntryPath
@@ -103,6 +132,9 @@ export async function serveControlUiIndexHtml(
       )
     : prepared;
   const hashes = computeInlineScriptHashes(document);
+  if (ingress) {
+    assertRemoteControlUiIngressCurrent(ingress);
+  }
   // Always set the document CSP here (the index carries inline scripts) so the
   // terminal's WASM relaxation is applied to the page that loads ghostty-web.
   res.setHeader(
@@ -111,6 +143,7 @@ export async function serveControlUiIndexHtml(
       inlineScriptHashes: hashes,
       allowWasm,
       portalHost: req.headers.host,
+      frameAncestors: ingress?.frameAncestors,
     }),
   );
   res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -118,5 +151,11 @@ export async function serveControlUiIndexHtml(
     "Cache-Control",
     bootstrapConfig ? "private, no-store" : sessionEntryPath ? "no-store" : "no-cache",
   );
-  await sendControlUiHtmlBody(req, res, document, isSessionEntryCurrent, sessionEntryPath);
+  const links = controlUiPreloadLinks(withBasePath);
+  if (links.length && (!isSessionEntryCurrent || isSessionEntryCurrent())) {
+    // Final-response preloads avoid the duplicate fetches observed with 103.
+    // The document still rechecks authority after asynchronous compression.
+    res.setHeader("Link", links);
+  }
+  await sendControlUiHtmlBody(req, res, document, isSessionEntryCurrent);
 }

@@ -19,11 +19,23 @@ enum ScreenshotFixtureMode {
         ProcessInfo.processInfo.arguments.contains("--openclaw-progress-bar-fixture")
     }
 
+    static var modelSignInScenario: String? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "--openclaw-model-sign-in-fixture"),
+              arguments.indices.contains(index + 1)
+        else { return nil }
+        return arguments[index + 1]
+    }
+
     static let gatewayName = "OpenClaw Gateway"
     static let gatewayAddress = "Gateway on local network"
     static let gatewayID = "screenshot-fixture-gateway"
     static var reactionsEnabled: Bool {
         !ProcessInfo.processInfo.arguments.contains("--openclaw-no-reactions-fixture")
+    }
+
+    static var progressCardEnabled: Bool {
+        ProcessInfo.processInfo.arguments.contains("--openclaw-progress-card-fixture")
     }
 }
 
@@ -94,7 +106,18 @@ struct LocalChatFixture {
         responsePrefix: "OpenClaw is connected to your gateway.",
         seedMessages: ProcessInfo.processInfo.arguments.contains("--openclaw-empty-chat-fixture")
             ? []
-            : ["Ready when you are. I can check a project, coordinate an agent, or prepare the next step."],
+            : [
+                "Ready when you are. I can check a project, coordinate an agent, or prepare the next step.",
+                """
+                A small release workflow:
+
+                ```mermaid
+                flowchart TD
+                  Draft --> Review
+                  Review --> Ship
+                ```
+                """,
+            ],
         agents: [
             AgentSummary(
                 id: "main",
@@ -143,7 +166,7 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
     {
         OpenClawChatComposerCapabilityCatalog(
             sessionSettingsAvailable: true,
-            modelMutationAvailable: true,
+            modelMutationAvailable: ScreenshotFixtureMode.modelSignInScenario != "read-only",
             effortMutationAvailable: true,
             webSearchBaseEnabled: true,
             webSearchAvailable: true,
@@ -237,18 +260,29 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
         try await self.store.history(sessionKey: sessionKey)
     }
 
+    func gatewayAdvertisesMethod(_ method: String) async -> Bool? {
+        guard ScreenshotFixtureMode.progressCardEnabled,
+              ["progressCard.get", "progressCard.refresh"].contains(method)
+        else { return nil }
+        return true
+    }
+
     func fetchProgressCard(sessionKey: String, agentID _: String?) async throws -> ProgressCard? {
-        guard ScreenshotFixtureMode.progressBarEnabled else { return nil }
+        guard ScreenshotFixtureMode.progressCardEnabled || ScreenshotFixtureMode.progressBarEnabled else { return nil }
         return ProgressCard(
             sessionkey: sessionKey,
             revision: 1,
             updatedat: 0,
-            markdown: """
+            markdown: ScreenshotFixtureMode.progressCardEnabled ? nil : """
             <progress aria-label="Sample tasks · 3/5" value="3" max="5"></progress>
 
             Now: reading the sample diff.
             """,
-            steps: [])
+            steps: ScreenshotFixtureMode.progressCardEnabled ? [
+                ProgressCardStep(step: "Collect the sample data", status: .completed),
+                ProgressCardStep(step: "Draft the summary", status: .inProgress),
+                ProgressCardStep(step: "Share the result", status: .pending),
+            ] : [])
     }
 
     func acquireReactionsRouteLease() async -> OpenClawChatReactionsRouteLease? {
@@ -276,7 +310,21 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
             })
     }
 
+    func acquireModelSignInContext(agentID: String?) async -> OpenClawChatModelSignInContext? {
+        guard self.fixture.sessionIDPrefix == "screenshot-fixture",
+              ScreenshotFixtureMode.modelSignInScenario != nil
+        else { return nil }
+        return OpenClawChatModelSignInContext(
+            agentID: agentID ?? self.fixture.defaultAgentID,
+            request: { method, _ in
+                guard method == "models.authStatus" else { throw CancellationError() }
+                return Data(#"{"providers":[],"providerCapabilities":[]}"#.utf8)
+            },
+            isCurrent: { true })
+    }
+
     func listModels(agentID _: String?) async throws -> [OpenClawChatModelChoice] {
+        if ScreenshotFixtureMode.modelSignInScenario == "empty" { return [] }
         if ProcessInfo.processInfo.arguments.contains("--openclaw-unavailable-model-fixture") {
             return try OpenClawChatGatewayPayloadCodec.decodeModelChoices(Data(#"""
             {"models":[
@@ -484,7 +532,7 @@ private actor LocalFixtureChatStore {
     private let fixture: LocalChatFixture
     private var messages: [OpenClawChatMessage]
     private var modelID: String
-    private var thinkingLevel = "auto"
+    private var thinkingLevel: String?
     private var fastMode: OpenClawChatFastMode?
     private var verboseLevel: String?
     private var permissionMode: OpenClawChatPermissionMode? = .guarded
@@ -502,8 +550,27 @@ private actor LocalFixtureChatStore {
     }
 
     func history(sessionKey: String) throws -> OpenClawChatHistoryPayload {
-        let owner = ScreenshotFixtureMode.progressBarEnabled ? self.fixture.defaultAgentID : nil
+        let owner = ScreenshotFixtureMode.progressCardEnabled || ScreenshotFixtureMode.progressBarEnabled
+            ? self.fixture.defaultAgentID : nil
         let normalizedSessionKey = Self.normalizedSessionKey(sessionKey, fallback: self.fixture.sessionKey)
+        var startupSnapshot: OpenClawChatInFlightRun?
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-startup-status-fixture"),
+           let runID = self.activeRunID
+        {
+            let wire = try JSONSerialization.data(withJSONObject: [[
+                "runId": runID,
+                "seq": 1,
+                "stream": "run_status",
+                "data": ["phase": "starting_model"],
+            ]])
+            let events = try JSONDecoder().decode([OpenClawAgentEventPayload].self, from: wire)
+            startupSnapshot = OpenClawChatInFlightRun(runId: runID, text: "", events: events)
+        }
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-external-run-fixture"),
+           let runID = self.activeRunID
+        {
+            startupSnapshot = OpenClawChatInFlightRun(runId: runID, text: "", events: self.externalRunEvents)
+        }
         let historyMessages: [OpenClawChatMessage] = if self.fixture.sessionIDPrefix == "screenshot-fixture",
                                                         ProcessInfo.processInfo.arguments
                                                             .contains("--openclaw-subagent-wait-fixture"),
@@ -522,12 +589,13 @@ private actor LocalFixtureChatStore {
             sessionId: "\(self.fixture.sessionIDPrefix)-\(normalizedSessionKey)",
             messages: JSONDecoder().decode([AnyCodable].self, from: JSONEncoder().encode(historyMessages)),
             thinkingLevel: self.thinkingLevel,
+            // The progress card is read only for a session whose owner the history names.
             sessionInfo: OpenClawChatSessionInfo(
                 hasActiveRun: self.activeRunID != nil,
                 activeRunIds: self.activeRunID.map { [$0] },
                 key: owner.map { "agent:\($0):\(normalizedSessionKey)" },
                 agentId: owner),
-            inFlightRun: self.duplicateReplaySessionKey.flatMap { _ in
+            inFlightRun: startupSnapshot ?? self.duplicateReplaySessionKey.flatMap { _ in
                 self.activeRunID.map { OpenClawChatInFlightRun(runId: $0, text: "") }
             } ?? (ProcessInfo.processInfo.arguments.contains("--openclaw-streaming-layout-fixture")
                 ? self.activeRunID.map {
@@ -578,6 +646,18 @@ private actor LocalFixtureChatStore {
         {
             self.heldInitialRun = true
             self.activeRunID = runId
+            if ProcessInfo.processInfo.arguments.contains("--openclaw-startup-status-fixture") {
+                let wire = try? JSONSerialization.data(withJSONObject: [
+                    "runId": runId,
+                    "sessionKey": sessionKey,
+                    "state": "status",
+                    "phase": "starting_model",
+                    "seq": 1,
+                ])
+                if let wire, let event = try? JSONDecoder().decode(OpenClawChatEventPayload.self, from: wire) {
+                    self.publish(.chat(event))
+                }
+            }
             return OpenClawChatSendResponse(runId: runId, status: "started")
         }
         let assistantMessage = Self.message(
@@ -606,7 +686,7 @@ private actor LocalFixtureChatStore {
             timestamp: timestamp + 1,
             transcriptMessageID: "\(runId):assistant")
         self.messages.append(saved)
-        self.eventContinuation?.yield(.sessionMessage(OpenClawSessionMessageEventPayload(
+        self.publish(.sessionMessage(OpenClawSessionMessageEventPayload(
             sessionKey: sessionKey, message: saved, messageId: saved.transcriptMessageID, messageSeq: nil)))
         self.emitDuplicateAgentEvent(
             runId: runId,
@@ -623,6 +703,18 @@ private actor LocalFixtureChatStore {
                 "phase": "start", "name": "read", "toolCallId": "dup-filter-receipt",
                 "args": ["path": "dup-filter-inputs-received"],
             ])
+        self.emitDuplicateAgentEvent(
+            runId: runId,
+            seq: 3,
+            stream: "usage",
+            timestamp: timestamp + 4,
+            data: ["outputTokens": 485])
+        self.emitDuplicateAgentEvent(
+            runId: runId,
+            seq: 4,
+            stream: "run_status",
+            timestamp: timestamp + 5,
+            data: ["phase": "retrying", "attempt": 2, "maxAttempts": 3])
     }
 
     private func emitDuplicateAgentEvent(
@@ -641,22 +733,81 @@ private actor LocalFixtureChatStore {
         guard let event = OpenClawChatGatewayPayloadCodec.event(from: frame) else {
             preconditionFailure("Invalid duplicate reply fixture event")
         }
-        self.eventContinuation?.yield(event)
+        self.publish(event)
     }
 
     private var heldInitialRun = false
     private var activeRunID: String?
-    private var eventContinuation: AsyncStream<OpenClawChatTransportEvent>.Continuation?
+    private var eventContinuations: [UUID: AsyncStream<OpenClawChatTransportEvent>.Continuation] = [:]
 
     func setEventContinuation(_ continuation: AsyncStream<OpenClawChatTransportEvent>.Continuation) {
-        self.eventContinuation = continuation
+        // Chat and its session sidebar independently subscribe to the fixture transport.
+        let id = UUID()
+        self.eventContinuations[id] = continuation
+        if self.fixture.sessionIDPrefix == "screenshot-fixture",
+           ProcessInfo.processInfo.arguments.contains("--openclaw-external-run-fixture"),
+           !self.externalRunStarted
+        {
+            self.externalRunStarted = true
+            Task {
+                try? await Task.sleep(for: .seconds(4))
+                self.publishExternalRunStatus()
+                try? await Task.sleep(for: .seconds(8))
+                self.publishExternalRunTool()
+            }
+        }
+        continuation.onTermination = { [weak self] _ in
+            Task { await self?.removeEventContinuation(id) }
+        }
+    }
+
+    private var externalRunStarted = false
+    private var externalRunEvents: [OpenClawAgentEventPayload] = []
+
+    private func publishExternalRunStatus() {
+        self.activeRunID = "fixture-external-run"
+        let wire = Data(#"""
+        {"runId":"fixture-external-run","sessionKey":"main","state":"status",
+         "phase":"starting_model","seq":1}
+        """#.utf8)
+        if let event = try? JSONDecoder().decode(OpenClawChatEventPayload.self, from: wire) {
+            let statusWire = Data(#"""
+            {"runId":"fixture-external-run","seq":1,"stream":"run_status","data":{"phase":"starting_model"}}
+            """#.utf8)
+            if let status = try? JSONDecoder().decode(OpenClawAgentEventPayload.self, from: statusWire) {
+                self.externalRunEvents.append(status)
+            }
+            self.publish(.chat(event))
+        }
+    }
+
+    private func publishExternalRunTool() {
+        let wire = Data(#"""
+        {"runId":"fixture-external-run","seq":2,"stream":"tool",
+         "data":{"phase":"start","name":"read","toolCallId":"external-read",
+                 "args":{"path":"external-fixture.txt"}}}
+        """#.utf8)
+        if let event = try? JSONDecoder().decode(OpenClawAgentEventPayload.self, from: wire) {
+            self.externalRunEvents.append(event)
+            self.publish(.agent(event))
+        }
+    }
+
+    private func removeEventContinuation(_ id: UUID) {
+        self.eventContinuations[id] = nil
+    }
+
+    private func publish(_ event: OpenClawChatTransportEvent) {
+        for continuation in self.eventContinuations.values {
+            continuation.yield(event)
+        }
     }
 
     func runObservation(runId: String) -> OpenClawChatRunObservation {
         if self.activeRunID == runId,
            let sessionKey = self.duplicateReplaySessionKey,
            !self.duplicateReplayStarted,
-           self.eventContinuation != nil
+           !self.eventContinuations.isEmpty
         {
             self.duplicateReplayStarted = true
             self.replayDuplicateReply(
@@ -670,12 +821,18 @@ private actor LocalFixtureChatStore {
         self.activeRunID = nil
         self.duplicateReplaySessionKey = nil
         self.duplicateReplayStarted = false
-        self.eventContinuation?.yield(.chat(OpenClawChatEventPayload(
+        self.publish(.chat(OpenClawChatEventPayload(
             runId: runId,
             sessionKey: sessionKey,
             state: "aborted",
             message: nil,
             errorMessage: nil)))
+    }
+
+    private var selectedModelProvider: String {
+        self.fixture.additionalModels.first {
+            $0.selectionID == self.modelID || $0.modelID == self.modelID
+        }?.provider ?? self.fixture.modelProvider
     }
 
     func sessions() throws -> OpenClawChatSessionsListResponse {
@@ -693,7 +850,7 @@ private actor LocalFixtureChatStore {
             verboseLevel: self.verboseLevel,
             totalTokens: 24000,
             totalTokensFresh: true,
-            modelProvider: self.fixture.modelProvider,
+            modelProvider: self.selectedModelProvider,
             model: self.modelID,
             contextTokens: 128_000,
             thinkingLevels: Self.thinkingLevels,
@@ -735,7 +892,7 @@ private actor LocalFixtureChatStore {
         self.messages = Self.seedMessages(fixture: self.fixture)
         self.reactionOverrides.removeAll()
         self.modelID = self.fixture.modelID
-        self.thinkingLevel = "auto"
+        self.thinkingLevel = nil
         self.fastMode = nil
         self.verboseLevel = nil
         self.permissionMode = .guarded
@@ -758,7 +915,7 @@ private actor LocalFixtureChatStore {
             self.modelID = model ?? self.fixture.modelID
         }
         if let thinkingLevel = patch.thinkingLevel {
-            self.thinkingLevel = thinkingLevel ?? "auto"
+            self.thinkingLevel = thinkingLevel
         }
         if let fastMode = patch.fastMode {
             self.fastMode = fastMode
@@ -774,7 +931,7 @@ private actor LocalFixtureChatStore {
         }
         return OpenClawChatModelPatchResult(
             key: key,
-            modelProvider: self.fixture.modelProvider,
+            modelProvider: self.selectedModelProvider,
             model: self.modelID,
             thinkingLevel: self.thinkingLevel,
             thinkingLevels: Self.thinkingLevels,
@@ -834,7 +991,7 @@ private actor LocalFixtureChatStore {
     private func publishReactions(for message: OpenClawChatMessage, sessionKey: String, agentID: String? = nil) {
         guard ScreenshotFixtureMode.reactionsEnabled, let messageID = message.transcriptMessageID else { return }
         let key = Self.normalizedSessionKey(sessionKey, fallback: self.fixture.sessionKey)
-        self.eventContinuation?.yield(.sessionReaction(OpenClawChatReactionEvent(
+        self.publish(.sessionReaction(OpenClawChatReactionEvent(
             sessionKey: key,
             agentID: agentID ?? self.fixture.defaultAgentID,
             sessionID: "\(self.fixture.sessionIDPrefix)-\(key)",
@@ -875,6 +1032,13 @@ private actor LocalFixtureChatStore {
 
     private static func seedMessages(fixture: LocalChatFixture) -> [OpenClawChatMessage] {
         let now = Date().timeIntervalSince1970 * 1000
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-external-run-fixture") {
+            return [Self.message(
+                role: "user",
+                text: "Read external-fixture.txt. Sent from another client.",
+                timestamp: now,
+                transcriptMessageID: "fixture-external-user")]
+        }
         if ProcessInfo.processInfo.arguments.contains("--openclaw-system-notices-fixture") {
             return [
                 OpenClawChatMessage(
@@ -936,55 +1100,11 @@ private actor LocalFixtureChatStore {
                 row("VOICE_SPOKEN_AFTER: The one before went on yesterday.", at: 5, spoken: true),
             ]
         }
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-anthropic-work-chunks-fixture") {
+            return self.anthropicWorkChunkMessages(now: now)
+        }
         if ProcessInfo.processInfo.arguments.contains("--openclaw-step-labels-fixture") {
-            return [
-                self.message(
-                    role: "user",
-                    text: "Check local readiness.",
-                    timestamp: now,
-                    transcriptMessageID: "fixture-step-prompt"),
-                OpenClawChatMessage(
-                    role: "assistant",
-                    content: [
-                        OpenClawChatMessageContent(
-                            type: "toolCall",
-                            id: "fixture-exec",
-                            name: "exec",
-                            arguments: AnyCodable(["command": "printf ready"])),
-                        OpenClawChatMessageContent(
-                            type: "toolCall",
-                            id: "fixture-no-result",
-                            name: "exec",
-                            arguments: AnyCodable(["command": "printf missing"])),
-                        OpenClawChatMessageContent(
-                            type: "toolCall",
-                            id: "fixture-success",
-                            name: "exec",
-                            arguments: AnyCodable(["command": "printf complete"])),
-                    ],
-                    timestamp: now + 1,
-                    transcriptMessageID: "fixture-step-call",
-                    stopReason: "toolUse"),
-                OpenClawChatMessage(
-                    role: "toolResult",
-                    content: [OpenClawChatMessageContent(type: "text", text: "ready")],
-                    timestamp: now + 2,
-                    transcriptMessageID: "fixture-step-result",
-                    toolCallId: "fixture-exec",
-                    toolName: "exec"),
-                OpenClawChatMessage(
-                    role: "toolResult",
-                    content: [OpenClawChatMessageContent(type: "text", text: "complete")],
-                    timestamp: now + 3,
-                    transcriptMessageID: "fixture-success-result",
-                    toolCallId: "fixture-success",
-                    toolName: "exec"),
-                self.message(
-                    role: "assistant",
-                    text: "Local readiness checked.",
-                    timestamp: now + 4,
-                    transcriptMessageID: "fixture-step-answer"),
-            ]
+            return self.stepLabelMessages(now: now)
         }
         if ProcessInfo.processInfo.arguments.contains("--openclaw-long-chat-fixture") {
             return [
@@ -993,15 +1113,27 @@ private actor LocalFixtureChatStore {
                     text: "Prepare a detailed project review.",
                     timestamp: now,
                     transcriptMessageID: "fixture-long-prompt"),
-                self.message(
+                OpenClawChatMessage(
                     role: "assistant",
-                    text: String(repeating: "Earlier response context. ", count: 120),
+                    content: [.init(
+                        type: "toolCall",
+                        id: "fixture-long-review",
+                        name: "read",
+                        arguments: AnyCodable(["path": "project-review.txt"]))],
                     timestamp: now + 1,
-                    transcriptMessageID: "fixture-long-answer"),
+                    transcriptMessageID: "fixture-long-call",
+                    stopReason: "toolUse"),
+                OpenClawChatMessage(
+                    role: "toolResult",
+                    content: [.init(type: "text", text: String(repeating: "Earlier response context. ", count: 120))],
+                    timestamp: now + 2,
+                    transcriptMessageID: "fixture-long-result",
+                    toolCallId: "fixture-long-review",
+                    toolName: "read"),
                 self.message(
                     role: "assistant",
                     text: "OPENCLAW_LONG_CHAT_LATEST",
-                    timestamp: now + 2,
+                    timestamp: now + 3,
                     transcriptMessageID: "fixture-long-latest"),
             ]
         }
@@ -1012,6 +1144,114 @@ private actor LocalFixtureChatStore {
                 timestamp: now + Double(index),
                 transcriptMessageID: "\(fixture.sessionIDPrefix)-seed-\(index)")
         }
+    }
+
+    private static func anthropicWorkChunkMessages(now: Double) -> [OpenClawChatMessage] {
+        // Synthetic Anthropic-style envelopes: narration and tool_use share each
+        // assistant message; tool results separate the two narration boundaries.
+        [
+            self.message(
+                role: "user",
+                text: "Check the sample project.",
+                timestamp: now,
+                transcriptMessageID: "work-chunks-user"),
+            OpenClawChatMessage(
+                role: "assistant",
+                content: [
+                    .init(type: "text", text: "I will read the sample file."),
+                    .init(
+                        type: "tool_use",
+                        id: "work-chunks-read",
+                        name: "read",
+                        arguments: AnyCodable(["path": "sample.txt"])),
+                ],
+                timestamp: now + 1,
+                transcriptMessageID: "work-chunks-first",
+                stopReason: "tool_use"),
+            OpenClawChatMessage(
+                role: "toolResult",
+                content: [.init(type: "text", text: "Sample configuration is valid.")],
+                timestamp: now + 2,
+                transcriptMessageID: "work-chunks-read-result",
+                toolCallId: "work-chunks-read",
+                toolName: "read"),
+            OpenClawChatMessage(
+                role: "assistant",
+                content: [
+                    .init(type: "text", text: "The file looks good. I will run the check."),
+                    .init(
+                        type: "tool_use",
+                        id: "work-chunks-exec",
+                        name: "exec",
+                        arguments: AnyCodable(["command": "printf checked"])),
+                ],
+                timestamp: now + 3,
+                transcriptMessageID: "work-chunks-second",
+                stopReason: "tool_use"),
+            OpenClawChatMessage(
+                role: "toolResult",
+                content: [.init(type: "text", text: "checked")],
+                timestamp: now + 4,
+                transcriptMessageID: "work-chunks-exec-result",
+                toolCallId: "work-chunks-exec",
+                toolName: "exec"),
+            self.message(
+                role: "assistant",
+                text: "All checks passed.",
+                timestamp: now + 5,
+                transcriptMessageID: "work-chunks-final"),
+        ]
+    }
+
+    private static func stepLabelMessages(now: Double) -> [OpenClawChatMessage] {
+        [
+            self.message(
+                role: "user",
+                text: "Check local readiness.",
+                timestamp: now,
+                transcriptMessageID: "fixture-step-prompt"),
+            OpenClawChatMessage(
+                role: "assistant",
+                content: [
+                    OpenClawChatMessageContent(
+                        type: "toolCall",
+                        id: "fixture-exec",
+                        name: "exec",
+                        arguments: AnyCodable(["command": "printf ready"])),
+                    OpenClawChatMessageContent(
+                        type: "toolCall",
+                        id: "fixture-no-result",
+                        name: "exec",
+                        arguments: AnyCodable(["command": "printf missing"])),
+                    OpenClawChatMessageContent(
+                        type: "toolCall",
+                        id: "fixture-success",
+                        name: "exec",
+                        arguments: AnyCodable(["command": "printf complete"])),
+                ],
+                timestamp: now + 1,
+                transcriptMessageID: "fixture-step-call",
+                stopReason: "toolUse"),
+            OpenClawChatMessage(
+                role: "toolResult",
+                content: [OpenClawChatMessageContent(type: "text", text: "ready")],
+                timestamp: now + 2,
+                transcriptMessageID: "fixture-step-result",
+                toolCallId: "fixture-exec",
+                toolName: "exec"),
+            OpenClawChatMessage(
+                role: "toolResult",
+                content: [OpenClawChatMessageContent(type: "text", text: "complete")],
+                timestamp: now + 3,
+                transcriptMessageID: "fixture-success-result",
+                toolCallId: "fixture-success",
+                toolName: "exec"),
+            self.message(
+                role: "assistant",
+                text: "Local readiness checked.",
+                timestamp: now + 4,
+                transcriptMessageID: "fixture-step-answer"),
+        ]
     }
 
     private static func message(

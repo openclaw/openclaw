@@ -1,12 +1,15 @@
+import { once } from "node:events";
 import { createServer } from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { type WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
-import { type Browser, type ConnectOverCDPTransport, chromium } from "playwright-core";
+import { type ConnectOverCDPTransport, chromium } from "playwright-core";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import * as chromeModule from "./chrome.js";
 import { pwAi } from "./pw-ai.js";
 import { connectOverCdpTransport } from "./pw-session-cdp-transport.js";
+import { makeTargetBrowser } from "./pw-session.browser.test-support.js";
 
 const { registerManagedProxyBrowserCdpBypassMock } = vi.hoisted(() => ({
   registerManagedProxyBrowserCdpBypassMock: vi.fn<(url: string) => (() => void) | undefined>(
@@ -19,33 +22,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
 const { closePlaywrightBrowserConnection, listPagesViaPlaywright } = pwAi;
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
 const getChromeWebSocketEndpointSpy = vi.spyOn(chromeModule, "getChromeWebSocketEndpoint");
-
-function makeBrowser(): Browser {
-  const page = {
-    on: vi.fn(),
-    context: () => context,
-    title: vi.fn(async () => "title:A"),
-    url: vi.fn(() => "https://example.com"),
-  } as unknown as import("playwright-core").Page;
-  const context = {
-    pages: () => [page],
-    on: vi.fn(),
-    newCDPSession: vi.fn(async () => ({
-      send: vi.fn(async (method: string) =>
-        method === "Target.getTargetInfo"
-          ? { targetInfo: { targetId: "A", title: "title:A" } }
-          : {},
-      ),
-      detach: vi.fn(async () => {}),
-    })),
-  } as unknown as import("playwright-core").BrowserContext;
-  return {
-    contexts: () => [context],
-    on: vi.fn(),
-    off: vi.fn(),
-    close: vi.fn(async () => {}),
-  } as unknown as Browser;
-}
 
 function pinnedLoopbackLookup() {
   return ((_hostname: string, options: unknown, callback?: unknown) => {
@@ -60,7 +36,7 @@ function inspectTransport(inspect: (transport: ConnectOverCDPTransport) => Promi
   connectOverCdpSpy.mockImplementationOnce(async (value: unknown) => {
     expect(typeof value).not.toBe("string");
     await inspect(value as ConnectOverCDPTransport);
-    return makeBrowser();
+    return makeTargetBrowser("A", "https://example.com").browser;
   });
 }
 
@@ -74,9 +50,7 @@ async function openServer() {
       server.close(() => resolve());
     });
   });
-  await new Promise<void>((resolve) => {
-    server.once("listening", resolve);
-  });
+  await once(server, "listening");
   const socket = new Promise<WebSocket>((resolve) => {
     server.once("connection", resolve);
   });
@@ -90,6 +64,14 @@ async function listPages(cdpUrl: string) {
     expect.objectContaining({ targetId: "A" }),
   ]);
   expect(connectOverCdpSpy).toHaveBeenCalledOnce();
+}
+
+async function inspectSocket(
+  run: (transport: ConnectOverCDPTransport, socket: WebSocket) => Promise<void>,
+) {
+  const { socket, cdpUrl } = await openServer();
+  inspectTransport(async (transport) => run(transport, await socket));
+  await listPages(cdpUrl);
 }
 
 async function connectPrepared(wire: ConnectOverCDPTransport) {
@@ -164,9 +146,7 @@ describe("pw-session Playwright CDP transport", () => {
         method: "Target.detachFromTarget",
         params: { sessionId: "worker-session" },
       });
-      const closed = new Promise<void>((resolve) => {
-        socket.once("close", resolve);
-      });
+      const closed = once(socket, "close");
       transport.close();
       await closed;
       expect(delivered).toEqual(forwarded);
@@ -234,14 +214,8 @@ describe("pw-session Playwright CDP transport", () => {
         });
       });
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("test server has no TCP port");
-    }
-    const cdpUrl = `ws://127.0.0.1:${address.port}/start`;
+    const port = await listenOnLoopback(server);
+    const cdpUrl = `ws://127.0.0.1:${port}/start`;
     getChromeWebSocketEndpointSpy.mockResolvedValue({
       url: cdpUrl,
       lookup: pinnedLoopbackLookup(),
@@ -259,20 +233,8 @@ describe("pw-session Playwright CDP transport", () => {
     expect(paths).toStrictEqual(["/devtools/browser/redirected"]);
   });
 
-  it("closes the pinned Playwright transport on malformed CDP JSON", async () => {
-    const { socket, cdpUrl } = await openServer();
-    inspectTransport(async (transport) => {
-      const closed = createDeferred<string | undefined>();
-      Object.assign(transport, { onclose: closed.resolve });
-      (await socket).send("{not-json");
-      await expect(closed.promise).resolves.toBe("CDP socket closed");
-    });
-    await listPages(cdpUrl);
-  });
-
   it("delivers queued CDP messages before reporting pinned transport closure", async () => {
-    const { socket: connected, cdpUrl } = await openServer();
-    inspectTransport(async (transport) => {
+    await inspectSocket(async (transport, socket) => {
       const events: string[] = [];
       const closed = createDeferred<void>();
       Object.assign(transport, {
@@ -282,29 +244,11 @@ describe("pw-session Playwright CDP transport", () => {
           closed.resolve();
         },
       });
-      const socket = await connected;
       socket.send(JSON.stringify({ id: 1, result: { ok: true } }));
       socket.close();
       await closed.promise;
       expect(events).toStrictEqual(["message", "close"]);
     });
-    await listPages(cdpUrl);
-  });
-
-  it("closes the pinned Playwright transport when message delivery fails", async () => {
-    const { socket, cdpUrl } = await openServer();
-    inspectTransport(async (transport) => {
-      const closed = createDeferred<string | undefined>();
-      Object.assign(transport, {
-        onclose: closed.resolve,
-        onmessage: () => {
-          throw new Error("handler failed");
-        },
-      });
-      (await socket).send(JSON.stringify({ id: 1, result: {} }));
-      await expect(closed.promise).resolves.toContain("handler failed");
-    });
-    await listPages(cdpUrl);
   });
 
   it("retires a borrowed transport after rejected async delivery without inventing close acknowledgement", async () => {
@@ -332,16 +276,33 @@ describe("pw-session Playwright CDP transport", () => {
     expect(closed).toHaveBeenCalledExactlyOnceWith("async handler failed");
   });
 
-  it("propagates pinned WebSocket protocol errors through transport closure", async () => {
-    const { socket, cdpUrl } = await openServer();
-    inspectTransport(async (transport) => {
+  it.each([
+    ["malformed JSON", "CDP socket closed"],
+    ["failed delivery", "handler failed"],
+    ["protocol error", "Invalid WebSocket frame"],
+  ])("closes the pinned transport on %s", async (failure, reason) => {
+    await inspectSocket(async (transport, socket) => {
       const closed = createDeferred<string | undefined>();
       Object.assign(transport, { onclose: closed.resolve });
-      const rawSocket = Reflect.get(await socket, "_socket") as { write(data: Buffer): void };
-      // Invalid reserved opcode exercises the real ws client's protocol error.
-      rawSocket.write(Buffer.from([0x83, 0x00]));
-      await expect(closed.promise).resolves.toContain("Invalid WebSocket frame");
+      if (failure === "malformed JSON") {
+        socket.send("{not-json");
+      } else if (failure === "failed delivery") {
+        Object.assign(transport, {
+          onmessage: () => {
+            throw new Error(reason);
+          },
+        });
+        socket.send(JSON.stringify({ id: 1, result: {} }));
+      } else {
+        const rawSocket = Reflect.get(socket, "_socket") as { write(data: Buffer): void };
+        // Invalid reserved opcode exercises the real ws client's protocol error.
+        rawSocket.write(Buffer.from([0x83, 0x00]));
+      }
+      if (failure === "malformed JSON") {
+        await expect(closed.promise).resolves.toBe(reason);
+      } else {
+        await expect(closed.promise).resolves.toContain(reason);
+      }
     });
-    await listPages(cdpUrl);
   });
 });

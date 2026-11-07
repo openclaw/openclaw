@@ -5,7 +5,7 @@ import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { getChildLogger, getResolvedLoggerSettings, toPinoLikeLogger } from "../logging/logger.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { CronService } from "./service.js";
-import { resolveCronJobsStorePath } from "./store.js";
+import { resolveCronJobsStorePathAsync } from "./store.js";
 
 export async function withLocalAgentCronJobsRemoved<T>(
   agentId: string,
@@ -13,7 +13,7 @@ export async function withLocalAgentCronJobsRemoved<T>(
   commit: () => Promise<T>,
 ): Promise<T> {
   const cfg = getRuntimeConfig();
-  const storePath = resolveCronJobsStorePath();
+  const storePath = await resolveCronJobsStorePathAsync();
   const scheduler = new GatewayScheduler();
   const service = new CronService({
     scheduler,
@@ -32,7 +32,6 @@ export async function withLocalAgentCronJobsRemoved<T>(
         (configuredId) => normalizeAgentId(configuredId) === id,
       ),
     enqueueSystemEvent: () => false,
-    requestHeartbeat: () => {},
     runIsolatedAgentJob: async () => {
       throw new Error("Cron execution is unavailable in local service context.");
     },

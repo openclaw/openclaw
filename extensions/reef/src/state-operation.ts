@@ -26,7 +26,7 @@ import {
 import type { ReefKeys } from "./types.js";
 
 export type ReefInboxCursorRecord = ReefIdentityBinding & { cursor: number };
-export const REEF_INBOX_CURSOR_KEY = "current";
+const REEF_INBOX_CURSOR_KEY = "current";
 type ReefReviewDecision = "none" | "pending" | { approved: boolean };
 
 export { ReefReviewCapacityError } from "./state-policy.js";
@@ -93,7 +93,7 @@ export function lookupReefReviewDecision(
   return reefReviewDecision(current);
 }
 
-export function requireReefInboxCursorRecord(
+function requireReefInboxCursorRecord(
   value: unknown,
   binding: ReefIdentityBinding,
 ): ReefInboxCursorRecord {
@@ -131,7 +131,7 @@ export function runReefStateOperation(
       const binding = parseReefIdentityBinding(registered);
       if (binding) {
         throw new Error(
-          `Reef identity @${binding.handle} on ${binding.relayUrl} has no canonical keys; restore the original keys before registration`,
+          `Reef identity @${binding.handle} on ${binding.relayUrl} has no stored keys; restore the original keys before registration`,
         );
       }
       if (existing !== undefined) {

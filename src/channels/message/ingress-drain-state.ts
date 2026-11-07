@@ -1,6 +1,9 @@
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
-import { createDeferredCore } from "../../shared/deferred.js";
-import type { ChannelIngressQueueClaim, ChannelIngressQueueRecord } from "./ingress-queue.types.js";
+import type {
+  ChannelIngressQueue,
+  ChannelIngressQueueClaim,
+  ChannelIngressQueueRecord,
+} from "./ingress-queue.types.js";
 
 export class IngressAdoptionLostError extends Error {
   readonly code: "guillotined" | "superseded" | "reclaimed";
@@ -18,6 +21,10 @@ export function isIngressAdoptionLostError(error: unknown): error is IngressAdop
 
 export type ChannelIngressDrainDispatchResult =
   | { kind: "completed" }
+  /** The dispatch owner already committed this claim to its durable receipt. */
+  | { kind: "transferred" }
+  /** Normal admission backpressure; the caller owns the next wake. */
+  | { kind: "pending" }
   | { kind: "deferred" }
   | { kind: "failed-retryable"; error: unknown };
 
@@ -27,7 +34,7 @@ export type ActiveHandlerState<TPayload, TMetadata> = {
   claim: ChannelIngressQueueClaim<TPayload, TMetadata>;
   abortController: AbortController;
   startedAt: number;
-  phase: "dispatching" | "deferred" | "adopted" | "settled";
+  phase: "dispatching" | "deferred" | "adopted" | "failed" | "settled";
   occupiesLane: boolean;
   task: Promise<void>;
   settlement?: Promise<void>;
@@ -41,6 +48,60 @@ export type ActiveHandlerState<TPayload, TMetadata> = {
   /** Single settle owner for complete / fail / release / supersede / guillotine. */
   settleOnce: (fn: () => Promise<void>) => Promise<void>;
 };
+
+export function clearIngressClaimRefresh<TPayload, TMetadata>(
+  state: ActiveHandlerState<TPayload, TMetadata>,
+): void {
+  clearInterval(state.claimRefreshTimer);
+  state.claimRefreshTimer = undefined;
+}
+
+export function armIngressClaimRefresh<TPayload, TMetadata>(
+  state: ActiveHandlerState<TPayload, TMetadata>,
+  {
+    queue,
+    claimLeaseMs,
+    now,
+    onReclaimed,
+    log,
+    formatError,
+  }: {
+    queue: Pick<ChannelIngressQueue<TPayload, TMetadata>, "refreshClaim">;
+    claimLeaseMs: number;
+    now: () => number;
+    onReclaimed: (state: ActiveHandlerState<TPayload, TMetadata>) => void;
+    log: (message: string) => void;
+    formatError: (error: unknown) => string;
+  },
+): void {
+  clearIngressClaimRefresh(state);
+  // Keep lease alive until tombstone commits (includes complete-retry wedge).
+  const intervalMs = Math.max(1, Math.floor(claimLeaseMs / 3));
+  state.claimRefreshTimer = setInterval(() => {
+    if (state.phase === "settled" || state.guillotined || state.superseded) {
+      clearIngressClaimRefresh(state);
+      return;
+    }
+    void (async () => {
+      if (queue.refreshClaim) {
+        const refreshed = await queue.refreshClaim(state.claim, { refreshedAt: now() });
+        // false = claim-token fence rejected (lease reclaimed by another owner).
+        if (!refreshed) {
+          onReclaimed(state);
+        }
+      }
+    })().catch((err: unknown) => {
+      try {
+        log(
+          `ingress drain: claim refresh failed for event ${state.claim.id}; holding claim: ${formatError(err)}`,
+        );
+      } catch {
+        // A retiring observer cannot turn a failed heartbeat into an unhandled rejection.
+      }
+    });
+  }, intervalMs);
+  state.claimRefreshTimer.unref?.();
+}
 
 export function isPreAdoptionState<TPayload, TMetadata>(
   state: ActiveHandlerState<TPayload, TMetadata>,
@@ -62,13 +123,9 @@ export function createIngressSettleOwner<TPayload, TMetadata>(
       return;
     }
     if (settlePromise) {
-      await settlePromise;
-      return;
+      return settlePromise;
     }
-    const settlement = createDeferredCore();
-    settlePromise = settlement.promise;
-    state.settlement = settlePromise;
-    void (async () => {
+    settlePromise = Promise.resolve().then(async () => {
       try {
         // Only mark settled after the tombstone/fail/release write commits.
         // Write failure must keep heartbeat + in-memory ownership (wedged > duplicated).
@@ -82,7 +139,8 @@ export function createIngressSettleOwner<TPayload, TMetadata>(
       } finally {
         state.settlement = undefined;
       }
-    })().then(settlement.resolve, settlement.reject);
+    });
+    state.settlement = settlePromise;
     try {
       await settlePromise;
     } catch (err) {
@@ -122,8 +180,4 @@ export function resolveLaneKey<TPayload, TMetadata>(
   return reconcileStoredLaneKey(record, storedLaneKey, derivedLaneKey)
     ? derivedLaneKey
     : storedLaneKey;
-}
-
-export function sortedKeys(keys: Iterable<string>): string[] {
-  return [...keys].toSorted((a, b) => a.localeCompare(b));
 }

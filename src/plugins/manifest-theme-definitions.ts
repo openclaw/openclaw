@@ -1,3 +1,4 @@
+import { sniffInlineImageMime } from "@openclaw/media-core/inline-image-data-url";
 import { isSelfContainedSvg } from "../../packages/gateway-protocol/src/svg-image.js";
 import {
   MAX_THEME_DEFINITION_BYTES,
@@ -7,7 +8,12 @@ import {
 import type { PluginManifestRecord, PluginThemeArtwork } from "./manifest-registry.types.js";
 import type { PluginDiagnostic, PluginManifestTheme } from "./manifest-types.js";
 import { readPluginCacheFile } from "./plugin-cache-files.js";
-import { PLUGIN_ACTIVITY_ICON_MAX_BYTES } from "./portable-icon-paths.js";
+import {
+  PLUGIN_ACTIVITY_ICON_MAX_BYTES,
+  PLUGIN_THEME_BACKGROUND_MAX_BYTES,
+} from "./portable-icon-paths.js";
+
+const BACKGROUND_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 
 /** Capture palettes and artwork so a published generation never reads changed files. */
 export function loadManifestThemeDefinitions(params: {
@@ -63,6 +69,23 @@ export function loadManifestThemeDefinitions(params: {
         }
         return svg;
       };
+      const readBackground = (source: string): string => {
+        const imageFile = readPluginCacheFile({
+          rootDir: params.rootDir,
+          relativePath: source,
+          rejectHardlinks: params.rejectHardlinks,
+          maxBytes: PLUGIN_THEME_BACKGROUND_MAX_BYTES,
+        });
+        if (
+          !imageFile.ok ||
+          !BACKGROUND_MIME_TYPES.has(sniffInlineImageMime(imageFile.contents) ?? "")
+        ) {
+          throw new Error(
+            `background ${source} must be a readable PNG, JPEG, or WebP inside the plugin root, at most ${PLUGIN_THEME_BACKGROUND_MAX_BYTES} bytes`,
+          );
+        }
+        return imageFile.contents.toString("base64");
+      };
       const artwork: PluginThemeArtwork = {
         ...(theme.icons
           ? {
@@ -88,12 +111,22 @@ export function loadManifestThemeDefinitions(params: {
               ),
             }
           : {}),
+        ...(theme.backgrounds
+          ? {
+              backgrounds: Object.fromEntries(
+                Object.entries(theme.backgrounds).map(([mode, source]) => [
+                  mode,
+                  { base64: readBackground(source) },
+                ]),
+              ),
+            }
+          : {}),
       };
       return [
         {
           id: theme.id,
           definition,
-          ...(theme.icons || theme.hats || theme.critters ? { artwork } : {}),
+          ...(theme.icons || theme.hats || theme.critters || theme.backgrounds ? { artwork } : {}),
         },
       ];
     } catch (error) {

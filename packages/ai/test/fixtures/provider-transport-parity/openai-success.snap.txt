@@ -115,6 +115,9 @@
           "cacheRead": 0,
           "cacheWrite": 0,
           "total": 0
+        },
+        "usageReport": {
+          "state": "available"
         }
       },
       "stopReason": "stop"
@@ -229,6 +232,9 @@
           "cacheRead": 0,
           "cacheWrite": 0,
           "total": 0
+        },
+        "usageReport": {
+          "state": "available"
         }
       },
       "stopReason": "stop"
