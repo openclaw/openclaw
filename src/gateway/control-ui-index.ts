@@ -12,6 +12,7 @@ import {
   CONTROL_UI_ENVIRONMENT_ATTRIBUTE,
   CONTROL_UI_ROOT_PUBLIC_ASSETS,
   CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
+  controlUiPublicAssetVersion,
   isControlUiVersionedPublicAsset,
   type ControlUiBootstrapConfig,
 } from "./control-ui-contract.js";
@@ -40,7 +41,9 @@ function rewriteControlUiIndexHtmlAssetHrefs(
   ]);
   for (const asset of CONTROL_UI_ROOT_PUBLIC_ASSETS) {
     const version =
-      buildId && isControlUiVersionedPublicAsset(asset) ? `?v=${encodeURIComponent(buildId)}` : "";
+      buildId && isControlUiVersionedPublicAsset(asset)
+        ? `?v=${encodeURIComponent(controlUiPublicAssetVersion(buildId))}`
+        : "";
     const assetHref = `href="${buildControlUiRootAssetPath(normalized, asset)}${version}"`;
     // Vite's portable ./ base emits relative hrefs, which the browser starts
     // resolving against a nested route before the UI can correct them.

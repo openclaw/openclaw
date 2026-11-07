@@ -878,6 +878,69 @@ to composer and transcript readiness first, then measure its reload in the same
 browser context. Warm-up requests and CPU are excluded. This mode cannot be
 combined with `--service-worker`.
 
+Compare the emitted files of two adjacent builds with
+`node scripts/compare-control-ui-update-cache.ts --base-dir <build-A>
+--head-dir <build-B> --output <report.json>`. The report separates identical
+files, renamed files with only generated-reference changes, payload changes,
+and public-asset URL changes. Gzip and Brotli columns use emitted sidecars only
+where the Gateway serves them. Full-cache and offline-inventory totals describe
+potential downloads after those inventories have been cached; browser timing
+runs below record what a particular visit actually requests.
+
+To compare browser-cache survival across a real update, pass
+`--previous-bundle-dir <build-A> --boot-state cold,warm,updated
+--engines chromium,webkit,firefox`. Each updated arm visits build A, reaches the
+same application readiness, selects the arm's build B on the same server, and
+navigates the same tab to B with the same browser context, HTTP cache, worker
+registration, CacheStorage, and origin storage. Each arm otherwise gets a fresh
+context. States and base/control/head order rotate between pairs; control is an
+identical-base A/A sample. Use `--previous-compare-bundle-dir <patched-build-A>`
+when the head arm must prime a different predecessor (for example, to compare
+stock A→B with patched A→B). It defaults to `--previous-bundle-dir`; a first
+deployment from an old cache layout is a separate migration case.
+Add `--service-worker` to use the production worker.
+The explicit cold state starts without a registration; it is different from the
+legacy `--service-worker` cold profile that first installs and stops a worker.
+
+Explicit states or engines use `--network-latency-ms 100` as a server response
+delay for every HTTP request, including service-worker fetches. This is an RTT
+approximation without throughput throttling or mock-WebSocket delay, not the
+legacy Chromium CDP 10 Mbps profile. All engines record browser-clock composer
+and transcript readiness, resource timings, server requests (status, encoding,
+encoded response body bytes), and host load;
+only Chromium records CDP CPU, response headers, and early hints. Explicit modes
+serve the Gateway's successful `/healthz` contract alongside the synthetic bootstrap. `fontsReadyMs`
+records browser-clock font settlement after content readiness, and `usableMs`
+is the maximum of composer, completed text, active text, and font readiness.
+These are application observations, not paint timestamps. Server-request and
+CPU snapshots are taken just after the driver observes readiness; their cutoff
+is not synchronized exactly to the in-page timestamp. Unsupported CLS and CPU
+metrics are absent, not zero.
+
+Explicit warm and updated states use `--observe-after-ready-ms 3000` as a settled
+idle period after priming A, both with and without a worker. With workers enabled,
+the same setting also bounds the post-readiness observation of B. The summary records
+worker/controller states, cache names and URLs, update messages, and requests
+continuing after readiness. A bounded prime does not guarantee the entire
+optional offline inventory is cached; inspect the cache snapshot or choose a
+longer observation period. The worker's real foreground pauses, integrity reuse,
+and install/deferred download scheduling remain active. The harness does not
+force an update or skip its lifecycle, and extra update navigations are counted.
+If update recovery interrupts the driver navigation, the interruption remains in
+the result and the arm still requires the intended route, exact B build, and
+application readiness. Recovery query-string navigations and document HEAD
+checks remain in the request counts. Updated arms also record a browser epoch
+before switching builds: `navigationPrefixMs` spans that marker to the final
+document's time origin, and `transitionElapsedMs` adds its `usableMs`. These
+include driver/swap and recovery overhead, unlike the per-document application
+timings. Recovery arms omit CDP CPU deltas because navigation can reset them.
+`--boot-route new` explicitly measures the New Session enabled composer instead
+of the default rich Chat transcript, with `routeReadyMs` and font-inclusive
+`usableMs`; report those workloads separately. Cache snapshots include the
+expected build/cache name, complete offline-shell marker, and cached/expected
+boot-asset counts, so incomplete priming remains visible. Synthetic Gateway
+replies still measure delivery/rendering rather than backend or provider latency.
+
 For the 100 ms RTT / 10 Mbps profile, replace `--latency-ms 0` with
 `--latency-ms 100 --network-latency-ms 100 --download-kbps 10000` and add
 `--cold-http-cache`. HTTP/CDP throttling does not affect the synthetic WebSocket,

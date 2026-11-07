@@ -2905,6 +2905,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     "prices fully measured tooling selections without discarded siblings on %s",
     (runnerBackend) => {
       const target = "test/scripts/update-restart-module-outcome.test.ts";
+      // Unknown files must cost more than startup headroom regardless of which
+      // siblings the current checkout places in the target's tooling stripe.
+      vi.spyOn(shardMetadata, "estimateVitestToolingFileSeconds").mockReturnValue(60);
       const timings = vi
         .spyOn(testTimings, "readToolingFileTimings")
         .mockReturnValue({ [target]: 1 });
@@ -2918,6 +2921,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       const unknown = required(selectTests([target], { runnerBackend }));
       expectPlanFiles(unknown, [target]);
       expect(sumSeconds(unknown)).toBeGreaterThan(25);
+      expect(sumSeconds(unknown)).toBeGreaterThanOrEqual(60);
     },
   );
 
