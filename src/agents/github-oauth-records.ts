@@ -273,6 +273,20 @@ export async function inspectGitHubOAuthRecord(
   return record ? { state: "valid", record } : { state: "invalid" };
 }
 
+/** Display state of a valid record; a failure that kept its claim is never retried. */
+export function resolveGitHubOAuthRefreshState(
+  record: GitHubOAuthRecord,
+  now: number,
+): "refreshing" | "expired" | "failed" | "available" {
+  if (record.pendingRefresh) {
+    return "refreshing";
+  }
+  if (record.refreshClaim && record.refreshFailure) {
+    return "expired";
+  }
+  return record.refreshFailure ?? (record.refreshExpiresAtMs <= now ? "expired" : "available");
+}
+
 export async function deleteGitHubOAuthRecord(profileId: string): Promise<void> {
   await deleteHiddenGitHubSecretRecord({ name: githubOAuthRecordName(profileId) });
 }

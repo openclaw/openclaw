@@ -23,7 +23,9 @@ import {
 } from "../agents/github-tool-identity.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { subscribeSecretStoreChanges } from "../secrets/store/secret-store-changes.js";
+import { isRecoverableOAuthRefreshFailure } from "../shared/oauth-refresh-outcome.js";
 import {
   registerOpenClawStateDatabaseAsyncResource,
   registerOpenClawStateDatabaseLifecycleListener,
@@ -237,6 +239,33 @@ export async function settleGitHubOAuthRefreshRecord(
       throw error;
     }
   }
+}
+/**
+ * Release the claim only when the refresh grant provably survived. A retained claim
+ * stops automatic retries, so the warning names the reconnect action.
+ */
+export async function settleFailedGitHubOAuthRefresh(
+  claimed: GitHubOAuthRecord,
+  refreshFailure: "expired" | "failed",
+  error: unknown,
+  warn: (message: string) => void,
+): Promise<void> {
+  const recoverable = isRecoverableOAuthRefreshFailure(error);
+  await settleGitHubOAuthRefreshRecord(
+    {
+      ...claimed,
+      pendingRefresh: undefined,
+      refreshFailure,
+      ...(recoverable ? { refreshClaim: undefined } : {}),
+    },
+    claimed,
+  );
+  const owner = claimed.scope === "system" ? "the System identity" : `agent ${claimed.agentId}`;
+  warn(
+    recoverable
+      ? `GitHub OAuth refresh for ${owner} failed; will retry: ${formatErrorMessage(error)}`
+      : `GitHub OAuth refresh for ${owner} stopped; reconnect GitHub to restore access: ${formatErrorMessage(error)}`,
+  );
 }
 export function assertGitHubOAuthIdentitySelected(
   getConfig: () => OpenClawConfig,

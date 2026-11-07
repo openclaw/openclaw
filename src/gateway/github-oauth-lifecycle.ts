@@ -48,7 +48,6 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduler, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
-import { isRecoverableOAuthRefreshFailure } from "../shared/oauth-refresh-outcome.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import { assertGitHubCliAvailable } from "./github-cli-preflight.js";
 import { pollGitHubDeviceFlow, startGitHubDeviceFlow } from "./github-oauth-device-flow.js";
@@ -56,6 +55,7 @@ import {
   assertInitialOAuthRecordCurrent,
   assertGitHubOAuthIdentitySelected,
   applyPendingGitHubOAuthRefresh,
+  settleFailedGitHubOAuthRefresh,
   settleGitHubOAuthRefreshRecord,
   authorizationStillOwned,
   authorizationStillOwnedAsync,
@@ -367,7 +367,9 @@ export function createGitHubOAuthLifecycle(params: {
     if (currentIdentity?.kind !== "oauth" || currentIdentity.profileId !== profileId) {
       return;
     }
-    const claimedRecord: GitHubOAuthRecord = { ...currentRecord, refreshClaim: randomUUID() };
+    // A new attempt starts clean, so a kept claim plus failure always means a stuck grant.
+    const { refreshFailure: _previousFailure, ...unclaimedRecord } = currentRecord;
+    const claimedRecord: GitHubOAuthRecord = { ...unclaimedRecord, refreshClaim: randomUUID() };
     await settleGitHubOAuthRefreshRecord(claimedRecord, currentRecord);
     let refreshed;
     try {
@@ -382,29 +384,15 @@ export function createGitHubOAuthLifecycle(params: {
         },
       });
     } catch (error) {
-      await settleGitHubOAuthRefreshRecord(
-        {
-          ...claimedRecord,
-          pendingRefresh: undefined,
-          refreshFailure: "failed",
-          ...(isRecoverableOAuthRefreshFailure(error) ? { refreshClaim: undefined } : {}),
-        },
-        claimedRecord,
-      );
+      await settleFailedGitHubOAuthRefresh(claimedRecord, "failed", error, params.warn);
       return;
     }
     if (refreshed.status === "error") {
-      const refreshFailure = refreshed.code === "bad_refresh_token" ? "expired" : "failed";
-      await settleGitHubOAuthRefreshRecord(
-        {
-          ...claimedRecord,
-          pendingRefresh: undefined,
-          refreshFailure,
-          ...(isRecoverableOAuthRefreshFailure(refreshed.failure)
-            ? { refreshClaim: undefined }
-            : {}),
-        },
+      await settleFailedGitHubOAuthRefresh(
         claimedRecord,
+        refreshed.code === "bad_refresh_token" ? "expired" : "failed",
+        refreshed.failure ?? refreshed.code,
+        params.warn,
       );
       return;
     }

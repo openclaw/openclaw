@@ -15,7 +15,10 @@ const oauthMocks = vi.hoisted(() => ({ inspect: vi.fn() }));
 
 // mock-isolation: Capture credential subprocess requests without executing host Git or gh.
 vi.mock("../process/exec.js", () => ({ runCommandBuffered: run }));
-vi.mock("./github-oauth-records.js", () => ({ inspectGitHubOAuthRecord: oauthMocks.inspect }));
+vi.mock("./github-oauth-records.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./github-oauth-records.js")>()),
+  inspectGitHubOAuthRecord: oauthMocks.inspect,
+}));
 
 import {
   installManagedGitHubProfile,
@@ -232,6 +235,33 @@ describe("GitHub tool identity", () => {
       expect(status.effective.refreshState).toBe(expected);
     },
   );
+
+  it.each([
+    ["a released failure", "failed", { refreshFailure: "failed" }],
+    ["an in-flight claim", "available", { refreshClaim: "00000000-0000-4000-8000-000000000001" }],
+    [
+      "a failure that kept its claim",
+      "expired",
+      { refreshFailure: "failed", refreshClaim: "00000000-0000-4000-8000-000000000001" },
+    ],
+  ] as const)("reports %s as %s", async (_name, expected, fields) => {
+    await writeProfile(profilePath(), "managed-token");
+    run.mockImplementation(async () => commandResult());
+    oauthMocks.inspect.mockReturnValue({
+      state: "valid",
+      record: {
+        profileId,
+        accessExpiresAtMs: Date.now() + 60_000,
+        refreshExpiresAtMs: Date.now() + 60_000,
+        scopes: ["offline_access", "repo"],
+        ...fields,
+      },
+    });
+
+    const status = await statusFor({ tools: { github: { profileId, kind: "oauth" } } });
+
+    expect(status.effective.refreshState).toBe(expected);
+  });
 
   it("reports a GitHub rate limit without exposing command diagnostics", async () => {
     vi.mocked(fetch).mockResolvedValue(
