@@ -26,6 +26,7 @@ import {
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import { installNativePluginMockGateway } from "../ui/src/test-helpers/control-ui-plugin-e2e.ts";
 import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
 import {
   mapControlUiAllocationProfile,
@@ -888,9 +889,12 @@ try {
                   return sessions.list(params).result;
                 },
               };
+              const installGateway = scenario.fixture?.workboardResources
+                ? installNativePluginMockGateway
+                : installMockGateway;
               const gateway = idleControl
                 ? undefined
-                : await installMockGateway(
+                : await installGateway(
                     page,
                     { ...fixture, awaitInitialRoster: false },
                     {
