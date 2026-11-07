@@ -41,7 +41,9 @@ async function serve(listener: Server): Promise<string> {
   const port = await listenOnLoopback(listener);
   closers.push(async () => {
     listener.closeAllConnections();
-    await new Promise((resolve) => listener.close(resolve));
+    await new Promise((resolve) => {
+      listener.close(resolve);
+    });
   });
   return `http://127.0.0.1:${port}`;
 }
