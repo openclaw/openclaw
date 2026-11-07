@@ -36,7 +36,7 @@ struct RootTabsSidebarRegressionTests {
             to: "@ViewBuilder\n    private func identified")
 
         #expect(revealButton.contains("self.identified(self.button.buttonStyle(.plain))"))
-        #expect(button.contains(".frame(width: 44, height: 44)"))
+        #expect(button.contains(".openClawToolbarHitTarget()"))
         #expect(button.contains(".contentShape(Rectangle())"))
         #expect(icon.contains(".foregroundStyle(OpenClawBrand.accent)"))
         #expect(!icon.contains(".glassEffect("))
@@ -177,7 +177,7 @@ struct RootTabsSidebarRegressionTests {
         #expect(footer.contains("self.selectSidebarDestination(.settings)"))
         #expect(footer.contains("RootTabs.Sidebar.Destination.settings"))
 
-        #expect(pages.contains("ForEach(pinnedSessionNodes)"))
+        #expect(pages.contains("ForEach(self.displayRows(pinnedSessionNodes))"))
         #expect(sessions.contains("section.id == \"recent\""))
         #expect(sessions.contains("String(localized: \"Sessions\")"))
         #expect(!sessions.contains("String(localized: \"Recent\")"))
