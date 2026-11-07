@@ -414,7 +414,9 @@ and registered on the provider. Return `false` only for a confirmed no-op
 Fast choice, `true` for an applicable local request mapping, or `undefined`
 when facts are missing. `ProviderFastModePolicyContext` carries the selected
 model, route, auth mode, runtime, request parameters and transport policy;
-credentials are not included. Share the policy with request construction.
+credentials are not included. An API key reports `authMode: "api_key"`
+whether it comes from an auth profile, provider config or the environment.
+Share the policy with request construction.
 The host publishes only `supportsFastMode`, preserving unknown behavior
 and clearing saved preferences. This describes local applicability, not
 upstream entitlement or fulfillment, and does not reject `/fast` commands.
