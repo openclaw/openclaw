@@ -87,7 +87,7 @@ The current PR body reports an executed installed Knowledge–LosslessClaw
 continuity fixture using pinned LosslessClaw 1.2.0: actual Gateway/plugin/disk
 save, public compaction, cold restart, grep recall, evidence, and replay after
 committed publication but before the final reply. That is newer bounded
-#186065 evidence, not merely fixture source. It uses a shared-owner identity and
+evidence for #186065, not merely fixture source. It uses a shared-owner identity and
 deterministic model I/O; the distinct-person checks are separate scenarios.
 These are the dependency author's reported results, not an execution by this PR.
 Neither draft is integrated proof of combined two-person private/shared recall.
