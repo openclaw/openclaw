@@ -1,5 +1,6 @@
 // Mock OpenAI-compatible server for broader E2E scenarios.
 import { createHash, randomUUID } from "node:crypto";
+import { errorMonitor } from "node:events";
 import { readFileSync } from "node:fs";
 import http from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
@@ -7,6 +8,7 @@ import { escapeRegExp } from "../lib/regexp.mjs";
 import { resolveAgentPluginBundleResponse } from "./lib/agent-plugin-bundle-response.mjs";
 import { readPositiveIntEnv, readTcpPortEnv } from "./lib/env-limits.mjs";
 import { readMockUserText, summarizeMockInferenceRequest } from "./lib/mock-inference-facts.ts";
+import { writeMockListenDiagnostic } from "./lib/mock-listen-diagnostic.mjs";
 import {
   boundedRequestLogBody,
   isRequestBodyTooLargeError,
@@ -1014,6 +1016,16 @@ const server = http.createServer((req, res) => {
   });
 });
 
+const diagnosticLaunch = process.env.OPENCLAW_MOCK_LISTEN_DIAGNOSTIC_LAUNCH;
+if (diagnosticLaunch) {
+  writeMockListenDiagnostic("before-listen", port, Number(diagnosticLaunch));
+  // errorMonitor observes without consuming the unhandled error or its exit.
+  server.on(errorMonitor, (error) => {
+    if (error.code === "EADDRINUSE") {
+      writeMockListenDiagnostic("EADDRINUSE", port, Number(diagnosticLaunch));
+    }
+  });
+}
 server.listen(port, bindHost, () => {
   const address = server.address();
   if (!address || typeof address === "string") {
