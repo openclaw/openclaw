@@ -368,10 +368,7 @@ export function createRuntimeConfigCapability(
     },
     ensureDisplayLoaded,
     refreshDisplay,
-    ensureLoaded: () =>
-      !editor && !state.configSnapshot && !displayRead && !canEnsureConfigRead(state)
-        ? Promise.resolve()
-        : read((loaded) => loaded.ensureLoaded()),
+    ensureLoaded: () => read((loaded) => loaded.ensureLoaded()),
     ensureSchemaLoaded: () => loadSchema(false).then(() => undefined),
     refresh: (options) => read((loaded) => loaded.refresh(options), options?.background),
     refreshSchema: () => loadSchema(true),
