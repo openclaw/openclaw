@@ -39,8 +39,14 @@ export function describeMSTeamsMessageTool({
     capabilities: enabled ? ["presentation"] : [],
     schema: enabled
       ? {
-          actions: ["unpin"],
+          actions: ["send", "unpin"],
           properties: {
+            topLevel: Type.Optional(
+              Type.Boolean({
+                description:
+                  'For action="send", start a new Teams channel post unless an explicit thread is addressed.',
+              }),
+            ),
             pinnedMessageId: Type.Optional(
               Type.String({
                 description:

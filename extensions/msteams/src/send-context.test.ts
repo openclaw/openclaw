@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MSTeamsConfig, OpenClawConfig } from "../runtime-api.js";
 import { msTeamsApprovalNativeRuntime } from "./approval-handler.runtime.js";
 import type { StoredConversationReference } from "./conversation-store.js";
-import { resolveMSTeamsSendContext } from "./send-context.js";
+import { isMSTeamsNewChannelPost, resolveMSTeamsSendContext } from "./send-context.js";
 import { sendMessageMSTeams } from "./send.js";
 import { createMSTeamsTestConfig } from "./setup.test-support.js";
 
@@ -137,7 +137,37 @@ beforeEach(() => {
   vi.unstubAllEnvs();
 });
 
+it.each(["channel", "groupChat", "personal"])(
+  "applies new-post limits only to a stored channel (%s)",
+  async (conversationType) => {
+    storedChannel({ conversation: { id: conversationId, conversationType } });
+    await expect(
+      isMSTeamsNewChannelPost({ accountId: "default", to: conversationId }),
+    ).resolves.toBe(conversationType === "channel");
+    expect(loadMSTeamsSdkWithAuth).not.toHaveBeenCalled();
+  },
+);
+
 describe("resolveMSTeamsSendContext", () => {
+  it("creates a proactive root without changing normal or explicit thread placement", async () => {
+    storedChannel({ threadId: "stored-root" });
+    const cfg = createConfig({ replyStyle: "thread" });
+
+    expect(await resolveContext(cfg, { topLevel: true })).toMatchObject({
+      replyStyle: "top-level",
+    });
+    expect(await resolveContext(cfg)).toMatchObject({
+      replyStyle: "thread",
+      threadActivityId: "stored-root",
+    });
+    expect(
+      await resolveContext(cfg, {
+        to: `conversation:${conversationId};messageid=explicit-root`,
+        topLevel: true,
+      }),
+    ).toMatchObject({ replyStyle: "thread", threadActivityId: "explicit-root" });
+  });
+
   it.each([
     ["a:personal-chat", "allow-once", "Allowed once"],
     ["a:personal-chat", "deny", "Denied"],

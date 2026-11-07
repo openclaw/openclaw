@@ -375,6 +375,26 @@ it.each([undefined, false])("queues prepared payloads (bestEffort: %s)", async (
   });
 });
 
+it("preserves prepared payloads when the caller requires durable core delivery", async () => {
+  const selected = plugin("direct", {
+    prepareSendPayload: ({ payload }) => ({
+      ...payload,
+      channelData: { prepared: true },
+    }),
+  });
+
+  await send({
+    channelPlugin: selected,
+    input: { forceCoreDelivery: true, requireQueuePersistence: true },
+  });
+
+  expect(mocks.dispatch).not.toHaveBeenCalled();
+  expectCall(mocks.send, {
+    queuePolicy: "required",
+    payloads: [expect.objectContaining({ channelData: { prepared: true } })],
+  });
+});
+
 it("dispatches plugin polls before attempting shared parsing", async () => {
   const resolveCorePoll = vi.fn(() => {
     throw new Error("shared poll fallback should not run");
