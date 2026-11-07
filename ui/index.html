@@ -1479,13 +1479,11 @@
       }
 
       .mount-fallback:not([data-recovery="stopped"]) .mount-fallback__mascot-claw-left {
-        animation: mount-fallback-pinch-left 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite
-          alternate;
+        animation: mount-fallback-pinch-left 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
       }
 
       .mount-fallback:not([data-recovery="stopped"]) .mount-fallback__mascot-claw-right {
-        animation: mount-fallback-pinch-right 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite
-          alternate;
+        animation: mount-fallback-pinch-right 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
       }
 
       .mount-fallback:not([data-recovery="stopped"]) .mount-fallback__mascot-eyes {
@@ -1871,7 +1869,9 @@
     >
       <div class="mount-fallback__shell" aria-hidden="true">
         <div class="mount-fallback__rail">
-          <span class="mount-fallback__rail-item"><span class="mount-fallback__rail-disc"></span></span>
+          <span class="mount-fallback__rail-item"
+            ><span class="mount-fallback__rail-disc"></span
+          ></span>
           <span class="mount-fallback__rail-create"
             ><span class="mount-fallback__rail-new"
               ><svg
@@ -2113,7 +2113,13 @@
               ><span class="mount-fallback__mascot-ground"></span
               ><svg class="mount-fallback__mascot-figure" viewBox="-2 2 124 112" focusable="false">
                 <defs>
-                  <linearGradient id="mount-fallback-mascot-shell" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <linearGradient
+                    id="mount-fallback-mascot-shell"
+                    x1="0%"
+                    y1="0%"
+                    x2="100%"
+                    y2="100%"
+                  >
                     <stop offset="0%" stop-color="#ff4d4d" />
                     <stop offset="100%" stop-color="#991b1b" />
                   </linearGradient>
@@ -2143,8 +2149,9 @@
                     <circle cx="45" cy="35" r="6" fill="#181A1F" />
                     <circle cx="75" cy="35" r="6" fill="#181A1F" />
                     <circle cx="46" cy="34" r="2.5" fill="#DDE2E9" opacity="0.82" />
-                    <circle cx="76" cy="34" r="2.5" fill="#DDE2E9" opacity="0.82" /></g
-                ></g></svg
+                    <circle cx="76" cy="34" r="2.5" fill="#DDE2E9" opacity="0.82" />
+                  </g>
+                </g></svg
             ></span>
             <h1 id="openclaw-mount-fallback-title">Control UI didn’t start</h1>
             <p id="openclaw-mount-fallback-summary">
