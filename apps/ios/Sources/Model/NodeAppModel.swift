@@ -4117,6 +4117,8 @@ extension NodeAppModel {
         else { return }
         guard let route = await self.operatorGateway.currentRoute() else { return }
         let scopes = await self.operatorGateway.currentOperatorScopes(ifCurrentRoute: route)
+        // Control UI pages build their URL when they appear after connect; admit the mount first.
+        await self.refreshControlUiBasePath(stableID: stableID, routeGeneration: routeGeneration)
         guard await self.operatorGateway.currentRoute() == route,
               !self.isLocalGatewayFixtureEnabled,
               self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID),
@@ -4942,6 +4944,17 @@ extension NodeAppModel {
               await self.operatorGateway.currentRoute(ifGatewayID: stableID) == route
         else { return }
         self.isDesktopObserveAvailable = supported
+    }
+
+    private func refreshControlUiBasePath(stableID: String, routeGeneration: UInt64) async {
+        guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID),
+              let route = await self.operatorGateway.currentRoute(ifGatewayID: stableID)
+        else { return }
+        let basePath = await self.operatorGateway.currentControlUiBasePath(ifCurrentRoute: route)
+        guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID),
+              await self.operatorGateway.currentRoute(ifGatewayID: stableID) == route
+        else { return }
+        self.activeGatewayConnectConfig?.controlUiBasePath = basePath
     }
 }
 
