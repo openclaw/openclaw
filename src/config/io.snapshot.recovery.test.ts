@@ -8,6 +8,7 @@ import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import { acquireStartupMigrationLeaseWithWait } from "../infra/startup-migration-checkpoint.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
+import * as stateReadOwner from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -109,6 +110,31 @@ async function recovery(io: ReturnType<typeof createConfigIO>) {
 }
 
 describe("prepared config recovery", () => {
+  it("prepares a plugin-bearing backup without synchronous shared-state reads", async () => {
+    const { root, configPath, original, io } = fixture();
+    const backup = JSON.stringify({
+      gateway: { mode: "local", port: 18720 },
+      plugins: { enabled: false },
+    });
+    fs.writeFileSync(`${configPath}.bak`, backup);
+    const current = await withArtifactPreservingStateReads(() => io.readConfigFileSnapshot());
+    clearPluginMetadataLifecycleCaches();
+    const read = vi
+      .spyOn(stateReadOwner, "withExistingOpenClawStateDatabaseReadOnly")
+      .mockImplementation(() => {
+        throw new Error(
+          "synchronous shared-state reads are unavailable on the Gateway main thread",
+        );
+      });
+    try {
+      const plan = await io.prepareConfigRecovery(current);
+      expect(plan?.snapshot.config.plugins).toMatchObject({ enabled: false });
+      expectUnchanged(root, configPath, original, backup);
+    } finally {
+      read.mockRestore();
+    }
+  });
+
   it.each(["sync", "async"] as const)(
     "prepares a canonical backup when migration metadata is unavailable (%s)",
     async (mode) => {

@@ -1,0 +1,2 @@
+# Prepared config recovery must keep plugin metadata reads off the Gateway main thread.
+26
