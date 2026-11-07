@@ -460,6 +460,14 @@ export const GatewayConfigSchema = z
         allow: z.array(z.string()).optional(),
       })
       .optional(),
+    /** Disabled by default: persisted global admission for wake-starting sessions_send traffic. */
+    sessionsSendWakeAdmission: z
+      .strictObject({
+        enabled: z.boolean().optional(),
+        limit: z.number().int().positive().optional(),
+        windowMs: z.number().int().positive().optional(),
+      })
+      .optional(),
     tailscale: z
       .strictObject({
         /** Tailscale exposure mode for the Gateway control UI. */

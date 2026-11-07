@@ -8,6 +8,7 @@ import { createAgentTurnService } from "../agent-turn/agent-turn-service.js";
 import { createAgentTurnIo } from "../agent-turn/io.js";
 import { captureAgentTurnPrincipal, resolveAgentTurnRunObserver } from "../agent-turn/principal.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
+import { admitSessionsSendWake } from "../sessions-send-wake-admission.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
@@ -61,6 +62,27 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
   const preflight = prepareAgentRequestPreflight({ request, context, client: principal, io });
   if (!preflight) {
     return;
+  }
+  // sessions_send notify never issues an agent RPC. Every sessions_send request
+  // that reaches this common agent boundary can create a recipient turn, so gate
+  // it here rather than in the tool wrapper where direct callers could bypass it.
+  if (
+    preflight.inputProvenance?.kind === "inter_session" &&
+    preflight.inputProvenance.sourceTool === "sessions_send"
+  ) {
+    const admission = admitSessionsSendWake({
+      config: preflight.cfg.gateway?.sessionsSendWakeAdmission,
+      request: {
+        idempotencyKey: preflight.runId,
+        sourceSessionKey: preflight.inputProvenance.sourceSessionKey,
+        targetSessionKey: preflight.request.sessionKey,
+        targetAgentId: preflight.request.agentId,
+      },
+    });
+    if (!admission.allowed) {
+      respond(false, undefined, `sessions_send wake rejected: ${admission.reason}`);
+      return;
+    }
   }
   const onRunObserved = resolveAgentTurnRunObserver({
     principal,
