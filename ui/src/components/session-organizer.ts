@@ -408,10 +408,17 @@ export class SessionOrganizer {
   }
 
   assignSessionCategory(session: SidebarRecentSession, category: string | null): Promise<void> {
-    return this.runOperation(
-      (operations, scope) => operations.assignSessionCategory(this.deps, session, category, scope),
-      true,
-    );
+    return this.runOperation(async (operations, scope) => {
+      const result = await operations.assignSessionCategory(this.deps, session, category, scope);
+      if (
+        result === "completed" &&
+        category &&
+        this.deps.sessionData.isSessionMutationScopeCurrent(scope) &&
+        this.collapsedSessionSections.has(`category:${category}`)
+      ) {
+        this.toggleSection(`category:${category}`);
+      }
+    }, true);
   }
 
   private sectionAcceptsSession(
