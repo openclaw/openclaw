@@ -112,32 +112,29 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
-const diagnosticMethods = [
-  "synthesize",
-  "streamSynthesize",
-  "synthesizeTelephony",
-  "listVoices",
-] as const;
-it.each(diagnosticMethods)("redacts %s diagnostics and keeps the code", async (operation) => {
-  const apiKey = "opaque-heygen-secret42";
-  respond(() =>
-    Response.json(
-      { error: { code: "unauthorized", message: `provider diagnostic ${apiKey}` } },
-      { status: 401, headers: { "x-request-id": "req-1" } },
-    ),
-  );
-  const error: unknown = await provider[operation]?.({
-    ...request,
-    providerConfig: { apiKey },
-    target: "audio-file",
-  }).catch((cause: unknown) => cause);
-  assert(error instanceof Error);
-  expect(formatErrorMessage(error)).not.toContain(apiKey);
-  expect(error.message).toContain("provider diagnostic");
-  expect(error.message).toContain("[code=unauthorized]");
-  expect(error.message).toContain("[request_id=req-1]");
-  expect(error).toMatchObject({ status: 401, statusCode: 401 });
-});
+it.each(["synthesize", "streamSynthesize", "synthesizeTelephony", "listVoices"] as const)(
+  "redacts %s diagnostics and keeps the code",
+  async (operation) => {
+    const apiKey = "opaque-heygen-secret42";
+    respond(() =>
+      Response.json(
+        { error: { code: "unauthorized", message: `provider diagnostic ${apiKey}` } },
+        { status: 401, headers: { "x-request-id": "req-1" } },
+      ),
+    );
+    const error: unknown = await provider[operation]?.({
+      ...request,
+      providerConfig: { apiKey },
+      target: "audio-file",
+    }).catch((cause: unknown) => cause);
+    assert(error instanceof Error);
+    expect(formatErrorMessage(error)).not.toContain(apiKey);
+    expect(error.message).toContain("provider diagnostic");
+    expect(error.message).toContain("[code=unauthorized]");
+    expect(error.message).toContain("[request_id=req-1]");
+    expect(error).toMatchObject({ status: 401, statusCode: 401 });
+  },
+);
 
 const mp3 = { encoding: "mp3", sample_rate_hertz: 44_100 };
 const pcm = { encoding: "pcm", sample_rate_hertz: 24_000 };
@@ -167,26 +164,55 @@ it.each([
   ).toEqual(audioBuffer);
 });
 
-it("applies configured settings, with directives taking precedence", async () => {
+it.each([
+  [
+    "directives over configured settings",
+    { language: "fr", modelId: "heygen-voice-1-turbo-free", speakerVoiceId: "configured-voice" },
+    { model: "heygen-voice-1", voiceId: "directive-voice" },
+    { voice_id: "directive-voice", model: "heygen-voice-1", language: "fr" },
+  ],
+  [
+    "a persona model",
+    { model: "heygen-voice-1-turbo", modelId: "heygen-voice-1" },
+    {},
+    { model: "heygen-voice-1" },
+  ],
+  ["a speaker voice directive", {}, { voice: "named-voice" }, { voice_id: "named-voice" }],
+])("applies %s", async (_name, providerConfig, providerOverrides, expected) => {
   respond((_url, init) => {
-    expect(JSON.parse(init?.body as string)).toMatchObject({
-      voice_id: "directive-voice",
-      model: "heygen-voice-1",
-      language: "fr",
-    });
+    expect(JSON.parse(init?.body as string)).toMatchObject(expected);
     return new Response(Buffer.from([1]), { headers: { "content-type": "audio/mpeg" } });
   });
   await provider.synthesize({
     ...request,
-    providerConfig: {
-      apiKey: "key",
-      language: "fr",
-      modelId: "heygen-voice-1-turbo-free",
-      speakerVoiceId: "configured-voice",
-    },
-    providerOverrides: { model: "heygen-voice-1", voiceId: "directive-voice" },
+    providerConfig: { ...request.providerConfig, ...providerConfig },
+    providerOverrides,
     target: "audio-file",
   });
+});
+
+it("keeps a long HTTP take alive while audio arrives", async () => {
+  const { fetchWithSsrFGuard } = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/ssrf-runtime")
+  >("openclaw/plugin-sdk/ssrf-runtime");
+  fetchMock.mockImplementation((params: Parameters<typeof fetchWithSsrFGuard>[0]) =>
+    fetchWithSsrFGuard({ ...params, policy: { allowPrivateNetwork: true } }),
+  );
+  const baseUrl = await serve(
+    createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "audio/mpeg" });
+      let sent = 0;
+      const timer = setInterval(() => {
+        response.write(Buffer.from([++sent]));
+        if (sent === 4) {
+          clearInterval(timer);
+          response.end();
+        }
+      }, 200);
+    }),
+  );
+  const result = await streamSpeech({ baseUrl }, { timeoutMs: 500 });
+  expect(await readAudio(result.audioStream)).toEqual(Buffer.from([1, 2, 3, 4]));
 });
 
 it("transcodes voice notes to Opus", async () => {
@@ -249,8 +275,31 @@ it.each([
     "malformed base64",
   ],
   ["a non-JSON frame", (client: WebSocket) => client.send("nope"), "JSON"],
-])("rejects %s before audio so core can fall back", async (_name, speak, message) => {
+])("rejects %s before audio", async (_name, speak, message) => {
   await expect(streamOverSocket(speak)).rejects.toThrow(message);
+});
+
+it.each([
+  [
+    "an error frame",
+    (client: WebSocket, apiKey: string) =>
+      client.send(JSON.stringify({ error: { message: `bad key ${apiKey}` } })),
+  ],
+  [
+    "a close reason",
+    (client: WebSocket, apiKey: string) => client.close(1008, `bad key ${apiKey}`),
+  ],
+])("redacts the API key from %s", async (_name, fail) => {
+  const apiKey = "opaque-heygen-secret42";
+  const { baseUrl } = await createSpeechServer((client) => fail(client, apiKey));
+  const error: unknown = await streamSpeech({
+    apiKey,
+    baseUrl,
+    streamTransport: "websocket",
+  }).catch((cause: unknown) => cause);
+  assert(error instanceof Error);
+  expect(error.message).toContain("bad key");
+  expect(error.message).not.toContain(apiKey);
 });
 
 it("rejects a silent socket at the timeout", async () => {
@@ -316,6 +365,16 @@ it("closes the socket on release", async () => {
   expect(await readAudio(result.audioStream)).toEqual(Buffer.from([1]));
 });
 
+it("closes the socket when the reader cancels", async () => {
+  const closed = createDeferred<number>();
+  const result = await streamOverSocket((client) => {
+    client.once("close", closed.resolve);
+    client.send(audio(1));
+  });
+  await result.audioStream.cancel();
+  await closed.promise;
+});
+
 const voice = (id: string, status = "ACTIVE") => ({
   voice_id: id,
   mode: "instant",
@@ -374,6 +433,7 @@ it("falls back to HEYGEN_API_KEY", async () => {
 
 it.each([
   ["voice", "v", { voiceId: "v" }],
+  ["voiceid", "v", { voiceId: "v" }],
   ["voice_id", "v", { voiceId: "v" }],
   ["model", "heygen-voice-1", { model: "heygen-voice-1" }],
 ] as const)("accepts %s=%s directives", (key, value, overrides) => {
@@ -382,4 +442,42 @@ it.each([
     handled: true,
     overrides,
   });
+});
+
+it("warns on an unknown model directive", () => {
+  const policy = createSpeechDirectivePolicy();
+  expect(provider.parseDirectiveToken?.({ key: "model", value: "nope", policy })).toEqual({
+    handled: true,
+    warnings: ['Error: invalid HeyGen model "nope"'],
+  });
+});
+
+it("layers Talk settings over the base TTS config", () => {
+  const baseTtsConfig = {
+    providers: {
+      heygen: {
+        apiKey: "base-key",
+        model: "heygen-voice-1",
+        speakerVoiceId: "base-voice",
+      },
+    },
+  };
+  expect(
+    provider.resolveTalkConfig?.({
+      cfg: {},
+      baseTtsConfig,
+      talkProviderConfig: { voiceId: "talk-voice" },
+      timeoutMs: 1_000,
+    }),
+  ).toMatchObject({ apiKey: "base-key", model: "heygen-voice-1", voiceId: "talk-voice" });
+});
+
+it("turns request settings into overrides", () => {
+  const resolve = (params: Record<string, unknown>) =>
+    provider.resolveTalkOverrides?.({ talkProviderConfig: {}, params });
+  expect(resolve({ voiceId: "v", modelId: "heygen-voice-1" })).toEqual({
+    voiceId: "v",
+    model: "heygen-voice-1",
+  });
+  expect(resolve({ speed: 1.2 })).toBeUndefined();
 });

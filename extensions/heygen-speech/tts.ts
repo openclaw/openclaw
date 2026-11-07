@@ -3,6 +3,7 @@ import { Readable } from "node:stream";
 import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { canonicalizeBase64, rawDataToString } from "openclaw/plugin-sdk/realtime-voice-provider";
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
+import { filterStringRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const HEYGEN_MODELS = [
   "heygen-voice-1",
@@ -20,7 +21,7 @@ const HEYGEN_VOICE_PAGE_SIZE = 100;
 const HEYGEN_MAX_OWN_VOICE_PAGES = 20;
 const HEYGEN_VOICES_MAX_BYTES = 2 * 1024 * 1024;
 
-export type HeyGenTtsRequest = {
+type HeyGenTtsRequest = {
   text: string;
   apiKey: string;
   baseUrl: string;
@@ -38,10 +39,21 @@ type HeyGenAudioStream = {
 
 type HeyGenOutputFormat = typeof HEYGEN_MP3_OUTPUT | typeof HEYGEN_PCM_OUTPUT;
 
+// The guard's timeout covers the whole body. A professional take renders for minutes.
+function refreshTimeoutOnEachChunk(response: Response, refreshTimeout?: () => void): Response {
+  const refresh = new TransformStream<Uint8Array, Uint8Array>({
+    transform: (chunk, controller) => {
+      refreshTimeout?.();
+      controller.enqueue(chunk);
+    },
+  });
+  return response.body ? new Response(response.body.pipeThrough(refresh), response) : response;
+}
+
 async function requestHeyGenTts(params: HeyGenTtsRequest, outputFormat: HeyGenOutputFormat) {
   const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
     await import("openclaw/plugin-sdk/ssrf-runtime");
-  return await fetchWithSsrFGuard({
+  const { response, release, refreshTimeout } = await fetchWithSsrFGuard({
     url: `${params.baseUrl}/v3/models/audio/tts/stream`,
     init: {
       method: "POST",
@@ -50,7 +62,7 @@ async function requestHeyGenTts(params: HeyGenTtsRequest, outputFormat: HeyGenOu
         text: params.text,
         voice_id: params.voiceId,
         model: params.model,
-        ...(params.language ? { language: params.language } : {}),
+        language: params.language,
         output_format: outputFormat,
       }),
     },
@@ -58,6 +70,7 @@ async function requestHeyGenTts(params: HeyGenTtsRequest, outputFormat: HeyGenOu
     policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(params.baseUrl),
     auditContext: "heygen.tts",
   });
+  return { response: refreshTimeoutOnEachChunk(response, refreshTimeout), release };
 }
 
 export async function heygenTts(
@@ -114,16 +127,10 @@ type HeyGenSocketFrame = {
 };
 
 function toFetchResponse(response: IncomingMessage): Response {
-  const headers = new Headers();
-  for (const [name, value] of Object.entries(response.headers)) {
-    if (value !== undefined) {
-      headers.set(name, String(value));
-    }
-  }
   // SAFETY: Node creates the global ReadableStream class here.
   return new Response(Readable.toWeb(response) as ReadableStream<Uint8Array>, {
     status: response.statusCode,
-    headers,
+    headers: filterStringRecord(response.headers),
   });
 }
 
@@ -138,9 +145,15 @@ export async function heygenSocketTtsStream(params: HeyGenTtsRequest): Promise<H
     url.searchParams.set("language", params.language);
   }
 
-  const { createProviderHttpError, formatProviderErrorPayload, openProviderWebSocket } =
-    await import("openclaw/plugin-sdk/provider-http");
+  const {
+    createProviderHttpError,
+    formatProviderErrorPayload,
+    openProviderWebSocket,
+    redactProviderResponseErrorText,
+  } = await import("openclaw/plugin-sdk/provider-http");
   const requestHeaders = { "x-api-key": params.apiKey };
+  const serverError = (text: string) =>
+    new Error(redactProviderResponseErrorText(text, requestHeaders));
   const socket = await openProviderWebSocket({
     allowPrivateNetwork: false,
     baseUrl: params.baseUrl,
@@ -196,14 +209,8 @@ export async function heygenSocketTtsStream(params: HeyGenTtsRequest): Promise<H
     const handleFrame = (frame: HeyGenSocketFrame) => {
       if (frame.error) {
         const requestId = frame.error.request_id;
-        finish(
-          new Error(
-            `${HEYGEN_ERROR_LABEL}: ${formatProviderErrorPayload(frame)}${
-              requestId ? ` [request_id=${requestId}]` : ""
-            }`,
-          ),
-        );
-        return;
+        const suffix = requestId ? ` [request_id=${requestId}]` : "";
+        throw serverError(`${HEYGEN_ERROR_LABEL}: ${formatProviderErrorPayload(frame)}${suffix}`);
       }
       if (frame.audio) {
         const audio = canonicalizeBase64(frame.audio);
@@ -243,7 +250,7 @@ export async function heygenSocketTtsStream(params: HeyGenTtsRequest): Promise<H
 
     socket.once("close", (code, reason) => {
       finish(
-        new Error(`HeyGen TTS stream closed before final audio (${code}): ${reason.toString()}`),
+        serverError(`HeyGen TTS stream closed before final audio (${code}): ${reason.toString()}`),
       );
     });
 

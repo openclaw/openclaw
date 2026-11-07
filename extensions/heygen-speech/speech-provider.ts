@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/speech-provider";
 import {
   asOptionalRecord,
+  filterStringRecord,
   normalizeOptionalString as trimToUndefined,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -65,7 +66,7 @@ function normalizeProviderConfig(rawConfig: Record<string, unknown>) {
       path: "tts.providers.heygen.apiKey",
     }),
     baseUrl: normalizeBaseUrl(raw?.baseUrl),
-    model: normalizeModel(raw?.model ?? raw?.modelId),
+    model: normalizeModel(raw?.modelId ?? raw?.model),
     voiceId: trimToUndefined(raw?.speakerVoiceId ?? raw?.voiceId) ?? DEFAULT_VOICE_ID,
     language: trimToUndefined(raw?.language),
     streamTransport: normalizeStreamTransport(raw?.streamTransport),
@@ -82,10 +83,17 @@ function resolveApiKey(configValue?: string): string | undefined {
   return resolveSpeechProviderApiKey(configValue, process.env.HEYGEN_API_KEY);
 }
 
-const parseDirectiveToken = createSpeechDirectiveParser({
-  voiceId: ["allowVoice", ["voice", "voice_id", "heygen_voice"]],
-  model: ["allowModelId", ["model", "heygen_model"]],
-});
+const parseDirectiveToken = createSpeechDirectiveParser(
+  {
+    voiceId: ["allowVoice", ["voice", "voiceid", "voice_id", "heygen_voice"]],
+    model: [
+      "allowModelId",
+      ["model", "heygen_model"],
+      { value: (ctx) => normalizeModel(ctx.value) },
+    ],
+  },
+  { formatErrorMessage: String },
+);
 
 async function resolveSynthesisRequest(req: Omit<SpeechSynthesisRequest, "target">) {
   const config = readProviderConfig(req.providerConfig);
@@ -100,8 +108,8 @@ async function resolveSynthesisRequest(req: Omit<SpeechSynthesisRequest, "target
     text: req.text,
     apiKey,
     baseUrl: config.baseUrl,
-    voiceId: trimToUndefined(overrides.voiceId) ?? config.voiceId,
-    model: trimToUndefined(overrides.model) ? normalizeModel(overrides.model) : config.model,
+    voiceId: trimToUndefined(overrides.voiceId ?? overrides.voice) ?? config.voiceId,
+    model: normalizeModel(trimToUndefined(overrides.model) ?? config.model),
     language: config.language,
     streamTransport: config.streamTransport,
     timeoutMs: req.timeoutMs,
@@ -121,6 +129,13 @@ export function buildHeyGenSpeechProvider(): SpeechProviderPlugin {
     models: HEYGEN_MODELS,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     parseDirectiveToken,
+    resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) =>
+      readProviderConfig({ ...normalizeProviderConfig(baseTtsConfig), ...talkProviderConfig }),
+    resolveTalkOverrides: ({ params }) =>
+      filterStringRecord({
+        voiceId: trimToUndefined(params.voiceId),
+        model: trimToUndefined(params.modelId ?? params.model),
+      }),
     listVoices: async (req) => {
       const config = readProviderConfig(req.providerConfig ?? {});
       const apiKey = resolveApiKey(trimToUndefined(req.apiKey) ?? config.apiKey);

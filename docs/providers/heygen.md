@@ -48,7 +48,7 @@ openclaw plugins install @openclaw/heygen-speech
 | `baseUrl`         | string                    | HeyGen API URL. Trailing slashes stripped. Default `https://api.heygen.com`. |
 | `model`           | string                    | One of the [models](#models) below.                                          |
 | `speakerVoiceId`  | string                    | Default voice id. Alias: `voiceId`.                                          |
-| `language`        | string                    | Optional language code such as `en`.                                         |
+| `language`        | string                    | Optional base code such as `en`. Regional codes such as `en-US` fail.        |
 | `streamTransport` | `"http"` \| `"websocket"` | How streamed playback reaches HeyGen. Default `http`.                        |
 
 ## Models
@@ -61,7 +61,7 @@ openclaw plugins install @openclaw/heygen-speech
 
 ## Voices
 
-OpenClaw lists your workspace voices first, then a page of public voices. When the speech policy allows overrides, directive tokens select a voice or model: `voice`, `voice_id`, `heygen_voice`, `model`, and `heygen_model`.
+OpenClaw lists your workspace voices first, then a page of public voices. When the speech policy allows overrides, directive tokens select a voice or model: `voice`, `voiceId`, `voice_id`, `heygen_voice`, `model`, and `heygen_model`.
 
 The provider does not create voices. To create an instant clone, call `POST /v3/models/audio/voices` with `mode: "instant"`, then set the returned `data.voice_id` as `speakerVoiceId`. The [plugin README](https://github.com/openclaw/openclaw/tree/main/extensions/heygen-speech) has an example.
 
