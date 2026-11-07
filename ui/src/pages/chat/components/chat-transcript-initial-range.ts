@@ -186,23 +186,12 @@ export class TranscriptInitialRange {
     if (this.viewportOnly) {
       return this.normalRange({ ...range, overscan: 0 }, this.rowIndexes);
     }
-    if (
-      this.isReaderMoving() &&
-      this.scrollSample.distance >= (this.virtualizer().scrollRect?.height ?? 600)
-    ) {
-      // The first row starts at its cached offset. Shorter arriving rows leave
-      // space after the window, so retain following overscan without mounting
-      // the already-skipped preceding neighbour during a large jump.
-      return this.normalRange(
-        {
-          ...range,
-          endIndex: Math.min(range.count - 1, range.endIndex + range.overscan),
-          overscan: 0,
-        },
-        this.rowIndexes,
-      );
-    }
-    return this.normalRange(range, this.rowIndexes);
+    // Start lookahead with reader motion, before the first large step can expose
+    // unpainted rows. Keep both sides while arriving row estimates settle.
+    return this.normalRange(
+      { ...range, overscan: this.isReaderMoving() ? 6 : range.overscan },
+      this.rowIndexes,
+    );
   }
 
   private endIndexes(): number[] {
@@ -304,13 +293,13 @@ export class TranscriptInitialRange {
     return true;
   }
 
-  finish(viewportOnly = false): void {
+  finish(viewportOnly = false, readerStarted = false): void {
     const changed = this.viewportOnly !== viewportOnly;
     this.pending = false;
     // Boot placement can precede the native extent; only reader navigation
     // releases its anchor to subsequent native-offset measurements.
     this.viewportOnly = viewportOnly;
-    if (!this.tailRows && !changed) {
+    if (!this.tailRows && !changed && !readerStarted) {
       return;
     }
     // The measured viewport stays adaptive; offscreen rows wait for reader navigation.
@@ -358,6 +347,7 @@ export class TranscriptInitialRange {
   }
 
   recordReaderMovement(delta: number): void {
+    const starting = !this.isReaderMoving();
     this.idleStep = 1;
     this.idleMeasureStep = 1;
     const now = performance.now();
@@ -368,7 +358,8 @@ export class TranscriptInitialRange {
       velocity: previous.time ? Math.abs(delta) / Math.max(16, now - previous.time) : 0,
       direction: Math.sign(delta),
     };
-    this.finish();
+    // Motion changes overscan even when the visible row indexes stay put.
+    this.finish(false, starting);
   }
 
   readonly measureElement = (
