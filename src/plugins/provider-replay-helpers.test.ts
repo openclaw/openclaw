@@ -49,10 +49,21 @@ describe("provider replay helpers", () => {
       applyAssistantFirstOrderingFix: completion,
       validateGeminiTurns: completion,
       validateAnthropicTurns: completion,
-      ...(!completion ? { allowSyntheticToolResults: true } : {}),
+      ...(!completion ? { allowSyntheticToolResults: true, appendOnlyRuntimeContext: true } : {}),
     });
     expect(policy).not.toHaveProperty("sanitizeToolCallIds");
     expect(policy).not.toHaveProperty("toolCallIdMode");
+  });
+
+  it("enables appendOnlyRuntimeContext for OpenAI-compatible Responses family by default", () => {
+    expect(openAI("openai-responses")).toMatchObject({
+      allowSyntheticToolResults: true,
+      appendOnlyRuntimeContext: true,
+    });
+    expect(openAI("openai-responses", { appendOnlyRuntimeContext: false })).toMatchObject({
+      allowSyntheticToolResults: true,
+      appendOnlyRuntimeContext: false,
+    });
   });
 
   it("selects OpenAI-style ids for duplicate replay tool calls", () => {
