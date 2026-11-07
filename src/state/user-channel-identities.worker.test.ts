@@ -3,9 +3,17 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
-import { listUserChannelIdentitiesInDatabase } from "./user-channel-identities.js";
+import {
+  configuredCommandOwnerPolicyFingerprint,
+  isUserChannelPolicyUnchanged,
+  listUserChannelIdentitiesInDatabase,
+  resolveUserChannelAuthorizationPolicy,
+} from "./user-channel-identities.js";
 import { executeUserChannelIdentityChange } from "./user-channel-identities.worker.js";
 import { useProfileDatabase } from "./user-profiles-fixture.test-support.js";
+
+const OWNERS_HASH = configuredCommandOwnerPolicyFingerprint(["owner@example.test"]);
+const OTHER_HASH = configuredCommandOwnerPolicyFingerprint(["other@example.test"]);
 import { ensureProfileForEmail } from "./user-profiles.js";
 
 const { options } = useProfileDatabase("channel-admission-");
@@ -87,4 +95,55 @@ it.each(
   expect(Object.values(counts)).toEqual(outcome === "exhaust" ? [3, 3, 2] : [2, 1, 1]);
   expect(database.db.isTransaction).toBe(false);
   assertCheckpoint();
+});
+
+it("skips the write transaction when the startup policy is unchanged", () => {
+  const database = openOpenClawStateDatabase(options);
+  const admission = operationAdmission.createSqliteWorkerOperationAdmission((_request, grant) =>
+    grant(),
+  );
+  using cleanup = new DisposableStack();
+  cleanup.defer(() => admission.finish());
+  const postMessage = admission.port.postMessage.bind(admission.port);
+  const stages: string[] = [];
+  vi.spyOn(admission.port, "postMessage").mockImplementation((message, transferList) => {
+    if (isRecord(message) && (message.stage === "transaction" || message.stage === "commit")) {
+      stages.push(message.stage);
+    }
+    postMessage(message, transferList);
+  });
+  vi.spyOn(Atomics, "wait").mockImplementation(() => {
+    admission.service();
+    return "ok";
+  });
+  const policy = resolveUserChannelAuthorizationPolicy(undefined);
+  operationAdmission.withSqliteWorkerOperationAdmission({ port: admission.port }, () => {
+    expect(
+      executeUserChannelIdentityChange(
+        { action: "policy", policy, configuredOwnersHash: OWNERS_HASH },
+        { ...options, database },
+      ),
+    ).toEqual({ ok: true, value: { kind: "policy" } });
+    stages.length = 0;
+    // Same policy and owner fingerprint: the republication is a read, not a write.
+    expect(
+      executeUserChannelIdentityChange(
+        { action: "policy", policy, configuredOwnersHash: OWNERS_HASH },
+        { ...options, database },
+      ),
+    ).toEqual({ ok: true, value: { kind: "policy" } });
+    expect(stages).toEqual([]);
+    expect(isUserChannelPolicyUnchanged(database.db, policy, OWNERS_HASH)).toBe(true);
+    expect(
+      isUserChannelPolicyUnchanged(
+        database.db,
+        resolveUserChannelAuthorizationPolicy({
+          auth: { identityScopes: { main: ["operator.read"] } },
+        }),
+        OWNERS_HASH,
+      ),
+    ).toBe(false);
+    expect(isUserChannelPolicyUnchanged(database.db, policy, OTHER_HASH)).toBe(false);
+    expect(isUserChannelPolicyUnchanged(database.db, policy, undefined)).toBe(false);
+  });
 });
