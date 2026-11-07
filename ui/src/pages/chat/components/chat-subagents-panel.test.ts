@@ -562,8 +562,12 @@ it("retains failure feedback when a manual-unread fence returns an unchanged rec
   mark()!.click();
   await waitForSolid(() => expect(toast.toasts[0]?.options.severity).toBe("error"));
   // sessions.patch returns ok with the unchanged entry when a newer manual marker wins.
-  const stale = failed("a", { markedUnreadAt: 30, lastReadAt: 5 });
-  const patch = vi.spyOn(f.sessions, "patch").mockResolvedValueOnce(patchReceipt(stale.key, stale));
+  const stale = patchReceipt(failed("a").key, {
+    sessionId: "session-a",
+    markedUnreadAt: 30,
+    lastReadAt: 5,
+  });
+  const patch = vi.spyOn(f.sessions, "patch").mockResolvedValueOnce(stale);
   mark()!.click();
   await waitForSolid(() => expect(patch).toHaveBeenCalledOnce());
   await patch.mock.results[0]!.value;
