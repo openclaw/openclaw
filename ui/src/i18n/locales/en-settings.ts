@@ -1433,6 +1433,41 @@ const enSettings = {
     },
   },
   configPage: {
+    gatewayAuth: {
+      title: "Authentication",
+      description:
+        "How browsers and clients sign in to this Gateway. Changes here wait for Apply, so a half-finished change never signs you out.",
+      mode: "Authentication mode",
+      pendingDescription: "Not applied yet. The Gateway keeps its current mode until you apply.",
+      token: "Gateway token",
+      tokenDescription: "Shared secret clients send to connect in token mode.",
+      tokenPlaceholder: "Enter a token",
+      password: "Gateway password",
+      passwordDescription: "Shared secret clients send to connect in password mode.",
+      passwordPlaceholder: "Enter a password",
+      savedSecretPlaceholder: "Saved. Type to replace it.",
+      showSecret: "Show",
+      hideSecret: "Hide",
+      toggleSecret: "Show or hide the secret",
+      userHeader: "User identity header",
+      userHeaderPlaceholder: "x-forwarded-user",
+      userHeaderDescription:
+        "Header your proxy sets to the signed-in user. Applying trusted-proxy mode removes a saved Gateway token.",
+      noneTitle: "No sign-in",
+      noneDescription: "Anyone who can reach this Gateway can use it without a secret.",
+      unsaved: "Unsaved changes",
+      cancel: "Cancel",
+      apply: "Apply",
+      applying: "Applying…",
+      applyFailed: "Authentication settings were not applied. Your current settings are unchanged.",
+      issues: {
+        tokenRequired: "Enter a token to use token authentication.",
+        passwordRequired: "Enter a password to use password authentication.",
+        userHeaderRequired: "Enter the header your proxy uses for the signed-in user.",
+        trustedProxiesRequired:
+          "Add your proxy's address under Trusted proxy CIDRs before applying.",
+      },
+    },
     deviceSettings: {
       appOnly: "These settings are only available inside the OpenClaw app.",
       loading: "Loading app settings…",
