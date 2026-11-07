@@ -118,6 +118,7 @@ function MobileRow(props: {
       <Show when={props.item.dismiss}>
         {(dismiss) => (
           <IconButton
+            glyph="row"
             icon="check"
             label={dismiss().label}
             tooltip={false}

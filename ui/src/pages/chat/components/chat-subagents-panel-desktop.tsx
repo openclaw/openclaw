@@ -189,6 +189,7 @@ function DesktopRow(props: {
       <Show when={group() === "failed" && props.canDismiss(props.row)}>
         <IconButton
           size={28}
+          glyph="row"
           icon="check"
           label={t("chat.subagentsPanel.markFailureRead", { name: name() })}
           tooltip={false}
