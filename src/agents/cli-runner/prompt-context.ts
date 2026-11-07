@@ -128,7 +128,6 @@ export async function prepareCliTurnPromptContext(
     .filter((value): value is string => Boolean(value?.trim()))
     .join("\n\n");
   try {
-    const { resolveSystemPromptUsage } = await import("./helpers.js");
     const [mediaTaskContext] = await settleCurrentReadPreparations([
       buildMediaTaskRuntimeContext({
         capabilityToolNames: params.capabilityToolNames,
@@ -157,11 +156,8 @@ export async function prepareCliTurnPromptContext(
           sessionStatusAvailable: params.capabilityToolNames.has("session_status"),
         }),
       ),
+      buildActiveNodeContextText(params.requesterProfileId),
       mediaTaskMessage ? labelRuntimeContextText(mediaTaskMessage.content) : undefined,
-      // Native-prompt owners and first-only resumes do not receive the current runtime line.
-      resolveSystemPromptUsage({ ...params, systemPrompt })
-        ? undefined
-        : buildActiveNodeContextText(params.requesterProfileId),
     ]
       .filter((value): value is string => Boolean(value?.trim()))
       .join("\n\n");

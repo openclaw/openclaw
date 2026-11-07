@@ -126,7 +126,6 @@ export function buildCliAgentSystemPrompt(params: {
     preparedRepoRoot: params.preparedRepoRoot,
     preparedGitCoauthorPrompt: params.preparedGitCoauthorPrompt,
     preparedSessionEntry: params.preparedSessionEntry,
-    requesterProfileId: params.requesterProfileId,
     runtime: {
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,

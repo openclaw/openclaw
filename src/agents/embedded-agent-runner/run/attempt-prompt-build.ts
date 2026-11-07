@@ -6,6 +6,10 @@ import { createRuntimeConfigReader } from "../../../config/runtime-snapshot.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
 import { logDecisionToolPrefilter } from "../../../decisions/diagnostics.js";
 import {
+  buildActiveNodeContextText,
+  prepareActiveNodeContext,
+} from "../../../infra/active-node-context.js";
+import {
   type DiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
@@ -13,7 +17,10 @@ import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js
 import { buildInterSessionPromptContext } from "../../../sessions/input-provenance.js";
 import { getUserTurnTranscriptAdmissionOwner } from "../../../sessions/user-turn-transcript-admission.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
-import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import {
+  readAdmittedRunOperatorAuthority,
+  resolveAdmittedRunActiveAssertion,
+} from "../../admitted-run-context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import {
   buildAgentInternalEventContext,
@@ -377,7 +384,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   appendOnlyRuntimeContext?: boolean;
   executionHost?: boolean;
   inHistorySystemUpdates?: boolean;
-  attempt: PromptContextAttempt;
+  attempt: PromptContextAttempt & Partial<Pick<EmbeddedRunAttemptParams, "admittedRunContext">>;
   capabilityToolNames: ReadonlySet<string>;
   boundaryTimezone?: string;
   includeBoundaryTimestamp: boolean;
@@ -506,7 +513,23 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
         .filter((text): text is string => Boolean(text?.trim()))
         .map((text) => ({ kind: "runtime-instruction", text }))
     : [];
-  const contextFragments = [...fragments, ...runtimeFacts, ...fallbackHookFragments];
+  // Presence flips mid-conversation, so it rides the current turn rather than a cached prefix.
+  const activeNodeFragments: RuntimeContextFragment[] = [];
+  if (!input.isRawModelRun && attempt.operation !== "settled-tool-finalization") {
+    const profileId = readAdmittedRunOperatorAuthority(attempt.admittedRunContext)?.profileId;
+    // The hint is synchronous, so a revoked pairing must refresh under this requester's key first.
+    await prepareActiveNodeContext(profileId);
+    activeNodeFragments.push({
+      kind: "conversation-data",
+      text: buildActiveNodeContextText(profileId),
+    });
+  }
+  const contextFragments = [
+    ...fragments,
+    ...runtimeFacts,
+    ...activeNodeFragments,
+    ...fallbackHookFragments,
+  ];
   const runtimeContextForHook = joinPresentTextSegments(
     contextFragments.map((fragment) => fragment.text),
   );

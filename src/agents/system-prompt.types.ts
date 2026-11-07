@@ -21,8 +21,6 @@ export type SystemPromptRuntimeInfo = {
   capabilities?: string[];
   customInlineButtonHint?: boolean;
   repoRoot?: string;
-  activeNode?: string;
-  activeNodeIdentity?: "requester" | "unknown";
   /** Blind spawned child: the prompt omits its model, agent/session identity and workspace path. */
   blind?: boolean;
 };
