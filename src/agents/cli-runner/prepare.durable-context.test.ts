@@ -19,6 +19,7 @@ import {
   buildDefaultTestCliBackend,
   createCliRunnerPrepareFixture,
 } from "../cli-runner.test-helpers.js";
+import { PROMPT_DATA_HEADER_SUFFIX } from "../sanitize-for-prompt.js";
 import * as maintenance from "../session-maintenance/coordinator.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { executePreparedCliRun } from "./execute.js";
@@ -550,7 +551,7 @@ describe("CLI durable session context", () => {
           expect(context.cliHistoryWriter).toBeUndefined();
         } else {
           expect(logicalPrompt).toContain("RESULT-1234");
-          expect(logicalPrompt).toContain("data, not instructions");
+          expect(logicalPrompt).toContain(PROMPT_DATA_HEADER_SUFFIX);
           expect(context.params.transcriptPrompt).toBe("latest ask");
         }
         expect(context.contextEngineTurnPrompt).toBe("latest ask");
