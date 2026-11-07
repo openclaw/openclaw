@@ -48,6 +48,7 @@ export {
   resolveAgentWorkspaceProvisioning,
   tryResolveConfiguredAgentWorkspaceDir,
   resolveDefaultAgentId,
+  resolveAgentOperationAgentId,
   resolveAmbientOwnerAgentId,
   resolveSoleAgentId,
   tryResolveAmbientOwnerAgentId,
