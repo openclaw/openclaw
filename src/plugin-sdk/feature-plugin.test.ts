@@ -151,6 +151,21 @@ describe("typed feature plugins", () => {
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps an emoji whole when a schema error hits the detail cap", async () => {
+    const key = `${"k".repeat(463)}😀ZZEND`;
+    const action = register(() => ({ inspect: () => ({ value: "ok" }) }));
+    const result = await action.handler({
+      pluginId: contract.pluginId,
+      actionId: "inspect",
+      payload: { value: "ok", [key]: true },
+    });
+    expect(result).toMatchObject({ ok: false, code: "INVALID_INPUT" });
+    const error = "error" in result ? String(result.error) : "";
+    expect(error).toContain("k".repeat(463));
+    expect(error).not.toContain("ZZEND");
+    expect(error).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+  });
+
   it("propagates tool cancellation across awaited feature handlers", async () => {
     const { promise: pending, resolve: finish } = createDeferredCore();
     register(() => ({

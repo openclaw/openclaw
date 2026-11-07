@@ -1,4 +1,5 @@
 /** Registers typed feature operations on existing host-owned tools, commands, and actions. */
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { TSchema } from "typebox";
 import type { AgentToolUpdateCallback } from "../agents/runtime/index.js";
 import { jsonResult } from "../agents/tools/common.js";
@@ -92,13 +93,11 @@ function validateFeatureValue(
     value,
   });
   if (!validation.ok) {
-    const detail = validation.errors
-      .map((error) => error.text)
-      .join("; ")
-      .slice(0, 512);
+    const detail = validation.errors.map((error) => error.text).join("; ");
+    const bounded = truncateUtf16Safe(detail, 512);
     throw new FeatureValidationError(
       code,
-      `Feature ${direction} does not match its schema: ${detail}`,
+      `Feature ${direction} does not match its schema: ${bounded}`,
     );
   }
   return value;
