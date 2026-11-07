@@ -422,8 +422,7 @@ export function createPluginsPage(options: {
     routeDataConsumed = true;
     const detailPluginId = surface === "settings" ? activeRoutePluginId() : null;
     const catalogId = surface === "discovery" ? activeRoutePluginId() : null;
-    // Route location is UI state, not Gateway data. Apply it even when the
-    // catalog snapshot is stale so deep links do not fall back to Installed.
+    // Navigation stays usable before Gateway reads settle, including deep links.
     if (surface === "settings" && !detailPluginId) {
       setSettingsTab(
         new URLSearchParams(data.location.search).get("tab") === "advanced"
@@ -441,15 +440,6 @@ export function createPluginsPage(options: {
     }
     if (readAccess === false) {
       return;
-    }
-    if (gateway.isRouteDataCurrent(data)) {
-      // Route loading can complete after publication on the same connection.
-      if (pluginGeneration !== undefined && (data.result?.generation ?? -1) < pluginGeneration) {
-        void refreshCatalog();
-      } else {
-        replaceResult(data.result);
-        setState({ error: data.error });
-      }
     }
     if (surface === "settings" && detailPluginId !== state.detail?.pluginId) {
       void showDetails(detailPluginId);
@@ -502,9 +492,8 @@ export function createPluginsPage(options: {
     }
     setState({ messages: consent.reconcileInstallMessages(result) });
     setState({ result });
-    // Both route loading and explicit refreshes publish the installed inventory.
-    // Retire any earlier catalog request before resolving its local identity.
-    if (result && surface === "discovery") {
+    // Detail selection needs the installed identity before choosing its local reader.
+    if (result && surface === "discovery" && activeRoutePluginId()) {
       void refreshDiscovery();
     }
   }
@@ -529,11 +518,11 @@ export function createPluginsPage(options: {
     }
     // Category navigation needs neither installed inventory nor catalog cards.
     // Start it as soon as this discovery page has a connection, even while the
-    // route's plugins.list request is pending.
+    // installed inventory request is pending.
     if (surface === "discovery" && !activeRoutePluginId()) {
       void discovery.ensureCategories();
     }
-    // The route owns initial loading; a warm page module can render before its data arrives.
+    // The route admits location and scope before the page starts its reads.
     if (!routeDataConsumed || !gateway.connected || !gateway.client) {
       return;
     }
@@ -558,6 +547,10 @@ export function createPluginsPage(options: {
       return;
     }
     setState({ error: null });
+    // Browsing carries its own local facts; inventory authority only gates mutations.
+    if (surface === "discovery" && !activeRoutePluginId()) {
+      void discovery.refresh();
+    }
     const promise = catalogTask.run([client]);
     void setCatalog(promise);
     await promise;
@@ -625,6 +618,9 @@ export function createPluginsPage(options: {
   function applyMutationResult(result: PluginMutationResult) {
     icons.installed.invalidate(result.plugin.id);
     replaceResult(mergePluginCatalogItem(state.result, result.plugin));
+    if (surface === "discovery" && !activeRoutePluginId()) {
+      void discovery.refresh();
+    }
   }
 
   function closeCatalogDetail() {

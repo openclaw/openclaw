@@ -26,7 +26,11 @@ import { PluginsPage } from "./plugins-page.tsx";
 import type { PluginsRouteData } from "./route-data.ts";
 import type { DetailProps } from "./settings-view.tsx";
 
-type RequestHandler = (method: string, params: unknown) => Promise<unknown>;
+type RequestHandler = (
+  method: string,
+  params: unknown,
+  options?: Parameters<GatewayBrowserClient["request"]>[2],
+) => Promise<unknown>;
 
 const PLUGINS_GATEWAY_HELLO = gatewayHelloForMethods([
   "config.set",
@@ -208,20 +212,39 @@ export function createPluginsRouteLocation(url = "/settings/plugins"): RouteLoca
   };
 }
 
+const routeInventories = new WeakMap<PluginsRouteData, PluginListResult>();
+const nextInventories = new WeakMap<GatewayBrowserClient, PluginListResult>();
+
 export function createPluginsRouteData(
   gateway: ApplicationGateway,
   result: PluginListResult | null = createResult(),
   location = createPluginsRouteLocation(),
 ): PluginsRouteData {
-  return { gateway, gatewaySnapshot: gateway.snapshot, location, result, error: null };
+  const data = { gateway, gatewaySnapshot: gateway.snapshot, location };
+  if (result) {
+    routeInventories.set(data, result);
+  }
+  return data;
 }
 
 export function createClient(handler: RequestHandler) {
   const request = vi.fn(handler);
-  return {
-    client: { request, addEventListener: () => () => {} } as unknown as GatewayBrowserClient,
-    request,
-  };
+  const client = {
+    request(
+      method: string,
+      params: unknown,
+      ...options: [] | [Parameters<GatewayBrowserClient["request"]>[2]]
+    ) {
+      const inventory = nextInventories.get(client);
+      if (method === "plugins.list" && inventory) {
+        nextInventories.delete(client);
+        return Promise.resolve(inventory);
+      }
+      return request(method, params, ...options);
+    },
+    addEventListener: () => () => {},
+  } as unknown as GatewayBrowserClient;
+  return { client, request };
 }
 
 function createSnapshot(
@@ -460,6 +483,15 @@ export async function mountPage(
     ? "settings"
     : "discovery",
 ): Promise<{ page: TestPluginsPage }> {
+  function supplyInventory(data: PluginsRouteData | undefined) {
+    const client = data?.gatewaySnapshot.client;
+    const inventory = data && routeInventories.get(data);
+    if (client && inventory) {
+      nextInventories.set(client, inventory);
+    }
+    return () => client && nextInventories.delete(client);
+  }
+  const clearInitialInventory = supplyInventory(routeData);
   const provider = createSolidApplicationContextProvider(context);
   const [currentRouteData, setRouteData] = createSignal(routeData);
   const [currentSurface, setSurface] = createSignal(surface);
@@ -478,12 +510,21 @@ export async function mountPage(
     },
   );
   await settlePlugins();
+  clearInitialInventory();
   const page = mounted.container.querySelector("openclaw-plugins-page") as TestPluginsPage;
   if (!page) {
     throw new Error("Plugins page did not render its host element");
   }
   Object.defineProperties(page, {
-    routeData: { get: currentRouteData, set: setRouteData },
+    routeData: {
+      get: currentRouteData,
+      set: (data: PluginsRouteData) => {
+        const clearInventory = supplyInventory(data);
+        setRouteData(data);
+        flush();
+        clearInventory();
+      },
+    },
     surface: { get: currentSurface, set: setSurface },
     updateComplete: { get: settlePlugins },
   });

@@ -122,17 +122,13 @@ it("keeps skills provenance from before its async preload", async () => {
   expect(data.agents).toBe(agents);
 });
 
-it("keeps plugins provenance from before its async preload", async () => {
-  const result = { plugins: [], diagnostics: [], mutationAllowed: true };
-  const response = deferred<typeof result>();
-  const requestMethod = vi.fn(() => response.promise);
+it("captures plugins provenance without waiting for its inventory", async () => {
+  const requestMethod = vi.fn(async () => ({}));
   const source = provenance(requestMethod);
   const request = source.load(pluginPages[0]);
 
   source.replace();
-  response.resolve(result);
-  const data = await request;
+  await request;
 
-  expect(requestMethod).toHaveBeenCalledWith("plugins.list", {});
-  expect(data.result).toEqual(result);
+  expect(requestMethod).not.toHaveBeenCalled();
 });

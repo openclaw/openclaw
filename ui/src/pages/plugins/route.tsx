@@ -7,33 +7,12 @@ import {
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
-import { formatUiError } from "../../lib/format-error.ts";
-import { loadPluginCatalog } from "../../lib/plugins/index.ts";
 import {
   canonicalPluginsRouteLocation,
   pluginSettingsNeedsSchema,
   pluginsRouteLocation,
   type PluginsRouteData,
 } from "./route-data.ts";
-
-async function loadPluginsRouteData(
-  context: ApplicationContext,
-  options: RouteLoaderOptions,
-): Promise<PluginsRouteData> {
-  const location = pluginsRouteLocation(options.location);
-  const gateway = context.gateway;
-  const gatewaySnapshot = gateway.snapshot;
-  const client = gatewaySnapshot.client;
-  const data: PluginsRouteData = { gateway, gatewaySnapshot, result: null, error: null, location };
-  if (gatewaySnapshot.phase === "connected" && client) {
-    try {
-      data.result = await loadPluginCatalog(client);
-    } catch (error) {
-      data.error = formatUiError(error);
-    }
-  }
-  return data;
-}
 
 type PluginsSurface = "discovery" | "settings";
 
@@ -60,7 +39,12 @@ function definePluginsPage(routeId: "plugins" | "plugin-settings", surface: Plug
           )
           .catch(() => undefined);
       }
-      return loadPluginsRouteData(context, options);
+      const gateway = context.gateway;
+      return {
+        gateway,
+        gatewaySnapshot: gateway.snapshot,
+        location,
+      } satisfies PluginsRouteData;
     },
     component: async () => {
       const { PluginsPage } = await import("./plugins-page.tsx");

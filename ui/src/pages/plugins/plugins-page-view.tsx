@@ -103,7 +103,6 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
   // The owner mutates in place; publish fresh props for each page revision.
   const discovery = createMemo(() => ({
     ...page().discovery.read(),
-    error: page().discovery.read().error ?? page().state.error,
   }));
   const onOpenSkill = (request: PluginsSkillsReadParams) => void page().skillPreview.open(request);
   const actions = {
@@ -363,6 +362,11 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
         {PluginRowMessageView(page().state.pageNotice ?? undefined)}
         {page().surface === "discovery" ? (
           <div id={PLUGINS_HUB_PANEL_ID} role="tabpanel" aria-labelledby="plugins-tab-plugins">
+            <Show when={page().state.error}>
+              {(error) => (
+                <PluginRetryError error={error()} onRetry={() => void page().refreshCatalog()} />
+              )}
+            </Show>
             {page().state.catalogDetail ? (
               detailPluginId() && !page().consent.getActiveInstall(`install:${catalogId()}`) ? (
                 <InstalledDetail pluginId={detailPluginId()!} />

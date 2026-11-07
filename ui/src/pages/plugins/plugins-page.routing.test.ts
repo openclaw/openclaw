@@ -405,6 +405,72 @@ it("reports when a listed install becomes unavailable", async () => {
   );
 });
 
+it.each([
+  { outcome: "success", detail: false },
+  { outcome: "failure", detail: false },
+  { outcome: "failure", detail: true },
+] as const)(
+  "browses while inventory is pending and retains catalog on $outcome (detail=$detail)",
+  async ({ outcome, detail }) => {
+    const inventory = deferred<PluginListResult>();
+    const offered = discoveryDetail({
+      ...createPlugin({
+        id: "calendar",
+        name: "Calendar",
+        installed: false,
+        state: "not-installed",
+      }),
+      catalogId: "ch_Y2FsZW5kYXI",
+    });
+    let inventoryReads = 0;
+    const { request, harness } = pageGateway({
+      "plugins.list": () => (++inventoryReads === 1 ? inventory.promise : createResult([])),
+      "plugins.catalog.browse": (params) => browseResult(params, [offered]),
+      "plugins.catalog.categories": () => ({ categories: [] }),
+      "plugins.catalog.get": () => offered,
+    });
+    const { page } = await mountRoute(
+      harness,
+      null,
+      detail ? "/plugins/ch_Y2FsZW5kYXI" : "/plugins",
+    );
+    const install = () =>
+      page.querySelector<HTMLButtonElement>(
+        detail ? ".plugin-catalog-detail__install" : '[aria-label="Install Calendar"]',
+      );
+    await waitForSolid(() => expect(install()).not.toBeNull());
+    expect(install()!.disabled).toBe(true);
+    const contentSelector = detail ? "#plugin-catalog-detail" : '[data-plugin-id="ch_Y2FsZW5kYXI"]';
+    const content = page.querySelector(contentSelector);
+    if (!detail) {
+      expect(page.querySelector<HTMLInputElement>('[type="search"]')!.disabled).toBe(false);
+    }
+    if (outcome === "success") {
+      inventory.resolve(createResult([]));
+      await waitForSolid(() => expect(install()!.disabled).toBe(false));
+    } else {
+      inventory.reject(new Error("Installed inventory unavailable"));
+      await waitForSolid(() =>
+        expect(page.textContent).toContain("Installed inventory unavailable"),
+      );
+      expect(install()!.disabled).toBe(true);
+    }
+    expect(page.querySelector(contentSelector)).toBe(content);
+    expect(
+      request.mock.calls.filter(([method]) => method === "plugins.catalog.browse"),
+    ).toHaveLength(detail ? 0 : 1);
+    expect(request.mock.calls.some(([method]) => method === "plugins.install")).toBe(false);
+    if (outcome === "failure") {
+      [...page.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent?.trim() === "Try again")!
+        .click();
+      await waitForSolid(() => expect(install()!.disabled).toBe(false));
+      expect(inventoryReads).toBe(2);
+      expect(page.textContent).not.toContain("Installed inventory unavailable");
+    }
+  },
+);
+
 it("keeps the latest Install request while an older catalog detail is pending", async () => {
   const details = ["Alpha", "Beta"].map((name) =>
     discoveryDetail({
@@ -641,17 +707,15 @@ it.each([
   ["/settings/plugins/workboard?view=settings", true],
   ["/settings/plugins/workboard#configuration", true],
 ] as const)("preloads schema only for configuration surfaces at %s", async (url, schemaNeeded) => {
-  const result = createResult();
-  const { harness } = pageGateway({ "plugins.list": () => result });
+  const { harness } = pageGateway({});
   const context = createContext(harness.gateway);
   const loader = pages[1].loader;
   if (!loader) {
     throw new Error("Plugin Settings route has no loader");
   }
 
-  const data = await loader(context, createRouteLoaderOptions(createPluginsRouteLocation(url)));
+  await loader(context, createRouteLoaderOptions(createPluginsRouteLocation(url)));
 
-  expect(data).toMatchObject({ result });
   expect(context.runtimeConfig.ensureLoaded).toHaveBeenCalledOnce();
   expect(context.runtimeConfig.ensureSchemaLoaded).toHaveBeenCalledTimes(schemaNeeded ? 1 : 0);
 });
