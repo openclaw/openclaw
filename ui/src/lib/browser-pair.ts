@@ -78,6 +78,7 @@ async function postBrowserPair(params: {
       }),
     });
     // Keep the timeout through body consumption as well as receipt of the headers.
+    // SAFETY: The same Gateway build serves this same-origin reply; unknown statuses take retry/error paths.
     const body = (await response.json()) as BrowserPairReply;
     return { response, body };
   } finally {

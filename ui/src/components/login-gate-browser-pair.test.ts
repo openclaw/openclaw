@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { selectBrowserGatewayConnectAuth } from "../api/gateway-connect-plan.ts";
 import { createBrowserPairSession } from "../lib/browser-pair.ts";
@@ -174,11 +175,12 @@ describe("browser pairing", () => {
     });
     await vi.advanceTimersByTimeAsync(2_100);
     expect(pair.onApproved).toHaveBeenCalledWith(gatewayUrl);
-    const requests = fetchMock.mock.calls.map(([url, init]) => ({
-      url,
-      body: JSON.parse(String(init?.body)),
-    }));
-    expect(requests.filter(({ url }) => String(url).endsWith("/start"))).toHaveLength(1);
+    const requests = fetchMock.mock.calls.map(([url, init]) => {
+      assert(typeof url === "string");
+      assert(typeof init?.body === "string");
+      return { url, body: JSON.parse(init.body) };
+    });
+    expect(requests.filter(({ url }) => url.endsWith("/start"))).toHaveLength(1);
     expect(requests.slice(1).every(({ body }) => body.requestId === "request-1")).toBe(true);
     pair.dispose();
   });
@@ -190,9 +192,13 @@ describe("browser pairing", () => {
       .mockImplementationOnce(
         (_url: string, init: RequestInit) =>
           new Promise((_resolve, reject) => {
-            init.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
-              once: true,
-            });
+            init.signal?.addEventListener(
+              "abort",
+              () => reject(new Error("Browser pairing request aborted")),
+              {
+                once: true,
+              },
+            );
           }),
       )
       .mockResolvedValueOnce(json(approved));
@@ -344,13 +350,11 @@ describe("browser pairing", () => {
     await pair.cancel();
     expect(pair.onState).toHaveBeenLastCalledWith({ kind: "cancelled" });
     expect(
-      fetchMock.mock.calls
-        .slice(2)
-        .every(
-          ([url, init]) =>
-            String(url).endsWith("/cancel") &&
-            JSON.parse(String(init?.body)).requestId === "request-1",
-        ),
+      fetchMock.mock.calls.slice(2).every(([url, init]) => {
+        assert(typeof url === "string");
+        assert(typeof init?.body === "string");
+        return url.endsWith("/cancel") && JSON.parse(init.body).requestId === "request-1";
+      }),
     ).toBe(true);
     expect(pair.onApproved).not.toHaveBeenCalled();
   });
@@ -402,9 +406,10 @@ describe("browser pairing", () => {
 
   it("requires explicit Continue when approval wins cancellation", async () => {
     const gate = await mountWaitingGate();
-    vi.mocked(fetch).mockImplementation(async (url) =>
-      String(url).endsWith("/cancel") ? json({ status: "approved" }) : json(approved),
-    );
+    vi.mocked(fetch).mockImplementation(async (url) => {
+      assert(typeof url === "string");
+      return url.endsWith("/cancel") ? json({ status: "approved" }) : json(approved);
+    });
     const cancel = [...gate.element.querySelectorAll("button")].find(
       (button) => button.textContent === "Cancel",
     );
