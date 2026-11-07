@@ -109,11 +109,15 @@ internal fun actionRequiresClearableNotification(kind: NotificationActionKind): 
  */
 private object DeviceNotificationStore {
   private val lock = Any()
-  private var connected = false
+  private var activeService: DeviceNotificationListenerService? = null
   private val byKey = LinkedHashMap<String, DeviceNotificationEntry>()
 
-  fun replace(entries: List<DeviceNotificationEntry>) {
+  fun connect(
+    service: DeviceNotificationListenerService,
+    entries: List<DeviceNotificationEntry>,
+  ) {
     synchronized(lock) {
+      activeService = service
       byKey.clear()
       entries.associateByTo(byKey, DeviceNotificationEntry::key)
     }
@@ -131,15 +135,16 @@ private object DeviceNotificationStore {
     }
   }
 
-  fun setConnected(value: Boolean) {
+  fun disconnect(service: DeviceNotificationListenerService) {
     synchronized(lock) {
-      connected = value
-      if (!value) {
-        // Android invalidates activeNotifications when the listener disconnects.
-        byKey.clear()
-      }
+      if (activeService !== service) return
+      activeService = null
+      // Android invalidates activeNotifications when the listener disconnects.
+      byKey.clear()
     }
   }
+
+  fun activeService(): DeviceNotificationListenerService? = synchronized(lock) { activeService }
 
   fun snapshot(
     enabled: Boolean,
@@ -148,7 +153,7 @@ private object DeviceNotificationStore {
     synchronized(lock) {
       DeviceNotificationSnapshot(
         enabled = enabled,
-        connected = connected,
+        connected = activeService != null,
         notifications =
           byKey.values
             .filter { isGatewayVisibleNotification(appPackageName, it.packageName) }
@@ -163,23 +168,16 @@ class DeviceNotificationListenerService : NotificationListenerService() {
 
   override fun onListenerConnected() {
     super.onListenerConnected()
-    activeService = this
-    DeviceNotificationStore.setConnected(true)
     refreshActiveNotifications()
   }
 
   override fun onListenerDisconnected() {
-    if (activeService === this) {
-      activeService = null
-    }
-    DeviceNotificationStore.setConnected(false)
+    DeviceNotificationStore.disconnect(this)
     super.onListenerDisconnected()
   }
 
   override fun onDestroy() {
-    if (activeService === this) {
-      activeService = null
-    }
+    DeviceNotificationStore.disconnect(this)
     super.onDestroy()
   }
 
@@ -276,7 +274,7 @@ class DeviceNotificationListenerService : NotificationListenerService() {
           ?.toList()
           ?: emptyList()
       }.getOrElse { emptyList() }
-    DeviceNotificationStore.replace(entries)
+    DeviceNotificationStore.connect(this, entries)
   }
 
   private fun StatusBarNotification.toEntry(): DeviceNotificationEntry {
@@ -304,8 +302,6 @@ class DeviceNotificationListenerService : NotificationListenerService() {
   companion object {
     private const val recentPackagesPref = "notifications.forwarding.recentPackages"
     private const val recentPackagesLimit = 64
-
-    @Volatile private var activeService: DeviceNotificationListenerService? = null
 
     @Volatile private var nodeEventSink: ((event: String, payloadJson: String?) -> Unit)? = null
 
@@ -358,7 +354,7 @@ class DeviceNotificationListenerService : NotificationListenerService() {
         return notificationActionError("NOTIFICATIONS_DISABLED", "enable notification access in system Settings")
       }
       val service =
-        activeService
+        DeviceNotificationStore.activeService()
           ?: return notificationActionError("NOTIFICATIONS_UNAVAILABLE", "notification listener not connected")
       return service.executeActionInternal(request)
     }
@@ -370,7 +366,7 @@ class DeviceNotificationListenerService : NotificationListenerService() {
     }
 
     private fun rememberRecentPackage(packageName: String?) {
-      val service = activeService ?: return
+      val service = DeviceNotificationStore.activeService() ?: return
       val normalized = packageName?.trim().orEmpty()
       if (normalized.isEmpty() || normalized == service.packageName) return
       val prefs = recentPackagesPrefs(service.applicationContext)

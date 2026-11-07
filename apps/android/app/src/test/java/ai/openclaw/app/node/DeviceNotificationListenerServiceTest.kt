@@ -10,6 +10,7 @@ import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -169,6 +170,54 @@ class DeviceNotificationListenerServiceTest {
     val snapshot = DeviceNotificationListenerService.snapshot(context, enabled = true)
     assertEquals(listOf(thirdPartyKey), snapshot.notifications.map { it.key })
     assertEquals(listOf(thirdPartyPackage), snapshot.notifications.map { it.packageName })
+  }
+
+  @Test
+  fun supersededListenerRetirementPreservesReplacementSnapshot() {
+    service.onListenerConnected()
+    val replacement = Robolectric.buildService(DeviceNotificationListenerService::class.java).create().get()
+    val replacementShadow = Shadow.extract<ShadowNotificationListenerService>(replacement)
+    val key = replacementShadow.addActiveNotification(thirdPartyPackage, 401, buildNotification("Replacement"))
+    replacement.onListenerConnected()
+    try {
+      service.onListenerDisconnected()
+      service.onDestroy()
+
+      val snapshot = DeviceNotificationListenerService.snapshot(context, enabled = true)
+      assertTrue(snapshot.connected)
+      assertEquals(listOf(key), snapshot.notifications.map { it.key })
+    } finally {
+      replacement.onListenerDisconnected()
+      replacement.onDestroy()
+    }
+  }
+
+  @Test
+  fun activeListenerDestroyRetiresSnapshotAndAllowsRebind() {
+    shadowService.addActiveNotification(thirdPartyPackage, 402, buildNotification("Before destroy"))
+    service.onListenerConnected()
+
+    service.onDestroy()
+
+    val snapshot = DeviceNotificationListenerService.snapshot(context, enabled = true)
+    assertFalse(snapshot.connected)
+    assertTrue(snapshot.notifications.isEmpty())
+
+    val manager = context.getSystemService(NotificationManager::class.java)
+    Shadow.extract<ShadowNotificationManager>(manager).setNotificationListenerAccessGranted(
+      ComponentName(context, DeviceNotificationListenerService::class.java),
+      true,
+    )
+    var rebindRequested = false
+    val handler = NotificationsHandler(context, requestServiceRebind = { rebindRequested = true })
+    runBlocking { handler.handleNotificationsList(null) }
+    assertTrue(rebindRequested)
+    val actionResult =
+      DeviceNotificationListenerService.executeAction(
+        context,
+        NotificationActionRequest("retired", NotificationActionKind.Open),
+      )
+    assertEquals("NOTIFICATIONS_UNAVAILABLE", actionResult.code)
   }
 
   @Test
