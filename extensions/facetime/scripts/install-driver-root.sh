@@ -116,6 +116,7 @@ build_and_install() {
     -configuration Release \
     -derivedDataPath "$work_dir/DerivedData" \
     CODE_SIGNING_ALLOWED=NO \
+    MACOSX_DEPLOYMENT_TARGET=12.0 \
     CONFIGURATION_BUILD_DIR="$build_dir" \
     PRODUCT_BUNDLE_IDENTIFIER="$bundle_id" \
     CC="$clang" \
