@@ -5,6 +5,10 @@ import { parseDebugCommand } from "../../auto-reply/reply/debug-commands.js";
 import { logVerbose } from "../../globals.js";
 import { getConfigValueAtPath, parseConfigPath, setConfigValueAtPath } from "../config-paths.js";
 import { REDACTED_SENTINEL } from "../redact-sentinel.js";
+import {
+  COMMAND_INPUT_IDEMPOTENCY_PREFIX,
+  COMMAND_REPLY_IDEMPOTENCY_PREFIX,
+} from "./command-transcript-keys.js";
 import { appendAssistantMessageToSessionTranscript } from "./transcript.js";
 
 export function scopeCommandTranscriptId(
@@ -111,19 +115,6 @@ type CommandExchangeParams = Pick<
   /** The command already committed its input as a user turn; record only the reply. */
   commandInputCommitted?: boolean;
 };
-
-/** Idempotency keys that mark a delivered command exchange, owned with the writer below. */
-export const COMMAND_INPUT_IDEMPOTENCY_PREFIX = "command-input:" as const;
-export const COMMAND_REPLY_IDEMPOTENCY_PREFIX = "command-reply:" as const;
-
-/** True for the user/assistant rows a delivered command exchange writes. */
-export function isCommandExchangeIdempotencyKey(key: unknown): boolean {
-  return (
-    typeof key === "string" &&
-    (key.startsWith(COMMAND_INPUT_IDEMPOTENCY_PREFIX) ||
-      key.startsWith(COMMAND_REPLY_IDEMPOTENCY_PREFIX))
-  );
-}
 
 /** A local effect committed; this records its outcome, not delivery of the reply. */
 export function recordCommittedCommandExchange(params: CommandExchangeParams) {

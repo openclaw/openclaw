@@ -1,4 +1,4 @@
-import { isCommandExchangeIdempotencyKey } from "../../config/sessions/command-transcript.js";
+import { isCommandExchangeIdempotencyKey } from "../../config/sessions/command-transcript-keys.js";
 import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import { readTranscriptEventAtSeqSync } from "../../config/sessions/session-accessor.sqlite-read.js";
 import { readActiveTranscriptEntryAnchor } from "../../config/sessions/session-accessor.sqlite-transcript-admitted-read.js";
