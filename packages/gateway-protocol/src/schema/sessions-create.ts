@@ -13,8 +13,10 @@ import {
 } from "./sessions-row.js";
 import { SessionVisibilitySchema } from "./sessions-sharing-values.js";
 
-export { SESSION_CREATE_RETRY_WINDOW_MS } from "../session-limits.js";
-export const SESSION_CREATE_IDEMPOTENCY_RETENTION_MS = 5 * 60_000;
+export {
+  SESSION_CREATE_RETRY_WINDOW_MS,
+  SESSION_CREATE_IDEMPOTENCY_RETENTION_MS,
+} from "../session-limits.js";
 
 /** Creates or adopts a session with optional model, thinking, fast mode, label, and parent linkage. */
 export const SessionsCreateParamsSchema = closedObject({

@@ -15,9 +15,9 @@ export function createRecallStateFixture() {
     },
     expireCacheAfter(ttlMs: number) {
       const lookup = recallState.getCachedResult;
-      const expiredAt = Date.now() + ttlMs;
+      const expiredAt = performance.now() + ttlMs;
       return vi.spyOn(recallState, "getCachedResult").mockImplementation((cacheKey) => {
-        using _ = vi.spyOn(Date, "now").mockReturnValue(expiredAt);
+        using _ = vi.spyOn(performance, "now").mockReturnValue(expiredAt);
         return lookup(cacheKey);
       });
     },

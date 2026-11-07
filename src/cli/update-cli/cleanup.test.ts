@@ -27,7 +27,7 @@ vi.mock(import("../../config/io.js"), async (original) => ({
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(readSourceConfigBestEffort).mockResolvedValue({});
-  vi.mocked(inspectSessionSqliteRecovery).mockReturnValue(cleanupReport());
+  vi.mocked(inspectSessionSqliteRecovery).mockResolvedValue(cleanupReport());
   vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
 });
@@ -104,7 +104,7 @@ it.each([
 
 it("keeps the inspected recovery report when retirement throws", async () => {
   const report = cleanupReport();
-  vi.mocked(inspectSessionSqliteRecovery).mockReturnValue(report);
+  vi.mocked(inspectSessionSqliteRecovery).mockResolvedValue(report);
   vi.mocked(retireSessionSqliteRecovery).mockRejectedValueOnce(new Error("retirement unavailable"));
 
   await expect(updateCleanupCommand({ json: true, yes: true })).rejects.toEqual(new ExitError(1));

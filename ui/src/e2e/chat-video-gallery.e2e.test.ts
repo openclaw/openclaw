@@ -3,7 +3,7 @@ import type { CDPSession } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
+import { scrollChatThreadToTop, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Expanded video gallery" });
@@ -56,7 +56,7 @@ async function nativeVideoControlBox(cdp: CDPSession, control: string) {
 
 suite.define(() => {
   it.each([false, true])(
-    "navigates the whole turn and preserves player controls (touch=%s)",
+    "navigates the loaded thread and preserves player controls (touch=%s)",
     async (mobile) => {
       await suite.withPage(
         {
@@ -87,31 +87,30 @@ suite.define(() => {
             });
           });
           const gateway = await installMockGateway(page, {
-            historyMessages: [
-              { role: "user", content: "Compare these clips.", timestamp: 1800000000000 },
-              {
-                role: "assistant",
-                content:
+            historyMessages: (
+              [
+                ["user", "Compare these clips."],
+                [
+                  "assistant",
                   "**Before**\nMEDIA:https://example.com/gallery-proof/before.mp4\n\n**After**\nMEDIA:https://example.com/gallery-proof/after.mp4",
-                timestamp: 1800000001000,
-              },
-              {
-                role: "assistant",
-                content: "**Alternate**\nMEDIA:https://example.com/gallery-proof/alternate.mp4",
-                timestamp: 1800000002000,
-              },
-              { role: "user", content: "A separate turn.", timestamp: 1800000003000 },
-              {
-                role: "assistant",
-                content: "MEDIA:https://example.com/gallery-proof/separate.mp4",
-                timestamp: 1800000004000,
-              },
-            ],
+                ],
+                [
+                  "assistant",
+                  "**Alternate**\nMEDIA:https://example.com/gallery-proof/alternate.mp4",
+                ],
+                ["user", "A separate turn."],
+                ["assistant", "MEDIA:https://example.com/gallery-proof/separate.mp4"],
+              ] as const
+            ).map(([role, content], index) => ({
+              role,
+              content,
+              timestamp: 1_800_000_000_000 + index * 1_000,
+            })),
           });
           await page.goto(`${suite.server.baseUrl}chat`);
           await gateway.waitForRequest("sessions.messages.subscribe");
           // Lazy media admission creates the expand button only near the viewport.
-          await page.getByText("before.mp4", { exact: true }).scrollIntoViewIfNeeded();
+          await scrollChatThreadToTop(page);
           const expand = page.getByRole("button", {
             name: "Expand before.mp4 in the media overlay",
             exact: true,
@@ -128,7 +127,7 @@ suite.define(() => {
           await expect
             .poll(() => player.evaluate((media: HTMLVideoElement) => media.readyState))
             .toBeGreaterThanOrEqual(2);
-          await expect.poll(async () => (await counter.textContent())?.trim()).toBe("1 / 3");
+          await expect.poll(async () => (await counter.textContent())?.trim()).toBe("1 / 4");
           if (dir) {
             await page.screenshot({ path: `${dir}/expanded-first.png`, animations: "disabled" });
           }
@@ -156,7 +155,12 @@ suite.define(() => {
           await page.keyboard.press("ArrowRight");
           await expect.poll(() => player.getAttribute("src")).toContain("alternate.mp4");
           await page.keyboard.press("ArrowRight");
-          expect((await counter.textContent())?.trim()).toBe("3 / 3");
+          await expect.poll(() => player.getAttribute("src")).toContain("separate.mp4");
+          await expect.poll(async () => (await counter.textContent())?.trim()).toBe("4 / 4");
+          await page.keyboard.press("ArrowRight");
+          expect((await counter.textContent())?.trim()).toBe("4 / 4");
+          await page.keyboard.press("ArrowLeft");
+          await expect.poll(() => player.getAttribute("src")).toContain("alternate.mp4");
           await page.keyboard.press("ArrowLeft");
           await expect.poll(() => player.getAttribute("src")).toContain("after.mp4");
           await expect
@@ -182,14 +186,14 @@ suite.define(() => {
           await expect
             .poll(() => player.evaluate((media: HTMLVideoElement) => media.currentTime))
             .toBeGreaterThan(0.1);
-          expect((await counter.textContent())?.trim()).toBe("2 / 3");
+          expect((await counter.textContent())?.trim()).toBe("2 / 4");
           await player.focus();
           const beforeSeek = await player.evaluate((media: HTMLVideoElement) => media.currentTime);
           await page.keyboard.press("ArrowRight");
           await expect
             .poll(() => player.evaluate((media: HTMLVideoElement) => media.currentTime))
             .toBeGreaterThan(beforeSeek);
-          expect((await counter.textContent())?.trim()).toBe("2 / 3");
+          expect((await counter.textContent())?.trim()).toBe("2 / 4");
           await clickNative("timeline", 0.1);
           await clickNative("play-button");
           await expect
@@ -232,7 +236,7 @@ suite.define(() => {
             await expect
               .poll(() => player.evaluate((media: HTMLVideoElement) => media.currentTime))
               .toBeGreaterThan(0.3);
-            expect((await counter.textContent())?.trim()).toBe("2 / 3");
+            expect((await counter.textContent())?.trim()).toBe("2 / 4");
             const swipe = async (dx: number) => {
               const box = await player.boundingBox();
               if (!box) {
@@ -278,7 +282,7 @@ suite.define(() => {
           await page
             .getByRole("button", { name: "Expand separate.mp4 in the media overlay", exact: true })
             .click();
-          expect(await viewer.locator(".gallery-counter").count()).toBe(0);
+          await expect.poll(async () => (await counter.textContent())?.trim()).toBe("4 / 4");
           await page.keyboard.press("Escape");
         },
       );

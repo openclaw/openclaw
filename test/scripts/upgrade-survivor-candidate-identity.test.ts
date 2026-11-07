@@ -8,9 +8,10 @@ import { readJson, runProcess, writeJson } from "./upgrade-survivor-shard.test-s
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const selectedSha = "a".repeat(40);
-const version = "2026.9.6";
+const version = "2026.10.9";
 type Change =
   | "valid"
+  | "deferred-doctor"
   | "stale"
   | "tarball-changed"
   | "tarball-missing"
@@ -18,7 +19,12 @@ type Change =
   | "wrong-source"
   | "published"
   | "missing-baseline";
-type Scenario = "base" | "sqlite-volume" | "projects-doctor" | "workshop-doctor-recovery";
+type Scenario =
+  | "base"
+  | "sqlite-volume"
+  | "legacy-operator-state"
+  | "projects-doctor"
+  | "workshop-doctor-recovery";
 
 type IdentityCase = [scenario: Scenario, change: Change, error?: string, events?: string[]];
 const payloadMismatch = "Installed application payload differs from the frozen tarball";
@@ -26,6 +32,20 @@ it.skipIf(process.platform === "win32").each<IdentityCase>([
   ["base", "stale", payloadMismatch, ["updater"]],
   ["base", "valid", undefined, ["updater", "following-phase"]],
   ["sqlite-volume", "valid", undefined, ["updater", "following-phase"]],
+  ["legacy-operator-state", "stale", payloadMismatch, ["updater"]],
+  ["legacy-operator-state", "valid", undefined, ["updater", "following-phase"]],
+  [
+    "legacy-operator-state",
+    "wrong-source",
+    "Candidate build commit must equal the selected source SHA",
+    [],
+  ],
+  [
+    "legacy-operator-state",
+    "deferred-doctor",
+    undefined,
+    ["updater", "deferred-doctor", "following-phase"],
+  ],
   ["base", "wrong-source", "Candidate build commit must equal the selected source SHA", []],
   ["base", "tarball-changed", "Candidate tarball changed", ["updater"]],
   ["base", "tarball-missing", "Candidate tarball changed", ["updater"]],
@@ -86,7 +106,12 @@ SCENARIO="$UNIT_SCENARIO"
 CANDIDATE_KIND=tarball
 CANDIDATE_SPEC="$UNIT_ROOT/candidate.tgz"
 ARTIFACT_ROOT="$UNIT_ROOT/artifacts"
+UPDATE_JSON="$ARTIFACT_ROOT/update.json"
+UPDATE_ERR="$ARTIFACT_ROOT/update.err"
+baseline_version="$UNIT_BASELINE_VERSION"
+UPDATE_RESTART_MODE=manual
 native_assignment_enabled=0
+plugin_registry_pid=0
 export OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT="$ARTIFACT_ROOT"
 export OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT="$UNIT_ROOT/runtime"
 node() { "$UNIT_NODE" "$@"; }
@@ -94,6 +119,7 @@ ${section("prepare_worker_cell_package() {\n", "\nassert_worker_cell_update() {"
 package_root() { printf '%s\\n' "$UNIT_ROOT/installed"; }
 companion_survivor_scenario() { return 1; }
 run_plugin_fixture_phase() { :; }
+openclaw_e2e_stop_process() { :; }
 run_missing_load_path_fixture() {
   [ "$1" != post-update ] || printf 'following-phase\\n'
 }
@@ -115,6 +141,9 @@ phase() {
         "$UNIT_NODE" "$@"
       fi ;;
     update_candidate_for_install_mode|prepare_worker_cell_package) "$@" ;;
+    observe_deferred_schema_doctor)
+      [ ! -e "$ARTIFACT_ROOT/installed-package-identity.json" ]
+      printf 'deferred-doctor\\n' ;;
     *) : ;;
   esac
 }
@@ -129,6 +158,7 @@ ${section(startMarker, following)}${audited ? "" : following}
       UNIT_NODE: resolveTestNodeExecPath(),
       UNIT_SCENARIO: scenario,
       UNIT_CHANGE: change,
+      UNIT_BASELINE_VERSION: change === "deferred-doctor" ? "2026.9.2" : version,
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: change === "wrong-source" ? "b".repeat(40) : selectedSha,
     },
     10_000,

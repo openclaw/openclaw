@@ -109,12 +109,9 @@ async function copyFileExclusive(
   let target: Awaited<ReturnType<typeof fs.open>> | undefined;
   let targetIdentity: BigIntStats | undefined;
   try {
-    const publication = await copySqliteFile(
-      sourcePath,
-      targetPath,
-      sourceFingerprint,
+    const publication = await copySqliteFile(sourcePath, targetPath, sourceFingerprint, {
       beforeByteCopy,
-    );
+    });
     target = await fs.open(targetPath, "r+");
     // Native receipts retain exact Windows file IDs beyond Number precision.
     const openedIdentity = await target.stat({ bigint: true });
@@ -610,13 +607,19 @@ export async function createVerifiedSqliteSnapshot(
             undefined,
             options.onProgress,
           );
-      return withPreparedSqliteSnapshot(prepared, (privateSourcePath) =>
-        verifyAndPublishSqliteSnapshot(options, privateSourcePath),
+      return withPreparedSqliteSnapshot(
+        prepared,
+        (privateSourcePath) => verifyAndPublishSqliteSnapshot(options, privateSourcePath),
+        { bestEffortCleanup: options.sourceAcquisition.bestEffortCleanup },
       );
     }
     return verifyAndPublishSqliteSnapshot(options);
   };
-  return retained ? withPreparedSqliteSnapshot(retained.prepared, create) : create();
+  return retained
+    ? withPreparedSqliteSnapshot(retained.prepared, create, {
+        bestEffortCleanup: options.sourceAcquisition?.bestEffortCleanup,
+      })
+    : create();
 }
 
 async function verifyAndPublishSqliteSnapshot(

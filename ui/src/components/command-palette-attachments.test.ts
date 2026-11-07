@@ -255,7 +255,7 @@ describe("command palette attachments", () => {
     expect(create).not.toHaveBeenCalled();
   });
 
-  it("clears a rejected pasted-data-URL prompt when its image is removed", async () => {
+  it("hands pasted images to the started session and reopens an empty launcher", async () => {
     const { palette, input, create, start, query } = await mount();
     create.mockResolvedValueOnce({
       key: "agent:main:dashboard:rejected-images",
@@ -265,15 +265,11 @@ describe("command palette attachments", () => {
     await vi.waitFor(() => expect(start().disabled).toBe(false));
     start().click();
     await vi.waitFor(() => expect(palette.isOpen).toBe(false));
+    expect(create).toHaveBeenCalledOnce();
     await openPalette(palette);
-    await vi.waitFor(() =>
-      expect(query('[role="alert"]')?.textContent).toContain("Image turn rejected"),
-    );
-    expect(start().disabled).toBe(true);
-    await waitForSolid(() => expect(query(".chat-attachment-thumb img")).not.toBeNull());
-    query<HTMLButtonElement>(".chat-attachment-remove")!.click();
-    await palette.updateComplete;
     expect(query('[role="alert"]')).toBeNull();
+    expect(query(".chat-attachment-thumb")).toBeNull();
+    expect(start().disabled).toBe(true);
   });
 
   it.each([

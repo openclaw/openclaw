@@ -20,6 +20,7 @@ import { nativeListener } from "../lib/solid-native-listener.ts";
 import type { OverlayPlacement } from "./overlay-anchor.ts";
 import { createOverlay } from "./overlay-lifecycle.ts";
 import type { OverlayNativeAdapter } from "./overlay-types.ts";
+import { createPickerPhoneSheet } from "./select-picker-phone-sheet.tsx";
 import { PickerOptionContent, PickerTriggerContent } from "./select-picker-presentation.tsx";
 import { pickerSearchInputProps } from "./select-picker-search.ts";
 import type { PickerOption, PickerParams, PickerGroup } from "./select-picker-types.ts";
@@ -179,6 +180,16 @@ export function PickerContent<Option extends PickerOption>(props: {
     options().find((option) => option.value === props.params.value),
   );
   const optionId = (value: string) => `${id}:${value}`;
+  const phone = createPickerPhoneSheet({
+    open: () => opened(),
+    wanted: () =>
+      !props.params.sheet &&
+      props.params.variant !== "submenu" &&
+      (props.params.phoneSheet ?? options().length > 8),
+    surface: () => surface,
+    dismiss: () => overlay.request(false, "return"),
+  });
+  const phoneSheet = phone.active;
   // Native presentation mode belongs to this mounted overlay lifetime.
   const initialSheet = untrack(() => props.params.sheet);
   const overlay = createOverlay(id, undefined, {
@@ -404,6 +415,7 @@ export function PickerContent<Option extends PickerOption>(props: {
     { region: () => list, revealTiming: "animation-frame" },
   );
   function onOpenChange(next: boolean) {
+    phone.onOpenChange(next);
     if (next) {
       pointerHighlight = false;
       props.params.onOpen?.();
@@ -555,16 +567,20 @@ export function PickerContent<Option extends PickerOption>(props: {
           {
             "oc-overlay": !props.params.sheet,
             "picker-select__menu--grouped": Boolean(props.params.groupBy),
+            "picker-select__menu--phone-sheet": phoneSheet(),
           },
         ]}
         popover={props.params.sheet ? undefined : "manual"}
         hidden={props.params.sheet ? true : undefined}
       >
+        <phone.Chrome searching={searching()} />
         <MenuNavigationError binding={menu} />
         <Show when={!searchAvailable()}>{props.renderers?.header}</Show>
-        <Show when={props.params.sheet && !searchAvailable()}>
+        <Show when={(props.params.sheet || phoneSheet()) && !searchAvailable()}>
           <div class="picker-select__page-header">
-            <SheetBack />
+            <Show when={props.params.sheet}>
+              <SheetBack />
+            </Show>
             <span>{props.params.label}</span>
           </div>
         </Show>

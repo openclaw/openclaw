@@ -13,6 +13,7 @@ import type {
   ToolResultMessage,
 } from "@openclaw/llm-core";
 import type { Static, TSchema } from "typebox";
+import type { ToolInterruptions } from "./tool-interruption.js";
 
 /**
  * Stream function used by the agent loop.
@@ -199,6 +200,8 @@ export type ToolLoopRecoveryState = {
 };
 
 export interface AgentLoopConfig extends SimpleStreamOptions {
+  /** @internal Call-scoped cancellation owned by the active Agent. */
+  toolInterruptions?: ToolInterruptions;
   /** @internal Host-resolved small-model repetition policy. */
   repetitionGuard?: (model: Model) => boolean;
   model: Model;
@@ -531,6 +534,8 @@ export interface AgentTool<
    * If omitted, the default execution mode applies.
    */
   executionMode?: ToolExecutionMode;
+  /** Abort settles all call-owned effects before execute resolves or rejects. */
+  interruptible?: true | ((args: unknown) => boolean);
 }
 
 /** Context snapshot passed into the low-level agent loop. */

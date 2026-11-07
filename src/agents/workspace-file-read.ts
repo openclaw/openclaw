@@ -1,16 +1,30 @@
 import syncFs from "node:fs";
 import path from "node:path";
 import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
-import { openRootFile } from "../infra/boundary-file-read.js";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { isRootFileMissingFailure, openRootFile } from "../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import { FsSafeError } from "../infra/fs-safe.js";
+import { resolveUserPath } from "../infra/home-dir.js";
 import { retryAsync } from "../infra/retry.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { exactWorkspaceEntryExists } from "../memory/root-memory-files.js";
+import { settleCurrentReadPreparations } from "../shared/current-read-authority.js";
 import { getAgentWorkspaceAccess } from "./workspace-access.js";
-import type { WorkspaceBootstrapFile } from "./workspace-bootstrap-policy.js";
+import {
+  DEFAULT_MEMORY_FILENAME,
+  DEFAULT_USER_FILENAME,
+  WORKSPACE_BOOTSTRAP_FILENAMES,
+  type WorkspaceBootstrapFile,
+  type WorkspaceBootstrapFileName,
+} from "./workspace-bootstrap-policy.js";
 import {
   MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
   readWorkspaceBootstrapFile,
 } from "./workspace-bootstrap-read.js";
 import { readWorkspaceFileCache, writeWorkspaceFileCache } from "./workspace-file-cache.js";
+
+const workspaceLogger = createSubsystemLogger("workspace");
 
 const TRANSIENT_WORKSPACE_READ_CODES = new Set(["EAGAIN", "EWOULDBLOCK", "EINTR"]);
 const TRANSIENT_WORKSPACE_READ_ERRNOS = new Set([-11, -4]);
@@ -190,4 +204,73 @@ function isTransientWorkspaceReadError(error: unknown): boolean {
     }
   }
   return error instanceof Error && TRANSIENT_WORKSPACE_READ_MESSAGE.test(error.message);
+}
+
+export async function loadWorkspaceBootstrapFiles(
+  dir: string,
+  names?: readonly WorkspaceBootstrapFileName[],
+): Promise<WorkspaceBootstrapFile[]> {
+  const resolvedDir = resolveUserPath(dir);
+  const access = getAgentWorkspaceAccess(resolvedDir);
+  // Cache hits still open files to validate identity, so select names before I/O.
+  const entries = WORKSPACE_BOOTSTRAP_FILENAMES.filter(
+    (name) => names === undefined || names.includes(name),
+  ).map((name) => ({ name, filePath: path.join(resolvedDir, name) }));
+
+  // The canonical list bounds fan-out. Join every read before releasing workspace
+  // access on failure, then project results in prompt order, not completion order.
+  const loadedFiles = await settleCurrentReadPreparations(
+    entries.map(async (entry) => {
+      if (
+        !access &&
+        (entry.name === DEFAULT_MEMORY_FILENAME || entry.name === DEFAULT_USER_FILENAME) &&
+        // Lookup failures still need a guarded read for content or an unreadable diagnostic.
+        !(await exactWorkspaceEntryExists(resolvedDir, entry.name).catch(() => true))
+      ) {
+        return undefined;
+      }
+      const loaded = await readWorkspaceFileWithGuards({
+        filePath: entry.filePath,
+        workspaceDir: resolvedDir,
+      });
+      return { entry, loaded };
+    }),
+  );
+  const result: WorkspaceBootstrapFile[] = [];
+  for (const file of loadedFiles) {
+    if (!file) {
+      continue;
+    }
+    const { entry, loaded } = file;
+    if (loaded.ok) {
+      result.push(createLoadedWorkspaceBootstrapFile(entry.name, entry.filePath, loaded));
+    } else if (isRootFileMissingFailure(loaded)) {
+      if (entry.name === DEFAULT_MEMORY_FILENAME || entry.name === DEFAULT_USER_FILENAME) {
+        continue;
+      }
+      result.push({ name: entry.name, path: entry.filePath, missing: true });
+    } else {
+      const fallbackReason = `workspace file could not be read (${loaded.reason})`;
+      const rawReason = loaded.error instanceof Error ? loaded.error.message : fallbackReason;
+      const reason = truncateUtf16Safe(
+        rawReason.replaceAll(/\s+/gu, " ").trim() || fallbackReason,
+        300,
+      );
+      workspaceLogger.warn("Workspace bootstrap file is unreadable.", {
+        fileName: entry.name,
+        filePath: entry.filePath,
+        reason,
+        consoleMessage: `Workspace bootstrap file is unreadable: file=${entry.filePath} reason=${reason}`,
+      });
+      result.push({
+        name: entry.name,
+        path: entry.filePath,
+        content: `[UNREADABLE: ${reason}]`,
+        missing:
+          loaded.error instanceof FsSafeError &&
+          (loaded.error.code === "symlink" || loaded.error.code === "outside-workspace"),
+      });
+    }
+  }
+  return result;
 }

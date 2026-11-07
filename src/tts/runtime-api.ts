@@ -54,8 +54,9 @@ export { resolveExplicitTtsOverrides, resolveExplicitTtsOverridesAsync } from ".
 export { streamSpeech, textToSpeechStream } from "./tts-streaming.js";
 export { synthesizeSpeech } from "./tts-synthesis.js";
 export { textToSpeechTelephony } from "./tts-telephony.js";
-export type { TtsDirectiveOverrides, TtsDirectiveParseResult } from "./provider-types.js";
 export type {
+  TtsDirectiveOverrides,
+  TtsDirectiveParseResult,
   TtsStreamResult,
   TtsSynthesisResult,
   TtsSynthesisStreamResult,

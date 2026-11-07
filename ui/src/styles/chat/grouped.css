@@ -54,7 +54,8 @@
 
 /* Top-aligned avatars span the message and footer rows, so a short message never
    grows its row and the space above it stays the turn gap. */
-.chat-group.chat-group--with-footer > :is(.chat-avatar, .chat-avatar-slot) {
+.chat-group.chat-group--with-footer > .chat-avatar,
+.chat-group.chat-group--with-footer > .chat-avatar-slot {
   grid-column: var(--chat-group-avatar-column);
   grid-row: 1 / span 2;
 }
@@ -83,12 +84,13 @@
   max-width: none;
 }
 
-:is(.chat-group-messages, .chat-agent-run-body)
+/* Expanded work-group contents keep the smaller text/tool boundary. */
+.chat-group-messages
   > :is(
     .chat-bubble--tool-shell + .chat-bubble:not(.chat-bubble--tool-shell),
     .chat-bubble:not(.chat-bubble--tool-shell) + .chat-bubble--tool-shell
   ) {
-  margin-block-start: var(--chat-message-type-boundary-gap);
+  margin-block-start: var(--space-1);
 }
 
 :is(.chat-group > .chat-group-messages, .chat-agent-run-body)
@@ -168,15 +170,11 @@
 /* Shared threads keep the author name visible beside the gutter avatar. The
    other footer details stay focusable but leave the row layout until reveal. */
 .chat-group-footer--persistent-identity {
-  position: relative;
   opacity: var(--chat-persistent-footer-opacity, 1);
-  pointer-events: var(--chat-footer-disclosure-pointer-events, none);
 }
 
-.chat-group-footer--persistent-identity .chat-confirm-wrap,
-.chat-group-footer--persistent-identity .chat-group-timestamp,
-.chat-group-footer--persistent-identity .msg-meta__summary,
-.chat-group-footer--persistent-identity .chat-group-footer-actions {
+.chat-group-footer--persistent-identity
+  :is(.chat-confirm-wrap, .chat-group-timestamp, .msg-meta__summary, .chat-group-footer-actions) {
   position: var(--chat-footer-detail-position, absolute);
   opacity: var(--chat-footer-open-detail-opacity, var(--chat-footer-disclosure-opacity, 0));
   pointer-events: var(
@@ -204,9 +202,10 @@
 /* Own-message footers are right-aligned, so hover-revealed time/actions must
    slot in to the LEFT of the always-visible name; otherwise the name jumps
    sideways on hover. */
+.chat-group.user:not(.chat-group--peer) .chat-group-footer--persistent-identity .chat-sender-name,
 .chat-group.user:not(.chat-group--peer)
   .chat-group-footer--persistent-identity
-  :is(.chat-sender-name, .chat-message-source) {
+  .chat-message-source {
   order: 1;
 }
 
@@ -223,8 +222,7 @@
   flex: 0 0 auto;
 }
 
-.chat-group.user .chat-group-footer-actions,
-.chat-group.assistant .chat-group-footer-actions,
+.chat-group:is(.user, .assistant) .chat-group-footer-actions,
 .chat-group.assistant .chat-message-actions-row,
 .chat-group.user.chat-group--peer .chat-message-actions-row {
   justify-content: flex-start;
@@ -238,7 +236,6 @@
   --chat-footer-disclosure-pointer-events: none;
   --chat-action-gap: calc(4px + var(--chat-message-gap));
   position: relative;
-  --chat-message-action-size: 24px;
   align-self: stretch;
   margin-top: 4px;
 }
@@ -258,16 +255,14 @@
   pointer-events: auto;
 }
 
-.chat-group-footer > .chat-message-reactions,
-.chat-message-actions-row > .chat-message-reactions {
+:is(.chat-group-footer, .chat-message-actions-row) > .chat-message-reactions {
   min-width: 0;
   margin-top: 0;
 }
 
 /* One chip and its add button stay together while metadata yields width.
    Longer reaction inventories retain their wrapping layout. */
-.chat-group-footer > .chat-message-reactions--single,
-.chat-message-actions-row > .chat-message-reactions--single {
+:is(.chat-group-footer, .chat-message-actions-row) > .chat-message-reactions--single {
   flex-shrink: 0;
   max-width: 100%;
 }
@@ -279,8 +274,8 @@
   pointer-events: auto;
 }
 
-.chat-group-footer:has(> .chat-message-reactions)
-  > :is(.chat-group-footer__meta, .chat-group-footer-actions) {
+.chat-group-footer:has(> .chat-message-reactions) > .chat-group-footer__meta,
+.chat-group-footer:has(> .chat-message-reactions) > .chat-group-footer-actions {
   opacity: var(--chat-footer-disclosure-opacity, 0);
   pointer-events: var(--chat-footer-disclosure-pointer-events, none);
   transition: opacity 120ms ease-out;
@@ -352,36 +347,6 @@
   opacity: var(--chat-message-action-opacity, 0);
   pointer-events: var(--chat-message-action-pointer-events, none);
   transition: opacity 120ms ease;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .chat-reaction-chip {
-    animation: chat-reaction-chip-in 160ms ease-out;
-  }
-
-  .chat-reaction-chip__count {
-    display: inline-block;
-    animation: chat-reaction-count-in 200ms cubic-bezier(0.2, 0.9, 0.3, 1.4);
-  }
-}
-
-@keyframes chat-reaction-chip-in {
-  from {
-    transform: scale(0.85);
-    opacity: 0;
-  }
-}
-
-@keyframes chat-reaction-count-in {
-  from {
-    transform: translateY(35%);
-    opacity: 0;
-  }
-}
-
-.chat-reaction-action {
-  opacity: var(--chat-message-action-opacity, 0);
-  pointer-events: var(--chat-message-action-pointer-events, none);
 }
 
 .chat-group .chat-reaction-action:hover {
@@ -512,9 +477,10 @@
   white-space: nowrap;
 }
 
-:is(.chat-group-footer-actions, .chat-message-actions-row)
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind),
-.chat-group-footer .chat-send-status__action,
+:is(.chat-group-footer-actions, .chat-message-actions-row) .chat-copy-btn,
+:is(.chat-group-footer-actions, .chat-message-actions-row) .chat-reply-btn,
+:is(.chat-group-footer-actions, .chat-message-actions-row) .chat-read-aloud-btn,
+:is(.chat-group-footer-actions, .chat-message-actions-row) .chat-group-rewind,
 .chat-comment-preview__actions button {
   background: none;
   border: none;
@@ -532,10 +498,16 @@
   justify-content: center;
 }
 
-/* Each action row consumes only its own message's disclosure state. */
-.chat-group {
+/* Each action row consumes only its own message's disclosure state. Closing-footer
+   hover state stops before the potentially large message subtree. */
+.chat-group,
+.chat-group > .chat-group-messages {
   --chat-final-disclosure-opacity: 0;
   --chat-final-disclosure-pointer-events: none;
+}
+
+.chat-group > .chat-group-messages {
+  --chat-footer-detail-position: initial;
 }
 
 .chat-group > .chat-group-footer {
@@ -545,15 +517,18 @@
   --chat-message-action-pointer-events: var(--chat-final-disclosure-pointer-events);
 }
 
-:is(.chat-group-footer-actions, .chat-message-actions-row)
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind) {
+.chat-reaction-action,
+:is(.chat-group-footer-actions, .chat-message-actions-row) .chat-copy-btn,
+:is(.chat-group-footer-actions, .chat-message-actions-row) .chat-reply-btn,
+:is(.chat-group-footer-actions, .chat-message-actions-row) .chat-read-aloud-btn,
+:is(.chat-group-footer-actions, .chat-message-actions-row) .chat-group-rewind {
   opacity: var(--chat-message-action-opacity, 0);
   pointer-events: var(--chat-message-action-pointer-events, none);
 }
 
 .chat-message-actions-row
   :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind) {
-  min-height: var(--chat-message-action-size);
+  min-height: 24px;
 }
 
 .chat-message-footer {
@@ -563,7 +538,8 @@
 }
 
 /* Extend only the toolbar hitbox through its existing gap to the message. */
-:is(.chat-group-footer, .chat-message-actions-row)::before {
+.chat-group-footer::before,
+.chat-message-actions-row::before {
   content: "";
   position: absolute;
   inset-inline: 0;
@@ -575,7 +551,8 @@
 .chat-group-messages
   > :is(.chat-bubble, .chat-message--reply):hover
   + :is(.chat-message-actions-row, .chat-message-footer),
-:is(.chat-message-actions-row, .chat-message-footer):hover {
+.chat-message-actions-row:hover,
+.chat-message-footer:hover {
   --chat-message-action-opacity: 0.6;
   --chat-message-action-pointer-events: auto;
   --chat-footer-disclosure-opacity: 1;
@@ -590,10 +567,8 @@
 .chat-group-messages
   > .chat-message--reply:has(> .chat-bubble--actions-revealed)
   + :is(.chat-message-actions-row, .chat-message-footer),
-:is(.chat-message-actions-row, .chat-message-footer):is(
-  :focus-within,
-  :has([data-copy-state="error"])
-) {
+.chat-message-actions-row:is(:focus-within, :has([data-copy-state="error"])),
+.chat-message-footer:is(:focus-within, :has([data-copy-state="error"])) {
   --chat-message-action-opacity: 0.6;
   --chat-message-action-pointer-events: auto;
   --chat-footer-disclosure-opacity: 1;
@@ -659,15 +634,16 @@
     --chat-footer-disclosure-pointer-events: auto;
   }
   .chat-group:not(.chat-group--peer) > .chat-group-footer,
-  .chat-group:not(.chat-group--peer) .chat-message-actions-row,
-  .chat-group:not(.chat-group--peer) .chat-message-footer {
+  .chat-group:not(.chat-group--peer) :is(.chat-message-actions-row, .chat-message-footer) {
     --chat-message-action-opacity: var(--chat-footer-disclosure-opacity, 0);
     --chat-message-action-pointer-events: var(--chat-footer-disclosure-pointer-events, none);
   }
 }
 
-:is(.chat-group-footer-actions, .chat-message-actions-row)
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind):disabled {
+:is(.chat-group-footer-actions, .chat-message-actions-row) .chat-copy-btn:disabled,
+:is(.chat-group-footer-actions, .chat-message-actions-row) .chat-reply-btn:disabled,
+:is(.chat-group-footer-actions, .chat-message-actions-row) .chat-read-aloud-btn:disabled,
+:is(.chat-group-footer-actions, .chat-message-actions-row) .chat-group-rewind:disabled {
   opacity: calc(var(--chat-message-action-opacity, 0) / 2);
   pointer-events: none;
 }
@@ -678,8 +654,10 @@
   pointer-events: none;
 }
 
-:is(.chat-group-footer-actions, .chat-message-actions-row)
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind):hover,
+:is(.chat-group-footer-actions, .chat-message-actions-row) .chat-copy-btn:hover,
+:is(.chat-group-footer-actions, .chat-message-actions-row) .chat-reply-btn:hover,
+:is(.chat-group-footer-actions, .chat-message-actions-row) .chat-read-aloud-btn:hover,
+:is(.chat-group-footer-actions, .chat-message-actions-row) .chat-group-rewind:hover,
 .chat-comment-preview__actions button:hover {
   opacity: 1 !important;
   background: transparent;
@@ -703,24 +681,28 @@
   color: var(--muted);
 }
 
-.chat-group-footer .chat-send-status__action {
-  width: auto;
-  min-width: 0;
-  min-height: 0;
+.chat-send-status__action {
   padding: 0;
+  border: 0;
   border-radius: 0;
-  color: var(--link);
-  font: inherit;
-  opacity: 1 !important;
+  background: none;
   pointer-events: auto;
 }
 
-.chat-group-footer .chat-send-status__discard {
+.chat-send-status__retry {
+  color: var(--link);
+}
+
+.chat-send-status__discard {
   color: var(--muted);
 }
 
-.chat-group-footer .chat-send-status__action:hover {
+.chat-send-status__action:hover {
   text-decoration: underline;
+}
+
+.chat-steer-now {
+  margin-block-start: 4px;
 }
 
 /* Chat divider (e.g., compaction marker) */
@@ -995,10 +977,6 @@
   letter-spacing: -0.02em;
 }
 
-img.chat-avatar.user {
-  object-fit: cover;
-}
-
 /* The frame stays square while loading and when the image falls back. */
 .chat-avatar-slot {
   position: relative;
@@ -1029,9 +1007,7 @@ img.chat-avatar.user {
   display: none;
 }
 
-.chat-avatar.assistant,
-.chat-avatar.other,
-.chat-avatar.tool {
+.chat-avatar:is(.assistant, .other, .tool) {
   background: var(--secondary);
   color: var(--muted);
 }
@@ -1113,10 +1089,12 @@ img.chat-avatar {
   position: relative;
 }
 
-.chat-group.chat-group--reply > :is(.chat-avatar, .chat-avatar-slot),
-.chat-message--reply > :is(.chat-avatar, .chat-avatar-slot) {
+.chat-group.chat-group--reply > .chat-avatar,
+.chat-group.chat-group--reply > .chat-avatar-slot,
+.chat-message--reply > .chat-avatar,
+.chat-message--reply > .chat-avatar-slot {
   align-self: start;
-  margin-top: calc(var(--chat-reply-attribution-line-height) + var(--chat-reply-attribution-gap));
+  margin-top: calc(20px + var(--chat-reply-attribution-gap));
   position: relative;
   z-index: 1;
   display: grid;
@@ -1127,8 +1105,7 @@ img.chat-avatar {
   box-shadow: none;
 }
 
-.chat-group--reply > .chat-avatar-slot > .chat-avatar,
-.chat-message--reply > .chat-avatar-slot > .chat-avatar {
+:is(.chat-group--reply, .chat-message--reply) > .chat-avatar-slot > .chat-avatar {
   border: 0;
   background: var(--bg);
   outline: 0;
@@ -1141,7 +1118,7 @@ img.chat-avatar {
 .chat-group.assistant.chat-group--reply > :is(.chat-avatar, .chat-avatar-slot) {
   grid-row: 1 / span 2;
   margin-top: calc(
-    var(--chat-reply-attribution-line-height) + var(--chat-reply-attribution-gap) + 4px +
+    20px + var(--chat-reply-attribution-gap) + 4px +
       (var(--chat-text-size) * 1.5 - var(--chat-avatar-column)) / 2
   );
 }
@@ -1156,7 +1133,8 @@ img.chat-avatar {
   min-width: 0;
 }
 
-.chat-message--reply > :is(.chat-avatar, .chat-avatar-slot) {
+.chat-message--reply > .chat-avatar,
+.chat-message--reply > .chat-avatar-slot {
   position: absolute;
   inset-block-start: 0;
   inset-inline-end: calc(100% + var(--chat-avatar-gap));
@@ -1194,16 +1172,14 @@ img.chat-avatar {
   gap: 6px;
   min-width: 0;
   width: 100%;
-  font-size: var(--chat-reply-attribution-font-size);
+  font-size: 13px;
   font-weight: 400;
-  line-height: var(--chat-reply-attribution-line-height);
+  /* A whole-pixel line box keeps the 16px avatar on integer offsets. */
+  line-height: 20px;
   white-space: nowrap;
 }
 
-/* A whole-pixel line box keeps the 16px avatar on integer offsets. */
 :root {
-  --chat-reply-attribution-font-size: 13px;
-  --chat-reply-attribution-line-height: 20px;
   --chat-reply-attribution-gap: 6px;
 }
 
@@ -1295,19 +1271,17 @@ button.chat-reply-attribution__target:focus-visible {
 }
 
 button.chat-reply-attribution__target:disabled {
-  cursor: var(--cursor-default);
+  cursor: default;
 }
 
-.chat-reply-attribution__excerpt {
+.chat-reply-attribution__excerpt,
+.chat-reply-attribution__unavailable {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .chat-reply-attribution__unavailable {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
   color: var(--muted);
   font-weight: 400;
 }
@@ -1375,24 +1349,32 @@ button.chat-reply-attribution__target:disabled {
     justify-content: flex-end;
   }
 
-  :is(.chat-group-footer-actions, .chat-message-actions-row)
-    :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind) {
-    position: relative;
-    margin-inline: 10px;
+  /* Every action, including the reaction trigger, owns 4px on each side, so
+     icons share one 32px rhythm and the row's own box contains every hit area. */
+  :is(.chat-group-footer-actions, .chat-message-actions-row) {
+    gap: 0;
   }
 
-  /* This transparent extension belongs to the native button. It is anchored to
-     the button's bottom edge and grows up over the group's own message, never
-     into the turn gap; inline margins keep neighboring targets apart. It
-     inherits the button’s pointer policy during disclosure. */
+  :is(.chat-group-footer-actions, .chat-message-actions-row) .chat-copy-btn,
+  :is(.chat-group-footer-actions, .chat-message-actions-row) .chat-reply-btn,
+  :is(.chat-group-footer-actions, .chat-message-actions-row) .chat-read-aloud-btn,
+  :is(.chat-group-footer-actions, .chat-message-actions-row) .chat-group-rewind,
+  :is(.chat-group-footer-actions, .chat-message-actions-row) .chat-reaction-action {
+    position: relative;
+    margin-inline: 4px;
+  }
+
+  /* This transparent extension belongs to the native button. It fills the
+     button's inline margins and grows up over the group's own message, never
+     into the turn gap. It inherits the button's pointer policy during
+     disclosure. */
   :is(.chat-group-footer-actions, .chat-message-actions-row)
     :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind)::before {
     content: "";
     position: absolute;
     inset-block-end: 0;
-    inset-inline-start: -10px;
-    width: var(--chat-touch-target);
-    height: var(--chat-touch-target);
+    inset-inline: -4px;
+    height: 44px;
     pointer-events: inherit;
   }
 
@@ -1474,19 +1456,6 @@ button.chat-reply-attribution__target:disabled {
   --chat-text-link: var(--link-on-tint);
 }
 
-/* User bubbles have different styling */
-.chat-group.user .chat-bubble {
-  --chat-bubble-background: var(--chat-participant-surface);
-  background: var(--chat-bubble-background);
-
-  :where(.shell[data-background-managed]) & {
-    background:
-      linear-gradient(var(--chat-bubble-background), var(--chat-bubble-background)),
-      var(--bg-content, var(--bg));
-  }
-  border-color: transparent;
-}
-
 :root[data-theme="dark"]
   .chat-group.user:not(.chat-group--sender-tint)
   > .chat-group-messages
@@ -1506,9 +1475,9 @@ button.chat-reply-attribution__target:disabled {
   box-shadow: inset 0 1px 0 var(--card-highlight);
 }
 
-/* Theme selection must not outrank the bare sent-media shell below. */
-:where(:root[data-theme-mode="light"]) .chat-group.user .chat-bubble {
-  border-color: transparent;
+/* Participant surfaces override the generic light bubble in either theme. */
+.chat-group.user .chat-bubble {
+  --chat-bubble-background: var(--chat-participant-surface);
   background: var(--chat-bubble-background);
 
   :where(.shell[data-background-managed]) & {
@@ -1516,6 +1485,11 @@ button.chat-reply-attribution__target:disabled {
       linear-gradient(var(--chat-bubble-background), var(--chat-bubble-background)),
       var(--bg-content, var(--bg));
   }
+  border-color: transparent;
+}
+
+/* Theme selection must not outrank the bare sent-media shell below. */
+:where(:root[data-theme-mode="light"]) .chat-group.user .chat-bubble {
   color: var(--text-strong);
   box-shadow: none;
 }
@@ -1539,15 +1513,6 @@ button.chat-reply-attribution__target:disabled {
       linear-gradient(var(--chat-bubble-background), var(--chat-bubble-background)),
       var(--bg-content, var(--bg));
   }
-}
-
-.chat-group.user.chat-group--sender-tint .chat-bubble:hover {
-  border-color: transparent;
-}
-
-:root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-bubble:hover {
-  border-color: transparent;
-  box-shadow: none;
 }
 
 /* Ephemeral drafts share sent-turn geometry, typography, and identity tint. */
@@ -1905,12 +1870,6 @@ button.chat-reply-attribution__target:disabled {
   user-select: none;
 }
 
-.chat-confirm-popover__check {
-  width: 14px;
-  height: 14px;
-  accent-color: var(--accent);
-}
-
 .chat-confirm-popover__actions {
   display: flex;
   gap: 6px;
@@ -1969,9 +1928,10 @@ button.chat-reply-attribution__target:disabled {
     flex-shrink: 0;
   }
 
+  .chat-group.user:not(.chat-group--peer) .chat-group-footer--persistent-identity .chat-sender-name,
   .chat-group.user:not(.chat-group--peer)
     .chat-group-footer--persistent-identity
-    :is(.chat-sender-name, .chat-message-source) {
+    .chat-message-source {
     order: 0;
   }
 
@@ -2034,15 +1994,17 @@ button.chat-reply-attribution__target:disabled {
     --chat-avatar-gap: 0px;
   }
 
-  .chat-group.chat-group--reply > :is(.chat-avatar, .chat-avatar-slot),
-  .chat-message--reply > :is(.chat-avatar, .chat-avatar-slot),
+  .chat-group.chat-group--reply > .chat-avatar,
+  .chat-group.chat-group--reply > .chat-avatar-slot,
+  .chat-message--reply > .chat-avatar,
+  .chat-message--reply > .chat-avatar-slot,
   .chat-reply-connector {
     display: none;
   }
 
   .chat-reply-attribution--reply {
     align-items: center;
-    min-height: var(--chat-reply-attribution-line-height);
+    min-height: 20px;
   }
 
   .chat-reply-attribution--reply .chat-reply-attribution__label {
@@ -2341,6 +2303,7 @@ button.chat-reply-attribution__target:disabled {
   overflow-wrap: anywhere;
 }
 
-.chat-system-events__body :is(.chat-notice, .chat-divider) {
+.chat-system-events__body .chat-notice,
+.chat-system-events__body .chat-divider {
   margin: 0;
 }

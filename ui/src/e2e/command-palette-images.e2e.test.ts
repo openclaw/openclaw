@@ -1,10 +1,6 @@
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
-import {
-  expectForegroundUnchanged,
-  openFromForeground,
-  scenario,
-} from "./command-palette.test-support.ts";
+import { foregroundDraft, openFromForeground, scenario } from "./command-palette.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -120,36 +116,30 @@ suite.define(() => {
               message: "",
               attachments,
             });
-            // The launcher closes once create is sent; the failure notice reopens the prompt.
+            // The start owns its images; the launcher reopens empty while it is pending.
+            await input.waitFor({ state: "hidden" });
+            await page.keyboard.press("ControlOrMeta+K");
+            await input.waitFor({ state: "visible" });
+            expect(await images.count()).toBe(0);
+            await input.press("Escape");
             await input.waitFor({ state: "hidden" });
             await gateway.rejectDeferred("sessions.create", {
               code: "INVALID_REQUEST",
               message: "Could not create session",
             });
             const toast = page.locator(".app-toast");
-            await expect.poll(() => toast.textContent()).toContain("Session didn't start");
-            await toast.getByRole("button", { name: "Edit prompt", exact: true }).click();
-            await input.waitFor({ state: "visible" });
-            await expect
-              .poll(() => palette.getByRole("alert").textContent())
-              .toContain("Could not create session");
+            await expect.poll(() => toast.textContent()).toContain("Could not create session");
             expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-            expect(await images.count()).toBe(2);
-            await input.press("Escape");
-            await input.waitFor({ state: "hidden" });
-            await page.keyboard.press("ControlOrMeta+K");
-            await input.waitFor({ state: "visible" });
-            expect(await images.count()).toBe(2);
-            await expect.poll(() => start.isEnabled()).toBe(true);
-            await input.press("ControlOrMeta+Enter");
+            await toast.getByRole("button", { name: "Try again", exact: true }).click();
             expect(
               (await gateway.waitForRequest("sessions.create", { after: 1 })).params,
             ).toMatchObject({
               message: "",
               attachments,
             });
-            await input.waitFor({ state: "hidden" });
-            await expectForegroundUnchanged(page, composer, url);
+            // Notice actions retire their own button; the foreground route and draft stay intact.
+            expect(page.url()).toBe(url);
+            expect(await composer.inputValue()).toBe(foregroundDraft);
             expect(await gateway.getRequests("chat.send")).toEqual([]);
           }
         },

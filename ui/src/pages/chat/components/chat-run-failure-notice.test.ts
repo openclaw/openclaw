@@ -1,5 +1,8 @@
 // @vitest-environment jsdom
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { ApplicationContext } from "../../../app/context.ts";
+import { ApplicationProvider } from "../../../lib/reactive/context.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { mountSolid as mountStatefulSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
@@ -79,7 +82,7 @@ it("replaces the canonical failed run row with one line-icon notice and explicit
   }
   const onRetry = vi.fn();
   drawNotice(item, { failureActionsRunId: "run-a", onRetryRun: onRetry });
-  expect(container.textContent).toContain("Unable to finish this reply");
+  expect(container.textContent).toContain("Couldn’t finish this reply");
   expect(container.textContent).not.toContain("⚠");
   expect(part("icon svg")).not.toBeNull();
   expect(query("details")).toBeNull();
@@ -165,4 +168,50 @@ it("shows a repeat count only for repeated failures", () => {
     drawNotice({ ...item, repeatCount });
     expect(part("repeat")).toBeNull();
   }
+});
+
+it("names a provider's billing problem and sends its fix to Models, not another attempt", () => {
+  const navigate = vi.fn<ApplicationContext["navigate"]>();
+  const onRetryRun = vi.fn<(runId: string) => void>();
+  const draw = (failoverReason: string) =>
+    mountSolid(
+      () =>
+        createComponent(ApplicationProvider, {
+          value: { navigate } as unknown as ApplicationContext,
+          get children() {
+            return createComponent(ChatNotice, {
+              item: {
+                ...failure("Provider error"),
+                runError: {
+                  runId: "run-a",
+                  summary: "Provider error",
+                  cause: { provider: "openrouter", failoverReason },
+                },
+              },
+              recovery: { failureActionsRunId: "run-a", onRetryRun },
+            });
+          },
+        }),
+      { container },
+    );
+  const billing = draw("billing");
+  expect(part("title")?.textContent).toBe("OpenRouter reports a billing problem");
+  const [openModels, tryAgain] = container.querySelectorAll<HTMLButtonElement>(
+    ".chat-run-failure__retry",
+  );
+  expect(openModels?.textContent).toBe("Open Models");
+  expect(openModels?.classList.contains("primary")).toBe(true);
+  expect(tryAgain?.classList.contains("primary")).toBe(false);
+  openModels?.click();
+  expect(navigate).toHaveBeenCalledExactlyOnceWith("model-providers", {
+    search: "?provider=openrouter",
+  });
+  expect(onRetryRun).not.toHaveBeenCalled();
+  billing.unmount();
+
+  // A failure another attempt can fix keeps its generic title and Try again.
+  draw("overloaded");
+  expect(part("title")?.textContent).toBe("Couldn’t finish this reply");
+  expect(container.querySelectorAll(".chat-run-failure__retry")).toHaveLength(1);
+  expect(query(".chat-run-failure__retry")?.classList.contains("primary")).toBe(true);
 });

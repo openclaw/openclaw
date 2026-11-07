@@ -17,6 +17,7 @@ import { Session } from "node:inspector/promises";
 import { stripTypeScriptTypes } from "node:module";
 import { loadavg } from "node:os";
 import { parseArgs } from "node:util";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -65,12 +66,7 @@ const inspector = values.allocations ? new Session() : undefined;
 let allocatedBytes;
 try {
   if (inspector) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const hostLoadBefore = loadavg();
   const started = performance.now();

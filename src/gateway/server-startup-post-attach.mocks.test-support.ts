@@ -134,7 +134,7 @@ vi.mock("./server-startup-log.js", () => ({
 }));
 
 // mock-isolation: Control update-check lifetime without network refreshes or persistent update campaigns.
-vi.mock("../infra/update-startup.js", () => ({
+vi.mock("../infra/update-startup-scheduler.js", () => ({
   createGatewayUpdateCheck: postAttachMocks.createGatewayUpdateCheck,
 }));
 

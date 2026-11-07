@@ -139,7 +139,7 @@ export function resolveOcPath(ast: OcAst, path: OcPath): OcMatch | null {
       if (p.section === undefined) {
         return { kind: "insertion-point", container: "md-file", line: 1 };
       }
-      if (p.section === "[frontmatter]") {
+      if (p.section === "[frontmatter]" && p.item === undefined && p.field === undefined) {
         return { kind: "insertion-point", container: "md-frontmatter", line: 1 };
       }
       if (p.item === undefined && p.field === undefined) {
@@ -424,11 +424,18 @@ function setMdInsertion(ast: MdAst, info: InsertionInfo, value: string): OcAst {
     }));
   }
 
-  if (p.section === "[frontmatter]") {
+  if (p.section === "[frontmatter]" && p.item === undefined && p.field === undefined) {
     if (typeof info.marker !== "object" || info.marker.kind !== "keyed") {
       throw new OcPathEditError("not-writable", "md frontmatter insertion requires +key");
     }
     const key = info.marker.key;
+    // Keep inserted keys addressable by the Markdown frontmatter reader.
+    if (!/^[a-zA-Z_][a-zA-Z0-9_-]*$/.test(key)) {
+      throw new OcPathEditError(
+        "not-writable",
+        "md frontmatter keys must start with an ASCII letter or underscore and contain only ASCII letters, digits, underscores, or hyphens",
+      );
+    }
     if (ast.frontmatter.some((e) => e.key === key)) {
       throw new OcPathEditError(
         "type-mismatch",

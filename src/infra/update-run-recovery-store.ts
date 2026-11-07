@@ -2,8 +2,8 @@ import { isDeepStrictEqual } from "node:util";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { PluginSourceSnapshotIndexChange } from "../plugins/plugin-source-snapshot.types.js";
 import {
-  readPluginCohortArtifactIdentity,
   readPluginCohortArtifactPreimage,
+  readPluginCohortPublishedArtifactIdentity,
   readPluginCohortRetentionMarker,
 } from "../plugins/update-cohort-artifacts.js";
 import {
@@ -17,6 +17,7 @@ import type { DB } from "../state/openclaw-state-db.generated.js";
 import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import type { EngineConnection } from "./sql-connection.js";
+import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
 import {
   assertPluginCohortRecoveryBinding,
   decodePluginCohortRecovery,
@@ -41,6 +42,15 @@ import {
 import type { UpdateRecoveryFence } from "./update-run-recovery-types.js";
 
 type RecoveryDatabase = Pick<DB, "update_runs" | "config_machine_state">;
+
+export function readUpdateRecoveryAdmissionFacts(db: EngineConnection) {
+  // Reservations and companions must come from one snapshot; an orphan cannot
+  // disappear between reads. Execution authority stays with the calling updater.
+  return runSqliteReadSnapshotSync(db, () => ({
+    cohorts: inspectPluginCohortRecoveryRows(db),
+    recoveries: inspectRecoveryRows(db),
+  }));
+}
 
 function readRecoveryRows(db: EngineConnection, runId?: string) {
   if (!tableExists(db, "config_machine_state")) {
@@ -382,7 +392,10 @@ export function recordPluginCohortIndexPublicationInDatabase(
     ) {
       return artifact;
     }
-    return { ...artifact, identity: readPluginCohortArtifactIdentity(artifact.targetPackageDir) };
+    return {
+      ...artifact,
+      identity: readPluginCohortPublishedArtifactIdentity(artifact.targetPackageDir),
+    };
   });
   const cohort = {
     ...pair.cohort,

@@ -219,7 +219,7 @@ suite.define(() => {
             page,
             rail,
             `${id} rail`,
-            "var(--accent-foreground)",
+            "var(--sidebar-rail-action-foreground)",
             [
               "var(--sidebar-rail-action-bg)",
               "var(--sidebar-rail-action-hover-bg)",
@@ -261,7 +261,7 @@ suite.define(() => {
           expect(sent.params, `${id}: submitted draft`).toMatchObject({
             message: "Review this draft.",
           });
-          const stop = page.getByRole("button", { name: "Stop generating", exact: true });
+          const stop = page.getByRole("button", { name: "Stop", exact: true });
           await stop.waitFor({ state: "visible" });
           const stopMobile = await inspectStates(page, stop, `${id} stop`, "var(--danger)");
           await screenshot(page, `${id}-mobile-stop`, [chatInput]);

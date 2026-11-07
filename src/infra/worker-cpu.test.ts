@@ -218,6 +218,37 @@ describe("worker CPU lifecycle", () => {
     }
   });
 
+  it("retains cumulative reader bytes across worker replacement without per-read messages", async () => {
+    const operation = "sessions.usage.refresh";
+    for (const id of [9011, 9012]) {
+      const worker = registerWorker(id, "./session-transcript.worker.ts");
+      const { port1, port2 } = new MessageChannel();
+      const values = new BigUint64Array(new SharedArrayBuffer(16));
+      receiveWorkerMemoryPort(worker, { status: "memory", port: port1 });
+      const registered = id === 9011 ? once(port1, "message") : undefined;
+      port2.postMessage({ sqliteReaderCounter: { operation, values } });
+      if (registered) {
+        await registered;
+      }
+      Atomics.add(values, 0, 2n);
+      Atomics.add(values, 1, 4096n);
+      if (registered) {
+        expect(sampleTrackedWorkerMemory({ refresh: false }).sqliteReaderMetrics).toContainEqual({
+          operation,
+          count: 2,
+          readBytes: 4096,
+        });
+      }
+      worker.emit("exit");
+      port2.close();
+    }
+    expect(sampleTrackedWorkerMemory({ refresh: false }).sqliteReaderMetrics).toContainEqual({
+      operation,
+      count: 4,
+      readBytes: 8192,
+    });
+  });
+
   it.each([
     ["ERR_WORKER_OUT_OF_MEMORY", "crash"],
     ["ERR_CODE_MODE_GC_THRASH", "gc-thrash"],

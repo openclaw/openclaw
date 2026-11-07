@@ -1,39 +1,44 @@
 import type { TranslationMap } from "../lib/types.ts";
 import { registerChatCommandsEnglish } from "./en-chat-commands.ts";
 import { registerChatWelcomeEnglish } from "./en-chat-welcome.ts";
+import { registerSessionOrganizationSharedEnglish } from "./en-session-organization-shared.ts";
 import { en } from "./en.ts";
 
-// Discovery copy loads with the palette or transcript search, not the shell.
+// Discovery copy loads with the palette, not the shell or Sessions page.
 const enCommandPalette = {
   commandPalette: {
     newSessionSettings: "New session settings",
     rememberSettings: "Remember settings for {shortcut}",
     rememberSettingsNoShortcut: "Remember these settings",
     rememberUnavailable: "Reconnect to remember settings.",
-    settingsSaveFailed: "Could not save settings.",
+    settingsSaveFailed: "Couldn’t save settings. Try again.",
   },
   palette: {
     placeholder: en.palette.placeholder,
-    noResults: "No results found",
+    noResults: "No results match your search.",
     noResultsStart: "Press {shortcut} to start a new session.",
     startSession: "New session",
     startSessionBackground: "Start new session in background",
     startingSession: "Starting…",
-    startFailed: "Session didn't start: {error}",
-    editPrompt: "Edit prompt",
+    sessionStarted: "Session started",
+    sessionCreated: "Session created",
+    sessionCreatedWithError: "Session created, but couldn't start: {error}",
+    startFailed: "Couldn’t start the session. Try again. {error}",
+    tryAgain: "Try again",
     promptRequired: "Write a prompt to start a session.",
     attachmentPrompt: en.palette.attachmentPrompt,
     searchingSessions: "Searching sessions…",
     searchingCommands: "Searching commands…",
+    archivedSessionsExcluded: "Archived sessions are not included in message search.",
     clearSearch: "Clear search",
     escapeKey: "esc",
     filterLabel: "Filter search results",
     filters: { all: "All", sessions: "Sessions", messages: "Messages" },
-    searchFailed: "Chat search failed — check the gateway logs and retry",
-    searchOffline: "Reconnect to search Gateway content.",
-    modelSearchFailed: "Model search unavailable. Change your search to retry.",
-    searchPartial: "Transcript search unavailable — showing chat titles and metadata",
-    searchIndexing: "Results may be incomplete — search again shortly.",
+    searchFailed: "Couldn’t search sessions. Try again.",
+    searchOffline: "Reconnect to search sessions.",
+    modelSearchFailed: "Couldn’t search models. Change your search to try again.",
+    searchPartial: "Couldn’t search messages. Showing session titles and details.",
+    searchIndexing: "Results may be incomplete. Search again shortly.",
     categories: {
       search: "Search",
       navigation: en.palette.categories.navigation,
@@ -61,23 +66,9 @@ const enCommandPalette = {
     },
   },
   sessionsView: {
-    transcriptSearchTitle: "Search transcripts",
-    transcriptSearchDescription:
-      "Find exact words or phrases in user and assistant messages across the default agent's sessions.",
-    transcriptSearchInputLabel: "Search session transcripts",
-    transcriptSearchPlaceholder: "Search exact words or phrases…",
-    transcriptSearchAction: "Search",
-    transcriptSearchClear: "Clear",
-    transcriptSearchRetry: "Retry",
-    transcriptSearchSearching: "Searching transcripts…",
-    transcriptSearchUnavailable: "Connect to the Gateway to search transcripts.",
-    transcriptSearchError: "Transcript search failed",
-    transcriptSearchIndexing: "Results may be incomplete — search again shortly.",
     transcriptSearchArchivedExcluded:
-      "{count} archived transcripts excluded; open a session to restore its searchable history.",
-    transcriptSearchEmpty: "No transcript messages match that search.",
-    transcriptSearchMatches: "Transcript matches: {count}",
-    transcriptSearchTruncated: "Showing the first 25 matches.",
+      registerSessionOrganizationSharedEnglish.catalog.sessionsView
+        .transcriptSearchArchivedExcluded,
   },
 
   shortcutsOverlay: {

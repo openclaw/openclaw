@@ -332,11 +332,11 @@ export async function runGlobalPackageUpdateSteps(params: {
       installSpec: params.installSpec,
       packageName: params.packageName,
       runStep: params.runStep,
+      onPackDir: (packDir) => (packedInstallDir = packDir),
       timeoutMs: workTimeoutMs,
       env: params.env,
       installCwd: params.installCwd,
     });
-    packedInstallDir = preparedSpec.packDir;
     steps.push(...preparedSpec.steps);
     if (preparedSpec.failedStep) {
       return await packageUpdateFailure(preparedSpec.failedStep, steps);

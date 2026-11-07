@@ -136,19 +136,13 @@ openclaw-desktop-panel {
     flex: 1;
   }
   .desktop-sizing {
+    --settings-control-height: 32px;
+
     width: 88px;
-    height: 32px;
     flex: 0 0 auto;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 0 6px;
-    background: var(--bg);
-    color: var(--text);
-    font: inherit;
-    font-size: 12px;
   }
   .desktop-touch-toolbar .desktop-sizing {
-    height: 44px;
+    --settings-control-height: 44px;
   }
   .desktop-sizing-menu__trigger {
     height: 28px;

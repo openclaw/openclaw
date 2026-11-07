@@ -335,7 +335,7 @@ describe("memory embedding policy", () => {
     message: string;
     expectedCalls: number;
   }> = [
-    // Transient transport/service errors retry up to the short 3-attempt budget.
+    // Network/service failures retry; batch watchdog timeouts go straight to splitting.
     {
       label: "fetch failed transport error",
       message: "TypeError: fetch failed | other side closed",
@@ -349,7 +349,7 @@ describe("memory embedding policy", () => {
     {
       label: "embedding batch timeout",
       message: "memory embeddings batch timed out",
-      expectedCalls: 3,
+      expectedCalls: 1,
     },
     { label: "5xx service error", message: "HTTP 503: service unavailable", expectedCalls: 3 },
     // Permanent errors never retry.
@@ -457,12 +457,13 @@ describe("memory embedding policy", () => {
     expect(onSuccess).not.toHaveBeenCalled();
   });
 
-  it("splits transport errors only when a smaller request can help", async () => {
+  it("splits recoverable transport failures and batch watchdog timeouts", async () => {
     const splittableMessages = [
       "TypeError: fetch failed | other side closed",
       "undici error: UND_ERR_SOCKET",
       "read ECONNRESET",
       "socket hang up",
+      "memory embeddings batch timed out",
     ];
 
     for (const message of splittableMessages) {
@@ -470,7 +471,6 @@ describe("memory embedding policy", () => {
     }
     expect(await probeBatchSplits("ECONNREFUSED")).toBe(false);
     expect(await probeBatchSplits("EHOSTUNREACH")).toBe(false);
-    expect(await probeBatchSplits("memory embeddings batch timed out")).toBe(false);
   });
 
   it("splits only provider errors with an explicit numeric embedding item limit", async () => {

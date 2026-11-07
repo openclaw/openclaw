@@ -107,6 +107,30 @@ function kernelFixture() {
 const withKernel = (run: (fixture: ReturnType<typeof kernelFixture>) => void | Promise<void>) =>
   withOpenClawTestState({ scenario: "minimal" }, async () => await run(kernelFixture()));
 
+it("rejects a discarded actor thenable, rolls back, and releases the actor scope", () =>
+  withKernel((f) => {
+    const state = f.hydrate();
+    const then = vi.fn();
+    expect(() =>
+      f.write(() => {
+        withSessionActorTransactionState(f.database, forkSessionActorStoredState(state), () => {
+          expect(f.append("rejected", { role: "user", content: "rejected" })?.appended).toBe(true);
+          // oxlint-disable-next-line unicorn/no-thenable -- Exercise rejection of a discarded thenable.
+          return { then };
+        });
+      }),
+    ).toThrow("SQLite write scopes cannot await work");
+    expect(f.events()).toEqual([]);
+    expect(then).not.toHaveBeenCalled();
+    f.inState(f.hydrate(), () => {
+      expect(f.append("accepted", { role: "user", content: "accepted" })?.appended).toBe(true);
+    });
+    expect(f.events()).toMatchObject([
+      { type: "session", id: f.scope.sessionId },
+      { type: "message", id: "accepted", message: { role: "user", content: "accepted" } },
+    ]);
+  }));
+
 const header = (id: string) => ({
   type: "session",
   id,
