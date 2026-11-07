@@ -507,6 +507,22 @@ Options:
 
 The health snapshot includes: `ok` (boolean), `ts` (timestamp), `durationMs` (check time), per-channel status, agent availability, session-store summary, and optional delivery-queue warnings.
 
+If a queue-health read fails, `deliveryQueues.unavailable` identifies the unavailable
+read (`outbound`, `ingressFailed`, or `ingressPressure`). The endpoint remains
+available, but an empty fallback is not a successful zero count. Both
+`openclaw health` and `openclaw gateway health` report the queue warning; the
+Gateway command uses a `WARN` headline instead of green `OK`. The warning names
+the affected check and suggests `openclaw health --verbose` to retry diagnostics,
+not message delivery. Normal healthy text output is unchanged. JSON remains a
+snapshot passthrough: failed reads add the optional `deliveryQueues.unavailable`
+field and may include `deliveryQueues` where it was previously omitted. Raw
+storage errors, message IDs, and content are not returned.
+A permanent terminal receipt still does not prove delivery or acknowledge an
+incident. These diagnostics alone do not authorize deletion or blind retry, and
+do not create automatic owner follow-up or a global stop for other work.
+Reconciliation of delivery effect and necessary duplicate protection is separate;
+unknown effect blocks only the affected message from blind repetition.
+
 ## Related
 
 - [Gateway runbook](/gateway)

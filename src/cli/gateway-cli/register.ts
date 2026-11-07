@@ -371,18 +371,27 @@ export function registerGatewayCli(program: Command) {
             defaultRuntime.writeJson(result);
             return;
           }
-          const [{ formatHealthChannelLines }, { styleHealthChannelLine }] = await Promise.all([
+          const [
+            { formatHealthChannelLines },
+            { styleHealthChannelLine },
+            { formatDeliveryQueueHealthLine },
+          ] = await Promise.all([
             import("../../commands/health.js"),
             import("../../../packages/terminal-core/src/health-style.js"),
+            import("../../commands/health-format.js"),
           ]);
           const rich = isRich();
           const obj: Record<string, unknown> =
             result && typeof result === "object" ? (result as Record<string, unknown>) : {};
           const durationMs = typeof obj.durationMs === "number" ? obj.durationMs : null;
+          const queueHealthLine = formatDeliveryQueueHealthLine(obj as HealthSummary);
           defaultRuntime.log(colorize(rich, theme.heading, "Gateway Health"));
           defaultRuntime.log(
-            `${colorize(rich, theme.success, "OK")}${durationMs != null ? ` (${durationMs}ms)` : ""}`,
+            `${colorize(rich, queueHealthLine ? theme.warn : theme.success, queueHealthLine ? "WARN" : "OK")}${durationMs != null ? ` (${durationMs}ms)` : ""}`,
           );
+          if (queueHealthLine) {
+            defaultRuntime.log(styleHealthChannelLine(queueHealthLine, rich));
+          }
           if (obj.channels && typeof obj.channels === "object") {
             for (const line of formatHealthChannelLines(obj as HealthSummary)) {
               defaultRuntime.log(styleHealthChannelLine(line, rich));
