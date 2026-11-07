@@ -90,7 +90,7 @@ async function exhaustMountRecovery(page: Page): Promise<void> {
   await page.clock.runFor(12_001);
   await page.getByRole("heading", { name: "Control UI did not start" }).waitFor();
   expect(await page.locator("#openclaw-mount-fallback-summary").textContent()).toContain(
-    "A fresh page still could not start the Control UI",
+    "Automatic retries didn’t fix this",
   );
   await page.clock.runFor(60_000);
   expect(await counter(page, loadCountKey)).toBe("4");
@@ -118,8 +118,14 @@ registeredElementSuite.define(() => {
 
       await exhaustMountRecovery(page);
 
-      expect(await page.getByRole("button", { name: "Try again" }).isVisible()).toBe(true);
+      expect(await page.getByRole("button", { name: "Reload page" }).isVisible()).toBe(true);
       expect(await page.getByRole("button", { name: "Keep waiting" }).isVisible()).toBe(true);
+      if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
+        await page.screenshot({
+          path: registeredElementSuite.artifactDir + "/bootstrap-manual-reload-desktop.png",
+          animations: "disabled",
+        });
+      }
       expect(await counter(page, renderCountKey)).toBeNull();
 
       const drag = await page.evaluate(() => {
@@ -168,7 +174,7 @@ registeredElementSuite.define(() => {
       syntheticModuleRenders = true;
       await Promise.all([
         page.waitForNavigation({ waitUntil: "domcontentloaded" }),
-        page.getByRole("button", { name: "Try again" }).click(),
+        page.getByRole("button", { name: "Reload page" }).click(),
       ]);
       await page.getByText("Application rendered", { exact: true }).waitFor();
       await page.clock.runFor(12_001);

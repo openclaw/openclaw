@@ -1435,12 +1435,9 @@
         <p class="mount-fallback__eyebrow">OpenClaw Control UI</p>
         <h1 id="openclaw-mount-fallback-title">Control UI did not start</h1>
         <p id="openclaw-mount-fallback-summary">
-          The browser loaded the static page, but the app bundle did not start. The gateway may be
-          restarting, or this page may reference assets from a different OpenClaw version.
+          The page loaded, but the app didn’t start. Trying again automatically.
         </p>
         <ul>
-          <li>If startup fails, OpenClaw will retry the current app bundle automatically.</li>
-          <li>If this persists, reload or try a clean browser profile.</li>
           <li>
             See
             <a
@@ -1457,7 +1454,7 @@
             id="openclaw-mount-retry"
             class="mount-fallback__button mount-fallback__button--primary"
           >
-            Try again
+            Reload page
           </button>
           <button type="button" id="openclaw-mount-wait" class="mount-fallback__button">
             Keep waiting
@@ -1477,6 +1474,11 @@
         var failureSummary = summary.textContent;
         var retry = document.getElementById("openclaw-mount-retry");
         var wait = document.getElementById("openclaw-mount-wait");
+        var recoveryActions = fallback.querySelector(".mount-fallback__actions");
+        function setManualRecovery(manual) {
+          if (recoveryActions) recoveryActions.style.display = manual ? "" : "none";
+        }
+        setManualRecovery(false);
         var rawDelay = Number(fallback.getAttribute("data-openclaw-mount-timeout-ms"));
         var delay = Number.isFinite(rawDelay) && rawDelay > 0 ? rawDelay : 12000;
         var maxRecoveryNavigations = 3;
@@ -1540,18 +1542,23 @@
         function finishRecoveryAttempt() {
           recoveryController = undefined;
           if (bootSettled) return;
-          setSummary(
-            "The gateway is not reachable yet. OpenClaw will keep retrying while it restarts.",
-          );
+          setSummary("Couldn’t reach OpenClaw to reload this page. Trying again automatically.");
           scheduleRecovery();
         }
 
         function retryCurrentDocument() {
-          if (bootSettled || recoveryController || typeof window.fetch !== "function") return;
+          if (bootSettled || recoveryController) return;
+          if (typeof window.fetch !== "function") {
+            setManualRecovery(true);
+            setSummary("This browser can’t retry automatically. Reload the page to try again.");
+            return;
+          }
+          setManualRecovery(false);
           var documentUrl = new URL(window.location.href);
           if (recoveryNavigation >= maxRecoveryNavigations) {
+            setManualRecovery(true);
             setSummary(
-              "A fresh page still could not start the Control UI. Try again, then check the troubleshooting guide if the problem persists.",
+              "Automatic retries didn’t fix this. A required file may be missing or blocked. Reload the page to try again.",
             );
             return;
           }
@@ -1656,12 +1663,15 @@
           "openclaw-control-ui-unsupported-browser-failed",
           function () {
             title.textContent = "Browser guidance could not load";
-            setSummary("Check your connection, then try again to load the browser requirements.");
+            setSummary(
+              "Check your connection, then reload this page to load the browser requirements.",
+            );
             fallback.querySelector("ul").hidden = true;
             wait.hidden = true;
             fallback.hidden = false;
             document.body.replaceChildren(fallback);
             document.body.classList.add("openclaw-mount-fallback-active");
+            setManualRecovery(true);
             retry.focus();
           },
           { once: true },
