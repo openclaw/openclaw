@@ -84,7 +84,7 @@ export function findCommandReservationCandidates(reservedAtMs: number): number[]
   const byPid = new Map(births.map((birth) => [birth.pid, birth]));
   const ancestry = (pid: number) => {
     const chain = new Set<number>();
-    for (let next: number | undefined = pid; next && !chain.has(next); ) {
+    for (let next: number | undefined = pid; next && !chain.has(next);) {
       chain.add(next);
       next = byPid.get(next)?.ppid;
     }
