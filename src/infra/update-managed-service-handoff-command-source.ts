@@ -2,6 +2,14 @@ import { SCHTASKS_TIMEOUT_MS } from "../daemon/schtasks-budget.js";
 
 // Embedded into the sealed handoff script; native effects retain their live lease guard.
 export const MANAGED_HANDOFF_COMMAND_SOURCE = String.raw`
+// Elapsed-time budget: survives wall-clock steps, unlike an epoch deadline read back
+// with Date.now(). Spawn deadlines stay epoch-valued for the cross-process contract.
+function createMonotonicBudget(timeoutMs) {
+  const startedAt = performance.now();
+  const remainingMs = () => Math.max(0, Math.floor(timeoutMs - (performance.now() - startedAt)));
+  return { remainingMs, commandDeadlineAt: () => Date.now() + remainingMs() };
+}
+
 function runServiceCommand(command, args, onSpawn, deadline, timeoutCap) {
   if (!hasManagedUpdateLease()) return Promise.resolve({ code: 1, stdout: "", stderr: "" });
   return new Promise((resolve) => {

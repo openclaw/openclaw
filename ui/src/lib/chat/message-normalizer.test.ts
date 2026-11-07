@@ -151,10 +151,10 @@ describe("message-normalizer", () => {
     ],
     [
       "MEDIA paths without filename leakage",
-      "Before\nMEDIA:/tmp/Shopping report.pdf\nAfter",
+      "Before\nMEDIA:media://inbound/%E9%9B%AA.pdf\nAfter",
       [
         text("Before"),
-        media("/tmp/Shopping report.pdf", "document", "Shopping report.pdf", "application/pdf"),
+        media("media://inbound/%E9%9B%AA.pdf", "document", "雪.pdf", "application/pdf"),
         text("After"),
       ],
     ],

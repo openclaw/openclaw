@@ -1,4 +1,5 @@
 import { vi, type Mock } from "vitest";
+import type { ConfigMutationIO, TransformConfigFileWithRetryParams } from "../config/mutate.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { getMockCallOutput } from "./test-runtime-capture.js";
 
@@ -21,6 +22,21 @@ export async function withPostCoreUpdateFixtureRun<T>(operation: () => Promise<T
 
 export function createUpdateConfigMock() {
   const readConfigFileSnapshot = vi.fn();
+  // Keep orchestration I/O synthetic while using the config owner's transform
+  // and publication receipts, including custom plugin-index commits.
+  const io: ConfigMutationIO = {
+    readConfigFileSnapshotForWrite: async (options) => ({
+      snapshot: await readConfigFileSnapshot(options),
+      writeOptions: {},
+    }),
+    writeConfigFile: async () => {},
+  };
+  const replaceConfigFile = vi.fn<typeof import("../config/mutate.js").replaceConfigFile>(
+    async (params) => {
+      const actual = await import("../config/mutate.js");
+      return await actual.replaceConfigFile({ ...params, io });
+    },
+  );
   return {
     // Source-only recovery cleanup may import the runtime loader, but must not use it.
     loadConfig: vi.fn((): OpenClawConfig => {
@@ -72,7 +88,11 @@ export function createUpdateConfigMock() {
     readConfigFileSnapshot,
     readSourceConfigBestEffort: vi.fn(),
     mutateConfigFileWithRetry: vi.fn(),
-    replaceConfigFile: vi.fn(),
+    transformConfigFileWithRetry: async <T>(params: TransformConfigFileWithRetryParams<T>) => {
+      const actual = await import("../config/mutate.js");
+      return await actual.transformConfigFileWithRetry({ ...params, io });
+    },
+    replaceConfigFile,
     resolveGatewayPort: vi.fn(() => 18789),
   };
 }

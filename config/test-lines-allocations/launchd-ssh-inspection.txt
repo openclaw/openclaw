@@ -1,0 +1,2 @@
+32
+# Native launchctl failure through gateway status: missing GUI domain and access denial.

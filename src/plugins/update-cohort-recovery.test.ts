@@ -7,35 +7,38 @@ import { withPluginCohortConfigCapture } from "../config/plugin-cohort-recovery.
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { pluginCohortPublicationContext } from "../infra/update-plugin-cohort-context.js";
 import type { PluginCohortRecovery } from "../infra/update-plugin-cohort-schema.js";
-import { createUpdateRun } from "../infra/update-run-ledger.js";
+import { createUpdateRun, getUpdateRun } from "../infra/update-run-ledger.js";
 import type { UpdateRecoveryRecord } from "../infra/update-run-recovery-schema.js";
 import * as recoveryStore from "../infra/update-run-recovery-store.js";
+import { updateRunWarningMessages } from "../infra/update-run-step.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import {
-  resolvePluginNpmGenerationProjectDir,
-  resolvePluginNpmProjectDir,
-} from "./install-paths.js";
 import * as recordCommit from "./install-record-commit.js";
+import { hashJson } from "./installed-plugin-index-hash.js";
+import { normalizeInstallRecordMap } from "./installed-plugin-index-install-records.js";
 import {
   readPersistedInstalledPluginIndexInstallRecordsAsync,
   writePersistedInstalledPluginIndexInstallRecordsWithLease,
 } from "./installed-plugin-index-records.js";
 import { INSTALLED_PLUGIN_INDEX_STATE_KEY } from "./installed-plugin-index-row.js";
-import { restorePersistedInstalledPluginIndexIfCurrent } from "./installed-plugin-index-store-write.js";
+import {
+  restorePersistedInstalledPluginIndexIfCurrent,
+  refreshPersistedInstalledPluginIndexWithReceipt,
+} from "./installed-plugin-index-store-write.js";
+import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { RETAINED_MANAGED_NPM_KEEP_FILES_REASON } from "./managed-npm-retention-contract.js";
 import {
   markRetainedManagedNpmInstall,
   resolveRetainedManagedNpmInstallMarkerPath,
 } from "./managed-npm-retention.js";
 import { withPluginLifecycleLeaseAsync } from "./plugin-lifecycle-lease.js";
+import type { PluginSourceSnapshotDescriptor } from "./plugin-source-snapshot.types.js";
 import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
-import { readPluginCohortArtifactIdentity } from "./update-cohort-artifacts.js";
 import {
   beginUpdatePluginCohort,
   recordPluginCohortRetentionMarker,
@@ -43,28 +46,7 @@ import {
 } from "./update-cohort-recovery.js";
 
 afterEach(() => vi.restoreAllMocks());
-const fence = { assertCurrent() {} };
-const config = { plugins: { enabled: false } };
-const packageName = "@example/cohort-fixture";
-
-function generation(state: OpenClawTestState, version: string) {
-  writeManagedNpmPlugin({ stateDir: state.stateDir, packageName, pluginId: "fixture", version });
-  const npmDir = state.statePath("npm");
-  const npmRoot = resolvePluginNpmGenerationProjectDir({
-    npmDir,
-    packageName,
-    generationKey: version,
-  });
-  fs.renameSync(resolvePluginNpmProjectDir({ npmDir, packageName }), npmRoot);
-  const packageDir = path.join(npmRoot, "node_modules", ...packageName.split("/"));
-  const record: PluginInstallRecord = {
-    source: "npm",
-    spec: `${packageName}@${version}`,
-    version,
-    installPath: packageDir,
-  };
-  return { npmRoot, packageDir, record, identity: readPluginCohortArtifactIdentity(packageDir) };
-}
+import { config, fence, generation, packageName } from "./update-cohort-recovery.test-support.js";
 
 async function fixture(state: OpenClawTestState) {
   await state.writeConfig(config);
@@ -198,49 +180,277 @@ it.each([false, true])(
   },
 );
 
-it.each(["record", "artifact", "chain"] as const)(
-  "preserves a conflicting %s before cumulative index restore",
-  async (conflict) => {
+it("retains unpublished snapshot cleanup authority until pending rollback settles", async () => {
+  await withOpenClawTestState(
+    { label: "cohort-unpublished-snapshot", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
+    async (state) => {
+      const { preparePluginSourceSnapshot } = await import("./plugin-generation-worker.js");
+      const { collectInstalledPluginSourceSnapshots } =
+        await import("./plugin-source-snapshot-collection.js");
+      const { closeDefaultRetainedNativeWorkerSource } =
+        await import("../infra/worker-native-lifecycle.js");
+      const f = await fixture(state);
+      const snapshot = await preparePluginSourceSnapshot({
+        stateDir: state.stateDir,
+        rootDir: f.latest.packageDir,
+      });
+      try {
+        const descriptor = await snapshot.publish({
+          installRecordHash: hashJson(
+            normalizeInstallRecordMap({ fixture: f.latest.record }).fixture,
+          ),
+          contentDigest: snapshot.contentDigest,
+          dependencyClosureDigest: snapshot.dependencyClosureDigest,
+          buildResolutionDigest: "build-resolution",
+        });
+        await snapshot.disposeAsync();
+        f.begin();
+        await collectInstalledPluginSourceSnapshots(state.stateDir, [descriptor]);
+        expect(fs.existsSync(descriptor.artifact.path)).toBe(true);
+        expect(
+          (await readPersistedInstalledPluginIndex({ env: state.env }))?.retiredSourceSnapshots,
+        ).toContainEqual({ ...descriptor, installedRevision: 0 });
+        await f.settle();
+        expect(fs.existsSync(descriptor.artifact.path)).toBe(false);
+      } finally {
+        await snapshot.disposeAsync();
+        await closeDefaultRetainedNativeWorkerSource();
+      }
+    },
+  );
+});
+
+it.each(["records", "same-record", "successor"] as const)(
+  "restores exact snapshot metadata through cohort rollback (%s)",
+  async (mode) => {
     await withOpenClawTestState(
-      { label: "cohort-conflicting-records", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
+      { label: "cohort-source-snapshots", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
       async (state) => {
         const f = await fixture(state);
-        if (conflict === "chain") {
-          f.cohort.publications[1] = {
-            kind: "records",
-            records: [
+        const digests = { contentDigest: "c".repeat(64), dependencyClosureDigest: "d".repeat(64) };
+        const recordHash = (record: PluginInstallRecord) =>
+          hashJson(normalizeInstallRecordMap({ fixture: record }).fixture);
+        for (const installed of [f.original, f.middle, f.latest]) {
+          installed.record.sourceSnapshotDigests = { fixture: digests };
+        }
+        const descriptor = (
+          installed: typeof f.original,
+          installedRevision: number,
+        ): PluginSourceSnapshotDescriptor => ({
+          formatVersion: 1,
+          generation: installed.record.version!,
+          installedRevision,
+          installRecordHash: recordHash(installed.record),
+          ...digests,
+          buildResolutionDigest: "b".repeat(64),
+          platform: process.platform,
+          arch: process.arch,
+          abi: process.versions.modules,
+          artifact: {
+            path: state.statePath("snapshot", String(installedRevision)),
+            identity: "identity",
+            manifestIdentity: "manifest",
+            manifestDigest: "f".repeat(64),
+            tokenIdentity: "token-identity",
+          },
+        });
+        const current = await refreshPersistedInstalledPluginIndexWithReceipt({
+          reason: "source-changed",
+          env: state.env,
+          config,
+          installRecords: f.current,
+          sourceSnapshots: [
+            {
+              pluginId: "fixture",
+              installOwner: "fixture",
+              rootDir: f.latest.packageDir,
+              descriptor: descriptor(f.latest, 3),
+            },
+          ],
+        });
+        const latestDescriptor = {
+          ...descriptor(f.latest, 3),
+          installedRevision: current.revision,
+        };
+        const originalDescriptor = descriptor(mode === "same-record" ? f.latest : f.original, 1);
+        const metadata = (
+          installed: typeof f.original,
+          sourceSnapshot: PluginSourceSnapshotDescriptor,
+        ) => ({
+          installOwner: "fixture",
+          rootDir: installed.packageDir,
+          installRecordHash: recordHash(installed.record),
+          sourceSnapshot,
+        });
+        const middleDescriptor = descriptor(f.middle, 2);
+        f.cohort.publications =
+          mode === "same-record"
+            ? [
+                {
+                  kind: "records",
+                  records: [],
+                  sourceSnapshots: [
+                    {
+                      pluginId: "fixture",
+                      before: metadata(f.latest, originalDescriptor),
+                      after: metadata(f.latest, latestDescriptor),
+                    },
+                  ],
+                },
+              ]
+            : [
+                {
+                  kind: "records",
+                  records: [
+                    { pluginId: "fixture", before: f.original.record, after: f.middle.record },
+                  ],
+                  sourceSnapshots: [
+                    {
+                      pluginId: "fixture",
+                      before: metadata(f.original, originalDescriptor),
+                      after: metadata(f.middle, middleDescriptor),
+                    },
+                  ],
+                },
+                {
+                  kind: "records",
+                  records: [
+                    { pluginId: "fixture", before: f.middle.record, after: f.latest.record },
+                  ],
+                  sourceSnapshots: [
+                    {
+                      pluginId: "fixture",
+                      before: metadata(f.middle, middleDescriptor),
+                      after: metadata(f.latest, latestDescriptor),
+                    },
+                  ],
+                },
+              ];
+        expect(await recoveryStore.canCollectPluginSourceSnapshots({ env: state.env })).toBe(true);
+        f.begin();
+        expect(await recoveryStore.canCollectPluginSourceSnapshots({ env: state.env })).toBe(false);
+        if (mode === "successor") {
+          await refreshPersistedInstalledPluginIndexWithReceipt({
+            reason: "source-changed",
+            env: state.env,
+            config,
+            installRecords: f.current,
+            sourceSnapshots: [
               {
                 pluginId: "fixture",
-                before: { ...f.middle.record, version: "independent" },
-                after: f.latest.record,
+                installOwner: "fixture",
+                rootDir: f.latest.packageDir,
+                descriptor: { ...latestDescriptor, generation: "independent" },
               },
             ],
-          };
+          });
+          // The later snapshot owns the plugin: its record and snapshot both stay.
+          await f.settle();
+          expect(
+            (await readPersistedInstalledPluginIndex({ env: state.env }))?.plugins.find(
+              (plugin) => plugin.pluginId === "fixture",
+            )?.sourceSnapshot,
+          ).toMatchObject({ generation: "independent" });
+          expect(
+            await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+          ).toEqual(f.current);
+          expect(
+            recoveryStore.loadPluginCohortRecovery(f.runId, { env: state.env }),
+          ).toBeUndefined();
+          expect(
+            updateRunWarningMessages(getUpdateRun(f.runId, { env: state.env })?.steps ?? []),
+          ).toEqual([expect.stringContaining("plugin fixture source snapshot")]);
+        } else {
+          await f.settle();
+          expect(
+            (await readPersistedInstalledPluginIndex({ env: state.env }))?.plugins.find(
+              (plugin) => plugin.pluginId === "fixture",
+            )?.sourceSnapshot,
+          ).toEqual(originalDescriptor);
+          expect(await recoveryStore.canCollectPluginSourceSnapshots({ env: state.env })).toBe(
+            true,
+          );
         }
+      },
+    );
+  },
+);
+
+it("refuses a corrupt publication chain before cumulative index restore", async () => {
+  await withOpenClawTestState(
+    { label: "cohort-conflicting-records", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
+    async (state) => {
+      const f = await fixture(state);
+      // Journal corruption, not a later writer: the chain itself disagrees.
+      f.cohort.publications[1] = {
+        kind: "records",
+        records: [
+          {
+            pluginId: "fixture",
+            before: { ...f.middle.record, version: "independent" },
+            after: f.latest.record,
+          },
+        ],
+      };
+      f.begin();
+      const commit = vi.spyOn(recordCommit, "commitPluginInstallRecordsOnly");
+      await expect(f.settle()).rejects.toThrow("between update publications");
+      expect(commit).not.toHaveBeenCalled();
+      expect(
+        await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+      ).toEqual(f.current);
+      expect(recoveryStore.loadPluginCohortRecovery(f.runId, { env: state.env })).toBeDefined();
+    },
+  );
+});
+
+it.each(["install record", "package files"] as const)(
+  "keeps later %s, restores matching ones and completes rollback",
+  async (laterChange) => {
+    await withOpenClawTestState(
+      { label: "cohort-later-record", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
+      async (state) => {
+        const f = await fixture(state);
+        const local = (name: string): PluginInstallRecord => {
+          const installPath = state.statePath(name);
+          fs.mkdirSync(installPath, { recursive: true });
+          return { source: "path", installPath, sourcePath: installPath };
+        };
+        const localBefore = local("local-before");
+        const localAfter = local("local-after");
+        f.cohort.publications.push({
+          kind: "records",
+          records: [{ pluginId: "local", before: localBefore, after: localAfter }],
+        });
         f.begin();
-        const current =
-          conflict === "record"
-            ? { fixture: { ...f.latest.record, version: "independent" }, later: f.later }
-            : f.current;
-        if (conflict === "record") {
-          await seedInstalledPluginIndex(current, { config, env: state.env });
-        }
-        if (conflict === "artifact") {
+        // A later install replaced the fixture's record, or its published payload.
+        const independent =
+          laterChange === "install record"
+            ? { ...f.latest.record, version: "independent" }
+            : f.latest.record;
+        if (laterChange === "package files") {
           fs.appendFileSync(path.join(f.latest.packageDir, "package.json"), "\n");
         }
-        const commit = vi.spyOn(recordCommit, "commitPluginInstallRecordsOnly");
-        await expect(f.settle()).rejects.toThrow(
-          conflict === "artifact"
-            ? "artifact changed"
-            : conflict === "chain"
-              ? "between update publications"
-              : "changed after the update",
+        await seedInstalledPluginIndex(
+          { fixture: independent, later: f.later, local: localAfter },
+          { config, env: state.env },
         );
-        expect(commit).not.toHaveBeenCalled();
+        const warnings: string[] = [];
+        await settleUpdatePluginCohort({
+          runId: f.runId,
+          env: state.env,
+          fence,
+          action: "rollback",
+          onLaterDecisionsKept: (warning) => warnings.push(warning),
+        });
         expect(
           await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
-        ).toEqual(current);
-        expect(recoveryStore.loadPluginCohortRecovery(f.runId, { env: state.env })).toBeDefined();
+        ).toEqual({ fixture: independent, later: f.later, local: localBefore });
+        expect(recoveryStore.loadPluginCohortRecovery(f.runId, { env: state.env })).toBeUndefined();
+        expect(warnings).toEqual([expect.stringContaining(`plugin fixture ${laterChange}`)]);
+        expect(
+          updateRunWarningMessages(getUpdateRun(f.runId, { env: state.env })?.steps ?? []),
+        ).toEqual(warnings);
       },
     );
   },
@@ -519,9 +729,8 @@ it.each(["replacement-active", "database-restored", "later-payload"] as const)(
             path.join(original.packageDir, "package.json"),
             '{"version":"independent"}',
           );
-          await expect(
-            settleUpdatePluginCohort({ runId, env: state.env, fence, action: "rollback" }),
-          ).rejects.toThrow("Originally absent payload now exists");
+          // A later payload at the originally absent path keeps the repaired record.
+          await settleUpdatePluginCohort({ runId, env: state.env, fence, action: "rollback" });
           expect(
             await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
           ).toEqual({
@@ -530,7 +739,10 @@ it.each(["replacement-active", "database-restored", "later-payload"] as const)(
           expect(fs.readFileSync(path.join(original.packageDir, "package.json"), "utf8")).toBe(
             '{"version":"independent"}',
           );
-          expect(recoveryStore.loadPluginCohortRecovery(runId, { env: state.env })).toBeDefined();
+          expect(recoveryStore.loadPluginCohortRecovery(runId, { env: state.env })).toBeUndefined();
+          expect(
+            updateRunWarningMessages(getUpdateRun(runId, { env: state.env })?.steps ?? []),
+          ).toEqual([expect.stringContaining("plugin fixture original package files")]);
         } else {
           await settleUpdatePluginCohort({ runId, env: state.env, fence, action: "rollback" });
           expect(
@@ -548,3 +760,65 @@ it.each(["replacement-active", "database-restored", "later-payload"] as const)(
     );
   },
 );
+
+it("keeps a damaged npm payload without package.json as its rollback baseline", async () => {
+  await withOpenClawTestState(
+    { label: "cohort-damaged-payload", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
+    async (state) => {
+      await state.writeConfig(config);
+      const original = generation(state, "1.0.0");
+      await seedInstalledPluginIndex({ fixture: original.record }, { config, env: state.env });
+      fs.rmSync(path.join(original.packageDir, "package.json"));
+      const { runId } = createUpdateRun({ trigger: "cli" }, { env: state.env });
+      const pair = await beginUpdatePluginCohort({
+        runId,
+        installKey: state.root,
+        env: state.env,
+        fence,
+        from: {
+          root: state.root,
+          nodePath: process.execPath,
+          version: "2026.10.9",
+          buildId: "old",
+        },
+        to: { root: state.root, nodePath: process.execPath, version: "2026.10.10", buildId: "new" },
+      });
+      const damaged = { ...original.identity, manifestSha256: null };
+      expect(pair.cohort.priorArtifacts).toMatchObject([
+        { pluginId: "fixture", packageDir: original.packageDir, identity: damaged },
+      ]);
+      const repaired = generation(state, "2.0.0");
+      recoveryStore.writePluginCohortRecovery(
+        pair,
+        {
+          ...pair.cohort,
+          artifacts: [
+            {
+              pluginId: "fixture",
+              packageName,
+              targetNpmRoot: repaired.npmRoot,
+              targetPackageDir: repaired.packageDir,
+              stagedIdentity: repaired.identity,
+              identity: repaired.identity,
+            },
+          ],
+          publications: [
+            {
+              kind: "records",
+              records: [{ pluginId: "fixture", before: original.record, after: repaired.record }],
+            },
+          ],
+        },
+        fence,
+        { env: state.env },
+      );
+      await seedInstalledPluginIndex({ fixture: repaired.record }, { config, env: state.env });
+      await settleUpdatePluginCohort({ runId, env: state.env, fence, action: "rollback" });
+      expect(
+        await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+      ).toEqual({ fixture: original.record });
+      expect(fs.existsSync(path.join(original.packageDir, "package.json"))).toBe(false);
+      expect(recoveryStore.loadPluginCohortRecovery(runId, { env: state.env })).toBeUndefined();
+    },
+  );
+});

@@ -153,14 +153,13 @@ private struct OnboardingSecurityNotice: View {
                     Text("Security notice")
                         .font(OpenClawType.subheadSemiBold)
                         .foregroundStyle(.primary)
-                    (
-                        Text("The connected OpenClaw agent can use device capabilities you enable.")
-                            + Text(verbatim: " ")
-                            + Text(
-                                "Camera, microphone, photos, contacts, calendar, and location may be available.")
-                            + Text(verbatim: " ")
-                            + Text(
-                                "Continue only if you trust the gateway and agent you connect to."))
+                    Text(verbatim: [
+                        String(localized: "The connected OpenClaw agent can use device capabilities you enable."),
+                        String(localized: """
+                        Camera, microphone, photos, contacts, calendar, and location may be available.
+                        """),
+                        String(localized: "Continue only if you trust the gateway and agent you connect to."),
+                    ].joined(separator: " "))
                         .font(OpenClawType.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

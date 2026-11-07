@@ -1,10 +1,11 @@
 /**
- * Measure unchanged transcript SQL owners on a synthetic schema-39 fixture.
+ * Measure transcript SQL owners on a synthetic schema-39 fixture.
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-read-transactions-owners.mjs \
  *   --database .local/lane2035/fixture/agent.sqlite --session-id session-0 \
  *   --session-key agent:main:session-0 --operation bounded --mode timing --output result.json
  * A/A arms are counterbalanced controls unless --baseline supplies an earlier
- * cache-TTL prefix owner for --operation prefix. Timing, sampled
+ * cache-TTL prefix, navigation, or transcript-match owner; --control uses the baseline in both arms.
+ * The controls workload isolates the legacy-control scan used by bounded hydration. Timing, sampled
  * V8 allocation, SQL plans/counts and CPU profiles run separately. This directly
  * invokes worker-owned SQL code; it does not measure Gateway transport or btrfs.
  */
@@ -18,6 +19,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { readSessionTranscriptBoundedActiveContextCore } from "../../src/config/sessions/session-accessor.sqlite-active-context.ts";
+import { iterateUnindexedTranscriptNavigation } from "../../src/config/sessions/session-accessor.sqlite-history-navigation.ts";
 import { readCurrentProjectionSnapshot } from "../../src/config/sessions/session-accessor.sqlite-projection-read.ts";
 import { readCacheTtlProjectionPrefix } from "../../src/config/sessions/session-cache-ttl-prefix.ts";
 import { findTranscriptEventMatchingInDatabase } from "../../src/config/sessions/session-transcript-match-read.ts";
@@ -33,8 +35,10 @@ const { values } = parseArgs({
     "session-id": { type: "string" },
     "session-key": { type: "string" },
     baseline: { type: "string" },
+    control: { type: "boolean", default: false },
     "anchor-position": { type: "string", default: "1000" },
     "run-id": { type: "string", default: "synthetic-absent-run" },
+    key: { type: "string", default: "synthetic-absent-key" },
     operation: { type: "string", default: "bounded" },
     mode: { type: "string", default: "timing" },
     samples: { type: "string", default: "5" },
@@ -43,10 +47,15 @@ const { values } = parseArgs({
   },
 });
 assert(values.database && values["session-id"] && values["session-key"] && values.output);
-assert(["bounded", "prefix", "latest", "visible-final"].includes(values.operation));
+assert(
+  ["bounded", "controls", "prefix", "latest", "visible-final", "idempotency"].includes(
+    values.operation,
+  ),
+);
 assert(["timing", "allocation", "plans", "profile"].includes(values.mode));
 assert(global.gc, "Use --expose-gc");
 assert(!fs.existsSync(values.output), "Refusing to overwrite measurement evidence");
+assert(!values.control || values.baseline, "--control requires --baseline");
 const samples = Number(values.samples),
   iterations = Number(values.iterations);
 assert(Number.isSafeInteger(samples) && samples > 0);
@@ -78,37 +87,53 @@ if (values.operation === "prefix") {
   assert.equal(typeof anchorEntry?.id, "string", "Prefix anchor must exist in the fixture");
   assert.equal(anchorEntry.type, "message", "Prefix comparison uses an ordinary message anchor");
 }
-const makeRead = (prefixOwner) => () =>
-  runSqliteReadSnapshotSync(db, () =>
-    values.operation === "prefix"
-      ? readCurrentProjectionSnapshot(database, target, (projection) =>
-          prefixOwner(projection, {
-            activePosition: anchorPosition,
-            id: anchorEntry.id,
-            entry: anchorEntry,
-          }),
-        )
-      : values.operation === "bounded"
-        ? readSessionTranscriptBoundedActiveContextCore(target, {
-            maxEvents: 50,
-            maxBytes: 1024000,
-            transaction: database,
-            resolvedScope: target,
-          })
-        : findTranscriptEventMatchingInDatabase(database, {
-            target,
-            match:
-              values.operation === "latest"
-                ? { kind: "latest" }
-                : { kind: "visible-final", runId: values["run-id"] },
-          }),
-  );
-const read = makeRead(readCacheTtlProjectionPrefix);
+const makeRead =
+  (prefixOwner, controlsOwner, matchOwner = findTranscriptEventMatchingInDatabase) =>
+  () =>
+    runSqliteReadSnapshotSync(db, () =>
+      values.operation === "prefix"
+        ? readCurrentProjectionSnapshot(database, target, (projection) =>
+            prefixOwner(projection, {
+              activePosition: anchorPosition,
+              id: anchorEntry.id,
+              entry: anchorEntry,
+            }),
+          )
+        : values.operation === "controls"
+          ? readCurrentProjectionSnapshot(database, target, (projection) =>
+              Array.from(controlsOwner(projection, { controlsOnly: true })),
+            )
+          : values.operation === "bounded"
+            ? readSessionTranscriptBoundedActiveContextCore(target, {
+                maxEvents: 50,
+                maxBytes: 1024000,
+                transaction: database,
+                resolvedScope: target,
+              })
+            : matchOwner(database, {
+                target,
+                match:
+                  values.operation === "latest"
+                    ? { kind: "latest" }
+                    : values.operation === "idempotency"
+                      ? { kind: "idempotency", key: values.key }
+                      : { kind: "visible-final", runId: values["run-id"] },
+              }),
+    );
+let read = makeRead(readCacheTtlProjectionPrefix, iterateUnindexedTranscriptNavigation);
 let baselineRead;
 if (values.baseline) {
-  assert.equal(values.operation, "prefix", "Baseline substitution targets only the prefix owner");
+  assert.notEqual(
+    values.operation,
+    "bounded",
+    "Bounded-context baseline substitution is unsupported",
+  );
   const ownerUrl = new URL(
-    "../../src/config/sessions/session-cache-ttl-prefix.ts?comparison",
+    values.operation === "prefix"
+      ? "../../src/config/sessions/session-cache-ttl-prefix.ts?comparison"
+      : values.operation === "controls"
+        ? "../../src/config/sessions/session-accessor.sqlite-history-navigation.ts?comparison"
+        : "../../src/config/sessions/session-transcript-match-read.ts?comparison",
     import.meta.url,
   );
   const source = pathToFileURL(path.resolve(values.baseline));
@@ -121,7 +146,16 @@ if (values.baseline) {
       return { format: loaded.format, source: loaded.source, shortCircuit: true };
     },
   });
-  baselineRead = makeRead((await import(ownerUrl.href)).readCacheTtlProjectionPrefix);
+  const baseline = await import(ownerUrl.href);
+  baselineRead = makeRead(
+    baseline.readCacheTtlProjectionPrefix,
+    baseline.iterateUnindexedTranscriptNavigation,
+    baseline.findTranscriptEventMatchingInDatabase,
+  );
+  if (values.control) {
+    read = baselineRead;
+    baselineRead = undefined;
+  }
 }
 const digest = (result) =>
   createHash("sha256")
@@ -158,6 +192,7 @@ try {
               calls: 0,
               rows: 0,
               textBytes: 0,
+              executionMs: 0,
               plan: originalPrepare(`EXPLAIN QUERY PLAN ${text}`).all(...bindings),
             };
             statements.set(text, record);
@@ -174,7 +209,9 @@ try {
             }
             return row;
           };
+          const started = performance.now();
           const result = execute(...bindings);
+          record.executionMs += performance.now() - started;
           if (method === "get") {
             return account(result);
           }
@@ -182,8 +219,18 @@ try {
             return result.map(account);
           }
           return (function* () {
-            for (const row of result) {
-              yield account(row);
+            try {
+              for (;;) {
+                const stepStarted = performance.now();
+                const next = result.next();
+                record.executionMs += performance.now() - stepStarted;
+                if (next.done) {
+                  return;
+                }
+                yield account(next.value);
+              }
+            } finally {
+              result.return?.();
             }
           })();
         };
@@ -265,6 +312,7 @@ try {
         databaseBytes: fs.statSync(pathname).size,
         sessionId: target.sessionId,
         runId: values.operation === "visible-final" ? values["run-id"] : undefined,
+        key: values.operation === "idempotency" ? values.key : undefined,
         anchorPosition: values.operation === "prefix" ? anchorPosition : undefined,
         comparison: baselineRead ? "baseline/candidate" : "A/A",
         samples,

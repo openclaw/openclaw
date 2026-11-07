@@ -151,23 +151,65 @@ it("rejects preconnection when the document URL changes before adoption", async 
   expect(wsInstances[0]?.readyState).toBe(3);
 });
 
-it.each(["native", "confirmation", "document", "relay"])(
-  "keeps %s startup with its ordinary owner",
-  (boundary) => {
-    const initial = prepareApplicationStartup();
-    if (boundary === "native") {
-      initial.startup.nativeClient = { clientName: "openclaw-control-ui", mode: "webchat" };
-    } else if (boundary === "confirmation") {
-      initial.hasPendingGateway = true;
-    } else if (boundary === "document") {
-      initial.ownsWarmBoot = false;
-    } else {
-      document.documentElement.setAttribute("data-openclaw-remote-ingress", "true");
-    }
-    expect(startEarlyApplicationGateway(initial)).toBeUndefined();
+it.each([
+  ["native", "/new"],
+  ["confirmation", "/new"],
+  ["document", "/new"],
+  ["relay", "/new"],
+  ["confirmation", "/dashboard/main/dashboard/proof"],
+])("keeps %s startup with its ordinary owner on %s", (boundary, pathname) => {
+  window.history.replaceState({}, "", pathname);
+  const initial = prepareApplicationStartup();
+  if (boundary === "native") {
+    initial.startup.nativeClient = { clientName: "openclaw-control-ui", mode: "webchat" };
+  } else if (boundary === "confirmation") {
+    initial.hasPendingGateway = true;
+  } else if (boundary === "document") {
+    initial.ownsWarmBoot = false;
+  } else {
+    document.documentElement.setAttribute("data-openclaw-remote-ingress", "true");
+  }
+  expect(startEarlyApplicationGateway(initial)).toBeUndefined();
+  expect(wsInstances).toHaveLength(0);
+});
+
+it.each(["/dashboard/main", "/dashboard/main/abcdef12"])(
+  "leaves non-literal dashboard route %s with its resolver",
+  (pathname) => {
+    window.history.replaceState({}, "", pathname);
+    expect(startEarlyApplicationGateway(prepareApplicationStartup())).toBeUndefined();
     expect(wsInstances).toHaveLength(0);
   },
 );
+
+it("starts literal dashboard history on the early transport after hello", async () => {
+  window.history.replaceState({}, "", "/dashboard/main/dashboard/proof");
+  early = startEarlyApplicationGateway(prepareApplicationStartup());
+  expect(early).toBeDefined();
+  expect(wsInstances).toHaveLength(1);
+  const socket = getLatestWebSocket();
+  socket.emitOpen();
+  socket.emitConnectChallenge({ nonce: "dashboard-early", ts: 1_800_000_000_000 });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(socket.sent.map((frame) => JSON.parse(frame).method)).toEqual(["connect"]);
+  const connect = JSON.parse(socket.sent[0]!);
+  socket.emitMessage({
+    type: "res",
+    id: connect.id,
+    ok: true,
+    payload: { type: "hello-ok", protocol: PROTOCOL_VERSION },
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(socket.sent.map((frame) => JSON.parse(frame))).toContainEqual(
+    expect.objectContaining({
+      method: "sessions.messages.subscribe",
+      params: expect.objectContaining({
+        key: "agent:main:dashboard:proof",
+        initialHistory: { limit: 80, knownState: {}, maxBytes: 262144, toolResultMaxChars: 2000 },
+      }),
+    }),
+  );
+});
 
 it("imports New without waiting for the socket to open", async () => {
   await import("../main.ts");

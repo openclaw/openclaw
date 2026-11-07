@@ -191,7 +191,7 @@ describe("conversation position rail", () => {
       const unobserve = vi.spyOn(resize, "unobserve");
 
       if (scenario === "focused") {
-        marks.scrollTop = 40 * 12;
+        marks.scrollTop = 40 * 10;
         marks.dispatchEvent(new Event("scroll"));
         flushFrame();
         document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
@@ -269,8 +269,8 @@ describe("conversation position rail", () => {
       clientHeight: { configurable: true, get: () => viewportHeight },
       scrollHeight: { configurable: true, get: () => transcriptHeight },
     });
-    Object.defineProperty(marks, "clientHeight", { configurable: true, value: 12 });
-    emitTranscriptResize(marks, 44, 12);
+    Object.defineProperty(marks, "clientHeight", { configurable: true, value: 10 });
+    emitTranscriptResize(marks, 44, 10);
     flushFrame();
     const resize = (clientHeight: number, scrollHeight: number) => {
       viewportHeight = clientHeight;
@@ -323,11 +323,14 @@ describe("conversation position rail", () => {
         configurable: true,
         get: () => railOffset,
         set: (value: number) => {
-          railOffset = Math.max(0, Math.min(value, count * 12 - marksHeight));
+          railOffset = Math.max(0, Math.min(value, count * 10 - marksHeight));
         },
       });
       root.scrollTop = startsAtTop ? 0 : 8315;
       const flushRailFrames = () => {
+        // Native layout observation publishes dimensions and the reader; a
+        // scroll on the rail itself only publishes its own offset.
+        emitTranscriptResize(marks, 44, marksHeight);
         marks.dispatchEvent(new Event("scroll"));
         flushFrame();
         flushFrame();
@@ -338,7 +341,7 @@ describe("conversation position rail", () => {
         flushRailFrames();
       };
       flushRailFrames();
-      expect(marks.scrollTop).toBe(startsAtTop ? 0 : 677);
+      expect(marks.scrollTop).toBe(startsAtTop ? 0 : 517);
       expect(marks.querySelectorAll(".chat-position-rail__marker").length).toBeLessThan(50);
       if (scenario === "hidden") {
         const mounted = [...marks.querySelectorAll(".chat-position-rail__marker")];
@@ -349,7 +352,7 @@ describe("conversation position rail", () => {
         renderRail();
         flushFrame();
         expect([...marks.querySelectorAll(".chat-position-rail__marker")]).toEqual(mounted);
-        expect(marks.style.getPropertyValue("--chat-position-scroll-top")).toBe("677px");
+        expect(marks.style.getPropertyValue("--chat-position-scroll-top")).toBe("517px");
 
         // Reader navigation while hidden must be reflected once the rail returns.
         root.scrollTop = 0;
@@ -365,7 +368,7 @@ describe("conversation position rail", () => {
         publishVisibility(root.querySelector(".chat-bubble")!);
         resize(543, 229);
         expect(marker(79).hasAttribute("data-visible")).toBe(true);
-        const initialOffset = 731;
+        const initialOffset = 571;
         expect(marks.scrollTop).toBe(initialOffset);
         resize(512, 198);
         expect(marks.scrollTop).toBe(initialOffset);
@@ -378,7 +381,7 @@ describe("conversation position rail", () => {
         flushRailFrames();
         expect(marker(79).getAttribute("aria-current")).toBe("true");
         expect(Number.parseFloat(marker(79).style.top)).toBeGreaterThanOrEqual(marks.scrollTop);
-        expect(Number.parseFloat(marker(79).style.top) + 12).toBeLessThanOrEqual(
+        expect(Number.parseFloat(marker(79).style.top) + 10).toBeLessThanOrEqual(
           marks.scrollTop + marks.clientHeight,
         );
       } else if (scenario.startsWith("composer-resize-reversal")) {
@@ -395,7 +398,7 @@ describe("conversation position rail", () => {
           },
         });
         flushRailFrames();
-        expect(marks.scrollTop).toBe(677);
+        expect(marks.scrollTop).toBe(517);
         container.classList.add("chat");
         const textarea = container.appendChild(document.createElement("textarea"));
         textarea.value = "/goal";
@@ -426,25 +429,25 @@ describe("conversation position rail", () => {
           expect(marks.scrollTop).toBe(0);
           return;
         }
-        expect(marks.scrollTop).toBe(677);
+        expect(marks.scrollTop).toBe(517);
         root.scrollTop = scrollHeight - height;
         flushRailFrames();
-        expect(marks.scrollTop).toBe(677);
+        expect(marks.scrollTop).toBe(517);
       } else if (scenario === "resize") {
         height = 554;
         marksHeight = 240;
         activeMessage.mockReturnValue("message-76");
         flushRailFrames();
-        expect(marks.scrollTop).toBe(677);
+        expect(marks.scrollTop).toBe(517);
         root.scrollTop = 8319;
         flushRailFrames();
-        expect(marks.scrollTop).toBe(677);
+        expect(marks.scrollTop).toBe(517);
         // A second resize retargets the same smooth compensation, including its last 6px.
         resize(512, 198);
         for (const offset of [8323, 8394, 8400]) {
           root.scrollTop = offset;
           flushRailFrames();
-          expect(marks.scrollTop).toBe(677);
+          expect(marks.scrollTop).toBe(517);
         }
         publishTranscriptScroll(root, {
           type: "input",
@@ -454,19 +457,19 @@ describe("conversation position rail", () => {
         root.scrollTop = 8000;
         activeMessage.mockReturnValue("message-40");
         flushRailFrames();
-        expect(marks.scrollTop).toBeLessThan(677);
+        expect(marks.scrollTop).toBeLessThan(517);
       } else if (scenario === "focus-resize") {
         document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
         marker(79).focus();
         expect(marker(79).matches(":focus-visible")).toBe(true);
         resize(554, 240);
         expect(document.activeElement).toBe(marker(79));
-        expect(marks.scrollTop).toBe(720);
+        expect(marks.scrollTop).toBe(560);
       } else if (scenario === "pointer") {
         marker(60).dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
         marker(60).focus();
         expect(marker(60).matches(":focus-visible")).toBe(false);
-        expect(marks.scrollTop).toBe(677);
+        expect(marks.scrollTop).toBe(517);
         activeMessage.mockReturnValue("message-0");
         flushRailFrames();
         expect(document.activeElement).toBe(marker(60));
@@ -508,6 +511,7 @@ describe("conversation position rail", () => {
   });
 
   it("keeps focused previews after pointer exit and resets interaction when the session changes", async () => {
+    const flushFrame = stubSettledAnimationFrames();
     const messages = Array.from({ length: 40 }, (_, index) =>
       message(
         `message-${index}`,
@@ -522,6 +526,10 @@ describe("conversation position rail", () => {
     const { transcript, container, view, rerender, markers, preview, query } = threadFixture(props);
     rerender();
     transcript.start();
+    const marks = part(container, "marks")!;
+    measure(marks, { clientHeight: 600 });
+    emitTranscriptResize(marks, 44, 600);
+    flushFrame();
     expect(markers()).toHaveLength(40);
     // Rail wheel input belongs to its scrollport, never transcript history.
     for (const type of ["wheel", "touchstart", "touchmove"]) {
@@ -695,8 +703,9 @@ describe("conversation position rail", () => {
     expect(document.activeElement).toBe(provisional);
     expect(preview()).toContain("Final response");
     const persistedBubble = query('[data-entry-id="persisted-answer"]')!;
-    await settleFrames();
+    // Ref retirement releases the old target before queued additions and layout.
     expect(observed.has(streamBubble)).toBe(false);
+    await settleFrames();
     expect(observed.has(persistedBubble)).toBe(true);
     marker().click();
     await settleFrames();

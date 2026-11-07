@@ -8782,7 +8782,8 @@ struct ChatViewModelTests {
         #expect(await transport.sessionSettingsPatches().isEmpty)
     }
 
-    @Test func `composer web search cannot override a globally disabled baseline`() async throws {
+    @Test(arguments: [nil, false, true] as [Bool?])
+    func `composer web search cannot override a globally disabled baseline`(_ webSearch: Bool?) async throws {
         let catalog = OpenClawChatComposerCapabilityCatalog(
             sessionSettingsAvailable: true,
             webSearchBaseEnabled: false,
@@ -8793,12 +8794,13 @@ struct ChatViewModelTests {
         let (transport, vm) = await makeViewModel(
             historyResponses: [historyPayload()],
             sessionsResponses: [sessionsResponse([
-                sessionEntry(key: "main", updatedAt: 1),
+                sessionEntry(key: "main", updatedAt: 1, toolOverrides: .init(webSearch: webSearch)),
             ])],
             composerCapabilityCatalog: catalog)
         try await loadAndWaitBootstrap(vm: vm)
         await vm.loadComposerCapabilities()
 
+        #expect(await MainActor.run { !vm.composerWebSearchEnabled })
         await MainActor.run { vm.toggleComposerWebSearch() }
 
         #expect(await transport.sessionSettingsPatches().isEmpty)
@@ -10576,7 +10578,6 @@ struct ChatViewModelTests {
         await finalRefresh?.value
         #expect(await mainHistoryCount.current() == 3)
 
-
         await send.value
         #expect(await MainActor.run {
             vm.sessionId == "sess-main-send-refresh" &&
@@ -10635,7 +10636,6 @@ struct ChatViewModelTests {
             vm.sessionId == "sess-main-terminal-empty-refresh" &&
                 vm.pendingRunCount == 0
         })
-
 
         await send.value
         #expect(await MainActor.run {
@@ -10702,7 +10702,6 @@ struct ChatViewModelTests {
                 }
         })
 
-
         await send.value
         #expect(await MainActor.run {
             vm.sessionId == "sess-main-terminal-user-only-refresh" &&
@@ -10758,7 +10757,6 @@ struct ChatViewModelTests {
         await sendRefreshGate.release()
         await vm.bootstrapTask?.value
         #expect(vm.sessionId == "sess-main-manual-user-only-refresh" && vm.pendingRunCount == 0)
-
 
         await send?.value
         #expect(vm.sessionId == "sess-main-manual-user-only-refresh")
@@ -10823,7 +10821,6 @@ struct ChatViewModelTests {
         #expect(vm.messages.contains { message in
             message.content.contains { $0.text == "older answer" }
         })
-
 
         await send?.value
         #expect(vm.sessionId == "sess-main-manual-older-complete-refresh")
@@ -10920,7 +10917,6 @@ struct ChatViewModelTests {
         #expect(await MainActor.run {
             vm.sessionId == "sess-main-manual-stale-complete-refresh"
         })
-
 
         await send.value
         #expect(await MainActor.run {

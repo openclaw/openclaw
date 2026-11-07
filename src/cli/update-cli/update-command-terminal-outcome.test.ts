@@ -522,8 +522,7 @@ describe("composed cleanup and terminal outcome", () => {
     expect(value.launcher).toBe("candidate launcher\n");
     expect(value.retainedExists).toBe(true);
     expect(value.exitCode).toBe(1);
-    expect(value.history?.status).not.toBe("succeeded");
-    expect(value.history?.status).not.toBe("rolled-back");
+    expect(["succeeded", "rolled-back"]).not.toContain(value.history?.status);
   });
   it("publishes the Gateway's completed row after real executor release", async () => {
     const value = await scenario("healthy");
@@ -531,6 +530,12 @@ describe("composed cleanup and terminal outcome", () => {
     expect(value.lease).toBe("absent");
     expect(value.retainedExists).toBe(false);
     expect(value.observedResults).toEqual([expect.objectContaining({ status: "ok" })]);
+    // Verified retirement is recorded with its wall time, not only on warnings.
+    for (const name of ["package-backup-retention", "post-update-maintenance-timing"]) {
+      expect(value.observedResults[0]?.steps).toContainEqual(
+        expect.objectContaining({ name, exitCode: 0, durationMs: expect.any(Number) }),
+      );
+    }
     expect(value.observationLeases).toEqual(["absent"]);
     expect(value.humanOutput.join("\n").toLowerCase()).toContain("updated");
     expect(value.errorOutput).not.toContain(
@@ -542,8 +547,7 @@ describe("composed cleanup and terminal outcome", () => {
     expect(value.injected).toBe(true);
     expect(value).toMatchObject({ exitCode: 1, history: { status: "succeeded" } });
     expect(value.lease).toBe("current");
-    expect(value.observedResults).toEqual([]);
-    expect(value.jsonOutput).toEqual([]);
+    expect([value.observedResults, value.jsonOutput]).toEqual([[], []]);
   });
   it("reports revoked authority from captured facts without changing retained state", async () => {
     const value = await scenario("revoked");

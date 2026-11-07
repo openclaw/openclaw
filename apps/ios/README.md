@@ -28,7 +28,7 @@ Onboarding names the device from its iOS device idiom, so an iPad keeps iPad wor
 ## Exact Xcode Manual Deploy Flow
 
 1. Prereqs:
-   - Xcode 26.x or newer with the iOS and watchOS SDKs
+   - Xcode 27.1 or newer with the iOS and watchOS SDKs
    - `pnpm`
    - `xcodegen`
    - The pinned [Watch Rust toolchain](#watch-companion-build-requirements)
@@ -94,6 +94,15 @@ watchOS 27 SDK; the app's deployment target remains watchOS 11. See the
 [native Watch module README](../shared/OpenClawWatchRTC/README.md) for supported
 architectures, build output locations, and dependency notices.
 
+Run app tests on a simulator from the repo root with `pnpm ios:test`. With no
+arguments it runs the `OpenClaw` scheme (`OpenClawTests` and
+`OpenClawLogicTests`). Pass suite names (`pnpm ios:test TalkModeManagerTests`)
+or `Target/Suite[/test]` selectors to run fewer; a name that matches no test
+fails the run. `OpenClawUITests` selectors run through their own scheme. Set
+`IOS_SIM` to a simulator name or UDID to choose the device. The command prints
+failures and counts; the full log and `.xcresult` stay in
+`apps/ios/build/TestResults`.
+
 Run `OpenClawWatchTests` through the `OpenClawWatchApp` scheme for configuration,
 call lifecycle, and native codec coverage. These tests and signed simulator
 builds do not prove a real Watch microphone/speaker route, background audio,
@@ -107,7 +116,7 @@ normal **Enable Standalone Voice → Talk on Watch → Start** flow; see
 
 Prereqs:
 
-- Xcode 26.x
+- Xcode 27.1 or newer
 - `pnpm`
 - `xcodegen`
 - The pinned [Watch Rust toolchain](#watch-companion-build-requirements)

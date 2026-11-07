@@ -8,7 +8,6 @@ import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-res
 import { upsertSessionEntry } from "../src/plugin-sdk/session-store-runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../src/plugin-sdk/sqlite-runtime-testing.js";
 import { seedInstalledPluginIndex } from "../src/plugins/test-helpers/installed-plugin-index.js";
-import { VERSION } from "../src/version.js";
 import { connectProofClient } from "./helpers/gateway-integration-fixtures.js";
 import {
   createOpenClawTestInstance,
@@ -59,8 +58,8 @@ async function installCodexHarnessFixture(stateDir: string, config: OpenClawConf
     configSchema: { type: "object", additionalProperties: false },
   });
   await writeMetadata("package.json", {
-    name: "@openclaw/codex",
-    version: VERSION,
+    name: "@example/copied-codex-session-proof",
+    version: "1.0.0",
     type: "module",
     openclaw: { extensions: ["./index.js"] },
   });

@@ -1,28 +1,23 @@
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import {
-  encodePowerShell,
-  windowsPackageInstallScript,
-} from "../../scripts/e2e/parallels/powershell.ts";
+import { encodePowerShell } from "../../scripts/e2e/parallels/powershell.ts";
+import { windowsPackageInstallProbe } from "./parallels-windows-package-install.test-support.js";
 
-describe.runIf(process.platform === "win32")("Windows package install notices", () => {
-  it.each([0, 23])("preserves npm exit code %i when npm writes a notice", (exitCode) => {
-    const script = `
-function curl.exe { $global:LASTEXITCODE = 0 }
-function npm.cmd { & $env:ComSpec /d /s /c 'echo npm notice 1>&2 & exit /b ${exitCode}' }
-function Invoke-OpenClaw { Write-Output 'OpenClaw fixture'; $global:LASTEXITCODE = 0 }
-try {
-  & {
-${windowsPackageInstallScript("https://example.test/openclaw.tgz", "openclaw-fixture.tgz")}
-  } *>&1 | Out-String | Write-Output
-  exit 0
-} catch {
-  Write-Output $_
-  exit 1
-}`;
+describe.runIf(process.platform === "win32")("Windows package install handoff", () => {
+  it.each([
+    [0, false],
+    [0, true],
+    [23, false],
+  ] as const)("preserves npm status %i and existing PATH (%s)", (exitCode, alreadyOnPath) => {
     const result = spawnSync(
       "powershell.exe",
-      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encodePowerShell(script)],
+      [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        encodePowerShell(windowsPackageInstallProbe(exitCode, alreadyOnPath)),
+      ],
       { encoding: "utf8", timeout: 10_000 },
     );
     expect(result.error).toBeUndefined();

@@ -35,6 +35,7 @@ describe("resolveTelegramAutoSelectFamilyDecision", () => {
     vi.mocked(isWSL2Sync).mockReset().mockReturnValue(false);
     vi.stubEnv("OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY", undefined);
     vi.stubEnv("OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY", undefined);
+    vi.stubEnv("OPENCLAW_TELEGRAM_DNS_RESULT_ORDER", undefined);
   });
 
   afterEach(() => {

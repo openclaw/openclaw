@@ -1434,7 +1434,10 @@ merge_run() {
   local root
   root=$(repo_root)
   cd "$root" || return 1
-  cleanup_pr_worktree ".worktrees/pr-$pr" || cleanup_complete=false
+  cleanup_pr_worktree ".worktrees/pr-$pr" || {
+    cleanup_complete=false
+    merge_outcome_print_cleanup_guidance "$pr"
+  }
   if [ "$cleanup_complete" = true ]; then
     merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.phase="complete"')" || return 1
     retire_pr_workflow_binding "$pr" || return 1

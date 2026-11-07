@@ -27,7 +27,7 @@ function withFixturePlugin(config: OpenClawConfig): OpenClawConfig {
   load.paths = [...new Set([...(load.paths ?? []), PLUGIN_DIR])];
   (plugins.entries ??= {})[PLUGIN_ID] = {
     enabled: true,
-    hooks: { allowConversationAccess: true, allowPromptInjection: true },
+    hooks: { allowConversationAccess: true, allowPromptModification: true },
   };
   return config;
 }

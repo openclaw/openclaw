@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 89354,
-  "reason": "New Session socket preconnect: 20 paired observations per profile improve 100 ms RTT composer readiness by 8.1%; accept measured startup 89354 B (+219 B vs exact base), with unchanged request counts and CPU/tail caveats recorded in PR evidence.",
-  "updatedAt": "2026-10-31"
+  "startupJsGzipBytes": 89370,
+  "reason": "Retire unused browser fallbacks, dead English copy, and unused theme validator initialization; measured startup 89,370 B normalized gzip.",
+  "updatedAt": "2026-11-06"
 }

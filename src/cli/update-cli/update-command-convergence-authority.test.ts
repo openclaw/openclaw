@@ -427,6 +427,7 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
         });
       vi.spyOn(pluginConfig, "preparePostCorePluginConfig").mockResolvedValue({
         configSnapshot: snapshot,
+        configBaseline: snapshot.sourceConfig,
         configWriteOptions: {},
         configChanged: false,
         restoredAuthoredChannels: [],

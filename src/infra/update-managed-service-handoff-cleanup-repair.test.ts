@@ -166,6 +166,12 @@ describe("managed handoff repair facts", () => {
     },
   );
 
+  it("identifies a child lease's own run after adoption dropped its dead updater", async () => {
+    history.mockResolvedValue([run(lease.owner, {})]);
+
+    await expectFacts(lease.owner, [lease.key]);
+  });
+
   it.each(["missing", "conflicting"])("refuses %s original run identity", async (identity) => {
     if (identity === "conflicting") {
       await helper("matching", { runId: "helper-run" });

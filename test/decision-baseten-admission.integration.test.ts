@@ -8,10 +8,10 @@ import { acquireAgentRunPreparedModelRuntime } from "../src/agents/prepared-mode
 import { closeProviderTransportDispatcherPool } from "../src/agents/provider-transport-dispatcher-pool.js";
 import { setRuntimeConfigSnapshot } from "../src/config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
+import { DecisionContractError } from "../src/decisions/contract-error.js";
 import { prepareDecisionProviderReload } from "../src/decisions/provider-reload.js";
 import { evaluateDecisionV2InRegistry } from "../src/decisions/runtime.js";
 import type { DecisionBatchV2 } from "../src/decisions/types-v2.js";
-import { DecisionContractError } from "../src/decisions/validation.js";
 import * as fetchGuard from "../src/infra/net/fetch-guard.js";
 import { fetchWithRuntimeDispatcher } from "../src/infra/net/runtime-fetch.js";
 import { createHttp1Agent } from "../src/infra/net/undici-runtime.js";
@@ -125,17 +125,20 @@ it.each(["allowed", "auth-reflection", "header-reflection", "replaced", "abort-r
         let admission: "unreached" | "allowed" | "rejected" = "unreached";
         let pending: Promise<unknown> | undefined;
         let settled = false;
+        let phase = "evaluation";
         // Baseten uses the pooled provider transport. Forward its internal guard,
         // preserving the real pool, DNS admission and response lifecycle.
         const forwarding = vi
           .spyOn(fetchGuard, "fetchWithSsrFGuard")
           .mockImplementation(async (params) => {
+            phase = "guard";
             expect(params.url).toBe(nativeUrl);
             expect(params.dispatcherPool).toBeDefined();
             expect(params.maxRedirects).toBe(0);
             const guarded = await originalFetch({
               ...params,
               lookupFn: async (hostname) => {
+                phase = "dns";
                 expect(hostname).toBe("inference.baseten.co");
                 dnsEntered.resolve();
                 await allowDns.promise;
@@ -186,6 +189,7 @@ it.each(["allowed", "auth-reflection", "header-reflection", "replaced", "abort-r
           expect(prepared.snapshot.isCurrent()).toBe(true);
           const usage = trackDecisionUsage();
           try {
+            const evaluationStartedAt = performance.now();
             pending = evaluateDecisionV2InRegistry(
               input,
               {
@@ -208,7 +212,14 @@ it.each(["allowed", "auth-reflection", "header-reflection", "replaced", "abort-r
             await Promise.race([
               dnsEntered.promise,
               outcome.then((value) => {
-                throw new Error("Baseten settled before DNS preparation", { cause: value });
+                const runtime = process.versions.bun
+                  ? `Bun ${process.versions.bun}`
+                  : process.version;
+                const elapsedMs = Math.round(performance.now() - evaluationStartedAt);
+                throw new Error(
+                  `Baseten settled before DNS preparation (${runtime}, phase=${phase}, elapsedMs=${elapsedMs})`,
+                  { cause: value },
+                );
               }),
             ]);
             expect(received).toHaveLength(0);

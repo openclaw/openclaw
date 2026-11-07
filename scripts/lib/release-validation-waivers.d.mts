@@ -25,6 +25,7 @@ export function evaluateReleaseChildPolicy(input: {
   child: { key: string; jobs: ReleasePolicyJob[] };
   targetVersion?: string;
 }): ReleaseChildPolicy;
+export class ReleaseAggregateValidationError extends Error {}
 export function validateReleaseWaiverAggregates(input: {
   policy: ReleaseChildPolicy;
   jobs: (ReleasePolicyJob & {

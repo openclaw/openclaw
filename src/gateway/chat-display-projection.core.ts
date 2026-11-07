@@ -24,7 +24,7 @@ import {
   CONTEXT_OVERFLOW_ERROR_MESSAGE,
   formatProviderRefusalText,
 } from "../shared/assistant-error-format.js";
-import { readRunFailureNotice } from "../shared/run-failure-notice.js";
+import { readRunFailureCause, readRunFailureNotice } from "../shared/run-failure-notice.js";
 import {
   isOpenClawMessageToolMirrorAssistantMessage,
   isTranscriptOnlyOpenClawAssistantMessage,
@@ -487,7 +487,12 @@ function projectRunFailureNotices(
       const summary =
         readRunFailureNotice(message)?.summary ??
         (typeof message.content === "string" ? message.content.trim() : undefined);
-      return runId && summary ? [{ ...message, openclawRunError: { runId, summary } }] : [message];
+      const cause =
+        readRunFailureNotice(message)?.cause ??
+        readRunFailureCause(asOptionalRecord(message.details)?.cause);
+      return runId && summary
+        ? [{ ...message, openclawRunError: { runId, summary, ...(cause ? { cause } : {}) } }]
+        : [message];
     }
     if (readSessionTranscriptRunId(message) && isPendingAssistantError(message)) {
       // Legacy receipt-less attempts stay in the raw transcript. Inactivity or
@@ -612,8 +617,14 @@ export function projectChatDisplayMessagesWithState(
       }
     }
   }
-  // Recovery already admitted records and consumed assistant display content.
-  const sanitizedMessages = sanitizeChatHistoryMessages(projectedErrors, Number.MAX_SAFE_INTEGER, {
+  // TTS hashes and delivery deduplication compare complete normalized text.
+  // Ordinary previews must be bounded before sanitation parses their Markdown.
+  const normalizationMaxChars = projectedErrors.some(
+    (message) => message.openclawTtsSupplement || isTranscriptOnlyOpenClawAssistantMessage(message),
+  )
+    ? Number.MAX_SAFE_INTEGER
+    : (options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS);
+  const sanitizedMessages = sanitizeChatHistoryMessages(projectedErrors, normalizationMaxChars, {
     includeCommentaryFallbacks: options?.includeCommentaryFallbacks,
   }).filter(
     (message) => !isCompletedAssistantMessage(message) || hasAssistantHistoryMaterial(message),

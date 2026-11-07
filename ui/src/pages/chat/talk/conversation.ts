@@ -362,7 +362,19 @@ function findTextOverlap(base: string, next: string): number {
   const max = Math.min(normalizedBase.length, normalizedNext.length);
   for (let length = max; length >= 3; length -= 1) {
     if (normalizedBase.endsWith(normalizedNext.slice(0, length))) {
-      return length;
+      // Case expansion changes offsets; slice the incoming text at its original boundary.
+      let originalLength = 0;
+      let foldedLength = 0;
+      for (const character of next) {
+        originalLength += character.length;
+        foldedLength += character.toLowerCase().length;
+        if (foldedLength === length) {
+          return originalLength;
+        }
+        if (foldedLength > length) {
+          break;
+        }
+      }
     }
   }
   return 0;

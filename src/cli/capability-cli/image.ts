@@ -3,6 +3,7 @@ import { detectMime } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { normalizeImageGenerationResolution } from "../../image-generation/resolution.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createEnumOptionParser } from "../../shared/enum-option.js";
 import { parseOptionalPositiveInteger } from "../parse-positive-integer.js";
 import { collectOption } from "../program/helpers.js";
@@ -52,6 +53,7 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
       .option("--json", "Output JSON", false)
       .action((opts, command) =>
         runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
+          const signal = getAsyncWorkSignal();
           const capability: "image.generate" | "image.edit" = `image.${commandName}`;
           const prompt = String(opts.prompt);
           const file =
@@ -106,13 +108,16 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
             targetIds: getModelsCommandSecretTargetIds(),
             agent,
           });
-          const { readFile } = await import("node:fs/promises");
+          const { realpath } = await import("node:fs/promises");
           const inputImages =
             file && file.length > 0
               ? await Promise.all(
                   file.map(async (filePath) => {
                     const resolvedPath = path.resolve(filePath);
-                    const buffer = await readFile(resolvedPath);
+                    const { readRegularFile } = await import("../../infra/fs-safe.js");
+                    const { buffer } = await readRegularFile({
+                      filePath: await realpath(resolvedPath),
+                    });
                     return {
                       buffer,
                       fileName: path.basename(resolvedPath),
@@ -122,6 +127,7 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
                   }),
                 )
               : undefined;
+          signal?.throwIfAborted();
           const result = await generateImage({
             cfg,
             agentDir,
@@ -145,7 +151,10 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
                 : undefined,
             timeoutMs,
             inputImages,
+            signal,
           });
+          // Providers may return a result after cancellation; do not publish it late.
+          signal?.throwIfAborted();
           const outputs = await Promise.all(
             result.images.map(async (image, index) => {
               const written = await writeOutputAsset({

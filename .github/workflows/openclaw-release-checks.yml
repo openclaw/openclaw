@@ -88,6 +88,7 @@ on:
           - windows-node
           - live-e2e
           - package
+          - qualified-package
           - qa
           - qa-parity
           - qa-live
@@ -935,6 +936,15 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
 
+      - name: Materialize release package source
+        if: needs.resolve_target.outputs.package_mode == 'source'
+        env:
+          PACKAGE_REF: ${{ needs.resolve_target.outputs.revision }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --no-recurse-submodules --depth=1 --refetch --no-filter origin "$PACKAGE_REF"
+          git rev-parse --verify "$PACKAGE_REF^{commit}" >/dev/null
+
       - name: Validate release package source metadata
         if: needs.resolve_target.outputs.package_mode == 'source'
         env:
@@ -1076,6 +1086,7 @@ jobs:
         if: needs.resolve_target.outputs.package_mode != 'artifact'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: ${{ steps.artifact.outputs.name }}
           path: |
             .artifacts/docker-e2e-package/${{ steps.artifact.outputs.file_name }}
@@ -1088,6 +1099,7 @@ jobs:
         if: needs.resolve_target.outputs.package_mode != 'artifact' && steps.package.outputs.plugin_registry_manifest_sha256 != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: docker-e2e-prepublish-plugin-registry-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/prepublish-plugin-registry/
           retention-days: 14
@@ -1376,6 +1388,7 @@ jobs:
         if: steps.windows_node_candidate.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: windows-node-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             .artifacts/windows-node-candidate/openclaw-current.tgz
@@ -2228,7 +2241,7 @@ jobs:
     if: needs.resolve_target.outputs.qa_parity_scheduled == 'true'
     # Pinned: hosted ubuntu-24.04 failed the core lane in both runs after a backend flip
     # (36639549086, 36639978260). An outage queues this lane instead of failing it.
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('blacksmith-8vcpu-ubuntu-2404'))) || 'blacksmith-8vcpu-ubuntu-2404' }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('blacksmith-2vcpu-ubuntu-2404'))) || 'blacksmith-2vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     strategy:
       fail-fast: false

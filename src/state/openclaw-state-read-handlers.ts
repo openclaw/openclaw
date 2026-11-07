@@ -2,12 +2,6 @@ import {
   prepareAcpSessionMetadataRead,
   readAcpSessionCommand,
 } from "../acp/runtime/session-meta-read.worker.js";
-import {
-  readSandboxBrowserRegistryInDatabase,
-  readSandboxRegistryEntryInDatabase,
-  readSandboxRegistryInDatabase,
-  readSandboxRuntimeIdsInDatabase,
-} from "../agents/sandbox/registry.kernel.js";
 import { loadSubagentSessionListRunsFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { readSubagentRunsInWorker } from "../agents/subagents/registry/subagent-registry.store.worker.js";
 import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
@@ -43,7 +37,6 @@ import { readSessionGroupCatalogSnapshot } from "../gateway/session-group-catalo
 import { readSessionGroupMembership } from "../gateway/session-group-membership.read.js";
 import {
   readWorkerPlacementEnvironmentOwnerInDatabase,
-  readWorkerPlacementRecoveryCandidatesInDatabase,
   readWorkerSessionPlacementProjectionInDatabase,
 } from "../gateway/worker-environments/placement-read-projection.js";
 import {
@@ -53,14 +46,14 @@ import {
 import { readWorkspaceJournalInDatabase } from "../gateway/worker-environments/placement-workspace-journal.js";
 import { isWorkspaceJournalReadCommand } from "../gateway/worker-environments/placement-workspace-journal.types.js";
 import { listPendingWorkerWorkspaceResultsInDatabase } from "../gateway/worker-environments/placement-workspace-result.js";
-import { readPreparedPoolPresenceDemandInDatabase } from "../gateway/worker-environments/prepared-pool-presence-store.worker.js";
-import { readWorkerEnvironmentFacts } from "../gateway/worker-environments/store-row-codec.js";
 import { executeDevicePairingRead } from "../infra/device-pairing-read.kernel.js";
 import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
 import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-storage.kernel.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
+import { readUpdateRunAdmissionCommand } from "../infra/update-run-admission.read.js";
+import { isUpdateRunAdmissionReadCommand } from "../infra/update-run-admission.types.js";
 import {
   readInterruptedUpdateCandidate,
   readUpdateRunStatusInDatabase,
@@ -69,10 +62,9 @@ import {
   readUpdateRuns,
 } from "../infra/update-run-read.kernel.js";
 import {
-  inspectUpdateRunReconciliation,
-  readUpdateRunReconciliationCandidates,
-} from "../infra/update-run-reconciliation.read.js";
-import { inspectPluginCohortRecoveryRows } from "../infra/update-run-recovery-store.js";
+  canCollectPluginSourceSnapshotsInDatabase,
+  inspectPluginCohortRecoveryRows,
+} from "../infra/update-run-recovery-store.js";
 import {
   pluginBlobLookupInDatabase,
   pluginBlobEntriesInDatabase,
@@ -91,10 +83,7 @@ import { readTemplateStateCommandInDatabase } from "../templates/state-read.kern
 import { isTuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import { readTuiLastSessionCommand } from "../tui/tui-last-session.kernel.js";
 import { readAgentDeletionJournalStatusInDatabase } from "./agent-deletion-journal.read.js";
-import {
-  readAgentDatabaseDeletionWorkerSnapshot,
-  readRetainedAgentDeletionIds,
-} from "./agent-deletion-journal.snapshot.worker.js";
+import { readRetainedAgentDeletionIds } from "./agent-deletion-journal.snapshot.worker.js";
 import { readBackupRunsInDatabase } from "./backup-run-records.kernel.js";
 import {
   isConfigMachineStateReadCommand,
@@ -136,6 +125,7 @@ export function readOpenClawStateDatabaseCommand(
           | "meetingTranscripts.export"
           | "gatewayOwnerLease.read"
           | "agentDatabaseRegistry.read"
+          | "agentDatabaseDeletion.snapshot"
           | "localWorkspace.manifest"
           | "subagents.sessionList";
       }
@@ -144,12 +134,6 @@ export function readOpenClawStateDatabaseCommand(
 ) {
   if (command.type === "templates.inventory") {
     return readTemplateStateCommandInDatabase(db, command);
-  }
-  if (command.type === "agentDatabaseDeletion.snapshot") {
-    return {
-      type: command.type,
-      snapshot: readAgentDatabaseDeletionWorkerSnapshot(db, input.databasePath, command.purpose),
-    };
   }
   if (command.type === "deliveryQueue.outbound") {
     // Custody reads retain queue ownership admission even on a read-only connection.
@@ -299,18 +283,8 @@ export function readOpenClawStateDatabaseCommand(
       runs: readUpdateRuns(db, command.input),
     };
   }
-  if (command.type === "updateRuns.reconciliationCandidates") {
-    return {
-      type: command.type,
-      candidates: readUpdateRunReconciliationCandidates(db, command.input),
-    };
-  }
-  if (command.type === "updateRuns.reconciliationCandidate") {
-    const run = tableExists(db, "update_runs") ? readUpdateRunRecord(db, command.runId) : undefined;
-    return {
-      type: command.type,
-      candidate: run ? inspectUpdateRunReconciliation(db, run, {}) : undefined,
-    };
+  if (isUpdateRunAdmissionReadCommand(command)) {
+    return readUpdateRunAdmissionCommand(db, command);
   }
   if (command.type === "updateRuns.status") {
     return {
@@ -334,6 +308,12 @@ export function readOpenClawStateDatabaseCommand(
     return {
       type: command.type,
       pairs: runSqliteReadSnapshotSync(db, () => inspectPluginCohortRecoveryRows(db)),
+    };
+  }
+  if (command.type === "updateRuns.pluginSnapshotCollection") {
+    return {
+      type: command.type,
+      allowed: runSqliteReadSnapshotSync(db, () => canCollectPluginSourceSnapshotsInDatabase(db)),
     };
   }
   if (command.type === "exec-approvals.read") {
@@ -515,12 +495,6 @@ export function readOpenClawStateDatabaseCommand(
   if (isWorkspaceJournalReadCommand(command)) {
     return readWorkspaceJournalInDatabase(db, command);
   }
-  if (command.type === "workers.placementRecoveryCandidates") {
-    return {
-      type: command.type,
-      candidates: readWorkerPlacementRecoveryCandidatesInDatabase(db),
-    };
-  }
   if (command.type === "workers.placementPreservation") {
     return {
       type: command.type,
@@ -552,15 +526,6 @@ export function readOpenClawStateDatabaseCommand(
   if (isTuiLastSessionReadCommand(command)) {
     return readTuiLastSessionCommand(db, command);
   }
-  if (command.type === "preparedPoolPresence.read") {
-    return { type: command.type, demand: readPreparedPoolPresenceDemandInDatabase(db) };
-  }
-  if (command.type === "workerEnvironments.snapshot") {
-    return {
-      type: command.type,
-      facts: runSqliteReadSnapshotSync(db, () => readWorkerEnvironmentFacts(db, command.ids)),
-    };
-  }
   if (command.type === "agentDeletionJournal.status") {
     return {
       type: command.type,
@@ -569,27 +534,6 @@ export function readOpenClawStateDatabaseCommand(
   }
   if (command.type === "agentDeletionJournal.retainedIds") {
     return { type: command.type, agentIds: readRetainedAgentDeletionIds(db) };
-  }
-  if (command.type === "sandboxRegistry.list") {
-    return { type: command.type, entries: readSandboxRegistryInDatabase(db, command.workspaceDir) };
-  }
-  if (command.type === "sandboxRegistry.get") {
-    return {
-      type: command.type,
-      entry: readSandboxRegistryEntryInDatabase(db, command.containerName),
-    };
-  }
-  if (command.type === "sandboxRegistry.runtimeIds") {
-    return {
-      type: command.type,
-      runtimeIds: readSandboxRuntimeIdsInDatabase(db, command),
-    };
-  }
-  if (command.type === "sandboxRegistry.browsers") {
-    return {
-      type: command.type,
-      entries: readSandboxBrowserRegistryInDatabase(db, command.workspaceDir),
-    };
   }
   return {
     type: command.type,

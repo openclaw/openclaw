@@ -113,7 +113,7 @@ async function recoverStartup(
   await page.reload();
   await expect.poll(failure.documentCount).toBe(1);
   await expect.poll(() => documentProbes).toBeGreaterThan(0);
-  const alert = pane.getByRole("alert").filter({ hasText: "startup needs attention" });
+  const alert = pane.getByRole("alert").filter({ hasText: "Couldn’t start this session" });
   await button(alert, "Retry").waitFor();
   const readStartup = () =>
     evaluateControlUiContext(
@@ -223,7 +223,8 @@ async function recoverStartup(
     // blocks document replacement. Manual reload must still stop at the guard.
     const probesBeforeManualReload = documentProbes;
     await reload.click();
-    const toast = page.locator(".app-toast__message");
+    // Two-sentence copy renders as a title plus description; read both.
+    const toast = page.locator(".app-toast__body");
     await expect.poll(() => toast.textContent()).toContain(warning);
 
     expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);

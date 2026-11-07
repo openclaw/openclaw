@@ -19,7 +19,6 @@ import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import type { ChannelCapability, createChannelCapability } from "../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
-import { loadCurrentDeviceAuthToken } from "../lib/nodes/index.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import { openPreferredApplicationSession } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
@@ -32,7 +31,6 @@ import { ControlUiPluginRuntime } from "../plugins/control-ui-runtime.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
 import { AssistantDock } from "./assistant-dock.ts";
-import { readBootRecord } from "./boot-record.ts";
 import { prepareApplicationStartup } from "./bootstrap-connection.ts";
 import {
   applicationRouteLocation,
@@ -46,7 +44,6 @@ import {
 import { createApplicationNavigationPreferences } from "./bootstrap-navigation-preferences.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
 import {
-  prewarmBootChat,
   subscribeBootRecordPersistence,
   subscribeWarmBootConnection,
 } from "./bootstrap-warm-boot.ts";
@@ -149,28 +146,10 @@ export function bootstrapApplication(
   const connectionBootstrap = createConnectionBootstrapCoordinator();
   const chatSubmissions = createChatSubmissions();
   const router = createApplicationRouter();
-  const bootRecord =
-    ownsWarmBoot && !hasPendingGateway
-      ? readBootRecord(gatewayCredentialScope(settings.gatewayUrl), (method) => {
-          if (startup.pendingBootstrapToken || startup.password) {
-            return null;
-          }
-          if (["trusted-proxy", "tailscale", "password"].includes(method)) {
-            return settings.token.trim() ? null : "";
-          }
-          // An explicit token takes precedence over paired-device auth on the next connect.
-          return method === "token"
-            ? settings.token
-            : settings.token.trim()
-              ? null
-              : loadCurrentDeviceAuthToken(settings.gatewayUrl);
-        })
-      : null;
+  const bootRecord = initial.bootRecord;
   let warmBoot = bootRecord !== null;
   const warmBootConnectionRevision = gateway.connectionRevision;
-  if (bootRecord) {
-    prewarmBootChat(bootRecord, settings.sessionKey, applicationLocation, basePath);
-  }
+  initial.prewarmChatSnapshot();
   if (startsApplicationRouter && !firstRunDefaultLanding) {
     // Explicit routes download alongside snapshot reads, before shell construction.
     warmApplicationRouteModule(router, applicationLocation, basePath);

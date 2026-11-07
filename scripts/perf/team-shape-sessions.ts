@@ -21,6 +21,7 @@ type TeamShapeSession = { sessionKey: string; sessionId: string };
 
 export type TeamShapeSessionsOptions = {
   stateDir: string;
+  agentId?: string;
   sessions: number;
   retainedRuns: number;
   seed: number | string;
@@ -90,7 +91,8 @@ export async function seedTeamShapeSessions(options: TeamShapeSessionsOptions) {
     throw new Error("chatStartupSessions must not exceed sessions");
   }
   const env = { ...process.env, OPENCLAW_STATE_DIR: options.stateDir };
-  const databaseOptions = { agentId: "main", env };
+  const agentId = options.agentId ?? "main";
+  const databaseOptions = { agentId, env };
   ensureUserProfilesSchema({ env });
   runOpenClawStateWriteTransaction(
     ({ db }) => {
@@ -177,16 +179,16 @@ export async function seedTeamShapeSessions(options: TeamShapeSessionsOptions) {
         const sessionKey =
           options.sessionKeys?.[index] ??
           (stressCategory === "dashboard" || stressCategory === "archivedDashboard"
-            ? `agent:main:dashboard:${startupUuid}`
+            ? `agent:${agentId}:dashboard:${startupUuid}`
             : stressCategory === "subagent"
-              ? `agent:main:subagent:${startupUuid}`
+              ? `agent:${agentId}:subagent:${startupUuid}`
               : stressCategory === "channel"
-                ? `agent:main:discord:channel:synthetic-${index}`
+                ? `agent:${agentId}:discord:channel:synthetic-${index}`
                 : stressCategory === "cron"
-                  ? `agent:main:cron:synthetic-${index}`
+                  ? `agent:${agentId}:cron:synthetic-${index}`
                   : startupTarget
-                    ? `agent:main:dashboard:${startupUuid}`
-                    : `agent:main:${sessionId}`);
+                    ? `agent:${agentId}:dashboard:${startupUuid}`
+                    : `agent:${agentId}:${sessionId}`);
         // Keep the live stress cohort inside normal maintenance age limits for the campaign.
         const ageDays = stressCategory === "dashboard" ? 6 : stressCategory ? 29 : 30;
         const updatedAt = options.now - Math.floor(random() ** 2 * ageDays * DAY_MS);
@@ -205,7 +207,7 @@ export async function seedTeamShapeSessions(options: TeamShapeSessionsOptions) {
           stressCounts[stressCategory]++;
         }
         if (stressCategory && !archived && !isChild && stressTargets.length < 64) {
-          stressTargets.push({ sessionKey, agentId: "main" });
+          stressTargets.push({ sessionKey, agentId });
         }
         const entry: InternalSessionEntry = {
           sessionId,
@@ -219,7 +221,7 @@ export async function seedTeamShapeSessions(options: TeamShapeSessionsOptions) {
           displayName: `Team fixture session ${index}`,
           createdVia: isChild ? "spawn" : "operator",
           createdActor: isChild
-            ? { type: "agent", id: "main" }
+            ? { type: "agent", id: agentId }
             : { type: "human", source: "profile", id: profileId },
           visibility,
           status: index % 13 === 0 ? "failed" : "done",
@@ -241,7 +243,7 @@ export async function seedTeamShapeSessions(options: TeamShapeSessionsOptions) {
           recordSessionParticipantFromWorker(database, scope, {
             identity: { type: "profile", id: `team-shape-profile-${(index + participant) % 24}` },
             promptedAt: createdAt + participant,
-            sessionAgentId: "main",
+            sessionAgentId: agentId,
           });
           participantCount++;
         }

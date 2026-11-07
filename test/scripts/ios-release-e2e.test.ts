@@ -448,82 +448,167 @@ describe("release qualification workflow authority", () => {
   const workflow = parse(readFileSync(".github/workflows/ios-release-e2e.yml", "utf8"));
   const release = parse(readFileSync(".github/workflows/ios-store-release.yml", "utf8"));
   const ci = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
-  const selectionArtifact = {
-    id: 456,
-    name: "ios-release-gateway-selection-123",
-    expired: false,
-    workflow_run: { id: 123, head_sha: "a".repeat(40) },
-  };
-  const pin = (run: Partial<typeof selectionArtifact.workflow_run>) => ({
-    ...selectionArtifact,
-    workflow_run: { ...selectionArtifact.workflow_run, ...run },
-  });
-  const reuseSelection = { create: "false", "artifact-id": "456" };
-  const invalidPin = "expired or belongs to another source/run";
-  async function findGatewaySelection(
-    attempt: number,
-    artifacts: (typeof selectionArtifact)[],
-    outputs: Map<string, string>,
-    apiFailure?: Error,
-  ) {
-    const { runInNewContext } = await import("node:vm");
-    const step = workflow.jobs.qualify.steps.find(
-      (candidate: { id?: string }) => candidate.id === "gateway-selection",
-    );
-    const listWorkflowRunArtifacts = vi.fn();
-    const paginate = apiFailure
-      ? vi.fn().mockRejectedValue(apiFailure)
-      : vi.fn().mockResolvedValue(artifacts);
-    const execution: unknown = runInNewContext(`(async () => { ${step.with.script} })()`, {
-      github: { rest: { actions: { listWorkflowRunArtifacts } }, paginate },
-      context: { repo: { owner: "openclaw", repo: "openclaw" }, runId: 123 },
-      core: { setOutput: (name: string, value: string) => outputs.set(name, value) },
-      process: {
-        env: {
-          GITHUB_RUN_ATTEMPT: String(attempt),
-          TARGET_SHA: selectionArtifact.workflow_run.head_sha,
+  const gatewayPreparation = parse(
+    readFileSync(".github/actions/prepare-mobile-release-gateway/action.yml", "utf8"),
+  );
+  describe.each(["ios", "android"])("%s stable Gateway selection", (platform) => {
+    const selectionArtifact = {
+      id: 456,
+      name: `${platform}-release-gateway-selection-123`,
+      expired: false,
+      workflow_run: { id: 123, head_sha: "a".repeat(40) },
+    };
+    const pin = (run: Partial<typeof selectionArtifact.workflow_run>) => ({
+      ...selectionArtifact,
+      workflow_run: { ...selectionArtifact.workflow_run, ...run },
+    });
+    const reuseSelection = { create: "false", "artifact-id": "456" };
+    const invalidPin = "expired or belongs to another source/run";
+    async function findGatewaySelection(
+      attempt: number,
+      artifacts: (typeof selectionArtifact)[],
+      outputs: Map<string, string>,
+      apiFailure?: Error,
+    ) {
+      const { runInNewContext } = await import("node:vm");
+      const step = gatewayPreparation.runs.steps.find(
+        (candidate: { id?: string }) => candidate.id === "gateway-selection",
+      );
+      const listWorkflowRunArtifacts = vi.fn();
+      const paginate = apiFailure
+        ? vi.fn().mockRejectedValue(apiFailure)
+        : vi.fn().mockResolvedValue(artifacts);
+      const execution: unknown = runInNewContext(`(async () => { ${step.with.script} })()`, {
+        github: { rest: { actions: { listWorkflowRunArtifacts } }, paginate },
+        context: { repo: { owner: "openclaw", repo: "openclaw" }, runId: 123 },
+        core: { setOutput: (name: string, value: string) => outputs.set(name, value) },
+        process: {
+          env: {
+            GITHUB_RUN_ATTEMPT: String(attempt),
+            TARGET_SHA: selectionArtifact.workflow_run.head_sha,
+            SELECTION_ARTIFACT_NAME: selectionArtifact.name,
+          },
         },
-      },
+      });
+      await execution;
+      expect(paginate).toHaveBeenCalledWith(listWorkflowRunArtifacts, {
+        owner: "openclaw",
+        repo: "openclaw",
+        run_id: 123,
+        name: selectionArtifact.name,
+        per_page: 100,
+      });
+    }
+    it.each([
+      ["new workflow run", 1, [], { create: "true", "artifact-id": "" }],
+      ["existing first-attempt selection", 1, [selectionArtifact], reuseSelection],
+      ["workflow rerun", 2, [selectionArtifact], reuseSelection],
+    ])("preserves the Gateway selection for %s", async (_name, attempt, artifacts, expected) => {
+      const outputs = new Map<string, string>();
+      await findGatewaySelection(attempt, artifacts, outputs);
+      expect(Object.fromEntries(outputs)).toEqual(expected);
     });
-    await execution;
-    expect(paginate).toHaveBeenCalledWith(listWorkflowRunArtifacts, {
-      owner: "openclaw",
-      repo: "openclaw",
-      run_id: 123,
-      name: selectionArtifact.name,
-      per_page: 100,
+    it.each([
+      ["missing rerun pin", [], "no saved stable Gateway selection"],
+      ["expired pin", [{ ...selectionArtifact, expired: true }], invalidPin],
+      [
+        "duplicate pins",
+        [selectionArtifact, selectionArtifact],
+        "Multiple stable Gateway selections",
+      ],
+      ["different source", [pin({ head_sha: "b".repeat(40) })], invalidPin],
+      ["different run", [pin({ id: 124 })], invalidPin],
+    ])("rejects %s without authorizing a new selection", async (_name, artifacts, error) => {
+      const outputs = new Map<string, string>();
+      await expect(findGatewaySelection(2, artifacts, outputs)).rejects.toThrow(error);
+      expect(outputs.size).toBe(0);
     });
-  }
-  it.each([
-    ["new workflow run", 1, [], { create: "true", "artifact-id": "" }],
-    ["existing first-attempt selection", 1, [selectionArtifact], reuseSelection],
-    ["workflow rerun", 2, [selectionArtifact], reuseSelection],
-  ])("preserves the Gateway selection for %s", async (_name, attempt, artifacts, expected) => {
-    const outputs = new Map<string, string>();
-    await findGatewaySelection(attempt, artifacts, outputs);
-    expect(Object.fromEntries(outputs)).toEqual(expected);
+    it("fails artifact lookup errors without treating the pin as missing", async () => {
+      const outputs = new Map<string, string>();
+      await expect(
+        findGatewaySelection(1, [], outputs, new Error("artifact API unavailable")),
+      ).rejects.toThrow("artifact API unavailable");
+      expect(outputs.size).toBe(0);
+    });
   });
-  it.each([
-    ["missing rerun pin", [], "no saved stable Gateway selection"],
-    ["expired pin", [{ ...selectionArtifact, expired: true }], invalidPin],
-    [
-      "duplicate pins",
-      [selectionArtifact, selectionArtifact],
-      "Multiple stable Gateway selections",
-    ],
-    ["different source", [pin({ head_sha: "b".repeat(40) })], invalidPin],
-    ["different run", [pin({ id: 124 })], invalidPin],
-  ])("rejects %s without authorizing a new selection", async (_name, artifacts, error) => {
-    const outputs = new Map<string, string>();
-    await expect(findGatewaySelection(2, artifacts, outputs)).rejects.toThrow(error);
-    expect(outputs.size).toBe(0);
-  });
-  it("fails artifact lookup errors without treating the pin as missing", async () => {
-    const outputs = new Map<string, string>();
-    await expect(
-      findGatewaySelection(1, [], outputs, new Error("artifact API unavailable")),
-    ).rejects.toThrow("artifact API unavailable");
-    expect(outputs.size).toBe(0);
+  it("preserves platform selection identity and the installation-clock boundary", () => {
+    const steps = gatewayPreparation.runs.steps;
+    expect(gatewayPreparation.runs.using).toBe("composite");
+    expect(gatewayPreparation.inputs["artifact-name"].required).toBe(true);
+    expect(gatewayPreparation.inputs["record-install-clock"].default).toBe("false");
+    expect(gatewayPreparation.outputs["install-start-epoch"].value).toBe(
+      "${{ steps.install-start.outputs.epoch }}",
+    );
+    const [find, restore, clock, setup, prepare, save] = steps;
+    expect(find.uses).toBe("actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3");
+    expect(find.env.SELECTION_ARTIFACT_NAME).toBe("${{ inputs.artifact-name }}");
+    expect(restore.uses).toBe("actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333");
+    expect(restore.if).toBe("steps.gateway-selection.outputs.artifact-id != ''");
+    expect(restore.with).toEqual({
+      "artifact-ids": "${{ steps.gateway-selection.outputs.artifact-id }}",
+      "github-token": "${{ github.token }}",
+      "run-id": "${{ github.run_id }}",
+      path: "${{ env.GATEWAY_SELECTION_DIR }}",
+      "digest-mismatch": "error",
+    });
+    expect(clock).toMatchObject({
+      id: "install-start",
+      if: "inputs.record-install-clock == 'true'",
+      shell: "bash",
+    });
+    expect(setup).toMatchObject({
+      uses: "./.github/actions/setup-node-env",
+      with: { "node-version": "24.22.1", "install-bun": "false", "cache-mode": "off" },
+    });
+    expect(prepare.env).toEqual({
+      GH_TOKEN: "${{ github.token }}",
+      RESTORED_SELECTION: "${{ steps.gateway-selection.outputs.artifact-id != '' }}",
+    });
+    expect(prepare.shell).toBe("bash");
+    for (const filename of ["selection.json", "package.json", "package-lock.json"]) {
+      expect(prepare.run).toContain(`test -f "$GATEWAY_SELECTION_DIR/${filename}"`);
+    }
+    expect(prepare.run).toContain(
+      '--target-sha "$TARGET_SHA" --selection-dir "$GATEWAY_SELECTION_DIR"',
+    );
+    expect(save.uses).toBe("actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9");
+    expect(save.if).toBe("steps.gateway-selection.outputs.create == 'true'");
+    expect(save.with).toEqual({
+      name: "${{ inputs.artifact-name }}",
+      path:
+        ["selection.json", "package.json", "package-lock.json"]
+          .map((filename) => `\${{ env.GATEWAY_SELECTION_DIR }}/${filename}`)
+          .join("\n") + "\n",
+      "if-no-files-found": "error",
+      "retention-days": 30,
+    });
+    for (const platform of ["ios", "android"]) {
+      const selected = parse(readFileSync(`.github/workflows/${platform}-release-e2e.yml`, "utf8"));
+      const call = requiredWorkflowStep(
+        selected.jobs.qualify.steps,
+        "Prepare stable Gateway selection",
+      );
+      expect(call.id).toBe("gateway-preparation");
+      expect(call.uses).toBe("./.github/actions/prepare-mobile-release-gateway");
+      expect(call.with).toEqual({
+        "artifact-name": `${platform}-release-gateway-selection-\${{ github.run_id }}`,
+        ...(platform === "ios" ? { "record-install-clock": "true" } : {}),
+      });
+    }
+    const finish = requiredWorkflowStep(
+      workflow.jobs.qualify.steps,
+      "Complete sanitized timing proof",
+    );
+    expect(finish.env.INSTALL_START).toBe(
+      "${{ steps.gateway-preparation.outputs.install-start-epoch }}",
+    );
+    expect(finish.env.INSTALL_END).toBe("${{ steps.install-end.outputs.epoch }}");
+    expect(
+      requiredWorkflowStep(
+        workflow.jobs.qualify.steps,
+        "Finish shared toolchain installation clock",
+      ).if,
+    ).toBeUndefined();
   });
   it.each([
     ["manual current revision", {}, true],

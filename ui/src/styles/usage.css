@@ -200,10 +200,6 @@
   border: 1px solid var(--border);
 }
 
-.usage-skeleton-block::after {
-  animation-duration: 1.35s;
-}
-
 .usage-skeleton-block--tall {
   min-height: 128px;
 }
@@ -226,38 +222,21 @@
 .usage-query-input,
 .usage-filters-inline select,
 .usage-filters-inline input[type="text"] {
-  min-height: 32px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
-  color: var(--text);
-  font: inherit;
-  font-size: 12px;
-  transition:
-    border-color 0.18s var(--ease-out),
-    box-shadow 0.18s var(--ease-out),
-    background 0.18s var(--ease-out);
+  min-height: var(--settings-control-height);
+  border: 1px solid var(--field-border);
+  border-radius: var(--field-radius);
+  background-color: var(--field-bg);
+  font-size: var(--field-font-size);
 }
 
 .usage-date-input,
 .usage-select {
-  height: 32px;
-  padding: 0 10px;
+  height: var(--settings-control-height);
+  padding: 0 var(--field-padding-inline);
 }
 
-.usage-date-input:hover,
-.usage-select:hover {
-  border-color: var(--border-strong);
-}
-
-.usage-date-input:focus-visible,
-.usage-select:focus-visible,
-.usage-query-input:focus-visible,
-.usage-filters-inline select:focus-visible,
-.usage-filters-inline input[type="text"]:focus-visible {
-  outline: none;
-  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent);
+select.usage-select {
+  width: auto;
 }
 
 .usage-separator,
@@ -309,7 +288,8 @@
   white-space: nowrap;
 }
 
-.usage-header .btn--icon {
+/* The refresh button keeps its shared size, which grows on touch. */
+.usage-header .btn--icon:not(.refresh-button) {
   width: 32px;
   height: 32px;
   min-height: 32px;
@@ -332,23 +312,7 @@
 
 .usage-query-input {
   width: 100%;
-  padding: 8px 12px;
-  font-size: 12px;
-}
-
-@media (hover: none) and (pointer: coarse) {
-  .usage-date-input,
-  .usage-select,
-  .usage-query-input,
-  .usage-filters-inline select,
-  .usage-filters-inline input[type="text"] {
-    font-size: 16px;
-  }
-}
-
-.usage-query-input::placeholder {
-  color: var(--muted);
-  opacity: 0.7;
+  padding: 0 var(--field-padding-inline);
 }
 
 .usage-query-actions {
@@ -415,11 +379,6 @@
 .usage-export-menu > .oc-menu {
   min-width: 220px;
   max-width: min(320px, calc(100vw - 48px));
-  padding: var(--menu-padding);
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
 }
 
 .usage-filter-option {
@@ -557,20 +516,6 @@
 
 .usage-callout--tight {
   margin-top: 0;
-}
-
-.callout.warning {
-  border-color: color-mix(in srgb, var(--warn) 22%, var(--border));
-  background: var(--warn-subtle);
-  color: var(--text);
-}
-
-.callout.warning.usage-cache-warning {
-  border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
-  background: var(--warn-subtle);
-  color: var(--accent);
-  font-weight: 600;
-  box-shadow: none;
 }
 
 .usage-empty-state {
@@ -769,7 +714,7 @@
 }
 
 /* Fixed width: identity names arrive with the data and must not move the controls beside it. */
-.usage-creator-filter {
+select.usage-creator-filter {
   width: 260px;
   max-width: 100%;
 }
@@ -799,7 +744,7 @@
 }
 
 /* Identities may be long keys; numbers never break mid-value. */
-.usage-creators-table td:first-child {
+.usage-creators-table tbody th:first-child {
   overflow-wrap: anywhere;
   white-space: normal;
 }
@@ -835,6 +780,7 @@
 
 .usage-creator-select {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   width: 100%;
   gap: 7px;
   padding: 4px 0;
@@ -959,9 +905,13 @@
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: baseline;
   gap: 5px var(--space-3);
-  padding: 10px 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
-  font-size: 13px;
+  padding: var(--space-3) 0;
+  font-size: var(--control-ui-text-md);
+}
+
+.usage-list-label .agent-row-chip {
+  color: inherit;
+  font: inherit;
 }
 
 .usage-list-bar {
@@ -1011,7 +961,6 @@
   padding-bottom: 0;
 }
 
-.usage-list-item:first-child,
 .context-breakdown-item:first-child {
   padding-top: 0;
 }
@@ -1554,12 +1503,12 @@
 }
 
 .sessions-sort select {
-  min-height: 34px;
-  padding: 7px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg);
-  color: var(--text);
+  min-height: var(--settings-control-height);
+  padding: 0 var(--field-padding-inline);
+  border: 1px solid var(--field-border);
+  border-radius: var(--field-radius);
+  background-color: var(--field-bg);
+  font-size: var(--field-font-size);
 }
 
 /* Sessions read as a divided list; the page scrolls, the list does not. */
@@ -1817,7 +1766,7 @@
 
 .usage-filters-inline input[type="text"] {
   flex: 1 1 220px;
-  padding: 9px 10px;
+  padding: 0 var(--field-padding-inline);
 }
 
 .session-log-has-tools {
@@ -1963,6 +1912,23 @@
     gap: 14px;
   }
 
+  .usage-creators {
+    container-type: inline-size;
+  }
+
+  /* Numbers keep their natural width; the identity takes the rest and wraps. */
+  .usage-creators-table {
+    table-layout: auto;
+  }
+
+  .usage-creators-table th:first-child {
+    width: auto;
+  }
+
+  .usage-creators-table tbody tr {
+    border-top: 0;
+  }
+
   .usage-controls,
   .usage-filter-row,
   .usage-filters-inline {
@@ -1993,6 +1959,255 @@
   }
 }
 
+/* Phone toolbar: presets, then agent, metric, and the filter sheet's trigger. */
+@media (max-width: 640px) {
+  openclaw-usage-page .content-header.hub-page-header--untabbed {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "title actions";
+    align-items: start;
+  }
+
+  .usage-toolbar--phone {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-2);
+  }
+
+  .usage-toolbar--phone .usage-presets {
+    display: flex;
+    width: 100%;
+  }
+
+  .usage-toolbar--phone .usage-presets > .settings-segmented__btn,
+  .usage-filter-sheet .oc-sheet__body > .settings-segmented > .settings-segmented__btn {
+    flex: 1 1 auto;
+    justify-content: center;
+    min-width: 0;
+    padding-inline: var(--space-1);
+  }
+
+  .usage-toolbar__row {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .usage-toolbar__row .agent-scope-control {
+    flex: 0 1 auto;
+    min-width: 0;
+    margin-inline-end: auto;
+  }
+
+  .usage-toolbar__row .agent-scope-control openclaw-agent-select {
+    min-width: 96px;
+  }
+
+  .usage-toolbar__row .agent-select__trigger {
+    min-height: var(--settings-control-height);
+  }
+
+  .usage-toolbar__row .settings-segmented {
+    flex: none;
+  }
+
+  .usage-filter-sheet__trigger.btn--sm,
+  .usage-phone-actions__trigger.btn--sm {
+    flex: none;
+    justify-content: center;
+    width: var(--settings-control-height);
+    min-height: var(--settings-control-height);
+    height: var(--settings-control-height);
+    padding: 0;
+  }
+
+  .usage-filter-sheet__trigger svg,
+  .usage-phone-actions__trigger svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .usage-query-section .usage-query-count {
+    margin-left: 0;
+  }
+
+  /* Chart selections and query terms read as one row of applied filters. */
+  .usage-applied-filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .usage-applied-filters > :is(.active-filters, .usage-query-chips) {
+    display: contents;
+  }
+
+  .provider-usage-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .usage-filter-sheet__body {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .usage-filter-sheet__fields {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+  }
+
+  .usage-filter-sheet__facets {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-3);
+  }
+
+  .usage-filter-sheet__fields .field {
+    flex: 1 1 calc(50% - var(--space-3));
+    min-width: 0;
+  }
+
+  /* A full date plus its calendar needs more than half of the narrowest phones. */
+  .usage-filter-sheet__fields .field:nth-child(-n + 2) {
+    flex-basis: 150px;
+  }
+
+  .usage-filter-sheet__body :is(.usage-query-section, .usage-query-bar) {
+    gap: var(--space-3);
+  }
+
+  /* The query's own Filter sits beside its field; the sheet's other buttons take the row. */
+  .oc-popover.oc-sheet .oc-sheet__body .usage-query-bar .btn {
+    flex: none;
+    width: auto;
+  }
+
+  .usage-filter-sheet__fields :is(.usage-date-input, .usage-select) {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .usage-filter-sheet__body > .settings-segmented {
+    display: flex;
+    width: 100%;
+  }
+
+  .usage-filter-sheet .oc-sheet__body .usage-query-input {
+    text-overflow: ellipsis;
+  }
+
+  .usage-filter-sheet__facets .usage-filter-select,
+  .usage-filter-sheet__facets .usage-filter-trigger {
+    width: 100%;
+  }
+
+  /* A facet reads as a labelled select: its label above, its value in the field. */
+  .usage-filter-sheet__facets .usage-filter-trigger,
+  .usage-filter-sheet__facets .usage-filter-trigger:hover,
+  .usage-filter-sheet__facets .usage-filter-trigger[aria-expanded="true"] {
+    display: block;
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+  }
+
+  .usage-filter-sheet__facets .usage-filter-trigger > .oc-menu-item__label {
+    display: grid;
+    gap: 6px;
+    width: 100%;
+    text-align: start;
+  }
+
+  .usage-filter-sheet__facets .oc-menu-item__label > span:first-child {
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .usage-filter-sheet__facets .settings-count {
+    display: flex;
+    justify-content: space-between;
+    height: var(--settings-control-height);
+    padding: 0 var(--field-padding-inline);
+    border: 1px solid var(--field-border);
+    border-radius: var(--field-radius);
+    background: var(--field-bg);
+    color: var(--text);
+    font-size: 16px;
+    font-weight: var(--control-ui-font-weight-normal);
+  }
+
+  .usage-filter-sheet__facets .settings-count::after {
+    content: "";
+    flex: none;
+    width: 16px;
+    height: 16px;
+    background: var(--text-tertiary);
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")
+      center / contain no-repeat;
+  }
+
+  .usage-filter-sheet__facets .usage-filter-trigger[aria-expanded="true"] .settings-count {
+    border-color: var(--field-focus-border);
+  }
+}
+
+/* Phones: the panel opens by scrolling to it, its X shares the title row, and the
+   conversation filters are the page's facet menus. */
+@media (max-width: 640px) {
+  .usage-session-detail-column {
+    scroll-margin-top: var(--space-3);
+  }
+
+  .session-detail-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+  }
+
+  /* The tooltip host lays out as its button, so both claim the title row's end. */
+  .session-detail-header > openclaw-tooltip,
+  .session-detail-header .session-detail-close {
+    grid-area: 1 / 2;
+  }
+
+  .session-detail-header > .session-detail-stats {
+    grid-column: 1 / -1;
+  }
+
+  /* Side by side when both labels fit; wider mono themes wrap instead of truncating. */
+  .session-log-filters > .usage-filter-select {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .session-log-filters .usage-filter-trigger {
+    width: 100%;
+  }
+
+  .session-log-filters .usage-filter-trigger > .oc-menu-item__label {
+    justify-content: space-between;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .session-log-filters .usage-filter-trigger__label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .session-log-filters > .session-log-has-tools {
+    flex: 1 0 100%;
+  }
+}
+
 /* Legend: every stacked series with its share of the range. */
 .daily-chart-legend {
   display: flex;
@@ -2009,4 +2224,37 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
+}
+
+/* Too narrow for four columns: the identity takes its own line above the numbers. */
+@container (max-width: 320px) {
+  .usage-creators-table,
+  .usage-creators-table thead,
+  .usage-creators-table tbody {
+    display: block;
+  }
+
+  .usage-creators-table tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1fr);
+  }
+
+  .usage-creators-table thead th:first-child {
+    display: none;
+  }
+
+  .usage-creators-table tbody th:first-child {
+    grid-column: 1 / -1;
+    padding-right: 0;
+    padding-bottom: 2px;
+  }
+
+  .usage-creators-table td {
+    padding-top: 4px;
+  }
+
+  .usage-creators-table :is(th, td):nth-child(2) {
+    padding-left: 0;
+    text-align: left;
+  }
 }

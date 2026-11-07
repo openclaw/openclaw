@@ -1,6 +1,7 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import {
   canShareSqliteDatabaseAdmissions,
@@ -47,6 +48,10 @@ import {
   isSessionDeliveryGenerationUnavailableError,
 } from "./session-delivery-generation-errors.js";
 import { prepareMemorySessionGeneration } from "./session-delivery-generation-memory.js";
+import {
+  createSessionGenerationReadBatch,
+  type GenerationRead,
+} from "./session-delivery-generation-read-batch.js";
 import type {
   SessionDeliveryGeneration,
   SessionGenerationEntry,
@@ -87,6 +92,7 @@ function isSessionGenerationFacts(value: unknown): value is SessionGenerationFac
 async function prepareSessionGenerationLease(
   input: SessionGenerationFacts,
   onRevoked?: (reason: unknown) => void,
+  initialRead: GenerationRead = withSessionEntriesFromStoresInWorker,
 ): Promise<{
   assertCurrent: SessionSourceAssertion;
   assertDeliveryCurrent: () => void;
@@ -122,6 +128,7 @@ async function prepareSessionGenerationLease(
     });
     return prepared;
   }
+  let readGeneration = initialRead;
   const generation = { ...input };
   const releases: Array<() => void> = [];
   const paths = new Set([path.resolve(generation.storePath)]);
@@ -274,7 +281,9 @@ async function prepareSessionGenerationLease(
     while (!retained) {
       assertActive();
       const before = publications;
-      retained = await withSessionEntriesFromStoresInWorker(
+      const readInitialGeneration = readGeneration;
+      readGeneration = withSessionEntriesFromStoresInWorker;
+      retained = await readInitialGeneration(
         [
           {
             ...generation,
@@ -653,22 +662,25 @@ async function prepareSessionGenerationLease(
 
 /** Session lifecycle owners compose these facts with their own admitted mutation authority. */
 export async function prepareSessionGenerationFacts(input: SessionGenerationFacts) {
-  const {
-    assertCurrent,
-    prepareRead,
-    readSessionSettings,
-    release,
-    bindCreation,
-    isCreationAdopted,
-  } = await prepareSessionGenerationLease(input);
-  return {
-    assertCurrent,
-    prepareRead,
-    readSessionSettings,
-    release,
-    bindCreation,
-    isCreationAdopted,
-  };
+  const { assertDeliveryCurrent: _delivery, ...facts } = await prepareSessionGenerationLease(input);
+  return facts;
+}
+
+/** Share initial worker reads while each generation retains its own live lease and checks. */
+export async function prepareSessionGenerationFactsBatch(
+  inputs: readonly SessionGenerationFacts[],
+) {
+  type Facts = Awaited<ReturnType<typeof prepareSessionGenerationFacts>>;
+  const batch = createSessionGenerationReadBatch();
+  // File leases register publication listeners synchronously before queuing the first read.
+  const prepared = inputs.map((input) =>
+    prepareSessionGenerationLease(input, undefined, batch.read).then(
+      ({ assertDeliveryCurrent: _delivery, ...facts }): Result<Facts, unknown> => ok(facts),
+      (error: unknown): Result<Facts, unknown> => err(error),
+    ),
+  );
+  await batch.flush();
+  return Promise.all(prepared);
 }
 
 /** Stable cron roots retain their admitted run; exact-run keys already name one generation. */

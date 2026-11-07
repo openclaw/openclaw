@@ -1,6 +1,10 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
-import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { openChatPanels, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiMockSameOriginGatewayScript } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { chatDelta } from "./chat-flow-fixtures.test-support.ts";
@@ -24,6 +28,65 @@ const previewArtifact = {
 };
 
 suite.define(() => {
+  it("shows scratch expiry in Files and when opening its artifact", async () => {
+    const evidence = createControlUiE2eArtifactDir("scratch-expiry");
+    for (const expired of [false, true]) {
+      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        const message = expired
+          ? "file expired (scratch cleaned after 24 h)"
+          : "artifact download is unsupported";
+        const title = expired ? `${message}: report.txt` : "report.txt";
+        const gateway = await installMockGateway(page, {
+          heldMethods: ["artifacts.download"],
+          methodResponses: {
+            "artifacts.list": {
+              artifacts: [
+                {
+                  id: "scratch-report",
+                  title,
+                  type: "file",
+                  download: { mode: "unsupported" },
+                },
+              ],
+            },
+            "sessions.files.list": { sessionKey: "main", root: "/workspace", files: [] },
+          },
+        });
+        await page.setViewportSize({ width: 1280, height: 900 });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await openChatSidePanelType(page, "Files");
+        const row = page.locator(".workspace-desktop__row", { hasText: title });
+        await row.waitFor();
+        const capture = async (stage: string, content: typeof row) => {
+          const frame = await takeControlUiScreenshotFrame(page, page.locator("body"), [content], {
+            animations: "disabled",
+            elements: [content],
+          });
+          await fs.writeFile(
+            path.join(evidence, `${expired ? "after" : "before"}-${stage}.png`),
+            frame.png,
+          );
+          await fs.writeFile(
+            path.join(evidence, `${expired ? "after" : "before"}-${stage}-panel.png`),
+            frame.elements[0]!.png,
+          );
+        };
+        await capture("list", row);
+        await row.click();
+        await gateway.waitForRequest("artifacts.download");
+        await gateway.rejectDeferred("artifacts.download", {
+          code: "INVALID_REQUEST",
+          message,
+          details: { type: expired ? "artifact_file_expired" : "artifact_download_unsupported" },
+        });
+        const notice = page.locator(".empty-state__description", { hasText: message });
+        await notice.waitFor();
+        await capture("open", notice);
+        expect(await gateway.getRequests("artifacts.download")).toHaveLength(1);
+      });
+    }
+  });
+
   it("keeps transcript attachment icons compact beside project files", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       await installMockGateway(page, {
@@ -70,6 +133,7 @@ suite.define(() => {
           await page.getByRole("separator", { name: "Resize side panel" }).press("End");
         } else if (mobile) {
           await page.setViewportSize({ width: 390, height: 900 });
+          await openChatPanels(page, "mobile");
         }
         const selector = mobile
           ? '.chat-workspace-mobile__group[role="list"] .chat-workspace-mobile__row'
@@ -210,7 +274,7 @@ suite.define(() => {
       await page
         .locator(".chat-group.assistant .chat-text", { hasText: "The delivery notes are ready." })
         .waitFor();
-      await page.getByRole("button", { name: "Stop generating", exact: true }).waitFor({
+      await page.getByRole("button", { name: "Stop", exact: true }).waitFor({
         state: "hidden",
       });
       expect(await composer.inputValue()).toBe("Keep the examples ready for review.");
@@ -362,6 +426,7 @@ suite.define(() => {
       await expect.poll(listRequests).toHaveLength(2);
       await waitForFile("AFTER_RUN.md");
       await page.setViewportSize({ height: 900, width: 640 });
+      await openChatPanels(page, "mobile");
       const workspaceRail = page.locator(".chat-workspace-mobile");
       await workspaceRail.waitFor();
       await expect

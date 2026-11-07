@@ -25,7 +25,7 @@ import type { GatewayLockIdentity } from "../infra/gateway-lock.js";
 import { resolveCurrentOpenClawCliInvocation } from "../infra/openclaw-cli-invocation.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
-import { setConsoleSubsystemFilter } from "../logging/console.js";
+import { setConsoleSubsystemFilter, withConsoleSubsystemsSuppressed } from "../logging/console.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -493,13 +493,21 @@ export async function withEmbeddedTuiStateLock<T>(
 }
 
 export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
-  if (opts.local === true && opts.backend === undefined) {
-    return await withEmbeddedTuiStateLock(async () => await runTuiUnlocked(opts));
-  }
-  return await runTuiUnlocked(opts);
+  const previousConsoleSubsystemFilter = loggingState.consoleSubsystemFilter;
+  return await withConsoleSubsystemsSuppressed(async () => {
+    if (opts.local === true && opts.backend === undefined) {
+      return await withEmbeddedTuiStateLock(
+        async () => await runTuiUnlocked(opts, previousConsoleSubsystemFilter),
+      );
+    }
+    return await runTuiUnlocked(opts, previousConsoleSubsystemFilter);
+  });
 }
 
-async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
+async function runTuiUnlocked(
+  opts: RunTuiOptions,
+  previousConsoleSubsystemFilter: string[] | null,
+): Promise<TuiResult> {
   const isLocalMode = opts.local === true || opts.backend !== undefined;
   const config =
     opts.config ??
@@ -628,15 +636,6 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
           tlsFingerprint: opts.tlsFingerprint,
         });
   }
-  const previousConsoleSubsystemFilter = isLocalMode
-    ? loggingState.consoleSubsystemFilter
-      ? [...loggingState.consoleSubsystemFilter]
-      : null
-    : null;
-  if (isLocalMode) {
-    setConsoleSubsystemFilter(["__openclaw_tui_quiet__"]);
-  }
-
   const tui = new TuiMainScreen(new TuiProcessTerminal());
   const programStatus = createTuiProgramStatusReporter(tui.terminal);
   const dedupeBackspace = createBackspaceDeduper();
@@ -997,16 +996,12 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
 
   const withTuiSuspended = async <T>(work: () => Promise<T>): Promise<T> => {
     await drainAndStopTuiSafely(tui);
-    if (isLocalMode) {
-      setConsoleSubsystemFilter(previousConsoleSubsystemFilter);
-    }
+    setConsoleSubsystemFilter(previousConsoleSubsystemFilter);
     try {
       return await work();
     } finally {
       if (!exitRequested) {
-        if (isLocalMode) {
-          setConsoleSubsystemFilter(["__openclaw_tui_quiet__"]);
-        }
+        setConsoleSubsystemFilter(["__openclaw_tui_quiet__"]);
         tui.start();
         tui.setFocus(editor);
         updateHeader();
@@ -1629,9 +1624,6 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       disposeStatus();
       disposeEventHandlers();
       promptControllers.forEach((controller) => controller.dispose());
-      if (isLocalMode) {
-        setConsoleSubsystemFilter(previousConsoleSubsystemFilter);
-      }
       cleanupTerminalLossHandler?.();
       cleanupTerminalLossHandler = undefined;
       process.off("SIGINT", handleCtrlC);

@@ -118,7 +118,6 @@ export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
       <span ref={(element) => props.contentRef?.(element)} class="chat-tool-disclosure__content">
         <Show
           when={shown()?.title}
-          keyed
           fallback={
             <Show when={!props.bubbleMode}>
               <span class="chat-activity-group__label">{props.summary}</span>
@@ -126,8 +125,14 @@ export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
           }
         >
           {(title) => (
-            <span class="chat-activity-group__label chat-activity-group__label--live">
-              {title}
+            <span
+              class={[
+                "chat-activity-group__label chat-activity-group__label--live",
+                props.activity?.status === "running" &&
+                  "chat-activity-group__label--running text-shimmer",
+              ]}
+            >
+              {title()}
               {!props.bubbleMode && shown()?.status === "running" ? "…" : ""}
             </span>
           )}

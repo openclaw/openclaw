@@ -16,6 +16,18 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "Override the hosted model catalog URL for a self-hosted HTTPS mirror (localhost HTTP is allowed for testing). A running Gateway stops using the previous source's catalog and adopts the mirror's at its next catalog check, without restarting.",
   "models.providers.*":
     "One named provider configuration. Replace * with your chosen ID, or an existing integration ID you intentionally want to override. Schema lookup works before a custom ID is configured.",
+  "models.providers.*.name":
+    "Optional display name shown in provider settings and model pickers. Does not change the provider ID, model references, credentials, or routing.",
+  "models.providers.*.icon":
+    "Optional provider artwork: a local file, public HTTPS image URL, or bundled icon. PNG, JPEG, WebP, and GIF sources are limited to 2 MiB and 4096 pixels per side and served as a sanitized static PNG. Relative file paths resolve from the active configuration file directory. Invalid artwork falls back to the provider brand or display-name initial.",
+  "models.providers.*.icon.source":
+    "Artwork source: file for a Gateway-local image, url for a public HTTPS image, or builtin for an icon bundled with the Control UI.",
+  "models.providers.*.icon.path":
+    "Gateway-local PNG, JPEG, WebP, or GIF path. Relative paths resolve from the directory containing the active configuration file; ~/ expands to the Gateway user's home directory. Only this configured image is exposed through the scoped provider asset route.",
+  "models.providers.*.icon.url":
+    "Public HTTPS PNG, JPEG, WebP, or GIF URL without embedded credentials or a fragment. The Gateway fetches and sanitizes the image with private-network and redirect protections; the browser never contacts this URL directly.",
+  "models.providers.*.icon.name":
+    "Bundled Control UI icon name, such as server. An unknown name falls back to the provider's built-in brand or display-name initial.",
   "models.providers.*.baseUrl":
     "Base URL for the provider endpoint used to serve model requests for that provider entry. Use HTTPS endpoints and keep URLs environment-specific through config templating where needed.",
   "models.providers.*.apiKey":
@@ -195,7 +207,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "agents.defaults.modelPolicy":
     "Explicit policy for model overrides. Omit it or leave allow empty to permit any model.",
   "agents.defaults.modelPolicy.allow":
-    'Allowed model override refs. Accepts aliases, full "provider/model" refs, and provider wildcards such as "openai/*". Empty permits any model.',
+    'Allowed model override refs. Accepts aliases, full "provider/model" refs, and trailing prefix wildcards such as "openai/*", "clawrouter/anthropic/*" or "openai/gpt-*". Empty permits any model.',
   "agents.defaults.models.*.agentRuntime":
     "Optional per-model runtime policy for the default agent. Use this for model-specific runtime exceptions instead of setting a whole-agent runtime.",
   "agents.defaults.models.*.agentRuntime.id":

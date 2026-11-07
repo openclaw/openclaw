@@ -5,6 +5,10 @@ import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { Picker, type PickerParams, type PickerOption } from "./select-picker.ts";
 import overlayStyles from "./solid/overlay.css?inline";
+import "../styles/base.css";
+
+// Geometry assertions measure the settled list, not the Select entry scale.
+document.documentElement.style.setProperty("--select-enter-duration", "0s");
 
 const options: PickerOption[] = [
   { value: "fixture/anchor", label: "Anchor", description: "Fixture provider" },
@@ -64,7 +68,14 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
     trigger.click();
     await picker.updateComplete;
   };
+  const openSearch = async () => {
+    if (!picker.querySelector("input")) {
+      picker.querySelector<HTMLButtonElement>(".header-search__toggle")!.click();
+      await picker.updateComplete;
+    }
+  };
   const search = async (value: string) => {
+    await openSearch();
     const input = picker.querySelector<HTMLInputElement>("input")!;
     input.value = value;
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
@@ -84,10 +95,34 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
     await picker.updateComplete;
     return event;
   };
-  return { params, picker, trigger, open, search, rows, key, update, container };
+  return { params, picker, trigger, open, openSearch, search, rows, key, update, container };
 }
 
 describe("Picker", () => {
+  it("opens long lists as a phone sheet and keeps short or opted-out lists anchored", async () => {
+    const media = window.matchMedia("(max-width: 640px)");
+    const long = Array.from({ length: 9 }, (_, index) => ({
+      value: `model/${index}`,
+      label: `Model ${index}`,
+    }));
+    const p = await mount({ searchable: false, options: long, value: "model/0" });
+    const menu = p.picker.querySelector<HTMLElement>(".picker-select__menu")!;
+    const opensAsSheet = async () => {
+      await p.open();
+      const sheet = menu.classList.contains("picker-select__menu--phone-sheet");
+      await p.key("Escape");
+      expect(menu.classList.contains("picker-select__menu--phone-sheet")).toBe(false);
+      return sheet;
+    };
+    expect(await opensAsSheet()).toBe(media.matches);
+    await p.update({ options: long.slice(0, 8), value: "model/0" });
+    expect(await opensAsSheet()).toBe(false);
+    await p.update({ options: long, value: "model/0", phoneSheet: false });
+    expect(await opensAsSheet()).toBe(false);
+    await p.update({ options: long.slice(0, 2), value: "model/0", phoneSheet: true });
+    expect(await opensAsSheet()).toBe(media.matches);
+  });
+
   it("keeps closed choices unmounted across catalog refreshes and shows current choices on open", async () => {
     const groupBy = vi.fn(() => undefined);
     const p = await mount({ searchable: false, groupBy });
@@ -174,6 +209,7 @@ describe("Picker", () => {
       searchable: "always",
     });
     await p.open();
+    await p.openSearch();
     const search = p.picker.querySelector<HTMLInputElement>("input")!;
     for (const value of ["content", "trigger"]) {
       const row = p.rows().find((option) => option.dataset.value === value)!;
@@ -278,6 +314,7 @@ describe("Picker", () => {
     });
     p.container.style.width = "420px";
     await p.open();
+    await p.openSearch();
     const input = p.picker.querySelector<HTMLInputElement>("input")!;
     const viewport = p.picker.querySelector<HTMLElement>(".picker-select__options")!;
     const active = () => document.getElementById(input.getAttribute("aria-activedescendant")!);
@@ -442,9 +479,12 @@ describe("Picker", () => {
     expect(p.rows()).toHaveLength(9);
     expect(p.rows()[0]?.textContent).toContain("Fixture provider");
     await p.key("Escape");
+    expect(p.picker.querySelector("input")).toBeNull();
+    await p.key("Escape");
     expect(document.activeElement).toBe(p.trigger);
     expect(p.params.onChange).not.toHaveBeenCalled();
     await p.open();
+    await p.openSearch();
     expect(p.picker.querySelector<HTMLInputElement>("input")!.value).toBe("");
     expect(p.rows()).toHaveLength(9);
   });
@@ -509,6 +549,7 @@ describe("Picker", () => {
     removed.click();
     await p.key("Enter");
     expect(p.params.onChange).not.toHaveBeenCalled();
+    await p.key("Escape");
     await p.key("Escape");
     await p.open();
     expect(p.picker.querySelector("input")).toBeNull();

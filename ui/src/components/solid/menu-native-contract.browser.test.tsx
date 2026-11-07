@@ -309,7 +309,7 @@ it("updates root placement and RTL submenu geometry", async () => {
 
 it.each([
   { dir: "ltr", placement: "right-end", left: "60px", side: "right" },
-  { dir: "ltr", placement: "right-end", left: "1060px", side: "left" },
+  { dir: "ltr", placement: "right-end", left: "1180px", side: "left" },
   { dir: "rtl", placement: "left-end", left: "1060px", side: "left" },
 ] as const)("keeps end-aligned submenu actions reachable ($dir, $side)", async (position) => {
   await page.viewport(1280, 800);

@@ -92,26 +92,24 @@ it.each([
   },
 );
 
-it.each(["standard", "daybreak_blue", "daybreak_red"] as const)(
-  "allows only Standard Access for a chat CLI turn (%s)",
-  async (cyberAccessProgram) => {
+// Codex CLI runs OpenAI models and cannot carry Daybreak; other CLI models run as Standard.
+it.each([
+  ["codex-cli", "gpt-5.4", "standard", true],
+  ["codex-cli", "gpt-5.4", "daybreak_blue", false],
+  ["codex-cli", "gpt-5.4", "daybreak_red", false],
+  ["claude-cli", "opus", "daybreak_blue", true],
+  ["claude-cli", "opus", "daybreak_red", true],
+] as const)(
+  "gates Access for a %s/%s chat CLI turn (%s)",
+  async (provider, model, cyberAccessProgram, runs) => {
     state.isCliProviderMock.mockReturnValue(true);
-    selectFallback("codex-cli", "gpt-5.4");
+    selectFallback(provider, model);
     state.runCliAgentMock.mockResolvedValueOnce(createRunResult("final"));
     const result = await runTurn({
-      followupRun: createFollowupRun({
-        provider: "codex-cli",
-        model: "gpt-5.4",
-        cyberAccessProgram,
-      }),
+      followupRun: createFollowupRun({ provider, model, cyberAccessProgram }),
     });
-    if (cyberAccessProgram === "standard") {
-      expect(result.kind).toBe("success");
-      expect(state.runCliAgentMock).toHaveBeenCalledOnce();
-    } else {
-      expect(result.kind).toBe("final");
-      expect(state.runCliAgentMock).not.toHaveBeenCalled();
-    }
+    expect(result.kind).toBe(runs ? "success" : "final");
+    expect(state.runCliAgentMock).toHaveBeenCalledTimes(runs ? 1 : 0);
   },
 );
 

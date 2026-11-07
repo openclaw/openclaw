@@ -23,6 +23,40 @@ function presenceIdentity(client: GatewayWsClient): string | undefined {
       : undefined;
 }
 
+/** Rebuild evicted rows from their live owner, including explicit clears of old facts. */
+export function buildClientPresence(
+  client: GatewayWsClient,
+  observedAt = Date.now(),
+): PresenceEntry {
+  const { connect } = client;
+  const role = connect.role ?? "operator";
+  return {
+    connectionId: client.connId,
+    deviceId: connect.device?.id,
+    instanceId:
+      role === "node"
+        ? (connect.device?.id ?? connect.client.instanceId)
+        : connect.client.instanceId,
+    host: connect.client.displayName ?? connect.client.id,
+    clientId: connect.client.id,
+    version: connect.client.version,
+    platform: connect.client.platform,
+    deviceFamily: connect.client.deviceFamily,
+    modelIdentifier: connect.client.modelIdentifier,
+    timeZone: connect.client.timeZone,
+    mode: connect.client.mode,
+    ip: client.internal?.isLocalClient ? undefined : client.clientIp,
+    roles: [role],
+    scopes: connect.scopes,
+    user: presenceIdentity(client) ? buildAuthenticatedPresenceUser(client) : undefined,
+    watchedSessions: client.watchedSessions?.length ? [...client.watchedSessions] : undefined,
+    onlineSince: client.personPresence?.onlineSince,
+    lastActivityAt: client.personPresence?.lastActivityAt,
+    connectionLastActivityAt: client.connectionLastActivityAt,
+    ts: observedAt,
+  };
+}
+
 /** Current transport facts are complete even when the legacy beacon cache evicts a row. */
 export function snapshotClientPresence(
   clients: ReadonlySet<GatewayWsClient>,
@@ -30,30 +64,7 @@ export function snapshotClientPresence(
 ): PresenceEntry[] {
   return [...clients]
     .filter((client) => client.presenceKey && isLiveClient(client))
-    .map((client) => {
-      const entry: PresenceEntry = {
-        connectionId: client.connId,
-        deviceId: client.connect.device?.id,
-        instanceId: client.connect.client.instanceId,
-        host: client.connect.client.displayName ?? client.connect.client.id,
-        clientId: client.connect.client.id,
-        platform: client.connect.client.platform,
-        deviceFamily: client.connect.client.deviceFamily,
-        timeZone: client.connect.client.timeZone,
-        ip: client.internal?.isLocalClient ? undefined : client.clientIp,
-        roles: [client.connect.role ?? "operator"],
-        user: presenceIdentity(client) ? buildAuthenticatedPresenceUser(client) : undefined,
-        connectionLastActivityAt: client.connectionLastActivityAt,
-        ts: observedAt,
-      };
-      if (client.personPresence) {
-        entry.onlineSince = client.personPresence.onlineSince;
-        if (client.personPresence.lastActivityAt !== undefined) {
-          entry.lastActivityAt = client.personPresence.lastActivityAt;
-        }
-      }
-      return entry;
-    });
+    .map((client) => buildClientPresence(client, observedAt));
 }
 
 /** Reconciles live identity/timing and returns whether a presence snapshot is needed. */
@@ -110,14 +121,7 @@ export function refreshClientPresence(
     if (nextPublication) {
       activityPublications.set(peer, nextPublication);
     }
-    upsertPresence(peer.presenceKey!, {
-      connectionId: peer.connId,
-      clientId: peer.connect.client.id,
-      mode: peer.connect.client.mode,
-      user: buildAuthenticatedPresenceUser(peer),
-      ...peer.personPresence,
-      connectionLastActivityAt: peer.connectionLastActivityAt,
-    });
+    upsertPresence(peer.presenceKey!, buildClientPresence(peer));
   }
   return publish;
 }
