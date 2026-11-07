@@ -115,6 +115,7 @@ export function renderSessionListToolbar(host: SessionListHost & { onToggleSideb
       method: "sessions.groups.put",
       requiredScope: "operator.write",
     });
+  const groupLabel = () => t("sessionsView.newGroupTitle");
   const statusLabel = () =>
     host.sessionsStatusFilter === "active"
       ? t("common.active")
@@ -122,21 +123,21 @@ export function renderSessionListToolbar(host: SessionListHost & { onToggleSideb
   return (
     <SidebarPanelHeader class="sidebar-session-toolbar" onToggleSidebar={host.onToggleSidebar}>
       <SidebarOwnerPicker host={host} />
-      <Show when={host.sidebarAgentsMode !== "roster"}>
+      {host.sidebarAgentsMode !== "roster" && (
         <button
           type="button"
-          class="sidebar-session-toolbar__button sidebar-session-toolbar__new-group"
+          class="sidebar-session-toolbar__button"
           title={(() => {
             const access = groupAccess();
-            return access.allowed ? t("sessionsView.newGroupTitle") : access.reason;
+            return access.allowed ? groupLabel() : access.reason;
           })()}
-          aria-label={t("sessionsView.newGroupTitle")}
+          aria-label={groupLabel()}
           disabled={!groupAccess().allowed}
           onClick={() => void host.sessionOrganizer.createSessionGroup()}
         >
           <Icon name="folder" />
         </button>
-      </Show>
+      )}
       <SidebarPanelFilter
         menus={host.sidebarMenus}
         menu="sessionSort"

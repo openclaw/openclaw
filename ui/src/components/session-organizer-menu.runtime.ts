@@ -158,7 +158,7 @@ export async function runBatchSessionAction(
         allUnread,
         scope,
       );
-      if (action.kind === "move-to-group" && moved?.length) {
+      if (action.kind === "move-to-group" && moved && moved.length) {
         organizer.revealSessionGroup(action.category, scope);
       }
     },

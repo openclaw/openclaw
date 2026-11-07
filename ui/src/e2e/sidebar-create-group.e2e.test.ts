@@ -80,9 +80,9 @@ suite.define(() => {
       const gateway = await installMockGateway(page, { heldMethods: ["connect"] });
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("connect");
-      expect(await page.locator(".sidebar-session-toolbar__new-group:enabled").count()).toBe(0);
+      const create = page.getByRole("button", { name: "New group", exact: true });
+      expect(await create.and(page.locator(":enabled")).count()).toBe(0);
       await gateway.resolveDeferred("connect");
-      const create = page.locator(".sidebar-session-toolbar__new-group");
       await create.waitFor();
       await expect.poll(() => create.isDisabled()).toBe(false);
       expect(await gateway.getRequests("sessions.groups.put")).toHaveLength(0);
@@ -92,7 +92,7 @@ suite.define(() => {
     suite.withPage({ locale: "en-US" }, async ({ page }) => {
       const gateway = await installMockGateway(page, { operatorScopes: ["operator.read"] });
       await page.goto(`${suite.server.baseUrl}chat`);
-      const create = page.locator(".sidebar-session-toolbar__new-group");
+      const create = page.getByRole("button", { name: "New group", exact: true });
       await create.waitFor();
       expect(await create.isDisabled()).toBe(true);
       expect(await gateway.getRequests("sessions.groups.put")).toHaveLength(0);
@@ -108,7 +108,7 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await page.locator(".sidebar-session-toolbar__new-group").click();
+      await page.getByRole("button", { name: "New group", exact: true }).click();
       const dialog = page.getByRole("dialog", { name: "New group", exact: true });
       await dialog.getByRole("textbox").fill("Project Alpha");
       await dialog.getByRole("button", { name: "Create group", exact: true }).click();
