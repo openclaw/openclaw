@@ -42,7 +42,7 @@ The weekly Skill Workshop curator (declaration key `skill-collection-review:<age
   On `automations edit`, removes the per-job fallback override so the job follows configured fallback precedence. Cannot combine with `--fallbacks`.
 </ParamField>
 <ParamField path="--clear-model" type="boolean">
-  On `automations edit`, removes the per-job model override so the job follows normal automation model precedence (stored automation-session override, else agent/default model). Cannot combine with `--model`.
+  On `automations edit`, removes the per-job model override so the job follows normal automation model precedence (stored automation-session override, else subagent/agent/default model selection). Cannot combine with `--model`.
 </ParamField>
 <ParamField path="--thinking" type="string">
   Thinking level override (`off|minimal|low|medium|high|xhigh|adaptive|max|ultra`). Available levels still depend on the selected model and agent runtime.
@@ -310,7 +310,19 @@ Model-selection precedence for isolated jobs, highest first:
 1. Per-job payload `model` (explicit config; a disallowed model fails the run)
 2. Gmail hook model override (only when the run came from Gmail and that override is allowed)
 3. User-selected stored automation-session model override
-4. Agent/default model selection
+4. The agent's `subagents.model` (`agents.entries.*.subagents.model`)
+5. The global subagent default (`agents.defaults.subagents.model`)
+6. The agent's own `model` (`agents.entries.*.model`)
+7. Default model selection (`agents.defaults.model`, then the built-in default)
+
+Isolated jobs share the subagent model selector with native subagent spawning, so a configured `subagents.model` wins over the agent's own `model`.
+
+Fallbacks resolve separately from the primary model. When step 4 or 5 selects the model and the job has no per-job `model`, the subagent fallback policy applies:
+
+- A fallback override on the agent's own `subagents.model` (`agents.entries.*.subagents.model.fallbacks`) wins first, even when the primary came from `agents.defaults.subagents.model`. A fallback-only entry such as `agents.entries.main.subagents.model: { "fallbacks": [] }` keeps the global primary but disables inherited fallbacks for that agent.
+- Otherwise the fallbacks configured on the selected entry apply: the agent's `subagents.model` entry, else the global `agents.defaults.subagents.model` entry.
+
+Explicit per-job `--fallbacks` always win, and a per-job `model` keeps its own candidate chain. When step 6 or 7 selects the model, the job uses normal fallback resolution instead of the subagent policy.
 
 A user-selected stored session model is an exact selection, as described in [selection source policy](/concepts/model-failover#selection-source-policy): if it fails, the run reports the failure instead of answering from configured fallbacks. The same applies to an agent turn in a main or custom (`session:<key>`) session and to a main-session system event when the session's model was selected by the user. Per-job `--fallbacks` still apply.
 
