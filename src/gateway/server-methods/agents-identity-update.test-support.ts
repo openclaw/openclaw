@@ -114,21 +114,48 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
       },
     );
 
-    it("writes combined identity fields to both config and IDENTITY.md", async () => {
-      mocks.rootRead.mockRejectedValue(new FsSafeError("not-found", "file not found"));
-      const identity = { name: "New Name", emoji: "🤖", avatar: "https://example.com/new.png" };
-      const respond = await update(identity);
+    it.each(["missing", "fenced"])(
+      "writes combined identity fields with %s content",
+      async (source) => {
+        const example = "\n```markdown\n- Name: Example\n- Emoji: ❌\n```\n";
+        if (source === "missing") {
+          mocks.rootRead.mockRejectedValue(new FsSafeError("not-found", "file not found"));
+        } else {
+          readIdentities({
+            "/workspace/test-agent/IDENTITY.md":
+              "# IDENTITY.md - Agent Identity\n\n- Name: Old Name\n" + example,
+          });
+        }
+        const identity = { name: "New Name", emoji: "🤖", avatar: "https://example.com/new.png" };
+        const respond = await update(identity);
 
-      expectRespondOk(respond, { ok: true, agentId: "test-agent" });
-      expectRecordFields(mockCallArg(mocks.applyAgentConfig, 0, 1), {
-        name: "New Name",
-        identity: expect.objectContaining(identity),
+        expectRespondOk(respond, { ok: true, agentId: "test-agent" });
+        expectRecordFields(mockCallArg(mocks.applyAgentConfig, 0, 1), {
+          name: "New Name",
+          identity: expect.objectContaining(identity),
+        });
+        expectRecordFields(mockCallArg(mocks.rootWrite), {
+          rootDir: "/workspace/test-agent",
+          relativePath: "IDENTITY.md",
+          data:
+            "# IDENTITY.md - Agent Identity\n\n- Name: New Name\n- Theme: steady\n- Emoji: 🤖\n- Avatar: https://example.com/new.png\n" +
+            (source === "fenced" ? example : ""),
+        });
+      },
+    );
+
+    it("does not write identity or config when a persisted value changes fence boundaries", async () => {
+      mocks.loadConfigReturn = agentConfig({
+        "test-agent": {
+          workspace: "/workspace/test-agent",
+          identity: { name: "Current Agent", theme: "steady\n```" },
+        },
       });
-      expectRecordFields(mockCallArg(mocks.rootWrite), {
-        rootDir: "/workspace/test-agent",
-        relativePath: "IDENTITY.md",
-        data: "# IDENTITY.md - Agent Identity\n\n- Name: New Name\n- Theme: steady\n- Emoji: 🤖\n- Avatar: https://example.com/new.png\n",
-      });
+      readIdentities({ "/workspace/test-agent/IDENTITY.md": "```md\n- Name: Example\n```\n" });
+      await expect(update({ name: "Nova" })).rejects.toThrow(
+        "Identity update would change fenced Markdown content or field values",
+      );
+      expectUncalled(mocks.rootWrite, mocks.writeConfigFile);
     });
 
     it.each([true, false])(

@@ -285,6 +285,7 @@ Each agent workspace can include an `IDENTITY.md` at the workspace root:
 - Example path: `~/.openclaw/workspace/IDENTITY.md`
 - `set-identity --from-identity` reads from the workspace root (or an explicit `--identity-file`).
 - Identity files must be valid UTF-8. Invalid encoding fails the import without changing the saved identity.
+- Identity fields inside fenced code blocks are ignored during import and preserved when OpenClaw updates the file.
 
 Avatar paths resolve relative to the workspace root and cannot escape it, even through a symlink.
 
