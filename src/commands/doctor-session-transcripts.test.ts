@@ -4,6 +4,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+} from "../agents/internal-runtime-context.js";
 import * as sessionDirs from "../agents/session-dirs.js";
 import { appendTranscriptEvent } from "../config/sessions/session-accessor.js";
 import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
@@ -84,6 +88,51 @@ it("defers large transcripts without reading their contents", async () => {
   const [issue] = await detect();
   expect(issue).toMatchObject({ filePath, deferred: true, broken: false });
   expect(promiseReadSpy).not.toHaveBeenCalled();
+});
+
+const withRuntimeContext = (text: string) =>
+  `${INTERNAL_RUNTIME_CONTEXT_BEGIN}\ninternal detail\n${INTERNAL_RUNTIME_CONTEXT_END}\n${text}`;
+
+it("reports a rewritten branch that the active path no longer reaches", async () => {
+  // "e" is the user turn on the active path; "b" is its discarded copy, still carrying the
+  // internal runtime context that the active copy was rewritten to drop.
+  const filePath = writeTranscript([
+    {
+      type: "message",
+      id: "a",
+      parentId: null,
+      message: { role: "user", content: "real question" },
+    },
+    {
+      type: "message",
+      id: "e",
+      parentId: "a",
+      message: { role: "user", content: "real question" },
+    },
+    {
+      type: "message",
+      id: "b",
+      parentId: "a",
+      message: { role: "user", content: withRuntimeContext("real question") },
+    },
+    { type: "message", id: "f", parentId: "e", message: { role: "assistant", content: "final" } },
+  ]);
+  await expect(detect()).resolves.toEqual([
+    expect.objectContaining({ filePath, broken: true, originalEntries: 4, activeEntries: 3 }),
+  ]);
+});
+
+it("stays quiet when no user turn was rewritten", async () => {
+  writeTranscript([
+    {
+      type: "message",
+      id: "a",
+      parentId: null,
+      message: { role: "user", content: "real question" },
+    },
+    { type: "message", id: "e", parentId: "a", message: { role: "assistant", content: "final" } },
+  ]);
+  await expect(detect()).resolves.toEqual([]);
 });
 
 const note = vi.hoisted(() => vi.fn());
