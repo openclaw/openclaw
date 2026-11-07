@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
-import { recordLegacyMigrationReceipt } from "../infra/state-migrations.receipts.js";
+import {
+  readLegacyMigrationReceiptFromDatabase,
+  recordLegacyMigrationReceipt,
+} from "../infra/state-migrations.receipts.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import {
@@ -22,12 +25,16 @@ import {
   assertAgentDeletionJournalAvailable,
   reconstructAgentDeletionJournalSchema,
 } from "./openclaw-state-db-schema-additive.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import { resolveOpenClawAgentDatabaseStoredPath } from "./openclaw-state-db.paths.js";
 
 type RecoveryTables = Pick<DB, "migration_sources">;
 
 const JOURNAL_TABLE = "agent_deletion_journal";
+const NODE_STARTUP_BACKFILL_SOURCE_KEY = "agent-deletion-journal-node-startup-backfill";
+const NODE_STARTUP_BACKFILL_DESCRIPTION =
+  "Node startup created the missing agent deletion journal. This node-local state was initialized from native bootstrap before the journal backfill, so the table was never created and no agent deletion could have begun on this database. Created empty; no agent databases were held.";
 /** Schema and Doctor producers cannot infer permission to repair an unverified store. */
 export function assertAgentDeletionRecoveryAllowsMutation(
   database: RecoveryDatabase,
@@ -175,4 +182,77 @@ export function resolveAgentDeletionRecoveryHolds(
     );
   }
   return removed;
+}
+
+/**
+ * Complete a deletion journal that node-local initialization never created.
+ *
+ * Native bootstrap databases migrated before the journal backfill never
+ * received the table, so node approvals saves fail with a raw SQLite error
+ * instead of the deletion fence. A deletion can only begin when the journal
+ * exists, and no production path drops the table, so a database that never
+ * had it never had a deletion in progress and an empty journal fences
+ * nothing. This backfills at most once: when a prior Doctor reconstruction
+ * or an earlier backfill is recorded and the table is missing again, the
+ * history is unknown and Doctor owns the repair.
+ *
+ * The caller's transaction commits canonical reconstruction and its receipt together.
+ */
+export function backfillMissingAgentDeletionJournalForNodeStartup(
+  database: RecoveryDatabase,
+  now = Date.now(),
+): boolean {
+  const db = database.db;
+  if (isPostgresSqlConnection(db)) {
+    return false;
+  }
+  if (!db.isTransaction) {
+    throw new Error("Agent deletion journal backfill requires a shared-state transaction.");
+  }
+  if (!needsAgentDeletionJournalBackfill(db)) {
+    return false;
+  }
+  if (!reconstructAgentDeletionJournalSchema(db, database.path)) {
+    return false;
+  }
+  recordLegacyMigrationReceipt(db, {
+    sourceKey: NODE_STARTUP_BACKFILL_SOURCE_KEY,
+    migrationKind: NODE_STARTUP_BACKFILL_SOURCE_KEY,
+    sourcePath: database.path,
+    targetTable: JOURNAL_TABLE,
+    sourceSha256: null,
+    sourceSizeBytes: null,
+    sourceRecordCount: null,
+    runId: `${NODE_STARTUP_BACKFILL_SOURCE_KEY}:${randomUUID()}`,
+    now,
+    reportJson: JSON.stringify({
+      description: NODE_STARTUP_BACKFILL_DESCRIPTION,
+      held: [],
+    }),
+    upsert: true,
+  });
+  return true;
+}
+
+/** Read-only probe, so startup never opens an unrecognized database for write. */
+export function needsAgentDeletionJournalBackfillForNodeStartup(
+  db: RecoveryDatabase["db"],
+): boolean {
+  return needsAgentDeletionJournalBackfill(db);
+}
+
+function needsAgentDeletionJournalBackfill(db: RecoveryDatabase["db"]): boolean {
+  if (isPostgresSqlConnection(db)) {
+    return false;
+  }
+  if (tableExists(db, JOURNAL_TABLE)) {
+    return false;
+  }
+  if (!tableExists(db, "migration_sources")) {
+    return false;
+  }
+  return (
+    readLegacyMigrationReceiptFromDatabase(db, SOURCE_KEY) === null &&
+    readLegacyMigrationReceiptFromDatabase(db, NODE_STARTUP_BACKFILL_SOURCE_KEY) === null
+  );
 }

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
+  backfillMissingAgentDeletionJournalForNodeStartup,
   reconstructAgentDeletionJournal as reconstruct,
   recordAgentDeletionRecoveryHolds as record,
   resolveAgentDeletionRecoveryHolds as resolve,
@@ -17,6 +18,7 @@ import {
   type RecoveryDatabase,
 } from "./agent-deletion-journal-recovery.kernel.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let database: RecoveryDatabase;
@@ -118,4 +120,42 @@ it("rejects malformed or unheld missing-table provenance", () => {
   expect(() => missingHolds(database)).toThrow("Invalid missing-journal provenance");
   updateReport({ missingJournal: [other] }, report);
   expect(() => missingHolds(database)).toThrow("unheld agent database");
+});
+
+it("backfills the journal for node startup when it was never created", () => {
+  database.db.exec("DROP TABLE agent_deletion_journal");
+  expect(transaction(() => backfillMissingAgentDeletionJournalForNodeStartup(database))).toBe(
+    true,
+  );
+  expect(tableExists(database.db, "agent_deletion_journal")).toBe(true);
+  expect(readReport(database)).toBeUndefined();
+});
+
+it("leaves an existing journal alone for node startup", () => {
+  expect(transaction(() => backfillMissingAgentDeletionJournalForNodeStartup(database))).toBe(
+    false,
+  );
+  expect(tableExists(database.db, "agent_deletion_journal")).toBe(true);
+});
+
+it("refuses a node startup backfill for a database Doctor already reconstructed", () => {
+  database.db.exec("DROP TABLE agent_deletion_journal");
+  transaction(() => reconstruct(database, [main]));
+  database.db.exec("DROP TABLE agent_deletion_journal");
+  expect(transaction(() => backfillMissingAgentDeletionJournalForNodeStartup(database))).toBe(
+    false,
+  );
+  expect(tableExists(database.db, "agent_deletion_journal")).toBe(false);
+});
+
+it("refuses a second node startup backfill after the table goes missing again", () => {
+  database.db.exec("DROP TABLE agent_deletion_journal");
+  expect(transaction(() => backfillMissingAgentDeletionJournalForNodeStartup(database))).toBe(
+    true,
+  );
+  database.db.exec("DROP TABLE agent_deletion_journal");
+  expect(transaction(() => backfillMissingAgentDeletionJournalForNodeStartup(database))).toBe(
+    false,
+  );
+  expect(tableExists(database.db, "agent_deletion_journal")).toBe(false);
 });
