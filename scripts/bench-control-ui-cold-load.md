@@ -24,6 +24,16 @@ check; positions and directions rotate. Split compound actions before attributin
 a gap. Fix validation requires 20 rotated pairs plus A/A and unchanged engines
 within the campaign's acceptance band.
 
+For the chat model picker, select `model-picker-first-open`, `model-picker-open`,
+`model-picker-search`, and `model-picker-search-paste` separately. Opening ends
+with mounted choices and focused search; paste uses one native edit, while search
+types the same query character by character. The compound
+`model-picker-first-open-search` retains the driver gaps between those phases.
+Use a separate WebKit `--trace` run to attribute layout and the first content
+paint; application time is not a paint timestamp. `sidebar-open` and
+`sidebar-close` split one activation on desktop and mobile and await the relevant
+navigation animations.
+
 Firefox retains the same browser-local application elapsed clock and boot/route
 readiness milestones. These measure neither CPU nor paint. CPU counters, native
 traces, throttling, forced GC, and heap snapshots are unavailable in this harness;

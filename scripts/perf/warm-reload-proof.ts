@@ -50,6 +50,7 @@ const { values } = parseArgs({
     "plugin-activation": { type: "boolean", default: false },
     "details-session-facts": { type: "boolean", default: false },
     "details-subagent-activity": { type: "boolean", default: false },
+    "details-child-count": { type: "string", default: "3" },
     "active-targets": { type: "boolean", default: false },
     "composer-controls": { type: "boolean", default: false },
     "reload-after-navigation": { type: "boolean", default: false },
@@ -67,7 +68,7 @@ if (values.help) {
   --admission signed-in|token --base <dist|ref> --candidate <dist|ref>
   --reloads 11 --sessions 3000 --rtt-ms 80 --capture-ms 8000 --route both|chat|dashboard
   --transcript-late-paint --plugin-activation --active-targets --reload-after-navigation --cpu-profile
-  --details-subagent-activity (two settled ordinary children on the active chat target)
+  --details-subagent-activity --details-child-count 3..8 (active chat ordinary children; default 3)
   --init-script <browser-script.js> (repeatable)
 Creates fresh isolated state and Chromium, records cold + warm reloads, then stops both.
 Offline paint audit: --audit-report <report.json> --paint-audit <paint-audit.json>
@@ -103,6 +104,9 @@ const reloads = integer(values.reloads, "--reloads", 0, 100);
 const sessions = integer(values.sessions, "--sessions", 2000, 20000);
 const rttMs = integer(values["rtt-ms"], "--rtt-ms", 0, 1000);
 const captureMs = integer(values["capture-ms"], "--capture-ms", 1000, 60000);
+const detailsChildren = values["details-subagent-activity"]
+  ? integer(values["details-child-count"], "--details-child-count", 3, 8)
+  : 0;
 const extraInitScripts = await Promise.all(
   values["init-script"].map((file) => readFile(file, "utf8")),
 );
@@ -814,7 +818,7 @@ try {
     dashboardPaneChrome: values["dashboard-pane-chrome"],
     pluginActivation: values["plugin-activation"],
     detailsSessionFacts: values["details-session-facts"],
-    detailsSubagentActivity: values["details-subagent-activity"],
+    detailsSubagentActivity: detailsChildren,
     activeTargets: values["active-targets"],
     composerControls: values["composer-controls"],
     ...(admission
