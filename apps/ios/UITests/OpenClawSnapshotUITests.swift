@@ -1673,6 +1673,30 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertEqual(refreshedArtifacts.last?["sessionKey"] as? String, artifacts.first?["sessionKey"] as? String)
     }
 
+    func testLiveGatewayWorkshopDocumentationOpensOutsideTheApp() throws {
+        // Run with an isolated Gateway and Safari as the default browser.
+        _ = try self.launchPairedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
+        let app = self.relaunchConnectedLiveGatewayApp(initialTab: "chat", initialDestination: "skillWorkshop")
+        let learnMore = app.webViews.links["Learn more"].firstMatch
+        XCTAssertTrue(learnMore.waitForExistence(timeout: 10), app.debugDescription)
+
+        let browser = XCUIApplication(bundleIdentifier: "com.apple.mobilesafari")
+        defer {
+            browser.terminate()
+            app.activate()
+        }
+        learnMore.tap()
+        XCTAssertTrue(
+            browser.wait(for: .runningForeground, timeout: 10),
+            "The documentation link must leave the authenticated Settings WebView")
+        let background = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "state != %d", XCUIApplication.State.runningForeground.rawValue),
+            object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [background], timeout: 5), .completed)
+        app.activate()
+        XCTAssertTrue(learnMore.waitForExistence(timeout: 5), "Returning preserves the Workshop page")
+    }
+
     func testLiveGatewayPairChatAndRelaunch() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone lifecycle proof only")
         let app = try self.launchPairedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
