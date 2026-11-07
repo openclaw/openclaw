@@ -174,7 +174,7 @@ function BrowserDashboardWidgetContent(
               <div>
                 <button
                   type="button"
-                  class="btn btn--small"
+                  class="btn btn--sm"
                   disabled={footer.pending}
                   onClick={() =>
                     void request(
@@ -197,7 +197,7 @@ function BrowserDashboardWidgetContent(
                 <Show when={footer.dashboard?.browserTab && !footer.dashboard.paused}>
                   <button
                     type="button"
-                    class="btn btn--small"
+                    class="btn btn--sm"
                     disabled={footer.pending}
                     onClick={() => void request("stop")}
                   >

@@ -74,7 +74,7 @@ export function BoardPendingCapabilities(props: {
       </Show>
       <div class="board-widget__grant-actions">
         <button
-          class="btn btn--small btn--primary"
+          class="btn btn--sm primary"
           type="button"
           data-test-id="board-grant-allow"
           disabled={props.disabled}
@@ -83,7 +83,7 @@ export function BoardPendingCapabilities(props: {
           {t("board.widget.allow")}
         </button>
         <button
-          class="btn btn--small"
+          class="btn btn--sm"
           type="button"
           data-test-id="board-grant-reject"
           disabled={props.disabled}

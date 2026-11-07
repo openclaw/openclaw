@@ -121,7 +121,7 @@ export function BoardMcpAppContent(props: {
               <span>{t("board.widget.appStaleDetail")}</span>
               <div class="board-widget__grant-actions">
                 <button
-                  class="btn btn--small btn--primary"
+                  class="btn btn--sm primary"
                   type="button"
                   disabled={props.loading}
                   onClick={() => props.retry()}
@@ -129,7 +129,7 @@ export function BoardMcpAppContent(props: {
                   {t("board.widget.retry")}
                 </button>
                 <button
-                  class="btn btn--small"
+                  class="btn btn--sm"
                   type="button"
                   disabled={props.busy}
                   onClick={() => props.remove()}

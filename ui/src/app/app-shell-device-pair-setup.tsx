@@ -64,7 +64,7 @@ function PairingDialogFallback(props: {
             {t("common.close")}
           </button>
           <Show when={props.failed}>
-            <button class="btn btn--primary" type="button" onClick={() => props.retry?.()}>
+            <button class="btn primary" type="button" onClick={() => props.retry?.()}>
               {t("common.retry")}
             </button>
           </Show>
