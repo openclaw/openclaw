@@ -60,6 +60,27 @@ const CUSTOM_ENDPOINT_CAPABILITIES: RealtimeVoiceProviderCapabilities = {
   supportsBrowserSession: false,
 };
 
+/**
+ * Resolve `talk.speechLocale` (BCP 47, e.g. "cs-CZ") into the ISO 639-1 code that
+ * realtime input transcription accepts. Unset, malformed, and unknown codes return
+ * undefined so the provider keeps autodetecting; Android normalizes the same config
+ * value's legacy underscore form, so browser sessions must agree with it.
+ */
+function resolveOpenAIRealtimeTranscriptionLanguage(speechLocale: string | undefined) {
+  if (!speechLocale) {
+    return undefined;
+  }
+  try {
+    const language = new Intl.Locale(speechLocale.replace(/_/g, "-")).language;
+    return /^[a-z]{2}$/.test(language) &&
+      new Intl.DisplayNames(["en"], { type: "language", fallback: "none" }).of(language)
+      ? language
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function prepareOpenAIRealtimeVoiceConfig({
   rawConfig,
   surface,
@@ -287,6 +308,9 @@ export function buildOpenAIRealtimeVoiceProvider(
         normalizeOpenAIRealtimeVoice(req.voice) ??
         normalizeOpenAIRealtimeVoice(config.voice) ??
         "alloy";
+      const transcriptionLanguage = resolveOpenAIRealtimeTranscriptionLanguage(
+        req.cfg?.talk?.speechLocale,
+      );
       if (req.clientControl) {
         if (!quicksilverBroker) {
           throw new Error("OpenAI realtime browser session broker is unavailable");
@@ -297,6 +321,7 @@ export function buildOpenAIRealtimeVoiceProvider(
           instructions: req.instructions,
           interruptResponseOnInputAudio: config.interruptResponseOnInputAudio,
           inputTranscriptionModel: config.inputTranscriptionModel,
+          language: transcriptionLanguage,
           model,
           noiseReduction: { type: "near_field" },
           prefixPaddingMs: req.prefixPaddingMs ?? config.prefixPaddingMs,
@@ -383,6 +408,7 @@ export function buildOpenAIRealtimeVoiceProvider(
             },
             transcription: {
               model: config.inputTranscriptionModel ?? OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL,
+              ...(transcriptionLanguage ? { language: transcriptionLanguage } : {}),
             },
           },
           output: { voice },

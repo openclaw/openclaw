@@ -1,0 +1,4 @@
+# #176044: parameterized browser-session cases proving talk.speechLocale reaches
+# OpenAI realtime input transcription on both the GA and WebRTC branches
+# (regional, underscore, bare, unknown, and unset forms), red on base.
+65

@@ -193,6 +193,33 @@ describe("OpenAI realtime voice browser authentication", () => {
     expect((session as { offerHeaders?: Record<string, string> }).offerHeaders).toBeUndefined();
   });
 
+  it.each([
+    { speechLocale: "cs-CZ", language: "cs" },
+    { speechLocale: "en_US", language: "en" },
+    { speechLocale: "xx", language: undefined },
+    { speechLocale: undefined, language: undefined },
+  ])(
+    "forwards talk.speechLocale=$speechLocale as WebRTC transcription language=$language",
+    async ({ speechLocale, language }) => {
+      mockRealtimeClientSecretResponse();
+      const provider = buildOpenAIRealtimeVoiceProvider();
+      if (!provider.createBrowserSession) {
+        throw new Error("expected OpenAI realtime provider to support browser sessions");
+      }
+
+      await provider.createBrowserSession({
+        cfg: { talk: speechLocale ? { speechLocale } : {} } as never,
+        providerConfig: { apiKey: "test-api-key-test" },
+      });
+
+      const bodySession = requireRecord(requireFetchJsonBody().session, "fetch session");
+      expect(requireNestedRecord(bodySession, ["audio", "input", "transcription"])).toEqual({
+        model: "gpt-4o-mini-transcribe",
+        ...(language ? { language } : {}),
+      });
+    },
+  );
+
   it("explains auth precedence when the selected API key is rejected", async () => {
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
       response: Response.json(
