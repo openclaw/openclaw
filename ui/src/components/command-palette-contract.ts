@@ -44,7 +44,7 @@ export function commandPaletteOpenAttachments(event: Event | undefined): readonl
     typeof detail === "object" &&
     "attachments" in detail &&
     Array.isArray(detail.attachments)
-    ? (detail.attachments as ChatAttachment[])
+    ? detail.attachments
     : [];
 }
 export const SHELL_NAV_DRAWER_TOGGLE_EVENT = "openclaw:shell-nav-drawer-toggle";
