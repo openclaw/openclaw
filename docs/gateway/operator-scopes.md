@@ -311,11 +311,6 @@ profile's cached verified primary GitHub identity, then `gateway.roles.default`.
 a cached GitHub identity never match this mapping. Clearing an explicit assignment
 with `role: null` exposes the configured mapping or default again.
 
-Preassignment does not require fetching a public GitHub profile. Give the setup
-agent the administrator's requested login and configured role directly; the
-configuration owner validates the mapping locally. Saving it does not establish
-that the person has signed in or currently has that role.
-
 `users.list` keeps `role` as the explicit assignment and reports `effectiveRole`
 with `roleSource` (`"assigned"`, `"githubLogin"`, or `"default"`).
 `gateway.roles.default` is required whenever roles are configured and must name

@@ -31,11 +31,6 @@ openclaw users list --json
 Requires `operator.read`. Human output lists each profile's ID, display name, and
 email aliases. Use the durable IDs when linking or merging profiles.
 
-For role assignments, see [Operator roles](/gateway/operator-scopes). Existing
-profiles use the administrator-scoped `users.setRole` RPC. Before a person's first
-sign-in, use the documented GitHub-login preassignment instead; no public-profile
-lookup is required.
-
 ## Link an email alias
 
 ```bash
