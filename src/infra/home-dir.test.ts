@@ -10,6 +10,7 @@ import {
   resolveRequiredHomeDir,
   resolveRequiredOsHomeDir,
   resolveUserPath,
+  resolveUserPathLiteral,
 } from "./home-dir.js";
 
 describe("resolveEffectiveHomeDir", () => {
@@ -284,5 +285,20 @@ describe("resolveOsHomeRelativePath", () => {
         } as NodeJS.ProcessEnv,
       }),
     ).toBe(path.resolve("/home/alice/docs"));
+  });
+});
+
+describe("resolveUserPathLiteral", () => {
+  it("keeps trailing whitespace that resolveUserPath would trim", () => {
+    const spaced = "/tmp/secret ";
+    expect(resolveUserPath(spaced)).toBe(path.resolve("/tmp/secret"));
+    expect(resolveUserPathLiteral(spaced)).toBe(path.resolve("/tmp/secret "));
+  });
+
+  it("still expands a leading home prefix without trimming the rest", () => {
+    const env = { HOME: "/home/alice" } as NodeJS.ProcessEnv;
+    expect(resolveUserPathLiteral("~/vault.json ", env)).toBe(
+      path.resolve("/home/alice/vault.json "),
+    );
   });
 });
