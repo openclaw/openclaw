@@ -1,4 +1,4 @@
 # Same-device replacement WebSocket regression, connection-retirement guards,
-# and the shared node lifecycle fixture: 149 net test/support lines.
+# and the shared node lifecycle fixture: 150 net test/support lines.
 # Covers response-before-close, obsolete non-effects, and replacement usability.
-149
+150

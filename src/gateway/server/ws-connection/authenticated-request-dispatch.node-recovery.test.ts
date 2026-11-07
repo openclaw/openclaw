@@ -6,6 +6,7 @@ import {
   requestFrame,
 } from "./authenticated-request-dispatch.test-support.js";
 
+// mock-isolation: Inject pairing rejection without loading or dispatching real Gateway methods.
 vi.mock("./authenticated-request-dispatch.server-methods.runtime.js", () => ({
   handleGatewayRequest: async ({ respond }: GatewayRequestOptions) => {
     respond(false, undefined, {
