@@ -522,7 +522,10 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
             <Show
               when={hasProviderBrandIcon(view().agent.id)}
               fallback={
-                <span class="model-providers__icon model-providers__agent-icon" aria-hidden="true">
+                <span
+                  class="model-providers__icon model-providers__agent-icon muted"
+                  aria-hidden="true"
+                >
                   <Icon name="terminal" />
                 </span>
               }
@@ -669,7 +672,7 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
                 {(agent) => <AgentRow agent={agent()} />}
               </For>
               <Show when={missing().length > 0}>
-                <p class="model-providers__agents-missing" data-installed-agents-missing>
+                <p class="model-providers__agents-missing muted" data-installed-agents-missing>
                   {t("modelProviders.installedAgents.notDetected", {
                     names: missing()
                       .map((agent) => agent.name)

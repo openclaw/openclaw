@@ -194,13 +194,13 @@ function CatalogFeedback(props: {
   return (
     <>
       {props.discovering ? (
-        <div class="model-providers__catalog-progress" role="status" aria-live="polite">
+        <div class="model-providers__catalog-progress muted" role="status" aria-live="polite">
           <span class="btn__spinner" aria-hidden="true" />
           <span>{t("modelProviders.defaults.discoveringMore")}</span>
         </div>
       ) : undefined}
       {props.error ? (
-        <div class="model-providers__catalog-progress" role="alert" aria-live="polite">
+        <div class="model-providers__catalog-progress muted" role="alert" aria-live="polite">
           <span>{props.error}</span>
           <button class="btn btn--sm" type="button" onClick={() => props.onRetry()}>
             {t("modelProviders.defaults.retryDiscover")}
