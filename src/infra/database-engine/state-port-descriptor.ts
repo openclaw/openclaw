@@ -5,6 +5,7 @@ import {
 } from "../../state/openclaw-state-db-contract.js";
 import {
   admitStatePostgres,
+  getStatePostgresRuntime,
   inspectStateSqlite,
   stateEngineSchema,
 } from "../../state/openclaw-state-db-engine.js";
@@ -30,7 +31,6 @@ import { listOpenClawStateFeatureSchemas } from "../../state/openclaw-state-feat
 import { RETAINED_STATE_TABLES } from "../../state/openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import manifest from "../../state/postgres-schema.generated/manifest.json" with { type: "json" };
-import { statePostgresRuntime } from "../../state/postgres-schema.generated/runtime.js";
 import metadata from "../../state/postgres-schema.generated/state-port.json" with { type: "json" };
 import { CLIENT_CREDENTIAL_LEGACY_TABLES_SQL } from "../client-credential-schema.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
@@ -84,6 +84,7 @@ export async function loadStatePortDescriptor(
       );
     }
   }
+  const statePostgresRuntime = getStatePostgresRuntime();
   const source = sourceVersion < 29 ? statePostgresRuntime.clientCredentialSource : undefined;
   // The generated catalog owns these tagged facts; project only the copy fields.
   const isColumn = (

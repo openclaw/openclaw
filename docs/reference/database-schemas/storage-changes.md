@@ -142,7 +142,10 @@ fragment does not activate PostgreSQL shared-state runtime support.
 `state.postgres.sql` and each manifest `file` contain the single runtime form of
 their state DDL. The generated `runtime.ts` module packages that same SQL with
 fragment activation/dependencies and the expected catalog for the state owner;
-it does not maintain a separate schema definition. They omit transaction wrappers and fixed schema qualification;
+it does not maintain a separate schema definition. The state owner constructs and
+retains that generated runtime data only when PostgreSQL is selected or a database
+port is requested; importing the shared owner for SQLite does not construct
+PostgreSQL catalogs or fragments. They omit transaction wrappers and fixed schema qualification;
 the owning connection supplies the namespace and transaction. The `agent.postgres.sql` artifact follows the same runtime-only convention.
 
 ### Local workspace manifest storage
