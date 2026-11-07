@@ -15,6 +15,10 @@ import {
 } from "./chat-message.test-support.ts";
 
 const harness = createChatMessageHarness();
+it("labels unnamed agent replies with the localized product noun", () => {
+  harness.renderAssistantMessage(createAssistantMessage("Ready"), { assistantName: undefined });
+  expect(harness.elementText(".chat-sender-name")).toBe("Agent");
+});
 const {
   render,
   renderStreamGroup,
@@ -70,6 +74,27 @@ it.each([
 });
 
 describe("grouped chat rendering", () => {
+  it.each([{ tools: [] }, { tools: ["upload"] }])(
+    "explains an unavailable steer without offering a no-op (%j)",
+    ({ tools }) => {
+      renderGroupedMessage(createUserMessage("Use the shorter approach."), "user", {
+        pendingSteer: () => ({
+          id: "steer",
+          runId: "send",
+          acceptedAt: 1,
+          state: "queued",
+          message: {},
+          steerNow: { status: "blocked", tools },
+        }),
+        onSteerNow: vi.fn(),
+      });
+      expectPresent(".chat-bubble");
+      expect(elementText(".chat-steer-now")).toContain(
+        tools.length ? "cannot interrupt safely" : "this runtime cannot interrupt tools",
+      );
+      expectAbsent(".chat-steer-now button");
+    },
+  );
   function applyNotice(
     host: ReturnType<typeof createHost>,
     seq: number,
@@ -126,18 +151,24 @@ describe("grouped chat rendering", () => {
       retry: false,
       discard: true,
     },
-    { state: "submitting", label: "Queued", actionLabel: undefined, retry: false, discard: true },
-    { state: "sending", label: "Queued", actionLabel: undefined, retry: false, discard: true },
+    { state: "submitting", label: undefined, actionLabel: undefined, retry: false, discard: false },
+    { state: "sending", label: undefined, actionLabel: undefined, retry: false, discard: false },
     {
       state: "waiting-model",
-      label: "Queued",
+      label: undefined,
       actionLabel: undefined,
       retry: false,
-      discard: true,
+      discard: false,
     },
-    { state: "waiting-idle", label: "Queued", actionLabel: undefined, retry: false, discard: true },
+    {
+      state: "waiting-idle",
+      label: undefined,
+      actionLabel: undefined,
+      retry: false,
+      discard: false,
+    },
   ] as const)(
-    "shows a $state footer with its diagnostic and recovery actions ($actionLabel)",
+    "shows only actionable $state delivery status ($actionLabel)",
     ({ state, label, actionLabel, retry: canRetry, discard: canDiscard }) => {
       const onRetryQueuedMessage = vi.fn();
       const onDiscardQueuedMessage = vi.fn();
@@ -162,6 +193,13 @@ describe("grouped chat rendering", () => {
       );
 
       const status = element(".chat-send-status");
+      if (!label) {
+        expect(status).toBeNull();
+        expect(requireElement(".chat-group-timestamp", HTMLTimeElement).dateTime).toBe(
+          new Date(1_000).toISOString(),
+        );
+        return;
+      }
       expect(status).not.toBeNull();
       expect(status?.title).toBe("Delivery diagnostic");
       expect(status?.textContent).toContain(label);
@@ -355,12 +393,12 @@ describe("grouped chat rendering", () => {
 
     expectCount(".chat-group.assistant", 1);
     expectAbsent(".chat-working-indicator");
-    // Usage leads and the duration follows, matching the live indicator's order.
+    // Run duration belongs to the Worked summary, so the recap carries usage only.
     expect(
       Array.from(element(".chat-turn-recap--continuation")!.children, (child) =>
         child.textContent?.trim(),
       ),
-    ).toEqual(["1 output token", "·", "Done in 4 hours, 2 minutes"]);
+    ).toEqual(["1 output token"]);
     expectAbsent(".chat-turn-recap__claw");
     expectPresent(".chat-group-footer");
   });

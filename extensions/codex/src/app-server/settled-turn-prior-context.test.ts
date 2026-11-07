@@ -57,14 +57,24 @@ function project(prior: AgentMessage[]) {
   });
 }
 
-it.each([false, true])("rejects evicted call ID reuse (current=%s)", (currentDuplicate) => {
-  const prior = exchange("first", currentDuplicate ? "current-call" : "reused-call");
-  if (!currentDuplicate) {
-    prior.push(...exchange("second", "reused-call"));
-  }
-  prior.push(...laterExchanges());
-  expect(() => project(prior)).toThrow(new CodexHistoryRejection("invalid_pairing"));
-});
+it.each([
+  { currentDuplicate: false, pending: false },
+  { currentDuplicate: true, pending: false },
+  { currentDuplicate: true, pending: true },
+])(
+  "rejects call ID reuse (current=$currentDuplicate, pending=$pending)",
+  ({ currentDuplicate, pending }) => {
+    const prior = exchange("first", currentDuplicate ? "current-call" : "reused-call");
+    if (pending) {
+      prior.pop();
+    }
+    if (!currentDuplicate) {
+      prior.push(...exchange("second", "reused-call"));
+    }
+    prior.push(...laterExchanges());
+    expect(() => project(prior)).toThrow(new CodexHistoryRejection("invalid_pairing"));
+  },
+);
 
 it.each([
   ["assistant block", "unsupported_content", [oversizedMessage("assistant")]],
@@ -94,20 +104,16 @@ it.each([
   expect(() => project(prior)).toThrow(expect.objectContaining({ reason }));
 });
 
-it.each(["reused", "missing", "wrong-name"])(
+it.each(["reused", "wrong-name"])(
   "rejects %s tool pairing after an oversized steering message",
   (failure) => {
     const prior = exchange("prior", "prior-call", true);
-    if (failure === "missing") {
-      prior.pop();
-    } else if (failure === "wrong-name") {
+    if (failure === "wrong-name") {
       prior[3] = message(toolResult("prior-call", "other"), "prior:tool:prior-call:result");
     } else {
       prior.push(...exchange("duplicate", "prior-call").slice(1));
     }
-    expect(() => project(prior)).toThrow(
-      new CodexHistoryRejection(failure === "missing" ? "incomplete_pairing" : "invalid_pairing"),
-    );
+    expect(() => project(prior)).toThrow(new CodexHistoryRejection("invalid_pairing"));
   },
 );
 

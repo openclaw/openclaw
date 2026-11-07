@@ -2,7 +2,7 @@ import path from "node:path";
 import { isContainerEnvironment } from "./container-environment.js";
 import { readPackageName } from "./package-json.js";
 import { canAccess, safeStat } from "./path-existence.js";
-import { detectGlobalInstallManagerForRoot } from "./update-global.js";
+import { detectGlobalInstallManagerForRoot, type GlobalInstallManager } from "./update-global.js";
 import type { UpdateInstallKind } from "./update-install-kind.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
 import { buildUpdateCommandRunner } from "./update-runner-command.js";
@@ -29,6 +29,7 @@ export async function describeUpdateInstallRoot(root: string): Promise<string> {
 export async function resolveUpdateInstallSurface(opts: {
   root: string | null;
   installKind: UpdateInstallKind;
+  packageManager?: GlobalInstallManager;
   timeoutMs?: number;
   runCommand?: CommandRunner;
 }): Promise<UpdateInstallSurface> {
@@ -42,12 +43,15 @@ export async function resolveUpdateInstallSurface(opts: {
   if (opts.installKind === "immutable") {
     return { kind: "immutable", mode: "unknown", root, packageRoot: root };
   }
-  const { runCommand } = await buildUpdateCommandRunner(opts.runCommand);
-  const globalManager = await detectGlobalInstallManagerForRoot(
-    runCommand,
-    root,
-    opts.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS,
-  );
+  // Reuse fresh package ownership. Missing facts keep the interactive runner's
+  // own budget so an unavailable startup probe can still recover.
+  const globalManager =
+    opts.packageManager ??
+    (await detectGlobalInstallManagerForRoot(
+      (await buildUpdateCommandRunner(opts.runCommand)).runCommand,
+      root,
+      opts.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS,
+    ));
   if (globalManager) {
     return { kind: "global", mode: globalManager, root, packageRoot: root };
   }

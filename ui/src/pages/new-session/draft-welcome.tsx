@@ -13,9 +13,11 @@ type WelcomeSessions = {
   subscribe: (notify: () => void) => () => void;
 };
 
+export type DraftWelcomeOptions = Omit<ChatWelcomeProps, "composer"> & { sessionKey?: string };
+
 export function DraftWelcome(props: {
   sessions: WelcomeSessions | undefined;
-  options: Omit<ChatWelcomeProps, "composer">;
+  options: DraftWelcomeOptions;
   composer?: JSX.Element;
   assistantNameControl?: JSX.Element;
 }) {

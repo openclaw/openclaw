@@ -27,7 +27,6 @@ import {
   TEST_SECONDARY_PROFILE_ID as SECONDARY,
   withAuthState,
 } from "./session-override.test-support.js";
-import { isProfileInCooldown } from "./usage-state.js";
 
 const sessionKey = "agent:main:main";
 const readSession = (scope: { storePath: string }) =>
@@ -42,6 +41,28 @@ async function persistSession(state: OpenClawTestState, initial: SessionEntry) {
 }
 
 describe("resolveSessionAuthProfileOverride", () => {
+  it.each(["user", "user-link", "auto"] as const)(
+    "recognizes runtime-owned native pins with %s provenance",
+    (source) =>
+      withAuthState(async (state) => {
+        const warn = vi.spyOn(authProfilesLog, "warn").mockImplementation(() => {});
+        const profileId = "anthropic:claude-cli";
+        const sessionEntry = automaticSession({
+          authProfileOverride: profileId,
+          authProfileOverrideSource: source,
+        });
+        const resolved = await resolveSession({
+          agentDir: state.agentDir(),
+          provider: "anthropic",
+          nativeAuthProfileIds: [profileId],
+          sessionEntry,
+        });
+        expect(resolved).toBe(source === "auto" ? undefined : profileId);
+        expect(sessionEntry.authProfileOverride).toBe(resolved);
+        expect(warn).not.toHaveBeenCalled();
+      }),
+  );
+
   it("returns early when no auth sources exist", () =>
     withAuthState(async (state) => {
       const agentDir = state.agentDir();
@@ -99,10 +120,10 @@ describe("resolveSessionAuthProfileOverride", () => {
     ["clears when all profiles are in cooldown", false],
   ] as const)("%s without restoring concurrent session metadata", (_label, rotates) =>
     withAuthState(async (state) => {
-      const agentDir = await prepareCooldownAuthState(state, { profileIds: [PRIMARY, SECONDARY] });
-      if (rotates) {
-        authStoreMocks.isProfileInCooldown.mockImplementation((_store, id) => id === PRIMARY);
-      }
+      const agentDir = await prepareCooldownAuthState(state, {
+        profileIds: [PRIMARY, SECONDARY],
+        ...(rotates ? { usageStats: { [PRIMARY]: { cooldownUntil: Date.now() + 60_000 } } } : {}),
+      });
       const session = await persistSession(
         state,
         automaticSession({
@@ -295,7 +316,6 @@ describe("resolveSessionAuthProfileOverride", () => {
           },
         },
       };
-      authStoreMocks.isProfileInCooldown.mockImplementation(isProfileInCooldown);
       const sessionEntry = automaticSession({
         authProfileOverride: profileId,
         model: "model-y",
@@ -431,9 +451,6 @@ describe("session auth-profile rotation", () => {
       authStoreMocks.state.store.usageStats = {
         [API_PRIMARY]: { cooldownUntil: Date.now() + 60_000, cooldownReason: "rate_limit" },
       };
-      authStoreMocks.isProfileInCooldown.mockImplementation(
-        (_store, profileId) => profileId === API_PRIMARY,
-      );
       const sessionEntry = automaticSession({
         authProfileOverride: API_PRIMARY,
         model: MODEL,

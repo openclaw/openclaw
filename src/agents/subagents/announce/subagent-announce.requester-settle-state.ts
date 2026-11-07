@@ -24,12 +24,7 @@ export function isRequesterSettleMemberReady(entry: SubagentRunRecord): boolean 
 }
 
 export function needsRequesterSettleFindings(entry: SubagentRunRecord): boolean {
-  // Earlier delivery cannot discharge reconciliation of restart-interrupted work.
-  return (
-    entry.delivery?.status !== "delivered" ||
-    (entry.execution.interruptionReason === "gateway-restart" &&
-      (entry.delivery.deliveredAt ?? 0) < (entry.execution.endedAt ?? Infinity))
-  );
+  return entry.delivery?.status !== "delivered";
 }
 
 /**
@@ -145,7 +140,6 @@ export function readSharedBatchState(
     status: source?.status ?? "pending",
     attemptCount: Math.max(0, ...states.map((state) => state.attemptCount ?? 0)),
     ...(source?.privateInput ? { privateInput: source.privateInput } : {}),
-    ...(source?.replayCount !== undefined ? { replayCount: source.replayCount } : {}),
     ...(source?.nextAttemptAt !== undefined ? { nextAttemptAt: source.nextAttemptAt } : {}),
     ...(source?.lastError !== undefined ? { lastError: source.lastError } : {}),
     ...(source?.progressOperationId ? { progressOperationId: source.progressOperationId } : {}),

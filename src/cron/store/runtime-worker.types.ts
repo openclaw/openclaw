@@ -6,6 +6,7 @@ import type {
 } from "../../gateway/operator-approval-store.types.js";
 import type { ExecApprovalsFile } from "../../infra/exec-approvals-core.js";
 import type { AgentDeletionRecoveryHoldPredicate } from "../../state/agent-deletion-journal-recovery.kernel.js";
+import type { CronJobConfigRevisionResult } from "../config-revision.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
 import type { CronJobScratchWriteInput, CronJobScratchWriteOutcome } from "../scratch-contract.js";
 import type {
@@ -97,6 +98,7 @@ export type CronRuntimeMutationInputs = {
   "cron.writeScratch": CronJobScratchWriteInput & { createdAtMsFallback?: number };
   "cron.mutateJobs": {
     storeKey: string;
+    includeConfigRevisions?: boolean;
     streamSecurity?: {
       method: "cron.add" | "cron.update";
       sessionEntryCurrentSource?: SessionEntryCurrentSource;
@@ -159,6 +161,7 @@ export type CronRunFinalizationOutcome = CronJobExecutionResult & {
   startedAt: number;
   endedAt: number;
   runReceipt?: CronRunReceiptHandle;
+  executionPending?: boolean;
   activeJobMarker?: { jobRemoved?: true; scheduleMutated?: true; triggerMutated?: true };
   request?: {
     runId?: string;
@@ -200,7 +203,7 @@ export type CronRuntimeMutationContracts = {
 
   "cron.mutateExternalState": {
     input: CronRuntimeMutationInputs["cron.mutateExternalState"];
-    snapshot: { nowMs: number; cronConfig?: CronConfig };
+    snapshot: { nowMs: number; cronConfig?: CronConfig; defaultAgentId?: string };
     outcome: {
       job?: CronJob;
       nowMs: number;
@@ -218,6 +221,7 @@ export type CronRuntimeMutationContracts = {
     snapshot: CronJobMutationSnapshot;
     outcome: {
       store: CronStoreFile;
+      configRevisions: Map<string, CronJobConfigRevisionResult>;
       consumedStreamApproval?: OperatorApprovalRecord;
       names: Map<string, string | undefined>;
       changed: boolean;
@@ -239,6 +243,7 @@ export type CronRuntimeMutationContracts = {
   "cron.finalizeRuns": {
     input: CronRuntimeMutationInputs["cron.finalizeRuns"];
     snapshot: {
+      receiptOnly?: boolean;
       nowMs: number;
       defaultAgentId?: string;
       cronConfig?: CronConfig;

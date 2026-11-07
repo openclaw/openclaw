@@ -6,8 +6,9 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
-import { createServer, type Alias } from "vite";
-import { expect, it, vi } from "vitest";
+import { JSDOM } from "jsdom";
+import { build, createServer, type Alias } from "vite";
+import { expect, it, onTestFinished, vi } from "vitest";
 import {
   hashControlUiTranslationText,
   loadControlUiTranslationMemory,
@@ -72,6 +73,90 @@ const buildInfo = {
   release: false,
   buildId: "mock-artifact",
 };
+
+it("preloads CSS-gated route entries without promoting optional chunks", async () => {
+  const config = controlUiViteConfig({ buildInfo });
+  const preload = config.build?.modulePreload;
+  if (!preload || typeof preload !== "object" || !preload.resolveDependencies) {
+    throw new Error("Expected the Control UI module preload resolver");
+  }
+  const owner = config.plugins?.find(
+    (plugin) =>
+      plugin &&
+      typeof plugin === "object" &&
+      "name" in plugin &&
+      plugin.name === "control-ui-static-import-preloads",
+  );
+  if (!owner) {
+    throw new Error("Expected the Control UI preload metadata owner");
+  }
+  const styledEntry = path.join(repoRoot, "ui/src/pages/config/config-page.tsx");
+  const sessionsEntry = path.join(repoRoot, "ui/src/pages/sessions/sessions-page.tsx");
+  const cronEntry = path.join(repoRoot, "ui/src/pages/cron/cron-page.tsx");
+  const plainEntry = path.join(repoRoot, "ui/src/pages/usage/usage-page.tsx");
+  const sources = new Map([
+    [
+      "/preload-entry.js",
+      `globalThis.loadStyled = () => import(${JSON.stringify(styledEntry)}); globalThis.loadSessions = () => import(${JSON.stringify(sessionsEntry)}); globalThis.loadCron = () => import(${JSON.stringify(cronEntry)}); globalThis.loadPlain = () => import(${JSON.stringify(plainEntry)}); globalThis.loadOptional = () => import("/optional.js");`,
+    ],
+    [styledEntry, 'import "/nested.js"; export const ready = true;'],
+    [sessionsEntry, 'import "/nested.js"; export const sessionsReady = true;'],
+    [cronEntry, 'import "/nested.js"; export const cronReady = true;'],
+    ["/nested.js", 'import "/style.css"; globalThis.styled = true;'],
+    [plainEntry, "export const ready = true;"],
+    ["/optional.js", 'import "/style.css"; export const ready = true;'],
+    ["/style.css", ".fixture { color: red; }"],
+  ]);
+  const requests = new Map<string, string[]>();
+  const result = await build({
+    configFile: false,
+    publicDir: false,
+    logLevel: "silent",
+    plugins: [
+      {
+        name: "preload-fixture",
+        enforce: "pre",
+        resolveId: (id) => (sources.has(id) ? id : null),
+        load: (id) => sources.get(id),
+      },
+      owner,
+    ],
+    build: {
+      write: false,
+      minify: false,
+      rolldownOptions: { input: "/preload-entry.js" },
+      modulePreload: {
+        ...preload,
+        resolveDependencies: (filename, deps, context) => {
+          const resolved = preload.resolveDependencies!(filename, deps, context);
+          requests.set(filename, resolved);
+          return resolved;
+        },
+      },
+    },
+  });
+  if (Array.isArray(result) || !("output" in result)) {
+    throw new Error("Expected one fixture build");
+  }
+  const chunks = result.output.filter((asset) => asset.type === "chunk");
+  const styled = chunks.find((chunk) => chunk.facadeModuleId === styledEntry)!;
+  const sessions = chunks.find((chunk) => chunk.facadeModuleId === sessionsEntry)!;
+  const cron = chunks.find((chunk) => chunk.facadeModuleId === cronEntry)!;
+  const plain = chunks.find((chunk) => chunk.facadeModuleId === plainEntry)!;
+  const optional = chunks.find((chunk) => chunk.facadeModuleId === "/optional.js")!;
+  expect(requests.get(styled.fileName)).toContain(styled.fileName);
+  expect(requests.get(sessions.fileName)).toContain(sessions.fileName);
+  expect(requests.get(cron.fileName)).toContain(cron.fileName);
+  expect(requests.get(plain.fileName)).not.toContain(plain.fileName);
+  expect(requests.get(optional.fileName)).not.toContain(optional.fileName);
+  expect(
+    preload.resolveDependencies("assets/page.js", ["assets/shared.js"], {
+      hostType: "html",
+      hostId: "index.html",
+    }),
+  ).toEqual(["assets/shared.js"]);
+});
+
 type Catalog = TranslationMap & { common: TranslationMap };
 const labeledCatalog = (label: string): Catalog => ({
   common: { health: label },
@@ -109,6 +194,56 @@ async function localeHooks(aliases: Alias[] = []) {
   }
   return { buildStart, resolveId, load, watchChange };
 }
+
+it.each([
+  { language: "en-US", saved: "ar", dir: "rtl" },
+  { language: "fa-IR", saved: null, dir: "rtl" },
+  { language: "ar-EG", saved: "en", dir: "ltr" },
+  { language: "ar-EG", saved: "invalid", dir: "rtl" },
+  { language: "ar-EG", saved: null, dir: "rtl", blocked: true },
+])("sets $dir before the document body for $language and saved $saved", async (sample) => {
+  const server = await createServer({
+    configFile: false,
+    logLevel: "silent",
+    plugins: [controlUiLocaleModulesPlugin()],
+    optimizeDeps: { noDiscovery: true },
+    server: { middlewareMode: true, hmr: false, watch: null },
+  });
+  let html: string;
+  try {
+    html = await server.transformIndexHtml(
+      "/",
+      '<html lang="en"><head><script>window.bootLocale={dir:document.documentElement.dir,lang:document.documentElement.lang,body:document.body};</script></head><body></body></html>',
+    );
+  } finally {
+    await server.close();
+  }
+  const page = new JSDOM(html, {
+    url: "https://gateway.example/",
+    runScripts: "dangerously",
+    beforeParse(window) {
+      Object.defineProperty(window.navigator, "language", { value: sample.language });
+      if (sample.blocked) {
+        Object.defineProperty(window, "localStorage", {
+          get() {
+            throw new Error("denied");
+          },
+        });
+      } else if (sample.saved) {
+        window.localStorage.setItem("openclaw.i18n.locale", sample.saved);
+      }
+    },
+  });
+  try {
+    expect(Reflect.get(page.window, "bootLocale")).toEqual({
+      dir: sample.dir,
+      lang: "en",
+      body: null,
+    });
+  } finally {
+    page.window.close();
+  }
+});
 
 async function loadLocaleSource(
   load: Awaited<ReturnType<typeof localeHooks>>["load"],
@@ -184,13 +319,13 @@ async function executeLocale(
     JSON.stringify(lazyCatalogPath),
     JSON.stringify(lazyCatalogUrl),
   );
-  const namespaces: string[] = [];
+  const promisePath = path.join(repoRoot, "src/shared/lazy-promise.ts");
+  executableSource = executableSource.replace(
+    JSON.stringify(promisePath),
+    JSON.stringify(pathToFileURL(promisePath).href),
+  );
   for (const match of baseSource.matchAll(/import\("(virtual:[^"]+)"\)/g)) {
     const specifier = match[1]!;
-    const namespace = specifier.startsWith("virtual:openclaw-control-ui-locale-config-hints/")
-      ? "configHints"
-      : specifier.split("/").at(-1)!;
-    namespaces.push(namespace);
     const source = await loadLocaleSource(load, `\0${specifier}`);
     executableSource = executableSource.replace(
       JSON.stringify(specifier),
@@ -208,9 +343,7 @@ async function executeLocale(
     await module.getLazyLocaleCatalog(catalog)?.load(namespace);
   };
   const loadAll = async () => {
-    for (const namespace of namespaces) {
-      await loadNamespace(namespace);
-    }
+    await module.getLazyLocaleCatalog(catalog)?.prepare(loadControlUiSourceCatalog());
   };
   if (!deferNamespaces) {
     await loadAll();
@@ -223,9 +356,12 @@ it("emits Brotli and gzip variants only for bundled compressible assets", async 
     { length: 200 },
     (_, index) => `console.log("startup-${index % 97}", ${index % 31});\n`,
   ).join("");
+  // A boot asset keeps sidecars below the deferred-asset size floor.
+  const boot = new Set(["assets/app-AbCd1234.js"]);
   const variants = await createControlUiPrecompressedAssetVariants(
     "assets/app-AbCd1234.js",
     source,
+    boot,
   );
   expect(variants.map((variant) => variant.fileName)).toEqual([
     "assets/app-AbCd1234.js.br",
@@ -234,13 +370,14 @@ it("emits Brotli and gzip variants only for bundled compressible assets", async 
   expect(brotliDecompressSync(variants[0]?.source ?? Buffer.alloc(0)).toString()).toBe(source);
   expect(gunzipSync(variants[1]?.source ?? Buffer.alloc(0)).toString()).toBe(source);
   expect(createHash("sha256").update(variants[1]!.source).digest("hex")).toBe(
-    "aabdc80dc704c3abc609a76c6ac3e9ae872cf023770c6ea5fbb29ffe56adfcab",
+    "60e4687fc5820ca008c163772ca7f2c11787042a29b21615e43beebd8eb30198",
   );
   // No timestamp, filename, or host OS field may make the pinned gzip bytes host-dependent.
   expect(variants[1]!.source.subarray(0, 10).toString("hex")).toBe("1f8b08000000000002ff");
   const repeated = await createControlUiPrecompressedAssetVariants(
     "assets/app-AbCd1234.js",
     Buffer.from(source),
+    boot,
   );
   expect(repeated).toEqual(variants);
   for (const excluded of ["index.html", "assets/logo.png", "assets/app.js.map"]) {
@@ -248,21 +385,21 @@ it("emits Brotli and gzip variants only for bundled compressible assets", async 
   }
 });
 
-it("precompresses assets starting at 4 KiB only when the encoding saves bytes", async () => {
-  await expectEncodings("assets/small.js", "x".repeat(4095));
-  const boundary = "é".repeat(2048);
+it("precompresses deferred assets starting at 16 KiB only when the encoding saves bytes", async () => {
+  await expectEncodings("assets/small.js", "x".repeat(16 * 1024 - 1));
+  const boundary = "é".repeat(8 * 1024);
   const variants = await expectEncodings("assets/boundary.js", boundary, ["br", "gz"]);
   for (const variant of variants) {
     expect(variant.source.byteLength).toBeLessThan(Buffer.byteLength(boundary));
   }
   const incompressible = Buffer.concat(
-    Array.from({ length: 128 }, (_, index) => createHash("sha256").update(String(index)).digest()),
+    Array.from({ length: 512 }, (_, index) => createHash("sha256").update(String(index)).digest()),
   );
   await expectEncodings("assets/random.wasm", incompressible);
-  // These tails produce an exactly 4096-byte Brotli or gzip output, respectively.
-  incompressible.fill(0, 4096 - 29);
+  // These tails produce an exactly 16 KiB Brotli or gzip output, respectively.
+  incompressible.fill(0, 16 * 1024 - 19);
   await expectEncodings("assets/equal-br.wasm", incompressible);
-  incompressible.fill(0, 4096 - 66);
+  incompressible.fill(0, 16 * 1024 - 62);
   await expectEncodings("assets/equal-gzip.wasm", incompressible, ["br"]);
 });
 
@@ -285,6 +422,67 @@ it("keeps small CSS and measured startup assets compressed, excluding deferred r
   await expectEncodings("assets/entry.js", "x", [], startupAssets);
 });
 
+it("precompresses small chat boot chunks without adding sidecars for optional chunks", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "control-ui-boot-compression-"));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
+  const outDir = path.join(root, "dist");
+  const chatEntry = path.join(repoRoot, "ui/src/pages/chat/route-entry.ts");
+  const sources = new Map([
+    [
+      "/entry.js",
+      `globalThis.loadChat = () => import(${JSON.stringify(chatEntry)}); globalThis.loadOptional = () => import("/optional.js");`,
+    ],
+    [chatEntry, `export const label = ${JSON.stringify("chat ".repeat(100))};`],
+    ["/optional.js", `export const label = ${JSON.stringify("optional ".repeat(100))};`],
+  ]);
+  await writeFile(path.join(root, "index.html"), '<script type="module" src="/entry.js"></script>');
+  const owner = controlUiViteConfig({ buildInfo }).plugins?.find(
+    (plugin) =>
+      plugin &&
+      typeof plugin === "object" &&
+      "name" in plugin &&
+      plugin.name === "control-ui-precompressed-assets",
+  );
+  if (!owner) {
+    throw new Error("Expected the Control UI precompression owner");
+  }
+  const result = await build({
+    configFile: false,
+    root,
+    publicDir: false,
+    logLevel: "silent",
+    plugins: [
+      {
+        name: "boot-compression-fixture",
+        enforce: "pre",
+        resolveId: (id) => (sources.has(id) ? id : null),
+        load: (id) => sources.get(id),
+      },
+      owner,
+    ],
+    build: { outDir, minify: false },
+  });
+  if (Array.isArray(result) || !("output" in result)) {
+    throw new Error("Expected one fixture build");
+  }
+  const files = readdirSync(path.join(outDir, "assets"));
+  for (const [moduleId, compressed] of [
+    [chatEntry, true],
+    ["/optional.js", false],
+  ] as const) {
+    const chunk = result.output.find(
+      (output) => output.type === "chunk" && output.facadeModuleId === moduleId,
+    );
+    if (!chunk || chunk.type !== "chunk") {
+      throw new Error(`Expected fixture chunk for ${moduleId}`);
+    }
+    expect(Buffer.byteLength(chunk.code)).toBeLessThan(4096);
+    for (const suffix of ["br", "gz"]) {
+      expect(files.includes(`${path.basename(chunk.fileName)}.${suffix}`)).toBe(compressed);
+    }
+  }
+});
+
 it("uses the supplied artifact identity without reading Git metadata", () => {
   childProcessMocks.execFileSync.mockClear();
   const config = controlUiViteConfig({ command: "serve", buildInfo });
@@ -294,31 +492,32 @@ it("uses the supplied artifact identity without reading Git metadata", () => {
   expect(childProcessMocks.execFileSync).not.toHaveBeenCalled();
 });
 
-it("selects a polling watcher when the existing environment opt-in is enabled", async ({
-  onTestFinished,
-}) => {
-  vi.stubEnv("CHOKIDAR_USEPOLLING", "1");
-  onTestFinished(() => {
-    vi.unstubAllEnvs();
-  });
-  const root = await mkdtemp(path.join(os.tmpdir(), "openclaw-ui-watcher-"));
-  onTestFinished(() => rm(root, { recursive: true, force: true }));
-  const config = controlUiViteConfig({ command: "serve", buildInfo: resolveBuildInfo() });
-  const server = await createServer({
-    configFile: false,
-    root,
-    logLevel: "silent",
-    optimizeDeps: { noDiscovery: true },
-    server: { ...config.server, middlewareMode: true, hmr: false },
-  });
-  try {
-    // Chokidar can report polling enabled while still choosing FSEvents on macOS.
-    expect(server.watcher.options.usePolling).toBe(true);
-    expect(server.watcher.options.useFsEvents).toBe(false);
-  } finally {
-    await server.close();
-  }
-});
+it.each(["", "1"])(
+  "selects the development watcher with CHOKIDAR_USEPOLLING=%j",
+  async (polling) => {
+    vi.stubEnv("CHOKIDAR_USEPOLLING", polling);
+    onTestFinished(() => {
+      vi.unstubAllEnvs();
+    });
+    const root = await mkdtemp(path.join(os.tmpdir(), "openclaw-ui-watcher-"));
+    onTestFinished(() => rm(root, { recursive: true, force: true }));
+    const config = controlUiViteConfig({ command: "serve", buildInfo: resolveBuildInfo() });
+    const server = await createServer({
+      configFile: false,
+      root,
+      logLevel: "silent",
+      optimizeDeps: { noDiscovery: true },
+      server: { ...config.server, middlewareMode: true, hmr: false },
+    });
+    try {
+      // Chokidar can report polling enabled while still choosing FSEvents on macOS.
+      expect(server.watcher.options.usePolling).toBe(polling === "1");
+      expect(server.watcher.options.useFsEvents).toBe(false);
+    } finally {
+      await server.close();
+    }
+  },
+);
 
 it("embeds one canonical artifact identity from explicit build inputs", () => {
   expect(
@@ -436,25 +635,21 @@ it.each([
   ).toThrow(`${key} ${error}`);
 });
 
-it("resolves root tsconfig package aliases for source imports", () => {
-  const alias = resolveTsconfigPathAliasesForVite().find(
-    ({ find }) => find === "@openclaw/net-policy/ip",
-  );
-  expect(alias?.replacement).toBe(path.join(repoRoot, "packages/net-policy/src/ip.ts"));
-});
-
-it("resolves Control UI dev-server source aliases for internal packages", () => {
-  const aliases = resolveSourcePackageAliasesForVite();
-  const moduleId = "@openclaw/normalization-core/agent-id";
-  expect(aliases.find((alias) => alias.find === moduleId)?.replacement).toBe(
-    path.join(repoRoot, "packages/normalization-core/src/agent-id.ts"),
-  );
-  expectBefore(
-    aliases.map((alias) => alias.find),
-    moduleId,
-    "@openclaw/normalization-core",
-  );
-});
+it.each(["agent-id", "error-coercion", "expect", "stringified-error"])(
+  "resolves internal source aliases for %s",
+  (subpath) => {
+    const aliases = resolveSourcePackageAliasesForVite();
+    const moduleId = `@openclaw/normalization-core/${subpath}`;
+    expect(aliases.find((alias) => alias.find === moduleId)?.replacement).toBe(
+      path.join(repoRoot, `packages/normalization-core/src/${subpath}.ts`),
+    );
+    expectBefore(
+      aliases.map((alias) => alias.find),
+      moduleId,
+      "@openclaw/normalization-core",
+    );
+  },
+);
 
 it("uses Node package resolution for external packages inherited by worktrees", () => {
   const resolvePackage = vi.fn((specifier: string) => path.join("/parent/node_modules", specifier));
@@ -521,20 +716,27 @@ it("defers page and config-hint translations until their namespace loads", async
   expect(flattenTranslations(catalog).has("activity.title")).toBe(false);
   expect(catalog.configHints).toBeUndefined();
   const memoryPath = path.join(repoRoot, "ui/src/i18n/.i18n/fr.tm.jsonl");
-  const healthText = flattenTranslations(en).get("common.health");
-  if (typeof healthText !== "string") {
-    throw new Error("Expected English health source");
+  const loadingText = flattenTranslations(en).get("common.loading");
+  if (typeof loadingText !== "string") {
+    throw new Error("Expected English loading source");
   }
-  const healthEntry = [...loadControlUiTranslationMemory(memoryPath).values()].find(
+  const loadingEntry = [...loadControlUiTranslationMemory(memoryPath).values()].find(
     (entry) =>
-      (entry.segment_id === "common.health" || entry.segment_ids?.includes("common.health")) &&
-      entry.text_hash === hashControlUiTranslationText(healthText),
+      (entry.segment_id === "common.loading" || entry.segment_ids?.includes("common.loading")) &&
+      entry.text_hash === hashControlUiTranslationText(loadingText),
   );
-  expect(healthEntry).toBeDefined();
-  expect(flattenTranslations(catalog).get("common.health")).toBe(healthEntry?.translated);
+  expect(loadingEntry).toBeDefined();
+  expect(flattenTranslations(catalog).get("common.loading")).toBe(loadingEntry?.translated);
   await loadNamespace("activity");
   expect(flattenTranslations(catalog).get("activity.title")).toBeTypeOf("string");
   expect(catalog.configHints).toBeUndefined();
+  expect(flattenTranslations(catalog).has("runtimeErrors.nativeTimeout")).toBe(false);
+  expect(catalog.notificationErrors).toBeUndefined();
+  expect(catalog.nativeDeviceEditError).toBeUndefined();
+  await loadNamespace("notificationErrors");
+  expect(flattenTranslations(catalog).get("notificationErrors.manageDenied")).toBeTypeOf("string");
+  expect(flattenTranslations(catalog).has("runtimeErrors.nativeTimeout")).toBe(false);
+  expect(catalog.nativeDeviceEditError).toBeUndefined();
   await loadNamespace("configHints");
   expect(catalog.configHints).toBeTypeOf("object");
   expect(addWatchFile).toHaveBeenCalledWith(memoryPath);
@@ -567,13 +769,9 @@ it("bootstraps only an absent locale memory from the English catalog", async () 
 });
 
 it.each([
-  {
-    name: "empty",
-    memory: "",
-    expected: "Control UI fr translation memory is missing or empty",
-  },
-  { name: "malformed", memory: "{", expected: SyntaxError },
-])("rejects $name locale memory", async ({ memory, expected }) => {
+  ["empty", "", "Control UI fr translation memory is missing or empty"],
+  ["malformed", "{", SyntaxError],
+] as const)("rejects %s locale memory", async (_name, memory, expected) => {
   const { load } = await localeHooks();
   await fsMocks.readFileSync.withImplementation(
     () => memory,
@@ -584,10 +782,10 @@ it.each([
 });
 
 it.each([
-  { name: "stale resolved", outcome: "resolve" as const, invalidate: true },
-  { name: "stale rejected", outcome: "reject" as const, invalidate: true },
-  { name: "current rejected", outcome: "reject" as const, invalidate: false },
-])("recovers a $name source-catalog generation", async ({ outcome, invalidate }) => {
+  ["stale resolved", "resolve", true],
+  ["stale rejected", "reject", true],
+  ["current rejected", "reject", false],
+] as const)("recovers a %s source-catalog generation", async (_name, outcome, invalidate) => {
   const staleImport = deferred<ReturnType<typeof catalogImport>>();
   const currentCatalog = labeledCatalog("current");
   let imports = 0;

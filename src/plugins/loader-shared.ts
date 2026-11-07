@@ -199,6 +199,8 @@ export function createPluginCandidatesFromManifestRegistry(
 
 export class PluginLoadFailureError extends Error {
   readonly registry: PluginRegistry;
+  /** Every failure is a plugin held back until Doctor runs its pending state migration. */
+  readonly onlyPendingStateMigrations: boolean;
 
   constructor(registry: PluginRegistry, failedPlugins: readonly PluginRecord[]) {
     const summary = failedPlugins
@@ -207,6 +209,12 @@ export class PluginLoadFailureError extends Error {
     super(`plugin load failed: ${summary}`);
     this.name = "PluginLoadFailureError";
     this.registry = registry;
+    this.onlyPendingStateMigrations = failedPlugins.every((entry) =>
+      registry.diagnostics.some(
+        (diagnostic) =>
+          diagnostic.pluginId === entry.id && diagnostic.code === "plugin-state-migration",
+      ),
+    );
   }
 }
 
@@ -310,6 +318,7 @@ function createManifestPluginRecord(params: {
     channelIds: manifestRecord.channels,
     providerIds: manifestRecord.providers,
     declaredContextEngineIds: manifestRecord.contextEngineIds,
+    turnHandover: manifestRecord.reload?.turnHandover === true,
     configSchema: Boolean(manifestRecord.configSchema),
   });
   if (!params.shouldLoadModules) {

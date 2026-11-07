@@ -9,6 +9,8 @@ doc-schema-version: 1
 
 A cloud session is an ordinary session whose coding work runs on another machine. It appears in the sidebar, streams into chat, and keeps its transcript exactly like a local session — the Gateway stays the owner of the conversation, the reconciled workspace, model credentials, and placement records, while commands, file edits, and tool work execute remotely. The session and its durable state survive a remote failure. Reclaimed or suspended cloud workers restart on the next message. A previously active worker that fails also restarts on the next message once cleanup is complete and its saved workspace is ready. Gateway updates retain attached cloud machines and refresh their worker runtime in place. An offline paired device keeps its placement and waits for the device to return.
 
+In **New session**, choose a device under **Cloud**. The picker labels the Gateway’s device **This computer** and a cloud device’s size **Device size**.
+
 Sessions can run in three places, and every one of them uses the same session, the same chat, and the same Place picker:
 
 | Destination       | The machine                                                                       | Best for                                                    | Scope to dispatch |
@@ -105,7 +107,7 @@ See [Nodes](/nodes/session-hosting#host-openclaw-sessions) for the selection rul
 
 Two profile settings turn cloud workers from always-on machines into compute that sleeps when idle:
 
-- `suspendAfter: "2h"` — after the session has been idle for the duration, the Gateway performs the same safe stop as **Stop cloud worker…**: it reconciles the workspace first, then releases the machine. While suspended, you pay for retained snapshot storage only. The next message provisions a replacement automatically — no button to press.
+- `suspendAfter: "2h"` — after the session has been idle for the duration, the Gateway performs the same safe stop as **Stop cloud device…**: it reconciles the workspace first, then releases the cloud device. While suspended, you pay for retained snapshot storage only. The next message provisions a replacement automatically — no button to press.
 - `settings.warmImage` — prepare the project's committed checkout and node runtime, then capture a reusable image before node enrollment. Later sessions for the same project and profile can start from that image; the first session does not have to stop first. Linux only, and enabled by default when the effective machine class is known and `setupEnv` is empty. Profiles that forward host environment into setup capture only when you opt in explicitly, and `settings.warmImage: false` keeps any profile cold.
 
 For sessions sourced from a Gateway checkout, linked worktrees share a stable project identity. A warm image retains the pristine committed seed and verified runtime, while every new session gets fresh enrollment and its current workspace files. A matching seed skips origin access and a full Git pack transfer, including for private or unpublished commits. Changed commits prepare a new seed and can refresh the project's image. Repository-only sessions instead fetch on the node and can reuse machine/runtime images and verified Git seeds; they do not prepare a project image from a Gateway checkout. The first dispatch includes preparation and any needed capture; provider startup and capture costs still determine overall latency.
@@ -127,6 +129,8 @@ An offline paired device keeps its placement active and waits to reconnect. **Co
 Repository-only checkpoint history remains until session deletion. While a worker runs, **Files** and diffs use its checkout. After Stop, changed-file previews remain available from the accepted checkpoint; editing, unchanged upstream files, and full diffs require restarting the worker. Publication can use an accepted Git-normalized checkpoint without a Gateway checkout. See [what survives a dead machine](/gateway/cloud-workers#what-survives-a-dead-machine).
 
 Reset keeps the repository and accepted changes but ends unfinished publication requests from the previous session lifecycle. Review the retained changes and request publication again after reset. Existing GitHub commits and pull requests remain unchanged.
+
+Completed publication receipts remain readable by request ID after reset. A pending transcript report from the previous lifecycle is retired instead of being appended to the reset session.
 
 ## Related
 

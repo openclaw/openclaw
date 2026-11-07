@@ -41,15 +41,10 @@ const initSessionState = (
   },
 ) => initSessionStateRaw({ ...params, ctx: finalizeInboundContext(params.ctx) });
 
-function startSession(
-  storePath: string,
-  sessionKey: string,
-  Body = "hello",
-  reset?: SessionResetConfig,
-) {
+function startSession(storePath: string, sessionKey: string, Body = "hello") {
   return initSessionState({
     ctx: { Body, SessionKey: sessionKey },
-    cfg: { session: { store: storePath, ...(reset ? { reset } : {}) } },
+    cfg: { session: { store: storePath } },
     commandAuthorized: true,
   });
 }
@@ -66,6 +61,7 @@ const sessionCleanupMocks = vi.hoisted(() => ({
   retireSessionMcpRuntime: vi.fn(async () => false),
 }));
 
+// mock-isolation: Keep global hook dispatch on this suite's synthetic lifecycle handlers.
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () =>
     ({
@@ -129,13 +125,15 @@ function requireHookCall<T extends unknown[]>(mock: { mock: { calls: T[] } }, la
   return mock.mock.calls[0]!;
 }
 
-function holdRolloverHooks(onRelease?: (name: string) => Promise<void>) {
+function holdRolloverHooks(completed: string[]) {
   const releases: Array<() => void> = [];
   const held = (name: string) => async () => {
     await new Promise<void>((resolve) => {
       releases.push(resolve);
     });
-    await onRelease?.(name);
+    await trackAsyncWork(() => {
+      completed.push(name);
+    });
   };
   hookRunnerMocks.runSessionEnd.mockImplementationOnce(held("end"));
   hookRunnerMocks.runSessionStart.mockImplementationOnce(held("start"));
@@ -173,107 +171,127 @@ describe("session hook context wiring", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     clearInternalHooks();
     resetGatewayWorkAdmission();
     vi.restoreAllMocks();
   });
 
-  it.each(["new", "reset", "daily", "idle"] as const)(
-    "captures the retiring memory window before %s",
-    async (reason) => {
-      const projectionRepair = reason === "reset" || reason === "idle";
-      const sessionKey = "agent:main:memory-reset";
-      const sessionId = "memory-reset-session";
-      const storePath = await createStorePath(`memory-${reason}`);
-      const workspaceDir = path.join(path.dirname(storePath), "workspace");
-      const automatic = reason === "daily" || reason === "idle";
-      const cfg: OpenClawConfig = {
-        agents: { defaults: { workspace: workspaceDir } },
-        hooks: { internal: { enabled: true, entries: { "session-memory": { enabled: true } } } },
-        session: {
-          store: storePath,
-          ...(automatic
-            ? { reset: reason === "daily" ? { mode: "daily" } : { mode: "idle", idleMinutes: 30 } }
-            : {}),
+  it.each<["new" | "reset" | "daily" | "idle", SessionResetConfig?]>([
+    ["new"],
+    ["reset"],
+    ["daily", { mode: "daily" }],
+    ["idle", { mode: "idle", idleMinutes: 30 }],
+    ["idle", { mode: "daily", atHour: 4, idleMinutes: 30 }],
+  ])("captures retiring memory and emits rollover hooks: %s (%j)", async (reason, reset) => {
+    const overlap = reason === "idle" && reset?.mode === "daily";
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 0, 18, 5, overlap ? 30 : 0, 0));
+    const projectionRepair = reason === "reset" || reason === "idle";
+    const sessionKey = "agent:main:memory-reset";
+    const sessionId = "memory-reset-session";
+    const storePath = await createStorePath(`memory-${reason}`);
+    const workspaceDir = path.join(path.dirname(storePath), "workspace");
+    const automatic = reason === "daily" || reason === "idle";
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { workspace: workspaceDir } },
+      hooks: { internal: { enabled: true, entries: { "session-memory": { enabled: true } } } },
+      session: { store: storePath, reset },
+    };
+    await writeStore(storePath, {
+      [sessionKey]: {
+        sessionId,
+        updatedAt: automatic
+          ? new Date(2026, 0, 18, overlap ? 4 : 3, overlap ? 45 : 0, 0).getTime()
+          : Date.now(),
+      },
+    });
+    await replaceTranscriptEvents(
+      { agentId: "main", sessionId, sessionKey, storePath },
+      Array.from({ length: 20 }, (_, index) => ({
+        type: "message",
+        id: `message-${index}`,
+        parentId: index === 0 ? null : `message-${index - 1}`,
+        timestamp: new Date().toISOString(),
+        message: {
+          role: index % 2 === 0 ? "user" : "assistant",
+          content: `retiring-memory-${index}`,
         },
-      };
-      await writeStore(storePath, {
-        [sessionKey]: { sessionId, updatedAt: Date.now() - (automatic ? 86_400_000 : 0) },
+      })),
+    );
+    registerInternalHook(automatic ? "session:auto-reset" : `command:${reason}`, saveSessionMemory);
+    const listener = vi.fn();
+    registerInternalHook("session:auto-reset", listener);
+    if (projectionRepair) {
+      await sessionAccessor.waitForSessionTranscriptProjection({
+        agentId: "main",
+        sessionId,
+        sessionKey,
+        storePath,
       });
-      await replaceTranscriptEvents(
-        { agentId: "main", sessionId, sessionKey, storePath },
-        Array.from({ length: 20 }, (_, index) => ({
-          type: "message",
-          id: `message-${index}`,
-          parentId: index === 0 ? null : `message-${index - 1}`,
-          timestamp: new Date().toISOString(),
-          message: {
-            role: index % 2 === 0 ? "user" : "assistant",
-            content: `retiring-memory-${index}`,
-          },
-        })),
+      const database = openOpenClawAgentDatabase(
+        toDatabaseOptions(
+          resolveSqliteTranscriptReadScope({ agentId: "main", sessionId, sessionKey, storePath }),
+        ),
       );
-      registerInternalHook(
-        automatic ? "session:auto-reset" : `command:${reason}`,
-        saveSessionMemory,
-      );
-      if (projectionRepair) {
-        await sessionAccessor.waitForSessionTranscriptProjection({
-          agentId: "main",
-          sessionId,
-          sessionKey,
-          storePath,
-        });
-        const database = openOpenClawAgentDatabase(
-          toDatabaseOptions(
-            resolveSqliteTranscriptReadScope({ agentId: "main", sessionId, sessionKey, storePath }),
-          ),
-        );
-        database.db
-          .prepare(
-            "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
-          )
-          .run(sessionId);
-      }
-      hookRunnerMocks.hasHooks.mockImplementation(
-        (hookName) => !automatic && hookName === "before_reset",
-      );
+      database.db
+        .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
+        .run(sessionId);
+    }
+    hookRunnerMocks.hasHooks.mockImplementation(
+      (hookName) =>
+        hookName === "session_start" ||
+        hookName === "session_end" ||
+        (!automatic && hookName === "before_reset"),
+    );
 
-      try {
-        const body = automatic ? "Start the next turn" : `/${reason}`;
-        const ctx = { Body: body, SessionKey: sessionKey };
-        const initialized = await initSessionState({ ctx, cfg, commandAuthorized: true });
-        if (!automatic) {
-          await emitResetCommandHooks({
-            ...initialized,
-            action: reason,
-            agentId: "main",
-            cfg,
-            ctx,
-            command: { surface: "webchat", channel: "webchat" },
-            workspaceDir,
-          });
-        }
-        await flushSessionMemoryWritesForTest();
-        const memoryDir = path.join(workspaceDir, "memory");
-        const files = await fs.readdir(memoryDir);
-        expect(files).toHaveLength(1);
-        const content = await fs.readFile(path.join(memoryDir, files[0]!), "utf8");
-        expect(content).toContain('assistant: "retiring-memory-5"');
-        expect(content).toContain('assistant: "retiring-memory-19"');
-        expect(content).not.toContain('"retiring-memory-4"');
-        if (!automatic) {
-          expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledOnce();
-          expect(hookRunnerMocks.runBeforeReset.mock.calls[0]?.[0].messages).toHaveLength(20);
-          expect(hookRunnerMocks.runBeforeReset.mock.calls[0]?.[0].messages?.[0]).toMatchObject({
-            content: "retiring-memory-0",
-          });
-        }
-      } finally {
-        await flushSessionMemoryWritesForTest();
+    try {
+      const body = automatic ? "Start the next turn" : `/${reason}`;
+      const ctx = { Body: body, SessionKey: sessionKey };
+      const initialized = await initSessionState({ ctx, cfg, commandAuthorized: true });
+      if (!automatic) {
+        await emitResetCommandHooks({
+          ...initialized,
+          action: reason,
+          agentId: "main",
+          cfg,
+          ctx,
+          command: { surface: "webchat", channel: "webchat" },
+          workspaceDir,
+        });
       }
-    },
-  );
+      await flushSessionMemoryWritesForTest();
+      const memoryDir = path.join(workspaceDir, "memory");
+      const files = await fs.readdir(memoryDir);
+      expect(files).toHaveLength(1);
+      const content = await fs.readFile(path.join(memoryDir, files[0]!), "utf8");
+      expect(content).toContain('assistant: "retiring-memory-5"');
+      expect(content).toContain('assistant: "retiring-memory-19"');
+      expect(content).not.toContain('"retiring-memory-4"');
+      if (automatic) {
+        const [ended] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
+        const [started] = requireHookCall(hookRunnerMocks.runSessionStart, "session_start");
+        expectFields(ended, { reason, nextSessionId: sessionId });
+        expectFields(started, { sessionId });
+        await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
+        const [event] = listener.mock.calls[0]!;
+        expectFields(event, {
+          type: "session",
+          action: "auto-reset",
+          sessionKey,
+          context: { reason, nextSessionKey: sessionKey },
+        });
+      } else {
+        expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledOnce();
+        expect(hookRunnerMocks.runBeforeReset.mock.calls[0]?.[0].messages).toHaveLength(20);
+        expect(hookRunnerMocks.runBeforeReset.mock.calls[0]?.[0].messages?.[0]).toMatchObject({
+          content: "retiring-memory-0",
+        });
+      }
+    } finally {
+      await flushSessionMemoryWritesForTest();
+    }
+  });
 
   it.each(["stale", "failed"] as const)(
     "does not publish a memory snapshot from a %s lifecycle commit",
@@ -520,11 +538,7 @@ describe("session hook context wiring", () => {
     "keeps rollover hooks alive after their requester closes (restart drain: %s)",
     async (draining, { signal }) => {
       const completedHooks: string[] = [];
-      const releases = holdRolloverHooks((name) =>
-        trackAsyncWork(() => {
-          completedHooks.push(name);
-        }),
-      );
+      const releases = holdRolloverHooks(completedHooks);
       const sessionKey = "agent:main:telegram:direct:held-rollover";
       const sessionId = "old-held-session";
       const { storePath } = await createStoredSession({
@@ -596,49 +610,6 @@ describe("session hook context wiring", () => {
         for (const spy of continuations) {
           spy.mockRestore();
         }
-      }
-    },
-  );
-
-  it.each([
-    { reason: "daily", reset: { mode: "daily" }, overlap: false },
-    { reason: "daily", reset: { mode: "daily", atHour: 4 }, overlap: false },
-    { reason: "idle", reset: { mode: "idle", idleMinutes: 30 }, overlap: false },
-    { reason: "idle", reset: { mode: "daily", atHour: 4, idleMinutes: 30 }, overlap: true },
-  ] satisfies Array<{ reason: string; reset: SessionResetConfig; overlap?: boolean }>)(
-    "emits rollover hooks and one auto-reset event: $reset",
-    async ({ reason, reset, overlap }) => {
-      vi.useFakeTimers();
-      try {
-        vi.setSystemTime(new Date(2026, 0, 18, 5, overlap ? 30 : 0, 0));
-        const listener = vi.fn();
-        registerInternalHook("session:auto-reset", listener);
-        const sessionKey = `agent:main:telegram:direct:auto-${reason}`;
-        const sessionId = `auto-${reason}-session`;
-        const { storePath } = await createStoredSession({
-          prefix: `openclaw-session-auto-${reason}`,
-          sessionKey,
-          sessionId,
-          updatedAt: new Date(2026, 0, 18, overlap ? 4 : 3, overlap ? 45 : 0, 0).getTime(),
-        });
-        await startSession(storePath, sessionKey, "hello", reset);
-        const [ended] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
-        const [started] = requireHookCall(hookRunnerMocks.runSessionStart, "session_start");
-        expectFields(ended, { reason, nextSessionId: sessionId });
-        expectFields(started, { sessionId });
-        await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
-        const [event] = listener.mock.calls[0] ?? [];
-        expectFields(event, {
-          type: "session",
-          action: "auto-reset",
-          sessionKey,
-        });
-        expectFields((event as { context?: Record<string, unknown> }).context, {
-          reason,
-          nextSessionKey: sessionKey,
-        });
-      } finally {
-        vi.useRealTimers();
       }
     },
   );

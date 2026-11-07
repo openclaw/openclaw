@@ -52,7 +52,7 @@ describe("native attempt queued automation admission", () => {
     "revoke",
     "stop",
   ] as const)(
-    "retains its real tool generation until activation, not payload completion: %s",
+    "keeps accepted automation independent of its tool generation's lifetime: %s",
     async (outcome) => {
       await withCronGatewayState(async (fixture) => {
         const { cfg, context, cron, finished } = fixture;
@@ -163,6 +163,12 @@ describe("native attempt queued automation admission", () => {
           const { cleanup, released: generationReleased } = firstGeneration;
           const abortedAtCompletion = toolSignal?.aborted;
           const cleanupCallsAtCompletion = cleanup.mock.calls.length;
+          const closedBeforeCompletion =
+            outcome === "abort before completion" || outcome === "permission change";
+          const cleanupReason =
+            outcome === "abort" || outcome === "owner abort" || closedBeforeCompletion
+              ? "cancel"
+              : "completion";
           const replacement = outcome === "permission change" ? generations[1] : undefined;
           if (outcome === "permission change") {
             expect(generations).toHaveLength(2);
@@ -190,7 +196,7 @@ describe("native attempt queued automation admission", () => {
           }
           releaseBlocker.resolve();
           await blocker;
-          if (outcome === "execute") {
+          if (outcome !== "stop") {
             await Promise.race([
               payloadStarted.promise,
               finished(job.id).then((event) => {
@@ -200,7 +206,7 @@ describe("native attempt queued automation admission", () => {
               }),
             ]);
             await generationReleased.promise;
-            expect(cleanup).toHaveBeenCalledExactlyOnceWith("completion");
+            expect(cleanup).toHaveBeenCalledExactlyOnceWith(cleanupReason);
             expect(targetCalls()).toHaveLength(1);
           }
           releasePayload.resolve();
@@ -210,20 +216,12 @@ describe("native attempt queued automation admission", () => {
             expect(replacement.signal?.aborted).toBe(true);
             expect(replacement.cleanup).toHaveBeenCalledExactlyOnceWith("completion");
           }
-          expect(terminal.status).toBe(outcome === "execute" ? "ok" : "skipped");
-          const closedBeforeCompletion =
-            outcome === "abort before completion" || outcome === "permission change";
+          expect(terminal.status).toBe(outcome === "stop" ? "skipped" : "ok");
           expect(abortedAtCompletion).toBe(closedBeforeCompletion);
           expect(cleanupCallsAtCompletion).toBe(closedBeforeCompletion ? 1 : 0);
           expect(toolSignal?.aborted).toBe(true);
-          expect(cleanup).toHaveBeenCalledExactlyOnceWith(
-            outcome === "abort" || outcome === "owner abort" || closedBeforeCompletion
-              ? "cancel"
-              : "completion",
-          );
-          if (outcome !== "execute") {
-            expect(targetCalls()).toHaveLength(0);
-          }
+          expect(cleanup).toHaveBeenCalledExactlyOnceWith(cleanupReason);
+          expect(targetCalls()).toHaveLength(outcome === "stop" ? 0 : 1);
           expect((await readJob(fixture, job.id))?.state.queuedAtMs).toBeUndefined();
         } finally {
           releaseBlocker.resolve();

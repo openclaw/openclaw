@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { linkSync } from "node:fs";
+import fs, { linkSync, symlinkSync } from "node:fs";
 import { expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { runWithSqliteDatabaseAdmissionTurn } from "./sqlite-database-admission-turn.js";
 import { admitSqliteSchema } from "./sqlite-schema-facts.js";
 import {
   captureSqliteWorkerOpen,
@@ -21,6 +22,7 @@ import {
   readWorkerRows,
   appendWorkerRow,
 } from "./sqlite-worker-fixture.test-support.js";
+import * as workerIdentity from "./sqlite-worker-identity.js";
 import { SqliteWorkerInputAdmission } from "./sqlite-worker-input-admission.js";
 import type { FixtureOperations } from "./sqlite-worker-store.test-support.js";
 
@@ -126,12 +128,14 @@ it.each(["queued", "reused"] as const)("bounds and drains pending %s opens", asy
     return "opened";
   };
   const pending = [
-    admission.open(0, open, undefined, kind === "reused" ? open : undefined),
-    admission.open(0, async () => {}),
+    admission.open(0, databasePath(), open, undefined, kind === "reused" ? open : undefined),
+    admission.open(0, databasePath(), async () => {}),
   ];
   const joined = admission.joinOpens().then(() => finished);
   try {
-    await expect(admission.open(0, async () => {})).rejects.toMatchObject({ code: "overloaded" });
+    await expect(admission.open(0, databasePath(), async () => {})).rejects.toMatchObject({
+      code: "overloaded",
+    });
     if (kind === "reused") {
       await pending[1];
     }
@@ -140,99 +144,155 @@ it.each(["queued", "reused"] as const)("bounds and drains pending %s opens", asy
     await Promise.all(pending);
   }
   expect(await joined).toBe(true);
-  await expect(admission.open(0, async () => "admitted")).resolves.toBe("admitted");
+  await expect(admission.open(0, databasePath(), async () => "admitted")).resolves.toBe("admitted");
   expect(admission.retainedBytes).toBe(0);
 });
 
-it("admits cold shared state while an agent opens, with one shared input budget", async () => {
+it("reserves cold admission synchronously before a later database turn", async () => {
   const admission = inputAdmission();
-  const finishAgent = createDeferredCore();
-  const sharedGate = createEnteredGate();
-  const openShared = <T>(bytes: number, run: () => Promise<T>) =>
-    admission.open(bytes, run, undefined, undefined, true);
-  const agent = admission.open(512, () => finishAgent.promise);
-  const shared = openShared(512, sharedGate.wait);
-  try {
-    await sharedGate.entered;
-    await expect(admission.open(1, async () => {})).rejects.toMatchObject({ code: "overloaded" });
-    sharedGate.release();
-    await shared;
-    expect(admission.retainedBytes).toBe(512);
-    await expect(openShared(513, async () => {})).rejects.toMatchObject({ code: "overloaded" });
-    await expect(openShared(512, async () => "shared reopened")).resolves.toBe("shared reopened");
-  } finally {
-    sharedGate.release();
-    finishAgent.resolve();
-    await Promise.all([agent, shared]);
-  }
+  const file = databasePath();
+  const order: string[] = [];
+  const opening = admission.open(1, file, async () => order.push("open"));
+  const later = runWithSqliteDatabaseAdmissionTurn([file], async () => order.push("later"));
+  await Promise.all([opening, later, admission.joinOpens()]);
+  expect(order).toEqual(["open", "later"]);
   expect(admission.retainedBytes).toBe(0);
 });
+
+it.for(["ELOOP", "EACCES"])(
+  "releases cold open custody after synchronous %s",
+  async (code, { signal, skip }) => {
+    if (code === "ELOOP" && process.platform === "win32") {
+      skip(); // File symlinks require privileges on Windows.
+    }
+    const admission = inputAdmission();
+    const file = databasePath();
+    if (code === "ELOOP") {
+      symlinkSync(file, file);
+    } else {
+      // A permission error must be deterministic even when tests run as root.
+      vi.spyOn(workerIdentity, "inspectDatabasePathIdentitySync").mockImplementationOnce(() => {
+        throw Object.assign(new Error("permission denied"), { code });
+      });
+    }
+    const dispatch = vi.fn(async () => "unreachable");
+    await expect(admission.open(1024, file, dispatch)).rejects.toMatchObject({ code });
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(admission.retainedBytes).toBe(0);
+    await withinTest(admission.joinOpens(), signal);
+    await expect(admission.open(1024, databasePath(), async () => "recovered")).resolves.toBe(
+      "recovered",
+    );
+  },
+);
+
+it.each(["shared-state", "agent", "external"] as const)(
+  "admits cold %s beside ordinary opens within one input budget",
+  async (carrierClass) => {
+    const admission = inputAdmission();
+    const finishOrdinary = createDeferredCore();
+    const isolatedGate = createEnteredGate();
+    const openIsolated = <T>(bytes: number, run: () => Promise<T>) =>
+      admission.open(bytes, databasePath(), run, undefined, undefined, carrierClass);
+    const ordinary = admission.open(512, databasePath(), () => finishOrdinary.promise);
+    const isolated = openIsolated(512, isolatedGate.wait);
+    try {
+      await isolatedGate.entered;
+      await expect(admission.open(1, databasePath(), async () => {})).rejects.toMatchObject({
+        code: "overloaded",
+      });
+      isolatedGate.release();
+      await isolated;
+      expect(admission.retainedBytes).toBe(512);
+      await expect(openIsolated(513, async () => {})).rejects.toMatchObject({ code: "overloaded" });
+      await expect(openIsolated(512, async () => "isolated reopened")).resolves.toBe(
+        "isolated reopened",
+      );
+    } finally {
+      isolatedGate.release();
+      finishOrdinary.resolve();
+      await Promise.all([ordinary, isolated]);
+    }
+    expect(admission.retainedBytes).toBe(0);
+  },
+);
 
 await initializeSqliteRuntimeCapabilities();
 const { databasePath } = useSqliteWorkerStoreFixture("sqlite-capacity-drain-");
-it("keeps one physical owner when shared and ordinary opens acquire carriers together", async ({
-  signal,
-}) => {
+it("settles cold admission filesystem failures before draining the broker", async () => {
   const pathname = databasePath();
-  const alias = `${pathname}.alias`;
-  const database = openNodeSqliteDatabase(pathname);
-  database.exec("CREATE TABLE entries (id INTEGER PRIMARY KEY, value TEXT NOT NULL)");
-  admitSqliteSchema(database);
-  linkSync(pathname, alias);
-  const acquired = createDeferredCore();
-  let count = 0;
-  const createLifecycle = workerLifecycle.createSqliteWorkerLifecycle;
-  const lifecycleSpy = vi
-    .spyOn(workerLifecycle, "createSqliteWorkerLifecycle")
-    .mockImplementation((options) => {
-      const lifecycle = createLifecycle(options);
-      const acquireSlot = lifecycle.acquireSlot;
-      lifecycle.acquireSlot = async (...args) => {
-        const slot = await acquireSlot(...args);
-        if (++count === 2) {
-          acquired.resolve();
-        }
-        await acquired.promise;
-        return slot;
-      };
-      return lifecycle;
-    });
+  const failure = Object.assign(new Error("cold database permission denied"), { code: "EACCES" });
+  const stat = fs.statSync;
+  using _ = vi.spyOn(fs, "statSync").mockImplementation((file, options) => {
+    if (String(file) === pathname) {
+      throw failure;
+    }
+    return stat(file, options);
+  });
   const broker = new SqliteWorkerBroker();
-  const options = {
-    moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
-    databasePath: pathname,
-    existingOnly: true,
-    input: undefined,
-  };
-  const opening = Promise.allSettled([
-    broker.open<FixtureOperations>(options, undefined, undefined, { sharedState: true }),
-    broker.open<FixtureOperations>({ ...options, databasePath: alias }),
-  ]);
-  try {
-    const outcomes = await withinTest(opening, signal);
-    const opened = outcomes.flatMap((outcome) =>
-      outcome.status === "fulfilled" && outcome.value ? [outcome.value] : [],
-    );
-    expect(opened).toHaveLength(1);
-    expect(outcomes.find((outcome) => outcome.status === "rejected")).toMatchObject({
-      reason: { code: "overloaded", message: expect.stringContaining("retry open") },
-    });
-    const store = opened[0]!;
-    await appendWorkerRow(store, "still owned");
-    await expect(readWorkerRows(store)).resolves.toEqual(["still owned"]);
-  } finally {
-    acquired.resolve();
-    const outcomes = await opening;
-    await Promise.all(
-      outcomes.flatMap((outcome) =>
-        outcome.status === "fulfilled" && outcome.value ? [outcome.value.close()] : [],
-      ),
-    );
-    await broker.close();
-    lifecycleSpy.mockRestore();
-    database.close();
-  }
+  await expect(
+    broker.open({
+      moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
+      databasePath: pathname,
+      input: undefined,
+    }),
+  ).rejects.toBe(failure);
+  await broker.close();
 });
+
+it.for(["shared-state", "agent", "external"] as const)(
+  "keeps one physical owner across %s and ordinary opens",
+  async (carrierClass, { signal }) => {
+    const pathname = databasePath();
+    const alias = `${pathname}.alias`;
+    using database = openNodeSqliteDatabase(pathname);
+    database.exec("CREATE TABLE entries (id INTEGER PRIMARY KEY, value TEXT NOT NULL)");
+    admitSqliteSchema(database);
+    linkSync(pathname, alias);
+    const acquired = createDeferredCore();
+    let count = 0;
+    const createLifecycle = workerLifecycle.createSqliteWorkerLifecycle;
+    using _ = vi
+      .spyOn(workerLifecycle, "createSqliteWorkerLifecycle")
+      .mockImplementation((options) => {
+        const lifecycle = createLifecycle(options);
+        const acquireSlot = lifecycle.acquireSlot;
+        lifecycle.acquireSlot = async (...args) => {
+          const slot = await acquireSlot(...args);
+          if (++count === 2) {
+            acquired.resolve();
+          }
+          await acquired.promise;
+          return slot;
+        };
+        return lifecycle;
+      });
+    const broker = new SqliteWorkerBroker();
+    const options = {
+      moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
+      databasePath: pathname,
+      existingOnly: true,
+      input: undefined,
+    };
+    const opening = Promise.allSettled([
+      broker.open<FixtureOperations>(options, undefined, undefined, { carrierClass }),
+      broker.open<FixtureOperations>({ ...options, databasePath: alias }),
+    ]);
+    try {
+      const outcomes = await withinTest(opening, signal);
+      const store = outcomes.find((outcome) => outcome.status === "fulfilled")?.value;
+      assert(store);
+      expect(outcomes.find((outcome) => outcome.status === "rejected")).toMatchObject({
+        reason: { code: "overloaded", message: expect.stringContaining("retry open") },
+      });
+      await appendWorkerRow(store, "still owned");
+      await expect(readWorkerRows(store)).resolves.toEqual(["still owned"]);
+    } finally {
+      acquired.resolve();
+      await broker.close();
+    }
+  },
+);
 
 it("joins host drainage during reclamation without cycling through open admission", async () => {
   const broker = new SqliteWorkerBroker();

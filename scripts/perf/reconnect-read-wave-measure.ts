@@ -487,6 +487,7 @@ async function observeGateway() {
         process.send?.({ channel: "reconnect-wave", id: control.id, error: String(error) });
       });
   });
+  process.channel?.unref();
   // An awaited probe in a preload would prevent the CLI entry from starting.
   void waitForInitialProbe({
     port,

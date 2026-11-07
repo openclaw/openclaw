@@ -26,6 +26,12 @@ export type MockGatewayRequest = {
   params?: unknown;
 };
 
+export type ControlUiMockGatewayInstallOptions = {
+  requestHandlers?: Record<string, (params: unknown) => unknown>;
+  /** Run probes after the mock WebSocket is installed, in the same init script. */
+  afterInitScript?: string;
+};
+
 export type MockGatewayRequestSelector = {
   method: string;
   match?: Record<string, unknown>;
@@ -93,6 +99,11 @@ export type ControlUiMockGateway = GatewayMethods & {
   /** Commit one fixture-owned visibility change without replacing the canonical roster. */
   setSessionVisibility: ReturnType<typeof createControlUiSessionFixtures>["setVisibility"];
   readonly online: boolean;
+  readonly sessionListResponseFacts: {
+    replies: readonly { child: boolean; rows: number }[];
+    truncated: boolean;
+    unavailableReplies: number;
+  };
   requests: MockGatewayRequest[];
   emit: (event: string, payload?: unknown) => void;
   findRequests: (

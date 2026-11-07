@@ -407,11 +407,7 @@ describe("secrets runtime provider and media surfaces", () => {
                 request: {
                   auth: {
                     mode: "authorization-bearer",
-                    token: {
-                      source: "env",
-                      provider: "default",
-                      id: "MEDIA_INFERRED_AUDIO_TOKEN",
-                    },
+                    token: envTokenRef("MEDIA_INFERRED_AUDIO_TOKEN"),
                   },
                 },
               },
@@ -590,8 +586,8 @@ describe("secrets runtime provider and media surfaces", () => {
     });
 
     expect(snapshot.config.models?.providers?.["llama-cpp"]?.apiKey).toEqual(missingRef);
-    expect(snapshot.degradedOwners).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ ownerId: "memory-provider:main" })]),
+    expect(snapshot.degradedOwners).not.toContainEqual(
+      expect.objectContaining({ ownerId: "memory-provider:main" }),
     );
     activateSecretsRuntimeSnapshot(snapshot);
     await expect(
@@ -641,10 +637,8 @@ describe("secrets runtime provider and media surfaces", () => {
         allowUnavailableSecretOwners: true,
       });
       expect(snapshot.config.models?.providers?.[provider]?.apiKey).toEqual(missingRef);
-      expect(snapshot.degradedOwners).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ ownerKind: "provider", ownerId: provider }),
-        ]),
+      expect(snapshot.degradedOwners).toContainEqual(
+        expect.objectContaining({ ownerKind: "provider", ownerId: provider }),
       );
       activateSecretsRuntimeSnapshot(snapshot);
       await expect(

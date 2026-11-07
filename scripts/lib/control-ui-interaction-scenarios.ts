@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ElementHandle, Page } from "playwright";
 import { buildWidgetDocument } from "../../src/canvas/wrap.ts";
 import type { ConfigSchemaResponse, CronJob, GatewaySessionRow } from "../../ui/src/api/types.ts";
@@ -36,6 +37,7 @@ import {
   openInteractionPanel,
   openNavigationDrawer,
   prepareChat,
+  scrollTranscriptToTop,
 } from "./control-ui-interaction-navigation.ts";
 import { runProjectionFixture } from "./control-ui-projection-fixtures.ts";
 import type { ControlUiResourceCounts } from "./control-ui-resource-counts.ts";
@@ -62,6 +64,7 @@ const progressClockSessions = Array.from(
 const progressClocks =
   'openclaw-session-progress-widget [data-progress-card-placement="board"] time';
 const initialProgressClocks = new WeakMap<Page, { count: number; labels: string[] }>();
+const graphStreamingRuns = new WeakMap<Page, string>();
 
 const nativeBoardSessions = Array.from(
   { length: 6 },
@@ -119,9 +122,14 @@ export type InteractionScenario = {
   expected: string;
   /** Deliberately perturbs execution; exclude its timing from performance comparisons. */
   diagnostic?: string;
+  /** Run only when its ID is explicitly named in --steps. */
+  explicitOnly?: boolean;
   fixture?: InteractionFixtureOptions;
   /** Large-data campaigns replace only their domain's synthetic Gateway responses. */
-  fixtureOverrides?: (sandbox?: InteractionSandbox) => InteractionFixtureOverrides;
+  fixtureOverrides?: (
+    sandbox: InteractionSandbox | undefined,
+    base: ReturnType<typeof createInteractionFixture>,
+  ) => InteractionFixtureOverrides;
   createRequestHandlers?: (
     defaults: Readonly<Record<string, (params: unknown) => unknown>>,
   ) => Record<string, (params: unknown) => unknown>;
@@ -147,7 +155,7 @@ export function createScenarioFixture(
   sandbox?: InteractionSandbox,
 ): ControlUiMockGatewayScenario & { sessions: InteractionSession[] } {
   const base = createInteractionFixture(buildId, version, scenario.fixture, sandbox);
-  const overrides = scenario.fixtureOverrides?.(sandbox);
+  const overrides = scenario.fixtureOverrides?.(sandbox, base);
   return {
     ...base,
     ...overrides,
@@ -270,6 +278,29 @@ function progressClockResponses(updatedAt: number, revision = 1) {
   };
 }
 
+function createInteractionConfig() {
+  return {
+    transcripts: {
+      enabled: true,
+      autoStart: ["Alpha", "Beta"].map((title) => ({
+        providerId: "test-voice",
+        guildId: "guild",
+        channelId: title.toLowerCase(),
+        title,
+      })),
+    },
+  };
+}
+
+function createInteractionModels() {
+  return Array.from({ length: 1_000 }, (_, index) => ({
+    id: `model-${index}`,
+    name: `Warm model ${String(index).padStart(4, "0")}`,
+    provider: "example",
+    contextWindow: 128_000,
+  }));
+}
+
 export function createInteractionFixture(
   buildId: string,
   version: string,
@@ -282,13 +313,8 @@ export function createInteractionFixture(
   ) {
     throw new Error("Frame resource fixtures require the native sandbox descriptor");
   }
-  const captureSources = ["Alpha", "Beta"].map((title) => ({
-    providerId: "test-voice",
-    guildId: "guild",
-    channelId: title.toLowerCase(),
-    title,
-  }));
-  const config = { transcripts: { enabled: true, autoStart: captureSources } };
+  const config = createInteractionConfig();
+  const captureSources = config.transcripts.autoStart;
   const keyForIndex = (index: number) => sessionKeys[index] ?? `agent:main:interaction-${index}`;
   const startedAt = options.runningSessions ? Date.now() - 5_000 : undefined;
   const sessions = Array.from({ length: 1_000 }, (_, index) => {
@@ -421,12 +447,7 @@ export function createInteractionFixture(
           },
         ]),
     ),
-    models: Array.from({ length: 1_000 }, (_, index) => ({
-      id: `model-${index}`,
-      name: `Warm model ${String(index).padStart(4, "0")}`,
-      provider: "example",
-      contextWindow: 128_000,
-    })),
+    models: createInteractionModels(),
     methodResponses: {
       ...(options.browserResources ? browserResourceMethodResponses() : {}),
       ...(options.mcpAppResources
@@ -1166,15 +1187,7 @@ async function runTranscriptPlatformEvents(page: Page): Promise<InteractionEvide
     activePane,
   );
   try {
-    const thread = page.locator(`${activePane} .chat-thread`);
-    await thread.hover();
-    await page.mouse.wheel(0, -(await thread.evaluate((element) => element.scrollHeight)));
-    await thread.getByText("Transcript 0 message 0.", { exact: false }).waitFor();
-    await page.waitForFunction(
-      (selector) => document.querySelector(selector)?.scrollTop === 0,
-      `${activePane} .chat-thread`,
-    );
-    await frames(page);
+    const scroll = await scrollTranscriptToTop(page);
     const retirement = await original.evaluate((nodes) => ({
       initialDisclosureNodes: nodes.length,
       initialDisclosureNodesStillConnected: nodes.filter((node) => node.isConnected).length,
@@ -1186,6 +1199,7 @@ async function runTranscriptPlatformEvents(page: Page): Promise<InteractionEvide
       syntheticFontEvents: 9,
       nativeViewportChanges: 2,
       nativeReducedMotionChanges: 2,
+      ...scroll,
       ...platformTranscriptEvidence("before", before),
       ...platformTranscriptEvidence("afterPlatformEvents", afterPlatformEvents),
       ...platformTranscriptEvidence("after", await platformTranscriptSnapshot(page)),
@@ -1311,20 +1325,58 @@ async function settleSidebarCapture(page: Page) {
   await page.evaluate(
     () =>
       new Promise<void>((resolve) => {
-        setTimeout(() => requestIdleCallback(() => resolve(), { timeout: 1000 }), 500);
+        setTimeout(() => {
+          if (typeof requestIdleCallback === "function") {
+            requestIdleCallback(() => resolve(), { timeout: 1000 });
+          } else {
+            setTimeout(resolve, 0);
+          }
+        }, 500);
       }),
   );
 }
 
-export async function settleSidebarBackgroundWork(page: Page) {
-  // The prefetch owner automatically warms New Session; other groups require navigation intent.
-  const prefetchAssets = await page.evaluate(async () => {
+type InteractionPreloadWindow = Window & {
+  openclawInteractionPreloadState?: WeakMap<HTMLLinkElement, "load" | "error">;
+};
+
+export type InteractionNavigationPreloads = {
+  group: string | undefined;
+  assets: Array<{
+    href: string;
+    linkStates: Array<"load" | "error" | "pending">;
+    resourceComplete: boolean;
+  }>;
+};
+
+export function installInteractionNavigationPreloadObserver() {
+  const settled = new WeakMap<HTMLLinkElement, "load" | "error">();
+  Object.assign(window, { openclawInteractionPreloadState: settled });
+  for (const type of ["load", "error"] as const) {
+    document.addEventListener(
+      type,
+      (event) => {
+        if (event.target instanceof HTMLLinkElement) {
+          settled.set(event.target, type);
+        }
+      },
+      true,
+    );
+  }
+}
+
+export async function settleInteractionNavigationPreloads(
+  page: Page,
+): Promise<InteractionNavigationPreloads> {
+  // Headless Chromium can strand the shell's idle callback until another frame runs.
+  await frames(page);
+  const expected = await page.evaluate(async () => {
     const descriptor = document
       .getElementById("openclaw-navigation-preloads")
       ?.getAttribute("content");
     const route = window.openclawControlUi?.snapshot().route?.matches[0]?.routeId;
     if (!descriptor || !route) {
-      throw new Error("Warm sidebar measurement requires the built navigation prefetch manifest");
+      throw new Error("Warm interaction requires the built navigation prefetch manifest");
     }
     // The fixture server mounts resources at /; deep-link entry-script aliases differ.
     const base = new URL("/", location.origin);
@@ -1333,30 +1385,67 @@ export async function settleSidebarBackgroundWork(page: Page) {
       throw new Error("Could not read the built navigation prefetch manifest");
     }
     const manifest: Record<string, string[]> = await response.json();
-    return [...new Set(route === "new-session" ? [] : (manifest["new-session"] ?? []))].map(
-      (file) => new URL(file, base).href,
-    );
+    // Match the idle owner's automatic group; explicit navigation intent remains native.
+    const next = `${route}-next`;
+    const group = manifest[next] ? next : route === "new-session" ? undefined : "new-session";
+    if (group && !manifest[group]?.length) {
+      throw new Error(`Navigation prefetch manifest has no ${group} assets`);
+    }
+    return {
+      group,
+      assets: [...new Set(group ? manifest[group] : [])].map((file) => new URL(file, base).href),
+    };
   });
+  const ready = await page.waitForFunction(
+    ({ group, assets }) => {
+      // SAFETY: the page's initialization script installs this diagnostic map before navigation.
+      const settled = (window as InteractionPreloadWindow).openclawInteractionPreloadState;
+      if (!settled) {
+        throw new Error("Navigation prefetch observer must be installed before navigation");
+      }
+      const links = [
+        ...document.querySelectorAll<HTMLLinkElement>(
+          'link[rel="preload"], link[rel="modulepreload"]',
+        ),
+      ];
+      const observations = assets.map((href) => {
+        const matching = links.filter((link) => link.href === href);
+        const linkStates = matching.map((link) => settled.get(link) ?? ("pending" as const));
+        if (linkStates.includes("error")) {
+          throw new Error(`Navigation prefetch failed: ${href}`);
+        }
+        return {
+          href,
+          linkStates,
+          resourceComplete: performance
+            .getEntriesByName(href, "resource")
+            .some((entry) => entry instanceof PerformanceResourceTiming && entry.responseEnd > 0),
+        };
+      });
+      return observations.every((asset) =>
+        asset.linkStates.length
+          ? asset.linkStates.every((state) => state === "load")
+          : asset.resourceComplete,
+      )
+        ? { group, assets: observations }
+        : false;
+    },
+    expected,
+    { timeout: 60_000, polling: 100 },
+  );
   try {
-    await page.waitForFunction(
-      (assets) => {
-        const fetched = new Set(
-          performance.getEntriesByType("resource").map((entry) => entry.name),
-        );
-        return assets.every((asset) => fetched.has(asset));
-      },
-      prefetchAssets,
-      { timeout: 60_000, polling: 100 },
-    );
-  } catch (error) {
-    const missing = await page.evaluate((assets) => {
-      const fetched = new Set(performance.getEntriesByType("resource").map((entry) => entry.name));
-      return assets.filter((asset) => !fetched.has(asset));
-    }, prefetchAssets);
-    throw new Error(`Warm navigation prefetch did not finish: ${missing.join(", ")}`, {
-      cause: error,
-    });
+    const evidence = await ready.jsonValue();
+    if (!evidence) {
+      throw new Error("Navigation prefetch did not complete");
+    }
+    return evidence;
+  } finally {
+    await ready.dispose();
   }
+}
+
+export async function settleSidebarBackgroundWork(page: Page) {
+  await settleInteractionNavigationPreloads(page);
   await settleSidebarCapture(page);
   await page.waitForLoadState("networkidle");
   await frames(page);
@@ -1409,7 +1498,11 @@ async function inventoryReady(
       .getByText("Interaction 0000", { exact: true })
       .waitFor();
     await page.waitForFunction(
-      () => document.querySelectorAll(".sessions-table tbody .session-data-row").length === 25,
+      () =>
+        Number(
+          document.querySelector(".sessions-table")?.getAttribute("aria-rowcount") ??
+            document.querySelectorAll(".sessions-table tbody .session-data-row").length + 1,
+        ) === 26,
     );
   } else {
     await gateway.waitForRequest("cron.list", { match: { offset: 0 } });
@@ -1417,11 +1510,14 @@ async function inventoryReady(
       .locator(".cron-table__row")
       .getByText("Warm automation 0000", { exact: true })
       .waitFor();
-    await page.waitForFunction(
-      () =>
-        document.querySelectorAll(".cron-table__row").length === 50 &&
-        document.querySelector(".cron-table")?.getAttribute("aria-busy") !== "true",
-    );
+    await page.waitForFunction(() => {
+      const row = document.querySelector(".cron-table__row");
+      const size = row?.getAttribute("aria-setsize");
+      return (
+        (size ? Number(size) : document.querySelectorAll(".cron-table__row").length) === 50 &&
+        document.querySelector(".cron-table")?.getAttribute("aria-busy") !== "true"
+      );
+    });
   }
 }
 
@@ -1450,12 +1546,20 @@ async function prepareSessions(page: Page, gateway: MockGatewayControls) {
     match: { source: "sessions-page", limit: 1000 },
   });
   await page.locator(".data-table-pagination__info").getByText(/1000/).waitFor();
-  await toggle.click();
+  if ((await filters.getAttribute("aria-modal")) === "true") {
+    await filters.locator(".oc-sheet__close").click();
+  } else {
+    await toggle.click();
+  }
   await filters.waitFor({ state: "hidden" });
-  // The owner sorts 1,000 rows, while the product deliberately renders at most 100 per page.
+  // The owner sorts 1,000 rows; the logical page has 100 even when its DOM is windowed.
   await page.locator(".data-table-pagination__size").selectOption("100");
   await page.waitForFunction(
-    () => document.querySelectorAll(".sessions-table tbody .session-data-row").length === 100,
+    () =>
+      Number(
+        document.querySelector(".sessions-table")?.getAttribute("aria-rowcount") ??
+          document.querySelectorAll(".sessions-table tbody .session-data-row").length + 1,
+      ) === 101,
   );
   await frames(page);
 }
@@ -1470,19 +1574,32 @@ async function refreshSessions(page: Page, gateway: MockGatewayControls) {
   await frames(page);
 }
 
+// Inventory cardinality is independent of the number of materialized rows.
+// The fallback lets the same harness compare production bundles before windowing.
+export async function cronLoadedJobCount(page: Page) {
+  return page.evaluate(() => {
+    const size = document.querySelector(".cron-table__row")?.getAttribute("aria-setsize");
+    return size ? Number(size) : document.querySelectorAll(".cron-table__row").length;
+  });
+}
+
 async function prepareCron(page: Page) {
   await page.locator(".cron-table__row").first().waitFor();
   const more = page.getByRole("button", { name: "Load more", exact: true });
   for (let count = 100; count <= 500; count += 50) {
-    await more.click();
-    await page.waitForFunction(
-      (expected) => document.querySelectorAll(".cron-table__row").length === expected,
-      count,
-    );
+    // Measured rows can move the footer between pointer down and pointer up.
+    await more.press("Enter");
+    await page.waitForFunction((expected) => {
+      const row = document.querySelector(".cron-table__row");
+      const size = row?.getAttribute("aria-setsize");
+      return (
+        (size ? Number(size) : document.querySelectorAll(".cron-table__row").length) === expected
+      );
+    }, count);
   }
 }
 
-async function settingsSection(
+export async function settingsSection(
   page: Page,
   path: string,
   routeId: "appearance" | "connection" | "notifications",
@@ -1497,13 +1614,126 @@ async function settingsSection(
 }
 
 async function prepareModelPicker(page: Page) {
-  await prepareChat(page);
-  await page.locator(`${activePane} .agent-chat__input textarea`).first().click();
+  await prepareFirstModelPicker(page);
   const trigger = page.locator(`${activePane} [data-chat-model-select]`);
-  await trigger.waitFor({ state: "visible" });
   await trigger.click();
   await page.locator("[data-chat-model-search]").waitFor();
   await trigger.click();
+}
+
+async function prepareFirstModelPicker(page: Page) {
+  await prepareChat(page);
+  await page.locator(`${activePane} .agent-chat__input textarea`).first().click();
+  await page
+    .locator(`${activePane} [data-chat-model-select][aria-disabled="false"][aria-busy="false"]`)
+    .waitFor();
+  if (await page.locator(".chat-controls__model-menu, [data-chat-model-search]").count()) {
+    throw new Error("First-open measurement requires an unopened picker");
+  }
+}
+
+async function runFirstModelPicker(page: Page, recordPhases = false): Promise<InteractionEvidence> {
+  const recorder = recordPhases
+    ? await page.evaluateHandle((pane) => {
+        const events: Array<{
+          target: string;
+          type: string;
+          eventMs: number;
+          observedMs: number;
+        }> = [];
+        const eventTypes = [
+          "pointerdown",
+          "pointerup",
+          "touchstart",
+          "touchend",
+          "click",
+          "focus",
+          "focusin",
+          "keydown",
+          "keyup",
+          "beforeinput",
+          "input",
+        ];
+        const record = (event: Event) => {
+          if (!(event.target instanceof Element)) {
+            return;
+          }
+          const target = event.target.closest(`${pane} [data-chat-model-select]`)
+            ? "trigger"
+            : event.target.closest("[data-chat-model-search]")
+              ? "search"
+              : undefined;
+          if (!target) {
+            return;
+          }
+          events.push({
+            target,
+            type: event.type,
+            eventMs: event.timeStamp,
+            observedMs: performance.now(),
+          });
+        };
+        for (const type of eventTypes) {
+          document.addEventListener(type, record, true);
+        }
+        return {
+          finish(startedAt: number) {
+            const evidence: Record<string, number> = {
+              timeOriginMs: performance.timeOrigin,
+              startedAtMs: startedAt,
+            };
+            for (const event of events) {
+              if (event.observedMs < startedAt) {
+                continue;
+              }
+              const key = `native_${event.target}_${event.type}`;
+              const index = evidence[`${key}_count`] ?? 0;
+              evidence[`${key}_${index}_event_ms`] = event.eventMs - startedAt;
+              evidence[`${key}_${index}_observed_ms`] = event.observedMs - startedAt;
+              evidence[`${key}_count`] = index + 1;
+            }
+            return evidence;
+          },
+          dispose() {
+            for (const type of eventTypes) {
+              document.removeEventListener(type, record, true);
+            }
+          },
+        };
+      }, activePane)
+    : undefined;
+  try {
+    const started = await page.evaluate(() => performance.now());
+    const trigger = page.locator(`${activePane} [data-chat-model-select]`);
+    if ((page.viewportSize()?.width ?? 1440) < 600) {
+      await trigger.tap();
+    } else {
+      await trigger.click();
+    }
+    await page.locator("[data-chat-model-search]").waitFor();
+    await page.waitForFunction(
+      () => document.activeElement === document.querySelector("[data-chat-model-search]"),
+    );
+    const firstOpenReadyMs = await page.evaluate((start) => performance.now() - start, started);
+    await searchModels(page);
+    if (!(await page.locator('[data-chat-model-option="example/model-999"]').isEnabled())) {
+      throw new Error("First-open search result is not selectable");
+    }
+    return recorder
+      ? {
+          firstOpenReadyMs,
+          ...(await recorder.evaluate((value, start) => value.finish(start), started)),
+        }
+      : { firstOpenReadyMs };
+  } finally {
+    if (recorder) {
+      try {
+        await recorder.evaluate((value) => value.dispose());
+      } finally {
+        await recorder.dispose();
+      }
+    }
+  }
 }
 
 async function searchModels(page: Page) {
@@ -1555,6 +1785,87 @@ async function prepareProviderUsage(page: Page) {
     await summary.click();
   }
   await page.locator(".provider-usage__window").first().waitFor();
+}
+
+const providerModelPickerSelector = ".model-providers__defaults openclaw-select-picker";
+const providerModelValue = "example/model-999";
+
+function providerModelPicker(page: Page) {
+  return page.locator(providerModelPickerSelector).first();
+}
+
+async function openProviderModelPicker(page: Page) {
+  await providerModelPicker(page).locator(".picker-select__trigger").click();
+  await page.waitForFunction((selector) => {
+    const picker = document.querySelector(selector);
+    return (
+      picker?.querySelector(".picker-select__trigger")?.getAttribute("aria-expanded") === "true" &&
+      picker.querySelector(
+        ".picker-select__search:focus, .picker-select__options:focus, .picker-select__back:focus",
+      ) &&
+      picker
+        .querySelector<HTMLElement>('[role="option"][data-value^="example/model-"]')
+        ?.checkVisibility()
+    );
+  }, providerModelPickerSelector);
+}
+
+async function focusProviderModelSearch(page: Page) {
+  const picker = providerModelPicker(page);
+  const toggle = picker.locator(".header-search__toggle");
+  // Historical bundles focus search on open; current bundles expose a Search action.
+  if (await toggle.isVisible()) {
+    await toggle.click();
+  }
+  await page.waitForFunction(
+    (selector) =>
+      document.querySelector(selector)?.querySelector(".picker-select__search") ===
+      document.activeElement,
+    providerModelPickerSelector,
+  );
+  return picker.locator(".picker-select__search");
+}
+
+async function closeProviderModelPicker(page: Page) {
+  const host = providerModelPicker(page);
+  const search = host.locator(".picker-select__search");
+  if (await search.isVisible()) {
+    await search.press("Escape");
+    await search.waitFor({ state: "hidden" });
+  }
+  if ((await host.locator(".picker-select__trigger").getAttribute("aria-expanded")) === "true") {
+    await page.keyboard.press("Escape");
+  }
+  await page.waitForFunction((selector) => {
+    const picker = document.querySelector(selector);
+    const trigger = picker?.querySelector(".picker-select__trigger");
+    return (
+      trigger?.getAttribute("aria-expanded") === "false" &&
+      trigger === document.activeElement &&
+      picker?.querySelectorAll('[role="option"]').length === 0
+    );
+  }, providerModelPickerSelector);
+}
+
+async function prepareProviderModelPicker(page: Page) {
+  await prepareProviderUsage(page);
+  await openProviderModelPicker(page);
+  await closeProviderModelPicker(page);
+}
+
+async function searchProviderModels(page: Page) {
+  const search = await focusProviderModelSearch(page);
+  await search.pressSequentially(modelQuery);
+  await page.waitForFunction(
+    ({ selector, value }) => {
+      const picker = document.querySelector(selector);
+      const rows = [...(picker?.querySelectorAll<HTMLElement>('[role="option"]') ?? [])].filter(
+        (option) => option.checkVisibility(),
+      );
+      return rows.length === 1 && rows[0]?.dataset.value === value;
+    },
+    { selector: providerModelPickerSelector, value: providerModelValue },
+  );
 }
 
 export const interactionScenarios: readonly InteractionScenario[] = [
@@ -1675,7 +1986,10 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       "1,000 actual native Workboard cards preserve cancelled/coalesced popover transitions, pending hover cancellation, placement and independent resource retirement. Requires --resource-counts; diagnostic waits are not CPU timing.",
     rowSelector: ".workboard-card",
     prepare: (page) => prepareWorkboardResourceFixture(page, settleSidebarBackgroundWork),
-    run: (page, gateway) => exerciseWorkboardResourceFixture(page, gateway, frames),
+    run: (page, gateway) =>
+      exerciseWorkboardResourceFixture(page, gateway, async (target) => {
+        await frames(target);
+      }),
   },
   {
     id: "workboard-events-cpu",
@@ -1687,7 +2001,9 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       "1,000 closed cards receive eight actual viewport changes and eight native column scrolls with no diagnostic listeners; measure CPU without --resource-counts.",
     prepare: (page) => prepareWorkboardResourceFixture(page, settleSidebarBackgroundWork),
     run: async (page) => {
-      const evidence = await runWorkboardEventsCpu(page, frames);
+      const evidence = await runWorkboardEventsCpu(page, async (target) => {
+        await frames(target);
+      });
       await settleSidebarCapture(page);
       return evidence;
     },
@@ -1702,7 +2018,9 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       "Retire 1,000 actual cards, then mount 1,000 through real paginated responses inside the warm CPU interval; measure without --resource-counts.",
     prepare: (page) => prepareWorkboardResourceFixture(page, settleSidebarBackgroundWork),
     run: async (page, gateway) => {
-      const evidence = await runWorkboardRemountCpu(page, gateway, frames);
+      const evidence = await runWorkboardRemountCpu(page, gateway, async (target) => {
+        await frames(target);
+      });
       await settleSidebarCapture(page);
       return evidence;
     },
@@ -2100,68 +2418,15 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     route: pathForRoute("model-providers"),
     expected:
       "The generic 1,000-model primary picker filters to Warm model 0999, closes without saving, and returns focus.",
-    prepare: async (page) => {
-      await prepareProviderUsage(page);
-      const picker = page.locator(".model-providers__defaults openclaw-select-picker").first();
-      const trigger = picker.locator(".picker-select__trigger");
-      await trigger.click();
-      await picker.locator(".picker-select__search").waitFor();
-      await page.waitForFunction(
-        () =>
-          document
-            .querySelector(".model-providers__defaults openclaw-select-picker")
-            ?.querySelectorAll('[role="option"][data-value^="example/model-"]').length === 1_000,
-      );
-      await picker.locator(".picker-select__search").press("Escape");
-      await page.waitForFunction(() => {
-        const hostElement = document.querySelector(
-          ".model-providers__defaults openclaw-select-picker",
-        );
-        const triggerElement = hostElement?.querySelector(".picker-select__trigger");
-        return (
-          triggerElement?.getAttribute("aria-expanded") === "false" &&
-          triggerElement === document.activeElement
-        );
-      });
-    },
+    prepare: prepareProviderModelPicker,
     run: async (page, gateway) => {
-      const picker = page.locator(".model-providers__defaults openclaw-select-picker").first();
+      const picker = providerModelPicker(page);
       const trigger = picker.locator(".picker-select__trigger");
       const selected = await trigger.getAttribute("aria-label");
       const saves = (await gateway.getRequests("config.patch")).length;
-      await trigger.click();
-      const search = picker.locator(".picker-select__search");
-      await search.waitFor();
-      await page.waitForFunction(
-        () =>
-          document.querySelector(
-            ".model-providers__defaults openclaw-select-picker .picker-select__search",
-          ) === document.activeElement,
-      );
-      await search.pressSequentially(modelQuery);
-      await picker.locator('[role="option"][data-value="example/model-999"]').waitFor();
-      await page.waitForFunction(() => {
-        const hostElement = document.querySelector(
-          ".model-providers__defaults openclaw-select-picker",
-        );
-        return (
-          [...(hostElement?.querySelectorAll<HTMLElement>('[role="option"]') ?? [])].filter(
-            (option) => option.checkVisibility(),
-          ).length === 1
-        );
-      });
-      await search.press("Escape");
-      await page.waitForFunction(() => {
-        const hostElement = document.querySelector(
-          ".model-providers__defaults openclaw-select-picker",
-        );
-        const triggerElement = hostElement?.querySelector(".picker-select__trigger");
-        return (
-          triggerElement?.getAttribute("aria-expanded") === "false" &&
-          triggerElement === document.activeElement &&
-          hostElement?.querySelectorAll('[role="option"]').length === 0
-        );
-      });
+      await openProviderModelPicker(page);
+      await searchProviderModels(page);
+      await closeProviderModelPicker(page);
       if (
         (await trigger.getAttribute("aria-label")) !== selected ||
         (await gateway.getRequests("config.patch")).length !== saves
@@ -2173,14 +2438,123 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     },
   },
   {
+    id: "provider-model-picker-long-name",
+    route: pathForRoute("model-providers"),
+    resourceOnly: true,
+    expected:
+      "The generic picker preserves its intrinsic popup width for a long synthetic model name and leaves its filtered choice visible.",
+    fixtureOverrides: () => {
+      const models = createInteractionModels();
+      models[998]!.name =
+        "Warm model 0998 — Synthetic extended-context reasoning model with a deliberately wide provider name";
+      return { models };
+    },
+    prepare: prepareProviderModelPicker,
+    run: async (page) => {
+      await openProviderModelPicker(page);
+      const picker = providerModelPicker(page);
+      const search = await focusProviderModelSearch(page);
+      await search.fill("model 0998");
+      await picker.locator('[role="option"][data-value="example/model-998"]').waitFor({
+        state: "visible",
+      });
+      await frames(page);
+    },
+  },
+  {
+    id: "provider-model-picker-first-open",
+    route: pathForRoute("model-providers"),
+    resourceOnly: true,
+    expected: "The generic model picker loads visible choices on first open.",
+    prepare: prepareProviderUsage,
+    run: openProviderModelPicker,
+  },
+  {
+    id: "provider-model-picker-open",
+    route: pathForRoute("model-providers"),
+    resourceOnly: true,
+    expected: "The warm generic model picker opens with visible choices.",
+    prepare: prepareProviderModelPicker,
+    run: openProviderModelPicker,
+  },
+  {
+    id: "provider-model-picker-search",
+    route: pathForRoute("model-providers"),
+    resourceOnly: true,
+    expected: "The already-open generic model picker filters to Warm model 0999.",
+    prepare: async (page) => {
+      await prepareProviderModelPicker(page);
+      await openProviderModelPicker(page);
+      await frames(page);
+    },
+    run: searchProviderModels,
+  },
+  {
+    id: "provider-model-picker-select",
+    route: pathForRoute("model-providers"),
+    resourceOnly: true,
+    expected:
+      "Enter selects Warm model 0999 once, persists its exact reference, and returns focus to the updated trigger.",
+    fixtureOverrides: () => ({
+      methodResponses: {
+        "config.patch": {
+          config: {
+            ...createInteractionConfig(),
+            agents: { defaults: { model: providerModelValue } },
+          },
+          hash: "interaction-selected-model",
+        },
+      },
+    }),
+    prepare: async (page) => {
+      await prepareProviderModelPicker(page);
+      await openProviderModelPicker(page);
+      await searchProviderModels(page);
+      await frames(page);
+    },
+    run: async (page, gateway) => {
+      const saves = (await gateway.getRequests("config.patch")).length;
+      await providerModelPicker(page).locator(".picker-select__search").press("Enter");
+      const request = await gateway.waitForRequest("config.patch", { after: saves });
+      const params = request.params;
+      const patch: unknown =
+        isRecord(params) && typeof params.raw === "string" ? JSON.parse(params.raw) : undefined;
+      if (
+        !isRecord(patch) ||
+        !isRecord(patch.agents) ||
+        !isRecord(patch.agents.defaults) ||
+        patch.agents.defaults.model !== providerModelValue
+      ) {
+        throw new Error("The provider picker must persist the exact selected model reference");
+      }
+      await page.waitForFunction(
+        ({ selector, label }) => {
+          const picker = document.querySelector(selector);
+          const trigger = picker?.querySelector<HTMLButtonElement>(".picker-select__trigger");
+          return (
+            trigger?.getAttribute("aria-expanded") === "false" &&
+            !trigger.disabled &&
+            trigger === document.activeElement &&
+            trigger.getAttribute("aria-label")?.includes(label) &&
+            picker?.querySelectorAll('[role="option"]').length === 0
+          );
+        },
+        { selector: providerModelPickerSelector, label: modelQuery },
+      );
+      if ((await gateway.getRequests("config.patch")).length !== saves + 1) {
+        throw new Error("Selecting a provider model must issue exactly one config patch");
+      }
+    },
+  },
+  {
     id: "storage-refresh",
     route: `${pathForRoute("ai-agents")}?section=session#settings-session-storage`,
     expected: "An unchanged storage refresh retains both agent rows and the open disclosure.",
-    rowSelector: "openclaw-session-storage-settings details > .settings-row",
+    rowSelector: "#settings-session-storage details .settings-row:not(summary)",
     prepare: async (page) => {
-      const details = page.locator(
-        "openclaw-session-storage-settings details.settings-row--stacked",
-      );
+      const details = page.locator("#settings-session-storage details").filter({
+        has: page.getByText("research", { exact: true }),
+      });
       await details.locator("summary").click();
       await details.getByText("research", { exact: true }).waitFor();
     },
@@ -2190,6 +2564,8 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       await section.getByRole("button", { name: "Refresh", exact: true }).click();
       await gateway.waitForRequest("sessions.storage.status", { after });
       await section.getByRole("button", { name: "Refresh", exact: true }).waitFor();
+      await section.getByText("main", { exact: true }).waitFor();
+      await section.getByText("research", { exact: true }).waitFor();
       await frames(page);
     },
   },
@@ -2205,6 +2581,117 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       await page.locator(".session-detail-stat").first().waitFor();
     },
     run: refreshSessions,
+  },
+  {
+    id: "graph-stream-100-deltas",
+    route: controlUiSessionPath(sessionKeys[0]),
+    explicitOnly: true,
+    expected:
+      "One hundred separately flushed chat deltas render the complete reply, which remains visible after finalization.",
+    prepare: async (page, gateway) => {
+      await prepareChat(page);
+      const after = (await gateway.getRequests("chat.send")).length;
+      await page
+        .locator(`${activePane} .agent-chat__composer-combobox textarea`)
+        .fill("Produce the synthetic graph measurement reply.");
+      await page.locator(`${activePane} .chat-send-btn--send`).click();
+      const request = await gateway.waitForRequest("chat.send", { after });
+      if (!isRecord(request.params) || typeof request.params.idempotencyKey !== "string") {
+        throw new Error("Graph streaming fixture did not start a chat run");
+      }
+      graphStreamingRuns.set(page, request.params.idempotencyKey);
+      await page.locator(`${activePane} .chat-send-btn--stop`).waitFor();
+      await frames(page);
+    },
+    run: async (page, gateway) => {
+      const runId = graphStreamingRuns.get(page);
+      if (!runId) {
+        throw new Error("Graph streaming fixture has no prepared run");
+      }
+      const text = await page.evaluate(
+        async ({ sessionKey, runId: targetRunId }) => {
+          const mock = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
+          let reply = "";
+          for (let index = 1; index <= 100; index++) {
+            reply += `Graph streaming checkpoint ${index}.\n\n`;
+            mock.emit("chat", {
+              sessionKey,
+              runId: targetRunId,
+              seq: index,
+              state: "delta",
+              message: { role: "assistant", content: [{ type: "text", text: reply }] },
+            });
+            // Give every event its own reactive flush and native presentation turn.
+            await new Promise<void>((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+            });
+          }
+          return reply;
+        },
+        { sessionKey: sessionKeys[0], runId },
+      );
+      const liveReply = page.locator(`${activePane} .chat-bubble.streaming`);
+      await liveReply.getByText("Graph streaming checkpoint 100.", { exact: true }).waitFor();
+      await liveReply.getByText("Graph streaming checkpoint 1.", { exact: true }).waitFor();
+      await gateway.emitChatFinal({ sessionKey: sessionKeys[0], runId, text });
+      const reply = page.locator(`${activePane} .chat-bubble:not(.streaming)`);
+      await reply.getByText("Graph streaming checkpoint 100.", { exact: true }).waitFor();
+      await reply.getByText("Graph streaming checkpoint 1.", { exact: true }).waitFor();
+      const rendered =
+        (await reply.filter({ hasText: "Graph streaming checkpoint 100." }).textContent()) ?? "";
+      if (
+        text
+          .trim()
+          .split("\n\n")
+          .some((checkpoint) => !rendered.includes(checkpoint))
+      ) {
+        throw new Error("Graph streaming lost content during finalization");
+      }
+      // Empty mobile composers show voice input instead of the disabled Send button.
+      await page.locator(`${activePane} .chat-send-btn--send`).waitFor({ state: "attached" });
+      await page.locator(`${activePane} .chat-send-btn--stop`).waitFor({ state: "detached" });
+      return { deltas: 100, finalized: true };
+    },
+  },
+  {
+    id: "graph-sidebar-live-update",
+    route: controlUiSessionPath(sessionKeys[0]),
+    explicitOnly: true,
+    expected:
+      "An existing sidebar session adopts its live title while the selected transcript stays visible.",
+    prepare: async (page) => {
+      await prepareChat(page);
+      await navigation(page, "sessions");
+      await page
+        .locator(`.sidebar-recent-session[data-session-key="${sessionKeys[1]}"]`)
+        .getByText("Interaction 0001", { exact: true })
+        .waitFor();
+      await settleSidebarBackgroundWork(page);
+    },
+    run: async (page, gateway) => {
+      const row = await gateway.getSessionRow(sessionKeys[1]);
+      const updatedAt = Math.max(Date.now(), (row.updatedAt ?? 0) + 1);
+      const label = "Graph sidebar live update witness";
+      await gateway.emitGatewayEvent("sessions.changed", {
+        sessionKey: row.key,
+        sessionId: row.sessionId,
+        agentId: "main",
+        reason: "patch",
+        ts: updatedAt,
+        session: { ...row, label, displayName: label, updatedAt, snapshotAt: updatedAt },
+        ancestorSessions: [],
+      });
+      await page
+        .locator(`.sidebar-recent-session[data-session-key="${sessionKeys[1]}"]`)
+        .getByText(label, { exact: true })
+        .waitFor();
+      await page
+        .locator(activePane)
+        .getByText("Transcript 0 message 399.", { exact: false })
+        .waitFor();
+      await frames(page);
+      return { updatedRows: 1 };
+    },
   },
   {
     id: "chat-typing",
@@ -2240,23 +2727,16 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     route: controlUiSessionPath(sessionKeys[0]),
     expected: "The first message of the 400-message transcript enters the viewport.",
     prepare: prepareChat,
-    run: async (page) => {
-      const thread = page.locator(`${activePane} .chat-thread`);
-      await thread.hover();
-      await page.mouse.wheel(0, -(await thread.evaluate((element) => element.scrollHeight)));
-      await thread.getByText("Transcript 0 message 0.", { exact: false }).waitFor();
-      await page.waitForFunction(
-        (selector) => document.querySelector(selector)?.scrollTop === 0,
-        `${activePane} .chat-thread`,
-      );
-      await frames(page);
-    },
+    run: scrollTranscriptToTop,
   },
   {
     id: "sidebar-toggle",
     route: controlUiSessionPath(sessionKeys[0]),
     expected: "The 1,000-session sidebar closes and reopens.",
-    prepare: prepareSidebarInventory,
+    prepare: async (page, gateway) => {
+      await prepareSidebarInventory(page, gateway);
+      await settleSidebarBackgroundWork(page);
+    },
     run: async (page) => {
       const mobile = (await page.locator(".shell--mobile-nav").count()) > 0;
       if (mobile) {
@@ -2333,6 +2813,23 @@ export const interactionScenarios: readonly InteractionScenario[] = [
         throw new Error("Warm Settings tabs must retain the loaded config schema");
       }
     },
+  },
+  {
+    id: "model-picker-first-open-search",
+    route: controlUiSessionPath(sessionKeys[0]),
+    expected: "The unopened 1,000-model picker focuses search and filters to Warm model 0999.",
+    prepare: prepareFirstModelPicker,
+    run: (page) => runFirstModelPicker(page),
+  },
+  {
+    id: "model-picker-first-open-phases",
+    route: controlUiSessionPath(sessionKeys[0]),
+    expected:
+      "The first-open picker exposes native input timestamps with the original action cadence.",
+    diagnostic: "Native event listeners and post-action collection perturb timing.",
+    explicitOnly: true,
+    prepare: prepareFirstModelPicker,
+    run: (page) => runFirstModelPicker(page, true),
   },
   {
     id: "model-picker-open-search",
@@ -2417,12 +2914,33 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     id: "sessions-sort",
     route: "/sessions",
     expected: "Sorting the 1,000-session result reverses its Updated order.",
-    prepare: prepareSessions,
+    prepare: async (page, gateway) => {
+      await prepareSessions(page, gateway);
+      if (
+        !(await page
+          .locator(".sessions-table")
+          .getByRole("button", { name: "Updated", exact: true })
+          .isVisible())
+      ) {
+        await page.getByRole("button", { name: "Filters", exact: true }).click();
+        await page
+          .locator(".sessions-filter-popover:popover-open")
+          .getByLabel("Direction")
+          .waitFor();
+      }
+    },
     run: async (page) => {
-      await page
+      const header = page
         .locator(".sessions-table")
-        .getByRole("button", { name: "Updated", exact: true })
-        .click();
+        .getByRole("button", { name: "Updated", exact: true });
+      if (await header.isVisible()) {
+        await header.click();
+      } else {
+        await page
+          .locator(".sessions-filter-popover:popover-open")
+          .getByLabel("Direction")
+          .selectOption("asc");
+      }
       await page
         .locator(".sessions-table tbody .session-data-row")
         .first()
@@ -2436,12 +2954,19 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     expected: "Gateway filtering replaces the 1,000-session result with Interaction 0999.",
     prepare: prepareSessions,
     run: async (page, gateway) => {
-      await page.getByRole("button", { name: "Filters", exact: true }).click();
+      let search = page.locator(".sessions-search input");
+      if (!(await search.isVisible())) {
+        await page.getByRole("button", { name: "Filters", exact: true }).click();
+        const filters = page.locator(".sessions-filter-popover:popover-open");
+        await filters.waitFor({ state: "visible" });
+        const searchToggle = filters.locator(".header-search__toggle");
+        if (await searchToggle.isVisible()) {
+          await searchToggle.click();
+        }
+        search = filters.locator(".sessions-filter-popover__search input");
+      }
       const after = (await gateway.getRequests("sessions.list", { search: sessionQuery })).length;
-      await page
-        .locator(".sessions-filter-popover:popover-open input")
-        .first()
-        .pressSequentially(sessionQuery);
+      await search.pressSequentially(sessionQuery);
       await gateway.waitForRequest("sessions.list", { after, match: { search: sessionQuery } });
       await page
         .locator(".sessions-table tbody .session-data-row")
@@ -2469,7 +2994,7 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       await frames(page);
       if (
         (await search.inputValue()) !== cronQuery ||
-        (await page.locator(".cron-table__row").count()) !== 500 ||
+        (await cronLoadedJobCount(page)) !== 500 ||
         (await page.locator(".cron-table").getAttribute("aria-busy")) !== "true" ||
         (await gateway.getRequests("cron.list")).length - before !== 1
       ) {
@@ -2480,7 +3005,7 @@ export const interactionScenarios: readonly InteractionScenario[] = [
   {
     id: "cron-menu-open",
     route: pathForRoute("cron"),
-    expected: "The first of 500 jobs opens its enabled Run if due, Clone, and Remove actions.",
+    expected: "The first of 500 jobs opens its enabled due-run, clone, and remove actions.",
     prepare: prepareCron,
     run: async (page) => {
       const trigger = page.locator(".cron-table__row").first().locator(".cron-job-menu__trigger");
@@ -2491,11 +3016,11 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       await trigger.click();
       const menu = page.locator(`[id=${JSON.stringify(menuId)}][role="menu"]`);
       await menu.waitFor({ state: "visible" });
-      for (const name of ["Run if due", "Clone", "Remove"]) {
-        const item = menu.getByRole("menuitem", { name, exact: true });
+      for (const action of ["run-if-due", "clone", "remove"]) {
+        const item = menu.locator(`[role="menuitem"][data-value="${action}"]`);
         await item.waitFor({ state: "visible" });
         if (!(await item.isEnabled())) {
-          throw new Error(`Automation action is disabled: ${name}`);
+          throw new Error(`Automation action is disabled: ${action}`);
         }
       }
       if ((await menu.getByRole("menuitem").count()) !== 3) {

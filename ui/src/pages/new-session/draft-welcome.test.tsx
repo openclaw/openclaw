@@ -94,3 +94,57 @@ it("prepares recents only for their owner and scope, parks display facts, and re
   view.unmount();
   expect(second.listeners.size).toBe(0);
 });
+
+it("lists recent sessions instead of suggestions when any exist", () => {
+  const opened: string[] = [];
+  const owner = roster([
+    row("current", "Current chat", 50),
+    { ...row("older", "Older chat", 10), pinned: true, pinnedAt: 5 },
+    { key: "agent:main:discord:group:g-1456", kind: "group", channel: "discord", updatedAt: 90 },
+    row("newer", "Newer chat", 40),
+  ]);
+  const view = mountSolid(() => (
+    <DraftWelcome
+      sessions={owner}
+      options={{
+        assistantName: "Val",
+        assistantAvatar: null,
+        sessionKey: "agent:main:dashboard:current",
+        onDraftChange: () => {},
+        onSend: () => {},
+        onOpenSession: (key) => opened.push(key),
+      }}
+    />
+  ));
+  expect(view.container.textContent).toContain("Recent sessions");
+  expect(view.container.querySelector(".agent-chat__suggestion")).toBeNull();
+  const rows = [...view.container.querySelectorAll<HTMLButtonElement>(".agent-chat__recent")];
+  expect(
+    rows.map((entry) => entry.querySelector(".agent-chat__recent-name")?.textContent?.trim()),
+  ).toEqual(["Newer chat", "Older chat"]);
+  rows[0]!.click();
+  expect(opened).toEqual(["agent:main:dashboard:newer"]);
+});
+
+it("inserts the displayed tour suggestion into the draft", () => {
+  const drafts: string[] = [];
+  const view = mountSolid(() => (
+    <DraftWelcome
+      sessions={roster([])}
+      options={{
+        assistantName: "Val",
+        assistantAvatar: null,
+        sessionKey: "agent:main:dashboard:current",
+        operatorAuth: { role: "operator", scopes: ["operator.read"] },
+        onDraftChange: (draft) => drafts.push(draft),
+        onSend: () => {},
+      }}
+    />
+  ));
+  const tour = [...view.container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+    button.textContent?.includes("Tour OpenClaw’s code and docs"),
+  );
+  expect(tour).toBeDefined();
+  tour!.click();
+  expect(drafts).toEqual(["Tour OpenClaw’s code and docs"]);
+});

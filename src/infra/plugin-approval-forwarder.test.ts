@@ -39,6 +39,27 @@ const PLUGIN_DISABLED_CFG = {
   },
 } as OpenClawConfig;
 
+const allowOnceButton = {
+  label: "Allow Once",
+  action: {
+    type: "approval",
+    approvalId: "plugin-req-1",
+    approvalKind: "plugin",
+    decision: "allow-once",
+  },
+  style: "success",
+};
+const denyButton = {
+  label: "Deny",
+  action: {
+    type: "approval",
+    approvalId: "plugin-req-1",
+    approvalKind: "plugin",
+    decision: "deny",
+  },
+  style: "danger",
+};
+
 function makePluginRequest(overrides?: Partial<PluginApprovalRequest>): PluginApprovalRequest {
   return {
     id: "plugin-req-1",
@@ -114,42 +135,29 @@ describe("plugin approval forwarding", () => {
       expect(result).toBe(false);
     });
 
-    it.each(["webchat", "tui"])(
-      "does not forward %s-originated approvals to stale session channels",
-      async (turnSourceChannel) => {
-        const resolveSessionTarget = vi.fn(async ({ request }) =>
-          request.request.turnSourceChannel
-            ? null
-            : { channel: "telegram" as const, to: "123", accountId: "default" },
-        );
-        const cfg = {
-          approvals: { plugin: { enabled: true, mode: "session" } },
-        } as OpenClawConfig;
-        const { deliver, forwarder } = createForwarder({ cfg, resolveSessionTarget });
-
-        await expect(
-          forwarder.handlePluginApprovalRequested!(
-            makePluginRequest({
-              request: {
-                ...makePluginRequest().request,
-                turnSourceChannel,
-              },
-            }),
-          ),
-        ).resolves.toBe(false);
-        await flushPendingDelivery();
-        expect(resolveSessionTarget).toHaveBeenCalledWith(
-          expect.objectContaining({
-            request: expect.objectContaining({
-              request: expect.objectContaining({ turnSourceChannel }),
-            }),
-          }),
-        );
-        expect(deliver).not.toHaveBeenCalled();
+    it.each([
+      {
+        name: "does not forward webchat-originated approvals to stale session channels",
+        turnSourceChannel: "webchat",
+        expectedSourceChannel: "webchat",
+        forwarded: false,
+        deliveryCount: 0,
       },
-    );
-
-    it("preserves session fallback for non-deliverable background sources", async () => {
+      {
+        name: "does not forward tui-originated approvals to stale session channels",
+        turnSourceChannel: "tui",
+        expectedSourceChannel: "tui",
+        forwarded: false,
+        deliveryCount: 0,
+      },
+      {
+        name: "preserves session fallback for non-deliverable background sources",
+        turnSourceChannel: "heartbeat",
+        expectedSourceChannel: null,
+        forwarded: true,
+        deliveryCount: 1,
+      },
+    ])("$name", async ({ turnSourceChannel, expectedSourceChannel, forwarded, deliveryCount }) => {
       const resolveSessionTarget = vi.fn(async ({ request }) =>
         request.request.turnSourceChannel
           ? null
@@ -165,20 +173,20 @@ describe("plugin approval forwarding", () => {
           makePluginRequest({
             request: {
               ...makePluginRequest().request,
-              turnSourceChannel: "heartbeat",
+              turnSourceChannel,
             },
           }),
         ),
-      ).resolves.toBe(true);
+      ).resolves.toBe(forwarded);
       await flushPendingDelivery();
       expect(resolveSessionTarget).toHaveBeenCalledWith(
         expect.objectContaining({
           request: expect.objectContaining({
-            request: expect.objectContaining({ turnSourceChannel: null }),
+            request: expect.objectContaining({ turnSourceChannel: expectedSourceChannel }),
           }),
         }),
       );
-      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(deliver).toHaveBeenCalledTimes(deliveryCount);
     });
 
     it("forwards to configured targets", async () => {
@@ -198,16 +206,7 @@ describe("plugin approval forwarding", () => {
           {
             type: "buttons",
             buttons: [
-              {
-                label: "Allow Once",
-                action: {
-                  type: "approval",
-                  approvalId: "plugin-req-1",
-                  approvalKind: "plugin",
-                  decision: "allow-once",
-                },
-                style: "success",
-              },
+              allowOnceButton,
               {
                 label: "Allow Always",
                 action: {
@@ -218,16 +217,7 @@ describe("plugin approval forwarding", () => {
                 },
                 style: "primary",
               },
-              {
-                label: "Deny",
-                action: {
-                  type: "approval",
-                  approvalId: "plugin-req-1",
-                  approvalKind: "plugin",
-                  decision: "deny",
-                },
-                style: "danger",
-              },
+              denyButton,
             ],
           },
         ],
@@ -279,28 +269,7 @@ describe("plugin approval forwarding", () => {
         blocks: [
           {
             type: "buttons",
-            buttons: [
-              {
-                label: "Allow Once",
-                action: {
-                  type: "approval",
-                  approvalId: "plugin-req-1",
-                  approvalKind: "plugin",
-                  decision: "allow-once",
-                },
-                style: "success",
-              },
-              {
-                label: "Deny",
-                action: {
-                  type: "approval",
-                  approvalId: "plugin-req-1",
-                  approvalKind: "plugin",
-                  decision: "deny",
-                },
-                style: "danger",
-              },
-            ],
+            buttons: [allowOnceButton, denyButton],
           },
         ],
       });

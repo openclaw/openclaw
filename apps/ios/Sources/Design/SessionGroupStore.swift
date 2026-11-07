@@ -15,6 +15,14 @@ enum SessionGroupStore {
         defaults.set(self.normalized(groups), forKey: self.defaultsKey)
     }
 
+    static func loadCollapsed(defaults: UserDefaults = .standard) -> Set<String> {
+        Set(defaults.stringArray(forKey: "openclaw:sessions:collapsed-groups") ?? [])
+    }
+
+    static func saveCollapsed(_ names: Set<String>, defaults: UserDefaults = .standard) {
+        defaults.set(names.sorted(), forKey: "openclaw:sessions:collapsed-groups")
+    }
+
     static func remember(_ name: String, defaults: UserDefaults = .standard) {
         self.save(self.adding(self.load(defaults: defaults), name), defaults: defaults)
     }

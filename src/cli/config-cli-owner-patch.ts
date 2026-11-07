@@ -3,8 +3,13 @@ import type { ReadConfigFileSnapshotWithPluginMetadataResult } from "../config/i
 import { prepareConfigWriteTopology } from "../config/io.write-topology.js";
 import { applyMergePatch, createMergePatch } from "../config/merge-patch.js";
 import { collectBaseArrayPaths, formatConfigPatchPath } from "../config/patch-replace-paths.js";
+import { resolveConfigPath } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { resolveIdentityPathViaExistingAncestorSync as identity } from "../infra/boundary-path.js";
+import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { isPlainObject } from "../infra/plain-object.js";
+import { shortenHomePath } from "../utils.js";
+import type { OwnerRequest } from "./local-state-owner.js";
 
 // Matches the config.patch request schema.
 const MAX_REPLACE_PATHS = 256;
@@ -94,7 +99,7 @@ export async function prepareConfigOwnerChange(
  * delete exactly, as the local writer would; a change the Gateway's merge cannot reproduce
  * (for example an authored null) is refused instead of being approximated.
  */
-export function buildConfigOwnerPatch(
+function buildConfigOwnerPatch(
   change: { previous: OpenClawConfig; next: OpenClawConfig },
   baseHash: unknown,
 ) {
@@ -113,5 +118,35 @@ export function buildConfigOwnerPatch(
     raw: JSON.stringify(patch),
     ...(typeof baseHash === "string" ? { baseHash } : {}),
     ...(replacePaths.length > 0 ? { replacePaths } : {}),
+  };
+}
+
+/**
+ * Bind a routed config change to the file the running Gateway writes. The change is prepared
+ * from this command's own read; the returned commit sends it as one config.patch against the
+ * owner's revision and returns the restart hint, if any.
+ */
+export async function bindConfigOwner(requestOwner: OwnerRequest, env: NodeJS.ProcessEnv) {
+  const current = await requestOwner<{ hash?: unknown; path?: unknown }>("config.get", {});
+  const selected = resolveConfigPath(env);
+  if (typeof current.path !== "string" || identity(current.path) !== identity(selected)) {
+    throw new Error(
+      `The running Gateway owns this state directory but uses config file ${typeof current.path === "string" ? shortenHomePath(current.path) : "<unknown>"}, not ${shortenHomePath(selected)}. Nothing was sent and no settings were saved. Rerun with the Gateway's config path, or stop the Gateway through its service owner and rerun this exact command.`,
+    );
+  }
+  // Owner-routed writes inspect installed plugin state without write custody.
+  if (!getDatabaseEngineSelection()) {
+    const { readConfigSnapshotForEngineSelection } =
+      await import("../commands/config-preflight-snapshot.js");
+    await readConfigSnapshotForEngineSelection();
+  }
+  return async (change: { previous: OpenClawConfig; next: OpenClawConfig }) => {
+    const result = await requestOwner<{ restart?: unknown; restartPending?: unknown }>(
+      "config.patch",
+      buildConfigOwnerPatch(change, current.hash),
+    );
+    return result.restart || result.restartPending
+      ? "The Gateway is restarting to apply it."
+      : undefined;
   };
 }

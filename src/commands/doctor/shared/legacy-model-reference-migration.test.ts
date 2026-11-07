@@ -38,7 +38,7 @@ const mediaModels = (provider: string) => ({
 
 function expectIdempotent(config: OpenClawConfigWithLegacyRoster) {
   const changes: string[] = [];
-  expect(normalizeRefs(config, changes)).toEqual(config);
+  expect(normalizeRefs(config, changes, [])).toEqual(config);
   expect(changes).toEqual([]);
 }
 
@@ -58,7 +58,7 @@ describe("canonical model-reference migration", () => {
             : { list: [{ id: "main", ...agent }] },
       };
 
-      const result = normalizeRefs(config, []);
+      const result = normalizeRefs(config, [], []);
       const migrated = scope === "defaults" ? result.agents?.defaults : result.agents?.list?.[0];
 
       expect(migrated?.model).toEqual(
@@ -83,7 +83,7 @@ describe("canonical model-reference migration", () => {
 
   it("migrates an identified legacy media provider/model pair together", () => {
     const config = audio(`google-gemini-cli/${audioModel}`, "google-gemini-cli");
-    const result = normalizeRefs(config, []);
+    const result = normalizeRefs(config, [], []);
     expect(result.tools?.media).toEqual(audio(`google/${audioModel}`).tools?.media);
   });
 
@@ -115,7 +115,9 @@ describe("canonical model-reference migration", () => {
 
   it("uses the same migration for image, video, and music model slots", () => {
     const config = defaults({ mediaModels: mediaModels("google-gemini-cli") });
-    expect(normalizeRefs(config, []).agents?.defaults?.mediaModels).toEqual(mediaModels("google"));
+    expect(normalizeRefs(config, [], []).agents?.defaults?.mediaModels).toEqual(
+      mediaModels("google"),
+    );
   });
 
   it("merges unselected model entries without losing authored fields or retaining blocked keys", () => {
@@ -129,17 +131,17 @@ describe("canonical model-reference migration", () => {
         "anthropic/assistant-a": {
           alias: "Canonical alias",
           params: { temperature: 0.8, ["__proto__"]: { polluted: true } },
-          agentRuntime: { id: "openclaw" },
+          agentRuntime: { id: "claude-cli" },
         },
       },
     });
     const changes: string[] = [];
-    const result = normalizeRefs(config, changes);
+    const result = normalizeRefs(config, changes, []);
     expect(result.agents?.defaults?.models).toEqual({
       "anthropic/assistant-a": {
         alias: "Canonical alias",
         params: { temperature: 0.8, maxTokens: 1200 },
-        agentRuntime: { id: "openclaw" },
+        agentRuntime: { id: "claude-cli" },
       },
     });
     expect(Reflect.get(Object.prototype, "polluted")).toBeUndefined();
@@ -148,7 +150,178 @@ describe("canonical model-reference migration", () => {
     expectIdempotent(result);
   });
 
-  it("canonicalizes a seeded legacy Claude CLI allowlist in one doctor pass", () => {
+  const opusApi = { agentRuntime: { id: "openclaw" } };
+  const [api5, cli5] = ["anthropic/claude-opus-5", "claude-cli/claude-opus-5"];
+  const [api, cli] = ["anthropic/claude-opus-4-7", "claude-cli/claude-opus-4-7"];
+  const entries = (value: Record<string, unknown>) =>
+    ({ agents: { entries: value } }) as OpenClawConfig;
+  const pinnedElsewhere = {
+    model: selection(cli5, api5),
+    models: { [api5]: opusApi, [cli5]: { alias: "opus-sub" } },
+    modelPolicy: { allow: ["anthropic/*", "claude-cli/*"] },
+  };
+  it.each<[string, OpenClawConfigWithLegacyRoster]>([
+    ["a defaults pin to another runtime (#191149)", defaults(pinnedElsewhere)],
+    ["an agent pin to another runtime", entries({ main: pinnedElsewhere })],
+    [
+      "an agent pin behind a matching defaults pin",
+      {
+        agents: {
+          defaults: { models: { [api5]: { agentRuntime: { id: "claude-cli" } } } },
+          entries: { main: { model: cli5, models: { [api5]: opusApi } } },
+        },
+      },
+    ],
+    [
+      "a wildcard-only legacy allowlist",
+      defaults({ models: { [api5]: opusApi }, modelPolicy: { allow: ["claude-cli/*"] } }),
+    ],
+    [
+      "a profile-qualified selector",
+      defaults({ model: `${cli5}@personal`, models: { [api5]: opusApi } }),
+    ],
+    [
+      "a provider-spelled pin key",
+      defaults({ model: cli5, models: { "Anthropic/claude-opus-5": opusApi } }),
+    ],
+    ["a provider wildcard pin", defaults({ model: cli5, models: { "anthropic/*": opusApi } })],
+    ["a bare model pin", defaults({ model: cli5, models: { "claude-opus-5": opusApi } })],
+    [
+      "a model-prefix legacy allowlist",
+      defaults({
+        model: api5,
+        models: { [api5]: opusApi },
+        modelPolicy: { allow: ["anthropic/*", "claude-cli/claude-opus-*"] },
+      }),
+    ],
+    [
+      "a provider runtime",
+      {
+        ...defaults({ model: cli5 }),
+        models: {
+          providers: {
+            anthropic: { baseUrl: "https://api.anthropic.com", models: [], ...opusApi },
+          },
+        },
+      },
+    ],
+    ["an API primary with a CLI fallback", defaults({ model: selection(api, cli) })],
+    ["a CLI primary with an API fallback", defaults({ model: selection(cli, api) })],
+    ["an agent API primary with a CLI fallback", entries({ main: { model: selection(api, cli) } })],
+    [
+      "a subagent API primary with a CLI fallback",
+      defaults({ subagents: { model: selection(api, cli) } }),
+    ],
+    ["a CLI subagent beside an API primary", defaults({ model: api, subagents: { model: cli } })],
+    ["a CLI heartbeat beside an API primary", defaults({ model: api, heartbeat: { model: cli } })],
+    ["an agent CLI heartbeat", entries({ work: { model: api, heartbeat: { model: cli } } })],
+    [
+      "an agent CLI heartbeat beside an inherited API primary",
+      { agents: { defaults: { model: api }, entries: { w: { heartbeat: { model: cli } } } } },
+    ],
+    [
+      "a defaults CLI heartbeat beside an agent API primary",
+      { agents: { defaults: { heartbeat: { model: cli } }, list: [{ id: "w", model: api }] } },
+    ],
+    [
+      "a model map with both spellings",
+      defaults({ model: api, models: { [api]: { alias: "API" }, [cli]: {} } }),
+    ],
+    [
+      "an allowlist with both spellings",
+      defaults({ model: api, modelPolicy: { allow: [api, cli] } }),
+    ],
+    [
+      "a Gemini CLI subagent beside a Google primary",
+      defaults({
+        model: "google/gemini-pro",
+        subagents: { model: "google-gemini-cli/gemini-pro" },
+      }),
+    ],
+  ])("keeps legacy CLI refs beside %s", (_case, config) => {
+    const changes: string[] = [];
+    const warnings: string[] = [];
+    expect(normalizeRefs(config, changes, warnings)).toEqual(config);
+    expect([changes, warnings]).toEqual([
+      [],
+      [expect.stringMatching(/^Kept legacy .*-cli\/\* model refs: /)],
+    ]);
+  });
+
+  // [case, config, agent whose API route stays unpinned, agent whose CLI route resolves]
+  it.each<[string, OpenClawConfigWithLegacyRoster, string?, string?]>([
+    [
+      "another model",
+      defaults({ model: api, heartbeat: { model: "claude-cli/claude-sonnet-5" } }),
+      "main",
+    ],
+    [
+      "a CLI-pinned canonical model",
+      defaults({
+        model: api,
+        models: { [api]: { agentRuntime: { id: "claude-cli" } } },
+        heartbeat: { model: cli },
+      }),
+      undefined,
+      "main",
+    ],
+    ["separate agents", entries({ api: { model: api }, cli: { model: cli } }), "api", "cli"],
+  ])("migrates Claude CLI refs beside %s", (_case, config, apiAgent, cliAgent) => {
+    const warnings: string[] = [];
+    const result = normalizeRefs(config, [], warnings);
+    expect(warnings).toEqual([]);
+    expect(JSON.stringify(result)).not.toContain("claude-cli/");
+    const routes = ([[apiAgent], [cliAgent, "claude-cli"]] as const).filter(([agent]) => agent);
+    for (const [agentId, id] of routes) {
+      expect(runtime(result, "anthropic", "claude-opus-4-7", agentId)?.id).toBe(id);
+    }
+  });
+
+  it("migrates Claude CLI refs when no pin routes Anthropic models elsewhere", () => {
+    const config = defaults({
+      model: "claude-cli/claude-opus-5",
+      models: {
+        "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
+        "anthropic/claude-haiku-5": { agentRuntime: { id: "auto" } },
+        "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+      },
+    });
+    const warnings: string[] = [];
+    const result = normalizeRefs(config, [], warnings);
+
+    expect(result.agents?.defaults?.model).toBe("anthropic/claude-opus-5");
+    expect(runtime(result, "anthropic", "claude-opus-5")?.id).toBe("claude-cli");
+    expect(warnings).toEqual([]);
+  });
+
+  it("still migrates other legacy CLI providers beside a retained Claude CLI route", () => {
+    const config = defaults({
+      model: selection("claude-cli/claude-opus-5", "google-gemini-cli/gemini-pro"),
+      models: { "anthropic/claude-opus-5": { agentRuntime: { id: "openclaw" } } },
+    });
+    const warnings: string[] = [];
+    const result = normalizeRefs(config, [], warnings);
+
+    expect(result.agents?.defaults?.model).toEqual(
+      selection("claude-cli/claude-opus-5", "google/gemini-pro"),
+    );
+    expect(result.agents?.defaults?.models).toEqual({
+      "anthropic/claude-opus-5": { agentRuntime: { id: "openclaw" } },
+      "google/gemini-pro": { agentRuntime: { id: "google-gemini-cli" } },
+    });
+    expect(warnings).toHaveLength(1);
+  });
+
+  it("keeps both selected routes through the complete Doctor normalization pass", async () => {
+    const model = selection("anthropic/claude-opus-4-7", "claude-cli/claude-opus-4-7");
+    const raw = defaults({ model });
+    const seeded = applyLegacyDoctorMigrations(raw, { sourceConfigBeforeMigrations: raw });
+    const result = await normalizeCompatibilityConfigValues(seeded.next ?? raw);
+    expect(result.config.agents?.defaults?.model).toEqual(model);
+    expect(runtime(result.config, "anthropic", "claude-opus-4-7")?.id).not.toBe("claude-cli");
+  });
+
+  it("canonicalizes a seeded legacy Claude CLI allowlist in one doctor pass", async () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "");
     vi.stubEnv("ANTHROPIC_OAUTH_TOKEN", "");
     // #124952: the seeded allowlist and its model map must migrate in one pass.
@@ -162,7 +335,7 @@ describe("canonical model-reference migration", () => {
       "claude-cli/claude-sonnet-4-6",
     ]);
 
-    const res = normalizeCompatibilityConfigValues(seeded.next);
+    const res = await normalizeCompatibilityConfigValues(seeded.next);
     expect(res.config.agents?.defaults?.models).toEqual({
       "anthropic/*": { agentRuntime: { id: "claude-cli" } },
       "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
@@ -172,6 +345,6 @@ describe("canonical model-reference migration", () => {
     expect(res.config.agents?.defaults?.modelPolicy).toEqual({
       allow: ["anthropic/claude-opus-4-7", "anthropic/claude-sonnet-4-6"],
     });
-    expect(normalizeCompatibilityConfigValues(res.config).changes).toEqual([]);
+    expect((await normalizeCompatibilityConfigValues(res.config)).changes).toEqual([]);
   });
 });

@@ -6,6 +6,7 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as workerRequests from "../infra/worker-request-diagnostics.js";
 import {
   createAgentDatabaseInspectionRefusal,
   preparePendingAgentDatabase,
@@ -20,8 +21,10 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { makeCronJob } from "./delivery.test-helpers.js";
 import { runSessionRegistryMaintenance } from "./session-registry-maintenance.js";
 import * as cronStore from "./store.js";
+import * as cronReadStore from "./store/read-only.js";
 
 const DAY_MS = 24 * 60 * 60_000;
 let state: OpenClawTestState;
@@ -60,7 +63,7 @@ describe("runSessionRegistryMaintenance", () => {
 
   it("skips the sweep instead of pruning when the cron store is unreadable", async () => {
     const stale = await writeStaleCronSession("main");
-    vi.spyOn(cronStore, "loadCronJobsStore").mockRejectedValue(
+    vi.spyOn(cronReadStore, "loadCronJobsStoreWithConfigJobsReadOnly").mockRejectedValue(
       new Error("cron store load unavailable"),
     );
 
@@ -156,8 +159,24 @@ describe("runSessionRegistryMaintenance", () => {
 
       if (kind === "per-agent") {
         // Preview isolates discovery from the lifecycle writer's live commit guards.
+        const cronPath = state.statePath("cron/jobs.json");
+        await cronStore.saveCronStore(cronPath, {
+          version: 1,
+          jobs: [
+            makeCronJob({ id: "done-job", agentId: "main", state: { runningAtMs: Date.now() } }),
+          ],
+        });
+        const requests = vi.spyOn(workerRequests, "trackWorkerRequest");
         const observation = observeHostDataSql();
         try {
+          expect(await maintain()).toMatchObject({ runningCronJobs: 1, pruned: 0 });
+          expect(
+            requests.mock.calls.filter(
+              ([workerKind, label]) => workerKind === "sqlite_writer" && label === "cron",
+            ),
+          ).toHaveLength(0);
+          requests.mockRestore();
+          await cronStore.saveCronStore(cronPath, { version: 1, jobs: [] });
           const preview = await maintain(false);
           expect(preview.pruned).toBe(2);
           expect(

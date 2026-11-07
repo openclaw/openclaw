@@ -12,3 +12,9 @@ export type WorktreeTemplateRecord = {
   createdAt: number;
   lastUsedAt: number;
 };
+
+export type WorktreeWarmPoolRequest = {
+  template: WorktreeTemplateRecord;
+  sourceOnly: boolean;
+  cloneBytes?: number;
+};

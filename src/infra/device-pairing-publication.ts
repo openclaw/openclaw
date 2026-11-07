@@ -23,7 +23,7 @@ type Publication = {
   mutation?: object;
   complete: boolean;
   rows: Map<string, DevicePairingBinding | null>;
-  devices: Map<string, PairedDevice | null>;
+  devices: Record<string, PairedDevice | null>;
   nodes?: DevicePairingNodeSnapshot;
   pending: Set<() => void>;
 };
@@ -66,7 +66,7 @@ export function invalidateDevicePairingNodeSnapshot(path: string): void {
   if (publication) {
     publication.epoch++;
     publication.nodes = undefined;
-    publication.devices.clear();
+    publication.devices = Object.create(null);
     publication.complete = false;
   }
 }
@@ -91,7 +91,7 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
       blocked: false,
       complete: false,
       rows: new Map(),
-      devices: new Map(),
+      devices: Object.create(null),
       pending: new Set(),
     };
   }
@@ -103,7 +103,7 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
   const install = (rows: readonly DevicePairingBindingFact[]) => {
     for (const row of rows) {
       captured.rows.set(row.deviceId, row.binding ? { ...row.binding } : null);
-      captured.devices.set(row.deviceId, structuredClone(row.device));
+      captured.devices[row.deviceId] = structuredClone(row.device);
     }
   };
   return {
@@ -114,7 +114,7 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
       if (publications.get(path) !== captured || captured.blocked) {
         return undefined;
       }
-      const device = captured.devices.get(deviceId);
+      const device = captured.devices[deviceId];
       // Public callers own mutable rows; never lend them the authorization publication.
       return device === undefined && !captured.complete
         ? undefined
@@ -139,7 +139,7 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
           }
         }
         // Complete receipts already carry the committed rows; discovery must not reread them.
-        const paired = Object.values(Object.fromEntries(captured.devices))
+        const paired = Object.values(captured.devices)
           .filter((device) => device !== null)
           .toSorted((a, b) => b.approvedAtMs - a.approvedAtMs);
         captured.nodes = Object.freeze({ paired: freezeTrustedJsonSnapshot(paired), bindings });
@@ -176,7 +176,7 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
       }
       if (complete) {
         captured.rows.clear();
-        captured.devices.clear();
+        captured.devices = Object.create(null);
       }
       captured.revision = revision;
       install(rows);

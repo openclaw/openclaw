@@ -1,10 +1,12 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import { observeLayoutShifts } from "../test-helpers/control-ui-layout-shift.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { revealSidebarTarget } from "../test-helpers/control-ui-sidebar-window.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expandSidebarSessions } from "./sidebar-session-pagination.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Systems workspace mocked Gateway E2E",
@@ -82,6 +84,271 @@ function installSystemsGateway(
 }
 
 suite.define(() => {
+  it.each(
+    [400, 820, 1280].flatMap((width) =>
+      [1, 4, 12].flatMap((diskCount) =>
+        [false, true].map((backups) => ({ width, diskCount, backups })),
+      ),
+    ),
+  )(
+    "keeps the overview steady at $width px with $diskCount disks (backups: $backups)",
+    async ({ width, diskCount, backups }) => {
+      await suite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport: { width, height: 900 } },
+        async ({ page }) => {
+          const gateway = await installSystemsGateway(page, 0, {
+            "system.info": {
+              ...systemInfo,
+              disks: Array.from({ length: diskCount }, (_, index) => ({
+                path: `/volume-${index}`,
+                totalBytes: 1024 ** 4,
+                availableBytes: (diskCount - index) * 1024 ** 3,
+              })),
+            },
+            "backup.status": {
+              targets: backups
+                ? [
+                    {
+                      kind: "archive",
+                      target: "Synthetic archive",
+                      latest: {
+                        id: "backup",
+                        kind: "archive",
+                        createdAt: 1,
+                        archivePath: "/backup",
+                        status: "failed",
+                        error: "Archive disk disconnected",
+                      },
+                    },
+                  ]
+                : [],
+              schedules: [],
+              locations: [],
+            },
+          });
+          await page.goto(suite.server.baseUrl + "new");
+          await waitForControlUiRoute(page, { routeId: "new-session" });
+          const inventoryReads = await gateway.deferNext("environments.list");
+          const backupReads = await gateway.deferNext("backup.status");
+          await page.evaluate(() => {
+            window.openclawControlUi!.navigate("systems");
+          });
+          await gateway.waitForRequest("environments.list", { after: inventoryReads });
+          await gateway.waitForRequest("backup.status", { after: backupReads });
+          await waitForControlUiRoute(page, { routeId: "systems" });
+          await page.locator(".systems-body").waitFor();
+          const shifts = await observeLayoutShifts(page);
+          if (width <= 640) {
+            await page.getByRole("button", { name: "Show statistics" }).click();
+          }
+          await page.getByText("Loading backups…", { exact: true }).waitFor();
+          const body = page.locator(".systems-body");
+          expect(await body.locator(".systems-state").isVisible()).toBe(false);
+          const position = () => body.evaluate((element) => element.getBoundingClientRect().y);
+          const initialY = await position();
+          const backupY = await page
+            .locator(".systems-backups")
+            .evaluate((element) => element.getBoundingClientRect().y);
+          await expect
+            .poll(() =>
+              page.evaluate(() =>
+                document
+                  .getAnimations()
+                  .every(
+                    (animation) =>
+                      !Number.isFinite(animation.effect?.getComputedTiming().endTime) ||
+                      animation.playState === "finished",
+                  ),
+              ),
+            )
+            .toBe(true);
+          await gateway.resolveDeferred("environments.list");
+          await page.locator(".systems-volume-summary").waitFor();
+          await expect.poll(position).toBe(initialY);
+          expect(await body.locator(".systems-state").isVisible()).toBe(true);
+          expect(await page.locator(".systems-backups").textContent()).toContain(
+            "Loading backups…",
+          );
+          await gateway.resolveDeferred("backup.status");
+          await page
+            .getByText(backups ? "Recorded: 1 · Failed: 1" : "No backups yet.", {
+              exact: false,
+            })
+            .waitFor();
+          expect(await position()).toBe(initialY);
+          expect(
+            await page
+              .locator(".systems-backups")
+              .evaluate((element) => element.getBoundingClientRect().y),
+          ).toBe(backupY);
+          expect(await page.locator(".systems-volume-summary li:not([aria-hidden])").count()).toBe(
+            Math.min(3, diskCount),
+          );
+          expect(
+            await page
+              .locator(".systems-overview")
+              .evaluate((element) => element.scrollHeight <= element.clientHeight),
+          ).toBe(true);
+          await page.evaluate(
+            () =>
+              new Promise((resolve) => {
+                requestAnimationFrame(() => requestAnimationFrame(resolve));
+              }),
+          );
+          const layoutShifts = await shifts.evaluate((probe) => probe.read());
+          expect(layoutShifts.value, JSON.stringify(layoutShifts, null, 2)).toBe(0);
+          await shifts.evaluate((probe) => probe.stop());
+          await shifts.dispose();
+          const more = page.locator(".systems-volume-summary button");
+          await more.focus();
+          await page.keyboard.press("Enter");
+          await page.locator(".systems-details").waitFor();
+          expect(await page.locator(".systems-details .systems-vital--disk").count()).toBe(
+            diskCount,
+          );
+          expect(
+            await page
+              .locator(".systems-details")
+              .evaluate((element) => element === document.activeElement),
+          ).toBe(true);
+          if (backups) {
+            await page.getByText("Archive disk disconnected", { exact: true }).waitFor();
+          }
+          await page.getByRole("button", { name: "Close details" }).click();
+          await expect
+            .poll(() => more.evaluate((element) => element === document.activeElement))
+            .toBe(true);
+
+          // Selecting a worker removes Gateway backups and may have no telemetry.
+          const picker = page.locator(".systems-mobile-picker");
+          if (await picker.isVisible()) {
+            await picker.selectOption("worker-one");
+          } else {
+            const worker = page
+              .locator(".systems-sidebar")
+              .getByRole("button", { name: /Cloud worker/ });
+            if (!(await worker.isVisible())) {
+              await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
+            }
+            await worker.click();
+          }
+          await expect.poll(() => page.locator(".systems-backups").count()).toBe(0);
+          expect(await position()).toBe(initialY);
+        },
+      );
+    },
+  );
+  it("opens on the viewer at phone width until the operator chooses stats", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 390, height: 844 } },
+      async ({ page }) => {
+        await installSystemsGateway(page, 0, {
+          "backup.status": {
+            targets: [
+              {
+                kind: "archive",
+                target: "Synthetic archive",
+                latest: { id: "backup", kind: "archive", createdAt: 1, archivePath: "/backup" },
+              },
+            ],
+            schedules: [],
+            locations: [],
+          },
+        });
+        await page.goto(suite.server.baseUrl + "systems");
+        await page.locator(".systems-mobile-picker option[value='worker-one']").waitFor({
+          state: "attached",
+        });
+        const overview = page.locator(".systems-overview");
+        const stats = page.locator(".systems-overview__telemetry");
+        const backups = page.locator(".systems-backups");
+        const toolbarBottom = () =>
+          page
+            .locator(".systems-toolbar")
+            .evaluate((element) => element.getBoundingClientRect().bottom);
+        const bodyTop = () =>
+          page.locator(".systems-body").evaluate((element) => element.getBoundingClientRect().top);
+
+        expect(await overview.isVisible()).toBe(false);
+        expect(await stats.count()).toBe(0);
+        expect(await backups.isVisible()).toBe(false);
+        expect(await bodyTop()).toBe(await toolbarBottom());
+
+        const show = page.getByRole("button", { name: "Show statistics" });
+        await show.click();
+        await stats.waitFor();
+        await backups.waitFor();
+        expect(await bodyTop()).toBeGreaterThan(await toolbarBottom());
+
+        // The choice survives leaving the page and overrides the width default.
+        await page.evaluate(() => {
+          window.openclawControlUi!.navigate("dashboards");
+        });
+        await expect.poll(() => page.locator("openclaw-systems-page").isVisible()).toBe(false);
+        await page.evaluate(() => {
+          window.openclawControlUi!.navigate("systems");
+        });
+        await stats.waitFor();
+
+        await page.getByRole("button", { name: "Hide statistics" }).click();
+        await expect.poll(() => stats.count()).toBe(0);
+        await page.setViewportSize({ width: 1280, height: 900 });
+        expect(await page.getByRole("button", { name: "Show statistics" }).isVisible()).toBe(true);
+        await backups.waitFor();
+      },
+    );
+  });
+
+  it("follows the viewport until the operator chooses", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
+      async ({ page }) => {
+        const gateway = await installSystemsGateway(page, 0);
+        await page.goto(suite.server.baseUrl + "systems");
+        const stats = page.locator(".systems-overview__telemetry");
+        await stats.waitFor();
+        await page.setViewportSize({ width: 390, height: 844 });
+        await expect.poll(() => stats.count()).toBe(0);
+        const samples = (await gateway.getRequests("system.info")).length;
+        // Let the shared 10-second sample expire while statistics are hidden.
+        await page.waitForTimeout(10_100);
+        await page.setViewportSize({ width: 1280, height: 900 });
+        await stats.waitFor();
+        // Revealing stats must request a fresh sample before the 15-second polling tick.
+        await expect
+          .poll(async () => (await gateway.getRequests("system.info")).length, { timeout: 2_000 })
+          .toBeGreaterThan(samples);
+      },
+    );
+  });
+
+  it("keeps search, filter and refresh reachable in the touch drawer", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { width: 390, height: 844 },
+        hasTouch: true,
+        isMobile: true,
+      },
+      async ({ page }) => {
+        const gateway = await installSystemsGateway(page, 0);
+        await page.goto(suite.server.baseUrl + "systems");
+        await gateway.waitForRequest("environments.list");
+        await page.getByRole("button", { name: "Expand sidebar", exact: true }).tap();
+        const inventory = page.locator(".systems-sidebar");
+        await inventory.getByRole("searchbox", { name: "Find a device…" }).waitFor();
+        await inventory.getByRole("button", { name: "Filter & sort devices" }).waitFor();
+        const refresh = inventory.getByRole("button", { name: "Refresh devices" });
+        await expect.poll(() => refresh.isEnabled()).toBe(true);
+        expect(await refresh.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
+        const reads = (await gateway.getRequests("environments.list")).length;
+        await refresh.tap();
+        await gateway.waitForRequest("environments.list", { after: reads });
+      },
+    );
+  });
+
   it("names Macs consistently and enables a discovered desktop without reconnecting", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1440, height: 900 } },
@@ -143,18 +410,18 @@ suite.define(() => {
         });
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
         expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
-        await inventory.getByRole("searchbox", { name: "Find a machine…" }).fill("macOS");
+        await inventory.getByRole("searchbox", { name: "Find a device…" }).fill("macOS");
         await expect.poll(() => inventory.locator(".systems-machine").count()).toBe(2);
         await page
           .locator(".systems-toolbar")
-          .getByRole("button", { name: "Machine details" })
+          .getByRole("button", { name: "Device details" })
           .click();
         expect(await page.locator(".systems-details dd").allTextContents()).toContain(
           "macOS 27.0.0",
         );
         const systemReads = (await gateway.getRequests("system.info")).length;
         await gateway.deferNext("system.info");
-        await inventory.getByRole("button", { name: "Refresh machines" }).click();
+        await inventory.getByRole("button", { name: "Refresh devices" }).click();
         await gateway.waitForRequest("system.info", { after: systemReads });
         await gateway.rejectDeferred("system.info", {
           code: "UNAVAILABLE",
@@ -305,11 +572,7 @@ suite.define(() => {
             .first();
           await row.waitFor();
           if (route === "dashboards") {
-            const showMore = page
-              .locator("openclaw-app-sidebar")
-              .getByRole("button", { name: "Show more" });
-            await showMore.click();
-            await showMore.click();
+            await expandSidebarSessions(scroller, 30);
             await revealSidebarTarget(
               scroller,
               page.locator('.sidebar-recent-session[data-session-key="agent:main:task-29"]'),
@@ -410,7 +673,7 @@ suite.define(() => {
         ],
       });
       await page.setViewportSize({ width: 1440, height: 900 });
-      await inventory.getByRole("button", { name: "Refresh machines" }).click();
+      await inventory.getByRole("button", { name: "Refresh devices" }).click();
       await expect.poll(() => inventory.locator(".systems-machine").count()).toBe(1);
       expect(await inventory.locator(".systems-group__count").allTextContents()).toEqual([]);
       await page.setViewportSize({ width: 640, height: 900 });
@@ -418,5 +681,41 @@ suite.define(() => {
     } finally {
       await context.close();
     }
+  });
+  it("reports the source and geometry of a layout shift", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      await page.setContent(
+        '<div id="moving" style="position:absolute;left:8px;top:8px;width:100px;height:40px">Probe</div>',
+      );
+      const paint = () =>
+        page.evaluate(
+          () =>
+            new Promise((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(resolve));
+            }),
+        );
+      await paint();
+      const shifts = await observeLayoutShifts(page);
+      await page.locator("#moving").evaluate((element) => {
+        element.style.top = "28px";
+      });
+      await paint();
+      const result = await shifts.evaluate((probe) => probe.read());
+      expect(result.entries[0]?.value).toBeGreaterThan(0);
+      expect(result.entries).toContainEqual({
+        startTime: expect.any(Number),
+        value: expect.any(Number),
+        hadRecentInput: expect.any(Boolean),
+        sources: [
+          {
+            node: "div#moving",
+            previousRect: { x: 8, y: 8, width: 100, height: 40 },
+            currentRect: { x: 8, y: 28, width: 100, height: 40 },
+          },
+        ],
+      });
+      await shifts.evaluate((probe) => probe.stop());
+      await shifts.dispose();
+    });
   });
 });

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   findGitRoot,
+  readGitBranchTrackingRemotes,
   readGitHead,
   readGitMetadataDirectories,
   readGitMetadataPrefix,
@@ -113,6 +114,27 @@ it("selects exact packed refs while preserving loose overrides and missing alias
     ["refs/tags/HEAD", null],
   ]);
   expect(readGitRefs(root, [...expected.keys()])).toEqual(expected);
+});
+
+it("selects literal branch remotes across loose and packed refs", async () => {
+  const value = "a".repeat(40);
+  const branch = "feature/release.v1+hotfix";
+  await write(at("refs/remotes/loose", branch), `${value}\n`);
+  await write(at("refs/remotes/nested/fork", branch), `${value}\n`);
+  await fs.writeFile(
+    at("packed-refs"),
+    [
+      "# pack-refs with: peeled fully-peeled sorted",
+      `${value} refs/openclaw/snapshots/retained`,
+      `${value} refs/remotes/packed/${branch}`,
+      `${value} refs/remotes/loose/${branch}`,
+      `${value} refs/remotes/ignored/feature/releaseXv11hotfix`,
+      `${value} refs/remotes/ignored/${branch}/child`,
+      `${value} refs/remotes/ignored/${branch}-extra`,
+      `^${value}`,
+    ].join("\n"),
+  );
+  expect(readGitBranchTrackingRemotes(root, branch)).toEqual(["loose", "nested/fork", "packed"]);
 });
 
 it("keeps short-read retries within the bounded metadata window", async () => {

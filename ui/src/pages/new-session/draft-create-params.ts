@@ -5,6 +5,15 @@ import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import type { DraftSessionCreateSelection } from "./create-params.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 
+/** The registered project this draft would create its session in, if any. */
+export function selectedDraftProjectId(
+  place: Pick<DraftPlaceState, "hostedEnvironment" | "browser">,
+): string | undefined {
+  return place.hostedEnvironment
+    ? undefined
+    : (place.browser.remoteProject?.projectId ?? place.browser.projectId) || undefined;
+}
+
 export function buildSelectedSessionCreateParams(
   place: DraftPlaceState,
   params: DraftSessionCreateSelection,
@@ -18,9 +27,8 @@ export function buildSelectedSessionCreateParams(
     contextWindow: place.modelControl.contextWindow,
     thinkingLevel: place.modelControl.thinkingLevel,
     fastMode: place.modelControl.fastMode,
-    projectId: place.hostedEnvironment
-      ? undefined
-      : (place.browser.remoteProject?.projectId ?? place.browser.projectId),
+    cyberAccessProgram: place.modelControl.accessProgramForSubmission(),
+    projectId: selectedDraftProjectId(place),
     projectGitUrl: place.hostedEnvironment ? undefined : place.browser.remoteProject?.cloneUrl,
     repository: place.remoteRepository,
     deviceFolder: place.deviceFolder,
@@ -79,9 +87,6 @@ export function buildSelectedSessionCreateParams(
       ? { mentions: draft.mentions.map((mention) => ({ ...mention })) }
       : {}),
     ...(displayName ? { displayName } : {}),
-    ...(displayName && draft.displayNameGenerated
-      ? { displayNameGenerated: draft.displayNameGenerated }
-      : {}),
     ...(titleSource ? { titleSource } : {}),
     ...(draft.visibility === "incognito" ? { incognito: true } : {}),
     ...(draft.visibility === "draft" ? { visibility: "draft" } : {}),
@@ -95,6 +100,9 @@ export function buildSelectedSessionCreateParams(
     ...(!catalogId && contextWindow ? { contextWindow } : {}),
     ...(!catalogId && thinkingLevel ? { thinkingLevel } : {}),
     ...(!catalogId && draft.fastMode !== undefined ? { fastMode: draft.fastMode } : {}),
+    ...(!catalogId && draft.cyberAccessProgram !== undefined
+      ? { cyberAccessProgram: draft.cyberAccessProgram }
+      : {}),
     ...(draft.toolOverrides ? { toolOverrides: draft.toolOverrides } : {}),
     ...(draft.permissionMode ? { permissionMode: draft.permissionMode } : {}),
     ...(projectId ? { projectId } : {}),

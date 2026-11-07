@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
+import { WIDGET_SIZE_CONFIRMATION_HTML } from "../canvas/wrap.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { KEYBOARD_SHORTCUT_MATCHER_SOURCE } from "../shared/keyboard-shortcuts.generated.js";
 import { COMMAND_PALETTE_SHORTCUTS } from "../shared/keyboard-shortcuts.js";
@@ -295,7 +296,8 @@ function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
   const serializedDocumentGuard = JSON.stringify(
     buildSandboxDocumentGuardHtml(blockDescendantFrames) +
       buildSandboxShortcutBridgeHtml() +
-      buildSandboxWidgetScrollBridgeHtml(),
+      buildSandboxWidgetScrollBridgeHtml() +
+      WIDGET_SIZE_CONFIRMATION_HTML,
   ).replaceAll("<", "\\u003c");
   return `<!doctype html>
 <meta charset="utf-8" />
@@ -373,6 +375,18 @@ function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
           inner.replaceWith(nextInner);
           inner = nextInner;
         }
+        return;
+      }
+      if (event.data?.method === "ui/notifications/sandbox-activation-query") {
+        // Transient activation reaches this frame only from input inside its own
+        // widget (activation propagates to ancestors), so the host can bind a
+        // widget request to a gesture in that widget. The widget cannot forge
+        // the answer: this proxy never relays its sandbox- notifications.
+        window.parent.postMessage({
+          jsonrpc: "2.0",
+          method: "ui/notifications/sandbox-activation",
+          params: { id: event.data.params?.id, active: navigator.userActivation?.isActive === true },
+        }, hostOrigin);
         return;
       }
       if (typeof event.data?.method === "string" && event.data.method.startsWith("ui/notifications/sandbox-")) return;

@@ -172,8 +172,13 @@ it("blocks offline retries and retries the search after reconnecting", async () 
   expect(originalSubmit?.disabled).toBe(true);
   retried.resolve(searchResponse([], { provider: "none", searchMode: "fts-only" }));
   await waitText("No memories matched");
-  expect(element.textContent).toContain("keyword search");
   expect(originalSubmit?.disabled).toBe(false);
+});
+
+it("counts one result in the singular and names the search mode", async () => {
+  request.mockResolvedValue(searchResponse([result], { provider: "none", searchMode: "fts-only" }));
+  search("Ada");
+  await waitText("1 result · keyword search");
 });
 
 it("shares pending and loaded files across matches while keeping each row's highlight", async () => {

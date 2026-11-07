@@ -293,7 +293,7 @@ describe("session workspace path actions", () => {
     assert(copy);
     copy.focus();
     copy.click();
-    await vi.waitFor(() => expect(copy.getAttribute("aria-label")).toBe("Copied!"));
+    await vi.waitFor(() => expect(copy.getAttribute("aria-label")).toBe("Copied"));
     loadSessionWorkspace(state, getSessionWorkspace(state), true);
     await vi.waitFor(() => expect(createSessionWorkspaceProps(state).loading).toBe(false));
     renderRows();
@@ -301,8 +301,8 @@ describe("session workspace path actions", () => {
       "README.md",
     );
     expect(document.activeElement).toBe(copy);
-    expect(container.querySelector('button[aria-label="Copied!"]')).toBe(copy);
-    expect(copy.parentElement?.querySelector('[role="status"]')?.textContent).toBe("Copied!");
+    expect(container.querySelector('button[aria-label="Copied"]')).toBe(copy);
+    expect(copy.parentElement?.querySelector('[role="status"]')?.textContent).toBe("Copied");
   });
 
   it("keeps Windows file labels readable and distinct", async () => {
@@ -346,7 +346,7 @@ describe("session workspace path actions", () => {
     expect(fileNames(mount)).toEqual([`ui${separator}index.ts`]);
   });
 
-  it("shows Copy failed when copying a session Files path", async () => {
+  it("shows Couldn’t copy. Try again. when copying a session Files path", async () => {
     const writeText = clipboard(
       vi.fn().mockRejectedValue(new DOMException("Clipboard access denied", "NotAllowedError")),
     );
@@ -374,11 +374,13 @@ describe("session workspace path actions", () => {
     expect(copy).toBeInstanceOf(HTMLButtonElement);
 
     copy!.click();
-    await vi.waitFor(() => expect(copy!.getAttribute("aria-label")).toBe("Copy failed"));
+    await vi.waitFor(() =>
+      expect(copy!.getAttribute("aria-label")).toBe("Couldn’t copy. Try again."),
+    );
 
     expect(writeText).toHaveBeenCalledWith("src/edited.ts");
     const feedback = copy!.parentElement?.querySelector<HTMLElement>('[role="status"]');
-    expect(feedback).toMatchObject({ textContent: "Copy failed", hidden: false });
+    expect(feedback).toMatchObject({ textContent: "Couldn’t copy. Try again.", hidden: false });
     expect(rowClick).not.toHaveBeenCalled();
     expect(onOpenFile).not.toHaveBeenCalled();
 
@@ -469,12 +471,12 @@ describe("session workspace path actions", () => {
     assert(chip, "Expected the selected Files filter to remain available");
     chip.click();
     expect(mount.querySelectorAll(".chat-workspace-rail__file-name")).toHaveLength(0);
-    expect(mount.textContent?.match(/No matching files\./g)).toHaveLength(1);
+    expect(mount.textContent?.match(/No files match your search\./g)).toHaveLength(1);
     expect(chip.getAttribute("aria-pressed")).toBe("true");
 
     search(mount, "");
     expect(fileNames(mount)).toHaveLength(restored);
-    expect(mount.textContent).not.toContain("No matching files.");
+    expect(mount.textContent).not.toContain("No files match your search.");
     expect(chip.getAttribute("aria-pressed")).toBe("true");
 
     search(mount, "NO-SUCH-FILE");
@@ -486,7 +488,7 @@ describe("session workspace path actions", () => {
     ]) {
       Object.assign(workspace, state);
       update();
-      expect(mount.textContent).not.toContain("No matching files.");
+      expect(mount.textContent).not.toContain("No files match your search.");
     }
     await waitForSolid(() => expect(mount.textContent).toContain(workspace.error));
   });
@@ -538,8 +540,42 @@ function setupDesktopLayout() {
   });
 }
 
-it("desktop browses lazy directories and restores activity after global search closes", async () => {
+it.each(["mobile", undefined] as const)(
+  "matches sigma forms in local Files groups (%s)",
+  async (presentation) => {
+    setupDesktopLayout();
+    const path = "ΕΛΕΓΧΟΣ/A  B.md";
+    const workspace = createWorkspace({
+      presentation,
+      list: {
+        files: [file(path)],
+        artifacts: [artifact("report", "ΕΛΕΓΧΟΣ")],
+      },
+      browserSearch: "Σ",
+      mobileNavigation: {
+        expandedGroups: { changed: true, read: true, artifacts: true, workspace: true },
+        scrollTop: 0,
+      },
+    });
+    const mounted = await mountWorkspace(workspace);
+    for (const query of ["Σ", "σ", "ς", "  Σ  "]) {
+      mounted.update({ ...workspace, browserSearch: query });
+      await waitForSolid(() => expect(button(mounted.container, path)).not.toBeNull());
+      expect(button(mounted.container, "ΕΛΕΓΧΟΣ")).not.toBeNull();
+    }
+    mounted.update({ ...workspace, browserSearch: "A  B.md" });
+    expect(button(mounted.container, path)).not.toBeNull();
+    mounted.update({ ...workspace, browserSearch: "A B.md" });
+    expect(button(mounted.container, path)).toBeNull();
+    mounted.unmount();
+  },
+);
+
+it("desktop browses lazy directories and restores activity after an incomplete search", async () => {
   setupDesktopLayout();
+  const incompleteNotice = "Search is incomplete. Some files may not appear in these results.";
+  const directoryNotice =
+    "Showing the first matching files. Refine your search to narrow the results.";
   const listFiles = vi.fn(
     async (_sessionKey: string, options?: { path?: string; search?: string }) => ({
       sessionKey: "agent:main:workspace",
@@ -551,10 +587,12 @@ it("desktop browses lazy directories and restores activity after global search c
       ],
       browser: {
         path: options?.path ?? "",
-        truncated: options?.path === "docs",
+        truncated: options?.search !== "absent",
         ...(options?.search ? { search: options.search } : {}),
         entries: options?.search
-          ? [{ path: "docs/read.md", name: "read.md", kind: "file" as const }]
+          ? options.search === "read"
+            ? [{ path: "docs/read.md", name: "read.md", kind: "file" as const }]
+            : []
           : options?.path === "docs"
             ? [{ path: "docs/untouched.md", name: "untouched.md", kind: "file" as const }]
             : [
@@ -580,9 +618,11 @@ it("desktop browses lazy directories and restores activity after global search c
     button(mounted.container, "docs")!.click();
     await vi.waitFor(() => expect(button(mounted.container, "docs/untouched.md")).not.toBeNull());
     expect(listFiles.mock.calls.map(([, options]) => options?.path)).toEqual(["", "docs"]);
-    expect(mounted.container.textContent).toContain(
-      "Showing the first matching files. Refine the search to narrow results.",
-    );
+    expect(
+      [
+        ...mounted.container.querySelectorAll(".workspace-desktop__project-scroll [role=status]"),
+      ].filter((node) => node.textContent === directoryNotice),
+    ).toHaveLength(2);
     const directory = getSessionWorkspace(state).directories!.docs!;
     directory.browser = {
       ...directory.browser!,
@@ -610,93 +650,51 @@ it("desktop browses lazy directories and restores activity after global search c
       ),
     );
     expect(getSessionWorkspace(state).filter).toBe("changed");
-    button(mounted.container, "Close file search")!.click();
+    await vi.waitFor(() =>
+      expect(mounted.queryByRole("button", { name: "Browse files" })).not.toBeNull(),
+    );
+    search(mounted.container, "different");
+    flush();
+    expect(
+      mounted.container.querySelector(".workspace-desktop__results")?.textContent,
+    ).not.toContain(incompleteNotice);
+    search(mounted.container, "read");
+    flush();
+    mounted.getByRole("button", { name: "Browse files" }).click();
     flush();
     expect(getSessionWorkspace(state).browserSearch).toBe("");
     expect(getSessionWorkspace(state).tree?.searchOpen).toBe(false);
     expect(getSessionWorkspace(state).tree?.expandedPaths).toContain("docs");
     expect(getSessionWorkspace(state).filter).toBe("changed");
+    await waitForSolid(() =>
+      expect(document.activeElement).toBe(button(mounted.container, "Search files")),
+    );
+    for (const [query, incomplete] of [
+      ["missing", true],
+      ["absent", false],
+    ] as const) {
+      button(mounted.container, "Search files")!.click();
+      flush();
+      search(mounted.container, query);
+      const results = () => mounted.container.querySelector(".workspace-desktop__results");
+      await vi.waitFor(() => {
+        expect(getSessionWorkspace(state).list?.browser?.search).toBe(query);
+        expect(results()?.textContent).toContain(
+          incomplete ? incompleteNotice : "No files match your search.",
+        );
+      });
+      expect(Boolean(mounted.queryByRole("button", { name: "Browse files" }))).toBe(incomplete);
+      if (incomplete) {
+        expect(results()?.textContent).not.toContain("No files match your search.");
+        mounted.getByRole("button", { name: "Browse files" }).click();
+      } else {
+        button(mounted.container, "Close file search")!.click();
+      }
+      flush();
+      expect(getSessionWorkspace(state).browserSearch).toBe("");
+    }
   } finally {
     unsubscribe();
-    mounted.unmount();
-  }
-});
-
-it("desktop distinguishes incomplete matching searches from empty complete results", async () => {
-  setupDesktopLayout();
-  const warning = "Showing the first matching files. Refine the search to narrow results.";
-  const navigation = {
-    browserPath: "",
-    browserSearch: "",
-    filter: "all" as const,
-    expandedPaths: ["", "docs"],
-    searchOpen: false,
-    sessionExpanded: true,
-    treeVisible: true,
-    treeScroll: 0,
-    sessionScroll: 0,
-  };
-  const workspace = createWorkspace({
-    presentation: "desktop",
-    navigation,
-    list: {
-      root: "/workspace",
-      files: [],
-      browser: { path: "", search: "report", entries: [], truncated: true },
-    },
-    directories: {
-      "": {
-        loading: false,
-        error: null,
-        browser: {
-          path: "",
-          entries: [{ path: "docs", name: "docs", kind: "directory" }],
-          truncated: true,
-        },
-      },
-      docs: {
-        loading: false,
-        error: null,
-        browser: { path: "docs", entries: [], truncated: true },
-      },
-    },
-  });
-  const mounted = await mountWorkspace(workspace);
-  try {
-    expect(
-      [
-        ...mounted.container.querySelectorAll(".workspace-desktop__project-scroll [role=status]"),
-      ].filter((node) => node.textContent === warning),
-    ).toHaveLength(2);
-    mounted.update({
-      ...workspace,
-      browserSearch: "different",
-      navigation: { ...navigation, searchOpen: true },
-    });
-    expect(
-      mounted.container.querySelector(".workspace-desktop__results")?.textContent,
-    ).not.toContain(warning);
-    mounted.update({
-      ...workspace,
-      browserSearch: "report",
-      navigation: { ...navigation, searchOpen: true },
-    });
-    const results = () =>
-      mounted.container.querySelector(".workspace-desktop__results")?.textContent;
-    expect(results()).toContain(warning);
-    expect(results()).not.toContain("No matching files.");
-    mounted.update({
-      ...workspace,
-      browserSearch: "report",
-      navigation: { ...navigation, searchOpen: true },
-      list: {
-        ...workspace.list!,
-        browser: { path: "", search: "report", entries: [] },
-      },
-    });
-    expect(results()).not.toContain(warning);
-    expect(results()).toContain("No matching files.");
-  } finally {
     mounted.unmount();
   }
 });
@@ -741,14 +739,18 @@ it("mobile restores folder search and root groups without mixing global search r
     browser: {
       path: options?.path ?? "",
       ...(options?.search ? { search: options.search } : {}),
-      entries: options?.search
-        ? [
-            { path: "docs/report.txt", name: "report.txt", kind: "file" as const, size: 1536 },
-            { path: "outside/report.txt", name: "report.txt", kind: "file" as const },
-          ]
-        : options?.path === "docs"
-          ? [{ path: "docs/report.txt", name: "report.txt", kind: "file" as const, size: 1536 }]
-          : [{ path: "docs", name: "docs", kind: "directory" as const }],
+      truncated: Boolean(options?.search) && options?.search !== "absent",
+      entries:
+        options?.search === "docs/report.txt" || options?.search === "absent"
+          ? []
+          : options?.search
+            ? [
+                { path: "docs/report.txt", name: "report.txt", kind: "file" as const, size: 1536 },
+                { path: "outside/report.txt", name: "report.txt", kind: "file" as const },
+              ]
+            : options?.path === "docs"
+              ? [{ path: "docs/report.txt", name: "report.txt", kind: "file" as const, size: 1536 }]
+              : [{ path: "docs", name: "docs", kind: "directory" as const }],
     },
   }));
   const state: SessionWorkspaceHost = createSessionWorkspaceHost({
@@ -804,4 +806,28 @@ it("mobile restores folder search and root groups without mixing global search r
   expect(searchInput(mounted.container).value).toBe("report");
   expect(button(mounted.container, "docs/report.txt")).not.toBeNull();
   expect(button(mounted.container, "outside/report.txt")).toBeNull();
+  for (const query of ["report", "docs/report.txt"]) {
+    search(mounted.container, query);
+    await vi.advanceTimersByTimeAsync(160);
+    await ready();
+    expect(mounted.container.textContent).toContain(
+      "Search is incomplete. Some files may not appear in these results.",
+    );
+    expect(mounted.container.textContent).not.toContain("No files match your search.");
+    expect(Boolean(button(mounted.container, "docs/report.txt"))).toBe(query === "report");
+    mounted.getByRole("button", { name: "Browse files" }).click();
+    await ready();
+    expect(searchInput(mounted.container).value).toBe("");
+    expect(document.activeElement).toBe(searchInput(mounted.container));
+    expect(getSessionWorkspace(state).browserPath).toBe("docs");
+    expect(getSessionWorkspace(state).tree?.searchOpen).toBe(false);
+    expect(button(mounted.container, "docs/report.txt")).not.toBeNull();
+    expect(button(mounted.container, "outside/report.txt")).toBeNull();
+    expect(mounted.queryByRole("button", { name: "Browse files" })).toBeNull();
+  }
+  search(mounted.container, "absent");
+  await vi.advanceTimersByTimeAsync(160);
+  await ready();
+  expect(mounted.container.textContent).toContain("No files match your search.");
+  expect(mounted.queryByRole("button", { name: "Browse files" })).toBeNull();
 });

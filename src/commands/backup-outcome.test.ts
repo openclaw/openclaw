@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
@@ -153,7 +154,7 @@ it.each(["accepted", "reply-lost", "refused"])(
     await backupRecordCommand(runtime, { status: "ok", target: "host-restic", bytes: 42 });
     expect(transport.call).toHaveBeenCalledTimes(1);
     if (outcome === "refused") {
-      expect(await fs.readFile(databasePath)).toEqual(before);
+      expectBytesEqual(await fs.readFile(databasePath), before!, "refused backup database");
       expect(await readBackupRuns(process.env)).toEqual([]);
     } else {
       expect(await readBackupRuns(process.env)).toEqual([

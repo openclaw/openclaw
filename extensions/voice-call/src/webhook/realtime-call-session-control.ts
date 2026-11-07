@@ -15,6 +15,7 @@ const OUTBOUND_GREETING_FALLBACK_MS = 3_000;
 export const REALTIME_MEDIA_INACTIVITY_TIMEOUT_MS = 30_000;
 export const REALTIME_DISCONNECT_HANGUP_GRACE_MS = 2_000;
 const ASSISTANT_SPEECH_RMS_THRESHOLD = 0.035;
+const ASSISTANT_ECHO_TAIL_MS = 400;
 
 export type RealtimeCallControlResult = {
   success: boolean;
@@ -278,10 +279,21 @@ export function createRealtimeCallAudioController(params: {
   harness: RealtimeVoiceSessionHarness;
   isOpen: () => boolean;
   isBlocked?: () => boolean;
+  isOpening?: () => boolean;
   onAudibleOutput?: () => void;
   pendingMarkAcks: Map<string, () => void>;
   providerCallId: string;
 }) {
+  let callerSpeechDetected = false;
+  let greetingPending = true;
+  let greetingResponseDone = false;
+  const isGreetingPlaying = (): boolean => {
+    const playing = params.harness.talk.outputAudioActive || params.audioPacer.hasPlaybackAudio(0);
+    if (greetingResponseDone && !playing) {
+      greetingPending = false;
+    }
+    return greetingPending && params.isOpening?.() === true && playing;
+  };
   const cancelOutputAudioForBargeIn = (
     source: "local" | "provider",
     interruptProvider?: (audioPlaybackActive: boolean) => void,
@@ -323,6 +335,8 @@ export function createRealtimeCallAudioController(params: {
       if (params.isBlocked?.()) {
         return;
       }
+      // Retire a drained opening before admitting audio for a later response.
+      isGreetingPlaying();
       // Silent model frames do not count as the assistant speaking.
       if (muLaw.length > 0 && calculateMulawRms(muLaw) >= ASSISTANT_SPEECH_RMS_THRESHOLD) {
         params.onAudibleOutput?.();
@@ -332,9 +346,14 @@ export function createRealtimeCallAudioController(params: {
     },
     getPlaybackState: () => params.audioPacer.getPlaybackState(),
     clearAudio: (reason) => {
+      if (reason === "barge-in" && isGreetingPlaying()) {
+        return;
+      }
       params.harness.flushOutput(() => {
+        greetingPending = false;
         const clearedBytes = params.audioPacer.clearAudio();
         if (reason === "barge-in") {
+          callerSpeechDetected = true;
           cancelOutputAudioForBargeIn("provider", undefined, clearedBytes);
           return;
         }
@@ -351,5 +370,25 @@ export function createRealtimeCallAudioController(params: {
       }
     },
   };
-  return { audioSink, cancelOutputAudioForBargeIn };
+  return {
+    audioSink,
+    cancelOutputAudioForBargeIn,
+    isGreetingPlaying,
+    finishGreeting: () => {
+      if (params.isOpening?.()) {
+        greetingResponseDone = true;
+      }
+    },
+    noteCallerSpeech: () => {
+      callerSpeechDetected = true;
+    },
+    acceptUserTranscript(isFinal: boolean) {
+      const accept =
+        !isGreetingPlaying() &&
+        (callerSpeechDetected || !params.audioPacer.hasPlaybackAudio(ASSISTANT_ECHO_TAIL_MS));
+      // Keep a caller who started before playback eligible until their final arrives.
+      callerSpeechDetected = accept && !isFinal;
+      return accept;
+    },
+  };
 }

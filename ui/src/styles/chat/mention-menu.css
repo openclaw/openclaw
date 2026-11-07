@@ -21,12 +21,6 @@
   visibility: visible;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .mention-menu__loading .skeleton::after {
-    animation: none;
-  }
-}
-
 .cmd-palette__mentions {
   flex: 0 0 auto;
   min-width: 0;

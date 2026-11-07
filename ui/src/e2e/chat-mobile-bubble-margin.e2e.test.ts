@@ -37,8 +37,13 @@ function expectActivityEdges(margin: Margin, label: string) {
 }
 
 suite.define(() => {
-  // Retain four-case media isolation while sharing each app boot within the batch.
-  const casesPerPage = 4;
+  // Preserve each video case's fresh-page boundary; share the later non-video cases.
+  const caseBatches = [
+    marginCases.slice(0, 4),
+    marginCases.slice(4, 8),
+    marginCases.slice(8, 16),
+    marginCases.slice(16),
+  ];
   let context: BrowserContext;
   let page: Page;
   let pageBatch = -1;
@@ -80,7 +85,7 @@ suite.define(() => {
   it.each(marginCases)(
     "preserves $id gutters across viewports and themes, restoring desktop geometry",
     async (testCase) => {
-      const batch = Math.floor(marginCases.indexOf(testCase) / casesPerPage);
+      const batch = caseBatches.findIndex((cases) => cases.includes(testCase));
       await page.setViewportSize({ width: 1440, height: 1200 });
       await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce" });
       if (batch !== pageBatch) {
@@ -89,7 +94,7 @@ suite.define(() => {
           page = await context.newPage();
         }
         pageBatch = batch;
-        const cases = marginCases.slice(batch * casesPerPage, (batch + 1) * casesPerPage);
+        const cases = caseBatches[batch]!;
         await installMockGateway(page, {
           ...marginScenario(testCase),
           sessions: cases.map((entry) => createControlUiSessionRow(sessionKey(entry), entry.id, 1)),
@@ -141,7 +146,11 @@ suite.define(() => {
           "false",
         );
       }
-      for (const theme of ["light", "dark"] as const) {
+      // Both themes use the same geometry; cover each viewport and theme once.
+      for (const [theme, width] of [
+        ["light", 390],
+        ["dark", 430],
+      ] as const) {
         await page.emulateMedia({ colorScheme: theme });
         await expectBrowser(page.locator("html")).toHaveAttribute("data-theme-mode", theme);
         if (testCase.id === "user-video" || testCase.id === "user-mixed") {
@@ -182,67 +191,65 @@ suite.define(() => {
           );
         }
         const desktop = await measure();
-        for (const width of [390, 430]) {
-          const label = `${testCase.id} at ${width} px in ${theme}`;
-          const pollMargin = <T>(project: (margin: Margin) => T) =>
-            expect.poll(async () => project(await measure()), { message: label });
-          await resizeMarginViewport(page, width);
-          if (testCase.selector === ".chat-session-activity") {
-            const activity = activePane.locator(".chat-thread .chat-session-activity");
-            const chevron = activity.locator("summary .chat-session-activity__chevron");
-            await expectBrowser(activity.locator("summary"), label).toBeVisible();
-            await expectBrowser(activity.locator(".chat-bubble"), label).toHaveCount(0);
-            const collapsed = await measure();
-            expectActivityEdges(collapsed, label);
-            await chevron.click();
-            await expectBrowser(activity.locator(".chat-bubble"), label).toBeVisible();
-            await expectBrowser(
-              activity.locator(".chat-message-disclosure__toggle"),
-              label,
-            ).toHaveCount(0);
-            const expanded = await measure();
-            expectActivityEdges(expanded, label);
-            expect(expanded.height, label).toBeGreaterThan(collapsed.height);
-            expect(expanded.overflow, label).toBe(0);
-            expectMediaInside(expanded, label);
-            await chevron.click();
-            await expectBrowser(activity, label).toHaveJSProperty("open", false);
-            await expectBrowser(activity.locator(".chat-bubble"), label).toHaveCount(0);
-          } else if (!("excluded" in testCase)) {
-            const mobile = await vi.waitFor(
-              async () => {
-                const box = await measure();
-                expect(box.open - box.columnWidth * 0.1, label).toBeGreaterThanOrEqual(-1);
-                expect(box.closed, label).toBeCloseTo(testCase.id === "user-audio" ? 17 : 0, 0);
-                return box;
-              },
-              { interval: 100, timeout: 15_000 },
-            );
-            if (imageSize) {
-              const expectedWidth = Math.min(imageSize.width, mobile.columnWidth * 0.9);
-              expect(mobile, label).toMatchObject({
-                width: expect.closeTo(expectedWidth, 1),
-                height: expect.closeTo((expectedWidth * imageSize.height) / imageSize.width, 1),
-              });
-            }
-            expectMediaInside(mobile, label);
-            const toggle = activePane.locator(".chat-message-disclosure__toggle");
-            if (await toggle.count()) {
-              await toggle.first().click();
-              const expanded = await measure();
-              expect(expanded.open, label).toBeGreaterThanOrEqual(expanded.columnWidth * 0.1 - 1);
-              await toggle.first().click();
-            }
+        const label = `${testCase.id} at ${width} px in ${theme}`;
+        const pollMargin = <T>(project: (margin: Margin) => T) =>
+          expect.poll(async () => project(await measure()), { message: label });
+        await resizeMarginViewport(page, width);
+        if (testCase.selector === ".chat-session-activity") {
+          const activity = activePane.locator(".chat-thread .chat-session-activity");
+          const chevron = activity.locator("summary .chat-session-activity__chevron");
+          await expectBrowser(activity.locator("summary"), label).toBeVisible();
+          await expectBrowser(activity.locator(".chat-bubble"), label).toHaveCount(0);
+          const collapsed = await measure();
+          expectActivityEdges(collapsed, label);
+          await chevron.click();
+          await expectBrowser(activity.locator(".chat-bubble"), label).toBeVisible();
+          await expectBrowser(
+            activity.locator(".chat-message-disclosure__toggle"),
+            label,
+          ).toHaveCount(0);
+          const expanded = await measure();
+          expectActivityEdges(expanded, label);
+          expect(expanded.height, label).toBeGreaterThan(collapsed.height);
+          expect(expanded.overflow, label).toBe(0);
+          expectMediaInside(expanded, label);
+          await chevron.click();
+          await expectBrowser(activity, label).toHaveJSProperty("open", false);
+          await expectBrowser(activity.locator(".chat-bubble"), label).toHaveCount(0);
+        } else if (!("excluded" in testCase)) {
+          const mobile = await vi.waitFor(
+            async () => {
+              const box = await measure();
+              expect(box.open - box.columnWidth * 0.1, label).toBeGreaterThanOrEqual(-1);
+              expect(box.closed, label).toBeCloseTo(testCase.id === "user-audio" ? 17 : 0, 0);
+              return box;
+            },
+            { interval: 100, timeout: 15_000 },
+          );
+          if (imageSize) {
+            const expectedWidth = Math.min(imageSize.width, mobile.columnWidth * 0.9);
+            expect(mobile, label).toMatchObject({
+              width: expect.closeTo(expectedWidth, 1),
+              height: expect.closeTo((expectedWidth * imageSize.height) / imageSize.width, 1),
+            });
           }
-          await resizeMarginViewport(page, 1440);
-          await pollMargin((restored) =>
-            Math.max(
-              ...(["x", "y", "width", "height"] as const).map((key) =>
-                Math.abs(restored[key] - desktop[key]),
-              ),
-            ),
-          ).toBeLessThanOrEqual(0.5);
+          expectMediaInside(mobile, label);
+          const toggle = activePane.locator(".chat-message-disclosure__toggle");
+          if (await toggle.count()) {
+            await toggle.first().click();
+            const expanded = await measure();
+            expect(expanded.open, label).toBeGreaterThanOrEqual(expanded.columnWidth * 0.1 - 1);
+            await toggle.first().click();
+          }
         }
+        await resizeMarginViewport(page, 1440);
+        await pollMargin((restored) =>
+          Math.max(
+            ...(["x", "y", "width", "height"] as const).map((key) =>
+              Math.abs(restored[key] - desktop[key]),
+            ),
+          ),
+        ).toBeLessThanOrEqual(0.5);
       }
     },
   );

@@ -402,7 +402,7 @@ export function applyConfiguredProviderOverrides(params: {
     return undefined;
   }
   const configuredStaticCatalogModel =
-    configuredModel || !discoveredModel
+    configuredModel || !discoveredModel || discoveredModel.maxTokensSource === "configured"
       ? (params.staticCatalogModel ?? params.getStaticCatalogModel?.())
       : undefined;
   const metadataOverrideModel =
@@ -528,7 +528,14 @@ export function applyConfiguredProviderOverrides(params: {
     resolvedMaxTokens,
     contextWindow,
   );
-  let catalogModel = params.staticCatalogModel ?? discoveredModel ?? configuredStaticCatalogModel;
+  // Output-limit provenance does not confer ownership of route capabilities.
+  // Resolve the catalog donor for configured rows instead of losing its defaults.
+  let catalogModel =
+    params.staticCatalogModel ??
+    (discoveredModel?.maxTokensSource === "configured"
+      ? configuredStaticCatalogModel
+      : discoveredModel) ??
+    configuredStaticCatalogModel;
   let hasCatalogOwnedModel = discoveredModel
     ? configuredStaticCatalogModel !== undefined || discoveredModel.maxTokensSource !== "configured"
     : configuredStaticCatalogModel !== undefined;

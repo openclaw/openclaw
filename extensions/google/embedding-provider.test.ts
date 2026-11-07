@@ -428,7 +428,7 @@ describe("Gemini embedding provider", () => {
     const fetchMock = installAxisVectorFetchMock(768);
     const { provider } = await createProvider();
 
-    await provider.embed("find this", { inputType: "query" });
+    await provider.embed("find this", { inputType: "query", documentFormatApplied: true });
     await provider.embed("custom: find this", {
       inputType: "query",
       queryInstructionApplied: true,
@@ -452,6 +452,26 @@ describe("Gemini embedding provider", () => {
       stableRequest("title: none | text: remember this", true),
     );
   });
+
+  it.each([
+    [undefined, "remember this", "title: none | text: remember this"],
+    [true, "remember this", "remember this"],
+    [true, "passage: remember this", "passage: remember this"],
+  ] as const)(
+    "preserves explicit document format %s for %s through single and synchronous batch calls",
+    async (documentFormatApplied, text, expectedText) => {
+      const fetchMock = installAxisVectorFetchMock(768);
+      const { provider } = await createProvider();
+      const options = { inputType: "document" as const, documentFormatApplied };
+
+      await provider.embed(text, options);
+      await provider.embedBatch([text], options);
+
+      for (const index of [0, 1]) {
+        expect(fetchJsonBody(fetchMock, index)).toEqual(stableRequest(expectedText, true));
+      }
+    },
+  );
 
   it.each([
     ["QUESTION_ANSWERING", "question answering"],

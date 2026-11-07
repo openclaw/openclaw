@@ -1,4 +1,5 @@
 import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
+import { copyChannelSourceTurnContext } from "../../auto-reply/reply/source-turn-id.js";
 import { readRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { hasInternalHookListeners } from "../../hooks/internal-hooks.js";
 import { prepareActiveNodeContext } from "../../infra/active-node-context.js";
@@ -13,6 +14,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
 import {
+  assertOperatorAccessProgramAllowed,
   assertOperatorModelAllowed,
   bindOperatorModelExecution,
   readRunOperatorAuthority,
@@ -27,6 +29,7 @@ import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../embedded-agent-runner/run/types.js";
+import { resolveAgentHarnessOperatorPolicyError } from "../operator-access-program.js";
 import {
   unwrapModelHeaderSentinelsForProviderEgress,
   unwrapSecretSentinelsForProviderEgress,
@@ -181,13 +184,16 @@ export async function runAgentHarnessSettledTurnFinalization(
       },
       builtIn,
     );
+    const { withPreparedEmbeddedRunToolAuthority } = await import("./tool-authority.runtime.js");
     const result = await runAgentHarnessOperation(harness, params, () =>
       runWithAgentRingZeroTools([], () =>
-        runAgentHarnessLifecycleFinalization(harness, attemptParams, () => {
-          assertHarnessModelPolicySupport(harness, params);
-          modelExecution?.assertCurrent();
-          return finalizeSettledTurn({ attempt: attemptParams, settledAttempt });
-        }),
+        withPreparedEmbeddedRunToolAuthority(internalParams, attemptParams, undefined, (prepared) =>
+          runAgentHarnessLifecycleFinalization(harness, prepared, () => {
+            assertHarnessModelPolicySupport(harness, params);
+            modelExecution?.assertCurrent();
+            return finalizeSettledTurn({ attempt: prepared, settledAttempt });
+          }),
+        ),
       ),
     );
     modelExecution?.assertCurrent();
@@ -198,12 +204,13 @@ export async function runAgentHarnessSettledTurnFinalization(
 }
 
 export async function runAgentHarnessAttempt(
-  params: EmbeddedRunAttemptParams,
+  params: EmbeddedRunAttemptInternalParams,
   nativeSessionRuntime?: import("../embedded-agent-runner/run/model-setup.js").PreparedNativeSessionRuntime,
 ): Promise<EmbeddedRunAttemptResult> {
-  let internalParams = params as EmbeddedRunAttemptParams & {
+  assertOperatorAccessProgramAllowed(readRunOperatorAuthority(params), params.cyberAccessProgram);
+  let internalParams: EmbeddedRunAttemptInternalParams & {
     systemAgentTool?: SystemAgentToolOptions;
-  };
+  } = params;
   if (nativeSessionRuntime) {
     await nativeSessionRuntime.assertCurrent();
   } else {
@@ -305,6 +312,10 @@ export async function runAgentHarnessAttempt(
             }
           }
           attempt.hostCapabilities?.assertActive();
+          assertOperatorAccessProgramAllowed(
+            readRunOperatorAuthority(params),
+            params.cyberAccessProgram,
+          );
           return harness.runAttempt(attempt);
         },
       );
@@ -429,9 +440,19 @@ export async function runAgentHarnessAttempt(
           );
           // Load the calculator only after admission and final host policy preparation.
           return import("./tool-authority.runtime.js").then(
-            ({ withPreparedEmbeddedRunToolAuthority }) =>
-              withPreparedEmbeddedRunToolAuthority(
-                { ...internalParams, queueInputAdapter },
+            ({ withPreparedEmbeddedRunToolAuthority }) => {
+              const toolAuthorityParams = {
+                admittedRunContext: internalParams.admittedRunContext,
+                replyOperation: internalParams.replyOperation,
+                sessionPersistence: internalParams.sessionPersistence,
+                trigger: internalParams.trigger,
+                bindWatchdogAttempt: internalParams.bindWatchdogAttempt,
+                joinObservation: internalParams.joinObservation,
+                queueInputAdapter,
+              };
+              copyChannelSourceTurnContext(toolAuthorityParams, internalParams);
+              return withPreparedEmbeddedRunToolAuthority(
+                toolAuthorityParams,
                 effectiveAttemptParams,
                 selection.builtIn
                   ? undefined
@@ -454,7 +475,8 @@ export async function runAgentHarnessAttempt(
                         : input;
                     },
                 (prepared) => pluginAttempt.runWithHostScope(() => runPreparedAttempt(prepared)),
-              ),
+              );
+            },
           );
         }),
       );
@@ -499,14 +521,11 @@ export async function runAgentHarnessAttempt(
 function assertHarnessModelPolicySupport(harness: AgentHarness, params: EmbeddedRunAttemptParams) {
   const authority = readRunOperatorAuthority(params);
   authority?.assertCurrent();
-  if (
-    !isBuiltInOpenClawAgentHarness(harness) &&
-    authority?.modelPolicy &&
-    harness.nativeModelPolicySupport !== "exact"
-  ) {
-    throw new AgentHarnessPreflightError(
-      `Agent harness ${harness.id} cannot enforce your operator role's model policy. Choose a compatible runtime or ask a gateway administrator to update the harness.`,
-    );
+  const error = !isBuiltInOpenClawAgentHarness(harness)
+    ? resolveAgentHarnessOperatorPolicyError(harness, authority)
+    : undefined;
+  if (error) {
+    throw new AgentHarnessPreflightError(error);
   }
   return authority;
 }
@@ -516,13 +535,16 @@ async function runAgentHarnessOperation<T>(
   params: EmbeddedRunAttemptParams,
   execute: () => Promise<T>,
 ): Promise<T> {
-  await prepareActiveNodeContext(readRunOperatorAuthority(params)?.profileId);
+  const builtIn = isBuiltInOpenClawAgentHarness(harness);
+  // Embedded prompt assembly refreshes this at consumption; plugin host capabilities need it here.
+  if (!builtIn) {
+    await prepareActiveNodeContext(readRunOperatorAuthority(params)?.profileId);
+  }
   resolveAdmittedRunActiveAssertion(params.admittedRunContext, params.abortSignal)?.();
   const activeTrace = getActiveDiagnosticTraceContext();
   const harnessTrace = freezeDiagnosticTraceContext(
     activeTrace ? createChildDiagnosticTraceContext(activeTrace) : createDiagnosticTraceContext(),
   );
-  const builtIn = isBuiltInOpenClawAgentHarness(harness);
   try {
     return await runWithDiagnosticTraceContext(harnessTrace, execute);
   } catch (error) {

@@ -12,7 +12,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Chat without assistant text" });
 
 suite.define(() => {
-  it("shows tool activity and a message wait without an empty assistant reply", async () => {
+  it("shows tool activity and speaks a message wait's acknowledgment without an empty reply", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         sessionKey: "agent:main:slack:group:empty-reply",
@@ -41,8 +41,13 @@ suite.define(() => {
       const screenshot = path.join(suite.artifactDir, "chat.png");
       await writeFile(screenshot, frame.png);
       console.log(`Screenshot: ${screenshot}`);
-      expect(await thread.locator(".chat-group.assistant").count()).toBe(0);
-      await thread.getByText(emptyAssistantAcknowledgment, { exact: true }).waitFor();
+      // The acknowledgment is the only assistant text, spoken by the run that waits.
+      await thread
+        .locator(".chat-group.assistant .chat-text")
+        .getByText(emptyAssistantAcknowledgment, { exact: true })
+        .waitFor();
+      expect(await thread.locator(".chat-group.assistant").count()).toBe(1);
+      expect(await thread.locator(".chat-notice").count()).toBe(0);
       expect(await thread.textContent()).not.toContain("PRIVATE_CONTINUATION");
     });
   });

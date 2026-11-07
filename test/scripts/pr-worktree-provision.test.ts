@@ -89,8 +89,8 @@ describePosix("native PR source provisioning", () => {
 import { registerHooks } from "node:module";
 if (process.argv[1]?.endsWith("/worktree-provision.mts")) {
   registerHooks({ load(url, context, nextLoad) {
-    if (url.endsWith("/src/config/config.ts")) {
-      throw new Error("Native Git provisioning must not load acceleration configuration.");
+    if (url.endsWith("/src/config/config.ts") || url.endsWith("/src/agents/worktrees/checkout.ts")) {
+      throw new Error("Native Git provisioning must not load the acceleration implementation.");
     }
     return nextLoad(url, context);
   } });
@@ -332,7 +332,7 @@ ${changeLock}
 
       const result = f.run("review-init");
       expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("PR operation lock changed or is unreadable");
+      expect(result.stderr).toContain("PR operation lock check failed (status=1, signal=null)");
       expectSeed(f);
       expect(readFileSync(join(f.worktree, "src", "subject.ts"), "utf8")).toBe(
         "hook-owned state after lock loss\n",

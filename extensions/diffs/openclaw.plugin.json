@@ -230,5 +230,9 @@
         }
       }
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Help me get standalone diff artifacts ready.",
+    "Turn my before-and-after text or patch into a diff artifact without changing the source."
+  ]
 }

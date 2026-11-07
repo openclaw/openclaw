@@ -22,6 +22,22 @@ export const leaseHeartbeatState = {
   lost: 3n,
 } as const;
 
+export function createLeaseHeartbeatState(): BigInt64Array<SharedArrayBuffer> {
+  return new BigInt64Array(
+    new SharedArrayBuffer((leaseHeartbeatState.ownerFence + 1) * BigInt64Array.BYTES_PER_ELEMENT),
+  );
+}
+
+// A heartbeat may not have started yet; retain the last confirmed acquisition expiry.
+export function readLeaseHeartbeatExpiry(
+  observation: BigInt64Array<SharedArrayBuffer> | undefined,
+  confirmedExpiresAt: number | undefined,
+): number | undefined {
+  return observation && confirmedExpiresAt !== undefined
+    ? Math.max(confirmedExpiresAt, Number(Atomics.load(observation, leaseHeartbeatState.expiresAt)))
+    : confirmedExpiresAt;
+}
+
 // Startup observations never grant readiness or lease authority.
 export const leaseHeartbeatStartupPhase = {
   "entry-not-observed": 0n,
@@ -47,9 +63,11 @@ export type LeaseHeartbeatLoss = {
 };
 
 export type LeaseHeartbeatWorkerData = {
-  postgresPool?: import("../infra/postgres-sync/pool.js").PostgresPoolEndpoints;
+  postgresPool?: import("../infra/postgres-sync/pool-state.js").PostgresPoolEndpoints;
   databaseEngineSelection?: DatabaseEngineSelection;
   databaseAdmissionPort: MessagePort;
+  /** First loss is queued before shared liveness changes, including while the parent is blocked. */
+  lossPort: MessagePort;
   path: string;
   expectedIdentity: string;
   /** The actor's startup operations settle before this worker begins renewal. */
@@ -73,7 +91,6 @@ export type LeaseHeartbeatParentMessage = LeaseHeartbeatRequest | { startup: "ac
 
 export type LeaseHeartbeatReply =
   | LeaseHeartbeatRenewalFailure
-  | { loss: LeaseHeartbeatLoss }
   | { startup: "prepared" }
   | { id: number; ok: true; expiresAt: number }
   | { id: number; ok: false; message: string; payload?: OpenClawStateWorkerErrorPayload };

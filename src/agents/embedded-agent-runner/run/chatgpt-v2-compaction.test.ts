@@ -140,6 +140,23 @@ const highUsageCompletion = {
     usage: { ...terminal.response.usage, input_tokens: 465_668, total_tokens: 465_674 },
   },
 };
+function respondWithToolTurn(reportHighUsage = false) {
+  let normal = 0;
+  let compacted = 0;
+  respond = (body) => {
+    if (body.input.at(-1)?.type === "compaction_trigger") {
+      return compactEvents(++compacted);
+    }
+    if (++normal !== 1) {
+      return textEvents();
+    }
+    const events = toolEvents();
+    if (reportHighUsage && !compacted) {
+      events[events.length - 1] = highUsageCompletion;
+    }
+    return events;
+  };
+}
 function requestAt(index: number) {
   const request = requests[index];
   if (!request) {
@@ -314,14 +331,7 @@ const realUserText = (body: Body) =>
 describe("ChatGPT V2 at the embedded normal request boundary", () => {
   it("compacts preflight and settled tool turns through the live stack without reexecuting tools", async () => {
     const f = await fixture();
-    let normal = 0;
-    let compacted = 0;
-    respond = (body) =>
-      body.input.at(-1)?.type === "compaction_trigger"
-        ? compactEvents(++compacted)
-        : ++normal === 1
-          ? toolEvents()
-          : textEvents();
+    respondWithToolTurn();
     await f.submit();
     expect(f.onFallback).not.toHaveBeenCalled();
     expect(f.execute).toHaveBeenCalledOnce();
@@ -392,22 +402,7 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
       content: [{ type: "text", text: "large tool output. ".repeat(16_000) }],
       details: {},
     });
-    let normal = 0;
-    let compacted = false;
-    respond = (body) => {
-      if (body.input.at(-1)?.type === "compaction_trigger") {
-        compacted = true;
-        return compactEvents(1);
-      }
-      if (++normal !== 1) {
-        return textEvents();
-      }
-      const events = toolEvents();
-      if (!compacted) {
-        events[events.length - 1] = highUsageCompletion;
-      }
-      return events;
-    };
+    respondWithToolTurn(true);
     await f.submit();
     expect(f.onFallback).not.toHaveBeenCalled();
     expect(f.execute).toHaveBeenCalledOnce();

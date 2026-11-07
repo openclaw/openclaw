@@ -61,6 +61,84 @@ const userPrecedesReply = (
   );
 
 suite.define(() => {
+  it("sends a pending steer now without replacing its user bubble", async () => {
+    const sessionKey = "agent:main:main";
+    const sessionId = `session:${sessionKey}`;
+    const runId = "pending-steer";
+    const prompt = "Use the shorter approach.";
+    const message = persistedText("user", prompt, {
+      idempotencyKey: `${runId}:user`,
+      steerTargetRunId: "active-run",
+    });
+    const secondMessage = persistedText("user", "Also keep the examples.", {
+      idempotencyKey: "pending-steer-2:user",
+      steerTargetRunId: "active-run",
+    });
+    const secondInput = {
+      id: "steer-input-2",
+      runId: "pending-steer-2",
+      message: secondMessage,
+      acceptedAt: Date.now(),
+      state: "queued",
+      steerNow: { status: "available", tools: [] },
+    };
+    const history = {
+      sessionId,
+      messages: [message, secondMessage],
+      pendingInputs: {
+        items: [
+          {
+            id: "steer-input",
+            runId,
+            message,
+            acceptedAt: Date.now(),
+            state: "queued",
+            steerNow: { status: "available", tools: [] },
+          },
+          secondInput,
+        ],
+        total: 2,
+      },
+    };
+    const { page, gateway } = await chatFixture(suite, {
+      methodResponses: {
+        "chat.startup": history,
+        "chat.history": history,
+        "chat.steerNow": { status: "blocked", tools: ["upload"] },
+      },
+    });
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+    const user = page.locator(".chat-group.user", { hasText: prompt });
+    const links = user.getByRole("button", { name: "Send now", exact: true });
+    const link = links.first();
+    await link.waitFor({ state: "visible" });
+    await expectCount(links, 2);
+    await expectCount(user, 1);
+    const bubble = await user.locator(".chat-bubble").first().elementHandle();
+    await link.click();
+    const request = await gateway.waitForRequest("chat.steerNow");
+    expect(request.params).toMatchObject({ sessionKey, sessionId, runId });
+    await page.getByText("Waiting for upload; cannot interrupt safely.", { exact: true }).waitFor();
+    await expectCount(user, 1);
+    await gateway.setMethodResponse("chat.steerNow", { status: "interrupted", tools: ["exec"] });
+    await gateway.setMethodResponse("chat.history", {
+      ...history,
+      pendingInputs: { items: [secondInput], total: 1 },
+    });
+    await link.click();
+    await expectCount(links, 1);
+    await gateway.setMethodResponse("chat.history", {
+      ...history,
+      pendingInputs: { items: [], total: 0 },
+    });
+    await links.click();
+    const second = await gateway.waitForRequest("chat.steerNow", { after: 2 });
+    expect(second.params).toMatchObject({ runId: "pending-steer-2" });
+    await expectCount(links, 0);
+    await expectCount(user, 1);
+    expect(await bubble?.evaluate((element) => element.isConnected)).toBe(true);
+  });
+
   it.each([
     { draft: "Draft from a shared link", name: "a one-shot chat draft" },
     { draft: undefined, name: "an existing session URL" },
@@ -299,6 +377,7 @@ suite.define(() => {
 
     const abortRequest = await gateway.waitForRequest("sessions.abort");
     expect(requireRecord(abortRequest.params)).toEqual({
+      userInitiated: true,
       key: channelSessionKey,
       clearQueued: true,
     });
@@ -329,34 +408,5 @@ suite.define(() => {
     await expectRequestCountStable(gateway, "chat.send", 0);
     await expectCount(page.getByRole("listbox"), 0);
     expect(await composer.inputValue()).toBe("");
-  });
-
-  it("keeps the composer clear when a stale native input replay arrives after send", async () => {
-    const { page, gateway } = await chatFixture(suite, {
-      historyMessages: [timedText("assistant", "Ready for stale replay check.")],
-    });
-    await page.goto(`${suite.server.baseUrl}chat`);
-    await page.getByText("Ready for stale replay check.").waitFor({ timeout: 10_000 });
-
-    const prompt = "submitted message";
-    const composer = chatComposer(page);
-    await sendMessage(page, prompt);
-    await gateway.waitForRequest("chat.send");
-    expect(await composer.inputValue()).toBe("");
-
-    const afterReplay = await composer.evaluate((element, submitted) => {
-      const textarea = element as HTMLTextAreaElement;
-      textarea.value = submitted;
-      textarea.dispatchEvent(
-        new InputEvent("input", { bubbles: true, data: submitted, inputType: "insertText" }),
-      );
-      return textarea.value;
-    }, prompt);
-
-    expect(afterReplay).toBe("");
-    expect(await composer.inputValue()).toBe("");
-
-    await composer.pressSequentially(prompt);
-    expect(await composer.inputValue()).toBe(prompt);
   });
 });

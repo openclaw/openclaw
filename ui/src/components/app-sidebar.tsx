@@ -1,15 +1,25 @@
 import "../styles/sidebar-attention-floating.css";
-import "../styles/session-title-placeholder.css";
 import { getObserver } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, onCleanup, onSettled } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createProjection,
+  lazy,
+  Loading,
+  onCleanup,
+  onSettled,
+  Show,
+} from "solid-js";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
+import { projectApplicationConfig } from "../lib/reactive/application.ts";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
 import { i18nRevision } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { projectOwner, projectSource } from "../lib/reactive/projection.ts";
 import { createTimeout } from "../lib/reactive/timers.ts";
+import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { PluginSurface } from "../plugins/control-ui-view.solid.tsx";
 import { appSidebarProperties, type AppSidebarProps } from "./app-sidebar-base.ts";
@@ -26,9 +36,22 @@ import { equalSidebarContext, selectSidebarContext } from "./sidebar-context-sta
 import { createSidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
 import { createSidebarPeople } from "./sidebar-people.ts";
 
+const OpenClawIdNotifications = lazy(() => import("./openclaw-id/notifications.tsx"), {
+  export: "OpenClawIdNotifications",
+});
+
 export { AppSidebarOwner } from "./app-sidebar-owner.tsx";
 
 const sidebarOwners = new WeakMap<HTMLElement, AppSidebarOwner>();
+// Testing a projection's own keys would subscribe every reader to property presence.
+const sidebarPreferenceKeys = new Set<PropertyKey>([
+  "sidebarAgentsMode",
+  "sessionsGrouping",
+  "sessionsShowPreview",
+  "sidebarLiveActivity",
+  "sessionInvolvingMeFilterActive",
+  "sessionOwnerFilterId",
+]);
 
 export function getAppSidebarOwner(host: HTMLElement): AppSidebarOwner | undefined {
   return sidebarOwners.get(host);
@@ -71,7 +94,7 @@ function AppSidebarContent(
     host,
     () => props.navigationVisible,
   );
-  const scroll = createSidebarScroll(owner);
+  const scroll = (owner.scroll = createSidebarScroll(owner));
   const contextual = createMemo(() => {
     const router = props.router;
     return router
@@ -86,9 +109,24 @@ function AppSidebarContent(
   const projection = projectSource(owner, {
     read: (current) => current,
     subscribe: (current, notify) => {
+      const refresh = () => {
+        const accepted = context.chatSubmissions.readAcceptedCreate();
+        const selected = context.gateway.snapshot.sessionKey;
+        if (
+          accepted &&
+          ((selected && !areUiSessionKeysEquivalent(selected, accepted.creation.sessionKey)) ||
+            current.sessionData.sessionsResult?.sessions.some((row) =>
+              areUiSessionKeysEquivalent(row.key, accepted.creation.sessionKey),
+            ))
+        ) {
+          context.chatSubmissions.retireAcceptedCreate();
+        }
+        notify();
+      };
       const stops = [
-        current.subscribe(notify),
-        context.chatSubmissions.subscribeCreate(notify),
+        current.subscribe(refresh),
+        context.chatSubmissions.subscribeCreate(refresh),
+        context.gateway.subscribe(refresh),
         context.theme.subscribe(notify),
         context.config.subscribe(notify),
         context.agentIdentity.subscribe(current.sessionData.requestSessionDataUpdate),
@@ -175,6 +213,7 @@ function AppSidebarContent(
     },
   );
   onSettled(() => context.gateway.subscribeEvents((event) => owner.narration?.handleEvent(event)));
+  const applicationConfig = projectApplicationConfig(context.config);
   const presentationRevision = createParkedProjection(
     () => {
       Object.values(props);
@@ -198,6 +237,18 @@ function AppSidebarContent(
     ],
   );
   const observed = new WeakMap<object, object>();
+  // Stable primitive preferences need one comparison, not one rerun per visible row.
+  const preferences = createProjection(() => {
+    presentationRevision();
+    return {
+      sidebarAgentsMode: owner.sidebarAgentsMode,
+      sessionsGrouping: owner.sessionsGrouping,
+      sessionsShowPreview: owner.sessionsShowPreview,
+      sidebarLiveActivity: owner.sidebarLiveActivity,
+      sessionInvolvingMeFilterActive: owner.sessionInvolvingMeFilterActive,
+      sessionOwnerFilterId: owner.sessionOwnerFilterId,
+    };
+  });
   const mutationInputs = createMemo(
     () => {
       presentationRevision();
@@ -228,6 +279,9 @@ function AppSidebarContent(
           return readSessionMutationAccess;
         }
         if (getObserver()) {
+          if (current === owner && sidebarPreferenceKeys.has(key)) {
+            return Reflect.get(preferences, key);
+          }
           presentationRevision();
         }
         const value = Reflect.get(current, key, receiver);
@@ -244,7 +298,7 @@ function AppSidebarContent(
   [owner.sessionData, owner.sessionOrganizer, owner.people].forEach(observe);
   owner.sessionPullRequests = createSessionPullRequestIndicators({
     getConnected: () => prepared().isConnected && props.connected,
-    getPresented: () => props.navigationVisible,
+    getPresented: () => props.navigationVisible && !prepared().sidebarSnapshot,
     getRows: () => prepared().readSessionPullRequestRows(),
     getSelectedAgentId: () => prepared().selectedAgentIdForSessions(),
     getGateway: () => prepared().sessionDataContext?.gateway,
@@ -315,7 +369,16 @@ function AppSidebarContent(
       disconnectSidebarOwner(host);
     };
   });
-  return content;
+  return (
+    <>
+      {content}
+      <Show when={applicationConfig.read().openclawIdEnabled}>
+        <Loading>
+          <OpenClawIdNotifications />
+        </Loading>
+      </Show>
+    </>
+  );
 }
 
 export type AppSidebarMethods = {
@@ -335,7 +398,15 @@ export const AppSidebar = defineSolidBridge<AppSidebarProps, AppSidebarMethods>(
   {
     properties: appSidebarProperties,
     connected: (host) => sidebarOwners.get(host)?.attach(),
-    disconnected: (host) => sidebarOwners.get(host)?.detach(),
+    disconnected: (host) => {
+      dismissSidebarTransientMenus(host);
+      // Match the bridge's retained view when native layout reparents its host.
+      queueMicrotask(() => {
+        if (!host.isConnected) {
+          sidebarOwners.get(host)?.detach();
+        }
+      });
+    },
     methods: {
       activeNavigationViewElement: (host) => sidebarOwners.get(host)?.activeNavigationViewElement(),
       dismissTransientMenus: dismissSidebarTransientMenus,

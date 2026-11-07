@@ -29,7 +29,8 @@ Model rows live in `openclaw.plugin.json` under `modelCatalog.providers.kimi`.
   `moonshot` catalog for the same model.
 - Legacy `k3[1m]` was retired upstream and normalizes to `k3` for shipped
   configurations.
-- `KIMI_K3_MODEL_IDS` in `provider-policy-api.ts` covers the catalog rows with a
-  K3 `thinkingLevelMap` and the self-hosted wire ID `kimi-k3` (case-insensitive).
-  The wire ID stays off by default. OpenAI-compatible requests use the same
+- A row with `compat.supportedReasoningEfforts` uses the K3 thinking policy; a
+  row whose `thinkingLevelMap` maps `off` to null cannot disable thinking. The
+  self-hosted wire ID `kimi-k3` (case-insensitive) has no row, keeps the K3
+  policy and stays off by default. OpenAI-compatible requests use the same
   low/high/max effort mapping as hosted K3, sent as `reasoning_effort`.

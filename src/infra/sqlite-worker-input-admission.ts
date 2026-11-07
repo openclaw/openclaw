@@ -1,6 +1,8 @@
 import { createDeferredCore } from "../shared/deferred.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
+import { runWithSqliteDatabaseAdmissionTurn } from "./sqlite-database-admission-turn.js";
 import type {
+  PreparedSqliteWorkerOpen,
   SqliteWorkerInputPreparation,
   SqliteWorkerInputRetention,
 } from "./sqlite-worker-broker.types.js";
@@ -39,47 +41,56 @@ export class SqliteWorkerInputAdmission {
     };
   }
 
-  open<T>(
+  async open<T>(
     bytes: number,
+    databasePath: string,
     dispatch: () => Promise<T>,
     signal?: AbortSignal,
     reuse?: () => Promise<T | undefined>,
-    sharedState = false,
+    carrierClass?: PreparedSqliteWorkerOpen["carrierClass"],
   ): Promise<T> {
     if (
       this.opens.size >= this.owner.maxPendingOpens ||
       bytes > this.owner.maxMessageBytes ||
       this.owner.queuedBytes() + this.bytes + bytes > this.owner.maxQueuedBytes
     ) {
-      return Promise.reject(
-        new SqliteWorkerError("SQLite worker open input capacity reached", "overloaded"),
-      );
+      throw new SqliteWorkerError("SQLite worker open input capacity reached", "overloaded");
     }
     const settled = createDeferredCore();
     this.opens.add(settled.promise);
     const release = this.retain(bytes);
-    // Serialize aliases within each owner class without holding shared state behind agent scans.
+    // Wait for a cold database's admission turn before the open FIFO. The turn owner
+    // opens its own worker inside that turn, so a FIFO holder waiting on the same
+    // turn would block that open and deadlock both.
     const enqueue = () =>
-      runQueuedStoreWrite({
-        queues: this.openQueue,
-        storePath: sharedState ? "sqlite-shared-state-open" : "sqlite-open",
-        label: "SQLite worker open",
-        fn: dispatch,
+      runWithSqliteDatabaseAdmissionTurn(
+        [databasePath],
+        () =>
+          // Serialize aliases within each owner class without holding unrelated stores behind agent scans.
+          runQueuedStoreWrite({
+            queues: this.openQueue,
+            storePath: carrierClass ?? "generic",
+            label: "SQLite worker open",
+            fn: dispatch,
+            signal,
+          }),
+        [],
         signal,
-      });
-    // Unknown actors enter the FIFO synchronously. A published actor can attach
+      );
+    // Unknown actors reserve their admission turn synchronously. A published actor can attach
     // independently, but still retains its input budget and participates in drainage.
-    return (
-      reuse
+    try {
+      // Reserve before yielding, but also settle custody if path inspection throws synchronously.
+      return await (reuse
         ? Promise.resolve()
             .then(reuse)
             .then((store) => (store === undefined ? enqueue() : store))
-        : enqueue()
-    ).finally(() => {
+        : enqueue());
+    } finally {
       this.opens.delete(settled.promise);
       release();
       settled.resolve();
-    });
+    }
   }
 
   async joinOpens(): Promise<void> {

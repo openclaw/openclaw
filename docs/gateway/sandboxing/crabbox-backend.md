@@ -8,7 +8,7 @@ Run sandboxed tools on a machine leased by Crabbox. OpenClaw manages the remote 
 
 ## Crabbox backend
 
-Initial support is for direct Daytona leases. Crabbox 0.79.2 or newer is required, including fixed-lease recovery, repository-owned `exec`, and `stop --current-repo`. OpenClaw prepares a verified managed distribution when the selected executable is missing or outdated, preserving the operator's binary and config; `openclaw doctor --fix` prepares configured sandboxes too. Authenticate Crabbox for Daytona on the Gateway host, then check support from the workspace that will own the sandbox:
+Initial support is for direct Daytona leases. Crabbox 0.80.0 or newer is required, including fixed-lease recovery, repository-owned `exec`, and `stop --current-repo`. OpenClaw prepares a verified managed distribution when the selected executable is missing or outdated, preserving the operator's binary and config; `openclaw doctor --fix` prepares configured sandboxes too. Authenticate Crabbox for Daytona on the Gateway host, then check support from the workspace that will own the sandbox:
 
 ```bash
 crabbox exec --check --provider daytona

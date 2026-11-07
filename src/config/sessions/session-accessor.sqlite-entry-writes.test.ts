@@ -25,7 +25,7 @@ import { loadExactSessionEntry } from "./session-accessor.sqlite-entry.js";
 import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owner.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
-import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.kernel.js";
 import type { SessionEntry } from "./types.js";
 
 function entryFixture(state: OpenClawTestState, sessionId: string) {

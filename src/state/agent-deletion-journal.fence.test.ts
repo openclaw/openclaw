@@ -216,7 +216,7 @@ it.each(["draining", "legacy-null"] as const)(
   },
 );
 
-it.each([false, true])("preserves Claw cleanup custody: gateway=%s", (gatewayOwned) => {
+it.each([false, true])("preserves Template cleanup custody: gateway=%s", (gatewayOwned) => {
   const { input, open, write } = phaseFixture({
     agentId: "claw-worker",
     operationId: "interrupted",
@@ -227,7 +227,7 @@ it.each([false, true])("preserves Claw cleanup custody: gateway=%s", (gatewayOwn
   expect(pending(database).entries).toHaveLength(1);
   database.db
     .prepare(
-      `INSERT INTO claw_workspace_files
+      `INSERT INTO template_workspace_files
           (agent_id, target_path, schema_version, workspace, source_path,
            content_digest, status, created_at_ms, updated_at_ms)
          VALUES (?, ?, '1', ?, 'AGENTS.md', 'sha256:fixture', 'modified', 1, 1)`,
@@ -235,14 +235,14 @@ it.each([false, true])("preserves Claw cleanup custody: gateway=%s", (gatewayOwn
     .run(input.agentId, path.join(input.workspaceDir, "AGENTS.md"), input.workspaceDir);
   expect(pending(database)).toMatchObject({
     entries: gatewayOwned ? [expect.objectContaining({ agentId: input.agentId })] : [],
-    manualClawAgentIds: gatewayOwned ? [] : [input.agentId],
+    manualTemplateAgentIds: gatewayOwned ? [] : [input.agentId],
   });
   const facts = readRetainedAgentDeletionsFromDatabase(database.db, database.path);
   expect(facts).toMatchObject({
     status: "present",
     entries: [{ agentId: input.agentId, cleanupCompleted: false }],
   });
-  expect(facts.status === "present" && facts.entries[0]?.manualClawRemoval).toBe(
+  expect(facts.status === "present" && facts.entries[0]?.manualTemplateRemoval).toBe(
     gatewayOwned ? undefined : true,
   );
   const recover = (operationId: string) =>
@@ -253,7 +253,7 @@ it.each([false, true])("preserves Claw cleanup custody: gateway=%s", (gatewayOwn
   if (gatewayOwned) {
     expect(recover(input.operationId).entry.phase).toBe("draining");
   } else {
-    expect(() => recover(input.operationId)).toThrow("Claw removal owner");
+    expect(() => recover(input.operationId)).toThrow("Template removal owner");
     expect(read(database, input.agentId)?.operationId).toBe(input.operationId);
   }
 });

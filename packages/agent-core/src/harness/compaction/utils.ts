@@ -1,4 +1,9 @@
-import { hasRuntimeContextMarker, type AssistantMessage, type Message } from "@openclaw/llm-core";
+import {
+  hasRuntimeContextMarker,
+  type AssistantMessage,
+  type Message,
+  type ToolCall,
+} from "@openclaw/llm-core";
 import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -36,8 +41,45 @@ export function mergeSummaryFileOperations(
   addFilePaths(fileOps.edited, details.modifiedFiles);
 }
 
-/** Add file operations from tool calls and results to an accumulator. */
-export function extractFileOpsFromMessage(message: AgentMessage, fileOps: FileOperations): void {
+/** Pair outcomes within each tool turn before collecting conservative file metadata. */
+export function extractFileOpsFromMessages(
+  messages: readonly AgentMessage[],
+  fileOps: FileOperations,
+): void {
+  const calls = createToolCallOccurrenceQueue<{ call: ToolCall; name: string }>();
+  const unchanged = new Set<ToolCall>();
+  for (const message of messages) {
+    if (message.role === "assistant") {
+      calls.clear();
+      for (const call of message.content) {
+        if (call.type === "toolCall") {
+          calls.add(call.id, { call, name: normalizeFileToolName(call.name) });
+        }
+      }
+    } else if (message.role === "toolResult") {
+      const occurrence = calls.claim(message.toolCallId);
+      const name = normalizeFileToolName(message.toolName);
+      if (
+        occurrence?.name === name &&
+        (name === "edit" || name === "write") &&
+        asRecord(message.details)?.changed === false
+      ) {
+        unchanged.add(occurrence.call);
+      }
+    } else {
+      calls.clear();
+    }
+  }
+  for (const message of messages) {
+    extractFileOpsFromMessage(message, fileOps, unchanged);
+  }
+}
+
+function extractFileOpsFromMessage(
+  message: AgentMessage,
+  fileOps: FileOperations,
+  unchanged: ReadonlySet<ToolCall>,
+): void {
   if (message.role === "toolResult") {
     if (normalizeFileToolName(message.toolName) !== "apply_patch") {
       return;
@@ -56,7 +98,7 @@ export function extractFileOpsFromMessage(message: AgentMessage, fileOps: FileOp
     return;
   }
   for (const toolCall of message.content) {
-    if (toolCall.type !== "toolCall") {
+    if (toolCall.type !== "toolCall" || unchanged.has(toolCall)) {
       continue;
     }
     const args = asRecord(toolCall.arguments);
@@ -189,9 +231,14 @@ function truncateForSummary(text: string, maxChars: number): string {
       }
     }
   }
-  const sliced = truncateUtf16Safe(text, maxChars);
-  const truncatedChars = text.length - sliced.length;
-  return `${sliced}\n\n[... ${truncatedChars} more characters truncated]`;
+  const headBudget = maxChars - tailChars - ELISION_MARKER_RESERVE_CHARS;
+  const prefix = truncateUtf16Safe(text, maxChars);
+  // Preserve diagnostics the old prefix already held; ordinary results also
+  // need their terminal facts, with the marker inside the same budget.
+  const tail = IMPORTANT_TOOL_RESULT_TAIL.test(prefix) ? "" : sliceUtf16Safe(text, -tailChars);
+  const head = tail ? truncateUtf16Safe(prefix, headBudget) : prefix;
+  const truncatedChars = text.length - head.length - tail.length;
+  return `${head}\n\n[... ${truncatedChars} more characters truncated]${tail ? `\n\n${tail}` : ""}`;
 }
 
 /** Project summary content once so rendering and token accounting share omission facts. */
@@ -240,12 +287,14 @@ const OMISSION_OVERFLOW = "[More image/non-text data omitted from summary input]
 // metadata is only meaningful on user turns, so this deliberately accepts the
 // minimal shared shape rather than forcing token accounting through an unsafe
 // Message cast.
+type PersistedSenderCarrier = { role: string };
+
 /**
  * Return exactly the persisted-sender text which is projected into a user
  * conversation label. Keep this shared with token accounting: adding a label
  * to the prompt without charging it can make bounded compaction overflow.
  */
-export function formatPersistedSenderSuffix(message: { role: string }): string {
+function formatPersistedSenderSuffix(message: PersistedSenderCarrier): string {
   if (message.role !== "user") {
     return "";
   }
@@ -271,6 +320,120 @@ export function formatPersistedSenderSuffix(message: { role: string }): string {
   return sender.id ? ` sender=${JSON.stringify(sender)}` : "";
 }
 
+function compactionUserRole(message: PersistedSenderCarrier): string {
+  if (hasRuntimeContextMarker(message)) {
+    return "Runtime context";
+  }
+  if (Reflect.get(message, "synthetic") === true) {
+    return "Synthetic input";
+  }
+  if (Reflect.get(message, "operatorMessage") !== undefined) {
+    return "Operator input";
+  }
+  const metadata = asRecord(Reflect.get(message, "__openclaw"));
+  if (metadata?.beforeAgentRunBlocked !== undefined) {
+    return "Internal system input";
+  }
+  const rawProvenance = Reflect.get(message, "provenance");
+  // Unmarked external turns are a shipped transcript contract. An explicit
+  // unrecognized record must not acquire that legacy meaning by normalization.
+  if (rawProvenance === undefined) {
+    return "User";
+  }
+  const provenance = asRecord(rawProvenance);
+  switch (provenance?.kind) {
+    case "external_user":
+      return "User";
+    case "realtime_voice":
+      // Talk persists actual spoken user text outside the foreground turn.
+      return provenance.sourceChannel === "talk" ? "User" : "Unknown-origin input";
+    case "inter_session":
+      return "Inter-session input";
+    case "internal_system":
+      return "Internal system input";
+    default:
+      return "Unknown-origin input";
+  }
+}
+
+/** Compaction request attribution only; admitted internal inputs still start runtime turns. */
+function isCompactionUserRequest(message: PersistedSenderCarrier): boolean {
+  return message.role === "user" && compactionUserRole(message) === "User";
+}
+
+/** Callers retain their text projection; request attribution has one owner. */
+export function findLatestCompactionUserMessage(
+  messages: readonly AgentMessage[],
+  getText: (message: Extract<AgentMessage, { role: "user" }>) => string,
+): Extract<AgentMessage, { role: "user" }> | undefined {
+  return messages.findLast(
+    (message): message is Extract<AgentMessage, { role: "user" }> =>
+      message.role === "user" &&
+      isCompactionUserRequest(message) &&
+      Boolean(getText(message).trim()),
+  );
+}
+
+export function extractCompactionMessageText(message: AgentMessage): string {
+  const content = Reflect.get(message, "content");
+  if (typeof content === "string") {
+    return content.trim();
+  }
+  return Array.isArray(content)
+    ? content
+        .flatMap((block) => {
+          const text = block && typeof block === "object" ? Reflect.get(block, "text") : undefined;
+          return typeof text === "string" && text.trim() ? [text.trim()] : [];
+        })
+        .join("\n")
+    : "";
+}
+
+/** Legacy producers cannot search past an independent input for a pending ask. */
+export function extractCurrentCompactionUserRequest(
+  messages: readonly AgentMessage[],
+  getText: (message: Extract<AgentMessage, { role: "user" }>) => string,
+): string | null {
+  const message = messages.findLast((item) => item.role === "user");
+  return message && isCompactionUserRequest(message) ? getText(message) : null;
+}
+
+/** Shared by summary input, preserved excerpts, and their token accounting. */
+export function formatCompactionUserLabel(message: PersistedSenderCarrier): string {
+  return `${compactionUserRole(message)}${formatPersistedSenderSuffix(message)}`;
+}
+
+export function removeGeneratedCompactionSection(
+  summary: string | undefined,
+  section: string,
+): string | undefined {
+  if (!summary) {
+    return summary;
+  }
+  if (summary.startsWith(section)) {
+    return summary.slice(section.length);
+  }
+  const delimitedSection = `\n\n${section}`;
+  const sectionIndex = summary.indexOf(delimitedSection);
+  return sectionIndex < 0
+    ? summary
+    : `${summary.slice(0, sectionIndex)}\n\n${summary.slice(sectionIndex + delimitedSection.length)}`;
+}
+
+/** Authoritative request owners clear stale model-written asks without rewriting other sections. */
+export function clearCompactionPendingAskSection(summary: string): string {
+  const heading = /^## Pending user asks[ \t]*$/mu.exec(summary);
+  if (!heading) {
+    return summary;
+  }
+  const contentStart = heading.index + heading[0].length;
+  const remaining = summary.slice(contentStart + 1);
+  const nextHeading = /^##[ \t]+\S.*$/mu.exec(remaining);
+  return `${summary.slice(0, contentStart)}\nNone.${
+    nextHeading ? `\n${remaining.slice(nextHeading.index)}` : ""
+  }`;
+}
+
 /** Serialize LLM messages to plain text for summarization prompts. */
 export function serializeConversation(messages: Message[]): string {
   return serializeConversationEntries(messages).entries.join(ENTRY_SEPARATOR);
@@ -293,11 +456,15 @@ function formatCallLabel(name: string, args: ReadonlyArray<readonly [string, str
     : label;
 }
 
-function serializeConversationEntries(messages: Message[]) {
-  const parts: string[] = [];
+function serializeConversationEntries(messages: Message[]): {
+  entries: string[];
   /** Tool-result entries rendered with the call that produced them, for sampled input. */
+  labeledResults: Map<number, string>;
+  /** External-user entries, which carry the asks, decisions and corrections. */
+  userEntries: number[];
+} {
+  const parts: string[] = [];
   const labeledResults = new Map<number, string>();
-  /** User-message entries, which carry the asks, decisions and corrections. */
   const userEntries: number[] = [];
   // Providers may repeat a call ID; each result claims the oldest unanswered call with it.
   const callLabels = createToolCallOccurrenceQueue<string>();
@@ -332,8 +499,10 @@ function serializeConversationEntries(messages: Message[]) {
         labeledResults.set(parts.length, `[Tool result of ${label}]: ${content}`);
         parts.push(`[Tool result]: ${content}`);
       } else {
-        userEntries.push(parts.length);
-        parts.push(`[User${formatPersistedSenderSuffix(msg)}]: ${content}`);
+        if (isCompactionUserRequest(msg)) {
+          userEntries.push(parts.length);
+        }
+        parts.push(`[${formatCompactionUserLabel(msg)}]: ${content}`);
       }
     } else if (msg.role === "assistant") {
       const textParts: string[] = [];
@@ -376,7 +545,7 @@ export const MAX_SUMMARY_INPUT_CHARS = 160_000;
 const MAX_SAMPLED_ENTRY_CHARS = 6_000;
 const MIN_TRIMMED_ENTRY_CHARS = 200;
 const TRIMMED_ENTRY_HEAD_SHARE = 0.7;
-// Covers "\n\n[... N characters omitted ...]\n\n" for any UTF-16 length.
+// Covers truncation and elision markers for any UTF-16 length.
 const ELISION_MARKER_RESERVE_CHARS = 64;
 const SUMMARY_INPUT_TAIL_SHARE = 0.5;
 const SUMMARY_INPUT_USER_SHARE = 0.25;

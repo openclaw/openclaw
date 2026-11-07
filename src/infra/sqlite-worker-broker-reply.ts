@@ -12,7 +12,6 @@ import {
 } from "../state/openclaw-state-worker-error.js";
 import { acquireWithWait } from "./acquire-with-wait.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
-import { withDatabaseEngineSelection } from "./database-engine/context.js";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-errors.js";
 import {
   acquireStateDatabaseSchemaLease,
@@ -117,7 +116,10 @@ export async function dispatchSqliteWorkerJob(
       const settlement = createDeferredCore<SqliteWorkerOperationSettlement>();
       job.settleNative = settlement.resolve;
       const retained: ReturnType<SqliteWorkerAdmissionFactory> = job.createAdmission
-        ? job.createAdmission({ settled: settlement.promise })
+        ? job.createAdmission({
+            settled: settlement.promise,
+            nativeStopped: actor?.nativeStopped ?? slot.exit,
+          })
         : {
             admission: createSqliteWorkerOperationAdmission(() => {
               throw new SqliteWorkerError(
@@ -128,6 +130,7 @@ export async function dispatchSqliteWorkerJob(
             nativeLocations: databasePath ? [databasePath] : [],
           };
       try {
+        retained.admission.requestClass = job.observation.requestClass;
         if (retained.databaseIdentity) {
           const existing = job.request.databaseIdentity;
           if (
@@ -214,7 +217,7 @@ export async function dispatchSqliteWorkerJob(
           });
         }
       } catch (error) {
-        retained.admission.finish();
+        retained.admission.finish("not-entered");
         throw error;
       }
       job.operationAdmission = {
@@ -246,7 +249,7 @@ export async function dispatchSqliteWorkerJob(
     const selection = request.stateContext?.databaseEngineSelection;
     if (!slot.postgresPoolSent && selection) {
       // A carrier can be created before boot selects its database engines.
-      request.postgresPool = withDatabaseEngineSelection(selection, createPostgresPoolEndpoints);
+      request.postgresPool = createPostgresPoolEndpoints(selection);
     }
     assertStateAccess?.();
     job.custody.accept();
@@ -428,7 +431,7 @@ export function receiveSqliteWorkerReply(
   let value: unknown;
   try {
     const continuation = runWithMainThreadTask(
-      "worker:sqlite:reply-decode",
+      "worker:sqlite",
       (): Extract<SqliteWorkerRequest, { type: "result-next" | "execute-frame" }> | undefined => {
         if (reply.input === "next") {
           const transfer = job.inputTransfer;
@@ -499,6 +502,7 @@ export function receiveSqliteWorkerReply(
         }
         return undefined;
       },
+      "reply-decode",
     );
     if (continuation) {
       // Continuations retain the current job and its reserved transport credits through drain.
@@ -661,10 +665,12 @@ export function settleSqliteWorkerJob(
   settlement?: SqliteWorkerOperationSettlement,
 ): void {
   job.custody.retire();
-  job.settleNative?.(
-    settlement ?? (job.custody.dispatched ? { kind: "completed" } : { kind: "not-entered", error }),
+  const outcome: SqliteWorkerOperationSettlement =
+    settlement ?? (job.custody.dispatched ? { kind: "completed" } : { kind: "not-entered", error });
+  job.settleNative?.(outcome);
+  job.operationAdmission?.admission.finish(
+    outcome.kind === "not-entered" ? "not-entered" : undefined,
   );
-  job.operationAdmission?.admission.finish();
   job.operationAdmission?.releaseService();
   // finish() drains the receipt port before the separate command reply can acknowledge success.
   const admission = job.operationAdmission?.admission;

@@ -43,15 +43,30 @@ export function findChatSubmissionMessage(
   return match;
 }
 
-function nativeHistoryMessageSourceIdentity(message: unknown): string | null {
+/** Gateway anchor IDs also belong to roleless status and compaction rows. */
+export function nativeHistoryMessageSourceId(message: unknown): string | null {
+  const id = asNullableRecord(asNullableRecord(message)?.["__openclaw"])?.id;
+  return typeof id === "string" && id ? id : null;
+}
+
+/** Raw loaded rows retain the sources rendered inside activity summaries. */
+export function oldestNativeHistoryMessage(messages: unknown[]): unknown {
+  return messages.find(nativeHistoryMessageSourceId);
+}
+
+export function nativeHistoryMessageSourceIdentity(message: unknown): string | null {
   const record = asNullableRecord(message);
   const metadata = asNullableRecord(record?.["__openclaw"]);
   const seq = metadata?.seq;
-  const id = metadata?.id ?? record?.messageId;
-  return typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0
-    ? `seq:${seq}`
-    : typeof id === "string" && id.trim()
-      ? `id:${id}`
+  const identity = readSessionMessageIdentity(message);
+  if (identity?.isImported && identity.externalSource) {
+    return `import:${identity.externalSource}`;
+  }
+  const id = nativeHistoryMessageSourceId(message);
+  return id
+    ? `id:${id}`
+    : typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0
+      ? `seq:${seq}`
       : null;
 }
 

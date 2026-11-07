@@ -37,12 +37,16 @@ import {
 } from "../reply-completion.js";
 import { recordAgentCleanupFailure } from "../run-cleanup-timeout.js";
 import { CliAuthProfilePreparationError } from "./auth-profile-preparation-error.js";
-import { runCliCleanup } from "./cleanup.js";
+import { preserveCliRequiredCleanupStop, runCliCleanup } from "./cleanup.js";
 import { resolveCliSessionId } from "./cli-run-recovery.js";
 import { projectCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import { hashCliReseedPrompt } from "./reseed-envelope.js";
 import type { ClaudeCliRunDiagnosticLifecycle } from "./run-diagnostics.js";
-import { resolveCliSourceReplyMirror, type PreparedCliRunTerminalReply } from "./terminal-reply.js";
+import {
+  resolveCliSourceReplyMirror,
+  shouldSuppressCliAutomaticFinal,
+  type prepareCliRunTerminalReply,
+} from "./terminal-reply.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
@@ -263,17 +267,26 @@ export async function settlePreparedCliRun(params: {
     outcome = completed ? { result: completed } : { error };
   }
   let cleanupError: Error | undefined;
+  let requiredBackendCleanupFailed = false;
   const recordCleanupError = (error: unknown) => {
     recordAgentCleanupFailure();
     cleanupError ??= error instanceof Error ? error : new Error(formatErrorMessage(error));
   };
   try {
-    await runCliCleanup(runParams, "cli-backend-release", async () => {
-      await context.preparedBackend.cleanup?.();
-    });
+    await runCliCleanup(
+      runParams,
+      "cli-backend-release",
+      async () => {
+        await context.preparedBackend.cleanup?.();
+      },
+      "required",
+    );
   } catch (error) {
+    requiredBackendCleanupFailed = true;
     recordCleanupError(error);
   }
+  const preserveRequiredCleanupStop = (error: unknown) =>
+    requiredBackendCleanupFailed ? preserveCliRequiredCleanupStop(error) : error;
   if (runParams.cleanupCliLiveSessionOnRunEnd === true) {
     try {
       const { closeCliLiveSession } = await import("./cli-live-session-registry.js");
@@ -327,14 +340,14 @@ export async function settlePreparedCliRun(params: {
     }
   } catch (error) {
     if (!completed) {
-      throw error;
+      throw preserveRequiredCleanupStop(error);
     }
     warnAfterCommit(error);
   }
   if ("error" in outcome) {
-    throw outcome.error instanceof Error
-      ? outcome.error
-      : new Error(formatErrorMessage(outcome.error));
+    throw preserveRequiredCleanupStop(
+      outcome.error instanceof Error ? outcome.error : new Error(formatErrorMessage(outcome.error)),
+    );
   }
   if (cleanupError && !completed && !delivered) {
     throw cleanupError;
@@ -481,7 +494,7 @@ export function buildCliDeliveredFailure(params: {
 export function buildCliRunResult(params: {
   context: PreparedCliRunContext;
   output: CliOutput;
-  preparedReply: PreparedCliRunTerminalReply;
+  preparedReply: ReturnType<typeof prepareCliRunTerminalReply>;
   effectiveCliSessionId?: string;
   bindingFlushOk?: boolean;
   assistantTranscriptOwned?: boolean;
@@ -509,11 +522,11 @@ export function buildCliRunResult(params: {
   const rawFinalText = output.rawFinalText;
   const { sourceReplyMirror } = preparedReply;
   const text = preparedReply.text;
-  const finalAssistantVisibleText = text;
+  const finalAssistantVisibleText = preparedReply.finalMessageText ?? text;
   const payloads =
     sourceReplyMirror.payloads.length > 0
       ? sourceReplyMirror.payloads
-      : sourceReplyMirror.delivered
+      : shouldSuppressCliAutomaticFinal(output, runParams, sourceReplyMirror.delivered)
         ? undefined
         : text
           ? (output.textParts && text === output.text ? output.textParts : [text]).map(

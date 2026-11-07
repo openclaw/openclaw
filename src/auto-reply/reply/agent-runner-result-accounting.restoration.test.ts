@@ -40,6 +40,9 @@ it.each(["ordinary", "followup"] as const)(
     const f = await fixture(lane);
     expect(await f.notices()).toEqual([]);
     await f.account(lane, primary);
+    expect(f.context.execution.result.meta.modelFallbackTranscriptToModel).toBe(
+      `${primary.provider}/${primary.model}`,
+    );
     expect(await f.notices()).toEqual([
       {
         kind: "model-fallback",

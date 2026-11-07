@@ -13,7 +13,7 @@ import {
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
-import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import * as sessionMetadataWrites from "../config/sessions/session-metadata-write.async.js";
 import { prepareSessionSourceAuthority } from "../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../config/sessions/types.js";

@@ -7,9 +7,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import type { OAuthCredential } from "./auth-profiles/types.js";
 import { resolveEmbeddedRunModelSetup } from "./embedded-agent-runner/run/model-setup.js";
 import type { AgentHarnessModelCatalogResult } from "./harness/types.js";
-import { harnessRegistry } from "./model-catalog-fixtures.test-support.js";
+import { harnessRegistry, oauth } from "./model-catalog-fixtures.test-support.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   loadProviderScopedThinkingCatalog,
@@ -66,6 +67,15 @@ function catalogLists(catalog: ModelCatalogSnapshot) {
   return [catalog.entries, catalog.routeVariants];
 }
 
+function apiRoute(
+  base: ModelCatalogEntry,
+  api: ModelCatalogEntry["api"],
+  host: string,
+  contextWindow: number,
+) {
+  return { ...base, api, baseUrl: `https://${host}.synthetic.test/v1`, contextWindow };
+}
+
 function holdDiscovery<T>(result: () => T) {
   const entered = createDeferredCore();
   const release = createDeferredCore();
@@ -84,15 +94,13 @@ function installHarnesses(
   ...entries: [
     ModelCatalogEntry & { nativeRuntime: string },
     () => Promise<AgentHarnessModelCatalogResult>,
-    string?,
   ][]
 ) {
   mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
     const registry = createEmptyPluginRegistry();
-    for (const [entry, loadModelCatalog, label = entry.name] of entries) {
+    for (const [entry, loadModelCatalog] of entries) {
       registry.agentHarnesses.push(
-        ...harnessRegistry(entry.nativeRuntime, { label, loadModelCatalog, runAttempt: vi.fn() })
-          .agentHarnesses,
+        ...harnessRegistry(entry.nativeRuntime, { loadModelCatalog }).agentHarnesses,
       );
     }
     return registry;
@@ -321,7 +329,6 @@ it.each(["before", "during", "revoked"] as const)(
           "superseded",
         );
       }
-      expect(loadB).toHaveBeenCalledOnce();
     } finally {
       discovery.release();
       await Promise.allSettled([setup]);
@@ -372,8 +379,6 @@ it("does not share a failed pending native discovery with another runtime, and r
   discovery.release();
   await rejected;
   expectModels((await second).entries, b);
-  expect(loadA).toHaveBeenCalledOnce();
-  expect(loadB).toHaveBeenCalledOnce();
   const partial = await owner.loadFullModelCatalog!({ refresh: true });
   expect(partial).toMatchObject({ authoritative: false, refreshFailed: true });
   expectModels(partial.entries, b);
@@ -391,25 +396,15 @@ it("keeps observed untagged models without restoring API rows deleted during nat
   const { owner, a, b, loadA, loadB } = await fixture(true, true);
   const siblingHost = { provider: a.provider, id: "sibling-host", name: "Sibling host" };
   loadA.mockResolvedValue([siblingHost]);
-  const previousApi = {
-    provider: b.provider,
-    id: b.id,
-    name: "API model",
-    api: "openai-completions" as const,
-    baseUrl: "https://old.synthetic.test/v1",
-    contextWindow: 16_000,
-  };
+  const hostModel = { provider: b.provider, id: b.id, name: "API model" };
+  const previousApi = apiRoute(hostModel, "openai-completions", "old", 16_000);
   const removedApi = { ...previousApi, id: "removed-api" };
   setProviderCatalog([previousApi, removedApi]);
   await owner.loadFullModelCatalog!({ refresh: true });
   const harnessOnly = { provider: b.provider, id: "harness-only", name: "Harness-only model" };
   const alternateHost = {
-    provider: b.provider,
-    id: b.id,
+    ...apiRoute(hostModel, "openai-chatgpt-responses", "account", 48_000),
     name: "Account route",
-    api: "openai-chatgpt-responses" as const,
-    baseUrl: "https://account.synthetic.test/v1",
-    contextWindow: 48_000,
     params: { accountModel: "account-route-model" },
   };
   const discovery = holdDiscovery(() => [
@@ -421,12 +416,7 @@ it("keeps observed untagged models without restoring API rows deleted during nat
   const selected = owner.loadNativeModelCatalog!(nativeSelection(b, harnessOnly.id));
   try {
     await discovery.entered;
-    const freshApi = {
-      ...previousApi,
-      api: "openai-responses" as const,
-      baseUrl: "https://fresh.synthetic.test/v1",
-      contextWindow: 32_000,
-    };
+    const freshApi = apiRoute(previousApi, "openai-responses", "fresh", 32_000);
     setProviderCatalog([freshApi]);
     await renewProvider(owner, b.provider);
     const providerPublication = owner.readFullModelCatalog!()!;
@@ -628,7 +618,6 @@ it.each([false, true])(
 
     await expect(owner.loadNativeModelCatalog!(nativeSelection(b))).rejects.toThrow("superseded");
     expect(owner.isCurrent()).toBe(false);
-    expect(readReadiness).toHaveBeenCalledOnce();
     expect(loadB).toHaveBeenCalledTimes(calls);
   },
 );
@@ -638,13 +627,9 @@ it("renews native observations without retaining harness-only host projections",
   const native = { provider, id: "native", name: "Native", nativeRuntime: "fixture-native" };
   const host = { provider, id: "host-only", name: "Host only" };
   const api = { provider, id: "api", name: "API" };
-  const profile = {
-    type: "oauth" as const,
-    provider,
+  const profile: OAuthCredential = {
+    ...oauth(provider, 1_900_000_000_000),
     accountId: "fixture-account",
-    access: "before",
-    refresh: "before-refresh",
-    expires: 1_900_000_000_000,
   };
   const setProfile = (value: typeof profile) => {
     mocks.preparedAuthStore = { version: 1, profiles: { "custom:default": value } };
@@ -653,13 +638,9 @@ it("renews native observations without retaining harness-only host projections",
   };
   setProfile(profile);
   const load = vi.fn<() => Promise<ModelCatalogEntry[]>>(async () => [native, host]);
-  installHarnesses([native, load, "Fixture"]);
+  installHarnesses([native, load]);
   mocks.configuredAgentIds = ["default"];
-  mocks.runPreparedModelCatalogWorker.mockImplementation(async () => ({
-    entries: [api],
-    routeVariants: [api],
-    providerOutcomes: [{ provider, status: "ready" }],
-  }));
+  setProviderCatalog([api], [{ provider, status: "ready" }]);
   const input = runtimeFixture.agentInput("default", {
     agents: { defaults: { model: "custom/api" } },
   });

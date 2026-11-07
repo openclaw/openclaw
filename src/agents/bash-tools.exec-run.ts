@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { ToolInterruptedByUser } from "../../packages/agent-core/src/tool-interruption.js";
 import { resolveStateDir } from "../config/paths.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import {
@@ -35,12 +36,14 @@ import {
 } from "./bash-tools.exec-output.js";
 import {
   assertSupportedExecParams,
+  assertDurableExecAvailable,
   createExecRequestPreparation,
   type ExecToolArgs,
   resolveExecPreparedRunEnvironment,
   resolveExecNotificationDefaults,
   resolvePreparedExecEnvironment,
 } from "./bash-tools.exec-request-preparation.js";
+import type { ExecToolApprovalReview, ExecToolDetails } from "./bash-tools.exec-result.types.js";
 import {
   DEFAULT_MAX_OUTPUT,
   DEFAULT_PENDING_MAX_OUTPUT,
@@ -58,12 +61,12 @@ import {
   buildExecForegroundResult,
   resolveExecReviewerDefaults,
 } from "./bash-tools.exec-support.js";
-import { resolveExecElevatedMode, resolveExecHost } from "./bash-tools.exec-target.js";
-import type {
-  ExecToolApprovalReview,
-  ExecToolDefaults,
-  ExecToolDetails,
-} from "./bash-tools.exec-types.js";
+import {
+  canInterruptExec,
+  resolveExecElevatedMode,
+  resolveExecHost,
+} from "./bash-tools.exec-target.js";
+import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import { formatUnavailableWorkdirFailure, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { createExecSchema, execSchema } from "./bash-tools.schemas.js";
 import { clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
@@ -161,26 +164,13 @@ export function createExecTool(defaults?: ExecToolDefaults) {
     resolveSubagentSession,
     notifyDeliveryContext,
   } = resolveExecNotificationDefaults(defaults);
+  const durableNotifications = { notifyOnExit, notifyOnExitEmptySuccess };
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
   const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
   const agentId =
     defaults?.agentId ??
     (parsedAgentSession ? resolveAgentIdFromSessionKey(defaults?.sessionKey) : undefined);
-  const buildUnavailableWorkdirResult = (params: {
-    cwd: string;
-    startedAt?: number;
-    warningText?: string;
-  }) =>
-    buildExecForegroundResult({
-      outcome: buildExecRuntimeErrorOutcome({
-        error: formatUnavailableWorkdirFailure(params.cwd),
-        aggregated: "",
-        durationMs: params.startedAt ? Date.now() - params.startedAt : 0,
-      }),
-      cwd: params.cwd,
-      warningText: params.warningText,
-    });
   const requestPreparation = createExecRequestPreparation({
     defaults,
     agentId,
@@ -197,6 +187,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       });
     },
     parameters: createExecSchema(defaults),
+    interruptible: (args) => canInterruptExec(args, defaults),
     getExecutionTimeoutMs: createExecToolExecutionTimeoutResolver(defaults),
     prepareBeforeToolCallParams: requestPreparation.prepareBeforeToolCallParams,
     finalizeBeforeToolCallParams: requestPreparation.finalizeBeforeToolCallParams,
@@ -287,6 +278,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         );
       }
       const host = resolveExecHost(params, defaults);
+      assertDurableExecAvailable(params, host, allowBackground);
       const foregroundFallbackWarning =
         (host === "node" || !backgroundAvailable) &&
         (params.background === true || typeof params.yieldMs === "number")
@@ -370,9 +362,13 @@ export function createExecTool(defaults?: ExecToolDefaults) {
               sandbox,
             });
       if (workdirResolution.kind === "unavailable") {
-        return buildUnavailableWorkdirResult({
+        return buildExecForegroundResult({
+          outcome: buildExecRuntimeErrorOutcome({
+            error: formatUnavailableWorkdirFailure(workdirResolution.requestedCwd),
+            aggregated: "",
+            durationMs: Date.now() - startedAt,
+          }),
           cwd: workdirResolution.requestedCwd,
-          startedAt,
           warningText: warnings.join("\n"),
         });
       }
@@ -415,18 +411,17 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         const storeEnv = await resolveStoreEnv();
         const subagentExecution = await resolveSubagentExecution();
         assertSourceActive();
-        // The proxy is loopback-owned by the Gateway. Sandbox and node hosts
-        // cannot use its sentinels, so both sides of the contract stay absent.
-        const useSecretEgress = secretEgressEnabled && host === "gateway";
-        if (useSecretEgress) {
-          if (!defaults?.operationalRunInstance) {
-            throw new Error("Secret egress proxy requires an admitted agent run instance");
-          }
-          assertSourceActive();
+        const storeBindings = storeEnv.secretEgressBindings ?? [];
+        const useSecretEgress = secretEgressEnabled && host === "gateway" && !params.durable;
+        const secretEgressBindings = useSecretEgress ? storeBindings : undefined;
+        if (secretEgressEnabled && params.durable && storeBindings.length) {
+          warnings.push(
+            `Durable execution starts without ${storeBindings.length} secret-store credential${storeBindings.length === 1 ? "" : "s"}: secret-egress grants end when the Gateway restarts. Use the managed GitHub identity, the command's own configuration, or non-durable background execution for commands that need them.`,
+          );
         }
-        const secretEgressBindings = useSecretEgress
-          ? (storeEnv.secretEgressBindings ?? [])
-          : undefined;
+        if (useSecretEgress && !defaults?.operationalRunInstance) {
+          throw new Error("Secret egress proxy requires an admitted agent run instance");
+        }
         const { env, requestedEnv, executionContext } = resolvePreparedExecEnvironment({
           execParams: params,
           host,
@@ -456,7 +451,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           nonInteractiveApproval: defaults?.nonInteractiveApproval,
           approvalFollowupMode: defaults?.approvalFollowupMode,
           turnSourceChannel: defaults?.messageProvider,
-          turnSourceTo: defaults?.currentChannelId,
+          turnSourceTo: defaults?.currentMessagingTarget ?? defaults?.currentChannelId,
           turnSourceAccountId: defaults?.accountId,
           turnSourceThreadId: defaults?.currentThreadTs,
           agentId,
@@ -505,6 +500,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
             ...hostApprovalParams(),
             workdir,
             secretEgressBindings,
+            durable: params.durable ? durableNotifications : undefined,
             githubProfileDir,
             pathPrepend: defaultPathPrepend,
             pty: params.pty === true && !sandbox,
@@ -561,6 +557,8 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           workdir,
           env,
           secretEgressBindings,
+          durable: params.durable ? durableNotifications : undefined,
+          sessionId: defaults?.sessionId,
           githubProfileDir,
           pathPrepend: defaultPathPrepend,
           sandbox,
@@ -673,16 +671,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         yielded = true;
         run.disableUpdates();
         markBackgrounded(run.session);
-        void Promise.resolve(run.session.exitNotificationPersistence).then(
-          () => backgrounded.resolve({ status: "backgrounded" }),
-          (error: unknown) =>
-            backgrounded.reject(
-              new Error(
-                `Process ${run.session.id} started, but its restart notification could not be saved. Use process poll before retrying.`,
-                { cause: error },
-              ),
-            ),
-        );
+        backgrounded.resolve({ status: "backgrounded" });
       };
 
       try {
@@ -694,7 +683,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           }
         }
         const completed = await result;
-        if (toolAborted) {
+        if (toolAborted && !(signal?.reason instanceof ToolInterruptedByUser)) {
           throw createAbortError("Tool execution was aborted", { cause: signal?.reason });
         }
         const deadlineAtMs = run.session.processActivity?.deadlineAtMs;
@@ -728,6 +717,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
                   ...(deadlineAtMs === undefined ? {} : { deadlineAtMs }),
                   cwd: run.session.cwd,
                   tail: run.session.tail,
+                  ...(warnings.length ? { warningText: warnings.join("\n") } : {}),
                   // Structured callers receive details without the visible content.
                   followUp,
                 },

@@ -79,6 +79,7 @@ export function buildPersistedUserTurnMetadata(
     ...(senderUsername ? { senderUsername } : {}),
     ...(senderIdentity && senderIdentity.id === senderId ? { senderIdentity } : {}),
     ...(input.workContext ? { workContext: structuredClone(input.workContext) } : {}),
+    ...(input.appContext ? { appContext: structuredClone(input.appContext) } : {}),
     ...(input.mentions?.length
       ? { humanMentions: input.mentions.map((mention) => ({ ...mention })) }
       : {}),
@@ -187,6 +188,7 @@ export function restorePreparedUserTurnOperationalMetaForRuntime<
   // A rewritten runtime input cannot retain an alternate copy of the original words.
   if (!contentUnchanged) {
     delete runtimeMeta.workContext;
+    delete runtimeMeta.appContext;
   }
   // Selections belong to the submitted bytes, not a hook's rewritten text.
   delete runtimeMeta.humanMentions;
@@ -244,12 +246,14 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const requesterOrigin = originalMeta?.requesterOrigin
     ? captureRequesterOrigin({ requesterOrigin: originalMeta.requesterOrigin })
     : undefined;
-  const sessionSendDelivery = structuredClone(originalMeta?.sessionSendDelivery);
   const originalContent =
-    originalMeta?.humanMentions === undefined && originalMeta?.workContext === undefined
+    originalMeta?.humanMentions === undefined &&
+    originalMeta?.workContext === undefined &&
+    originalMeta?.appContext === undefined
       ? undefined
       : structuredClone(message.content);
   const workContext = structuredClone(originalMeta?.workContext);
+  const appContext = structuredClone(originalMeta?.appContext);
   const humanMentions = structuredClone(originalMeta?.humanMentions);
   const display = message.display;
   const intent = structuredClone(originalMeta?.intent);
@@ -307,12 +311,12 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   if (requesterOrigin) {
     protectedMeta.requesterOrigin = requesterOrigin;
   }
-  delete protectedMeta.sessionSendDelivery;
-  if (sessionSendDelivery !== undefined) {
-    protectedMeta.sessionSendDelivery = sessionSendDelivery;
-  }
   // A redacting hook must not leave an alternate copy of the original text visible.
   const contentUnchanged = isDeepStrictEqual(nextUserMessage.content, originalContent);
+  delete protectedMeta.appContext;
+  if (appContext !== undefined && contentUnchanged) {
+    protectedMeta.appContext = appContext;
+  }
   delete protectedMeta.workContext;
   if (workContext !== undefined && contentUnchanged) {
     protectedMeta.workContext = workContext;

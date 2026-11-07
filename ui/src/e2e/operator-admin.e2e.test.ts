@@ -96,8 +96,9 @@ async function expectDenied(control: Locator, gateway: MockGatewayControls, meth
 async function expectAgentCreationDenied(page: Page, gateway: MockGatewayControls) {
   const createAgent = page.getByRole("button", { name: "New agent", exact: true });
   await expect.poll(() => createAgent.isDisabled()).toBe(true);
-  expect(await createAgent.getAttribute("title")).toContain("openclaw.chat");
-  expect(await createAgent.getAttribute("title")).toContain("operator.admin");
+  expect(await createAgent.getAttribute("title")).toContain(
+    "You need admin access to set up OpenClaw.",
+  );
   const url = page.url();
   await createAgent.click({ force: true });
   expect(page.url()).toBe(url);
@@ -113,7 +114,8 @@ suite.define(() => {
       const filesResponse = { agentId: "main", workspace };
       const readOnlyConfig = {
         ...operatorConfig,
-        skills: { workshop: { autonomous: { mode: "auto" } } },
+        plugins: { entries: { "skill-workshop": { config: { autonomous: { mode: "auto" } } } } },
+        meta: { migrations: { skillWorkshopPlugin: true } },
       };
       const gateway = await installMockGateway(page, {
         featureMethods: [
@@ -190,13 +192,15 @@ suite.define(() => {
       await gateway.waitForRequest("agents.list");
       await selectAgent(page.locator(".settings-sidebar__agent openclaw-agent-select"), "Reviewer");
       await page.locator("#agents-tab-overview").click();
-      const setDefault = page.getByRole("button", { name: "Set Default", exact: true });
+      await page.locator(".agents-page-menu__trigger").click();
+      const setDefault = page.getByRole("menuitem", { name: "Set default", exact: true });
       await expect.poll(() => setDefault.isDisabled()).toBe(true);
+      await setDefault.click({ force: true });
+      await page.keyboard.press("Escape");
       await expectAgentCreationDenied(page, gateway);
 
       const identityName = page.locator(".agent-identity-editor__fields input").first();
       await expect.poll(() => identityName.isDisabled()).toBe(true);
-      await setDefault.click({ force: true });
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
 
       await page.goto(`${suite.server.baseUrl}settings/agents/main/files`);
@@ -231,7 +235,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}settings/agents/main/skills`);
       await gateway.waitForRequest("skills.status", { match: { agentId: "main" } });
       const agentSkillsActions = page.locator(".settings-section", { hasText: "Skills" });
-      const disableAll = agentSkillsActions.getByRole("button", { name: "Disable All" });
+      const disableAll = agentSkillsActions.getByRole("button", { name: "Disable all" });
       await expectDenied(disableAll, gateway, "config.set");
 
       await page.goto(`${suite.server.baseUrl}skills`);
@@ -239,7 +243,7 @@ suite.define(() => {
       const skillCard = page.locator(".skill-discovery .plugin-catalog-card", {
         hasText: "Deploy Helper",
       });
-      await expectVisible(skillCard.getByRole("img", { name: /Needs Setup.*deploy-helper/ }));
+      await expectVisible(skillCard.getByRole("img", { name: /Needs setup.*deploy-helper/ }));
       expect(await page.locator(".skill-discovery").getByRole("switch").count()).toBe(0);
       await page.getByRole("button", { name: "Skill settings", exact: true }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/skills");
@@ -287,11 +291,13 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}settings/agents`);
       await gateway.waitForRequest("agents.list");
       await selectAgent(page.locator(".settings-sidebar__agent openclaw-agent-select"), "Reviewer");
-      const setDefault = page.getByRole("button", { name: "Set Default", exact: true });
+      await page.locator(".agents-page-menu__trigger").click();
+      const setDefault = page.getByRole("menuitem", { name: "Set default", exact: true });
       await expect.poll(() => setDefault.isDisabled()).toBe(true);
+      await setDefault.click({ force: true });
+      await page.keyboard.press("Escape");
       await expectAgentCreationDenied(page, gateway);
 
-      await setDefault.click({ force: true });
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
 
       await page.goto(`${suite.server.baseUrl}skills`);

@@ -111,6 +111,24 @@ function append(
 }
 
 describe("actor transcript context replica", () => {
+  it.each([false, true])("does not copy discarded navigation when truncated=%s", (truncated) => {
+    const { hot, prepared } = fixture();
+    prepared.snapshot.truncated = truncated;
+    const copyParents = vi.spyOn(prepared.snapshot.parents, "forEach");
+    const retained = seed(undefined, hot, prepared, limits);
+    expect(retained?.context?.rows ?? retained?.context?.window?.rows).toHaveLength(
+      3 - Number(truncated),
+    );
+    expect(copyParents).not.toHaveBeenCalled();
+    copyParents.mockRestore();
+    const rows = retained?.context?.rows ?? retained?.context?.window?.rows;
+    const event = rows?.find((row) => isRecord(row.event) && row.event.id === "user")?.event;
+    assert(isRecord(event) && isRecord(event.message));
+    event.message.role = "mutated-replica";
+    expect(prepared.snapshot.events[1]).toEqual(message("user", null, "user"));
+    expect(prepared.snapshot.parents.get("reply")).toBe("user");
+  });
+
   it("reuses inspected descriptors when detaching seed and read snapshots", () => {
     const { hot, prepared } = fixture();
     delete prepared.residentRows;

@@ -40,6 +40,8 @@ export type ExecProcessOutcome =
       noOutputTimedOut?: boolean;
       failureKind: ExecProcessFailureKind;
       oomScoreWrapperSelected?: boolean;
+      /** Concise failure diagnostic, without the aggregated process output. */
+      message: string;
       reason: string;
     };
 
@@ -190,6 +192,7 @@ export function buildExecExitOutcome(params: {
     noOutputTimedOut: params.exit.noOutputTimedOut,
     failureKind,
     oomScoreWrapperSelected: params.exit.oomScoreWrapperSelected,
+    message: reason,
     reason: joinExecFailureOutput(params.aggregated, reason),
   };
 }
@@ -199,6 +202,7 @@ export function buildExecRuntimeErrorOutcome(params: {
   aggregated: string;
   durationMs: number;
 }): ExecProcessOutcome {
+  const message = String(params.error);
   return {
     status: "failed",
     exitCode: null,
@@ -207,6 +211,7 @@ export function buildExecRuntimeErrorOutcome(params: {
     aggregated: params.aggregated,
     timedOut: false,
     failureKind: "runtime-error",
-    reason: joinExecFailureOutput(params.aggregated, String(params.error)),
+    message,
+    reason: joinExecFailureOutput(params.aggregated, message),
   };
 }

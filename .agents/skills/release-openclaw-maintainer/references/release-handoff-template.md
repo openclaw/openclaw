@@ -70,6 +70,13 @@ operator steering. Do not preserve superseded scope.
 - immutable successful children: `<run ids / artifacts or none>`
 - registry/provenance readback: `<artifact or command result>`
 
+## Hotfix tracking
+
+When backports are in scope, include the ledger release ID, assessed head SHA,
+and a link to scan/selection evidence. Note unresolved or deferred fixes and any
+updates still to sync. If using local evidence because access is unavailable,
+link it and state why; an unavailable ledger is not a publication blocker.
+
 ## Publication surfaces
 
 Keep one row per selected surface, with its exact run/attempt or immutable

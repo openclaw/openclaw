@@ -10,6 +10,7 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "artifacts.list",
   "artifacts.get",
   "artifacts.download",
+  "board.get",
   "canvas.document.preview",
   "canvas.document.view",
   "controlUi.sessionPullRequests.subscribe",
@@ -35,6 +36,7 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "sessions.branches.list",
   "sessions.get",
   "sessions.github.options",
+  "sessions.github.readiness",
   "sessions.github.status",
   "sessions.resolve",
   "sessions.search",
@@ -42,6 +44,8 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "sessions.files.get",
   "sessions.files.download",
   "sessions.files.assets",
+  "sessions.files.preview",
+  "sessions.files.preview.release",
   "sessions.setInvolvement",
   "chat.history",
   "chat.startup",
@@ -51,7 +55,10 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "session.members.listEvidence",
   "themes.get",
   "themes.list",
+  "tools.effective",
   "users.mentionable",
+  "users.personalFile.get",
+  "users.personalFile.set",
   "users.prefs.get",
   "users.prefs.set",
   "users.self",
@@ -60,6 +67,8 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
 ]);
 
 const SESSION_WRITE_METHODS: ReadonlySet<string> = new Set([
+  "board.update",
+  "board.widget.put",
   "question.request",
   "question.waitAnswer",
   "question.resolve",
@@ -67,11 +76,11 @@ const SESSION_WRITE_METHODS: ReadonlySet<string> = new Set([
   "question.list",
   "chat.send",
   "chat.abort",
+  "chat.steerNow",
   "sessions.create",
   "sessions.patch",
   "sessions.patchMany",
   "sessions.fork",
-  "sessions.recover",
   "sessions.send",
   "sessions.steer",
   "sessions.processes.stop",
@@ -85,11 +94,46 @@ export function resolveSessionMethodScope(
   method: string,
   params?: unknown,
 ): SessionOperatorScope | undefined {
+  // Discovery has no params; runtime admission and handlers still require a
+  // session-bound request without operator-only provider/model overrides.
+  if (method === "talk.catalog") {
+    return params === undefined ||
+      (isRecord(params) &&
+        typeof params.sessionKey === "string" &&
+        params.sessionKey.trim().length > 0 &&
+        Object.keys(params).every((key) => key === "sessionKey"))
+      ? "operator.sessions.read"
+      : undefined;
+  }
+  if (method === "talk.session.create") {
+    return params === undefined ||
+      (isRecord(params) &&
+        params.mode === "transcription" &&
+        typeof params.sessionKey === "string" &&
+        params.sessionKey.trim().length > 0 &&
+        Object.keys(params).every((key) =>
+          ["sessionKey", "mode", "transport", "brain"].includes(key),
+        ))
+      ? "operator.sessions.write"
+      : undefined;
+  }
+  if (method === "talk.session.appendAudio" || method === "talk.session.close") {
+    return "operator.sessions.write";
+  }
   // Selecting a device filesystem requires the broader operator capability.
   if (method === "sessions.create" && isRecord(params) && params.deviceFolder !== undefined) {
     return undefined;
   }
-  if (SESSION_READ_METHODS.has(method)) {
+  // Session readers can invoke only stored named queries. The closed RPC schema
+  // rejects overrides; the Gateway checks the definition and live grant at delivery.
+  if (
+    SESSION_READ_METHODS.has(method) ||
+    (method === "board.data.read" &&
+      isRecord(params) &&
+      typeof params.queryName === "string" &&
+      typeof params.ticket === "string" &&
+      Object.keys(params).every((key) => key === "ticket" || key === "queryName"))
+  ) {
     return "operator.sessions.read";
   }
   if (
@@ -149,9 +193,6 @@ export function resolveBaseSessionMutationRequiredScope(
   method: string,
   params?: unknown,
 ): SessionMutationOperatorScope | undefined {
-  if (method === "sessions.recover") {
-    return "operator.write";
-  }
   if (method === "sessions.create") {
     if (!isRecord(params)) {
       return "operator.write";

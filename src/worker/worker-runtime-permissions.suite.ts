@@ -244,7 +244,7 @@ export function registerWorkerPermissionTests({ setup }: WorkerPermissionFixture
 
   it.each([
     {
-      policy: "default",
+      policy: "configured",
       permissionMode: undefined,
       operatorHint: "workspace-contained by configuration",
     },
@@ -284,6 +284,8 @@ export function registerWorkerPermissionTests({ setup }: WorkerPermissionFixture
       launch.assignment.workerContainmentRoot = contained;
       if (permissionMode) {
         launch.assignment.permissionMode = permissionMode;
+      } else {
+        gateway.config = { tools: { exec: { applyPatch: { workspaceOnly: true } } } };
       }
 
       const logError = vi.spyOn(logger, "logError").mockImplementation(() => {});
@@ -293,7 +295,7 @@ export function registerWorkerPermissionTests({ setup }: WorkerPermissionFixture
         const failure = {
           status: "error",
           tool: "apply_patch",
-          error: `Path escapes sandbox root (${await realpath(contained)}): ../outside.txt`,
+          error: `Path escapes sandbox root (${await realpath(contained)}): ../outside.txt. Keep patch paths within the bound root. For an authorized task in another repository, ask the parent to respawn the worker with sessions_spawn and cwd set to that repository. Changing exec workdir does not rebind file tools.`,
         };
         const toolResult = gateway.inferenceRequests[1]?.context.messages.find(
           (message) => message.role === "toolResult",

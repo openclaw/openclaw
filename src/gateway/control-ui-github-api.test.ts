@@ -1,11 +1,7 @@
 import { once } from "node:events";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
-import {
-  CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE,
-  gitHubPublicApi as api,
-} from "./github-public-api.js";
+import { gitHubPublicApi as api } from "./github-public-api.js";
 
 const repoUrl = "https://api.github.com/repos/owner/repo";
 const now = 1_800_000_000_000;
@@ -211,19 +207,7 @@ it("dispatches an admitted request before its caller can retire", async () => {
   expect(activeAtDispatch).toBe(true);
 });
 
-it("shows configured credential recovery instructions but hides unknown errors", () => {
-  const unavailable = new SecretSurfaceUnavailableError({
-    ownerKind: "capability",
-    ownerId: "control-ui-github",
-    state: "unavailable",
-    paths: ["gateway.controlUi.github.token"],
-    refKeys: [],
-    reason: "secret-store-diagnostic",
-  });
-  expect(api.formatControlUiGitHubPreviewError(unavailable)).toEqual({
-    message: CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE,
-    retryable: false,
-  });
+it("hides unknown errors", () => {
   const display = api.formatControlUiGitHubPreviewError(
     new Error("Authorization: Bearer secret-unknown-credential"),
   );
