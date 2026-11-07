@@ -199,21 +199,24 @@ class ChatLinkPreviewTest {
   }
 
   @Test
-  fun fetchesHtmlWithoutAmbientHeaders() =
+  fun fetchesAdvertisedHtmlContentTypesWithoutAmbientHeaders() =
     withServer { server ->
-      server.enqueue(
-        MockResponse()
-          .setHeader("Content-Type", "text/html; charset=utf-8")
-          .setBody("<meta property='og:title' content='Fetched'>"),
-      )
+      val contentTypes = listOf("text/html; charset=utf-8", "application/xhtml+xml", "application/xhtml+xml; charset=utf-8")
+      for (contentType in contentTypes) {
+        server.enqueue(
+          MockResponse()
+            .setHeader("Content-Type", contentType)
+            .setBody("<html xmlns='http://www.w3.org/1999/xhtml'><head><title>Fetched</title></head></html>"),
+        )
 
-      val result = fetcher().fetch(server.url("/page").toString()) as LinkPreviewResult.Loaded
+        val result = fetcher().fetch(server.url("/page").toString())
 
-      assertEquals("Fetched", result.metadata.title)
-      val request = server.takeRequest()
-      assertEquals("text/html, application/xhtml+xml;q=0.9", request.getHeader("Accept"))
-      assertNull(request.getHeader("Cookie"))
-      assertNull(request.getHeader("Authorization"))
+        assertEquals(contentType, LinkPreviewResult.Loaded(LinkPreviewMetadata("Fetched", null, null)), result)
+        val request = server.takeRequest()
+        assertEquals("text/html, application/xhtml+xml;q=0.9", request.getHeader("Accept"))
+        assertNull(request.getHeader("Cookie"))
+        assertNull(request.getHeader("Authorization"))
+      }
     }
 
   @Test
@@ -262,8 +265,10 @@ class ChatLinkPreviewTest {
   @Test
   fun rejectsNonHtmlAndTimesOutQuickly() {
     withServer { server ->
-      server.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody("{}"))
-      assertSame(LinkPreviewResult.Failed, fetcher().fetch(server.url("/json").toString()))
+      for (contentType in listOf("application/json", "application/xml", "text/xml")) {
+        server.enqueue(MockResponse().setHeader("Content-Type", contentType).setBody("<title>Not HTML</title>"))
+        assertSame(contentType, LinkPreviewResult.Failed, fetcher().fetch(server.url("/not-html").toString()))
+      }
     }
 
     withServer { server ->
