@@ -307,7 +307,7 @@ function navigationPresentation(icon: IconName, key: string): NavigationPresenta
 
 const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation> = {
   settings: ["settings", "nav.settings", "common.settingsSections"],
-  templates: navigationPresentation("bot", "templates"),
+  templates: navigationPresentation("blobster", "templates"),
   agents: navigationPresentation("bot", "agents"),
   activity: navigationPresentation("activity", "activity"),
   meetings: navigationPresentation("book", "meetings"),

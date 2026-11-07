@@ -16,6 +16,8 @@ if [ -n "${OPENCLAW_PR_ANCHOR_REPO_ROOT:-}" ] &&
   trap 'exit 129' HUP
   trap 'exit 130' INT
   trap 'exit 131' QUIT
+  # `scripts/pr --help | head` closes stderr mid-run; dying here would strand dependency holds.
+  trap 'exit 141' PIPE
   trap 'exit 143' TERM
 fi
 
@@ -91,7 +93,7 @@ pr_subcommand_classification() {
     ls | workspace | ci-dispatch)
       printf 'advisory\n'
       ;;
-    gc | lock-recover | tooling-recover | review-transition-recover | review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-correction-init | prepare-correction-continue | prepare-correction-review-init | prepare-workflow-successor | prepare-publish-for-proof | prepare-baseline-refresh | prepare-baseline-successor | prepare-baseline-signing-request | prepare-baseline-signing-continue | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover | merge-complete)
+    gc | lock-recover | dependency-cache-recover | tooling-recover | review-transition-recover | review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-correction-init | prepare-correction-continue | prepare-correction-review-init | prepare-workflow-successor | prepare-publish-for-proof | prepare-baseline-refresh | prepare-baseline-successor | prepare-baseline-signing-request | prepare-baseline-signing-continue | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover | merge-complete)
       printf 'landing\n'
       ;;
     *) return 1 ;;
@@ -108,8 +110,9 @@ is_locked_pr_command() {
   local classification
   classification=$(pr_subcommand_classification "$1") || return 1
   [ "$classification" = "landing" ] || return 1
+  # Cache recovery owns the shared metadata mutex, not any one PR's operation.
   # gc manages per-PR locks itself; lock-recover performs an exact-OID CAS.
-  [ "$1" != "gc" ] && [ "$1" != "lock-recover" ]
+  [ "$1" != "gc" ] && [ "$1" != "lock-recover" ] && [ "$1" != dependency-cache-recover ]
 }
 
 dev_wrapper_opt_in=0
@@ -233,6 +236,11 @@ function git(directory, args, input) {
   return result.stdout;
 }
 const oid = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
+function officialOrigin() {
+    return ["https://github.com/openclaw/openclaw", "https://github.com/openclaw/openclaw.git",
+      "git@github.com:openclaw/openclaw.git", "ssh://git@github.com/openclaw/openclaw.git"]
+      .includes(git(repository, ["config", "--get", "remote.origin.url"]).toString("utf8").trim());
+}
 function repositoryContext() {
     const run = args => git(repository, args).toString("utf8").trim();
     const owner = realpathSync(run(["rev-parse", "--path-format=absolute", "--git-common-dir"]));
@@ -319,8 +327,7 @@ try {
       }
       if (!current ||
           source !== run(["rev-parse", "--verify", `${anchor}^{commit}`]) ||
-          !["https://github.com/openclaw/openclaw", "https://github.com/openclaw/openclaw.git",
-            "git@github.com:openclaw/openclaw.git", "ssh://git@github.com/openclaw/openclaw.git"].includes(run(["config", "--get", "remote.origin.url"]))) {
+          !officialOrigin()) {
         throw new Error("Current workflow recovery requires official current main and a retained workflow");
       }
       requireSource(current.source, anchor);
@@ -542,7 +549,10 @@ try {
       requireSource(current.source, paths[1]);
       run(["update-ref", "--no-deref", "-d", ref, current.oid]);
     } else throw new Error("Unknown workflow operation");
-  } else if (operation === "bootstrap-source") {
+  } else if (operation === "bootstrap-source" || operation === "bootstrap-cache-recovery-source") {
+    if (operation === "bootstrap-cache-recovery-source" && !officialOrigin()) {
+      throw new Error("Cache recovery requires the official OpenClaw repository origin");
+    }
     const run = args => git(repository, args).toString("utf8").trim();
     const { owner, identity } = repositoryContext();
     if (dirname(owner) !== realpathSync(repository) || run(["rev-parse", "--is-bare-repository"]) !== "false") {
@@ -660,7 +670,7 @@ pr_read_workflow_binding() {
   local classification binding tracking_status=0
   classification=$(pr_subcommand_classification "$requested_subcommand" 2>/dev/null || true)
   [ "$classification" = landing ] || return 0
-  case "$requested_subcommand" in gc | lock-recover) return 0 ;; esac
+  case "$requested_subcommand" in gc | lock-recover | dependency-cache-recover) return 0 ;; esac
   [[ "${2-}" =~ ^[1-9][0-9]*$ ]] || return 0
   PR_WORKFLOW_PR="$2"
   if [ -n "${OPENCLAW_PR_WORKFLOW_CONTEXT:-}" ]; then
@@ -849,6 +859,12 @@ pr_prepare_bootstrap() {
 }
 
 pr_retire_created_anchor() {
+  # Ordinary retirement opens SQLite and can roll back a hot journal even when
+  # recovery refused it. Retain this wrapper on every outcome without ledger access.
+  if [ "$requested_subcommand" = dependency-cache-recover ]; then
+    echo "Retaining PR recovery anchor without cache cleanup: $1" >&2
+    return 0
+  fi
   # Extraction can replace files even when it fails. Never reuse an earlier
   # verification result or import an invoking-worktree cleanup helper here.
   if [ "$pr_bootstrap_anchor" != "$1" ] || ! pr_verify_bootstrap; then
@@ -861,8 +877,9 @@ pr_retire_created_anchor() {
 # Keep dependency sourcing independent of wrapper selection. In particular, an
 # older anchor still supplies its own package/version policy to this bootstrap.
 pr_materialize_dependencies() {
-  # Location discovery uses only Git and Node built-ins, before dependency repair.
-  [ "$requested_subcommand" != workspace ] || return 0
+  # Discovery and cache recovery use built-ins only. Recovery still authenticates
+  # the complete official-main source closure before it can open the ledger.
+  case "$requested_subcommand" in workspace | dependency-cache-recover) return 0 ;; esac
   pr_verify_bootstrap || { echo "Refusing unauthenticated parent dependency helpers." >&2; return 1; }
   node --input-type=module - "$1" "$canonical_repo_root" "$2" "${3:-${PR_WORKFLOW_SOURCE_REVISION:-}}" "$pr_bootstrap_root/scripts/pr-lib/cache-lifetime.mjs" <<'EOF_TOOLING'
 import { execFileSync, spawnSync } from "node:child_process";
@@ -1084,6 +1101,10 @@ if [ -n "${OPENCLAW_PR_ANCHOR_REPO_ROOT:-}" ]; then
     exit 1
   fi
   canonical_repo_root="$OPENCLAW_PR_ANCHOR_REPO_ROOT"
+  # Establish recovery authority before bootstrap or cleanup can import helpers.
+  if [ "$requested_subcommand" = dependency-cache-recover ]; then
+    pr_batch_wrapper_git bootstrap-cache-recovery-source "$canonical_repo_root" "" >/dev/null || exit 1
+  fi
   pr_read_workflow_binding "$@"
   pr_prepare_bootstrap "$script_parent_dir/.." || exit 1
   if [ "${OPENCLAW_PR_ANCHOR_CREATOR_PID:-}" = "$$" ] && [ "${OPENCLAW_PR_ANCHOR_FD:-}" = 9 ]; then
@@ -1095,6 +1116,10 @@ if [ -n "${OPENCLAW_PR_ANCHOR_REPO_ROOT:-}" ]; then
     "$script_parent_dir/../node_modules"
 elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
   canonical_repo_root="$(dirname "$common_git_dir")"
+  # Establish recovery authority before bootstrap or cleanup can import helpers.
+  if [ "$requested_subcommand" = dependency-cache-recover ]; then
+    pr_batch_wrapper_git bootstrap-cache-recovery-source "$canonical_repo_root" "" >/dev/null || exit 1
+  fi
   canonical_self="$canonical_repo_root/scripts/$(basename "${BASH_SOURCE[0]}")"
   pr_read_workflow_binding "$@"
   if [ "$PR_WORKFLOW_BOOTSTRAP" != 1 ] && [ -x "$canonical_self" ] && { [ "$script_self" != "$canonical_self" ] || [ -n "$PR_WORKFLOW_PR" ]; }; then
@@ -1211,6 +1236,7 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
           trap 'exit 129' HUP
           trap 'exit 130' INT
           trap 'exit 131' QUIT
+          trap 'exit 141' PIPE
           trap 'exit 143' TERM
           exec 9< "$anchor_exec_dir"
           pr_prepare_bootstrap "$anchor_exec_dir" "$anchor_commit" || exit 1
@@ -1269,7 +1295,7 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
             exit 1
           fi
           pr_retire_created_anchor "$anchor_exec_dir"
-          trap - EXIT HUP INT QUIT TERM
+          trap - EXIT HUP INT QUIT PIPE TERM
           exec 9<&-
         fi
         # HEAD blobs are authoritative here: the uncommitted-wrapper guard above
@@ -1302,6 +1328,34 @@ fi
 # Keep the verified owner available after cleanup removes a linked wrapper.
 canonical_repo_root="$(cd "$canonical_repo_root" && pwd -P)"
 readonly canonical_repo_root
+
+if [ "$requested_subcommand" = dependency-cache-recover ]; then
+  [ "$#" -eq 5 ] && [ -n "${2-}" ] && [ "${3-}" = --plan-sha256 ] &&
+    [[ "${4-}" =~ ^[0-9a-f]{64}$ ]] && [ "${5-}" = --confirmed-operator-recovery ] || {
+      echo "dependency-cache-recover requires a plan, exact SHA-256 and --confirmed-operator-recovery." >&2
+      exit 2
+    }
+  # This also covers canonical and matching linked execution, where extraction
+  # was unnecessary. Neither an unlanded HEAD nor dev-wrapper grants authority.
+  recovery_selection=$(pr_batch_wrapper_git bootstrap-cache-recovery-source "$canonical_repo_root" "") || exit 1
+  IFS=$'\t' read -r recovery_source recovery_record <<< "$recovery_selection"
+  verify_pr_workflow_source "$recovery_source" "$script_parent_dir/.." || {
+    echo "Cache recovery requires the complete authenticated official-main wrapper." >&2
+    exit 1
+  }
+  node --input-type=module - "$script_parent_dir/pr-lib/cache-lifetime.mjs" "$2" "$4" <<'EOF_CACHE_RECOVERY'
+import { pathToFileURL } from "node:url";
+try {
+  const { recoverDependencyCache } = await import(pathToFileURL(process.argv[2]));
+  process.stdout.write(`${JSON.stringify(recoverDependencyCache(process.argv[3], process.argv[4]))}\n`);
+} catch (error) {
+  console.error(`PR dependency recovery refused: ${error.message}`);
+  console.error("[pr] FAILED (exit 1)");
+  process.exitCode = 1;
+}
+EOF_CACHE_RECOVERY
+  exit "$?"
+fi
 
 if [ -n "$PR_WORKFLOW_PR" ]; then
   # A pin is admission state, not caller-selected code. The operation lock
@@ -1377,8 +1431,12 @@ Usage:
   scripts/pr workspace <PR>
     Report physical checkout/artifact paths before review-init; no PR state changes.
   scripts/pr gc [--pr <number>] [--dry-run]
+  scripts/pr gc --pr <number> --finalized-task <codex-thread-id> --expected-head <sha>
+    [--worktree <path>] [--artifact <directory> ...] [--known-thread <id> ...]
+    [--codex-socket <path>] [--dry-run]
   scripts/pr lock-recover <PR> <OWNER_OID> --confirmed-no-running-tools
   scripts/pr tooling-recover <PR> <plan> --plan-sha256 <SHA256> --confirmed-quiescent
+  scripts/pr dependency-cache-recover <plan> --plan-sha256 <SHA256> --confirmed-operator-recovery
   scripts/pr review-transition-recover <PR> <plan> --plan-sha256 <SHA256> --confirmed-operator-recovery
     Preserve selected unknown file bytes and restore its journaled source; no transition completion or rebind.
     Requires current official-main tooling and the retained checkout. Exclude other writers until reconciliation.
@@ -1457,7 +1515,7 @@ Usage:
   classified advisory. OPENCLAW_PR_DEV_WRAPPER=1 is equivalent.
 
 Required commands: git, gh, jq, rg (ripgrep), pnpm, node.
-workspace does not require gh, jq, rg, pnpm, or installed Node packages.
+workspace and dependency-cache-recover do not require gh, jq, rg, pnpm, or installed Node packages.
 When macOS blocks ps, PR operation locks require Python 3 with ctypes on PATH.
 USAGE
 }
@@ -1544,7 +1602,8 @@ main() {
       return
       ;;
     gc)
-      local gc_dry_run=false gc_pr=""
+      local gc_dry_run=false gc_pr="" gc_worktree="" gc_head="" gc_task="" gc_socket=""
+      local gc_artifacts=() gc_threads=()
       while [ "$#" -gt 0 ]; do
         case "$1" in
           --dry-run)
@@ -1557,9 +1616,28 @@ main() {
             gc_pr="$2"
             shift 2
             ;;
+          --worktree | --expected-head | --finalized-task | --codex-socket)
+            [ "$#" -ge 2 ] && [ -n "$2" ] || { usage; exit 2; }
+            case "$1" in
+              --worktree) [ -z "$gc_worktree" ] || { usage; exit 2; }; gc_worktree="$2" ;;
+              --expected-head) [ -z "$gc_head" ] && [[ "$2" =~ ^[0-9a-f]{40}$ ]] || { usage; exit 2; }; gc_head="$2" ;;
+              --finalized-task) [ -z "$gc_task" ] || { usage; exit 2; }; gc_task="$2" ;;
+              --codex-socket) [ -z "$gc_socket" ] || { usage; exit 2; }; gc_socket="$2" ;;
+            esac
+            shift 2
+            ;;
+          --artifact | --known-thread)
+            [ "$#" -ge 2 ] && [ -n "$2" ] || { usage; exit 2; }
+            if [ "$1" = --artifact ]; then gc_artifacts+=("$2"); else gc_threads+=("$2"); fi
+            shift 2
+            ;;
           *) usage; exit 2 ;;
         esac
       done
+      if [ -n "$gc_task$gc_worktree$gc_head$gc_socket" ] || [ "${#gc_artifacts[@]}" -gt 0 ] || [ "${#gc_threads[@]}" -gt 0 ]; then
+        [ -n "$gc_task" ] && [ -n "$gc_pr" ] && [ -n "$gc_head" ] &&
+          { [ -n "$gc_worktree" ] || [ "${#gc_artifacts[@]}" -gt 0 ]; } || { usage; exit 2; }
+      fi
       ;;
     tooling-recover | review-transition-recover)
       [ "$#" -eq 5 ] && is_canonical_pr_number "$1" && [ "$3" = --plan-sha256 ] &&
@@ -1749,7 +1827,12 @@ main() {
       list_pr_worktrees
       ;;
     gc)
-      gc_pr_worktrees "$gc_dry_run" "$gc_pr"
+      if [ -n "$gc_task" ]; then
+        gc_finalized_task "$gc_dry_run" "$gc_pr" "$gc_worktree" "$gc_head" "$gc_task" "$gc_socket" \
+          "${#gc_threads[@]}" ${gc_threads[@]+"${gc_threads[@]}"} ${gc_artifacts[@]+"${gc_artifacts[@]}"}
+      else
+        gc_pr_worktrees "$gc_dry_run" "$gc_pr"
+      fi
       ;;
     review-init)
       local pr="${1-}"

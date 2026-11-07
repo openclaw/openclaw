@@ -1,4 +1,5 @@
 @import "../components/solid/connect-command.css";
+@import "../components/solid/icon-button.css";
 
 /* These providers wrap the live shell and panes, before hovercard content loads. */
 openclaw-link-reader-hovercard-provider,
@@ -11,7 +12,6 @@ openclaw-session-progress-hovercard-provider {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  height: 100vh;
   height: 100dvh;
   max-height: 100%;
   background: var(--bg);
@@ -256,9 +256,17 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 
 .sidebar-recent-session .session-owner-stack::after {
   right: 0;
+  /* Keep the right-hand face opaque underneath its away opacity. */
+  z-index: var(--owner-cutout-z, 0);
+  background:
+    linear-gradient(var(--session-row-bg, transparent) 0 0) padding-box,
+    var(--sidebar-bg, var(--bg));
+  mask: none;
 }
 
 .session-owner-stack--overflow {
+  --owner-cutout-z: 1;
+
   justify-content: flex-start;
 }
 
@@ -368,7 +376,9 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   left: -6px;
   width: 32px;
   height: 22px;
-  overflow: visible;
+  overflow: hidden;
+  /* Keep its animated stroke from rerasterizing the entire sidebar tile. */
+  transform: translateZ(0);
   pointer-events: none;
 }
 
@@ -382,13 +392,13 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   opacity: 0.2;
 }
 
-/* The arc covers the same share of its outline as the ring's arc and moves at the
-   ring's linear speed (~45px/s). */
+/* Keep the small arc at 30 painted positions per second without limiting
+   transcript frames. Its average speed still matches the ring (~45px/s). */
 .session-glyph__trace-run {
   stroke: var(--accent);
   stroke-linecap: round;
   stroke-dasharray: var(--spinner-trace-dash);
-  animation: session-run-trace 2s linear infinite;
+  animation: session-run-trace 2s steps(60, end) infinite;
 }
 
 .session-glyph__badge {
@@ -651,6 +661,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   line-height: 1;
 }
 
+/* Keep the lazy toast renderer's failure and retry surface available offline. */
 openclaw-toast-host[popover] {
   position: fixed;
   inset: 0;
@@ -676,7 +687,7 @@ openclaw-toast-host[popover] {
   position: relative;
   display: flex;
   align-items: flex-start;
-  gap: 10px;
+  gap: 6px;
   box-sizing: border-box;
   min-width: min(240px, calc(100vw - 24px));
   padding: 12px 16px;
@@ -693,18 +704,13 @@ openclaw-toast-host[popover] {
   font-family: var(--font-body);
 }
 
-.app-toast--single-row {
-  padding-block: 8px;
-}
-
 .app-toast--action {
   --app-toast-row: 28px;
   padding-right: 10px;
 }
 
 .app-toast--avatar {
-  --app-toast-row: 32px;
-  padding-left: 12px;
+  gap: 10px;
 }
 
 /* Other chat-like pages have no session toolbar to clear. */
@@ -712,8 +718,7 @@ openclaw-toast-host[popover] {
   --app-toast-shell-top: calc(var(--safe-area-top) + var(--rail-header-height) + 12px);
 }
 
-.app-toast-lanes,
-.app-toast-anchored {
+.app-toast-lanes {
   display: contents;
 }
 
@@ -756,188 +761,6 @@ openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane--top-center {
   width: min(360px, calc(100vw - 24px));
 }
 
-/* Arrivals keep their roomier block proportions, not compact feedback pills. */
-.app-toast-lane--top-right > .app-toast {
-  padding-block: 12px;
-  border-radius: min(16px, calc(16px * var(--openclaw-corner-radius-scale)));
-}
-
-@supports (corner-shape: squircle) {
-  .app-toast-lane--top-right > .app-toast {
-    border-radius: min(24px, calc(24px * var(--openclaw-corner-radius-scale)));
-    corner-shape: squircle;
-  }
-}
-
-.app-toast-lane > .app-toast {
-  transition:
-    translate 320ms var(--app-toast-lane-ease),
-    scale 320ms var(--app-toast-lane-ease),
-    opacity 200ms ease;
-}
-
-.app-toast-lane > .app-toast > * {
-  transition: opacity 160ms ease;
-}
-
-@starting-style {
-  .app-toast-lane > .app-toast[data-active="true"] {
-    opacity: 0;
-    translate: 0 -14px;
-    scale: 0.98;
-  }
-}
-
-.app-toast-lane > .app-toast[data-active="false"] {
-  opacity: 0;
-  translate: 0 -8px;
-  scale: 0.97;
-  pointer-events: none;
-  transition-timing-function: ease-in;
-  transition-duration: 180ms;
-}
-
-/* Closed, the newest toast is the only one in flow and sizes the lane. The next two
- * take its box and peek 10px lower per step, 5% smaller; later ones wait hidden. */
-.app-toast-lane:not([data-open]) > .app-toast:not([data-depth="0"]) {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  transform-origin: bottom center;
-}
-
-.app-toast-lane:not([data-open]) > .app-toast:not([data-depth="0"]) > * {
-  opacity: 0;
-}
-
-.app-toast-lane:not([data-open]) > .app-toast[data-depth="0"] {
-  z-index: 3;
-}
-
-.app-toast-lane:not([data-open]) > .app-toast[data-active="false"] {
-  z-index: 4;
-}
-
-.app-toast-lane:not([data-open]) > .app-toast[data-depth="1"] {
-  z-index: 2;
-  translate: 0 10px;
-  scale: 0.95;
-}
-
-.app-toast-lane:not([data-open]) > .app-toast[data-depth="2"] {
-  z-index: 1;
-  translate: 0 20px;
-  scale: 0.9;
-}
-
-.app-toast-lane:not([data-open])
-  > .app-toast[data-depth]:not([data-depth="0"], [data-depth="1"], [data-depth="2"]) {
-  opacity: 0;
-  translate: 0 20px;
-  scale: 0.85;
-  visibility: hidden;
-}
-
-/* The last toast leaving keeps its own box so the lane does not collapse under it. */
-.app-toast-lane:not([data-open]):not(:has(> .app-toast[data-active="true"]))
-  > .app-toast[data-active="false"] {
-  position: relative;
-  inset: auto;
-}
-
-.app-toast--anchored {
-  position: fixed;
-  z-index: var(--z-toast);
-  width: max-content;
-  left: var(--app-toast-anchor-center);
-  top: var(--app-toast-anchor-top);
-  transform: translateX(-50%);
-  min-width: 0;
-  max-width: min(360px, calc(var(--app-toast-anchor-width) - 24px));
-  transition-property: translate, scale, opacity;
-}
-
-.app-toast--anchored[data-active="true"] {
-  translate: 0 0;
-  scale: 1;
-  opacity: 1;
-  transition-duration: 200ms;
-  transition-timing-function: cubic-bezier(0.23, 1, 0.32, 1);
-}
-
-@starting-style {
-  .app-toast--anchored[data-active="true"] {
-    translate: 0 -100%;
-    scale: 0.95;
-    opacity: 0;
-  }
-}
-
-.app-toast--anchored[data-active="false"] {
-  translate: 0 -100%;
-  scale: 0.95;
-  opacity: 0;
-  pointer-events: none;
-  transition-duration: 400ms;
-  transition-timing-function: cubic-bezier(0.7, 0, 0.84, 0);
-}
-
-/* The leading slot shares the first row's height, so the glyph or avatar centers on
- * the title line whether an inline action makes that row 20, 28 or 32 tall. */
-.app-toast__icon,
-.app-toast__avatar {
-  display: grid;
-  flex: 0 0 auto;
-  height: var(--app-toast-row);
-  place-items: center;
-}
-
-.app-toast__icon {
-  width: 20px;
-  color: var(--muted);
-}
-
-.app-toast__icon svg {
-  width: 18px;
-  height: 18px;
-}
-
-.app-toast__avatar {
-  width: 32px;
-}
-
-.app-toast__avatar > * {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-full);
-}
-
-.app-toast--success .app-toast__icon {
-  color: var(--ok);
-}
-
-.app-toast--info .app-toast__icon {
-  color: var(--info);
-}
-
-.app-toast--warning .app-toast__icon {
-  color: var(--warn);
-}
-
-.app-toast--error .app-toast__icon {
-  color: var(--danger);
-}
-
-.app-toast--progress .app-toast__icon svg {
-  animation: app-toast-spin 0.9s linear infinite;
-}
-
-@keyframes app-toast-spin {
-  to {
-    rotate: 360deg;
-  }
-}
-
 /* An action stays beside the text only while the title and description fit one line
  * next to it. The body's flex basis is its single-line width, so anything longer
  * wraps the action onto its own row, right aligned. */
@@ -947,7 +770,7 @@ openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane--top-center {
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
-  gap: 10px;
+  gap: 10px 14px;
   min-width: 0;
 }
 
@@ -970,18 +793,6 @@ openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane--top-center {
   font-size: calc(14px * var(--control-ui-text-scale));
   font-weight: 500;
   line-height: calc(20px * var(--control-ui-text-scale));
-  text-wrap: pretty;
-}
-
-.app-toast__message a {
-  color: var(--link, var(--accent));
-  font-weight: 500;
-}
-
-.app-toast__description {
-  color: var(--muted);
-  font-size: calc(13px * var(--control-ui-text-scale));
-  line-height: calc(18px * var(--control-ui-text-scale));
   text-wrap: pretty;
 }
 
@@ -1010,16 +821,6 @@ openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane--top-center {
 
 .app-toast__action:active {
   background: var(--app-toast-wash-active);
-}
-
-.app-toast__action--primary {
-  background: var(--accent);
-  color: var(--accent-foreground);
-}
-
-.app-toast__action--primary:hover,
-.app-toast__action--primary:active {
-  background: var(--accent-hover);
 }
 
 /* Dismiss floats on the trailing corner and appears only while the toast is
@@ -1051,12 +852,6 @@ openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane--top-center {
   position: absolute;
   inset: -4px;
   content: "";
-}
-
-.app-toast__dismiss svg {
-  width: 11px;
-  height: 11px;
-  stroke-width: 2.5;
 }
 
 .app-toast:hover > .app-toast__dismiss,
@@ -1134,31 +929,12 @@ openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane--top-center {
     max-width: none;
     translate: none;
   }
-
-  /* Touch has no hover: an open stack shows every dismiss button. */
-  .app-toast-lane[data-open] > .app-toast > .app-toast__dismiss {
-    opacity: 1;
-    scale: 1;
-  }
-
-  .app-toast--anchored {
-    max-width: calc(var(--app-toast-anchor-width) - 24px);
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .app-toast-lane > .app-toast,
-  .app-toast-lane > .app-toast > *,
-  .app-toast--anchored,
-  .app-toast--anchored[data-active="true"],
-  .app-toast--anchored[data-active="false"],
   .app-toast__dismiss,
   .app-toast__action {
     transition: none;
-  }
-
-  .app-toast--progress .app-toast__icon svg {
-    animation-duration: 2s;
   }
 }
 
@@ -1516,14 +1292,6 @@ select.settings-select:not([multiple]) {
   column-gap: 10px;
 }
 
-.config-form .field.checkbox input[type="checkbox"],
-.exec-approval-skip input[type="checkbox"],
-.data-table-checkbox-col input[type="checkbox"] {
-  margin: 0;
-  width: 16px;
-  height: 16px;
-}
-
 .field input[aria-invalid="true"],
 .field textarea[aria-invalid="true"],
 .field select[aria-invalid="true"] {
@@ -1574,63 +1342,42 @@ select.settings-select:not([multiple]) {
   border-color: transparent;
 }
 
-.btn.refresh-button {
-  width: 32px;
-  min-width: 32px;
-  height: 32px;
-  min-height: 32px;
-  padding: 0;
-}
-
-.btn.refresh-button svg {
-  width: 16px;
-  height: 16px;
-}
-
-.btn.refresh-button[aria-busy="true"]:disabled {
-  opacity: 1;
-  cursor: progress;
-}
-
 .refresh-button[aria-busy="true"] svg {
   animation: btn-spinner-spin 0.9s linear infinite;
 }
 
 /* At the end of a row, the glyph's ink lines up with the edge of the card below. */
-openclaw-tooltip:last-child > .btn.refresh-button {
+openclaw-tooltip:last-child > .refresh-button {
   margin-inline-end: -10px;
 }
 
 /* The box must not grow a section header past its compact height. */
 @media not all and (max-width: 640px) {
-  .settings-section__actions .btn.refresh-button {
+  .settings-section__actions .refresh-button {
     margin-block: -2px;
   }
 }
 
 @media (pointer: coarse), (max-width: 640px) {
-  .btn.refresh-button {
-    width: 36px;
-    min-width: 36px;
-    height: 36px;
-    min-height: 36px;
+  .oc-icon-button.refresh-button {
+    --oc-icon-button-size: 36px;
   }
 
   /* Touch paints no hover box, so the glyph moves inside it and nothing overflows the gutter. */
-  openclaw-tooltip:last-child > .btn.refresh-button {
-    justify-content: flex-end;
+  openclaw-tooltip:last-child > .refresh-button {
+    justify-items: end;
     margin-inline-end: 0;
   }
 
   /* Beside a neighbor the box starts at that neighbor and reaches into the gutter, so the large
      touch box keeps the glyph at its desktop distance. */
-  * + openclaw-tooltip:last-child > .btn.refresh-button {
-    justify-content: flex-start;
+  * + openclaw-tooltip:last-child > .refresh-button {
+    justify-items: start;
     margin-inline: -8px -4px;
     padding-inline-start: 15px;
   }
 
-  .settings-section__actions > * + openclaw-tooltip:last-child > .btn.refresh-button {
+  .settings-section__actions > * + openclaw-tooltip:last-child > .refresh-button {
     margin-inline-end: -12px;
   }
 }
@@ -1667,9 +1414,45 @@ openclaw-tooltip:last-child > .btn.refresh-button {
   gap: 10px;
 }
 
+.callout__body {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
 .callout__content {
   min-width: 0;
   flex: 1;
+}
+
+.callout__body > .callout__content {
+  /* Reserve a readable text measure before wrapping the action below it. */
+  flex-basis: 24ch;
+}
+
+.callout__title {
+  display: block;
+  font-weight: 600;
+}
+
+.callout__action {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.callout__action > .btn {
+  white-space: normal;
+}
+
+.callout__action:empty {
+  display: none;
 }
 
 .callout__dismiss {
@@ -1680,6 +1463,8 @@ openclaw-tooltip:last-child > .btn.refresh-button {
   justify-content: center;
   flex: 0 0 auto;
   border: 0;
+  margin-block: -4px;
+  margin-inline-end: -6px;
   border-radius: var(--radius-sm);
   background: transparent;
   color: currentColor;
@@ -1694,6 +1479,14 @@ openclaw-tooltip:last-child > .btn.refresh-button {
   width: 16px;
   height: 16px;
   stroke-width: 1.8;
+}
+
+/* Filled tones are fill and text only; untoned notes keep the neutral border. */
+.callout.danger,
+.callout.warn,
+.callout.info,
+.callout.success {
+  border-color: transparent;
 }
 
 .callout.danger,
@@ -1730,6 +1523,16 @@ openclaw-tooltip:last-child > .btn.refresh-button {
 
 .callout.success {
   --callout-tone: var(--ok);
+}
+
+/* Popovers and menus: a row message. Tone colours the text; no box. */
+.callout.callout--compact {
+  padding: 4px var(--oc-menu-item-padding-inline, 8px);
+  border: 0;
+  border-radius: 0;
+  background: none;
+  font-size: inherit;
+  line-height: 1.4;
 }
 
 /* Pending routes reserve the content layout without exposing transient panel text. */
@@ -1853,15 +1656,106 @@ openclaw-tooltip:last-child > .btn.refresh-button {
   color: var(--muted);
 }
 
+.lazy-view-error__summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  margin-block-start: 6px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  color: var(--text);
+  font: 500 calc(13px * var(--control-ui-text-scale)) / 20px var(--font-body);
+  list-style: none;
+  cursor: var(--cursor-action);
+  user-select: none;
+}
+
+.lazy-view-error__summary:hover {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text-strong);
+}
+
+.lazy-view-error__summary:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.lazy-view-error__summary::-webkit-details-marker {
+  display: none;
+}
+
+.lazy-view-error__chevron {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  transition: rotate 150ms var(--ease-out);
+}
+
+.lazy-view-error__details[open] .lazy-view-error__chevron {
+  rotate: 180deg;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lazy-view-error__chevron {
+    transition: none;
+  }
+}
+
+/* Match the transcript's diagnostic well, with Copy in its own top-right cell. */
+.lazy-view-error__well {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-block-start: 8px;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
 .lazy-view-error__detail {
   display: block;
-  margin-top: 8px;
+  flex: 1;
+  min-width: 0;
   max-width: 100%;
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 11px;
-  line-height: 1.5;
+  max-height: min(16rem, 35dvh);
+  margin: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  color: var(--text);
+  font: calc(12px * var(--control-ui-text-scale)) / 1.65 var(--mono);
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.lazy-view-error__action {
+  display: inline-flex;
+  flex: none;
+}
+
+.lazy-view-error__action .chat-copy-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: var(--cursor-action);
+}
+
+.lazy-view-error__action .chat-copy-btn:hover {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text-strong);
+}
+
+@media (hover: none) {
+  .lazy-view-error__action .chat-copy-btn {
+    width: 32px;
+    height: 32px;
+  }
 }
 
 .code-block {
@@ -2065,7 +1959,8 @@ openclaw-tooltip:last-child > .btn.refresh-button {
   align-self: center;
 }
 
-.code-block-wrapper--long :is(.code-block-copy, .code-block-wrap) {
+.code-block-wrapper--long .code-block-copy,
+.code-block-wrapper--long .code-block-wrap {
   position: sticky;
   top: 4px;
   z-index: 1;
@@ -2536,10 +2431,6 @@ td.data-table-key-col {
   background: var(--data-table-row-bg);
 }
 
-.data-table-checkbox-col input[type="checkbox"] {
-  vertical-align: middle;
-}
-
 .data-table .data-table-key-col {
   position: sticky;
   left: var(--data-table-checkbox-col-width);
@@ -2758,15 +2649,6 @@ select.data-table-pagination__size {
   width: 100%;
 }
 
-.agent-select__menu-title {
-  padding: 4px 8px 2px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: var(--control-ui-font-weight-semibold);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-
 .agent-select__menu.oc-menu {
   width: min(320px, calc(100vw - 24px));
   max-height: 320px;
@@ -2976,7 +2858,10 @@ select.data-table-pagination__size {
   overflow: hidden;
 }
 
+/* The palette uses the compact, always-visible overlay scrollbar. */
 .cmd-palette__input {
+  --scrollbar-size: var(--scrollbar-size-compact);
+
   display: block;
   width: 100%;
   min-width: 0;
@@ -2987,7 +2872,6 @@ select.data-table-pagination__size {
   padding: 0 calc(var(--cmd-palette-actions-width) + 20px) 0 0;
   resize: none;
   overflow-y: hidden;
-  scrollbar-width: thin;
   scrollbar-gutter: stable;
   overscroll-behavior: contain;
   font-family: inherit;
@@ -3003,27 +2887,6 @@ select.data-table-pagination__size {
 
 .cmd-palette__input::placeholder {
   color: var(--muted);
-}
-
-/* Keep the overflow indicator visible instead of using an auto-hidden overlay. */
-@supports selector(::-webkit-scrollbar) {
-  .cmd-palette__input {
-    scrollbar-width: auto;
-    scrollbar-color: auto;
-  }
-
-  .cmd-palette__input::-webkit-scrollbar {
-    width: 8px;
-  }
-
-  .cmd-palette__input::-webkit-scrollbar-thumb {
-    border-radius: var(--radius-sm);
-    background: var(--scrollbar-thumb);
-  }
-
-  .cmd-palette__input::-webkit-scrollbar-thumb:hover {
-    background: var(--scrollbar-thumb-hover);
-  }
 }
 
 /* Fades cover only text, never the native far-right scrollbar or actions. */
@@ -3400,9 +3263,14 @@ select.data-table-pagination__size {
 }
 
 .session-glyph__ring--queued,
-.session-run-indicator--offscreen,
 .session-glyph__trace--queued .session-glyph__trace-run {
   animation-play-state: paused;
+}
+
+/* A paused transform still promotes offscreen rows and their overlapping labels.
+   Restart when the row returns instead of retaining those compositor layers. */
+.session-run-indicator--offscreen {
+  animation: none;
 }
 
 .session-glyph__ring--background,
@@ -3613,7 +3481,7 @@ select.data-table-pagination__size {
   background: var(--card);
 }
 
-.provider-brand-icon:not(.provider-brand-icon--fallback) {
+.provider-brand-icon[data-provider-icon] {
   background: currentColor;
   mask: var(--provider-icon-url) center / contain no-repeat;
 }
@@ -3725,16 +3593,14 @@ select.data-table-pagination__size {
 }
 
 /* Sidebar numbers stay tabular so counts and elapsed times hold their column. */
-:is(
-  .session-row-badge,
-  .session-row-trail,
-  .sidebar-child-session-toggle__count,
-  .sidebar-session-group-count,
-  .sidebar-agent-roster__unread,
-  .sidebar-issues-button__count,
-  .viewer-avatar--overflow,
-  .sidebar-session-tree__show-more
-) {
+.session-row-badge,
+.session-row-trail,
+.sidebar-child-session-toggle__count,
+.sidebar-session-group-count,
+.sidebar-agent-roster__unread,
+.sidebar-issues-button__count,
+.viewer-avatar--overflow,
+.sidebar-session-tree__show-more {
   font-variant-numeric: tabular-nums lining-nums;
 }
 
@@ -3759,53 +3625,243 @@ select.data-table-pagination__size {
   width: 26px;
 }
 
-/* One hover, disabled and corner treatment for every field and field-like trigger. */
-:where(
-  .field :is(input, textarea, select),
-  .settings-input,
-  select.settings-select,
-  .picker-select__trigger,
-  .agent-select__trigger,
-  .multi-select,
-  .usage-date-input,
-  .usage-select,
-  .usage-query-input,
-  .sessions-sort select,
-  .dashboards-search input,
-  .dashboards-select select,
-  .data-table-search input,
-  .cron-search-box input,
-  .input
-) {
+/* Keep zero-specificity leaf selectors flat: a mixed ancestor family makes
+   unrelated elements pay for repeated matching during style resolution. */
+:where(.field) :where(input, textarea, select),
+:where(.settings-input),
+:where(select.settings-select),
+:where(.picker-select__trigger),
+:where(.agent-select__trigger),
+:where(.multi-select),
+:where(.usage-date-input),
+:where(.usage-select),
+:where(.usage-query-input),
+:where(.sessions-sort) :where(select),
+:where(.dashboards-search) :where(input),
+:where(.dashboards-select) :where(select),
+:where(.data-table-search) :where(input),
+:where(.cron-search-box) :where(input),
+:where(.input) {
   corner-shape: superellipse(1.5);
   transition: border-color var(--duration-fast) var(--ease-out);
-
-  &::placeholder {
-    color: var(--muted);
+}
+:where(.field) :where(input, textarea, select)::placeholder,
+:where(.settings-input)::placeholder,
+:where(select.settings-select)::placeholder,
+:where(.picker-select__trigger)::placeholder,
+:where(.agent-select__trigger)::placeholder,
+:where(.multi-select)::placeholder,
+:where(.usage-date-input)::placeholder,
+:where(.usage-select)::placeholder,
+:where(.usage-query-input)::placeholder,
+:where(.sessions-sort) :where(select)::placeholder,
+:where(.dashboards-search) :where(input)::placeholder,
+:where(.dashboards-select) :where(select)::placeholder,
+:where(.data-table-search) :where(input)::placeholder,
+:where(.cron-search-box) :where(input)::placeholder,
+:where(.input)::placeholder {
+  color: var(--muted);
+}
+:where(.field) :where(input, textarea, select):focus-visible:focus-visible,
+:where(.settings-input):focus-visible:focus-visible,
+:where(select.settings-select):focus-visible:focus-visible,
+:where(.picker-select__trigger):focus-visible:focus-visible,
+:where(.agent-select__trigger):focus-visible:focus-visible,
+:where(.multi-select):focus-visible:focus-visible,
+:where(.usage-date-input):focus-visible:focus-visible,
+:where(.usage-select):focus-visible:focus-visible,
+:where(.usage-query-input):focus-visible:focus-visible,
+:where(.sessions-sort) :where(select):focus-visible:focus-visible,
+:where(.dashboards-search) :where(input):focus-visible:focus-visible,
+:where(.dashboards-select) :where(select):focus-visible:focus-visible,
+:where(.data-table-search) :where(input):focus-visible:focus-visible,
+:where(.cron-search-box) :where(input):focus-visible:focus-visible,
+:where(.input):focus-visible:focus-visible,
+:where(.field) :where(input, textarea, select)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.settings-input)[aria-expanded="true"]:not(.oc-menu-item),
+:where(select.settings-select)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.picker-select__trigger)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.agent-select__trigger)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.multi-select)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.usage-date-input)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.usage-select)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.usage-query-input)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.sessions-sort) :where(select)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.dashboards-search) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.dashboards-select) :where(select)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.data-table-search) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.cron-search-box) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.input)[aria-expanded="true"]:not(.oc-menu-item) {
+  border-color: var(--field-focus-border);
+  outline: none;
+}
+@media (forced-colors: active) {
+  :where(.field) :where(input, textarea, select):focus-visible:focus-visible,
+  :where(.settings-input):focus-visible:focus-visible,
+  :where(select.settings-select):focus-visible:focus-visible,
+  :where(.picker-select__trigger):focus-visible:focus-visible,
+  :where(.agent-select__trigger):focus-visible:focus-visible,
+  :where(.multi-select):focus-visible:focus-visible,
+  :where(.usage-date-input):focus-visible:focus-visible,
+  :where(.usage-select):focus-visible:focus-visible,
+  :where(.usage-query-input):focus-visible:focus-visible,
+  :where(.sessions-sort) :where(select):focus-visible:focus-visible,
+  :where(.dashboards-search) :where(input):focus-visible:focus-visible,
+  :where(.dashboards-select) :where(select):focus-visible:focus-visible,
+  :where(.data-table-search) :where(input):focus-visible:focus-visible,
+  :where(.cron-search-box) :where(input):focus-visible:focus-visible,
+  :where(.input):focus-visible:focus-visible,
+  :where(.field) :where(input, textarea, select)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.settings-input)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(select.settings-select)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.picker-select__trigger)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.agent-select__trigger)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.multi-select)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.usage-date-input)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.usage-select)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.usage-query-input)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.sessions-sort) :where(select)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.dashboards-search) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.dashboards-select) :where(select)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.data-table-search) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.cron-search-box) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.input)[aria-expanded="true"]:not(.oc-menu-item) {
+    outline-offset: 2px;
+    outline: 2px solid selecteditem;
   }
-
-  &:focus-visible:focus-visible,
-  &[aria-expanded="true"]:not(.oc-menu-item) {
-    outline: none;
-    border-color: var(--field-focus-border);
-  }
-
-  @media (forced-colors: active) {
-    &:focus-visible:focus-visible,
-    &[aria-expanded="true"]:not(.oc-menu-item) {
-      outline: 2px solid SelectedItem;
-      outline-offset: 2px;
-    }
-  }
-
-  &:hover:not(:disabled, :focus-visible, :focus-within, [aria-expanded="true"], [data-disabled]) {
+}
+@media (hover: hover) {
+  :where(.field)
+    :where(input, textarea, select):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.settings-input):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(select.settings-select):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.picker-select__trigger):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.agent-select__trigger):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.multi-select):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.usage-date-input):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.usage-select):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.usage-query-input):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.sessions-sort)
+    :where(select):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.dashboards-search)
+    :where(input):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.dashboards-select)
+    :where(select):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.data-table-search)
+    :where(input):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.cron-search-box)
+    :where(input):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.input):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ) {
     border-color: var(--border-strong);
   }
-
-  &:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
+}
+:where(.field) :where(input, textarea, select):disabled,
+:where(.settings-input):disabled,
+:where(select.settings-select):disabled,
+:where(.picker-select__trigger):disabled,
+:where(.agent-select__trigger):disabled,
+:where(.multi-select):disabled,
+:where(.usage-date-input):disabled,
+:where(.usage-select):disabled,
+:where(.usage-query-input):disabled,
+:where(.sessions-sort) :where(select):disabled,
+:where(.dashboards-search) :where(input):disabled,
+:where(.dashboards-select) :where(select):disabled,
+:where(.data-table-search) :where(input):disabled,
+:where(.cron-search-box) :where(input):disabled,
+:where(.input):disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Ghost triggers have no border to recolor, so focus draws one in the same place. */

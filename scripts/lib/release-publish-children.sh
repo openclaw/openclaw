@@ -118,6 +118,9 @@ cleanup_clawhub_children() {
     [[ -n "$run_id" ]] || continue
     run_json="$(gh_read api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")" || { failed=1; continue; }
     [[ "$(jq -r '.status' <<< "$run_json")" != completed ]] || continue
+    # A cancel request does not end a job waiting on an environment gate
+    # (Plugin ClawHub New's clawhub-plugin-bootstrap); reject it first.
+    reject_pending_deployments "$run_id"
     if ! gh run cancel --repo "$GITHUB_REPOSITORY" "$run_id"; then
       echo "::warning::Could not cancel ClawHub child ${run_id}; inspect https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}." >&2
       failed=1
@@ -328,6 +331,17 @@ dispatch_workflow_at_ref() {
   fi
   # API 2026-03-10 removed return_run_details and always returns the
   # workflow_run_id, API run_url, and browser html_url in a 200 response.
+  if [[ "$workflow" == plugin-npm-release.yml && "$(jq -r '.prepared_artifact // ""' <<< "$inputs_json")" != "" ]]; then
+    # Reauthenticate Q after all ref/field work, at the existing dispatch owner.
+    PREPARED_NPM_ARTIFACT="$(jq -r '.prepared_artifact' <<< "$inputs_json")" \
+      PREPARED_NPM_FRV_RUN_ID="$(jq -r '.full_release_validation_run_id // ""' <<< "$inputs_json")" \
+      PREPARED_NPM_FRV_RUN_ATTEMPT="$(jq -r '.full_release_validation_run_attempt // ""' <<< "$inputs_json")" \
+      PREPARED_NPM_SELECTION_MODE="$(jq -r '.publish_scope' <<< "$inputs_json")" \
+      PREPARED_NPM_PLUGINS="$(jq -r '.plugins // ""' <<< "$inputs_json")" \
+      PREPARED_NPM_DIST_TAG="$(jq -r '.npm_dist_tag // "default"' <<< "$inputs_json")" \
+      node "${BASH_SOURCE[0]%/*}/../plugin-npm-prepared-release.mjs" authorize \
+        --source-sha "$(jq -r '.ref' <<< "$inputs_json")" || return 1
+  fi
   dispatch_response="$(printf '%s' "$dispatch_body" | gh api \
     --method POST \
     -H "Accept: application/vnd.github+json" \

@@ -27,6 +27,7 @@ function stripThreadSuffix(value: string): string {
 export function limitHistoryTurns(
   messages: AgentMessage[],
   limit: number | undefined,
+  options: { groupConsecutiveUserTurns?: boolean } = {},
 ): AgentMessage[] {
   if (!limit || limit <= 0 || messages.length === 0) {
     return messages;
@@ -42,10 +43,13 @@ export function limitHistoryTurns(
   if (conversationStart < 0) {
     return messages;
   }
-  let userCount = 0;
+  const userTurnIndexes: number[] = [];
   for (let i = conversationStart; i < messages.length; i++) {
-    if (messages[i]?.role === "user") {
-      userCount++;
+    if (
+      messages[i]?.role === "user" &&
+      (!options.groupConsecutiveUserTurns || messages[i - 1]?.role !== "user")
+    ) {
+      userTurnIndexes.push(i);
     }
   }
 
@@ -53,21 +57,15 @@ export function limitHistoryTurns(
   // stable between cuts; up to 1.5x turns trades strictness for amortized cache reuse.
   const targetUserTurns = Math.floor(limit);
   const maxUserTurns = Math.ceil(targetUserTurns * 1.5);
+  const userCount = userTurnIndexes.length;
   if (userCount <= maxUserTurns) {
     return messages;
   }
   const evictionBatchSize = maxUserTurns - targetUserTurns + 1;
   const userTurnsToKeep = targetUserTurns + ((userCount - targetUserTurns) % evictionBatchSize);
 
-  let turnsRemaining = userTurnsToKeep;
-  const firstKeptIndex = messages.findLastIndex(
-    (message, index) =>
-      index >= conversationStart && message?.role === "user" && --turnsRemaining === 0,
-  );
-  return [
-    ...messages.slice(0, conversationStart),
-    ...messages.slice(firstKeptIndex < 0 ? messages.length : firstKeptIndex),
-  ];
+  const firstKeptIndex = userTurnIndexes.at(-userTurnsToKeep) ?? messages.length;
+  return [...messages.slice(0, conversationStart), ...messages.slice(firstKeptIndex)];
 }
 
 /** Raw channel-config fields this resolver reads, at channel root or under `accounts.<id>`. */

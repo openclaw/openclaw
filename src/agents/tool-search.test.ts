@@ -16,16 +16,14 @@ import { catalogTool, staticRuntime } from "./agent-bundle-mcp-fixture.test-supp
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import { raceWithAbortSignal } from "./agent-tools.abort.js";
-import {
-  finalizeToolTerminalPresentation,
-  type ToolOutcomeObservation,
-} from "./agent-tools.before-tool-call.js";
+import { finalizeToolTerminalPresentation } from "./agent-tools.before-tool-call.js";
 import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { createPromptBuildToolPolicy } from "./embedded-agent-runner/run/attempt-prompt-support.js";
 import { normalizeAgentRuntimeTools } from "./runtime-plan/tools.js";
 import { fakeTool } from "./test-helpers/fake-tool.js";
 import { formatToolExecutionErrorMessage } from "./tool-execution-error.js";
+import type { ToolOutcomeObservation } from "./tool-outcome-observation.js";
 import { filterToolsByPolicy } from "./tool-policy-match.js";
 import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";

@@ -330,13 +330,13 @@ describe("warm boot app root", () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
-  it("replaces the static frame with one splash, admitting login only after startup", async () => {
+  it("replaces the static frame with the normal shell, admitting login only after startup", async () => {
     const starting = Promise.withResolvers<void>();
     const { container, start } = await createWarmSurface(false, starting.promise);
     expect(start).toHaveBeenCalledOnce();
     expect(container.querySelector("#openclaw-boot-shell")).toBeNull();
-    expect(container.querySelectorAll(".connect-splash--skeleton")).toHaveLength(1);
-    expectSurface([".connect-splash"], ["openclaw-login-gate"]);
+    expect(container.querySelectorAll("openclaw-app-shell")).toHaveLength(1);
+    expectSurface(["openclaw-app-shell"], [".connect-splash", "openclaw-login-gate"]);
     starting.resolve();
     await starting.promise;
     await settleImports();
@@ -384,12 +384,39 @@ describe("warm boot app root", () => {
   });
 
   it.each([
-    ["cold connection", false, null, null, ".connect-splash"],
+    ["cold connection", false, null, null, "openclaw-app-shell"],
     ["pairing rejection", true, "Pairing required", "PAIRING_REQUIRED", "openclaw-login-gate"],
-  ] as const)("keeps %s outside the warm shell", async (_name, warm, error, code, surface) => {
+  ] as const)("selects the correct surface for %s", async (_name, warm, error, code, surface) => {
     const { draw } = await createWarmSurface(warm);
     await draw({ lastError: error, lastErrorCode: code });
-    expectSurface([surface], ["openclaw-app-shell"]);
+    expectSurface(
+      [surface],
+      [surface === "openclaw-app-shell" ? ".connect-splash" : "openclaw-app-shell"],
+    );
+  });
+
+  it("retains the cold shell during automatic retries but still admits genuine auth failures", async () => {
+    const { container, draw } = await createWarmSurface(false);
+    await draw();
+    const shell = container.querySelector("openclaw-app-shell");
+    expect(shell).not.toBeNull();
+    await draw({
+      phase: "offline",
+      lastError: "Connection interrupted",
+      lastErrorCode: null,
+      reconnectAt: Date.now() + 1000,
+    });
+    expect(container.querySelector("openclaw-app-shell")).toBe(shell);
+    expect(container.querySelector("openclaw-login-gate")).toBeNull();
+    await draw({ phase: "connecting", reconnectAt: undefined });
+    expect(container.querySelector("openclaw-app-shell")).toBe(shell);
+    await draw({
+      phase: "offline",
+      lastError: "Invalid token",
+      lastErrorCode: "AUTH_TOKEN_MISMATCH",
+      reconnectAt: undefined,
+    });
+    expectSurface(["openclaw-login-gate"], ["openclaw-app-shell"]);
   });
 
   it("pins a manual login attempt and releases it only after connection admission", async () => {
@@ -402,7 +429,7 @@ describe("warm boot app root", () => {
     expect(connect).toHaveBeenCalledOnce();
     expectSurface(["openclaw-login-gate"], ["openclaw-app-shell"]);
     await draw({ phase: "starting" });
-    expect(container.querySelector(".connect-splash")).not.toBeNull();
+    expect(container.querySelector("openclaw-app-shell")).not.toBeNull();
     snapshot.phase = "connected";
     publish();
     const nested = document.createElement("div");

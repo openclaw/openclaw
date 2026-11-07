@@ -46,6 +46,21 @@ surface and session root. Channels may use this capability to enable helper
 tools for restricted senders. Core remains responsible for authorization and
 containment. The same ID is advertised in Gateway `hello-ok.features.capabilities`.
 
+## Settled agent lifecycle events
+
+Use `api.agent.events.registerAgentEventSubscription` with `streams: ["lifecycle"]`
+and `phases: ["end", "error"]` to observe run outcomes. A publication with
+`data.executionSettled === true` records the execution owner's final decision
+across fallback attempts; `agent_end` is an attempt hook, not that guarantee.
+This fact does not imply source-reply delivery or completion of a yielded parent.
+Events without it can still require session-state reconciliation.
+
+`openclaw/plugin-sdk/agent-lifecycle` exposes the same stateless classifiers used
+by the host: `isAgentLifecycleYieldedWaiting(data)` identifies a parent still
+waiting, and `resolveAgentRunLifecycleTerminalFacts({ phase, data })` classifies
+success, failure, cancellation, and timeout. Match the event's session and run
+identity before updating plugin state. These helpers grant no execution authority.
+
 ## Module loading and host identity
 
 Declare plugin entries in `package.json` under `openclaw.extensions`, import

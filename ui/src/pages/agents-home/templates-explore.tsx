@@ -18,6 +18,7 @@ import {
 } from "../../components/solid/catalog-discovery.tsx";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { registerTemplatesEnglish } from "../../i18n/locales/en-templates.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -27,11 +28,17 @@ import { createPageRequestDelay } from "../../lib/page-request.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
+import { observeWindowResize } from "../../lib/reactive/window-resize.ts";
 import { TemplateArtwork } from "./template-artwork.tsx";
-import { searchTemplates, type TemplateCatalogEntry } from "./templates-catalog-client.ts";
 import "../../styles/agents-home.css";
 import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
+import {
+  readTemplatesOverview,
+  searchTemplates,
+  type TemplateCatalogEntry,
+} from "./templates-catalog-client.ts";
 
 registerEnglishCatalog(registerTemplatesEnglish);
 
@@ -91,6 +98,40 @@ function TemplateCard(props: {
         <p class="agents-home__template-summary">{props.entry.summary}</p>
       </Show>
     </article>
+  );
+}
+
+function TemplateCatalogSkeleton() {
+  let grid!: HTMLDivElement;
+  const [count, setCount] = createSignal(4);
+  const measure = createLayoutMeasurement(
+    () => count(),
+    () => {
+      const card = grid.firstElementChild?.getBoundingClientRect();
+      if (!card?.height) {
+        return undefined;
+      }
+      const style = getComputedStyle(grid);
+      const columns = style.gridTemplateColumns.split(" ").length;
+      const gap = Number.parseFloat(style.rowGap) || 0;
+      const available = window.innerHeight - grid.getBoundingClientRect().top;
+      const rows = Math.max(1, Math.ceil((available + gap) / (card.height + gap)));
+      return () => setCount(columns * rows);
+    },
+    { targets: () => [grid], fonts: true },
+  );
+  onSettled(() => observeWindowResize(window, measure));
+  return (
+    <div
+      ref={(element) => (grid = element)}
+      class="plugin-catalog-grid"
+      role="status"
+      aria-label={t("templatesCatalog.loading")}
+    >
+      <Repeat count={count()}>
+        {() => <div class="agents-home__template-skeleton" aria-hidden="true" />}
+      </Repeat>
+    </div>
   );
 }
 
@@ -209,9 +250,9 @@ export function TemplatesExplore(props: { onSelect?: (entry: TemplateCatalogEntr
             </CatalogDiscoveryChips>
             <div class="plugin-catalog-results__body">
               <Show when={unavailable()}>
-                <div class="callout warn" role="status">
+                <InlineAlert tone="warning" role="status">
                   {t("templatesCatalog.unavailable")}
-                </div>
+                </InlineAlert>
               </Show>
               <Show when={request()} keyed>
                 {(current) => {
@@ -223,6 +264,27 @@ export function TemplatesExplore(props: { onSelect?: (entry: TemplateCatalogEntr
                     if (!current.isCurrent()) {
                       const sections: TemplateSection[] = [];
                       return { entries: [], featured: [], sections };
+                    }
+                    if (overview) {
+                      const catalog = await readTemplatesOverview(
+                        current.scope.client,
+                        SECTION_SIZE,
+                      );
+                      if (!current.isCurrent()) {
+                        return { entries: [], featured: [], sections: [] };
+                      }
+                      if (catalog) {
+                        return {
+                          entries: [],
+                          featured: catalog.featured,
+                          sections: templateCategories.slice(1).flatMap((category) => {
+                            const entries = catalog.sections.find(
+                              (section) => section.category === category[0],
+                            )?.entries;
+                            return entries?.length ? [{ category, entries }] : [];
+                          }),
+                        };
+                      }
                     }
                     const [entries, featured, sections] = await Promise.all([
                       overview
@@ -262,29 +324,15 @@ export function TemplatesExplore(props: { onSelect?: (entry: TemplateCatalogEntr
                   return (
                     <Errored
                       fallback={(error) => (
-                        <div class="callout danger" role="alert">
+                        <InlineAlert tone="danger" role="alert">
                           {formatUiError(error(), t("templatesCatalog.unavailable"))}
                           <button type="button" class="btn btn--sm" onClick={() => loadCatalog()}>
                             {t("templatesCatalog.retry")}
                           </button>
-                        </div>
+                        </InlineAlert>
                       )}
                     >
-                      <Loading
-                        fallback={
-                          <div
-                            class="plugin-catalog-grid"
-                            role="status"
-                            aria-label={t("templatesCatalog.loading")}
-                          >
-                            <Repeat count={4}>
-                              {() => (
-                                <div class="agents-home__template-skeleton" aria-hidden="true" />
-                              )}
-                            </Repeat>
-                          </div>
-                        }
-                      >
+                      <Loading fallback={<TemplateCatalogSkeleton />}>
                         <Show
                           when={
                             gateway.connected &&

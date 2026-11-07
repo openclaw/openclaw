@@ -55,12 +55,13 @@ suite.define(() => {
       await openChatSidePanelType(page, "Browser");
 
       const panel = page.locator("section.bp");
-      await panel
-        .getByRole("status")
-        .getByText(
-          "Couldn’t complete this browser request. Try again. Screenshot fetch failed (404).",
-          { exact: true },
-        )
+      const failure = panel.getByRole("status");
+      await failure
+        .getByText("Couldn’t complete the browser action. Try again.", { exact: true })
+        .waitFor();
+      await failure.getByText("Show details", { exact: true }).click();
+      await failure
+        .getByText("Couldn’t load the screenshot (404). Try again.", { exact: true })
         .waitFor();
       expect(mediaRequest).toEqual({
         authorization: "Bearer e2e-device-token",

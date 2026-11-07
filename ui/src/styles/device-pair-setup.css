@@ -36,8 +36,8 @@
   opacity: 0.7;
 }
 
-.device-pair-setup__access input {
-  margin-top: 2px;
+.device-pair-setup__access .oc-radio {
+  margin-top: 1px;
 }
 
 .device-pair-setup__access span {
