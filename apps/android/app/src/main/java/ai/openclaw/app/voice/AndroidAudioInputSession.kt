@@ -77,6 +77,7 @@ internal class AndroidAudioInputSession private constructor(
           communicationAudio?.close()
           throw error
         }
+      communicationAudio?.ownCaptureSessionId = audioRecord.audioSessionId
       return AndroidAudioInputSession(
         audioManager = audioManager,
         audioRecord = audioRecord,
@@ -137,6 +138,9 @@ internal class AndroidAudioInputSession private constructor(
 
   val canCaptureDuringPlayback: Boolean
     get() = echoCancellationEnabled && communicationAudio?.eligible == true
+
+  val focusInterrupted: Boolean
+    get() = communicationAudio?.interrupted == true
 
   private val deviceCallback = audioDeviceChanges(::refreshRouteSafely)
   private val routingChangedListener = AudioRouting.OnRoutingChangedListener { refreshActualRouteSafely() }
