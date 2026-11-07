@@ -39,6 +39,7 @@ vi.mock("openclaw/plugin-sdk/media-understanding", async (original) => ({
 }));
 import plugin from "../index.js";
 import { buildLlamaCppProviderConfig } from "./defaults.js";
+import type { LlamaCppHardware } from "./hardware.js";
 import { resolveLlamaCppPresetPath } from "./managed-server.js";
 import { LLAMA_CPP_MEDIA_RECIPES } from "./media-catalog.js";
 import { LLAMA_CPP_OCR_FIXTURE, LLAMA_CPP_VISION_FIXTURE } from "./media-verification-fixtures.js";
@@ -90,7 +91,12 @@ function modelFile(source: string) {
   return path.join(root, source.includes("mmproj") ? "projector.gguf" : "model.gguf");
 }
 
-function hardware(total = 8, available = 7, arch = "x64") {
+function hardware(
+  total = 8,
+  available = 7,
+  arch = "x64",
+  overrides: Partial<LlamaCppHardware> = {},
+) {
   mocks.hardware.mockResolvedValue({
     platform: "linux",
     arch,
@@ -100,6 +106,7 @@ function hardware(total = 8, available = 7, arch = "x64") {
     availableDiskBytes: 20 * GIB,
     availableRuntimeDiskBytes: 20 * GIB,
     sharedDisk: true,
+    ...overrides,
   });
 }
 
@@ -251,7 +258,9 @@ it.each(["chat", "embedding-only"])(
     expect(rewritten).toContain("threads = 2");
     expect(rewritten).toContain("[embeddinggemma-300m-qat-q8_0]");
     ctx.config = applyProviderAuthConfigPatch(ctx.config, result.configPatch, result);
-    for (const recipe of LLAMA_CPP_MEDIA_RECIPES) {
+    for (const recipe of LLAMA_CPP_MEDIA_RECIPES.filter((entry) =>
+      provider.models.some((model) => model.id === entry.id),
+    )) {
       expect(rewritten).toContain(`[${recipe.id}]`);
       expect(rewritten).toContain(`mmproj = ${path.join(root, "projector.gguf")}`);
       await expect(
@@ -275,32 +284,63 @@ it.each(["chat", "embedding-only"])(
   },
 );
 
-it("declining consent neither downloads nor prepares or changes configuration", async () => {
-  ctx = context(false);
-  expect(await unchangedSetup(ctx)).toEqual({ profiles: [] });
-  expect(mocks.ensureModel.mock.calls.every(([arg]) => arg.download === false)).toBe(true);
-  expectNotCalled(mocks.install, mocks.prepare, mocks.inference);
-  expect(ctx.prompter.confirm).toHaveBeenCalledWith(
-    expect.objectContaining({
-      initialValue: false,
-      message: expect.stringContaining("Original images remain available"),
-    }),
-  );
-});
+it.each(["linux", "darwin"] as const)(
+  "%s declining consent neither downloads nor prepares or changes configuration",
+  async (platform) => {
+    ctx = context(false);
+    if (platform === "darwin") {
+      hardware(16, 7, "arm64", { platform, accelerator: { kind: "metal" } });
+    }
+    expect(await unchangedSetup(ctx)).toEqual({ profiles: [] });
+    expect(mocks.ensureModel.mock.calls.every(([arg]) => arg.download === false)).toBe(true);
+    expectNotCalled(mocks.install, mocks.prepare, mocks.inference);
+    expect(ctx.prompter.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialValue: false,
+        message: expect.stringContaining("Original images remain available"),
+      }),
+    );
+  },
+);
 
-it("leaves configuration untouched outside the verified Linux x64 scope", async () => {
-  hardware(16, 15, "arm64");
+it.each([
+  ["linux", "arm64"],
+  ["darwin", "x64"],
+  ["win32", "x64"],
+] as const)("leaves configuration untouched on unsupported %s/%s", async (platform, arch) => {
+  hardware(16, 15, arch, { platform });
   await expect(unchangedSetup(ctx)).resolves.toEqual({ profiles: [] });
   expect(ctx.prompter.note).toHaveBeenCalledWith(
-    expect.stringContaining("supports Linux x64 with CPU execution only"),
+    expect.stringContaining(`${platform}/${arch}`),
     "Local media unavailable",
   );
   expectNotCalled(mocks.ensureModel, mocks.install, mocks.prepare, mocks.inference);
 });
 
-it.each(["failure", "cancellation"])(
-  "removes candidate state after vision %s without changing configuration",
-  async (outcome) => {
+it("leaves Apple Silicon configuration untouched when Metal is unavailable", async () => {
+  hardware(16, 15, "arm64", {
+    platform: "darwin",
+    accelerator: { kind: "cpu", reason: "Metal probe failed" },
+  });
+  expect(await unchangedSetup(ctx)).toEqual({ profiles: [] });
+  expect(ctx.prompter.note).toHaveBeenCalledWith(
+    expect.stringContaining("Metal"),
+    "Local media unavailable",
+  );
+  expectNotCalled(mocks.ensureModel, mocks.install, mocks.prepare, mocks.inference);
+});
+
+it.each([
+  ["linux", "failure"],
+  ["linux", "cancellation"],
+  ["darwin", "failure"],
+  ["darwin", "cancellation"],
+] as const)(
+  "%s removes candidate state after vision %s without changing configuration",
+  async (platform, outcome) => {
+    if (platform === "darwin") {
+      hardware(16, 7, "arm64", { platform, accelerator: { kind: "metal" } });
+    }
     const controller = new AbortController();
     ctx.signal = controller.signal;
     mocks.inference.mockImplementation(async (request) => {
@@ -324,6 +364,60 @@ it.each(["failure", "cancellation"])(
       await expect(result).rejects.toMatchObject({ name: "AbortError" });
     }
     await expect(fs.stat(preset)).rejects.toMatchObject({ code: "ENOENT" });
+  },
+);
+
+it.each([
+  ["linux", 7, "none", "smolvlm2-2.2b-instruct-q4_k_m"],
+  ["darwin", 7, "MTL0", "smolvlm2-2.2b-instruct-q4_k_m"],
+  ["darwin", 4, "MTL0", "smolvlm2-500m-video-instruct-q8_0"],
+] as const)(
+  "%s installs %s GiB media as %s only after both image checks",
+  async (platform, available, device, vision) => {
+    hardware(16, available, platform === "darwin" ? "arm64" : "x64", {
+      platform,
+      accelerator: platform === "darwin" ? { kind: "metal" } : { kind: "cpu", reason: "CPU host" },
+    });
+    const actual =
+      await vi.importActual<typeof import("./managed-server.js")>("./managed-server.js");
+    mocks.prepare.mockImplementation(
+      (params: Parameters<typeof actual.prepareManagedLlamaServer>[0]) =>
+        actual.prepareManagedLlamaServer({ ...params, port: 20012 }),
+    );
+    const before = structuredClone(ctx.config);
+    mocks.inference.mockImplementation(async (request) => {
+      expect(ctx.config).toEqual(before);
+      return {
+        text: request.model.startsWith("glm") ? "OPENCLAW OCR 4827" : "red square",
+        model: request.model,
+      };
+    });
+    const result = await unchangedSetup(ctx);
+    expect(
+      mocks.inference.mock.calls.map(([request]) => ({
+        model: request.model,
+        buffer: request.images[0]?.buffer,
+      })),
+    ).toEqual([
+      { model: "glm-ocr-q8_0", buffer: LLAMA_CPP_OCR_FIXTURE },
+      { model: vision, buffer: LLAMA_CPP_VISION_FIXTURE },
+    ]);
+    const config = applyProviderAuthConfigPatch(ctx.config, result.configPatch, result);
+    const provider = config.models?.providers?.["llama-cpp"];
+    const candidatePreset = resolveLlamaCppPresetPath(provider?.localService);
+    assert(provider && candidatePreset, "Missing verified media configuration");
+    expect(provider.params?.mediaModels).toEqual({ ocr: "glm-ocr-q8_0", vision });
+    expect(provider.models.map((model) => model.params?.device)).toEqual([device, device]);
+    expect(config.agents?.defaults?.imageModel).toEqual({
+      primary: `llama-cpp/${vision}`,
+      fallbacks: [],
+    });
+    expect(config.tools?.media?.models).toEqual([
+      { provider: "llama-cpp", model: vision, capabilities: ["image"] },
+    ]);
+    const contents = await fs.readFile(candidatePreset, "utf8");
+    expect(contents.match(new RegExp(`^device = ${device}$`, "gm"))).toHaveLength(2);
+    expect(contents.match(new RegExp(`^mmproj-device = ${device}$`, "gm"))).toHaveLength(2);
   },
 );
 

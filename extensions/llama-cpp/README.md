@@ -48,6 +48,22 @@ It never installs, starts, stops, or reconfigures the external process.
 See the [llama.cpp provider guide](https://docs.openclaw.ai/plugins/llama-cpp)
 for authentication, router behavior, manual configuration, and troubleshooting.
 
+## Configure local OCR and vision
+
+On Linux x64 (CPU) or an Apple Silicon Mac (Metal), run:
+
+```bash
+openclaw models auth login --provider llama-cpp --method local-media
+```
+
+Setup selects separate OCR and vision models within the Gateway's current memory
+and disk budgets, asks permission, and verifies both with real image inference
+before activating local image routes. Cancellation or failure keeps the previous
+configuration. Macs require macOS 13.3 or newer and native arm64 Node.
+
+See [managed local OCR and vision](https://docs.openclaw.ai/plugins/llama-cpp#managed-local-ocr-and-vision)
+for model choices, resource requirements, and limitations.
+
 ## Configure embeddings
 
 Set `memory.search.provider` to `local`. The plugin preserves the historical

@@ -6,6 +6,8 @@ import { detectLlamaCppHardware } from "./hardware.js";
 const probes = vi.hoisted(() => ({
   output: "",
   error: undefined as Error | undefined,
+  displays: "",
+  displayError: undefined as Error | undefined,
   diskContainers: {} as Record<string, string>,
 }));
 vi.mock("node:child_process", () => ({
@@ -16,12 +18,14 @@ vi.mock("node:child_process", () => ({
     callback: (error: Error | null, stdout: string, stderr: string) => void,
   ) =>
     callback(
-      probes.error ?? null,
+      (file === "/usr/sbin/system_profiler" ? probes.displayError : probes.error) ?? null,
       file === "/bin/df"
         ? `/dev/${args[1] === "/models" ? "disk4s1" : "disk5s1"} 100 50 50 50% /volume`
         : file === "/usr/sbin/diskutil"
           ? (probes.diskContainers[args[2] ?? ""] ?? "")
-          : probes.output,
+          : file === "/usr/sbin/system_profiler"
+            ? probes.displays
+            : probes.output,
       "",
     ),
 }));
@@ -49,6 +53,8 @@ async function useSeparateVolume() {
 beforeEach(async () => {
   probes.output = "";
   probes.error = undefined;
+  probes.displays = "";
+  probes.displayError = undefined;
   probes.diskContainers = {};
   vi.spyOn(os, "platform").mockReturnValue("linux");
   vi.spyOn(os, "arch").mockReturnValue("x64");
@@ -96,14 +102,54 @@ it("reports reclaimable Linux memory and separate NVIDIA device budgets", async 
   });
 });
 
-it("counts reclaimable Apple memory once and identifies unified Metal", async () => {
+it.each([
+  { spdisplays_mtlgpufamilysupport: "spdisplays_metal4" },
+  { spdisplays_metal: "spdisplays_supported" },
+  { spdisplays_metal: "spdisplays_metalfeaturesetfamily1" },
+])("counts reclaimable Apple memory once with reported Metal support: %j", async (display) => {
   vi.mocked(os.platform).mockReturnValue("darwin");
   vi.mocked(os.arch).mockReturnValue("arm64");
+  vi.spyOn(os, "cpus").mockReturnValue([
+    { model: "Apple M4", speed: 0, times: { user: 0, nice: 0, sys: 0, idle: 0, irq: 0 } },
+  ]);
+  vi.spyOn(os, "availableParallelism").mockReturnValue(10);
+  probes.displays = JSON.stringify({ SPDisplaysDataType: [display] });
   probes.output =
     "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free: 65536.\nPages inactive: 131072.\nPages purgeable: 32768.";
-  const hardware = await detect();
+  const hardware = await detect({ verifyMetal: true });
   expect(hardware.availableMemoryBytes).toBe(3 * GIB);
   expect(hardware.accelerator).toEqual({ kind: "metal" });
+  expect(hardware).toMatchObject({ cpuModel: "Apple M4", cpuCores: 10 });
+});
+
+it.each([
+  ["missing telemetry", "", undefined],
+  ["malformed telemetry", "not JSON", undefined],
+  [
+    "unsupported GPU",
+    '{"SPDisplaysDataType":[{"spdisplays_metal":"spdisplays_unsupported"}]}',
+    undefined,
+  ],
+  ["failed probe", "", new Error("unavailable")],
+] as const)(
+  "does not infer Apple Metal from architecture with %s",
+  async (_name, displays, error) => {
+    vi.mocked(os.platform).mockReturnValue("darwin");
+    vi.mocked(os.arch).mockReturnValue("arm64");
+    probes.displays = displays;
+    probes.displayError = error;
+    expect((await detect({ verifyMetal: true })).accelerator).toMatchObject({
+      kind: "cpu",
+      reason: expect.any(String),
+    });
+  },
+);
+
+it("preserves native Mac chat and embedding selection without mandatory telemetry", async () => {
+  vi.mocked(os.platform).mockReturnValue("darwin");
+  vi.mocked(os.arch).mockReturnValue("arm64");
+  probes.displayError = new Error("system_profiler timed out");
+  expect((await detect()).accelerator).toEqual({ kind: "metal" });
 });
 
 it.each([

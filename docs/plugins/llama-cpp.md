@@ -246,10 +246,22 @@ current available memory, supported runtime backend, and free disk. It shows the
 host, backend, model and projector downloads, memory budget, rejected candidates,
 and degraded modes before asking permission. No download occurs before consent.
 
-The initial automatic media setup scope is **Linux x64 with CPU execution**. Other
-managed backends remain available for chat and embeddings, but automatic OCR and
-vision activation on those hosts waits for matching end-to-end verification.
-Use a Linux x64 Gateway for this setup, or configure another image provider.
+Automatic media setup supports these Gateway hosts:
+
+| Platform                    | Backend | Requirements                                                                                       |
+| --------------------------- | ------- | -------------------------------------------------------------------------------------------------- |
+| Linux x64                   | CPU     | The existing managed Linux runtime                                                                 |
+| macOS arm64 (Apple Silicon) | Metal   | macOS 13.3 or newer, native arm64 Node, and Metal reported by `system_profiler SPDisplaysDataType` |
+
+On a Mac, setup reports the Apple chip, available CPU cores, total unified memory,
+current available memory, and shared model/runtime disk budget. It prefers the
+2.2B vision recipe and selects the compact 500M recipe when only that complete
+pair fits memory or disk. Metal shares system memory; GPU memory is never added
+to the host budget. Linux keeps its original OCR/vision pair and CPU execution.
+Intel Macs, Rosetta Node processes, and hosts without confirmed Metal support
+receive guidance without changing configuration. Other managed backends remain
+available for chat and embeddings.
+
 Updating OpenClaw never activates these routes; setup requires explicit consent.
 
 The curated recipes use pinned repository revisions, sizes and SHA-256 checksums
@@ -261,17 +273,38 @@ Both checks must pass before configuration is saved. Cancellation or failure
 retains the previous configuration and removes the candidate preset. Verified
 downloads remain cached for retry.
 
-| Role   | Recipe               | Model + projector download | Model memory budget |
-| ------ | -------------------- | -------------------------- | ------------------- |
-| OCR    | GLM-OCR Q8_0         | About 1.43 GB              | 4 GiB               |
-| Vision | SmolVLM2 2.2B Q4_K_M | About 1.71 GB              | 5 GiB               |
+| Role                   | Recipe               | Model + projector download | Model memory budget |
+| ---------------------- | -------------------- | -------------------------- | ------------------- |
+| OCR                    | GLM-OCR Q8_0         | About 1.43 GB              | 4 GiB               |
+| Vision                 | SmolVLM2 2.2B Q4_K_M | About 1.71 GB              | 5 GiB               |
+| Vision (Metal compact) | SmolVLM2 500M Q8_0   | About 0.55 GB              | 3 GiB               |
 
 A complete pair needs at least 6 GiB host RAM, sufficient **available** memory
-after headroom, and disk for missing files plus runtime staging. These are
-eligibility floors, not guarantees of speed or accuracy. Only one router model
+after headroom, and disk for missing files plus runtime staging. The complete
+Metal pair needs at least 4 GiB available within that budget because OCR still
+reserves 4 GiB; the Linux pair needs 5 GiB. Close other applications and retry if
+current memory pressure prevents setup. These are eligibility floors, not
+guarantees of speed or accuracy. The compact recipe is English-focused and
+accepts one still image per request despite its upstream “Video” model name. Only one router model
 is resident at a time, including existing chat and embedding models. Switching
 tasks can incur model-loading latency. No additional model process manager is
 installed.
+
+Metal setup explicitly offloads both model and projector. If an existing router
+has global CPU options such as `--device none`, `--gpu-layers 0`, or
+`--no-mmproj-offload`, move those settings into the existing model's preset
+section before retrying. Global router arguments override per-model settings in
+the pinned runtime; setup reports the conflict before downloading anything.
+
+To check a separate image after setup, use the registered image route:
+
+```bash
+openclaw infer image describe --file ./photo.jpg --model llama-cpp/smolvlm2-2.2b-instruct-q4_k_m --prompt "Describe the visible objects."
+openclaw infer image describe --file ./scan.png --model llama-cpp/glm-ocr-q8_0 --prompt "Transcribe the visible text."
+```
+
+If setup selected the compact recipe, use
+`llama-cpp/smolvlm2-500m-video-instruct-q8_0` for the photo command instead.
 
 ### Choose the image task
 
