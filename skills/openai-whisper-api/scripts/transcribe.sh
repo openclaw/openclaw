@@ -72,6 +72,12 @@ fi
 
 mkdir -p "$(dirname "$out")"
 
+# Reject predictable output failures before making a paid request.
+if [[ -d "$out" || ( -e "$out" && ! -w "$out" ) || ( ! -e "$out" && ! -w "$(dirname "$out")" ) ]]; then
+  echo "Output is not writable: $out" >&2
+  exit 1
+fi
+
 api_base="${OPENAI_BASE_URL:-https://api.openai.com/v1}"
 api_base="${api_base%/}"
 

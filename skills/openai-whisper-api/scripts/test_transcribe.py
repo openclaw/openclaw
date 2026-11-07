@@ -17,14 +17,17 @@ class TranscribeTests(unittest.TestCase):
             temporary.mkdir()
             curl = root / "curl"
             curl.write_text(
-                '#!/bin/sh\n[ "$CURL_EXIT" = 22 ] || printf "new response"\nexit "$CURL_EXIT"\n'
+                '#!/bin/sh\ntouch "$CURL_CALLED"\n'
+                '[ "$CURL_EXIT" = 22 ] || printf "new response"\nexit "$CURL_EXIT"\n'
             )
             curl.chmod(0o755)
+            called = root / "curl-called"
             env = {
                 **os.environ,
                 "PATH": f"{root}{os.pathsep}{os.environ['PATH']}",
                 "OPENAI_API_KEY": "test-key",
                 "TMPDIR": str(temporary),
+                "CURL_CALLED": str(called),
             }
             for flags in (["--model", "whisper-1"], ["--json"]):
                 for status in (22, 18, 0):
@@ -42,6 +45,17 @@ class TranscribeTests(unittest.TestCase):
                             output.read_text(), "previous transcript" if status else "new response"
                         )
                         self.assertEqual(list(temporary.iterdir()), [])
+                with self.subTest(flags=flags, output="directory"):
+                    called.unlink()
+                    result = subprocess.run(
+                        ["bash", str(script), str(audio), "--out", str(root), *flags],
+                        env={**env, "CURL_EXIT": "0"},
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(called.exists())
 
 
 if __name__ == "__main__":
