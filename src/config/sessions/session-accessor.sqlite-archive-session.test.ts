@@ -125,7 +125,9 @@ describe("SQLite transcript archive sessions", () => {
     const sessionKey = `agent:main:${sessionId}`;
     const scope = { sessionKey, sessionId, storePath };
     const event = createTranscriptEvent(sessionId, content);
-    await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
+    // These tests exercise archive workers, not age-based maintenance. An epoch-old
+    // entry can be archived by background maintenance between planning and materialization.
+    await replaceSessionEntry(scope, { sessionId, updatedAt: Date.now() });
     await replaceTranscriptEvents(scope, [event]);
     await waitForSessionTranscriptIndexReconcilesInStateDir(tempDir);
     const database = openLifecycleTestDatabase(storePath);
