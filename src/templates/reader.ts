@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
-import { assertNoSymlinkParents, readFileHandleBounded } from "@openclaw/fs-safe/advanced";
+import { assertNoSymlinkParents } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
-import { FsSafeError, root as fsSafeRoot, type OpenResult } from "../infra/fs-safe.js";
+import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { digestTemplateBytes } from "./digest.js";
 import { readTemplateOpenClawProfile } from "./openclaw-profile.js";
@@ -409,74 +409,77 @@ export async function readTemplateManifestFile(
     ...parsed.manifest.workspace.files.map((entry) => entry.source),
   ].toSorted((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)));
 
-  const openedSources: Array<{ sourcePath: string; opened: OpenResult }> = [];
   const workspaceSources: TemplateWorkspaceSourceSnapshot[] = [];
-  try {
-    let workspaceByteLength = 0;
-    for (const sourcePath of declaredSources) {
-      try {
-        await assertNoSymlinkParents({
-          rootDir: resolvedSource.packageRoot,
-          targetPath: resolve(resolvedSource.packageRoot, sourcePath),
-          allowMissing: false,
-          messagePrefix: "Workspace source",
-        });
-        const opened = await sourceRoot.open(sourcePath, {
-          hardlinks: "reject",
-          symlinks: "reject",
-        });
-        if (opened.stat.size > MAX_MANAGED_FILE_BYTES) {
-          await opened[Symbol.asyncDispose]();
-          throw new FsSafeError(
-            "too-large",
-            `file exceeds limit of ${MAX_MANAGED_FILE_BYTES} bytes (got ${opened.stat.size})`,
-          );
-        }
-        workspaceByteLength += opened.stat.size;
-        openedSources.push({ sourcePath, opened });
-      } catch (error) {
-        return { ok: false, diagnostics: [workspaceSourceDiagnostic(error, sourcePath)] };
+  let workspaceByteLength = 0;
+  // Check the aggregate before reading contents without retaining a handle per source.
+  for (const sourcePath of declaredSources) {
+    try {
+      await assertNoSymlinkParents({
+        rootDir: resolvedSource.packageRoot,
+        targetPath: resolve(resolvedSource.packageRoot, sourcePath),
+        allowMissing: false,
+        messagePrefix: "Workspace source",
+      });
+      const opened = await sourceRoot.open(sourcePath, {
+        hardlinks: "reject",
+        symlinks: "reject",
+      });
+      await opened[Symbol.asyncDispose]();
+      if (opened.stat.size > MAX_MANAGED_FILE_BYTES) {
+        throw new FsSafeError(
+          "too-large",
+          `file exceeds limit of ${MAX_MANAGED_FILE_BYTES} bytes (got ${opened.stat.size})`,
+        );
       }
+      workspaceByteLength += opened.stat.size;
+    } catch (error) {
+      return { ok: false, diagnostics: [workspaceSourceDiagnostic(error, sourcePath)] };
     }
+  }
 
-    if (workspaceByteLength > MAX_MANAGED_WORKSPACE_BYTES) {
+  if (workspaceByteLength > MAX_MANAGED_WORKSPACE_BYTES) {
+    return fileFailure(
+      "workspace_sources_too_large",
+      `Workspace sources exceed ${MAX_MANAGED_WORKSPACE_BYTES} aggregate bytes.`,
+      "$.workspace",
+    );
+  }
+
+  let readWorkspaceByteLength = 0;
+  for (const sourcePath of declaredSources) {
+    let read: Awaited<ReturnType<typeof sourceRoot.read>>;
+    try {
+      await assertNoSymlinkParents({
+        rootDir: resolvedSource.packageRoot,
+        targetPath: resolve(resolvedSource.packageRoot, sourcePath),
+        allowMissing: false,
+        messagePrefix: "Workspace source",
+      });
+      read = await sourceRoot.read(sourcePath, {
+        hardlinks: "reject",
+        maxBytes: MAX_MANAGED_FILE_BYTES,
+        symlinks: "reject",
+      });
+    } catch (error) {
+      return { ok: false, diagnostics: [workspaceSourceDiagnostic(error, sourcePath)] };
+    }
+    const bytes = read.buffer;
+    readWorkspaceByteLength += bytes.byteLength;
+    if (readWorkspaceByteLength > MAX_MANAGED_WORKSPACE_BYTES) {
       return fileFailure(
         "workspace_sources_too_large",
         `Workspace sources exceed ${MAX_MANAGED_WORKSPACE_BYTES} aggregate bytes.`,
         "$.workspace",
       );
     }
-
-    let readWorkspaceByteLength = 0;
-    for (const { sourcePath, opened } of openedSources) {
-      let bytes: Buffer;
-      try {
-        bytes = await readFileHandleBounded(opened.handle, MAX_MANAGED_FILE_BYTES);
-      } catch (error) {
-        if (error instanceof FsSafeError && error.code === "too-large") {
-          return { ok: false, diagnostics: [workspaceSourceDiagnostic(error, sourcePath)] };
-        }
-        throw error;
-      }
-      readWorkspaceByteLength += bytes.byteLength;
-      if (readWorkspaceByteLength > MAX_MANAGED_WORKSPACE_BYTES) {
-        return fileFailure(
-          "workspace_sources_too_large",
-          `Workspace sources exceed ${MAX_MANAGED_WORKSPACE_BYTES} aggregate bytes.`,
-          "$.workspace",
-        );
-      }
-      const digest = digestTemplateBytes(bytes);
-      add(`workspace:${sourcePath}`, bytes);
-      workspaceSources.push({
-        sourcePath,
-        realPath: opened.realPath,
-        byteLength: bytes.byteLength,
-        digest,
-      });
-    }
-  } finally {
-    await Promise.all(openedSources.map(({ opened }) => opened[Symbol.asyncDispose]()));
+    const digest = digestTemplateBytes(bytes);
+    add(`workspace:${sourcePath}`, bytes);
+    workspaceSources.push({
+      sourcePath,
+      realPath: read.realPath,
+      byteLength: bytes.byteLength,
+      digest,
+    });
   }
   const source: TemplateSourceIdentity = {
     kind: resolvedSource.kind,
