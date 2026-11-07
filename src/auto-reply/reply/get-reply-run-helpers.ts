@@ -156,6 +156,7 @@ const embeddedAgentRuntimeLoader = createLazyImportLoader(
 );
 const agentRunnerRuntimeLoader = createLazyImportLoader(() => import("./agent-runner-run.js"));
 const sessionUpdatesRuntimeLoader = createLazyImportLoader(() => import("./session-updates.js"));
+const abortCutoffRuntimeLoader = createLazyImportLoader(() => import("./abort-cutoff.runtime.js"));
 
 export async function prewarmReplyRunRuntimes(): Promise<void> {
   await Promise.all([
@@ -168,6 +169,7 @@ export async function prewarmReplyRunRuntimes(): Promise<void> {
 export const loadEmbeddedAgentRuntime = embeddedAgentRuntimeLoader.load;
 export const loadAgentRunnerRuntime = agentRunnerRuntimeLoader.load;
 export const loadSessionUpdatesRuntime = sessionUpdatesRuntimeLoader.load;
+export const loadAbortCutoffRuntime = abortCutoffRuntimeLoader.load;
 
 export function hasInboundHistoryBody(ctx: TemplateContext): boolean {
   return (

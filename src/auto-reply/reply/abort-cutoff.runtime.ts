@@ -35,39 +35,41 @@ export async function clearAbortCutoffInSessionRuntime(params: {
 }
 
 /**
- * Claims the Stop a reply prompt may state (read before any await), never a newer one: true only
- * for the caller whose write retired it, so one prompt says it.
+ * Claims the Stop recorded on the reply's session row, never a newer one: true only for the caller
+ * whose write retired it, so one admitted turn states it.
  */
-export async function clearUserStopInSessionRuntime(params: {
+export async function claimUserStopInSessionRuntime(params: {
   /** The reply's agent: a key without one (`global`) cannot name the store the Stop was recorded in. */
   agentId: string;
-  sessionId: string;
-  stoppedAt: number;
-  sessionEntry: SessionEntry;
+  sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
 }): Promise<boolean> {
-  const { agentId, sessionId, stoppedAt, sessionEntry, sessionStore, sessionKey, storePath } =
-    params;
+  const { agentId, sessionEntry, sessionStore, sessionKey, storePath } = params;
+  const stoppedAt = resolveUserStoppedAt(sessionEntry);
+  if (!sessionEntry || stoppedAt === undefined) {
+    return false;
+  }
+  const { sessionId } = sessionEntry;
   const stated = (entry: SessionEntry) =>
     entry.sessionId === sessionId && resolveUserStoppedAt(entry) === stoppedAt;
   const retired = { userStoppedAt: undefined, userStoppedSessionId: undefined };
   // The map may hold another object by now; each copy clears only if it still holds this Stop.
-  let claimed = stated(sessionEntry);
   for (const entry of [sessionEntry, sessionKey ? sessionStore?.[sessionKey] : undefined]) {
     if (entry && stated(entry)) {
       Object.assign(entry, retired);
     }
   }
-  if (storePath && sessionKey) {
-    // The durable row decides: its serialized write retires the Stop for exactly one caller, and
-    // a missing row retires nothing.
-    claimed = false;
-    await patchSessionEntryCore({ agentId, storePath, sessionKey }, (current) => {
-      claimed = stated(current);
-      return claimed ? retired : null;
-    });
+  if (!storePath || !sessionKey) {
+    return true;
   }
+  // The durable row decides: its serialized write retires the Stop for exactly one caller, and
+  // a missing row retires nothing.
+  let claimed = false;
+  await patchSessionEntryCore({ agentId, storePath, sessionKey }, (current) => {
+    claimed = stated(current);
+    return claimed ? retired : null;
+  });
   return claimed;
 }

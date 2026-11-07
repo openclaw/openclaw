@@ -15,10 +15,8 @@ import type { SessionControllerInput } from "./session-controller.contracts.js";
 import {
   captureAbortTargetMark,
   notifySessionRunStopped,
-  recordSessionRunStopped,
   trackUserStop,
-  userStopTargetKey,
-  type UserStopProof,
+  type AbortTargetMark,
 } from "./session-run-stopped.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -112,7 +110,17 @@ describe("notifySessionRunStopped", () => {
   });
 });
 
-describe("recordSessionRunStopped", () => {
+/** A cancelled source input of run-1 on incarnation s1 of one stored row. */
+const inputOf = (sessionKey: string, storeScope: string) =>
+  ({
+    instance: { id: `${storeScope}:${sessionKey}` },
+    protocolRunId: "run-1",
+    sourceSessionId: "s1",
+    target: { storeScope },
+    mailbox: { key: sessionKey },
+  }) as unknown as SessionControllerInput;
+
+describe("trackUserStop records", () => {
   it("records only on the incarnation whose owning run the Stop ended", async () => {
     // The receipt carries the store its Stop was authorized against, not the agent's default.
     const storePath = path.join(tempDirs.make("openclaw-run-stopped-"), "sessions.json");
@@ -154,9 +162,16 @@ describe("recordSessionRunStopped", () => {
         { sessionId: "s1", updatedAt: 1, ...row },
       );
     }
-    const record = (ids: string[], proof: UserStopProof, store = storePath) =>
-      recordSessionRunStopped(
-        {
+    // A user's Stop whose committed cancellations (or idle abort mark) prove each row its own.
+    const record = async (
+      ids: string[],
+      cancelled: string[],
+      mark?: AbortTargetMark,
+      store = storePath,
+    ) => {
+      const userStop = trackUserStop({
+        reason: createAgentRunDirectAbortError(true),
+        receipt: () => ({
           stoppedAt: 5_000,
           sessions: ids.map((id) => ({
             agentId: "main",
@@ -164,30 +179,24 @@ describe("recordSessionRunStopped", () => {
             storePath: store,
             sessionId: "s1",
           })),
-        },
-        proof,
-      );
-    const cancelledIn = (...ids: string[]): UserStopProof => ({
-      runIds: new Map(
-        ids.map((id) => [
-          userStopTargetKey({ storePath, sessionKey: key(id), sessionId: "s1" }) ?? id,
-          new Set(["run-1"]),
-        ]),
-      ),
-    });
-    const markOn = (id: string): UserStopProof => ({
-      runIds: new Map(),
-      mark: captureAbortTargetMark({ storePath, sessionKey: key(id) }, { sessionId: "s1" }),
-    });
+        }),
+      });
+      for (const id of cancelled) {
+        userStop.cancelled(inputOf(key(id), storePath));
+      }
+      await userStop.record(mark);
+    };
+    const markOn = (id: string) =>
+      captureAbortTargetMark({ storePath, sessionKey: key(id) }, { sessionId: "s1" });
     const owned = ["owned", "newer", "carried", "replaced", "successor", "terminal", "missing"];
-    await record(owned, cancelledIn(...owned));
-    await record(["elsewhere"], cancelledIn("owned"));
-    await record(["owned"], cancelledIn("owned"), otherStore);
+    await record(owned, owned);
+    await record(["elsewhere"], ["owned"]);
+    await record(["owned"], ["owned"], undefined, otherStore);
     // An idle Stop cancels nothing; only the native abort mark proves the row its own.
-    await record(["idle", "idleOther"], markOn("idle"));
-    await record(["idle"], markOn("idle"), otherStore);
-    await record(["idleSuccessor"], markOn("idleSuccessor"));
-    await record(["idleUnmarked"], { runIds: new Map() });
+    await record(["idle", "idleOther"], [], markOn("idle"));
+    await record(["idle"], [], markOn("idle"), otherStore);
+    await record(["idleSuccessor"], [], markOn("idleSuccessor"));
+    await record(["idleUnmarked"], []);
     const stored = (id: string) => loadSessionEntry({ storePath, sessionKey: key(id) });
     for (const id of ["owned", "carried", "terminal", "idle"]) {
       expect(stored(id), id).toMatchObject(stop(5_000, "s1"));
@@ -211,20 +220,18 @@ describe("recordSessionRunStopped", () => {
   });
 
   it("never fails the Stop when a record cannot be written", async () => {
+    const userStop = trackUserStop({
+      reason: createAgentRunDirectAbortError(true),
+      receipt: () => ({
+        stoppedAt: 1,
+        // A store under a file cannot be opened, so the write throws.
+        sessions: [
+          { agentId: "main", sessionKey: "agent:main:a", storePath: "/dev/null/sessions.json" },
+        ],
+      }),
+    });
     await expect(
-      recordSessionRunStopped(
-        {
-          stoppedAt: 1,
-          // A store under a file cannot be opened, so the write throws.
-          sessions: [
-            { agentId: "main", sessionKey: "agent:main:a", storePath: "/dev/null/sessions.json" },
-          ],
-        },
-        {
-          runIds: new Map(),
-          mark: captureAbortTargetMark({ sessionKey: "agent:main:a" }, { sessionId: "s1" }),
-        },
-      ),
+      userStop.record(captureAbortTargetMark({ sessionKey: "agent:main:a" }, { sessionId: "s1" })),
     ).resolves.toBeUndefined();
   });
 });
@@ -241,13 +248,7 @@ describe("trackUserStop", () => {
       stoppedAt: 5_000,
       sessions: [{ agentId: "main", sessionKey, storePath, sessionId: "s1" }],
     });
-    const input = {
-      instance: { id: "input" },
-      protocolRunId: "run-1",
-      sourceSessionId: "s1",
-      target: { storeScope: storePath },
-      mailbox: { key: sessionKey },
-    } as unknown as SessionControllerInput;
+    const input = inputOf(sessionKey, storePath);
     const stored = () => loadSessionEntry({ storePath, sessionKey })?.userStoppedAt;
 
     // Neither a non-user cancellation nor a user Stop that cancelled nothing records.

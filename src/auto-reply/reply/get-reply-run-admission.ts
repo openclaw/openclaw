@@ -40,10 +40,12 @@ import {
   normalizeThinkLevel,
   resolveThinkingSelectionForModel,
 } from "../thinking.js";
+import { applySessionHints } from "./body.js";
 import { removeDirectiveSpan } from "./directive-parsing.js";
 import type { PreparedReplyRunContext } from "./get-reply-run-context.js";
 import {
   finishReplyPreparation,
+  loadAbortCutoffRuntime,
   loadAgentRunnerRuntime,
   loadEmbeddedAgentRuntime,
   loadSessionUpdatesRuntime,
@@ -567,6 +569,24 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     }
   }
   await traceRunPhase("reply.drain_system_events", () => drainSystemEventBlocks());
+  // Like system events, a recorded Stop is consumed only by an admitted turn: a turn refused
+  // above leaves its note for the next one. An automated turn states it too.
+  const { claimUserStopInSessionRuntime } = await loadAbortCutoffRuntime();
+  const stopClaimed = await claimUserStopInSessionRuntime({
+    agentId,
+    sessionEntry: context.sessionEntry,
+    sessionStore,
+    sessionKey,
+    storePath,
+  });
+  if (stopClaimed) {
+    prefixedBodyBase = applySessionHints({
+      baseBody: prefixedBodyBase,
+      abortedLastRun: false,
+      stoppedByUser: true,
+      abortKey: params.command.abortKey,
+    });
+  }
   const promptBodies = await rebuildPromptBodies();
 
   return {

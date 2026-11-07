@@ -105,9 +105,8 @@ type StoppedRow = Readonly<{ storePath?: string; sessionKey?: string; sessionId?
 /**
  * One stopped row: its store, key and incarnation. A key and incarnation can repeat across stores
  * (a copied row, `global` under several agents), so proof is never shared between rows.
- * @internal Exposed for unit tests only.
  */
-export function userStopTargetKey(row: StoppedRow): string | undefined {
+function userStopTargetKey(row: StoppedRow): string | undefined {
   return row.storePath && row.sessionKey && row.sessionId
     ? JSON.stringify([row.storePath, row.sessionKey, row.sessionId])
     : undefined;
@@ -134,22 +133,20 @@ export function captureAbortTargetMark(
 /**
  * What proves a Stop ended a row's own run: the run ids it cancelled, per stopped row
  * (`userStopTargetKey`), or for an idle Stop the target its native abort mark matched.
- * @internal Exposed for unit tests only.
  */
-export type UserStopProof = Readonly<{
+type UserStopProof = Readonly<{
   runIds: ReadonlyMap<string, ReadonlySet<string>>;
   mark?: AbortTargetMark;
 }>;
 
 /**
  * Records a user's Stop on each stopped session whose own run it ended, so the next reply prompt
- * says the user stopped it (get-reply-run-context states and retires it). The row's owner is its
+ * says the user stopped it (reply admission states and retires it). The row's owner is its
  * admitted writer, else its live or last lifecycle run, so a stale lastRunId never outranks a
  * current writer. Only the stopped incarnation's row is written, a newer Stop of it is kept, a
  * missing row is not created, and a failed write never fails the Stop.
- * @internal Exposed for unit tests only.
  */
-export async function recordSessionRunStopped(
+async function recordSessionRunStopped(
   receipt: SessionRunStopReceipt | undefined,
   proof: UserStopProof,
 ): Promise<void> {
