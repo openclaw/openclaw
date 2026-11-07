@@ -25,6 +25,7 @@ import { SettingsToggleRow } from "../../../components/solid/settings-ui.tsx";
 import { registerChatSessionSharingEnglish } from "../../../i18n/locales/en-chat-session-sharing.ts";
 import { registerSessionPeopleEnglish } from "../../../i18n/locales/en-session-people.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { ChatSessionPublicQr } from "./chat-session-public-qr.tsx";
 import "../../../styles/settings.css";
 import "../../../styles/chat/sharing-mobile.css";
 import {
@@ -181,6 +182,9 @@ export function ChatSessionSharingMobile(props: ChatSessionSharingMobileProps) {
                     <span class="chat-sharing-mobile__url">{link().url}</span>
                     <Icon name="copy" />
                   </button>
+                </Show>
+                <Show when={link().enabled && link().url}>
+                  {(url) => <ChatSessionPublicQr url={url()} />}
                 </Show>
               </SharingDisclosure>
             </div>

@@ -157,6 +157,23 @@ async function mount(props: Partial<ChatSessionSharingProps>, open = true) {
 }
 
 describe("chat session sharing menu", () => {
+  it("offers a QR only for the public URL confirmed by the sharing read", async () => {
+    const state = {
+      ...sharingState({ publicShare }),
+      publicUrl: "https://example.com/chat/openclaw/demo",
+    };
+    const props = renderSharing({ state });
+    const root = await mount(props);
+    expect(root.querySelector(".public-share-qr summary")?.textContent).toBe("Scan QR code");
+    expect(root.querySelector(".public-share-qr img")).toBeNull();
+    render(
+      { ...props, state: { ...state, result: { ...state.result!, publicShare: undefined } } },
+      root,
+    );
+    flush();
+    expect(root.querySelector(".public-share-qr")).toBeNull();
+  });
+
   it("reads people only on opening and retains the latest member rows across reopening", async () => {
     const onOpen = vi.fn();
     const readAvatar = vi.fn(() => undefined);

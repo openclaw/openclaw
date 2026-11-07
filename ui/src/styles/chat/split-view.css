@@ -1100,3 +1100,47 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
     opacity: 1;
   }
 }
+.public-share-qr {
+  min-width: 0;
+  margin-top: 10px;
+  font-size: 12px;
+
+  & > summary {
+    width: fit-content;
+    color: var(--text);
+    cursor: default;
+  }
+}
+
+.public-share-qr__preview {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding-top: 10px;
+
+  & > p {
+    margin: 0;
+    text-align: center;
+    font-size: 11px;
+  }
+}
+
+.public-share-qr__frame {
+  display: grid;
+  width: 240px;
+  max-width: 100%;
+  min-height: 240px;
+  place-items: center;
+  margin: 10px auto 0;
+  border-radius: var(--radius-md);
+  /* A white quiet zone is part of the code, including in dark mode. */
+  background: rgb(255 255 255);
+  color: rgb(0 0 0);
+
+  & > img {
+    display: block;
+    width: 100%;
+    height: auto;
+    image-rendering: pixelated;
+  }
+}

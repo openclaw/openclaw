@@ -27,6 +27,7 @@ import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
 import { SwitchIndicator } from "../../../components/solid/switch.tsx";
 import { registerChatSessionSharingEnglish } from "../../../i18n/locales/en-chat-session-sharing.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { ChatSessionPublicQr } from "./chat-session-public-qr.tsx";
 import {
   type ChatSessionSharingProps,
   VISIBILITY_LABEL_KEYS,
@@ -532,6 +533,9 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
                   </span>
                   <Icon name={copied() ? "check" : "copy"} />
                 </button>
+                <Show when={result()?.publicShare && props.state?.publicUrl}>
+                  {(url) => <ChatSessionPublicQr url={url()} />}
+                </Show>
                 <ChatSessionSharingError
                   completion={copyCompletion()}
                   pending={presentation.busy()}
