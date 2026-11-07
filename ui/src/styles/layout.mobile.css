@@ -734,7 +734,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
 /* ≤768px: tighten padding and stack pagination */
 @media (max-width: 768px) {
   .session-menu__panel {
-    --menu-item-height: 40px;
+    --menu-item-height: 36px;
   }
 
   .session-menu .session-menu__separator {

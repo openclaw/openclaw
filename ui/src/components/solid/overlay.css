@@ -366,7 +366,7 @@
   padding: var(--oc-popover-padding, 1.5rem);
 }
 
-/* Phone rows: 14px labels, 18px glyphs and a 12px text inset; the 40px height
+/* Phone rows: 14px labels, 18px glyphs and a 12px text inset; the 36px height
    comes from the coarse --menu-item-height. */
 @media (pointer: coarse) and (max-width: 640px) {
   .oc-menu {

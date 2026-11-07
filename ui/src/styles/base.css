@@ -495,10 +495,10 @@
   color-scheme: dark;
 }
 
-/* Touch menu rows sit one step above the 38px touch controls, phones included. */
+/* Touch menu rows match the 36px avatar rows, phones included. */
 @media (pointer: coarse) {
   :root {
-    --menu-item-height: 40px;
+    --menu-item-height: 36px;
   }
 }
 

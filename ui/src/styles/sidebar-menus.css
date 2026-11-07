@@ -129,7 +129,7 @@
 /* Keep the mobile touch geometry above the shared compact-menu rule. */
 .chat-header-session-menu--mobile.session-menu .session-menu__item {
   flex: 0 0 auto;
-  min-height: 40px;
+  min-height: var(--menu-item-height);
   gap: 10px;
   padding: 5px 12px;
   border-radius: var(--menu-item-radius);
