@@ -4,7 +4,10 @@ import {
   modelRequestBodyState,
 } from "@openclaw/ai/internal/model-request-body";
 import {
+  promptPresenceExpectations,
+  promptPresenceRequestToken,
   responsesPromptObserver,
+  type PromptPresenceExpectation,
   type ResponsesPromptObservation,
 } from "@openclaw/ai/internal/openai";
 import { stableStringify } from "@openclaw/normalization-core";
@@ -47,6 +50,13 @@ type ProviderPromptSnapshot = {
 export type ProviderPromptState = {
   lastAttempt?: ProviderPromptSnapshot;
   lastRejected?: ProviderPromptSnapshot;
+  /**
+   * Frozen expectation set of the CURRENT attempt prompt assembly (set by the
+   * prompt-build phase; memory-only; never a global latest-value cache).
+   */
+  pendingInjectedExpectations?: PromptPresenceExpectation[];
+  /** Monotonic per-run logical model request ordinal (incremented per attempt assembly). */
+  requestCount?: number;
 };
 
 const PROVIDER_PROMPT_STATES_KEY = Symbol.for("openclaw.providerPromptStates");
@@ -207,6 +217,10 @@ export function wrapStreamFnWithProviderPromptState(params: {
     params.state.lastAttempt = undefined; // Custom transports must not leave a stale candidate.
     let attempts = 0;
     let promptObservation: ResponsesPromptObservation | undefined;
+    // Presence forensics: bind the current attempt's frozen expectation set to this
+    // request's options so the transport checkpoint observes exactly what was assembled.
+    const pendingExpectations = params.state.pendingInjectedExpectations;
+    const requestIndex = params.state.requestCount;
     const originalOnPayload = options?.onPayload;
     const observedOptions: NonNullable<Parameters<StreamFn>[2]> = {
       ...options,
@@ -277,9 +291,15 @@ export function wrapStreamFnWithProviderPromptState(params: {
       }
       return encoded!;
     };
+    if (pendingExpectations && pendingExpectations.length > 0) {
+      promptPresenceExpectations.set(observedOptions, pendingExpectations);
+    }
     responsesPromptObserver.set(observedOptions, (observation) => {
       promptObservation = observation;
-      params.recordEvent?.("provider.prompt.observed", { ...observation });
+      params.recordEvent?.("provider.prompt.observed", {
+        ...observation,
+        ...(requestIndex !== undefined ? { requestIndex } : {}),
+      });
     });
     return params.streamFn(model, context, observedOptions);
   };

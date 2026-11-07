@@ -53,4 +53,17 @@ export type PluginHookBeforePromptBuildResult = {
    * Use for static plugin guidance instead of prependContext to avoid per-turn token cost.
    */
   appendSystemContext?: string;
+  /**
+   * Frozen forensic expectation set for this prompt build (prompt presence check).
+   * Must describe exactly what this result injects, frozen AFTER any size guard:
+   * bodyText is the post-guard text actually returned; bodyComplete=false marks a
+   * truncated fragment (never yields a full_hit). Memory-only; never persisted.
+   */
+  injectedExpectations?: {
+    activationId: string;
+    revision: number | string;
+    bodyText: string;
+    bodyChars: number;
+    bodyComplete: boolean;
+  }[];
 };

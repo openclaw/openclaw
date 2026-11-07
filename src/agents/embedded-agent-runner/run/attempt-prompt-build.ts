@@ -31,6 +31,7 @@ import {
   buildModelIdentityPromptLine,
 } from "../../system-prompt.js";
 import { log } from "../logger.js";
+import { getProviderPromptState } from "../provider-prompt-state.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
 import {
   createToolResultPromptProjectionState,
@@ -283,6 +284,16 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   });
   if (composedSystemPrompt) {
     setSystemPrompt(composedSystemPrompt);
+  }
+  // Presence forensics: freeze THIS attempt's expectation set (post size guard) and
+  // assign the per-run logical request ordinal. One assembly per model request.
+  {
+    const providerPromptState = getProviderPromptState(input.attempt.runId);
+    providerPromptState.pendingInjectedExpectations =
+      hookResult?.injectedExpectations && hookResult.injectedExpectations.length > 0
+        ? hookResult.injectedExpectations
+        : undefined;
+    providerPromptState.requestCount = (providerPromptState.requestCount ?? 0) + 1;
   }
   // Keep current model identity after the stable system cache boundary.
   const modelAwareSystemPrompt = isSettledTurnFinalization
