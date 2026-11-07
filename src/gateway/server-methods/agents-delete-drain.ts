@@ -29,6 +29,7 @@ import {
 } from "../../sessions/session-controller.rpc-sources.js";
 import { activeSessionOperations } from "../../sessions/session-controller.state.js";
 import { settlesWithin } from "../../shared/settle-within.js";
+import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { chatRunBelongsToAgent } from "../chat-run-owner.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
 import {
@@ -182,19 +183,26 @@ export async function drainAgentDeletionRuns(
       }
     });
     const preparing = new Set(targets.values());
-    const sessions = [...preparing].map(async (target) => {
-      const drain = await prepareSessionLifecycleDrain({
-        ...target,
-        onPrepared: () => preparing.delete(target),
-      });
-      if (finished) {
-        drain.release();
-        return;
-      }
-      drains.push(drain);
-      if (drain.hasAuthoritativeWork()) {
-        throw new Error(`Agent ${agentId} still has active work in ${target.sessionKey}`);
-      }
+    const failures: unknown[] = [];
+    const sessions = runTasksWithConcurrency({
+      // Idle stored sessions still check durable placement; do not flood the shared worker pool.
+      limit: 4,
+      onTaskError: (error) => failures.push(error),
+      tasks: [...preparing].map((target) => async () => {
+        assertCurrent();
+        const drain = await prepareSessionLifecycleDrain({
+          ...target,
+          onPrepared: () => preparing.delete(target),
+        });
+        if (finished) {
+          drain.release();
+          return;
+        }
+        drains.push(drain);
+        if (drain.hasAuthoritativeWork()) {
+          throw new Error(`Agent ${agentId} still has active work in ${target.sessionKey}`);
+        }
+      }),
     });
     const admitted = Promise.resolve().then(() => {
       assertCurrent();
@@ -212,10 +220,9 @@ export async function drainAgentDeletionRuns(
         drain?.release();
       }
     });
-    const failures: unknown[] = [];
     const settled = await settlesWithin(
       Promise.all(
-        [...sessions, admitted, ...sessionless, terminals].map((work) =>
+        [sessions, admitted, ...sessionless, terminals].map((work) =>
           work.catch((error: unknown) => {
             failures.push(error);
           }),
