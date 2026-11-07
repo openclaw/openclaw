@@ -4387,7 +4387,7 @@ html.openclaw-native-web-chrome
 }
 
 /* Session-row metrics (.sidebar-shell): 32px rows, 18px avatar centered 24px in, title at 42px.
-   The wordmark's mascot sits on that avatar column. */
+   The text wordmark starts on that avatar column; the status view carries the mascot. */
 .sidebar-connection-skeleton {
   padding-top: 10.3px;
   pointer-events: none;
@@ -4452,7 +4452,7 @@ html.openclaw-native-web-chrome
 }
 
 .topbar-connection-brand img {
-  width: 140px;
+  width: 101px;
   height: 32px;
   object-fit: contain;
 }
