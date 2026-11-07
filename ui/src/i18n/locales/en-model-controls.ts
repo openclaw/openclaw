@@ -7,6 +7,11 @@ const enModelControls = {
       subscription: "Subscription",
       api: "API",
       default: "Default",
+      favorites: "Favorites",
+      addFavorite: "Add {model} to favorites",
+      removeFavorite: "Remove {model} from favorites",
+      favoritesUnavailable: "Could not load favorites. Retry.",
+      favoritesChanged: "Favorites changed or could not be saved. Refresh and try again.",
       defaultModel: "Default model",
       routes: {
         claudeCli: {

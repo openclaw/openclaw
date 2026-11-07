@@ -1,6 +1,7 @@
 import { createMemo, Show, useContext } from "solid-js";
 import { providerDisplayLabel as defaultProviderLabel } from "../../../components/provider-icon-data.ts";
 import type { ProviderPresentation } from "../../../components/provider-icon-data.ts";
+import { IconButton } from "../../../components/solid/icon-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
 import { formatModelRuntimeLabel } from "../../../lib/model-runtime-label.ts";
@@ -141,108 +142,148 @@ function ModelOptionButton(
   const defaultLabel = createMemo(() =>
     props.entry.isDefault ? t("chat.modelControls.default") : "",
   );
-  const key = createMemo(() => modelPickerOptionKey(props.entry));
+  const key = createMemo(() => props.rowKey ?? modelPickerOptionKey(props.entry));
   // Query changes should reach only rows whose displayed search facts changed.
   const rank = createMemo(() => search?.row(key())?.rank);
   const hidden = createMemo(() => search?.row(key())?.hidden ?? false);
   const highlighted = createMemo(() => search?.isHighlighted(key()));
   return (
-    <button
-      ref={search?.rowRef(key)}
-      id={search?.optionId(key())}
-      class={[
-        "chat-controls__inline-select-option chat-controls__model-option",
-        {
-          "chat-controls__inline-select-option--selected": props.presentation.selected,
-        },
-      ]}
-      data-chat-model-option={props.entry.value}
-      data-chat-model-key={key()}
-      data-chat-model-rank={rank()}
-      data-chat-model-highlighted={highlighted() ? "" : undefined}
-      style={{ "--chat-model-rank": rank() }}
-      data-chat-model-runtime={props.entry.agentRuntime ?? undefined}
-      data-chat-model-default={props.entry.isDefault ? "true" : undefined}
-      data-chat-model-index={props.index}
-      data-chat-model-keywords={[defaultLabel(), props.presentation.runtimeLabel]
-        .filter(Boolean)
-        .join(" ")
-        .toLocaleLowerCase()}
-      data-chat-model-name={props.presentation.modelLabel.toLocaleLowerCase()}
-      data-chat-model-provider-label={providerDisplayLabel(
-        props.entry.provider,
-      ).toLocaleLowerCase()}
-      role="option"
-      aria-posinset={search?.row(key())?.position}
-      aria-setsize={search?.row(key())?.size}
+    <div
+      class="chat-controls__model-option-row"
       hidden={hidden()}
-      aria-selected={props.presentation.selected ? "true" : "false"}
-      title={props.presentation.accessibleStatus || undefined}
-      aria-label={[
-        props.presentation.modelLabel,
-        props.presentation.runtimeLabel,
-        props.presentation.accessibleStatus,
-        props.presentation.chatOnlyHelp,
-      ]
-        .filter(Boolean)
-        .join(". ")}
-      type="button"
-      disabled={
-        props.disabled ||
-        Boolean(
-          props.entry.disabled && !props.presentation.onModelSetup && !props.presentation.resetsPin,
-        )
-      }
-      data-chat-model-setup={props.presentation.onModelSetup ? "true" : undefined}
-      onMouseEnter={handleModelOptionMouseEnter}
-      onClick={(event) => {
-        // Auth-gated rows lead to setup rather than trapping a click on a disabled model.
-        if (props.entry.disabled && !props.presentation.resetsPin) {
-          event.stopPropagation();
-          props.presentation.onModelSetup?.();
-          return;
-        }
-        props.onSelect(props.entry, event);
-      }}
+      style={{ "--chat-model-rank": rank() }}
     >
-      <span class="chat-controls__model-option-provider">
-        <ChatModelProviderIcon
-          provider={props.entry.provider}
-          presentation={props.entry.presentation}
-        />
-      </span>
-      <span class="chat-controls__model-option-copy">
-        <span class="chat-controls__model-option-title">
-          <span class="chat-controls__model-option-name">{props.presentation.modelLabel}</span>
-          <Show when={props.entry.isDefault}>
-            <span class="chat-controls__model-state-label chat-controls__model-state-label--default">
-              {defaultLabel()}
-            </span>
-          </Show>
-          <Show when={props.presentation.modelMeta}>
-            <span class="chat-controls__model-option-meta">{props.presentation.modelMeta}</span>
-          </Show>
-          <Show when={props.presentation.needsAuth}>
-            <span class="chat-controls__model-option-auth-warning" data-chat-model-auth-warning>
-              <Icon name="alertTriangle" />
-              <span>{props.presentation.accessibleStatus}</span>
-            </span>
-          </Show>
-          <Show when={props.entry.supportsTools === false}>
-            <span class="chat-controls__model-chat-only-info" aria-hidden="true">
-              <Icon name="info" />
+      <button
+        ref={search?.rowRef(key)}
+        id={search?.optionId(key())}
+        class={[
+          "chat-controls__inline-select-option chat-controls__model-option",
+          {
+            "chat-controls__inline-select-option--selected": props.presentation.selected,
+          },
+        ]}
+        data-chat-model-option={props.entry.value}
+        data-chat-model-key={key()}
+        data-chat-model-rank={rank()}
+        data-chat-model-highlighted={highlighted() ? "" : undefined}
+        style={{ "--chat-model-rank": rank() }}
+        data-chat-model-runtime={props.entry.agentRuntime ?? undefined}
+        data-chat-model-default={props.entry.isDefault ? "true" : undefined}
+        data-chat-model-index={props.index}
+        data-chat-model-keywords={[defaultLabel(), props.presentation.runtimeLabel]
+          .filter(Boolean)
+          .join(" ")
+          .toLocaleLowerCase()}
+        data-chat-model-name={props.presentation.modelLabel.toLocaleLowerCase()}
+        data-chat-model-provider-label={providerDisplayLabel(
+          props.entry.provider,
+        ).toLocaleLowerCase()}
+        role="option"
+        aria-posinset={search?.row(key())?.position}
+        aria-setsize={search?.row(key())?.size}
+        hidden={hidden()}
+        aria-selected={props.presentation.selected ? "true" : "false"}
+        title={props.presentation.accessibleStatus || undefined}
+        aria-label={[
+          props.presentation.modelLabel,
+          props.presentation.runtimeLabel,
+          props.presentation.accessibleStatus,
+          props.presentation.chatOnlyHelp,
+        ]
+          .filter(Boolean)
+          .join(". ")}
+        type="button"
+        disabled={
+          props.disabled ||
+          Boolean(
+            props.entry.disabled &&
+            !props.presentation.onModelSetup &&
+            !props.presentation.resetsPin,
+          )
+        }
+        data-chat-model-setup={props.presentation.onModelSetup ? "true" : undefined}
+        onMouseEnter={handleModelOptionMouseEnter}
+        onClick={(event) => {
+          // Auth-gated rows lead to setup rather than trapping a click on a disabled model.
+          if (props.entry.disabled && !props.presentation.resetsPin) {
+            event.stopPropagation();
+            props.presentation.onModelSetup?.();
+            return;
+          }
+          props.onSelect(props.entry, event);
+        }}
+      >
+        <span class="chat-controls__model-option-provider">
+          <ChatModelProviderIcon
+            provider={props.entry.provider}
+            presentation={props.entry.presentation}
+          />
+        </span>
+        <span class="chat-controls__model-option-copy">
+          <span class="chat-controls__model-option-title">
+            <span class="chat-controls__model-option-name">{props.presentation.modelLabel}</span>
+            <Show when={props.entry.isDefault}>
+              <span class="chat-controls__model-state-label chat-controls__model-state-label--default">
+                {defaultLabel()}
+              </span>
+            </Show>
+            <Show when={props.presentation.modelMeta}>
+              <span class="chat-controls__model-option-meta">{props.presentation.modelMeta}</span>
+            </Show>
+            <Show when={props.presentation.needsAuth}>
+              <span class="chat-controls__model-option-auth-warning" data-chat-model-auth-warning>
+                <Icon name="alertTriangle" />
+                <span>{props.presentation.accessibleStatus}</span>
+              </span>
+            </Show>
+            <Show when={props.entry.supportsTools === false}>
+              <span class="chat-controls__model-chat-only-info" aria-hidden="true">
+                <Icon name="info" />
+              </span>
+            </Show>
+          </span>
+        </span>
+        <span class="chat-controls__model-option-action">
+          <Show when={props.presentation.selected} fallback={<ModelShortcut rowKey={key()} />}>
+            <span class="chat-controls__inline-select-check" aria-hidden="true">
+              <Icon name="check" />
             </span>
           </Show>
         </span>
-      </span>
-      <span class="chat-controls__model-option-action">
-        <Show when={props.presentation.selected} fallback={<ModelShortcut rowKey={key()} />}>
-          <span class="chat-controls__inline-select-check" aria-hidden="true">
-            <Icon name="check" />
-          </span>
-        </Show>
-      </span>
-    </button>
+      </button>
+      <Show when={props.favorite}>
+        <IconButton
+          size={28}
+          glyph="row"
+          icon="heart"
+          tooltip={false}
+          class="chat-controls__model-favorite"
+          data-chat-model-favorite={modelPickerOptionKey(props.entry)}
+          pressed={props.favorite?.selected}
+          label={t(
+            props.favorite?.selected
+              ? "chat.modelControls.removeFavorite"
+              : "chat.modelControls.addFavorite",
+            {
+              model: [props.presentation.modelLabel, props.presentation.runtimeLabel]
+                .filter(Boolean)
+                .join(" · "),
+            },
+          )}
+          disabled={props.favorite?.disabled}
+          onKeyDown={(event) => {
+            // A heart is an independent action, not a keyboard model selection.
+            if (event.key !== "Escape" && event.key !== "Tab") {
+              event.stopPropagation();
+            }
+          }}
+          onClick={(event) => {
+            event.stopPropagation();
+            props.favorite?.onToggle(event);
+          }}
+        />
+      </Show>
+    </div>
   );
 }
 

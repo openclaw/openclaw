@@ -2573,6 +2573,23 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   display: none;
 }
 
+.chat-controls__model-option-row {
+  position: relative;
+  order: var(--chat-model-rank, 0);
+  min-width: 0;
+
+  &:has(.chat-controls__model-favorite) > .chat-controls__model-option {
+    padding-right: 38px;
+  }
+}
+
+.chat-controls__model-favorite {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+}
+
 .chat-controls__model-option {
   order: var(--chat-model-rank, 0);
   content-visibility: auto;
