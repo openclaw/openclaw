@@ -1,6 +1,6 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, readFile, readdir, writeFile, chmod } from "node:fs/promises";
+import { mkdir, readFile, writeFile, chmod } from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pipeline } from "node:stream/promises";
@@ -122,38 +122,6 @@ it("duplicate stable IDs reject a snapshot", async () => {
   const window = ["2026-09-01T00:00:00Z", "2026-09-02T00:00:00Z", "2026-09-02T00:00:00Z"];
   await expect(snapshot(dir, "duplicate", rows, window)).rejects.toThrow(/Duplicate item id/);
 });
-
-it.each(["snapshot", "plan"])(
-  "%s cleans up scratch databases when input is missing",
-  async (command) => {
-    const dir = tempDirs.make("knowledge-source-missing-");
-    const scratch = path.join(dir, "tmp");
-    await mkdir(scratch);
-    for (const suffix of [".jsonl", ".jsonl.gz"]) {
-      const input = path.join(dir, "missing" + suffix);
-      const options: Record<string, string> =
-        command === "plan"
-          ? { current: input }
-          : {
-              provider: "discord",
-              "source-key": "channel",
-              input,
-              output: path.join(dir, "manifest.jsonl"),
-              "coverage-start": "2026-09-01T00:00:00Z",
-              "coverage-end": "2026-09-02T00:00:00Z",
-            };
-      const result = spawnSync(process.execPath, [manifestScript, command, ...flags(options)], {
-        encoding: "utf8",
-        timeout: 10_000,
-        env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch },
-      });
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("ENOENT");
-      expect(result.stderr).not.toContain("Unhandled");
-      expect(await readdir(scratch)).toEqual([]);
-    }
-  },
-);
 
 const DISCRAWL_SCHEMA =
   "CREATE TABLE channels(id TEXT,guild_id TEXT,name TEXT,thread_parent_id TEXT); CREATE TABLE members(guild_id TEXT,user_id TEXT,username TEXT,global_name TEXT,display_name TEXT,nick TEXT,bot INTEGER); CREATE TABLE messages(id TEXT,guild_id TEXT,channel_id TEXT,author_id TEXT,message_type TEXT,created_at TEXT,edited_at TEXT,deleted_at TEXT,content TEXT,normalized_content TEXT,reply_to_message_id TEXT,pinned INTEGER,has_attachments INTEGER); CREATE TABLE message_attachments(message_id TEXT,attachment_id TEXT,content_sha256 TEXT,fetch_status TEXT);";

@@ -62,7 +62,7 @@ const instant = (value, name) => {
 };
 const inputStream = (filename) => {
   const raw = filename === "-" ? process.stdin : createReadStream(filename);
-  return filename.endsWith(".gz") ? raw.compose(createGunzip()) : raw;
+  return filename.endsWith(".gz") ? raw.pipe(createGunzip()) : raw;
 };
 // Yields JSONL lines split on \n only; readline would also split on U+2028 inside JSON strings.
 async function* lines(filename) {
