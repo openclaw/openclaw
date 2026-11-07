@@ -64,7 +64,7 @@ it.each([2, 3])(
     expect(owner.takeDirty()).toBe("all");
     expect(attach).toHaveBeenCalledTimes(1);
     await fs.mkdir(directory);
-    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 5_001);
+    vi.spyOn(performance, "now").mockReturnValue(performance.now() + 5_001);
     created = createDeferred<observation.WatchSubscription>();
     expect(owner.takeDirty()).toBe("all");
     const replacement = await created.promise;
@@ -78,3 +78,42 @@ it.each([2, 3])(
     expect(attach).toHaveBeenCalledTimes(2);
   },
 );
+
+it("retries an unavailable watch on elapsed time even when the wall clock rolls back", async () => {
+  const realDateNow = Date.now.bind(Date);
+  let elapsed = 0;
+  let wallOffset = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+  vi.spyOn(Date, "now").mockImplementation(() => realDateNow() + wallOffset);
+  const unavailable: observation.WatchSubscription = {
+    health: () => ({ state: "unavailable", mode: "poll", directories: 0 }),
+    ready: Promise.resolve(),
+    setScopes: async () => {},
+    reconcile: async () => {},
+    close: async () => {},
+    [Symbol.asyncDispose]: async () => {},
+  };
+  const attach = vi.spyOn(observation, "watch").mockImplementation((authority, options) => {
+    options.onHealth?.({ state: "unavailable", mode: "poll", directories: 0 });
+    return unavailable;
+  });
+  const home = temp.make("claude-watch-rollback-");
+  const directory = path.join(home, "projects");
+  await fs.mkdir(path.join(directory, "existing"), { recursive: true });
+  const owner = createDirtyDirectoryWatch(directory, 2);
+  owners.push(owner);
+  await vi.waitFor(() => expect(attach).toHaveBeenCalledTimes(1));
+  // The watch reports unavailable; the retry deadline (elapsed + 5s) has not arrived yet.
+  expect(owner.takeDirty()).toBe("all");
+  expect(attach).toHaveBeenCalledTimes(1);
+
+  // The wall clock rolls back an hour while elapsed time advances past the 5s retry window:
+  // a Date.now()-keyed retryAt would never be reached, but performance.now() retries on schedule.
+  wallOffset -= 3_600_000;
+  elapsed += 5_001;
+  await vi.waitFor(() => {
+    expect(owner.takeDirty()).toBe("all");
+    expect(attach).toHaveBeenCalledTimes(2);
+  });
+  await owner.close();
+});
