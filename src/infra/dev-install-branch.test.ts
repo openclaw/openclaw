@@ -45,6 +45,18 @@ async function resolveBranch(
   return await resolveDevInstallGitBranch();
 }
 
+// Runs the production resolver against real Git in a temp repo (only the
+// package-root discovery is stubbed, so the exact production git invocations
+// execute against real checkouts).
+async function resolveBranchRealGit(packageRoot: string): Promise<string | null> {
+  // mock-isolation: The real-git controls must point the resolver at a temp repo.
+  vi.doMock("./openclaw-root.js", () => ({
+    resolveOpenClawPackageRoot: vi.fn(async () => packageRoot),
+  }));
+  const { resolveDevInstallGitBranch } = await import("./dev-install-branch.js");
+  return await resolveDevInstallGitBranch();
+}
+
 afterEach(() => {
   vi.resetModules();
   vi.doUnmock("../process/exec.js");
@@ -76,5 +88,58 @@ describe("resolveDevInstallGitBranch", () => {
 
   it("returns null when git branch resolution fails", async () => {
     expect(await resolveBranch(root, { code: 128, stdout: "" })).toBeNull();
+  });
+});
+
+// Real-Git controls for the same-name-tag ambiguity: `rev-parse --abbrev-ref
+// HEAD` prints identical output (`heads/main`) for a mainline checkout with a
+// colliding tag and for a literal `heads/main` branch, which is why the
+// resolver must read the actual branch identity instead of stripping prefixes.
+describe("resolveDevInstallGitBranch with real git checkouts", () => {
+  async function makeRepo(
+    name: string,
+  ): Promise<{ repo: string; git: (...args: string[]) => Promise<void> }> {
+    const repo = path.join(root, "realgit", name);
+    await fs.mkdir(repo, { recursive: true });
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const execFileAsync = promisify(execFile);
+    const git = async (...args: string[]) => {
+      await execFileAsync("git", ["-C", repo, ...args]);
+    };
+    await git("init", "-q", "-b", "main");
+    await git("config", "user.name", "Test User");
+    await git("config", "user.email", "test@example.com");
+    await git("commit", "-q", "--allow-empty", "-m", "init");
+    return { repo, git };
+  }
+
+  it("hides a mainline checkout whose branch shares a name with a tag", async () => {
+    const { repo, git } = await makeRepo("tagged-main");
+    await git("tag", "main");
+    expect(await resolveBranchRealGit(repo)).toBeNull();
+  });
+
+  it("keeps a literal heads/main branch visible without a colliding tag", async () => {
+    const { repo, git } = await makeRepo("literal-heads-main");
+    await git("branch", "heads/main");
+    await git("checkout", "-q", "heads/main");
+    // Identical `--abbrev-ref HEAD` output to the tagged-mainline case; only
+    // the actual branch identity differs.
+    expect(await resolveBranchRealGit(repo)).toBe("heads/main");
+  });
+
+  it("reports the real name of a feature branch that shares a name with a tag", async () => {
+    const { repo, git } = await makeRepo("tagged-feature");
+    await git("branch", "feat/dev-branch-badge");
+    await git("checkout", "-q", "feat/dev-branch-badge");
+    await git("tag", "feat/dev-branch-badge");
+    expect(await resolveBranchRealGit(repo)).toBe("feat/dev-branch-badge");
+  });
+
+  it("hides a detached checkout", async () => {
+    const { repo, git } = await makeRepo("detached");
+    await git("checkout", "-q", "--detach", "HEAD");
+    expect(await resolveBranchRealGit(repo)).toBeNull();
   });
 });

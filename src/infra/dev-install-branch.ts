@@ -31,13 +31,15 @@ async function detectDevInstallGitBranch(packageRoot: string | null): Promise<st
   if (!top || path.resolve(top) !== path.resolve(rootReal)) {
     return null;
   }
-  const branchRes = await runCommandWithTimeout(
-    ["git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD"],
-    {
-      timeoutMs: GIT_TIMEOUT_MS,
-      env: { GIT_NO_LAZY_FETCH: "1" },
-    },
-  );
+  // `rev-parse --abbrev-ref HEAD` returns a qualified ref when the checked-out
+  // branch shares a name with a tag (`heads/main`) and cannot distinguish that
+  // from a literal branch named `heads/main`. `branch --show-current` reports
+  // the actual branch name in both cases (same owner as session-diff.runtime)
+  // and prints nothing for detached HEAD, so no prefix stripping is needed.
+  const branchRes = await runCommandWithTimeout(["git", "-C", root, "branch", "--show-current"], {
+    timeoutMs: GIT_TIMEOUT_MS,
+    env: { GIT_NO_LAZY_FETCH: "1" },
+  });
   if (branchRes.code !== 0) {
     return null;
   }
