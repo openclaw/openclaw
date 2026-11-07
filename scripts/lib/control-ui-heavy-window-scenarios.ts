@@ -1,5 +1,4 @@
 import type { Page } from "playwright";
-import { mediaTicketPayload } from "../../ui/src/test-helpers/control-ui-attachment-fixtures.ts";
 import { controlUiSessionPath } from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import { createHeavyContentImageSources } from "./control-ui-heavy-content-images.ts";
 import { installHeavyCountProbe, readHeavyCountProbe } from "./control-ui-heavy-count-probe.ts";
@@ -18,8 +17,6 @@ type WindowCounts = {
   highlightRequests: number;
   imageLoads: number;
   decodeCalls: number;
-  metadataRequests: number;
-  imageRequests: number;
 };
 declare global {
   interface Window {
@@ -33,8 +30,6 @@ async function setup(page: Page) {
       highlightRequests: 0,
       imageLoads: 0,
       decodeCalls: 0,
-      metadataRequests: 0,
-      imageRequests: 0,
     };
     const NativeWorker = window.Worker;
     window.Worker = class extends NativeWorker {
@@ -69,15 +64,16 @@ async function setup(page: Page) {
     // oxlint-disable-next-line typescript/unbound-method -- Called below with the original image receiver.
     const decode = HTMLImageElement.prototype.decode;
     HTMLImageElement.prototype.decode = function () {
-      if (this.closest(".chat-thread") || this.src.includes("/__openclaw__/assistant-media")) {
-        window.heavyWindowCounts.decodeCalls++;
-      }
+      window.heavyWindowCounts.decodeCalls++;
       return decode.call(this);
     };
   });
 }
 
 function messages(fixture: HeavyWindowFixture) {
+  if (fixture.kind === "native-images") {
+    nativeImages ??= createHeavyContentImageSources();
+  }
   return Array.from({ length: 2_000 }, (_, index) => ({
     role: index % 2 === 0 ? "user" : "assistant",
     content:
@@ -87,7 +83,7 @@ function messages(fixture: HeavyWindowFixture) {
               { type: "text", text: `${marker} ${fixture.id}` },
               ...Array.from({ length: 40 }, (_image, image) => ({
                 type: "image",
-                url: `media://inbound/window-${image}.png`,
+                url: nativeImages![image],
                 alt: `Window image ${image}`,
                 width: 1024,
                 height: 1024,
@@ -125,17 +121,34 @@ async function measureCrossings(page: Page, fixture: HeavyWindowFixture, crossin
       const scroller = document.querySelector<HTMLElement>(selector)!;
       const findRow = () =>
         [...scroller.querySelectorAll<HTMLElement>(".chat-virtual-row")].find((row) =>
-          row.textContent?.includes(`Heavy window target ${id}`),
+          kind === "tool"
+            ? row.querySelector(".chat-tool-msg-summary") !== null
+            : row.textContent?.includes(`Heavy window target ${id}`),
         );
       const frame = () => new Promise(requestAnimationFrame);
-      const wait = async (ready: () => boolean) => {
+      const wait = async (ready: () => boolean, phase = "row") => {
         for (let attempt = 0; attempt < 1_800; attempt++) {
           if (ready()) {
             return;
           }
           await frame();
         }
-        throw new Error("Heavy window crossing did not settle in 1,800 frames");
+        const controls = [...scroller.querySelectorAll(".chat-virtual-row")].map((row) => ({
+          key: row.getAttribute("data-virtual-row-key"),
+          targetMarker: row.textContent?.includes(`Heavy window target ${id}`),
+          buttons: [...row.querySelectorAll("button")].map((button) => ({
+            class: button.className,
+            disabled: button.disabled,
+            expanded: button.getAttribute("aria-expanded"),
+          })),
+          images: [...row.querySelectorAll("img")].map((image) => ({
+            loaded: image.complete && image.naturalWidth > 0,
+            top: image.getBoundingClientRect().top,
+          })),
+        }));
+        throw new Error(
+          `Heavy window crossing did not settle (${phase}): ${JSON.stringify(controls)}`,
+        );
       };
       const move = (offset: number) => {
         scroller.scrollTop = offset;
@@ -147,6 +160,21 @@ async function measureCrossings(page: Page, fixture: HeavyWindowFixture, crossin
         move(0);
         await wait(() => Boolean(findRow()));
         const row = findRow()!;
+        let observedHeightChanges = 0;
+        // Observe the virtualizer's recorded measurements without adding a layout observer.
+        const measurements = new MutationObserver((records) => {
+          for (let recordIndex = 0; recordIndex < records.length; recordIndex++) {
+            const next = records[recordIndex + 1]?.oldValue ?? row.getAttribute("data-row-size");
+            if (records[recordIndex]!.oldValue !== next) {
+              observedHeightChanges++;
+            }
+          }
+        });
+        measurements.observe(row, {
+          attributes: true,
+          attributeFilter: ["data-row-size"],
+          attributeOldValue: true,
+        });
         let reopened = false;
         if (kind === "code") {
           await wait(() => Boolean(row.querySelector(".code-block-expand")));
@@ -155,7 +183,9 @@ async function measureCrossings(page: Page, fixture: HeavyWindowFixture, crossin
           if (reopened) {
             expand.click();
           }
-          await wait(() => row.querySelectorAll("pre code span").length >= 5_000);
+          await wait(
+            () => row.querySelectorAll("pre code span").length >= (id === "diff" ? 5_030 : 5_000),
+          );
           if (row.querySelector("pre code")?.textContent !== expected) {
             throw new Error("Remounted code lost source text");
           }
@@ -164,11 +194,17 @@ async function measureCrossings(page: Page, fixture: HeavyWindowFixture, crossin
           if (group && group.getAttribute("aria-expanded") !== "true") {
             group.click();
           }
-          await wait(() =>
-            Boolean(row.querySelector(".chat-tool-row__toggle, button.chat-tool-msg-summary")),
+          await wait(
+            () =>
+              Boolean(
+                row.querySelector(
+                  ".chat-tool-row__toggle:not(:disabled), button.chat-tool-msg-summary:not(:disabled)",
+                ),
+              ),
+            "enabled tool control",
           );
           const toggle = row.querySelector<HTMLButtonElement>(
-            ".chat-tool-row__toggle, button.chat-tool-msg-summary",
+            ".chat-tool-row__toggle:not(:disabled), button.chat-tool-msg-summary:not(:disabled)",
           )!;
           reopened = toggle.getAttribute("aria-expanded") !== "true";
           if (reopened) {
@@ -177,6 +213,7 @@ async function measureCrossings(page: Page, fixture: HeavyWindowFixture, crossin
           await wait(
             () =>
               row.querySelector(".chat-tool-card__block-content code")?.textContent === expected,
+            "tool preview",
           );
         } else if (kind === "images" || kind === "native-images") {
           await wait(() => {
@@ -191,17 +228,19 @@ async function measureCrossings(page: Page, fixture: HeavyWindowFixture, crossin
         }
         if (kind === "huge") {
           const source = `Heavy window target ${id}\n\n${expected}`;
+          await wait(() => Boolean(row.querySelector(".markdown-plain-text-fallback")));
+          const fallback = row.querySelector(".markdown-plain-text-fallback")!;
+          const shown =
+            (fallback.querySelector(".markdown-plain-text-source") ?? fallback).textContent ?? "";
           if (
             row.querySelector(".chat-bubble")?.getAttribute("data-message-text") !== source ||
-            !row
-              .querySelector(".markdown-plain-text-fallback")
-              ?.textContent?.startsWith(source.slice(0, 140_000))
+            !shown.startsWith(source.slice(0, 140_000)) ||
+            shown.length > 142_000
           ) {
             throw new Error("Remounted huge message changed its source or bounded fallback");
           }
         }
         let height = row.getBoundingClientRect().height;
-        let heightCorrections = 0;
         for (let settled = 0, attempt = 0; settled < 4; attempt++) {
           if (attempt >= 240) {
             throw new Error("Heavy row geometry did not settle in 240 frames");
@@ -209,16 +248,16 @@ async function measureCrossings(page: Page, fixture: HeavyWindowFixture, crossin
           await frame();
           const next = row.getBoundingClientRect().height;
           if (next !== height) {
-            heightCorrections++;
             settled = 0;
           } else {
             settled++;
           }
           height = next;
         }
+        measurements.disconnect();
         results.push({
           height,
-          heightCorrections,
+          observedHeightChanges,
           reopened,
           rows: scroller.querySelectorAll(".chat-virtual-row").length,
           applicationMs: performance.now() - started,
@@ -276,40 +315,11 @@ export function createHeavyWindowScenarios(
         }),
         expected:
           "A heavy row leaves and re-enters a 2,000-message transcript three times, preserving its complete content and bounded DOM.",
-        setup: async (page) => {
-          await setup(page);
-          if (fixture.kind !== "native-images") {
-            return;
-          }
-          nativeImages ??= createHeavyContentImageSources();
-          await page.route("**/__openclaw__/assistant-media?**", async (route) => {
-            const url = new URL(route.request().url());
-            const index = Number(
-              /window-(\d+)\.png/u.exec(url.searchParams.get("source") ?? "")?.[1],
-            );
-            if (!Number.isInteger(index) || index < 0 || index >= 40) {
-              throw new Error("Unexpected window image request");
-            }
-            const metadata = url.searchParams.get("meta") === "1";
-            await page.evaluate((meta) => {
-              if (meta) {
-                window.heavyWindowCounts.metadataRequests++;
-              } else {
-                window.heavyWindowCounts.imageRequests++;
-              }
-            }, metadata);
-            await route.fulfill(
-              metadata
-                ? { json: mediaTicketPayload(`window-${index}`) }
-                : {
-                    contentType: "image/png",
-                    body: Buffer.from(nativeImages![index]!.split(",")[1]!, "base64"),
-                  },
-            );
-          });
-        },
+        setup,
         prepare: async (page) => {
           await page.getByText("Window transcript message 1999.", { exact: false }).waitFor();
+          await page.locator(thread).hover();
+          await page.mouse.wheel(0, -1);
           await measureCrossings(page, fixture, 1);
         },
         run: async (page) => {
@@ -328,12 +338,10 @@ export function createHeavyWindowScenarios(
             highlightRequests: after.highlightRequests - before.highlightRequests,
             imageLoads: after.imageLoads - before.imageLoads,
             decodeCalls: after.decodeCalls - before.decodeCalls,
-            metadataRequests: after.metadataRequests - before.metadataRequests,
-            imageRequests: after.imageRequests - before.imageRequests,
-            maxMountedRows: Math.max(...crossings.map((crossing) => crossing.rows)),
+            maxSettledMountedRows: Math.max(...crossings.map((crossing) => crossing.rows)),
             reopenCount: crossings.filter((crossing) => crossing.reopened).length,
-            heightCorrections: crossings.reduce(
-              (sum, crossing) => sum + crossing.heightCorrections,
+            observedHeightChanges: crossings.reduce(
+              (sum, crossing) => sum + crossing.observedHeightChanges,
               0,
             ),
             minHeight: Math.min(...crossings.map((crossing) => crossing.height)),

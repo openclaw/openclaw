@@ -288,6 +288,7 @@ async function prepare(page: Page, gateway: MockGatewayControls) {
   runs.set(page, runId);
   await page.evaluate(() => {
     // Mark delivery in the page, before the real fixture transport invokes the app.
+    // SAFETY: This scenario installs its synthetic Gateway before preparation.
     const transport = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
     const emit = transport.emit.bind(transport);
     transport.emit = (event, payload) => {
