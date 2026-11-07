@@ -219,6 +219,60 @@ describe("runWorkspaceInventoryCommandToFile", () => {
     );
   });
 
+  // APFS and NTFS cannot hold a name with raw non-UTF-8 bytes, so both cases skip there.
+  const rawGitPath = (root: string, name: string) =>
+    Buffer.concat([Buffer.from(`${root}/${name}`), Buffer.from([0xff]), Buffer.from(".txt")]);
+
+  it.skipIf(process.platform === "darwin" || process.platform === "win32")(
+    "refuses a transfer list when an existing Git path is not UTF-8",
+    async () => {
+      const root = await workspace({ "paragraph.txt": "kept\n" });
+      await fs.writeFile(rawGitPath(root, "bad"), "tracked\n");
+      await git(root, "add", "-A");
+      const temporaryDirectory = path.join(tempDirs.make("openclaw-transfer-"), "inventory");
+
+      // The replacement spelling used to stat the wrong path, so the file left the transfer
+      // list and the capture published a manifest without it.
+      await expect(transferList(root, temporaryDirectory)).rejects.toThrow(
+        "worker workspace Git paths must be UTF-8; rename the invalid path before retrying",
+      );
+    },
+  );
+
+  it.skipIf(process.platform === "darwin" || process.platform === "win32")(
+    "refuses a transfer list when a valid file already claimed the spelled name",
+    async () => {
+      const root = await workspace({ "paragraph.txt": "kept\n" });
+      // Both files exist: the valid name sorts first and used to claim the decoded spelling, so
+      // the dedupe returned before the guard and the invalid file still left the transfer list.
+      await fs.writeFile(path.join(root, "bad\uFFFD.txt"), "replacement spelling\n");
+      await fs.writeFile(rawGitPath(root, "bad"), "tracked\n");
+      await git(root, "add", "-A");
+      const temporaryDirectory = path.join(tempDirs.make("openclaw-transfer-"), "inventory");
+
+      await expect(transferList(root, temporaryDirectory)).rejects.toThrow(
+        "worker workspace Git paths must be UTF-8; rename the invalid path before retrying",
+      );
+    },
+  );
+
+  it.skipIf(process.platform === "darwin" || process.platform === "win32")(
+    "keeps a vanished undecodable Git path out of the transfer list",
+    async () => {
+      const root = await workspace({ "paragraph.txt": "kept\n" });
+      const name = rawGitPath(root, "gone");
+      await fs.writeFile(name, "tracked\n");
+      await git(root, "add", "-A");
+      await fs.unlink(name);
+      const temporaryDirectory = path.join(tempDirs.make("openclaw-transfer-"), "inventory");
+
+      // A reclaim deletes without staging, so the index keeps listing a name the disk no longer
+      // has; that is a deletion, not a rename request.
+      const listPath = await transferList(root, temporaryDirectory);
+      await expect(fs.readFile(listPath)).resolves.toEqual(Buffer.from("paragraph.txt\0"));
+    },
+  );
+
   it.each(
     (["inventory", "metadata"] as const).flatMap((operation) =>
       [

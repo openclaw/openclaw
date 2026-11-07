@@ -11,6 +11,7 @@ export async function runWorkspaceManifestProgram(
 ) {
   const crypto = require("node:crypto");
   const fs = require("node:fs");
+  const { isUtf8 } = require("node:buffer");
   const path = require("node:path");
 
   const STAGED_INPUT_DIRECTORY_PREFIX = "media/inbound/openclaw-staged-";
@@ -258,6 +259,10 @@ export async function runWorkspaceManifestProgram(
   const MAX_WORKSPACE_INVENTORY_TOTAL_BYTES = 4294967296;
   const MAX_WORKSPACE_MANIFEST_BYTES = 67108864;
   const entriesByPath = new Map();
+  // Lossy-decoded names whose raw bytes still exist. Only an admitted name may fail the capture;
+  // an ignored name nothing selects must not fail the valid file that shares its spelling.
+  const undecodableAdmittedPaths = new Set();
+  const undecodableIgnoredPaths = new Set();
   let inventoryPathBytes = 0;
   let eligibleBytes = 0;
   const usedHashMemo = new Map();
@@ -403,6 +408,16 @@ export async function runWorkspaceManifestProgram(
     }
     entriesByPath.set(relative, entry);
   }
+  function rawEntryExists(directory, name) {
+    const prefix = directory.endsWith(path.sep) ? directory : directory + path.sep;
+    try {
+      fs.lstatSync(Buffer.concat([Buffer.from(prefix), name]));
+      return true;
+    } catch (error) {
+      if (error && (error.code === "ENOENT" || error.code === "ENOTDIR")) return false;
+      throw error;
+    }
+  }
   function addEntry(relative) {
     if (
       !relative ||
@@ -415,6 +430,12 @@ export async function runWorkspaceManifestProgram(
     }
     if (isExcludedWorkspacePath(relative)) return;
     if (entriesByPath.has(relative)) return;
+    // Only a name the capture admits and whose raw bytes still exist reaches this set; a vanished
+    // one is a reclaim deletion the manifest records as absent (#108398), and its replacement
+    // spelling is admitted below.
+    if (undecodableAdmittedPaths.has(relative)) {
+      fail("worker workspace Git paths must be UTF-8; rename the invalid path before retrying");
+    }
     const absolute = path.join(root, relative);
     let stats;
     try {
@@ -458,18 +479,26 @@ export async function runWorkspaceManifestProgram(
     const names = [];
     let hasDerivedEntry = false;
     let hasIncludedEntry = false;
-    const directory = fs.opendirSync(absoluteDirectory);
+    const directory = fs.opendirSync(absoluteDirectory, { encoding: "buffer" });
     try {
       for (;;) {
         const entry = directory.readSync();
         if (!entry) break;
-        const relative = relativeDirectory ? relativeDirectory + "/" + entry.name : entry.name;
-        if (!relativeDirectory && entry.name === ".git") continue;
+        const name = entry.name.toString("utf8");
+        const relative = relativeDirectory ? relativeDirectory + "/" + name : name;
+        if (!relativeDirectory && name === ".git") continue;
         if (isExcludedWorkspacePath(relative)) {
           hasDerivedEntry = true;
           continue;
         }
-        names.push(entry.name);
+        // Directory names are bytes too: a lossy spelling cannot become a manifest entry, and
+        // failing here replaces the mangled lstat's ENOENT with the rename instruction.
+        if (!isUtf8(entry.name)) {
+          // A name that vanished between readdir and this probe is a deletion, not a refusal.
+          if (!rawEntryExists(absoluteDirectory, entry.name)) continue;
+          fail("worker workspace Git paths must be UTF-8; rename the invalid path before retrying");
+        }
+        names.push(name);
         if (names.length > MAX_WORKSPACE_INVENTORY_ENTRIES) {
           fail("worker workspace directory has too many entries");
         }
@@ -495,13 +524,28 @@ export async function runWorkspaceManifestProgram(
   function comparePathNames(left, right) {
     return left < right ? -1 : left > right ? 1 : 0;
   }
-  async function nulPaths(args) {
+  async function nulPaths(args, recordUndecodable) {
     const value = await readManifestGit(
       root,
       ["ls-files", "-z", ...args],
       MAX_WORKSPACE_INVENTORY_PATH_BYTES,
     );
-    const paths = value.toString("utf8").split("\0").filter(Boolean);
+    const paths = [];
+    let start = 0;
+    while (start < value.length) {
+      const terminator = value.indexOf(0, start);
+      const stop = terminator === -1 ? value.length : terminator;
+      if (stop > start) {
+        const name = value.subarray(start, stop);
+        const relative = name.toString("utf8");
+        // Git names are bytes, so a lossy decode renames the path; remember the ones still on disk.
+        if (recordUndecodable && !isUtf8(name) && rawEntryExists(root, name)) {
+          recordUndecodable.add(relative);
+        }
+        paths.push(relative);
+      }
+      start = stop + 1;
+    }
     if (paths.length > MAX_WORKSPACE_GIT_CANDIDATES) {
       fail("worker workspace has too many Git path candidates");
     }
@@ -528,23 +572,24 @@ export async function runWorkspaceManifestProgram(
     const includePath = path.join(root, ".worktreeinclude");
     const hasIncludes = fs.existsSync(includePath) && fs.lstatSync(includePath).isFile();
     const ignored = new Set(
-      await nulPaths([
-        "--full-name",
-        "--others",
-        "--ignored",
-        "--exclude-standard",
-        ...(hasIncludes ? [] : ["--", ":(glob)media/inbound/openclaw-staged-*/**"]),
-      ]),
+      await nulPaths(
+        [
+          "--full-name",
+          "--others",
+          "--ignored",
+          "--exclude-standard",
+          ...(hasIncludes ? [] : ["--", ":(glob)media/inbound/openclaw-staged-*/**"]),
+        ],
+        undecodableIgnoredPaths,
+      ),
     );
     const included = [];
     if (hasIncludes) {
       // Standard excludes would select every ignored path, not just explicit inputs.
-      for (const candidate of await nulPaths([
-        "--full-name",
-        "--others",
-        "--ignored",
-        "--exclude-from=" + includePath,
-      ])) {
+      for (const candidate of await nulPaths(
+        ["--full-name", "--others", "--ignored", "--exclude-from=" + includePath],
+        undecodableAdmittedPaths,
+      )) {
         if (ignored.has(candidate)) included.push(candidate);
       }
     }
@@ -589,17 +634,20 @@ export async function runWorkspaceManifestProgram(
         retainBuildCacheInput(relative);
       }
     }
-    for (const relative of await nulPaths([
-      "--full-name",
-      "--cached",
-      "--others",
-      "--exclude-standard",
-    ])) {
+    for (const relative of await nulPaths(
+      ["--full-name", "--cached", "--others", "--exclude-standard"],
+      undecodableAdmittedPaths,
+    )) {
       addSelected(relative);
     }
     const { ignored, included } = ignoredPaths ?? (await readIgnoredWorkspacePaths());
     for (const candidate of ignored) {
-      if (isStagedInput(candidate)) addSelected(candidate);
+      if (!isStagedInput(candidate)) continue;
+      // Selecting it out of the ignored list admits it, so invalid bytes must not slip through.
+      if (undecodableIgnoredPaths.has(candidate)) {
+        fail("worker workspace Git paths must be UTF-8; rename the invalid path before retrying");
+      }
+      addSelected(candidate);
     }
     for (const candidate of included) addSelected(candidate);
     for (const priorManifestDigest of priorManifestDigests) {

@@ -1,0 +1,2 @@
+# Prove the transfer list and both captures stop on undecodable Git paths without dropping valid, removed, ignored or replacement-spelling names.
+170
