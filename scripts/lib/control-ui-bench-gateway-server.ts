@@ -1,7 +1,7 @@
 import { realpath } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
-import type { ControlUiRootState } from "../../src/gateway/server-control-ui-root.js";
+import type { ControlUiRootState } from "../../src/gateway/control-ui-root-state.js";
 
 type FixtureResponse = {
   body: string | Buffer;

@@ -12,12 +12,12 @@ import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { buildPdfPreviewWorkerCspHeader } from "./control-ui-csp.js";
 import type { ControlUiRootAsset } from "./control-ui-file.js";
 import { respondPlainText } from "./control-ui-http-utils.js";
+import type { ControlUiRootState } from "./control-ui-root-state.js";
 import { matchesHttpIfModifiedSince } from "./http-conditional.js";
 import {
   getRemoteControlUiIngressContext,
   assertRemoteControlUiIngressCurrent,
 } from "./ingress-attribution.js";
-import type { ControlUiRootState } from "./server-control-ui-root.js";
 
 const CONTROL_UI_ASSETS_MISSING_MESSAGE =
   "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.";

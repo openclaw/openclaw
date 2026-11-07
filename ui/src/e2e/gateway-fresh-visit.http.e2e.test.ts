@@ -2,7 +2,7 @@ import { once } from "node:events";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import type { ControlUiRootState } from "../../../src/gateway/server-control-ui-root.ts";
+import type { ControlUiRootState } from "../../../src/gateway/control-ui-root-state.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";

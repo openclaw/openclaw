@@ -57,6 +57,7 @@ import {
   respondNotFound as respondControlUiNotFound,
 } from "./control-ui-http-utils.js";
 import { serveControlUiIndexHtml } from "./control-ui-index.js";
+import type { ControlUiRequestOptions } from "./control-ui-request-options.js";
 import { resolveAssistantMediaRoutePath } from "./control-ui-resource-routes.js";
 import { classifyControlUiRequest, isControlUiApprovalDocumentPath } from "./control-ui-routing.js";
 import { isControlUiSharePath, serveControlUiShareDocument } from "./control-ui-share.js";
@@ -86,26 +87,13 @@ import {
   getRemoteControlUiIngressContext,
   assertRemoteControlUiIngressCurrent,
 } from "./ingress-attribution.js";
-import { readControlUiRootAsset, type ControlUiRootState } from "./server-control-ui-root.js";
+import { readControlUiRootAsset } from "./server-control-ui-root.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 
 const ROOT_PREFIX = "/";
 const loadAvatarThumbnail = createLazyRuntimeModule(
   () => import("./assistant-avatar-thumbnail.runtime.js"),
 );
-
-type ControlUiRequestOptions = Partial<GatewayHttpRequestAuthOptions> & {
-  basePath?: string;
-  config?: OpenClawConfig;
-  terminalEnabled?: boolean;
-  agentId?: string;
-  root?: ControlUiRootState;
-  /** Protected session-entry restores the canonical route before any app script runs. */
-  sessionEntryPath?: string;
-  isSessionEntryCurrent?: () => boolean;
-  /** Startup owns the asset-free recovery document; static serving detects missing bytes. */
-  onUnavailableDocument?: () => boolean;
-};
 
 const CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw__/";
 

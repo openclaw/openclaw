@@ -16,12 +16,12 @@ import { createControlUiPublicSessionRequestGate } from "./control-ui-public-ses
 import { buildPublicSessionMediaBaseUrl } from "./control-ui-public-session-attachments.js";
 import type { PublicSessionCardRenderer } from "./control-ui-public-session-card.js";
 import { isSecurePublicSessionIngress } from "./control-ui-public-session-ingress.js";
+import type { ControlUiRootState } from "./control-ui-root-state.js";
 import { controlUiSessionEntryPath } from "./control-ui-session-entry-path.js";
 import { resolveControlUiShareOrigin } from "./control-ui-share.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import type { GatewayAttributedIngress } from "./ingress-attribution.js";
-import type { ControlUiRootState } from "./server-control-ui-root.js";
 import { getControlUiModule } from "./server-http-modules.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";

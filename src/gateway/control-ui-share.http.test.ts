@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
-import type { ControlUiRootState } from "./server-control-ui-root.js";
+import type { ControlUiRootState } from "./control-ui-root-state.js";
 import { AUTH_TOKEN, createTestGatewayServer } from "./server-http.test-harness.js";
 
 function expectPublic(response: Response, status = 200, context?: string) {

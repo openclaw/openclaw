@@ -5,9 +5,9 @@ import {
   listenLoopback,
 } from "../../test/helpers/gateway-integration-fixtures.js";
 import { respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
+import type { ControlUiRootState } from "./control-ui-root-state.js";
 import { respondControlUiNotAcceptable } from "./control-ui-static.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
-import type { ControlUiRootState } from "./server-control-ui-root.js";
 
 type ResponseCase = {
   body: string;

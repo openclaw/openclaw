@@ -25,21 +25,8 @@ import type {
   ControlUiPreparedFile,
   ControlUiRootAsset,
 } from "./control-ui-file.js";
+import type { ControlUiRootState } from "./control-ui-root-state.js";
 import { isControlUiCompressibleAsset } from "./control-ui-static.js";
-
-export type ControlUiRootState =
-  | {
-      kind: "bundled";
-      path: string;
-      realPath?: string;
-      publicAssetBuildId?: string;
-    }
-  | { kind: "resolved"; path: string; realPath?: string }
-  | { kind: "invalid"; path: string }
-  | { kind: "preparing" }
-  // The document route is unauthenticated; build diagnostics stay in Gateway logs.
-  | { kind: "failed" }
-  | { kind: "missing" };
 
 type ReadyRoot = Extract<ControlUiRootState, { path: string; kind: "bundled" | "resolved" }>;
 type RootFiles = {

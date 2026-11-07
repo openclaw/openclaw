@@ -3,12 +3,12 @@ import type { TlsOptions } from "node:tls";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import type { ControlUiRootState } from "./control-ui-root-state.js";
 import type { GatewayHttpRequestLifetime } from "./http-request-authority.js";
 import type {
   GatewayIngressTransport,
   GatewayUnattributableProxyReporter,
 } from "./ingress-attribution.js";
-import type { ControlUiRootState } from "./server-control-ui-root.js";
 import type { ResolvePluginNodeCapabilityRoute } from "./server-http-plugin-auth.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { HooksRequestHandler } from "./server/hooks-request-handler.js";

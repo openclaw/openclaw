@@ -3,8 +3,8 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { chromium, webkit, type Browser } from "playwright";
 import { afterEach, expect, inject, it } from "vitest";
+import type { ControlUiRootState } from "../../../src/gateway/control-ui-root-state.ts";
 import { handleControlUiHttpRequest } from "../../../src/gateway/control-ui.ts";
-import type { ControlUiRootState } from "../../../src/gateway/server-control-ui-root.ts";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.ts";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.ts";
 import {

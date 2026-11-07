@@ -9,8 +9,8 @@ import * as httpFixtures from "../../test/helpers/gateway-integration-fixtures.j
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import type { ControlUiFileRead } from "./control-ui-file.js";
+import type { ControlUiRootState } from "./control-ui-root-state.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
-import type { ControlUiRootState } from "./server-control-ui-root.js";
 
 const assetBody = Buffer.from('console.log("conditional fixture");\n');
 const modifiedAt = new Date("2024-01-01T00:00:00.000Z");
