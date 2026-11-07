@@ -24,6 +24,7 @@ import {
 } from "./native-process-authority.js";
 import type {
   MonitorOptions,
+  NativeCompletionCatalogRequest,
   NativeDescendantCancellation,
   NativeDescendantCancellationResult,
   NativeSubagentMonitorClient,
@@ -45,6 +46,7 @@ type NativeMonitor = {
   ): Promise<T>;
   registerParent(params: NativeParentRegistration): Promise<ParentRegistrationHandle>;
   retireParent(parentThreadId: string): Promise<void>;
+  captureCompletionCatalog(request: NativeCompletionCatalogRequest): (() => void) | undefined;
   captureModelSource(
     request: NativeModelSourceRequest,
   ): Promise<NativeModelSourceCapture | undefined>;
@@ -66,6 +68,19 @@ type ChildThreadOwnership = {
 
 const TERMINAL_CHILD_RELEASE_RETRY_MS = 30_000;
 
+// All same-build module copies must reach the original physical client's custody.
+const resolveMonitors = defineCodexBuildState(
+  "openclaw.codexNativeSubagentMonitors",
+  () => new WeakMap<CodexAppServerClient, NativeMonitor>(),
+);
+
+export function captureCodexNativeCompletionCatalog({
+  client,
+  ...request
+}: NativeCompletionCatalogRequest & { client: CodexAppServerClient }): (() => void) | undefined {
+  return resolveMonitors().get(client)?.captureCompletionCatalog(request);
+}
+
 export const defaultNativeSubagentMonitorRuntime: NativeSubagentMonitorRuntime = {
   deliverAgentHarnessCompletion,
   captureAgentHarnessCompletionCustody,
@@ -75,12 +90,7 @@ export const defaultNativeSubagentMonitorRuntime: NativeSubagentMonitorRuntime =
 export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorConstructor>(
   Monitor: T,
 ) {
-  // Retirement and model admission must reach the original monitor's custody
-  // when another same-build module copy receives the shared physical client.
-  const monitors = defineCodexBuildState(
-    "openclaw.codexNativeSubagentMonitors",
-    () => new WeakMap<CodexAppServerClient, NativeMonitor>(),
-  )();
+  const monitors = resolveMonitors();
 
   async function registerMonitor({
     client,
