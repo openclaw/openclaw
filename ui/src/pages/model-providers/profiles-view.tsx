@@ -61,6 +61,9 @@ export type ProviderProfilesViewProps = {
   profileOrders: Record<string, string[]>;
   onProfileOrderChange: (cardId: string, provider: string, profileIds: string[] | null) => void;
   onRequestLogout: (pending: ModelProviderPendingLogout) => void;
+  canReconnect: (provider: string) => boolean;
+  reconnectDisabled: boolean;
+  onReconnect: (provider: string) => void;
 };
 
 const DRAGGING_CLASS = "model-providers__profile--dragging";
@@ -666,6 +669,20 @@ function ProviderProfileRow(
           : profileStatus(profile(), props.card.catalogStatus === "auth-rejected", true)}
       </span>
       <span class="model-providers__profile-actions">
+        {profile().type === "oauth" &&
+        profile().status === "expired" &&
+        profile().reconnectSupported === true &&
+        props.canReconnect(provider()) ? (
+          <button
+            type="button"
+            class="btn btn--sm model-providers__profile-reconnect"
+            disabled={!props.canMutate || props.reconnectDisabled}
+            title={!props.canMutate ? (props.mutationBlockedReason ?? "") : undefined}
+            onClick={() => props.onReconnect(provider())}
+          >
+            {t("modelProviders.profiles.reconnect")}
+          </button>
+        ) : undefined}
         {firstApiKey() ? props.keyAction?.() : undefined}
         {profile().logoutSupported === true && logoutProvider() ? (
           <button

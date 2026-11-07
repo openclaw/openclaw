@@ -1157,6 +1157,7 @@ const enSettings = {
       sourceExternal: "External CLI",
       sourceInherited: "Shared account",
       sourceSaved: "Saved in OpenClaw",
+      reconnect: "Reconnect",
     },
     apiKey: {
       label: "API key",
