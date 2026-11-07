@@ -393,10 +393,11 @@ it("refreshes from the current catalog when an older name write returns late", a
   const gate = pauseWrite({ profile: firstProfile });
   setCanonicalUserProfileDisplayName.mockImplementationOnce(gate.run);
   const refresh = vi.fn();
+  const params = { profileId: profile.id, displayName: "First name", onlyIfUnset: true };
   const pending = runUsersHandler(
     "users.setDisplayName",
-    { profileId: profile.id, displayName: "First name" },
-    adminClient,
+    params,
+    { connect: selfClient.connect, authenticatedUserProfile: { ...profileBinding } },
     { refreshConnectedUserProfile: refresh },
   );
   const respond = await finishWrite(gate, pending, () => {
@@ -409,6 +410,12 @@ it("refreshes from the current catalog when an older name write returns late", a
   });
   expect(respond).toHaveBeenCalledExactlyOnceWith(true, { profile: firstProfile });
   expect(validateUsersSetDisplayNameResult(respond.mock.calls[0]?.[1])).toBe(true);
+  expect(setCanonicalUserProfileDisplayName).toHaveBeenCalledWith(
+    profile.id,
+    "First name",
+    expect.objectContaining({ assertCurrent: expect.any(Function) }),
+    true,
+  );
   expect(refresh).toHaveBeenCalledExactlyOnceWith({
     id: profile.id,
     displayName: "Later name",

@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Page, WebSocket as PlaywrightWebSocket } from "playwright";
 import type { ViteDevServer } from "vite";
 import { expect, it } from "vitest";
 import type { GatewayClient } from "../../../src/gateway/client.ts";
@@ -29,9 +30,80 @@ const suite = createControlUiE2eSuite({
 
 const authenticatedUser = "primary.user@example.test";
 const administrator = "administrator@example.test";
+const onboardingUser = "onboarding.user@example.test";
+
+const onboardingName = "Integration Test Person";
+
+function observeGatewayMethodResponse(page: Page, method: string) {
+  const subscriptions: Array<{
+    socket: PlaywrightWebSocket;
+    onFrameSent: (event: { payload: string | Buffer }) => void;
+    onFrameReceived: (event: { payload: string | Buffer }) => void;
+    onClose: () => void;
+  }> = [];
+  let resolveResponse!: (payload: unknown) => void;
+  let rejectResponse!: (error: Error) => void;
+  let settled = false;
+  const response = new Promise<unknown>((resolve, reject) => {
+    resolveResponse = resolve;
+    rejectResponse = reject;
+  });
+  void response.catch(() => {});
+  const settle = (payload?: unknown, error?: Error) => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    if (error) {
+      rejectResponse(error);
+    } else {
+      resolveResponse(payload);
+    }
+  };
+  const onSocket = (socket: PlaywrightWebSocket) => {
+    const pending = new Set<string>();
+    const onFrameSent = ({ payload }: { payload: string | Buffer }) => {
+      try {
+        const frame = JSON.parse(String(payload)) as Record<string, unknown>;
+        if (frame.type === "req" && frame.method === method && typeof frame.id === "string") {
+          pending.add(frame.id);
+        }
+      } catch {}
+    };
+    const onFrameReceived = ({ payload }: { payload: string | Buffer }) => {
+      try {
+        const frame = JSON.parse(String(payload)) as Record<string, unknown>;
+        if (frame.type === "res" && typeof frame.id === "string" && pending.delete(frame.id)) {
+          settle(
+            frame.payload,
+            frame.ok === true ? undefined : new Error(`Gateway ${method} request failed`),
+          );
+        }
+      } catch {}
+    };
+    const onClose = () => pending.clear();
+    subscriptions.push({ socket, onFrameSent, onFrameReceived, onClose });
+    socket.on("framesent", onFrameSent);
+    socket.on("framereceived", onFrameReceived);
+    socket.on("close", onClose);
+  };
+  page.on("websocket", onSocket);
+  return {
+    response,
+    stop() {
+      page.off("websocket", onSocket);
+      for (const { socket, onFrameSent, onFrameReceived, onClose } of subscriptions) {
+        socket.off("framesent", onFrameSent);
+        socket.off("framereceived", onFrameReceived);
+        socket.off("close", onClose);
+      }
+      subscriptions.length = 0;
+    },
+  };
+}
 
 suite.define(() => {
-  it("lets a guest edit their profile and request admin after real role promotion", async () => {
+  it("keeps guest admin approval and member onboarding separate through a real Gateway", async () => {
     const port = await getFreePort();
     const state = await createOpenClawTestState({
       label: "control-ui-profile-real-gateway",
@@ -49,10 +121,11 @@ suite.define(() => {
         const guest = ensureProfileForEmail(authenticatedUser);
         setDisplayName(guest.id, "Test Person");
         setUserProfileRole(ensureProfileForEmail(administrator).id, "administrator");
+        setUserProfileRole(ensureProfileForEmail(onboardingUser).id, "member");
         const origin = new URL(suite.server.baseUrl).origin;
         const trustedProxy = {
           allowLoopback: true,
-          allowUsers: [authenticatedUser, administrator],
+          allowUsers: [authenticatedUser, administrator, onboardingUser],
           deviceAutoApprove: {
             enabled: true,
             scopes: ["operator.read", "operator.write"],
@@ -92,6 +165,11 @@ suite.define(() => {
                   sessions: { others: "view" },
                   scopes: ["operator.sessions.write"],
                 },
+                member: {
+                  agents: "*",
+                  sessions: { others: "view" },
+                  scopes: ["operator.read", "operator.write"],
+                },
                 administrator: {
                   agents: "*",
                   sessions: { others: "write" },
@@ -113,6 +191,10 @@ suite.define(() => {
         proxy = await createGatewayProxy(state.workspaceDir, {
           "/admin": {
             ...gatewayProxyRoute(port, administrator, "192.0.2.11"),
+            rewrite: () => "/",
+          },
+          "/member": {
+            ...gatewayProxyRoute(port, onboardingUser, "192.0.2.12"),
             rewrite: () => "/",
           },
           "/": gatewayProxyRoute(port, authenticatedUser),
@@ -146,14 +228,20 @@ suite.define(() => {
         const adminClient = admin;
 
         await suite.withPage(
-          { locale: "en-US", serviceWorkers: "block", viewport: { height: 800, width: 1280 } },
+          {
+            locale: "en-US",
+            serviceWorkers: "block",
+            viewport: { height: 800, width: 1280 },
+          },
           async ({ page }) => {
             const text = (selector: string) =>
               expect.poll(() => page.locator(selector).textContent());
             const url = new URL("settings/profile", suite.server.baseUrl);
             url.hash = new URLSearchParams({ gatewayUrl: gatewayUrl.href }).toString();
-            expect((await page.goto(url.href))?.status()).toBe(200);
+            const response = await page.goto(url.href);
+            expect(response?.status()).toBe(200);
             const confirmation = page.locator("openclaw-gateway-url-confirmation");
+            await confirmation.waitFor();
             await confirmation
               .getByRole("button", { name: `Switch to ${gatewayUrl.host}`, exact: true })
               .click();
@@ -181,7 +269,9 @@ suite.define(() => {
             await expect.poll(() => nameInput.inputValue()).toBe("Test Person");
             await nameInput.fill("Remote Person");
             await nameInput.press("Enter");
-            await text(".profile-hero__name").toBe("Remote Person");
+            await expect
+              .poll(() => page.locator(".profile-hero__name").textContent())
+              .toBe("Remote Person");
             await editor.locator('#settings-profile-identity input[type="file"]').setInputFiles({
               name: "avatar.png",
               mimeType: "image/png",
@@ -203,6 +293,7 @@ suite.define(() => {
             await nameInput.press("Enter");
             await text(".profile-hero__name").toBe(`Person ${guest.id.slice(0, 8)}`);
             await expect.poll(() => draft.inputValue()).toBe("Local draft");
+
             await editor.close();
             const auth = () =>
               evaluateControlUiContext(page, (app) => ({
@@ -284,6 +375,110 @@ suite.define(() => {
                   promotedAuth,
                   pendingApprovalScopes: pending[0]?.scopes,
                   reloadedAuth,
+                },
+                null,
+                2,
+              ),
+            );
+          },
+        );
+        await suite.withPage(
+          {
+            locale: "en-US",
+            serviceWorkers: "block",
+            viewport: { height: 800, width: 1280 },
+          },
+          async ({ page: editor }) => {
+            const memberGatewayUrl = new URL("member", gatewayUrl);
+            const initialProfileUrl = new URL("settings/profile", suite.server.baseUrl);
+            initialProfileUrl.hash = new URLSearchParams({
+              gatewayUrl: memberGatewayUrl.href,
+            }).toString();
+            expect((await editor.goto(initialProfileUrl.href))?.status()).toBe(200);
+            await editor
+              .locator("openclaw-gateway-url-confirmation")
+              .getByRole("button", { name: `Switch to ${memberGatewayUrl.host}`, exact: true })
+              .click();
+            await expect
+              .poll(() => editor.locator(".profile-hero__handle").textContent())
+              .toContain(onboardingUser);
+            const memberName = editor.locator(".identity-name-control input");
+            await memberName.fill("");
+            await memberName.press("Enter");
+            await expect.poll(() => memberName.inputValue()).toBe("");
+            const memberAuth = await evaluateControlUiContext(editor, (app) => ({
+              scopes: app.gateway.snapshot.hello?.auth?.scopes,
+              sessionCap: app.gateway.snapshot.hello?.auth?.sessionCap,
+              roleAllowsAdmin: app.gateway.snapshot.hello?.auth?.roleAllowsAdmin,
+            }));
+            expect(memberAuth).toMatchObject({ sessionCap: "view", roleAllowsAdmin: false });
+            expect(memberAuth.scopes).toContain("operator.write");
+            expect(memberAuth.scopes).not.toContain("operator.admin");
+            const onboardingUrl = new URL("custodian?onboarding=1", suite.server.baseUrl);
+            const profileUrl = new URL("settings/profile", suite.server.baseUrl);
+            await editor.goto(onboardingUrl.href);
+            const onboardingPrompt = editor.locator(".custodian__name-prompt");
+            await onboardingPrompt.waitFor({ state: "visible" });
+            await expect
+              .poll(() => editor.locator("#custodian-onboarding-display-name").inputValue())
+              .toBe("");
+
+            await editor.getByRole("button", { name: "Maybe later", exact: true }).click();
+            await expect.poll(() => onboardingPrompt.count()).toBe(0);
+            await expect.poll(() => editor.locator(".custodian-surface").isVisible()).toBe(true);
+
+            await editor.goto(profileUrl.href);
+            await expect
+              .poll(() => editor.locator(".profile-hero__handle").textContent())
+              .toContain(onboardingUser);
+            await expect
+              .poll(() => editor.locator(".identity-name-control input").inputValue())
+              .toBe("");
+
+            await editor.goto(onboardingUrl.href);
+            await editor.locator(".custodian__name-prompt").waitFor({ state: "visible" });
+            await editor.getByLabel("Your name", { exact: true }).fill(onboardingName);
+            await editor.getByRole("button", { name: "Save name", exact: true }).click();
+            await expect.poll(() => editor.locator(".custodian__name-prompt").count()).toBe(0);
+            await expect.poll(() => editor.locator(".custodian-surface").isVisible()).toBe(true);
+
+            await editor.goto(profileUrl.href);
+            await expect
+              .poll(() => editor.locator(".profile-hero__name").textContent())
+              .toBe(onboardingName);
+            await expect
+              .poll(() => editor.locator(".identity-name-control input").inputValue())
+              .toBe(onboardingName);
+
+            const selfProfileRead = observeGatewayMethodResponse(editor, "users.self");
+            try {
+              await editor.goto(onboardingUrl.href);
+              const selfProfileResult = await selfProfileRead.response;
+              expect(selfProfileResult).toMatchObject({ profile: { displayName: onboardingName } });
+              const custodianPage = editor.locator("openclaw-custodian-page");
+              await expect
+                .poll(() => custodianPage.locator(".custodian--page").getAttribute("aria-busy"))
+                .toBe("false");
+              await expect.poll(() => editor.locator(".custodian__name-prompt").count()).toBe(0);
+              await expect.poll(() => editor.locator(".custodian-surface").isVisible()).toBe(true);
+            } finally {
+              selfProfileRead.stop();
+            }
+
+            await editor.goto(profileUrl.href);
+            await expect
+              .poll(() => editor.locator(".profile-hero__name").textContent())
+              .toBe(onboardingName);
+            await expect
+              .poll(() => editor.locator(".identity-name-control input").inputValue())
+              .toBe(onboardingName);
+            await writeFile(
+              path.join(suite.artifactDir, "member-onboarding-real.json"),
+              JSON.stringify(
+                {
+                  transport: "real Gateway and separate browser context; no mocked RPCs",
+                  memberAuth,
+                  savedName: await editor.locator(".identity-name-control input").inputValue(),
                 },
                 null,
                 2,

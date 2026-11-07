@@ -290,6 +290,7 @@ function updateUserProfile(
   >,
   operation: "role" | "display-name" | "avatar",
   options: UserProfileMutationOptions,
+  onlyIfUnset = false,
 ): UserProfileListItem {
   const now = Date.now();
   if (operation === "role") {
@@ -300,6 +301,9 @@ function updateUserProfile(
   return runUserProfileWriteTransaction(
     ({ db }) => {
       const profile = requireResolvedUserProfileMetadataById(db, profileId);
+      if (onlyIfUnset && profile.display_name?.trim()) {
+        return selectUserProfileListItemById(db, profile.id);
+      }
       options.mutation?.before(db, profile.id);
       if (
         operation === "role" &&
@@ -534,8 +538,9 @@ export function setDisplayName(
   profileId: string,
   name: string | null,
   options: UserProfileMutationOptions = {},
+  onlyIfUnset = false,
 ): UserProfileListItem {
-  return updateUserProfile(profileId, { display_name: name }, "display-name", options);
+  return updateUserProfile(profileId, { display_name: name }, "display-name", options, onlyIfUnset);
 }
 
 export function setAvatar(

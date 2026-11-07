@@ -282,6 +282,38 @@ describe("user profiles", () => {
     expect(readUserProfileVersion()).toBe(version + 3);
   });
 
+  it("sets a display name only while the stored profile name is blank when requested", () => {
+    const profile = ensureProfileForTailscaleIdentity({ login: "first-name@github" }, options);
+    setDisplayName(profile.id, " \t ", options);
+
+    let firstWriter: ReturnType<typeof setDisplayName> | undefined;
+    duringWriterAdmission(() => {
+      firstWriter = setDisplayName(profile.id, "First name", options, true);
+    });
+    expect(setDisplayName(profile.id, "Competing name", options, true)).toMatchObject({
+      id: profile.id,
+      displayName: "First name",
+    });
+    expect(firstWriter).toMatchObject({ id: profile.id, displayName: "First name" });
+    const firstWriteVersion = readUserProfileVersion();
+
+    expect(setDisplayName(profile.id, "Later competing name", options, true)).toMatchObject({
+      id: profile.id,
+      displayName: "First name",
+    });
+    expect(readUserProfileVersion()).toBe(firstWriteVersion);
+
+    expect(setDisplayName(profile.id, "Profile editor name", options)).toMatchObject({
+      id: profile.id,
+      displayName: "Profile editor name",
+    });
+    expect(setDisplayName(profile.id, "Onboarding name", options, true)).toMatchObject({
+      id: profile.id,
+      displayName: "Profile editor name",
+    });
+    expect(readUserProfileVersion()).toBe(firstWriteVersion + 1);
+  });
+
   it("updates all profiles whose aliases change", () => {
     const now = vi.spyOn(Date, "now");
     now.mockReturnValue(100);

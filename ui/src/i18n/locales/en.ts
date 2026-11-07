@@ -1137,6 +1137,7 @@ const startupEnglish = {
     connectionChanged: {},
     sessionRestarted: {},
     unsupportedGateway: {},
+    onboardingName: {},
     accessRequired: {},
     autoSetup: { thisComputer: "This computer" },
     panel: {},
