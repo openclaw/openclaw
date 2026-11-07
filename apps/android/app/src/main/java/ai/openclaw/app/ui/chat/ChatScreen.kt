@@ -10,8 +10,8 @@ import ai.openclaw.app.NodeApp
 import ai.openclaw.app.PendingAssistantAutoSend
 import ai.openclaw.app.ProviderAuthController
 import ai.openclaw.app.R
-import ai.openclaw.app.SHARED_AUDIO_DOCUMENT_MIME_TYPES
 import ai.openclaw.app.SessionCatalog
+import ai.openclaw.app.UnsupportedSharedAttachmentException
 import ai.openclaw.app.chat.ChatBrowserTab
 import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatComposerOwner
@@ -711,17 +711,23 @@ internal fun ChatScreen(
     }
     val importOwner =
       if (shouldMigrateComposerDraft(lease.owner, currentPickerOwner, currentPickerMainSessionKey)) currentPickerOwner else lease.owner
+    var unsupportedCount = 0
     viewModel.importChatComposerAttachments(
       owner = importOwner,
       mediaAuthorizationId = lease.authorizationId,
       mainSessionKey = currentPickerMainSessionKey,
       expectedCount = uris.size,
+      unsupportedCount = { unsupportedCount },
     ) {
+      unsupportedCount = 0
       uris.take(CHAT_COMPOSER_MAX_ATTACHMENTS).mapNotNull { uri ->
         try {
           loadPickedMediaOrDocumentAttachment(resolver, uri)
         } catch (err: CancellationException) {
           throw err
+        } catch (_: UnsupportedSharedAttachmentException) {
+          unsupportedCount += 1
+          null
         } catch (_: Exception) {
           null
         }
@@ -775,6 +781,13 @@ internal fun ChatScreen(
     when (attachmentNotices[composerOwner]) {
       ChatComposerAttachmentNotice.Attachment -> {
         NativeText.Resource(source = "Could not stage an attachment for sending.", formatArgs = emptyList())
+      }
+
+      ChatComposerAttachmentNotice.UnsupportedType -> {
+        NativeText.Resource(
+          source = "This file type isn't supported. Choose a PDF, Office, CSV, Markdown, or media file.",
+          formatArgs = emptyList(),
+        )
       }
 
       ChatComposerAttachmentNotice.Image -> {
@@ -854,10 +867,21 @@ internal fun ChatScreen(
       inputDrafts[ownerSnapshot] =
         mergeSharedChatText(sharedText = staged.text, currentInput = inputDrafts[ownerSnapshot])
       val admissionOmissions = composerState.addAttachments(ownerSnapshot, staged.attachments)
-      composerState.reportAttachmentOmission(
-        ownerSnapshot,
-        staged.failedAttachmentCount + staged.droppedAttachmentCount + admissionOmissions,
-      )
+      val capOrBudgetOmissions =
+        (staged.droppedAttachmentCount - staged.unsupportedAttachmentCount).coerceAtLeast(0) + admissionOmissions
+      val notice =
+        chatAttachmentOmissionNotice(
+          unsupportedCount = staged.unsupportedAttachmentCount,
+          otherFailureCount = staged.failedAttachmentCount + capOrBudgetOmissions,
+        )
+      if (notice == ChatComposerAttachmentNotice.UnsupportedType) {
+        composerState.reportUnsupportedAttachment(ownerSnapshot, staged.unsupportedAttachmentCount)
+      } else if (notice == ChatComposerAttachmentNotice.Attachment) {
+        composerState.reportAttachmentOmission(
+          ownerSnapshot,
+          staged.failedAttachmentCount + staged.droppedAttachmentCount + admissionOmissions,
+        )
+      }
       viewModel.acknowledgeChatShareDraft(share.id, ownerSnapshot)
     }
   }
@@ -1254,7 +1278,10 @@ internal fun ChatScreen(
           }
         },
         onPickFile = {
-          pickAttachment(filePickerOwnerCheckpoint) { pickMediaOrDocument.launch(SHARED_AUDIO_DOCUMENT_MIME_TYPES) }
+          // The allowlist still decides admission. An unfiltered picker lets an
+          // unsupported file be chosen so the composer can say so, instead of
+          // greying it out with no explanation.
+          pickAttachment(filePickerOwnerCheckpoint) { pickMediaOrDocument.launch(arrayOf("*/*")) }
         },
         onLocation = { location ->
           if (attachmentPicker.admit(opening)) {

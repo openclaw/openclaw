@@ -380,6 +380,7 @@ internal data class StagedChatShare(
   val attachments: List<PendingAttachment>,
   val failedAttachmentCount: Int,
   val droppedAttachmentCount: Int,
+  val unsupportedAttachmentCount: Int = 0,
 )
 
 internal const val CHAT_COMPOSER_MAX_ATTACHMENTS = 8
@@ -470,15 +471,20 @@ internal suspend fun stageChatShareDraft(
   val attachments = mutableListOf<PendingAttachment>()
   var failedAttachmentCount = 0
   var droppedAttachmentCount = draft.droppedAttachmentCount
+  var unsupportedAttachmentCount = draft.unsupportedAttachmentCount
   for (sharedAttachment in draft.attachments) {
     try {
       val candidate = loadAttachment(sharedAttachment)
       val admission = admitChatAttachments(attachments, listOf(candidate))
       attachments += admission.accepted
+      // A size or count omission is not a type rejection.
       droppedAttachmentCount += admission.omittedCount
     } catch (error: CancellationException) {
       // Screen disposal must leave the queue head unacknowledged for the next ChatScreen.
       throw error
+    } catch (_: ai.openclaw.app.UnsupportedSharedAttachmentException) {
+      droppedAttachmentCount += 1
+      unsupportedAttachmentCount += 1
     } catch (_: Exception) {
       failedAttachmentCount += 1
     }
@@ -488,8 +494,20 @@ internal suspend fun stageChatShareDraft(
     attachments = attachments,
     failedAttachmentCount = failedAttachmentCount,
     droppedAttachmentCount = droppedAttachmentCount,
+    unsupportedAttachmentCount = unsupportedAttachmentCount,
   )
 }
+
+/** Type rejection stays distinct from a read, size, or cap failure. */
+internal fun chatAttachmentOmissionNotice(
+  unsupportedCount: Int,
+  otherFailureCount: Int,
+): ChatComposerAttachmentNotice? =
+  when {
+    otherFailureCount > 0 -> ChatComposerAttachmentNotice.Attachment
+    unsupportedCount > 0 -> ChatComposerAttachmentNotice.UnsupportedType
+    else -> null
+  }
 
 internal fun appendChatDictationTranscript(
   currentInput: String,

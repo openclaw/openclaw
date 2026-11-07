@@ -139,6 +139,7 @@ data class ChatShareDraft(
   val text: String?,
   val attachments: List<SharedAttachment>,
   val droppedAttachmentCount: Int,
+  val unsupportedAttachmentCount: Int = 0,
 )
 
 internal const val MAX_PENDING_CHAT_SHARES = 16
@@ -279,6 +280,7 @@ class MainViewModel internal constructor(
   private val prefs: SecurePrefs,
   savedStateHandle: SavedStateHandle,
   private val resolveShareMimeType: (Uri) -> String? = app.contentResolver::getType,
+  private val resolveShareDisplayName: (Uri) -> String? = { uri -> sharedAttachmentDisplayName(app.contentResolver, uri) },
   shareLaunchCapacity: Int = MAX_PENDING_CHAT_SHARES,
 ) : AndroidViewModel(app) {
   constructor(
@@ -962,7 +964,7 @@ class MainViewModel internal constructor(
         shareLaunchMutex.withLock {
           val request =
             withContext(Dispatchers.IO) {
-              parseShareLaunchIntent(retainedIntent, resolveShareMimeType)
+              parseShareLaunchIntent(retainedIntent, resolveShareMimeType, resolveShareDisplayName)
             } ?: return@withLock
           if (!enqueueShareLaunch(request, owner)) reportShareLaunchOverflow()
         }
@@ -1000,6 +1002,7 @@ class MainViewModel internal constructor(
           text = request.text,
           attachments = request.attachments,
           droppedAttachmentCount = request.droppedAttachmentCount,
+          unsupportedAttachmentCount = request.unsupportedAttachmentCount,
         ),
         owner,
       )
@@ -1780,6 +1783,7 @@ class MainViewModel internal constructor(
     mediaAuthorizationId: String,
     mainSessionKey: String,
     expectedCount: Int,
+    unsupportedCount: () -> Int = { 0 },
     load: suspend () -> List<PendingAttachment>,
   ): Job? {
     val importId =
@@ -1790,7 +1794,8 @@ class MainViewModel internal constructor(
         chatComposerState.completeMediaImport(
           importId = importId,
           candidates = loaded,
-          failedCount = expectedCount - loaded.size,
+          failedCount = (expectedCount - loaded.size).coerceAtLeast(0),
+          unsupportedCount = unsupportedCount().coerceAtLeast(0),
         )
       } catch (err: CancellationException) {
         chatComposerState.cancelMediaImport(importId)
