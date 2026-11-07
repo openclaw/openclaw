@@ -50,6 +50,7 @@ import type {
 import {
   prepareCodingToolAssembly,
   prepareCodingToolAssemblyAsync,
+  prepareCodingToolOptions,
   type CodingToolAssembly,
 } from "./agent-tools.preparation.js";
 import {
@@ -63,7 +64,6 @@ import { registerOneShotExecScopeCleanup } from "./bash-process-control.js";
 import { resolveProcessToolScopeKey } from "./bash-process-scope.js";
 import { listChannelAgentTools } from "./channel-tools.js";
 import {
-  prepareConversationCapabilityProfile,
   prepareDelegatedToolDenyFloor,
   resolveConversationCapabilityProfile,
 } from "./conversation-capability-profile.js";
@@ -85,7 +85,6 @@ import { createEmbeddedMessageInvocationPolicy } from "./scheduled-message-invoc
 import { resolveScheduledToolCallerContext } from "./scheduled-tool-policy.js";
 import { resolveSessionPlacementComputer } from "./session-placement-computer.js";
 import { withLegacySessionCapabilityRead } from "./subagents/spawn/subagent-session-store-legacy.js";
-import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import { subagentAttachmentRootForRun } from "./subagents/subagent-attachment-paths.js";
 import {
   withPreparedToolConstruction,
@@ -695,32 +694,17 @@ export async function createOpenClawCodingToolsInternalAsync(
   preparation: ToolConstructionPreparationOptions = {},
 ): Promise<AnyAgentTool[]> {
   const assertLoopbackConfigCurrent = captureLocalBrowserLoopbackConfig(options?.config);
+  const signal =
+    options?.abortSignal && preparation.signal
+      ? AbortSignal.any([options.abortSignal, preparation.signal])
+      : (options?.abortSignal ?? preparation.signal);
   return withPreparedToolConstruction(
     options?.config,
-    {
-      ...preparation,
-      signal:
-        options?.abortSignal && preparation.signal
-          ? AbortSignal.any([options.abortSignal, preparation.signal])
-          : (options?.abortSignal ?? preparation.signal),
-    },
+    { ...preparation, signal },
     async (shared) => {
-      const conversationCapabilityProfile =
-        options?.conversationCapabilityProfile ??
-        (await prepareConversationCapabilityProfile({
-          ...options,
-          config: shared.config,
-          agentId: options?.policyAgentId ?? options?.agentId,
-          sandboxToolPolicy: options?.sandbox?.enabled ? options.sandbox.tools : undefined,
-          pluginMetadataSnapshot: options?.preparedModelRuntime?.metadataSnapshot,
-        }));
-      const listingClientCaps =
-        options?.listingClientCaps ??
-        (await withPreparedSessionCapabilityRead(() =>
-          resolveSessionToolListingClientCaps({ ...options, config: shared.config }),
-        ));
+      const preparedOptions = await prepareCodingToolOptions(options, shared, signal);
       const assembly = assembleOpenClawCodingTools(
-        { ...options, config: shared.config, conversationCapabilityProfile, listingClientCaps },
+        preparedOptions,
         skillReadResources,
         onPolicyFilter,
         preparedSurface,
