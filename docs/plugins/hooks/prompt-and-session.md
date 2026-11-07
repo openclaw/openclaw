@@ -341,6 +341,15 @@ context-window metadata, the hook event and context also include
 fixed model contracts, and runtime discovery, plus `contextWindowSource` and
 `contextWindowReferenceTokens` when a lower cap was applied.
 
+On `model_call_ended`, `errorCategory` is a bounded JavaScript error category
+(such as `Error` or `TypeError`), not a provider failure reason. An ordinary
+`Error` carrying HTTP 401, 429, or 500 still reports `Error`. Optional
+`failureKind` classifies transport-style failures as `aborted`,
+`connection_closed`, `connection_reset`, `terminated`, or `timeout`; it does
+not provide an HTTP failure classification. The event includes neither HTTP
+status nor raw error text, so these fields alone cannot determine whether to
+retry or disable a credential.
+
 These provider-call hooks are emitted only by the embedded model-call
 path. A harness exposing `llm_input` / `llm_output` does not automatically
 expose the same provider-call telemetry. In external harnesses, LLM events
