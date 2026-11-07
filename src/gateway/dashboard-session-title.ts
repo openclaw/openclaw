@@ -10,6 +10,7 @@ import { createCrustaceanSlug } from "../agents/session-slug.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { withWorktreeSourceWait } from "../agents/worktrees/allocation.js";
 import type { WorktreeSourceStage, WorktreeWaitBudget } from "../agents/worktrees/types.js";
+import { isControlCommandMessage } from "../auto-reply/command-detection.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -24,6 +25,7 @@ import { withTimeout } from "../infra/fs-safe.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import {
   SESSION_TITLE_SOURCE_MAX_CHARS,
+  needsSkillCommandsForSessionTitle,
   resolveSessionTitleSource,
 } from "../sessions/session-title-source.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
@@ -37,6 +39,8 @@ import {
   sessionTitleRequests,
 } from "./session-title-state.js";
 import { readSessionTitleFieldsFromTranscriptAsync } from "./session-transcript-title-reader.js";
+
+const TITLE_SOURCE_CONTROL_OPTIONS = { isControlCommand: isControlCommandMessage } as const;
 
 type DashboardSessionTitleModelEntry = Pick<
   SessionEntry,
@@ -376,16 +380,21 @@ export async function prepareDashboardSessionTitle(params: {
   operatorAuthority?: AdmittedRunOperatorAuthority;
 }): Promise<string | null> {
   try {
-    const sourceText =
-      resolveSessionTitleSource(params.userMessage) ??
-      resolveSessionTitleSource(
-        params.userMessage,
-        await prepareTitleSkillCommands({
-          cfg: params.cfg,
-          agentId: params.agentId,
-          assertCurrent: params.assertCurrent,
-        }),
-      );
+    // Slash-prefixed text needs the skill registry to distinguish registered
+    // skill commands (their arguments title the session) from pasted paths and
+    // free-form commands (the de-slashed text titles it); plain text stays
+    // lazy and never loads skill commands.
+    const sourceText = needsSkillCommandsForSessionTitle(params.userMessage)
+      ? resolveSessionTitleSource(
+          params.userMessage,
+          await prepareTitleSkillCommands({
+            cfg: params.cfg,
+            agentId: params.agentId,
+            assertCurrent: params.assertCurrent,
+          }),
+          TITLE_SOURCE_CONTROL_OPTIONS,
+        )
+      : resolveSessionTitleSource(params.userMessage);
     return sourceText
       ? await generateDashboardSessionTitle({ ...params, sourceText, utilityOnly: true })
       : null;
@@ -543,13 +552,21 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
     ).firstUserMessage;
     assertMemoryCurrent();
     const transcriptText = transcriptSource ?? "";
-    const currentText = resolveSessionTitleSource(params.currentUserMessage ?? "", skillCommands);
+    const currentText = resolveSessionTitleSource(
+      params.currentUserMessage ?? "",
+      skillCommands,
+      TITLE_SOURCE_CONTROL_OPTIONS,
+    );
     // A first-turn transcript may win the persistence race before title work starts.
     // When it is the current turn, retain the supplied attachment-enriched source.
     const sourceText =
-      resolveSessionTitleSource(entry.pendingWorktree?.titleSource ?? "", skillCommands) ??
+      resolveSessionTitleSource(
+        entry.pendingWorktree?.titleSource ?? "",
+        skillCommands,
+        TITLE_SOURCE_CONTROL_OPTIONS,
+      ) ??
       (!transcriptText || (currentText && currentText === transcriptText)
-        ? resolveSessionTitleSource(params.userMessage, skillCommands)
+        ? resolveSessionTitleSource(params.userMessage, skillCommands, TITLE_SOURCE_CONTROL_OPTIONS)
         : transcriptText);
     if (!sourceText) {
       return false;
