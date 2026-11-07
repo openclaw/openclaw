@@ -87,6 +87,14 @@ describe("failover-error", () => {
     });
   });
 
+  it("classifies the explicit auth-order preflight refusal as an auth failure", () => {
+    const error = new Error("Explicit auth order for openai has no usable profiles.");
+    expect(coerceToFailoverError(error, { provider: "openai" })).toMatchObject({
+      reason: "auth",
+      rawError: error.message,
+    });
+  });
+
   it("does not promote a direct preflight into a provider failure", () => {
     const message = "handoff refused: 529 OVERLOADED";
     const cause = { status: 529, code: "OVERLOADED", message: "overloaded" };
