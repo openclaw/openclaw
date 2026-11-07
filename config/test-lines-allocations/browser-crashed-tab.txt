@@ -1,2 +1,2 @@
-# Tab-crash liveness probe for #194667: real renderer crash proof, request-boundary rejection, crash error translation, tab listing mark, and implicit selection coverage.
-227
+# Tab-crash liveness probe for #194667: real renderer crash proof, snapshot and navigate request-boundary rejection, crash error translation, tab listing mark, and implicit selection coverage.
+255

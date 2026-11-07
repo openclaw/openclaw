@@ -11,8 +11,8 @@ type SnapshotTab = {
   wsLookup?: Parameters<typeof assertCdpTargetResponsive>[0]["lookup"];
 };
 
-/** Reject a dead tab before snapshot work waits out the action budget. */
-export async function assertSnapshotTabResponsive(opts: {
+/** Reject a dead tab before a route action waits out the action budget. */
+export async function assertRouteTabResponsive(opts: {
   profileCtx: { profile: { cdpUrl: string } };
   tab: SnapshotTab;
   signal?: AbortSignal;

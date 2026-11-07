@@ -40,7 +40,6 @@ import {
   withPlaywrightRouteContext,
   withRouteTabContext,
 } from "./agent.shared.js";
-import { assertSnapshotTabResponsive } from "./agent.snapshot-crash.js";
 import {
   saveBrowserMedia,
   saveBrowserScreenshot,
@@ -51,6 +50,7 @@ import {
   resolveOperationTargetOutcome,
 } from "./agent.snapshot-target.js";
 import { resolveSnapshotPlan } from "./agent.snapshot.plan.js";
+import { assertRouteTabResponsive } from "./agent.tab-crash.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import { readRoutePositiveInteger, readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
@@ -83,6 +83,8 @@ export function registerBrowserAgentSnapshotRoutes(
       ctx,
       targetId,
       run: async ({ profileCtx, tab, cdpUrl, signal, assertCurrent }) => {
+        // Playwright navigation hangs on a dead renderer; fail before the action budget.
+        await assertRouteTabResponsive({ profileCtx, tab, signal });
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
           const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
           await assertChromeMcpNavigationAllowed({ url, ...ssrfPolicyOpts });
@@ -352,7 +354,7 @@ export function registerBrowserAgentSnapshotRoutes(
             });
           }
           await req.assertCurrent?.(profileCtx.profile);
-          await assertSnapshotTabResponsive({ profileCtx, tab, signal });
+          await assertRouteTabResponsive({ profileCtx, tab, signal });
           const jsonSnapshot = (snapshot: Record<string, unknown>) =>
             res.json({
               ok: true,

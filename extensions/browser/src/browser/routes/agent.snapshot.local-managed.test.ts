@@ -152,6 +152,12 @@ function snapshotRoute(state = snapshotState()) {
   return getHandlers.get("/snapshot");
 }
 
+function navigateRoute(state = snapshotState()) {
+  const { app, postHandlers } = createBrowserRouteApp();
+  registerBrowserAgentSnapshotRoutes(app, { state: () => state } as never);
+  return postHandlers.get("/navigate");
+}
+
 async function snapshot(query: BrowserRequest["query"], handler = snapshotRoute()) {
   return await runRoute(handler, { query });
 }
@@ -219,6 +225,22 @@ describe("local-managed browser snapshot routes", () => {
     expect(response.statusCode).toBe(200);
     expect(cdp.assertCdpTargetResponsive).toHaveBeenCalled();
     expect(isBrowserTargetCrashed("http://127.0.0.1:18800", "7")).toBe(false);
+  });
+
+  it("reports a crashed target on navigate before the navigation budget", async () => {
+    cdp.assertCdpTargetResponsive.mockRejectedValueOnce(new BrowserTargetCrashedError());
+
+    await expect(
+      runRoute(navigateRoute(), {
+        body: { url: "https://example.com" },
+      }),
+    ).rejects.toMatchObject({
+      name: "BrowserTargetCrashedError",
+      message: new BrowserTargetCrashedError().message,
+    });
+    expect(cdp.assertCdpTargetResponsive).toHaveBeenCalledWith(
+      expect.objectContaining({ wsUrl: "ws://127.0.0.1:18800/devtools/page/tab-1" }),
+    );
   });
 
   it("uses CDP first for unscoped managed role snapshots and publishes its refs", async () => {
