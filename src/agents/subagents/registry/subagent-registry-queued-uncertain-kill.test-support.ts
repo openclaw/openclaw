@@ -1,17 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
-import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
-import {
-  createContext,
-  createOperatorClient,
-} from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
+import { createContext } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
-import {
-  getPluginRuntimeGatewayRequestScope,
-  withPluginRuntimeGatewayRequestScope,
-} from "../../../plugins/runtime/gateway-request-scope.js";
 import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db-cache.js";
+import { createOperationalRunInstanceRef } from "../../operational-run-instance.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
@@ -58,27 +51,17 @@ export function registerQueuedUnknownKillAuthorityTest() {
     });
   });
 
-  it("restores an uncertain accepted address with its original runtime and completion custody", async () => {
+  it("restores an uncertain accepted address with its original runtime and requester accounting owner", async () => {
     await withQueuedRegistrationFixture(async (f) => {
       const context = createContext();
       const resolveGatewayContext = () => context;
       context.resolveGatewayContext = resolveGatewayContext;
-      const client = createOperatorClient({
-        profileName: "collector-rekey",
-        scopes: ["operator.write"],
-      });
-      const completion = await withPluginRuntimeGatewayRequestScope(
-        { client, context, resolveGatewayContext, isWebchatConnect: () => false },
-        () => captureOperatorToolGatewayContinuationContext(),
-      );
-      if (!completion?.operatorAuthority) {
-        throw new Error("Expected captured operator completion custody");
-      }
+      const requesterInstance = createOperationalRunInstanceRef("rekey-parent");
       f.registration.gatewayContextResolver = resolveGatewayContext;
       await f.register();
       const original = f.current();
       const runtimeKey = getSubagentRunRuntimeKey(original);
-      subagentRuns.bindCompletionAuthority(original, completion);
+      subagentRuns.bindCompletionOwner(original, requesterInstance);
       const retirement = subagentRuns.captureRetirement(
         original,
         (candidate) => candidate.runId !== original.runId,
@@ -121,14 +104,7 @@ export function registerQueuedUnknownKillAuthorityTest() {
         });
         expect(retirement.observation.entry).toBe(accepted);
         expect(f.scope.canAcceptLaunch()).toBe(true);
-        const readCompletionSource = () =>
-          getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority?.source;
-        expect(subagentRuns.runWithCompletionAuthority(original, readCompletionSource)).toBe(
-          completion.operatorAuthority.source,
-        );
-        expect(subagentRuns.runWithCompletionBatchAuthority([original], readCompletionSource)).toBe(
-          completion.operatorAuthority.source,
-        );
+        expect(subagentRuns.getRequesterRunInstance(accepted)).toBe(requesterInstance);
         await expect(
           mutateSubagentRuns([original.runId, acceptedId], () => ({ value: true }), {
             runs: f.runs,
@@ -148,8 +124,7 @@ export function registerQueuedUnknownKillAuthorityTest() {
         ack.release();
         await Promise.allSettled([accepting]);
         retirement.release();
-        subagentRuns.releaseCompletionAuthority(original);
-        completion.release();
+        subagentRuns.releaseRequesterRunInstance(original);
       }
     }, subagentRuns);
   });

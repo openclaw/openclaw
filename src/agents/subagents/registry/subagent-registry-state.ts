@@ -169,7 +169,7 @@ export function publishSubagentRunsAfterAtomicStore(
   changedRunIds: readonly string[] | undefined,
   databasePath?: string,
 ): () => void {
-  subagentRuns.settleCompletionAuthorities(runs, changedRunIds);
+  subagentRuns.settleCompletionOwners(runs, changedRunIds);
   const keys = rememberPersistedSubagentRunsSnapshot(runs, changedRunIds, databasePath);
   const events = updateCommittedSwarmNotifications(runs, changedRunIds);
   return () => {

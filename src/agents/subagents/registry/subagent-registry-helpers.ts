@@ -379,7 +379,7 @@ export function updateSubagentArchiveAtMs(entry: SubagentRunRecord, cfg?: OpenCl
         ? entry.completion.capturedAt
         : endedAt
     : entry.cleanup === "delete" &&
-        (entry.pauseReason !== "sessions_yield" || subagentRuns.isCompletionAuthorityRetired(entry))
+        (entry.pauseReason !== "sessions_yield" || subagentRuns.isCompletionRetired(entry))
       ? entry.delivery?.discardReason === "task-missing"
         ? (entry.delivery.discardedAt ?? endedAt)
         : endedAt

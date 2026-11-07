@@ -46,7 +46,7 @@ import {
   retireSubagentObligationsInContext,
   scheduleRequesterSettleWake,
 } from "./subagent-registry-lifecycle-wake.js";
-import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
+import { getCurrentSubagentRunOwner } from "./subagent-registry-memory.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
   mutateSubagentRuns,
@@ -550,13 +550,12 @@ export class SubagentLifecycleController {
     return adoptSubagentRunForRequesterTurnInRuns({
       ...params,
       runs: this.options.runs,
-      assertCurrent: () =>
-        subagentRuns.runWithCompletionAuthority(params.expected, () => {
-          params.assertCurrent();
-          if (this.newerGenerationOwnsSession(params.expected)) {
-            throw new Error("Steered completion no longer owns its execution");
-          }
-        }),
+      assertCurrent: () => {
+        params.assertCurrent();
+        if (this.newerGenerationOwnsSession(params.expected)) {
+          throw new Error("Steered completion no longer owns its execution");
+        }
+      },
     });
   };
 

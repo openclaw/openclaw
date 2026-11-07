@@ -325,11 +325,13 @@ for (const scenario of [
         if (!saved) {
           throw new Error("Missing durable child");
         }
-        bindGatewayContextResolver(saved, () => gatewayContext);
+        let completionGatewayCurrent = true;
+        bindGatewayContextResolver(saved, () =>
+          completionGatewayCurrent ? gatewayContext : undefined,
+        );
         if (!originalSource) {
           throw new Error("Original requester authority was not captured");
         }
-        subagentRuns.bindCompletionAuthority(saved, originalSource);
         const currentBatch = (batch: readonly SubagentRunRecord[]) =>
           batch.map((member) => {
             const current = subagentRuns.get(member.runId);
@@ -485,8 +487,9 @@ for (const scenario of [
           return;
         }
         if (scenario === "revoked") {
-          // Retire the actual Gateway source owner, including grants retained by the run.
+          // Gateway shutdown retires both authenticated access and the captured completion owner.
           closeGatewayDeviceRevocation(gatewayContext);
+          completionGatewayCurrent = false;
           release.resolve();
           expect(await wake).toBe(false);
           expect(transcriptText()).not.toContain("Requester synthesis ");

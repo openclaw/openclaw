@@ -83,7 +83,7 @@ export const sweptContext = (entry: SubagentRunRecord) => ({
 export const isSessionCleanupDeferred = (entry: SubagentRunRecord) =>
   ((entry.delivery?.status === "pending" || entry.delivery?.status === "in_progress") &&
     entry.delivery.disposition === "session_queued") ||
-  (!subagentRuns.isCompletionAuthorityRetired(entry) &&
+  (!subagentRuns.isCompletionRetired(entry) &&
     (entry.pauseReason === "sessions_yield" ||
       entry.delivery?.status === "in_progress" ||
       (entry.delivery?.status === "pending" &&
@@ -106,7 +106,7 @@ export function isCleanupCurrent(
     current.execution.status === expected.execution.status &&
     current.execution.endedAt === expected.execution.endedAt &&
     typeof current.execution.endedAt === "number" &&
-    (subagentRuns.isCompletionAuthorityRetired(current) ||
+    (subagentRuns.isCompletionRetired(current) ||
       (!current.killIntent && !current.killReconciliation && !current.requesterSettleWake)) &&
     !isSuspendedPendingFinalDelivery(current) &&
     !isSessionCleanupDeferred(current)

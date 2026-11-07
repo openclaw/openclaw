@@ -240,10 +240,10 @@ export function createSubagentRegistrySweeper(params: {
         if (
           getRecordedSubagentChildAuthority(entry).status === "mismatch" ||
           typeof entry.execution.endedAt !== "number" ||
-          (entry.requesterSettleWake && !subagentRuns.isCompletionAuthorityRetired(entry)) ||
+          (entry.requesterSettleWake && !subagentRuns.isCompletionRetired(entry)) ||
           isSuspendedPendingFinalDelivery(entry) ||
           ((entry.killIntent || entry.killReconciliation) &&
-            !subagentRuns.isCompletionAuthorityRetired(entry)) ||
+            !subagentRuns.isCompletionRetired(entry)) ||
           !(entry.collect && entry.collectorCompletion
             ? entry.collectorLaunchCleanupPending || isCollectorArchiveReady(entry, now)
             : entry.archiveAtMs && entry.archiveAtMs <= now && !isSessionCleanupDeferred(entry))
@@ -272,7 +272,7 @@ export function createSubagentRegistrySweeper(params: {
         if (
           (selected.delivery?.status === "pending" ||
             selected.delivery?.status === "in_progress") &&
-          subagentRuns.isCompletionAuthorityRetired(selected)
+          subagentRuns.isCompletionRetired(selected)
         ) {
           await blockSubagentCompletionDelivery({
             subagent: selected,
@@ -294,7 +294,7 @@ export function createSubagentRegistrySweeper(params: {
         }
         let entry = reconciled;
         // A yielded run no continuation can reach settles instead of parking forever.
-        const executionRetired = subagentRuns.isCompletionAuthorityRetired(entry);
+        const executionRetired = subagentRuns.isCompletionRetired(entry);
         if (
           !executionRetired &&
           isYieldedSubagentRun(entry) &&

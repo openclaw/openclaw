@@ -14,7 +14,6 @@ import {
   withFollowupSuccessor,
 } from "../completion/session-followup-completion.js";
 import { withSubagentProgressDraft } from "../registry/subagent-progress-draft.js";
-import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import {
   matchesSubagentRequesterSession,
   selectConnectedSettledSubagentWave,
@@ -619,7 +618,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
             if (!isSourceSessionEffectsAllowed()) {
               throw new Error("Requester completion source changed before continuation admission.");
             }
-            return subagentRuns.runWithCompletionBatchAuthority(settledBatch, deliver);
+            return deliver();
           },
         );
       };

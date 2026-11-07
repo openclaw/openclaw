@@ -131,27 +131,17 @@ function prepareBlockedSubagentCompletion(
   const generation = params.subagent.delivery?.generation ?? 1;
   if (
     !subagent ||
-    (!params.operatorAuthorityUnavailable &&
-      (subagent.execution.status !== "terminal" ||
-        !subagent.execution.outcome ||
-        subagent.pauseReason === "sessions_yield" ||
-        subagent.expectsCompletionMessage !== true)) ||
+    subagent.execution.status !== "terminal" ||
+    !subagent.execution.outcome ||
+    subagent.pauseReason === "sessions_yield" ||
+    subagent.expectsCompletionMessage !== true ||
     (subagent.delivery?.generation ?? 1) !== generation
   ) {
     return undefined;
   }
-  if (params.operatorAuthorityUnavailable) {
-    subagent.suppressCompletionDelivery = true;
-    subagent.requesterSettleWake = undefined;
-    subagent.wakeOnDescendantSettle = undefined;
-    if (subagent.delivery?.status === "delivered") {
-      return { subagent };
-    }
-  }
   const successful = subagent.execution.outcome?.status === "ok";
   if (
     !successful &&
-    !params.operatorAuthorityUnavailable &&
     ((params.suspendedReason !== undefined && !params.storeReplaced) ||
       !["pending", "in_progress", "failed"].includes(subagent.delivery?.status ?? "pending"))
   ) {
@@ -327,8 +317,7 @@ function mutateRequesterBatch(
         // A notice is one paused member's input, not settlement of its frozen cohort.
         if (
           params.outcome.storeReplaced ||
-          params.outcome.disposition === "intentional_non_delivery" ||
-          params.outcome.reason === "operator_authority_unavailable"
+          params.outcome.disposition === "intentional_non_delivery"
         ) {
           subagent.requesterSettleWake = undefined;
         }

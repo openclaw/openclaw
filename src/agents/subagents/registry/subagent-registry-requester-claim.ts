@@ -1,4 +1,3 @@
-import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { getActiveAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
 import {
   mergeAcceptedSessionSpawnsForRun,
@@ -98,34 +97,16 @@ export async function reconcileRequesterTurnClaimForRun(params: {
   if (getActiveAgentRunDelegatedAuthority(params.requesterRunInstance)) {
     return true;
   }
-  return subagentRuns.runWithCompletionBatchAuthority(entries, async () => {
-    const custody = await captureOperatorToolGatewayContinuationContext();
-    if (!custody) {
-      throw new Error("Committed requester claim has no retained completion custody");
-    }
-    try {
-      const current = ownedEntries();
-      if (!current.includes(acceptedEntry)) {
-        return false;
-      }
-      // The transfer owns row retirement; retain source custody independently of those rows.
-      return await subagentRuns.runWithCompletionBatchAuthority(current, () =>
-        custody.run(() =>
-          settleRequesterAfterSessionSpawns({
-            ...params,
-            requesterTurnRunId,
-            requesterYielded: false,
-            acceptedSessionSpawns: current.map((entry) => ({
-              runId: entry.taskRunId ?? entry.runId,
-              childSessionKey: entry.childSessionKey,
-              expectsCompletionMessage: true,
-            })),
-            assertCurrent: custody.assertCurrent,
-          }),
-        ),
-      );
-    } finally {
-      custody.release();
-    }
+  // The transfer owns current requester/run checks; a recorded claim settles without
+  // borrowing either child's operator invocation.
+  return settleRequesterAfterSessionSpawns({
+    ...params,
+    requesterTurnRunId,
+    requesterYielded: false,
+    acceptedSessionSpawns: entries.map((entry) => ({
+      runId: entry.taskRunId ?? entry.runId,
+      childSessionKey: entry.childSessionKey,
+      expectsCompletionMessage: true,
+    })),
   });
 }
