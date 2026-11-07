@@ -47,7 +47,7 @@ openclaw plugins install @openclaw/heygen-speech
 | `apiKey`          | string                    | Resolved API key. Supports `${ENV}` and secret refs.                         |
 | `baseUrl`         | string                    | HeyGen API URL. Trailing slashes stripped. Default `https://api.heygen.com`. |
 | `model`           | string                    | One of the [models](#models) below.                                          |
-| `speakerVoiceId`  | string                    | Default voice id. Legacy alias: `voiceId`.                                   |
+| `speakerVoiceId`  | string                    | Default voice id. Alias: `voiceId`.                                          |
 | `language`        | string                    | Optional language code such as `en`.                                         |
 | `streamTransport` | `"http"` \| `"websocket"` | How streamed playback reaches HeyGen. Default `http`.                        |
 

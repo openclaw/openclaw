@@ -22,7 +22,6 @@ import {
   heygenTts,
   listHeyGenVoices,
   type HeyGenModel,
-  type HeyGenTtsRequest,
 } from "./tts.js";
 
 const HEYGEN_BASE_URL = "https://api.heygen.com";
@@ -85,12 +84,10 @@ function resolveApiKey(configValue?: string): string | undefined {
 
 const parseDirectiveToken = createSpeechDirectiveParser({
   voiceId: ["allowVoice", ["voice", "voice_id", "heygen_voice"]],
-  model: ["allowModelId", ["model", "heygen_model"], { value: (ctx) => normalizeModel(ctx.value) }],
+  model: ["allowModelId", ["model", "heygen_model"]],
 });
 
-async function resolveSynthesisRequest(
-  req: Omit<SpeechSynthesisRequest, "target">,
-): Promise<HeyGenTtsRequest & { streamTransport: HeyGenStreamTransport }> {
+async function resolveSynthesisRequest(req: Omit<SpeechSynthesisRequest, "target">) {
   const config = readProviderConfig(req.providerConfig);
   const apiKey = resolveApiKey(config.apiKey);
   if (!apiKey) {
@@ -156,12 +153,7 @@ export function buildHeyGenSpeechProvider(): SpeechProviderPlugin {
           voiceCompatible: true,
         };
       }
-      return {
-        audioBuffer,
-        outputFormat: "mp3",
-        fileExtension: ".mp3",
-        voiceCompatible: false,
-      };
+      return { audioBuffer, ...MP3_RESULT };
     },
     streamSynthesize: async (req) => {
       const { streamTransport, ...params } = await resolveSynthesisRequest(req);
@@ -170,12 +162,7 @@ export function buildHeyGenSpeechProvider(): SpeechProviderPlugin {
         streamTransport === "websocket"
           ? await heygenSocketTtsStream(streamParams)
           : await heygenHttpTtsStream(streamParams);
-      return {
-        ...stream,
-        outputFormat: "mp3",
-        fileExtension: ".mp3",
-        voiceCompatible: false,
-      };
+      return { ...stream, ...MP3_RESULT };
     },
     synthesizeTelephony: async (req) => ({
       audioBuffer: await heygenTts(await resolveSynthesisRequest(req), HEYGEN_PCM_OUTPUT),

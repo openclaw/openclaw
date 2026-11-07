@@ -274,7 +274,6 @@ type HeyGenVoice = {
 
 type HeyGenVoicePage = {
   data?: HeyGenVoice[];
-  has_more?: boolean;
   next_token?: string | null;
 };
 
@@ -334,7 +333,7 @@ export async function listHeyGenVoices(params: {
     const page = await requestVoicePage("private", token);
     voices.push(...parseVoices(page));
     token = page.next_token ?? undefined;
-    if (!page.has_more || !token) {
+    if (!token) {
       break;
     }
   }

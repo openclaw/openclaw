@@ -149,7 +149,7 @@ it.each([
   respond((url, init) => {
     expect(url).toBe("https://api.heygen.com/v3/models/audio/tts/stream");
     expect(new Headers(init?.headers).get("x-api-key")).toBe("key");
-    expect(JSON.parse(String(init?.body))).toEqual({
+    expect(JSON.parse(init?.body as string)).toEqual({
       text: "hi",
       voice_id: "83548de556df48ba8c09c42a57c51d85",
       model: "heygen-voice-1-turbo",
@@ -167,7 +167,7 @@ it.each([
 
 it("applies configured settings, with directives taking precedence", async () => {
   respond((_url, init) => {
-    expect(JSON.parse(String(init?.body))).toMatchObject({
+    expect(JSON.parse(init?.body as string)).toMatchObject({
       voice_id: "directive-voice",
       model: "heygen-voice-1",
       language: "fr",
@@ -326,13 +326,12 @@ it("lists every workspace page, then public voices that are ready", async () => 
   respond((url) => {
     const params = new URL(url).searchParams;
     if (params.get("type") === "public") {
-      return Response.json({ data: [voice("public")], has_more: true, next_token: "more" });
+      return Response.json({ data: [voice("public")], next_token: "more" });
     }
     return params.get("token") === "next"
-      ? Response.json({ data: [voice("own-2")], has_more: false })
+      ? Response.json({ data: [voice("own-2")] })
       : Response.json({
           data: [voice("own-1"), voice("cloning", "PROCESSING")],
-          has_more: true,
           next_token: "next",
         });
   });
@@ -345,7 +344,7 @@ it("keeps workspace voices when the public list fails", async () => {
   respond((url) =>
     new URL(url).searchParams.get("type") === "public"
       ? new Response("unavailable", { status: 503 })
-      : Response.json({ data: [voice("own")], has_more: false }),
+      : Response.json({ data: [voice("own")] }),
   );
   expect((await provider.listVoices?.(request))?.map(({ id }) => id)).toEqual(["own"]);
 });
