@@ -112,6 +112,19 @@ type CommandExchangeParams = Pick<
   commandInputCommitted?: boolean;
 };
 
+/** Idempotency keys that mark a delivered command exchange, owned with the writer below. */
+export const COMMAND_INPUT_IDEMPOTENCY_PREFIX = "command-input:" as const;
+export const COMMAND_REPLY_IDEMPOTENCY_PREFIX = "command-reply:" as const;
+
+/** True for the user/assistant rows a delivered command exchange writes. */
+export function isCommandExchangeIdempotencyKey(key: unknown): boolean {
+  return (
+    typeof key === "string" &&
+    (key.startsWith(COMMAND_INPUT_IDEMPOTENCY_PREFIX) ||
+      key.startsWith(COMMAND_REPLY_IDEMPOTENCY_PREFIX))
+  );
+}
+
 /** A local effect committed; this records its outcome, not delivery of the reply. */
 export function recordCommittedCommandExchange(params: CommandExchangeParams) {
   return recordCommandExchange(params);
@@ -144,9 +157,9 @@ async function recordCommandExchange(params: CommandExchangeParams) {
               commandText,
               await redactConfigCommandInput(commandText),
             ),
-            idempotencyKey: `command-input:${params.commandId}`,
+            idempotencyKey: `${COMMAND_INPUT_IDEMPOTENCY_PREFIX}${params.commandId}`,
           },
         }),
-    idempotencyKey: `command-reply:${params.commandId}:${params.replyId}`,
+    idempotencyKey: `${COMMAND_REPLY_IDEMPOTENCY_PREFIX}${params.commandId}:${params.replyId}`,
   });
 }

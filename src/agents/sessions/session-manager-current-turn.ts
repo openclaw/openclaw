@@ -1,3 +1,4 @@
+import { isCommandExchangeIdempotencyKey } from "../../config/sessions/command-transcript.js";
 import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import { readTranscriptEventAtSeqSync } from "../../config/sessions/session-accessor.sqlite-read.js";
 import { readActiveTranscriptEntryAnchor } from "../../config/sessions/session-accessor.sqlite-transcript-admitted-read.js";
@@ -55,11 +56,7 @@ function isTranscriptOnlyCommandExchangeEntry(entry: SessionEntry): boolean {
   if (entry.type !== "message") {
     return false;
   }
-  const idempotencyKey = Reflect.get(entry.message, "idempotencyKey");
-  return (
-    typeof idempotencyKey === "string" &&
-    (idempotencyKey.startsWith("command-input:") || idempotencyKey.startsWith("command-reply:"))
-  );
+  return isCommandExchangeIdempotencyKey(Reflect.get(entry.message, "idempotencyKey"));
 }
 
 function traversalEntry(
