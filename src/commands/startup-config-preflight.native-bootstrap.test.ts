@@ -77,7 +77,7 @@ it.each([false, true])(
       if (routed) {
         seedMacNodeWorkerProofState(state.statePath("state", "openclaw.sqlite"));
         ambientDatabase = fs.readFileSync(state.statePath("state", "openclaw.sqlite"));
-        fs.mkdirSync(selectedRoot);
+        fs.mkdirSync(selectedRoot, { mode: 0o700 });
         fs.writeFileSync(selectedConfig, JSON.stringify(config));
         await state.writeConfig({ env: { vars: { OPENCLAW_STATE_DIR: selectedRoot } } });
         delete process.env.OPENCLAW_STATE_DIR;
@@ -86,8 +86,17 @@ it.each([false, true])(
       const configBefore = fs.readFileSync(selectedConfig, "utf8");
       const databasePath = path.join(selectedRoot, "state", "openclaw.sqlite");
       const nativeRows = seedMacNodeWorkerProofState(databasePath);
+      const measured: string[] = [];
+      const ready = await runStartupConfigPreflight({
+        gateway: true,
+        observe: false,
+        measure: async (name, run) => {
+          measured.push(name);
+          return await run();
+        },
+      });
 
-      const ready = await runStartupConfigPreflight({ gateway: true, observe: false });
+      expect(measured).toContain("doctor.config-preflight.webhook-completion-read");
 
       expect(ready.snapshot.valid).toBe(true);
       expect(ready.snapshot.path).toBe(selectedConfig);
