@@ -5,6 +5,12 @@ import {
   responsesPromptObserver,
   type ResponsesPromptObservation,
 } from "./openai-responses-contracts.js";
+import {
+  collectCompletionsRegions,
+  collectResponsesRegions,
+  promptPresenceExpectations,
+  runPromptPresenceCheck,
+} from "./prompt-presence-check.js";
 import { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
 type ResponsesPromptRequest = {
@@ -74,20 +80,61 @@ export function createResponsesPromptEgressObserver(
   const expectedPrompt = sanitizeTransportPayloadText(
     stripSystemPromptCacheBoundary(assembledPrompt ?? ""),
   );
+  const expectations = promptPresenceExpectations.get(options);
+  let attemptCounter = 0;
   return (request: ResponsesPromptRequest, metadata: ResponsesPromptMetadata) => {
     const [promptSource, observedPrompt] = readFinalResponsesPrompt(request);
     const sessionsSpawn = readSessionsSpawnSchema(request.tools);
+    const attemptIndex = attemptCounter++;
+    const presenceCheck = expectations
+      ? runPromptPresenceCheck({
+          collected: collectResponsesRegions(request),
+          expectations,
+          attemptIndex,
+        })
+      : undefined;
     observer({
       ...metadata,
       promptSource,
       expectedChars: expectedPrompt.length,
       observedChars: observedPrompt.length,
       matchesAssembledPrompt: promptSource !== "missing" && observedPrompt === expectedPrompt,
+      ...(presenceCheck ? { presenceCheck } : {}),
       ...(typeof request.model === "string" ? { model: request.model } : {}),
       ...(typeof request.reasoning?.effort === "string"
         ? { reasoningEffort: request.reasoning.effort }
         : {}),
       ...(sessionsSpawn ? { sessionsSpawn } : {}),
+    });
+  };
+}
+
+export function createCompletionsPromptEgressObserver(
+  options: object | undefined,
+  assembledPrompt: string | undefined,
+) {
+  const observer = options ? responsesPromptObserver.get(options) : undefined;
+  if (!observer) {
+    return undefined;
+  }
+  const expectations = promptPresenceExpectations.get(options);
+  const expectedPrompt = sanitizeTransportPayloadText(
+    stripSystemPromptCacheBoundary(assembledPrompt ?? ""),
+  );
+  return (params: unknown) => {
+    const collected = collectCompletionsRegions(params);
+    const firstLegal = collected.legal[0];
+    const presenceCheck = expectations
+      ? runPromptPresenceCheck({ collected, expectations, attemptIndex: 0 })
+      : undefined;
+    observer({
+      egress: "completions",
+      payloadVariant: "initial",
+      promptSource: firstLegal ? "input.system" : "missing",
+      expectedChars: expectedPrompt.length,
+      observedChars: firstLegal ? firstLegal.text.length : 0,
+      matchesAssembledPrompt: firstLegal !== undefined && firstLegal.text === expectedPrompt,
+      ...(presenceCheck ? { presenceCheck } : {}),
     });
   };
 }

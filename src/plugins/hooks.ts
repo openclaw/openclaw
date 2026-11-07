@@ -408,6 +408,12 @@ export function createHookRunner(
         left: acc?.appendSystemContext,
         right: next.appendSystemContext,
       }),
+      // Presence expectations accumulate across injecting plugins; each entry
+      // describes its own plugin contribution (frozen post-guard).
+      injectedExpectations:
+        [...(acc?.injectedExpectations ?? []), ...(next.injectedExpectations ?? [])].length > 0
+          ? [...(acc?.injectedExpectations ?? []), ...(next.injectedExpectations ?? [])]
+          : undefined,
     };
   };
 

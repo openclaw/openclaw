@@ -173,7 +173,12 @@ export type OpenAIResponsesOptions = BaseOpenAIStreamOptions & {
 
 const PROMPT_OBSERVER = Symbol("openaiResponsesPromptObserver");
 export type ResponsesPromptObservation = {
-  egress: "responses-sdk" | "responses-websocket" | "native-codex-websocket" | "native-codex-sse";
+  egress:
+    | "responses-sdk"
+    | "responses-websocket"
+    | "native-codex-websocket"
+    | "native-codex-sse"
+    | "completions";
   payloadVariant:
     | "initial"
     | "reasoning-stripped"
@@ -183,6 +188,10 @@ export type ResponsesPromptObservation = {
   expectedChars: number;
   observedChars: number;
   matchesAssembledPrompt: boolean;
+  /** Forensic containment facts for frozen injection expectations (fact-only). */
+  presenceCheck?: import("./prompt-presence-check.js").PromptPresenceCheck;
+  /** Monotonic per-run logical request ordinal stamped by the runner wrapper. */
+  requestIndex?: number;
   model?: string;
   reasoningEffort?: string;
   sessionsSpawn?: { strict?: boolean; categoryRequired: boolean };
