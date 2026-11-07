@@ -8,9 +8,14 @@ import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives
 import { isRelativeAssistantMediaReference, splitMediaOutput } from "../media/parse-output.js";
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import {
+  canReuseMarkdownOwnershipForAppend,
+  findCodeOwnership,
+} from "../shared/text/code-regions.js";
+import {
   createConditionalTextProjector,
   createTextProjection,
   type TextFilter,
+  type TextProjector,
   type TextProjection,
 } from "../shared/text/text-projection.js";
 import {
@@ -21,6 +26,8 @@ import type { AssistantTextSnapshot } from "./agent-event-assistant-text.js";
 import { stripAssistantMediaDirectivesForDisplay } from "./chat-display-projection.helpers.js";
 
 const MAX_LIVE_CHAT_BUFFER_CHARS = 500_000;
+const MEDIA_DIRECTIVE_PREFIX = "MEDIA:";
+const APPEND_SAFE_MEDIA_DELTA = /^[^[`~]*$/u;
 
 /** Cap live display text without letting later snapshots resurrect the retired prefix. */
 export function capLiveAssistantText(snapshot: AssistantTextSnapshot): string {
@@ -89,7 +96,7 @@ const pendingLiveAssistantTailFilter: TextFilter = {
           openBrackets = false;
         }
         previousChar = char;
-        if (char === "\n") {
+        if (char === "\n" || char === "\r") {
           possibleMediaLine = true;
           mediaPrefixLength = 0;
         } else if (possibleMediaLine && mediaPrefixLength < 5) {
@@ -109,6 +116,229 @@ const pendingLiveAssistantTailFilter: TextFilter = {
   },
 };
 
+function hasRemovedTrailingMediaDirective(source: string, visible: string): boolean {
+  let end = source.length;
+  while (end > 0 && /\s/u.test(source[end - 1] ?? "")) {
+    end -= 1;
+  }
+  if (end === 0) {
+    return false;
+  }
+  const lineStart =
+    Math.max(source.lastIndexOf("\n", end - 1), source.lastIndexOf("\r", end - 1)) + 1;
+  const line = source.slice(lineStart, end);
+  return /^\s*MEDIA:/iu.test(line) && !visible.trimEnd().endsWith(line);
+}
+
+/** Parse complete media lines once, then reuse unchanged Markdown-safe prose appends. */
+function createMediaDirectiveDisplayFilter(
+  managedMediaUrls: readonly string[],
+  final: boolean,
+): TextFilter {
+  const transform = (text: string) =>
+    stripAssistantMediaDirectivesForDisplay(text, managedMediaUrls);
+  if (final) {
+    return { activationTokens: [MEDIA_DIRECTIVE_PREFIX], transform };
+  }
+
+  return {
+    transform,
+    create: (): TextProjector => {
+      let source = "";
+      let visible = "";
+      let identity = true;
+      let active = false;
+      let mediaRemovalPending = false;
+      let pendingTrailingWhitespace = "";
+      let lineStart = 0;
+      let linePrefixLength = 0;
+      let linePrefixPossible = true;
+      let linePrefixComplete = false;
+      let lineHasContent = false;
+      let lineHasNonWhitespace = false;
+      let ownership: ReturnType<typeof findCodeOwnership> | undefined;
+
+      const capturePendingTrailingWhitespace = () => {
+        const sourceTrailingWhitespace = source.match(/\s*$/u)?.[0] ?? "";
+        const visibleTrailingWhitespace = visible.match(/\s*$/u)?.[0] ?? "";
+        let sharedSuffixLength = 0;
+        while (
+          sharedSuffixLength < sourceTrailingWhitespace.length &&
+          sharedSuffixLength < visibleTrailingWhitespace.length &&
+          sourceTrailingWhitespace[sourceTrailingWhitespace.length - sharedSuffixLength - 1] ===
+            visibleTrailingWhitespace[visibleTrailingWhitespace.length - sharedSuffixLength - 1]
+        ) {
+          sharedSuffixLength += 1;
+        }
+        pendingTrailingWhitespace = sourceTrailingWhitespace.slice(
+          0,
+          sourceTrailingWhitespace.length - sharedSuffixLength,
+        );
+      };
+
+      const resetLineProbe = (text: string) => {
+        lineStart = 0;
+        linePrefixLength = 0;
+        linePrefixPossible = true;
+        linePrefixComplete = false;
+        for (let index = 0; index < text.length; index += 1) {
+          const char = text[index] ?? "";
+          if (char === "\r" || char === "\n") {
+            lineStart = index + 1;
+            linePrefixLength = 0;
+            linePrefixPossible = true;
+            linePrefixComplete = false;
+            lineHasContent = false;
+            lineHasNonWhitespace = false;
+            continue;
+          }
+          lineHasContent = true;
+          lineHasNonWhitespace ||= /\S/u.test(char);
+          if (!linePrefixPossible || linePrefixComplete) {
+            continue;
+          }
+          if (linePrefixLength === 0 && /\s/u.test(char)) {
+            continue;
+          }
+          if (char.toUpperCase() === MEDIA_DIRECTIVE_PREFIX[linePrefixLength]) {
+            linePrefixLength += 1;
+            linePrefixComplete = linePrefixLength === MEDIA_DIRECTIVE_PREFIX.length;
+          } else {
+            linePrefixPossible = false;
+          }
+        }
+      };
+
+      const reset = (text: string) => {
+        source = text;
+        visible = transform(text);
+        identity = visible === source;
+        active = /(?:^|[\r\n])\s*MEDIA:/iu.test(source);
+        mediaRemovalPending = hasRemovedTrailingMediaDirective(source, visible);
+        capturePendingTrailingWhitespace();
+        ownership = undefined;
+        resetLineProbe(source);
+        return { text: visible, delta: null };
+      };
+
+      const projector: TextProjector = (input) => {
+        const appended = input.delta;
+        if (appended === null) {
+          return reset(input.text);
+        }
+        if (appended === "") {
+          return identity ? input : { text: visible, delta: "" };
+        }
+        if (input.text.length !== source.length + appended.length) {
+          return reset(input.text);
+        }
+
+        let completedMediaLine: { start: number; end: number } | undefined;
+        let completedWhitespaceOnlyLine = false;
+        let nonWhitespaceAfterMediaLine = false;
+        let resolvedPendingMediaRemoval = false;
+        for (let index = 0; index < appended.length; index += 1) {
+          const char = appended[index] ?? "";
+          const offset = source.length + index;
+          if (char === "\r" || char === "\n") {
+            completedWhitespaceOnlyLine ||= lineHasContent && !lineHasNonWhitespace;
+            if (linePrefixComplete) {
+              completedMediaLine = { start: lineStart, end: offset + 1 };
+              nonWhitespaceAfterMediaLine = false;
+            }
+            lineStart = offset + 1;
+            linePrefixLength = 0;
+            linePrefixPossible = true;
+            linePrefixComplete = false;
+            lineHasContent = false;
+            lineHasNonWhitespace = false;
+            continue;
+          }
+
+          lineHasContent = true;
+          lineHasNonWhitespace ||= /\S/u.test(char);
+          if (completedMediaLine && /\S/u.test(char)) {
+            nonWhitespaceAfterMediaLine = true;
+          }
+          if (linePrefixPossible && !linePrefixComplete) {
+            if (linePrefixLength === 0 && /\s/u.test(char)) {
+              continue;
+            }
+            if (char.toUpperCase() === MEDIA_DIRECTIVE_PREFIX[linePrefixLength]) {
+              linePrefixLength += 1;
+              linePrefixComplete = linePrefixLength === MEDIA_DIRECTIVE_PREFIX.length;
+            } else {
+              linePrefixPossible = false;
+            }
+          }
+          if (
+            mediaRemovalPending &&
+            /\S/u.test(char) &&
+            !linePrefixPossible &&
+            !linePrefixComplete
+          ) {
+            resolvedPendingMediaRemoval = true;
+          }
+        }
+
+        if (!active && !completedMediaLine) {
+          source = input.text;
+          return input;
+        }
+        active ||= Boolean(completedMediaLine);
+        const markdownSafe =
+          !active ||
+          (!linePrefixComplete &&
+            !completedWhitespaceOnlyLine &&
+            APPEND_SAFE_MEDIA_DELTA.test(appended) &&
+            canReuseMarkdownOwnershipForAppend(
+              source,
+              appended,
+              (ownership ??= findCodeOwnership(source)),
+            ));
+        if (!completedMediaLine && !resolvedPendingMediaRemoval && markdownSafe) {
+          source = input.text;
+          if (mediaRemovalPending) {
+            identity = visible === source;
+            return { text: visible, delta: "" };
+          }
+          if (identity) {
+            visible = source;
+            return input;
+          }
+          const nextVisible = pendingTrailingWhitespace + appended;
+          const stableEnd = nextVisible.search(/\s*$/u);
+          const stableAppend = nextVisible.slice(0, stableEnd);
+          pendingTrailingWhitespace = nextVisible.slice(stableEnd);
+          visible += stableAppend;
+          return { text: visible, delta: stableAppend };
+        }
+
+        const previousVisible = visible;
+        source = input.text;
+        visible = transform(source);
+        identity = visible === source;
+        capturePendingTrailingWhitespace();
+        ownership = undefined;
+        if (completedMediaLine && !nonWhitespaceAfterMediaLine) {
+          const line = source.slice(completedMediaLine.start, completedMediaLine.end).trimEnd();
+          mediaRemovalPending = Boolean(line) && !visible.trimEnd().endsWith(line);
+        } else if (resolvedPendingMediaRemoval) {
+          mediaRemovalPending = false;
+        }
+        const delta =
+          visible === previousVisible
+            ? ""
+            : visible.startsWith(previousVisible)
+              ? visible.slice(previousVisible.length)
+              : null;
+        return identity && delta === appended ? input : { text: visible, delta };
+      };
+      return projector;
+    },
+  };
+}
+
 /** One run-owned display chain; replacements rebuild every syntax and visibility probe. */
 export function createLiveAssistantTextProjection(options?: {
   managedMediaUrls?: readonly string[];
@@ -127,13 +357,7 @@ export function createLiveAssistantTextProjection(options?: {
     },
     ...(options?.final ? [] : [pendingLiveAssistantTailFilter]),
     ...(managedMediaUrls.length
-      ? [
-          {
-            activationTokens: ["MEDIA:"],
-            transform: (text: string) =>
-              stripAssistantMediaDirectivesForDisplay(text, managedMediaUrls),
-          },
-        ]
+      ? [createMediaDirectiveDisplayFilter(managedMediaUrls, Boolean(options?.final))]
       : []),
   ]);
   const present = (result: TextProjection, replace = false) => {
