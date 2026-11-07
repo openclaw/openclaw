@@ -31,6 +31,7 @@ type OpenAIResponsesPayloadPolicy = {
   defaultManagedReasoningEffort: "none" | undefined;
   explicitContinuationOptIn: boolean;
   explicitStore: boolean | undefined;
+  shouldCompleteInputStatus: boolean;
   shouldStripDisabledReasoningPayload: boolean;
   shouldStripInputStatus: boolean;
   shouldStripPromptCache: boolean;
@@ -64,6 +65,13 @@ function resolveOpenAIResponsesEndpointClass(baseUrl: unknown) {
       return "openai";
     case "api.x.ai":
       return "xai-native";
+  }
+  // Volcengine Ark and BytePlus ModelArk.
+  if (
+    host.startsWith("ark.") &&
+    (host.endsWith(".volces.com") || host.endsWith(".bytepluses.com"))
+  ) {
+    return "ark";
   }
   if (
     [
@@ -153,6 +161,7 @@ function resolveOpenAIResponsesPayloadCapabilities(model: OpenAIResponsesPayload
       provider !== undefined &&
       OPENAI_RESPONSES_PROVIDERS.has(provider) &&
       usesKnownNativeOpenAIEndpoint,
+    endpointClass,
     explicitContinuationOptIn,
     shouldStripResponsesPromptCache,
     supportsResponsesStoreField,
@@ -296,19 +305,42 @@ function stripDisabledOpenAIReasoningPayload(payloadObj: Record<string, unknown>
   }
 }
 
-/** Strip returned-item metadata rejected by strict Responses-compatible endpoints. */
-function stripInputItemStatuses(input: unknown): void {
+/** Swap changed items for copies: converted history can be shared across requests. */
+function rewriteInputItems(
+  input: unknown,
+  rewrite: (item: Record<string, unknown>) => Record<string, unknown> | undefined,
+): void {
   if (!Array.isArray(input)) {
     return;
   }
   for (let index = 0; index < input.length; index++) {
     const item = input[index];
-    if (item && typeof item === "object" && !Array.isArray(item) && "status" in item) {
-      // Converted history can be shared; strip metadata on the request's own item.
-      const { status: _, ...rest } = item;
-      input[index] = rest;
+    const next =
+      item && typeof item === "object" && !Array.isArray(item) ? rewrite(item) : undefined;
+    if (next) {
+      input[index] = next;
     }
   }
+}
+
+/** Ark requires `status` on replayed calls and reasoning items; fill it when absent. */
+function completeInputItemStatuses(input: unknown): void {
+  rewriteInputItems(input, (item) =>
+    (item.type === "function_call" || item.type === "reasoning") && typeof item.status !== "string"
+      ? { ...item, status: "completed" }
+      : undefined,
+  );
+}
+
+/** Strip returned-item metadata rejected by strict Responses-compatible endpoints. */
+function stripInputItemStatuses(input: unknown): void {
+  rewriteInputItems(input, (item) => {
+    if (!("status" in item)) {
+      return undefined;
+    }
+    const { status: _, ...rest } = item;
+    return rest;
+  });
 }
 
 /** Resolve payload mutation policy for one OpenAI Responses-style model endpoint. */
@@ -349,7 +381,10 @@ export function resolveOpenAIResponsesPayloadPolicy(
     );
   // Strict OpenAI-compatible Responses endpoints reject output-only fields
   // such as `status` on replayed input items. Strip them for non-native routes.
-  const shouldStripInputStatus = isResponsesApi && !capabilities.usesKnownNativeOpenAIRoute;
+  // Ark is the inverse: it rejects replayed calls and reasoning without one.
+  const isArkResponsesRoute = isResponsesApi && capabilities.endpointClass === "ark";
+  const shouldStripInputStatus =
+    isResponsesApi && !capabilities.usesKnownNativeOpenAIRoute && !isArkResponsesRoute;
   const serverCompactionPlan = resolveOpenAIResponsesServerCompactionPlan(
     model,
     options.extraParams,
@@ -372,6 +407,7 @@ export function resolveOpenAIResponsesPayloadPolicy(
         : undefined,
     explicitContinuationOptIn: capabilities.explicitContinuationOptIn,
     explicitStore,
+    shouldCompleteInputStatus: isArkResponsesRoute,
     shouldStripDisabledReasoningPayload,
     shouldStripInputStatus,
     shouldStripPromptCache:
@@ -417,5 +453,8 @@ export function applyOpenAIResponsesPayloadPolicy(
   }
   if (policy.shouldStripInputStatus) {
     stripInputItemStatuses(payloadObj.input);
+  }
+  if (policy.shouldCompleteInputStatus) {
+    completeInputItemStatuses(payloadObj.input);
   }
 }
