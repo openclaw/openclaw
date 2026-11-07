@@ -2,9 +2,11 @@ import {
   chunkMarkdown,
   extractCuratedEntryRecallMetadata,
   enforceEmbeddingMaxInputTokens,
+  hasPerEntryChunkingMarker,
   hashText,
   remapChunkLines,
   stripMemoryAnnotationCarriers,
+  stripPerEntryChunkingMarkers,
   type MemoryChunk,
   type MemoryEntryProvenance,
   type MemorySource,
@@ -52,10 +54,21 @@ export function prepareMemoryIndexChunks({
   // Hash, chunk, and embed one immutable read; publication validates it again.
   const contentHash = source === "memory" ? hashText(content) : undefined;
   const normalizedEntryPath = entry.path.replaceAll("\\", "/");
-  const perEntry =
+  // Topic files opt in with a marker in the content. Their hash changes with the
+  // marker, so adding or removing it reindexes through the normal per-file path.
+  const topicMarker =
     source === "memory" &&
-    (normalizedEntryPath === "MEMORY.md" || normalizedEntryPath === "USER.md");
-  const indexingContent = source === "memory" ? stripMemoryAnnotationCarriers(content) : content;
+    normalizedEntryPath.startsWith("memory/") &&
+    hasPerEntryChunkingMarker(content);
+  const perEntry =
+    topicMarker ||
+    (source === "memory" &&
+      (normalizedEntryPath === "MEMORY.md" || normalizedEntryPath === "USER.md"));
+  // Only an honored marker line is blanked; examples and other files keep their text and line numbers.
+  const indexingContent =
+    source === "memory"
+      ? stripMemoryAnnotationCarriers(topicMarker ? stripPerEntryChunkingMarkers(content) : content)
+      : content;
   // All chunks share one source snapshot; splitting per chunk makes indexing quadratic.
   const sourceLines = source === "memory" ? content.replace(/\r\n/gu, "\n").split("\n") : [];
   const chunkOptions = { ...chunking, perEntry };
@@ -78,14 +91,15 @@ export function prepareMemoryIndexChunks({
       previous.entryStartLine === undefined &&
       chunk.endLine > previous.endLine &&
       // Annotated headings own their metadata; size-split headings also differ from source lines.
-      previous.text
-        .split("\n")
-        .every(
-          (line, index) =>
-            (!line.trim() || /^ {0,3}#{1,6}(?:\s|$)/u.test(line)) &&
-            !line.includes("<!--") &&
-            line.trimEnd() === (sourceLines[previous.startLine + index - 1] ?? "").trimEnd(),
-        )
+      previous.text.split("\n").every(
+        (line, index) =>
+          (!line.trim() || /^ {0,3}#{1,6}(?:\s|$)/u.test(line)) &&
+          !line.includes("<!--") &&
+          // A stripped file-level marker leaves a blank line; it is neutral for the merge.
+          (line.trimEnd() === (sourceLines[previous.startLine + index - 1] ?? "").trimEnd() ||
+            (!line.trim() &&
+              hasPerEntryChunkingMarker(sourceLines[previous.startLine + index - 1] ?? ""))),
+      )
     ) {
       // Keep the following entry's annotation span, and do not repeat overlapping headings.
       const following = chunk.text
