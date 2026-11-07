@@ -73,6 +73,89 @@ export function collectRedactPatternWarnings(config: OpenClawConfig): ConfigVali
   return warnings;
 }
 
+const EMPTY_ALLOW_POLICY_MESSAGE =
+  'Empty allow list permits everything not denied; use deny:["*"] to deny all or omit allow to keep the default.';
+
+function pushEmptyAllowWarning(
+  warnings: ConfigValidationIssue[],
+  policyPath: string,
+  policy: unknown,
+  opts?: { alsoAllowNarrows?: boolean },
+): void {
+  if (!isRecord(policy)) {
+    return;
+  }
+  const allow: unknown = policy.allow;
+  if (Array.isArray(allow) && allow.length === 0) {
+    if (opts?.alsoAllowNarrows === true) {
+      const alsoAllow: unknown = policy.alsoAllow;
+      if (Array.isArray(alsoAllow) && alsoAllow.length > 0) {
+        return;
+      }
+    }
+    warnings.push({ path: policyPath, message: EMPTY_ALLOW_POLICY_MESSAGE });
+  }
+}
+
+/**
+ * Warns for explicit `allow: []` tool policies. Refs #147342.
+ * Warn-only, no runtime semantics change. The `alsoAllow` suppression
+ * applies only to `tools.subagents.tools`, the single scope where the
+ * runtime narrows instead of staying permissive.
+ * Called in production by validatePreparedConfigWithPlugins.
+ */
+export function collectEmptyAllowPolicyWarnings(config: OpenClawConfig): ConfigValidationIssue[] {
+  const warnings: ConfigValidationIssue[] = [];
+  pushEmptyAllowWarning(warnings, "tools", config.tools);
+  const globalBySender: unknown = config.tools?.toolsBySender;
+  if (isRecord(globalBySender)) {
+    for (const [sender, policy] of Object.entries(globalBySender)) {
+      pushEmptyAllowWarning(warnings, `tools.toolsBySender.${sender}`, policy);
+    }
+  }
+  const globalByProvider: unknown = config.tools?.byProvider;
+  if (isRecord(globalByProvider)) {
+    for (const [provider, policy] of Object.entries(globalByProvider)) {
+      pushEmptyAllowWarning(warnings, `tools.byProvider.${provider}`, policy);
+    }
+  }
+  const toolsNode: unknown = config.tools;
+  if (isRecord(toolsNode)) {
+    const subagentsNode: unknown = toolsNode.subagents;
+    if (isRecord(subagentsNode)) {
+      pushEmptyAllowWarning(warnings, "tools.subagents.tools", subagentsNode.tools, {
+        alsoAllowNarrows: true,
+      });
+    }
+    const sandboxNode: unknown = toolsNode.sandbox;
+    if (isRecord(sandboxNode)) {
+      pushEmptyAllowWarning(warnings, "tools.sandbox.tools", sandboxNode.tools);
+    }
+  }
+  for (const entry of listAgentEntries(config)) {
+    const base = `agents.entries.${entry.id}.tools`;
+    pushEmptyAllowWarning(warnings, base, entry.tools);
+    const toolsRecord: unknown = entry.tools;
+    const bySender: unknown = isRecord(toolsRecord) ? toolsRecord.toolsBySender : undefined;
+    if (isRecord(bySender)) {
+      for (const [sender, policy] of Object.entries(bySender)) {
+        pushEmptyAllowWarning(warnings, `${base}.toolsBySender.${sender}`, policy);
+      }
+    }
+    const byProvider: unknown = isRecord(toolsRecord) ? toolsRecord.byProvider : undefined;
+    if (isRecord(byProvider)) {
+      for (const [provider, policy] of Object.entries(byProvider)) {
+        pushEmptyAllowWarning(warnings, `${base}.byProvider.${provider}`, policy);
+      }
+    }
+    const sandboxNode: unknown = isRecord(toolsRecord) ? toolsRecord.sandbox : undefined;
+    if (isRecord(sandboxNode)) {
+      pushEmptyAllowWarning(warnings, `${base}.sandbox.tools`, sandboxNode.tools);
+    }
+  }
+  return warnings;
+}
+
 function materializeBundledModelProviderOverlays(config: OpenClawConfig): OpenClawConfig {
   const providers = config.models?.providers;
   if (!providers) {
