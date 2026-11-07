@@ -31,6 +31,60 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it.each(process.env.OPENCLAW_PAGE_PERF === "1" ? [0, 1, 2, 3, 4] : [0])(
+  "first content for a pinned day does not wait for capture status %#",
+  async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-01-02T12:00:00Z"));
+    let historical = false,
+      statusReads = 0,
+      statusReady = false;
+    let release: (() => void) | undefined;
+    const pending = new Promise<ReturnType<typeof logbookStatus>>((resolve) => {
+      release = () => {
+        statusReady = true;
+        resolve(logbookStatus("2026-01-02", { timeZone: "America/Los_Angeles" }));
+      };
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "logbook.status") {
+        return statusReads++ === 0
+          ? logbookStatus("2026-01-02", { timeZone: "America/Los_Angeles" })
+          : pending;
+      }
+      if (method === "logbook.timeline") {
+        return logbookTimeline(historical ? "2026-01-01" : "2026-01-02", [
+          { title: historical ? "Historical card" : "Current card" },
+        ]);
+      }
+      throw new Error("Unexpected method: " + method);
+    });
+    const mounted = mountLogbook(request);
+    await waitForSolid(() => expect(mounted.container.textContent).toContain("Current card"));
+    historical = true;
+    const timer = setTimeout(() => release!(), 250);
+    const start = performance.now();
+    mounted.getByRole("button", { name: "Previous day" }).click();
+    await waitForSolid(() => expect(mounted.container.textContent).toContain("Historical card"));
+    console.log(
+      "PAGE_FIRST_CONTENT",
+      JSON.stringify({
+        page: "logbook",
+        elapsedMs: performance.now() - start,
+        delayedMetadataMs: 250,
+      }),
+    );
+    try {
+      expect.soft(statusReady).toBe(false);
+    } finally {
+      await pending;
+      clearTimeout(timer);
+      mounted.unmount();
+    }
+    expect(request.mock.calls.filter(([method]) => method === "logbook.status")).toHaveLength(2);
+  },
+);
+
 it("renders timeline clocks in the capture host timezone and preserves detail text", async () => {
   vi.spyOn(i18n, "getLocale").mockReturnValue("en");
   const day = "2026-01-01";
