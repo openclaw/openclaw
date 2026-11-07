@@ -6,6 +6,8 @@ export type TelegramSpooledUpdatePayload = {
   receivedAt: number;
   update: unknown;
   preparedPollAnswer?: PreparedTelegramPollAnswer;
+  /** DM topic the receiving account adopted this root message into at admission. */
+  adoptedDmThreadId?: number;
 };
 
 export const TELEGRAM_SPOOLED_UPDATE_PAYLOAD_VERSION = 1;
