@@ -1,5 +1,14 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, createMemo, createStore, createUniqueId, onSettled } from "solid-js";
+import {
+  For,
+  Show,
+  createMemo,
+  createSignal,
+  createStore,
+  createUniqueId,
+  onSettled,
+} from "solid-js";
+import { IconButton } from "../../../components/solid/icon-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
@@ -53,6 +62,8 @@ export type ChatSubagentsPanelDesktopProps = {
   onRefresh: () => void;
   createStop: ReturnType<typeof createSubagentsPresentation>["createStop"];
   onOpen: (row: SubagentsPanelRow) => void;
+  canDismissFailure: (row: SubagentsPanelRow) => boolean;
+  onDismissFailures: (rows: readonly SubagentsPanelRow[]) => Promise<void>;
   renderElapsed: (row: SubagentsPanelRow) => JSX.Element;
 };
 
@@ -73,6 +84,9 @@ function DesktopRow(props: {
   createStop: ReturnType<typeof createSubagentsPresentation>["createStop"];
   renderElapsed: ChatSubagentsPanelDesktopProps["renderElapsed"];
   registerOpen: (key: string, button: HTMLButtonElement) => () => void;
+  registerDismiss: (key: string, button: HTMLButtonElement) => () => void;
+  canDismiss: (row: SubagentsPanelRow) => boolean;
+  onDismiss: (rows: readonly SubagentsPanelRow[]) => void;
 }) {
   const stop = props.createStop(() => props.row);
   const name = () => resolveSessionDisplayName(props.row.session.key, props.row.session);
@@ -172,6 +186,17 @@ function DesktopRow(props: {
           </span>
         </button>
       </Show>
+      <Show when={group() === "failed" && props.canDismiss(props.row)}>
+        <IconButton
+          size={28}
+          glyph="row"
+          icon="check"
+          label={t("chat.subagentsPanel.markFailureRead", { name: name() })}
+          tooltip={false}
+          ref={[elementRef(props.registerDismiss.bind(undefined, props.row.session.key))]}
+          onClick={() => props.onDismiss([props.row])}
+        />
+      </Show>
     </div>
   );
 }
@@ -200,14 +225,18 @@ export function ChatSubagentsPanelDesktop(props: ChatSubagentsPanelDesktopProps)
   );
   let content!: HTMLDivElement;
   const openButtons = new Map<string, HTMLButtonElement>();
-  const registerOpen = (key: string, button: HTMLButtonElement) => {
-    openButtons.set(key, button);
-    return () => {
-      if (openButtons.get(key) === button) {
-        openButtons.delete(key);
-      }
+  const dismissButtons = new Map<string, HTMLButtonElement>();
+  const register =
+    (buttons: Map<string, HTMLButtonElement>) => (key: string, button: HTMLButtonElement) => {
+      buttons.set(key, button);
+      return () => {
+        if (buttons.get(key) === button) {
+          buttons.delete(key);
+        }
+      };
     };
-  };
+  const registerOpen = register(openButtons);
+  const registerDismiss = register(dismissButtons);
   createPendingFocus(
     () => {
       const target = navigation.returnTarget;
@@ -247,6 +276,61 @@ export function ChatSubagentsPanelDesktop(props: ChatSubagentsPanelDesktopProps)
   });
   const visible = (group: Group) => families().filter(([root]) => groupFor(root) === group);
   const shownGroups = createMemo(() => groups.filter((group) => visible(group).length > 0));
+  const dismissable = createMemo(() => visible("failed").flat().filter(props.canDismissFailure));
+  // Rows stay in Failed; focus moves on once the Gateway reports the read and the control goes.
+  const [dismissal, setDismissal] = createSignal<{
+    keys: string[];
+    next?: string;
+    trigger: Element | null;
+    settled?: boolean;
+  }>();
+  // A failed child row can sit under an active root, so check every row, not only the Failed group.
+  const pendingKeys = (keys: readonly string[]) =>
+    props.rows.some((row) => keys.includes(row.session.key) && props.canDismissFailure(row));
+  createPendingFocus(
+    () => {
+      const request = dismissal();
+      return { request, active: props.active, pending: pendingKeys(request?.keys ?? []) };
+    },
+    {
+      requested: (next) => Boolean(next.request),
+      ready: (next) => next.active && (!next.pending || next.request?.settled === true),
+      focus: ({ request, pending }) => {
+        // A partial bulk read can remove its trigger while leaving a retry control.
+        // A rejected action whose trigger remains must not move the user's focus.
+        if (pending) {
+          if (request?.trigger && !request.trigger.isConnected) {
+            const retry = request.keys
+              .map((key) => dismissButtons.get(key))
+              .find((button) => button?.isConnected);
+            (retry ?? content).focus({ preventScroll: true });
+          }
+          setDismissal(undefined);
+          return;
+        }
+        const next = request?.next ? dismissButtons.get(request.next) : undefined;
+        const target = next ?? openButtons.get(request?.keys[0] ?? "");
+        (target?.isConnected ? target : content).focus({ preventScroll: true });
+        setDismissal(undefined);
+      },
+    },
+  );
+  const dismiss = (rows: readonly SubagentsPanelRow[]) => {
+    const keys = rows.map((row) => row.session.key);
+    const index = dismissable().findIndex((row) => keys.includes(row.session.key));
+    const remaining = dismissable().filter((row) => !keys.includes(row.session.key));
+    const request = {
+      keys,
+      next: remaining[Math.min(index, remaining.length - 1)]?.session.key,
+      trigger: document.activeElement,
+    };
+    setDismissal(request);
+    void props.onDismissFailures(rows).finally(() => {
+      if (dismissal() === request) {
+        setDismissal({ ...request, settled: true });
+      }
+    });
+  };
   const open = (row: SubagentsPanelRow, source: HTMLButtonElement) => {
     setNavigation((draft) => {
       draft.returnTarget = { button: source, scrollTop: content.scrollTop };
@@ -307,6 +391,15 @@ export function ChatSubagentsPanelDesktop(props: ChatSubagentsPanelDesktopProps)
                     <h3 class="subagents-desktop__heading">
                       <span>{groupLabel(group())}</span>
                       <span class="subagents-desktop__count">{visible(group()).length}</span>
+                      <Show when={group() === "failed" && dismissable().length > 1}>
+                        <button
+                          class="btn btn--ghost btn--xs"
+                          type="button"
+                          onClick={() => dismiss(dismissable())}
+                        >
+                          {t("chat.subagentsPanel.markAllFailuresRead")}
+                        </button>
+                      </Show>
                     </h3>
                   }
                 >
@@ -345,6 +438,9 @@ export function ChatSubagentsPanelDesktop(props: ChatSubagentsPanelDesktopProps)
                               createStop={props.createStop}
                               renderElapsed={props.renderElapsed}
                               registerOpen={registerOpen}
+                              registerDismiss={registerDismiss}
+                              canDismiss={props.canDismissFailure}
+                              onDismiss={dismiss}
                             />
                           )}
                         </For>

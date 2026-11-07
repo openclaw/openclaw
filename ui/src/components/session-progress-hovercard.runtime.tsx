@@ -18,8 +18,13 @@ import {
   sessionPullRequestsForGateway,
   type SessionPullRequestSnapshotStore,
 } from "../lib/session-pull-requests.ts";
+import {
+  canDismissSessionFailure,
+  dismissSessionFailures,
+} from "../lib/sessions/session-failure-dismissal.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
+import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 import type { AppSidebarElement, AppSidebarMethods } from "./app-sidebar.tsx";
 import { registryFor } from "./overlay-registry.ts";
 import { personActivityRouting } from "./person-activity-link.ts";
@@ -76,6 +81,28 @@ export type SessionProgressHovercardProvider = SolidBridgeElement<
   SessionProgressHovercardMethods
 >;
 const sessionLinkTitlers = new WeakMap<HTMLElement, SessionLinkTitler>();
+
+/** Dismiss acknowledges only the hovered session's own failure. */
+function failureDismissal(
+  context: ApplicationContext | null,
+  row: SidebarSessionHovercardRow | undefined,
+  fallbackAgentId: string | undefined,
+) {
+  const attention = row?.attention;
+  // A restored snapshot row has no session id yet; without it the read could clear a successor.
+  if (!context || attention?.kind !== "error" || !attention.sourceSessionId) {
+    return undefined;
+  }
+  const target = {
+    key: attention.sourceSessionKey,
+    sessionId: attention.sourceSessionId,
+    markedUnreadAt: attention.sourceMarkedUnreadAt,
+    sharingRole: attention.sourceSharingRole,
+  };
+  return canDismissSessionFailure(context, target, fallbackAgentId)
+    ? () => void dismissSessionFailures(context, [target], fallbackAgentId)
+    : undefined;
+}
 
 function createSessionProgressHovercard(
   props: SessionProgressHovercardProps,
@@ -344,6 +371,7 @@ function createSessionProgressHovercard(
         : undefined,
       pullRequests,
       progressCard: lastProgressCard,
+      dismissFailure: failureDismissal(currentContext, sidebarRow, session.agentId),
     };
     const commit = (card: HTMLDivElement) => {
       if (hovercard.card !== card) {

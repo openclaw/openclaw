@@ -116,6 +116,11 @@
   color: var(--danger);
 }
 
+/* Stacks the row's mark-as-read control above the row-wide open target. */
+.chat-subagents-mobile__row > .oc-icon-button {
+  position: relative;
+}
+
 .chat-subagents-mobile__copy {
   display: flex;
   flex: 1;

@@ -226,7 +226,8 @@
   opacity: 0;
 }
 
-.subagents-desktop__row > .subagents-desktop__stop {
+/* Controls after the row-wide open button sit above it in the action column. */
+.subagents-desktop__row > button + button {
   z-index: 1;
   grid-column: 4;
   grid-row: 1;

@@ -9,6 +9,7 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "../../../lib/sessions/session-capability.test-support.ts";
+import { patchReceipt } from "../../../lib/sessions/session-rpc.test-support.ts";
 import { disposeSidebarContextLifecycles } from "../../../test-helpers/app-sidebar-context-lifecycle.ts";
 import { createContext, createGatewayHarness } from "../../../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
@@ -19,6 +20,7 @@ import {
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import "../../../lib/toast-host.tsx";
 import { ChatSubagentsPanel } from "./chat-subagents-panel.tsx";
 
 const history = (sessionId: GatewaySessionRow["sessionId"]) => ({
@@ -388,3 +390,188 @@ it.each(["parent", "hidden", "connection"] as const)(
     expect(stop()?.disabled).toBe(false);
   },
 );
+
+const failed = (id: string, extra: Partial<GatewaySessionRow> = {}): GatewaySessionRow => ({
+  ...child(id),
+  label: `Worker ${id}`,
+  status: "failed",
+  hasActiveRun: false,
+  activeRunIds: [],
+  endedAt: 10,
+  updatedAt: 10,
+  ...extra,
+});
+
+function mountFailures(
+  initial: GatewaySessionRow[],
+  mobile: boolean,
+  rejectOnce = new Set<string>(),
+) {
+  let rows = initial;
+  const patched: Record<string, unknown>[] = [];
+  const f = mountPanel((method, params) => {
+    const values = asOptionalRecord(params);
+    if (method === "sessions.list") {
+      return page(values?.spawnedBy ? rows : []);
+    }
+    if (method === "chat.history") {
+      return history(rows.find((row) => row.key === values?.sessionKey)?.sessionId);
+    }
+    if (method === "sessions.patch") {
+      if (rejectOnce.delete(String(values?.key))) {
+        throw new Error("Session store unavailable");
+      }
+      const read = { ...rows.find((row) => row.key === values?.key)!, lastReadAt: 20 };
+      patched.push(values!);
+      rows = rows.map((row) => (row.key === read.key ? read : row));
+      return patchReceipt(read.key, read, "");
+    }
+    return {};
+  }, mobile);
+  return { ...f, patched, keys: () => patched.map((values) => values.key) };
+}
+
+it("marks desktop failures read one at a time and all at once, keeping them in Failed", async () => {
+  const f = mountFailures(
+    [
+      ...["a", "b", "c"].map((id) => failed(id)),
+      failed("seen", { lastReadAt: 20 }),
+      failed("shared", { sharingRole: "viewer" }),
+    ],
+    false,
+  );
+  const failedRows = () => f.panel.querySelectorAll('.subagents-desktop__row[data-group="failed"]');
+  const mark = () =>
+    f.panel.querySelectorAll<HTMLButtonElement>(".subagents-desktop__row .oc-icon-button");
+  const open = (key: string) =>
+    f.panel.querySelector(
+      `[data-session-key="agent:worker:subagent:${key}"] .subagents-desktop__open`,
+    );
+  await waitForSolid(() => expect(mark()).toHaveLength(3));
+  // Grouping stays by run outcome: an already-read failure is still listed as Failed.
+  expect(failedRows()).toHaveLength(5);
+  expect(mark()[0]!.getAttribute("aria-label")).toBe("Mark Worker a as read");
+  const markAll = () => f.find(".subagents-desktop__heading .btn");
+  expect(markAll()?.textContent).toBe("Mark all as read");
+
+  mark()[0]!.focus();
+  mark()[0]!.click();
+  await waitForSolid(() => expect(mark()).toHaveLength(2));
+  expect(f.patched).toEqual([
+    {
+      key: "agent:worker:subagent:a",
+      unread: false,
+      agentId: "worker",
+      expectedSessionId: "session-a",
+      expectedMarkedUnreadAt: null,
+    },
+  ]);
+  expect(failedRows()).toHaveLength(5);
+  await waitForSolid(() =>
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Mark Worker b as read"),
+  );
+
+  markAll()!.click();
+  await waitForSolid(() => expect(mark()).toHaveLength(0));
+  // The viewer-only failure never offers the control.
+  expect(f.keys()).toEqual([
+    "agent:worker:subagent:a",
+    "agent:worker:subagent:b",
+    "agent:worker:subagent:c",
+  ]);
+  expect(failedRows()).toHaveLength(5);
+  expect(markAll()).toBeNull();
+  await waitForSolid(() => expect(document.activeElement).toBe(open("b")));
+});
+
+it("marks a mobile failure read in place and keeps focus on its row", async () => {
+  const f = mountFailures([failed("a"), failed("b")], true);
+  const mark = () =>
+    f.panel.querySelectorAll<HTMLButtonElement>(".chat-subagents-mobile__row .oc-icon-button");
+  await waitForSolid(() => expect(mark()).toHaveLength(2));
+  expect(f.find(".chat-subagents-mobile__group > .btn")?.textContent).toBe("Mark all as read");
+  const row = f.panel.querySelector('[data-session-key="agent:worker:subagent:a"]')!;
+  mark()[0]!.click();
+  await waitForSolid(() => expect(mark()).toHaveLength(1));
+  expect(f.keys()).toEqual(["agent:worker:subagent:a"]);
+  // The row keeps its Failed outcome indicator.
+  expect(row.querySelector(".chat-subagents-mobile__indicator")?.getAttribute("data-status")).toBe(
+    "failed",
+  );
+  await waitForSolid(() =>
+    expect(document.activeElement).toBe(row.querySelector(".chat-subagents-mobile__open")),
+  );
+  expect(f.find(".chat-subagents-mobile__group > .btn")).toBeNull();
+});
+
+it.each([false, true])(
+  "reports a rejected mark as read and keeps the control for a retry (mobile: %s)",
+  async (mobile) => {
+    const toast = document.createElement("openclaw-toast-host");
+    document.body.append(toast);
+    await toast.updateComplete;
+    onTestFinished(() => toast.remove());
+    const f = mountFailures(
+      [failed("a"), failed("b")],
+      mobile,
+      new Set(["agent:worker:subagent:a"]),
+    );
+    const selector = mobile
+      ? ".chat-subagents-mobile__row .oc-icon-button"
+      : ".subagents-desktop__row .oc-icon-button";
+    const mark = () => f.panel.querySelectorAll<HTMLButtonElement>(selector);
+    await waitForSolid(() => expect(mark()).toHaveLength(2));
+
+    mark()[0]!.click();
+    await waitForSolid(() =>
+      expect(toast.toasts[0]?.options.message).toBe(
+        "Couldn't mark as read. Try again. Session store unavailable",
+      ),
+    );
+    expect(toast.toasts[0]?.options.severity).toBe("error");
+    expect(mark()).toHaveLength(2);
+    expect(mark()[0]!.disabled).toBe(false);
+
+    // A retired connection ends the retry without a receipt: still not read.
+    const patch = vi.spyOn(f.sessions, "patch").mockResolvedValueOnce(null);
+    mark()[0]!.click();
+    await waitForSolid(() => expect(patch).toHaveBeenCalledOnce());
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(toast.toasts).toHaveLength(1);
+    expect(toast.toasts[0]?.options.severity).toBe("error");
+    await waitForSolid(() => expect(mark()[0]!.disabled).toBe(false));
+
+    mark()[0]!.click();
+    await waitForSolid(() => expect(mark()).toHaveLength(1));
+    expect(f.keys()).toEqual(["agent:worker:subagent:a"]);
+    // The successful retry replaces the stale failure.
+    expect(toast.toasts.map((entry) => entry.options.message)).toEqual(["Marked as read"]);
+    expect(toast.toasts[0]?.options.severity).toBeUndefined();
+  },
+);
+
+it("retains failure feedback when a manual-unread fence returns an unchanged receipt", async () => {
+  const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
+  await toast.updateComplete;
+  onTestFinished(() => toast.remove());
+  const f = mountFailures([failed("a")], false, new Set(["agent:worker:subagent:a"]));
+  const mark = () => f.find(".subagents-desktop__row .oc-icon-button");
+  await waitForSolid(() => expect(mark()).not.toBeNull());
+  mark()!.click();
+  await waitForSolid(() => expect(toast.toasts[0]?.options.severity).toBe("error"));
+  // sessions.patch returns ok with the unchanged entry when a newer manual marker wins.
+  const stale = patchReceipt(failed("a").key, {
+    sessionId: "session-a",
+    markedUnreadAt: 30,
+    lastReadAt: 5,
+  });
+  const patch = vi.spyOn(f.sessions, "patch").mockResolvedValueOnce(stale);
+  mark()!.click();
+  await waitForSolid(() => expect(patch).toHaveBeenCalledOnce());
+  await patch.mock.results[0]!.value;
+  await Promise.resolve();
+  expect(toast.toasts[0]?.options.severity).toBe("error");
+  expect(mark()).not.toBeNull();
+});
