@@ -95,7 +95,7 @@ it("discovers and reads an independent session created by the requesting human",
         sessionKey: foreign,
         sessionId: "foreign-created-id",
         creatorId: bob.profileId,
-        visibility: "draft",
+        visibility: "shared",
       });
       await expect(
         history.execute("foreign-created-history", {
@@ -103,40 +103,6 @@ it("discovers and reads an independent session created by the requesting human",
           user: alice.profileId,
         }),
       ).resolves.toMatchObject({ details: { status: "forbidden" } });
-      const catalogRef = createToolSearchCatalogRef();
-      registerHeadlessToolSearchCatalog({
-        catalogRef,
-        tools: [createSessionsSendTool(options)],
-        hookContext: { runId: "post-denials" },
-      });
-      const postCatalog = new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig());
-      for (const target of [foreign, "agent:main:dashboard:missing-post-target"]) {
-        await expect(
-          postCatalog.callValue(
-            "sessions_send",
-            {
-              sessionKey: target,
-              user: alice.profileId,
-              mode: "post",
-              message: "Foreign session must not be writable",
-            },
-            { parentToolCallId: "post-denials" },
-          ),
-        ).resolves.toMatchObject({
-          status: "forbidden",
-          runId: expect.any(String),
-          error: expect.any(String),
-        });
-      }
-      expect(
-        JSON.stringify(
-          await loadTranscriptEvents({
-            agentId: "main",
-            sessionKey: foreign,
-            sessionId: "foreign-created-id",
-          }),
-        ),
-      ).not.toContain("Foreign session must not be writable");
       for (const filter of [{ creatorId: bob.profileId }, { ownerId: bob.profileId }]) {
         const filtered = await createSessionsListTool(options).execute("foreign-selector-list", {
           ...filter,
@@ -518,9 +484,9 @@ it("does not turn an unscoped ID lookup into spawned-session ownership", async (
   );
 });
 
-it("keeps reads allowed while enforcing explicit outbound post denial", async () => {
+it("keeps reads allowed while enforcing outbound and creator-only post denials", async () => {
   await withParticipantSessionToolsFixture(
-    async ({ turn, alice }) => {
+    async ({ turn, alice, bob }) => {
       const key = "agent:other:dashboard:outbound-post-denied";
       const sessionId = "5f9f29bf-e59d-4a30-8a97-51c6f3b96c78";
       await seedSessionToolsFixtureSession({
@@ -576,6 +542,35 @@ it("keeps reads allowed while enforcing explicit outbound post denial", async ()
           await loadTranscriptEvents({ agentId: "other", sessionKey: key, sessionId }),
         ),
       ).not.toContain("Must respect explicit outbound denial");
+      const foreign = "agent:main:dashboard:foreign-writable-post";
+      const foreignId = "foreign-writable-post-id";
+      const marker = "Foreign session must not be writable";
+      await seedSessionToolsFixtureSession({
+        sessionKey: foreign,
+        sessionId: foreignId,
+        creatorId: bob.profileId,
+        visibility: "shared",
+      });
+      await expect(
+        postCatalog.callValue(
+          "sessions_send",
+          { sessionKey: foreign, user: alice.profileId, mode: "post", message: marker },
+          { parentToolCallId: "foreign-created-post" },
+        ),
+      ).resolves.toMatchObject({
+        status: "forbidden",
+        runId: expect.any(String),
+        error: "Posts require a session created by the authenticated requesting human.",
+      });
+      expect(
+        JSON.stringify(
+          await loadTranscriptEvents({
+            agentId: "main",
+            sessionKey: foreign,
+            sessionId: foreignId,
+          }),
+        ),
+      ).not.toContain(marker);
     },
     { visibility: "all", mainSend: [] },
   );
@@ -586,6 +581,8 @@ it.each(["sender send list", "global A2A enablement", "global A2A allow list"])(
   async (policy) => {
     await withParticipantSessionToolsFixture(
       async ({ cfg, turn, alice }) => {
+        let currentConfig = cfg;
+        sessionToolsContext().getRuntimeConfig = () => currentConfig;
         const key = "agent:other:dashboard:revoked-post";
         const sessionId = "revoked-post-session";
         const marker = "Must not persist after revocation";
@@ -611,14 +608,15 @@ it.each(["sender send list", "global A2A enablement", "global A2A allow list"])(
               expect(params.key).toBe(key);
               const target = await load(params);
               boundaryReached = true;
+              currentConfig = structuredClone(cfg);
               if (policy === "sender send list") {
-                cfg.agents!.entries!.main!.tools!.agentToAgent!.send = [];
+                currentConfig.agents!.entries!.main!.tools!.agentToAgent!.send = [];
               } else if (policy === "global A2A enablement") {
-                cfg.tools!.agentToAgent!.enabled = false;
+                currentConfig.tools!.agentToAgent!.enabled = false;
               } else {
-                cfg.tools!.agentToAgent!.allow = ["main"];
+                currentConfig.tools!.agentToAgent!.allow = ["main"];
               }
-              setRuntimeConfigSnapshot({ ...cfg });
+              setRuntimeConfigSnapshot(currentConfig);
               return target;
             });
             return inject(...args);
@@ -652,6 +650,8 @@ it.each(["sender send list", "global A2A enablement", "global A2A allow list"])(
 it("rejects a same-agent post when requester visibility is revoked during injection", async () => {
   await withParticipantSessionToolsFixture(
     async ({ cfg, turn, alice }) => {
+      let currentConfig = cfg;
+      sessionToolsContext().getRuntimeConfig = () => currentConfig;
       const key = "agent:main:dashboard:visibility-revoked-post";
       for (const [sessionKey, sessionId] of [
         [REQUESTER, "session-tools-requester-id"],
@@ -679,8 +679,9 @@ it("rejects a same-agent post when requester visibility is revoked during inject
             expect(params.key).toBe(key);
             const target = await load(params);
             boundaryReached = true;
-            cfg.tools!.sessions!.visibility = "self";
-            setRuntimeConfigSnapshot({ ...cfg });
+            currentConfig = structuredClone(cfg);
+            currentConfig.tools!.sessions!.visibility = "self";
+            setRuntimeConfigSnapshot(currentConfig);
             return target;
           });
           return inject(...args);
