@@ -1,4 +1,4 @@
-import type { RunMediaUnderstandingFileResult } from "../../media-understanding/runtime-types.js";
+import type { RunMediaUnderstandingFileResult } from "../../../packages/media-understanding-common/src/types.js";
 
 export function isMissingMediaUnderstandingProvider(
   result: RunMediaUnderstandingFileResult,

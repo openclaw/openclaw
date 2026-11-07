@@ -81,6 +81,14 @@ export type MediaUnderstandingDecision = {
   nativeVisionActive?: boolean;
 };
 
+export type RunMediaUnderstandingFileResult = {
+  text: string | undefined;
+  provider?: string;
+  model?: string;
+  output?: MediaUnderstandingOutput;
+  decision?: MediaUnderstandingDecision;
+};
+
 type MediaUnderstandingTextResult = {
   text: string;
   model?: string;
