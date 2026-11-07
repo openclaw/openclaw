@@ -1,0 +1,2 @@
+# Regression tests for show_widget warnings: suppressed only when the client-caps filter withheld it, kept for literal and host-disabled entries.
+69

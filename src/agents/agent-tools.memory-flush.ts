@@ -19,9 +19,13 @@ export function resolveMemoryFlushToolSetup(options?: OpenClawCodingToolsOptions
   if (isMemoryFlushRun && !options?.memoryFlushWritePath && !options?.memoryFlushTools) {
     throw new Error("Memory flush requires memoryFlushWritePath or memoryFlushTools");
   }
+  const memoryFlushWritePath = isMemoryFlushRun ? options.memoryFlushWritePath : undefined;
   return {
     isMemoryFlushRun,
-    memoryFlushWritePath: isMemoryFlushRun ? options.memoryFlushWritePath : undefined,
+    memoryFlushWritePath,
+    unavailableCoreToolReason: memoryFlushWritePath
+      ? "memory-triggered compaction runs expose only read and append-only write"
+      : undefined,
     memoryFlush:
       isMemoryFlushRun && options?.memoryFlushTools
         ? { flushId: options.memoryFlushTools.flushId }

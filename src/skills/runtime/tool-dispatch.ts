@@ -162,7 +162,9 @@ export async function resolveSkillDispatchTools(params: {
         },
       }
     : undefined;
+  const clientCapsWithheldToolNames = new Set<string>();
   const tools = await createOpenClawToolsAsync({
+    clientCapsWithheldToolNames,
     gatewayConfigReadAllowed,
     agentSessionKey: params.sessionKey,
     agentChannel: channel,
@@ -224,11 +226,14 @@ export async function resolveSkillDispatchTools(params: {
       { policy: inheritedToolPolicy, label: "inherited tools" },
       { policy: ownerOnlyCoreToolPolicy, label: "gateway sender owner-only tools" },
     ],
-    declaredToolAllowlist: buildDeclaredToolAllowlistContext({
-      config: params.cfg,
-      workspaceDir: params.workspaceDir,
-      toolDenylist: explicitDenylist,
-    }),
+    declaredToolAllowlist: {
+      ...buildDeclaredToolAllowlistContext({
+        config: params.cfg,
+        workspaceDir: params.workspaceDir,
+        toolDenylist: explicitDenylist,
+      }),
+      clientCapsWithheldToolNames,
+    },
   });
   if (explicitPolicyList.some(hasRestrictiveAllowPolicy)) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, policyFiltered);

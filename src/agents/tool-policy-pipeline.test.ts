@@ -10,7 +10,7 @@ import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
 } from "./tool-policy-pipeline.js";
-import { resolveToolProfilePolicy } from "./tool-policy.js";
+import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
 
 const { toolPolicyAuditDebug, toolPolicyAuditInfo } = vi.hoisted(() => ({
   toolPolicyAuditDebug: vi.fn(),
@@ -170,6 +170,72 @@ describe("tool-policy-pipeline", () => {
     expect(warnings).toEqual([
       "tools: tools.profile (coding) allowlist contains unknown entries (browser). These entries are shipped core tools but unavailable in the current runtime/provider/model/config.",
     ]);
+  });
+
+  describe("client-capability gated tools from shipped families", () => {
+    const canvasPluginMeta = (tool: DummyTool) =>
+      tool.name === "canvas" ? { pluginId: "canvas" } : undefined;
+    const runMessagingProfile = (
+      alsoAllow: string[],
+      tools: DummyTool[],
+      label: string,
+      clientCapsWithheldToolNames?: string[],
+    ) => {
+      const warnings: string[] = [];
+      const profilePolicy = resolveToolProfilePolicy("messaging");
+      const filtered = runPipeline({
+        tools,
+        toolMeta: canvasPluginMeta,
+        warn: (msg) => warnings.push(msg),
+        steps: buildDefaultToolPolicyPipelineSteps({
+          profile: "messaging",
+          profilePolicy: mergeAlsoAllowPolicy(profilePolicy, alsoAllow),
+          profileUnavailableCoreWarningAllowlist: profilePolicy?.allow,
+          agentPolicy: { allow: alsoAllow },
+          agentId: label,
+        }),
+        declaredToolAllowlist: { clientCapsWithheldToolNames },
+      });
+      return { warnings, names: filtered.map((tool) => tool.name).toSorted() };
+    };
+    // The shared profile label is deduped across tests; agent labels are unique per test.
+    const unavailableWidgetWarning = (label: string) =>
+      `tools: agents.${label}.tools.allow allowlist contains unknown entries (show_widget). These entries are shipped core tools but unavailable in the current runtime/provider/model/config.`;
+
+    test.each([
+      ["show_widget implied by canvas", ["group:openclaw", "canvas"], ["canvas", "message"]],
+      ["group:openclaw alone", ["group:openclaw"], ["message"]],
+    ])("does not warn for %s withheld for client caps", (label, alsoAllow, names) => {
+      const tools = names.map((name) => ({ name }));
+      expect(runMessagingProfile(alsoAllow, tools, label, ["show_widget"])).toEqual({
+        warnings: [],
+        names,
+      });
+    });
+
+    test.each([
+      // Literal entries warn even when the client lacks the capability.
+      ["literal-widget", ["canvas", "show_widget"], ["show_widget"]],
+      // Host disabled: show_widget was never constructed, so it was not withheld for caps.
+      ["host-disabled-widget", ["canvas"], undefined],
+    ])("still warns for %s", (label, alsoAllow, withheld) => {
+      expect(
+        runMessagingProfile(alsoAllow, [{ name: "message" }, { name: "canvas" }], label, withheld)
+          .warnings,
+      ).toContain(unavailableWidgetWarning(label));
+    });
+
+    test("still warns for canvas without its plugin and for other unavailable core tools", () => {
+      expect(
+        runAllowlistWarningStep({
+          allow: ["canvas", "browser"],
+          label: "canvas-family tools.allow",
+          declaredToolAllowlist: { clientCapsWithheldToolNames: ["show_widget"] },
+        }),
+      ).toEqual([
+        "tools: canvas-family tools.allow allowlist contains unknown entries (canvas, browser). These entries are shipped core tools but unavailable in the current runtime/provider/model/config.",
+      ]);
+    });
   });
 
   test("does not warn for run-granted core tools absent from this run", () => {
