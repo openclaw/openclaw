@@ -433,6 +433,7 @@ A liveness check sent to your own number can therefore become agent input with `
   <Accordion title="Text chunking">
     - default chunk limit: `channels.whatsapp.textChunkLimit = 4000`
     - Markdown is converted before chunks are sent, preserving styles across message boundaries and counting WhatsApp formatting markers toward the limit
+    - Markdown table rendering mode: `channels.whatsapp.markdown.tables = "off" | "bullets" | "code"` (default `bullets`); `"block"` falls back to `"code"` because WhatsApp has no native block tables. Per-account override: `channels.whatsapp.accounts.<id>.markdown.tables`
     - `channels.whatsapp.streaming.chunkMode = "length" | "newline"`; `newline` prefers paragraph boundaries (blank lines), then falls back to length-safe chunking
 
   </Accordion>
@@ -742,7 +743,7 @@ Primary reference: [Configuration reference - WhatsApp](/gateway/config-channels
 | Area             | Fields                                                                                                         |
 | ---------------- | -------------------------------------------------------------------------------------------------------------- |
 | Access           | `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`                                             |
-| Delivery         | `textChunkLimit`, `streaming.chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `reactionLevel`                     |
+| Delivery         | `textChunkLimit`, `streaming.chunkMode`, `markdown.tables`, `mediaMaxMb`, `sendReadReceipts`, `reactionLevel`  |
 | Multi-account    | `accounts.<id>.enabled`, `accounts.<id>.authDir`, and other per-account overrides                              |
 | Operations       | `configWrites`, `enabled`                                                                                      |
 | Inbound batching | `messages.inbound.debounceMs`, `messages.inbound.byChannel.whatsapp`                                           |
