@@ -578,8 +578,10 @@ export function buildWorkerContext(
       lines.push(`Skills: ${automation.skills.join(", ")}`);
     }
     if (automation.workspace) {
+      const workspacePath =
+        automation.workspace.kind === "scratch" ? undefined : automation.workspace.path;
       lines.push(
-        `Workspace: ${automation.workspace.kind}${automation.workspace.path ? ` ${automation.workspace.path}` : ""}`,
+        `Workspace: ${automation.workspace.kind}${workspacePath ? ` ${workspacePath}` : ""}`,
       );
     }
     if (automation.summary) {

@@ -213,6 +213,22 @@ describe("dispatchAndStartWorkboardCards", () => {
     },
   );
 
+  it("keeps a retained path out of the actual scratch worker prompt", async () => {
+    const card = await createCard({
+      title: "Scratch context",
+      workspace: { kind: "worktree", path: "/workspace/repository", branch: "main" },
+      workspaceAccess: fullHostAccess,
+    });
+    await store.update(card.id, { workspace: { kind: "scratch" } });
+    run = vi.fn().mockResolvedValue({ runId: "run-scratch" });
+
+    await dispatch({ now: 10 });
+
+    const request = run.mock.calls[0]?.[0];
+    expect(request?.message).toContain("Workspace: scratch");
+    expect(request?.message).not.toContain("/workspace/repository");
+  });
+
   it.each([
     {
       name: "unsandboxed target",
