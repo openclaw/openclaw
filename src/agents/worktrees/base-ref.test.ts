@@ -245,6 +245,18 @@ describe("worktree default-base preparation", () => {
       fetchSucceeded: true,
     });
     expect(network).toEqual(["ls-remote", "fetch", "ls-remote", "ls-remote", "ls-remote", "fetch"]);
+
+    // An explicit fetch/ref bypasses preparation reuse, including a force-pushed rewind.
+    await git(remote, "update-ref", "refs/heads/next", head);
+    await git(repo, "fetch", "origin", "+refs/heads/next:refs/remotes/origin/next");
+    await expect(resolveWorktreeBase(repo, "origin/next")).resolves.toMatchObject({ commit: head });
+    await expect(resolveAt(120_000)).resolves.toMatchObject({ commit: head, fetchSucceeded: true });
+    expect(network.slice(-1)).toEqual(["ls-remote"]);
+    await git(remote, "update-ref", "refs/heads/next", advanced);
+    await resolveAt(150_000);
+    await git(remote, "update-ref", "refs/heads/next", head);
+    await expect(resolveAt(180_000)).resolves.toMatchObject({ commit: head, fetchSucceeded: true });
+    expect(network.slice(-4)).toEqual(["ls-remote", "fetch", "ls-remote", "fetch"]);
   });
 
   it("closes an unused base preparation without allowing later Git effects", async () => {
