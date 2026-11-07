@@ -665,6 +665,10 @@ struct OpenClawChatComposer: View {
         VStack(alignment: .leading, spacing: 8) {
             self.editorOverlay
 
+            #if os(iOS)
+            self.sendOptions
+            #endif
+
             Rectangle()
                 .fill(OpenClawChatTheme.divider)
                 .frame(height: 1)
@@ -746,6 +750,8 @@ struct OpenClawChatComposer: View {
         #if os(iOS)
         VStack(alignment: .leading, spacing: CleanChatComposerMetrics.rowGap) {
             self.cleanDraftRow
+            self.sendOptions
+                .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
             HStack(alignment: .center, spacing: 0) {
                 self.cleanLeadingControls
                 Spacer(minLength: 0)
@@ -1291,25 +1297,30 @@ extension OpenClawChatComposer {
             .accessibilityIdentifier("chat-send-message")
             .disabled(!self.canSendMessage)
             .contextMenu {
-                if self.canSendMessage {
-                    ForEach(self.inputModel?.sendModeChoices ?? [], id: \.self) { mode in
-                        Button {
-                            self.sendDraftIfEnabled(queueMode: mode)
-                        } label: {
-                            switch mode {
-                            case .steer:
-                                Label("Steer now", systemImage: "arrow.turn.up.right")
-                                    .font(OpenClawChatTypography.body)
-                            case .followup:
-                                Label("Queue next", systemImage: "clock")
-                                    .font(OpenClawChatTypography.body)
-                            }
-                        }
-                    }
-                }
+                self.sendModeMenuItems
             }
         }
     }
+
+    @ViewBuilder
+    private var sendModeMenuItems: some View {
+        if self.canSendMessage {
+            ChatSendModeMenuItems(modes: self.inputModel?.sendModeChoices ?? []) { mode in
+                self.sendDraftIfEnabled(queueMode: mode)
+            }
+        }
+    }
+
+    #if os(iOS)
+    @ViewBuilder
+    var sendOptions: some View {
+        if self.viewModel.canChooseSendMode, self.canSendMessage {
+            ChatSendOptions(defaultQueueMode: self.viewModel.currentSessionEntry()?.effectiveQueueMode) {
+                self.sendModeMenuItems
+            }
+        }
+    }
+    #endif
 
     private var refreshButton: some View {
         Button {
