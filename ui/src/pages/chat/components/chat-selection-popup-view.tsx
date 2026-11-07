@@ -1,5 +1,4 @@
 import { Portal, render } from "@solidjs/web";
-import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { ChatSelectionSource } from "../../../lib/chat/chat-types.ts";
@@ -69,12 +68,13 @@ export function showChatSelectionToolbar(
               {t("chat.messages.addToChat")}
             </button>
           ) : undefined}
-          {/* Hover or focus expands the destinations to the right, keeping the label
-              under the pointer; touch shows them expanded. */}
+          {/* Hover or focus swaps "Ask in…" for its two destinations in place;
+              touch shows the destinations directly. */}
           <div class="chat-selection-popup__ask" role="group" aria-label={t("chat.messages.askIn")}>
             <span class="chat-selection-popup__ask-label" aria-hidden="true">
-              {t("chat.messages.askIn")}
-              <Icon name="chevronRight" />
+              <span>
+                <span>{t("chat.messages.askIn")}</span>
+              </span>
             </span>
             <span class="chat-selection-popup__ask-options">
               <span>

@@ -417,7 +417,7 @@ composer. The optional comment field starts on one line, grows to five lines,
 then scrolls internally. Confirm or press Enter to save; Shift+Enter adds a line.
 Saving keeps your existing draft and does not send a message.
 
-Hover or keyboard-focus **Ask in** to choose where else to take the passage
+Hover or keyboard-focus **Ask in…** to choose where else to take the passage
 (touch shows both choices directly). **Side chat** asks about it in Side chat.
 **New session** opens the new-session launcher with the passage attached as a
 comment; starting the session sends it as a quote ahead of your prompt. The

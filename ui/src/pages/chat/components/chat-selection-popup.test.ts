@@ -131,7 +131,7 @@ describe("chat selection popup", () => {
     const thread = selection("route this passage", 5);
     await pointerUp(thread);
     const group = popup()!.querySelector<HTMLElement>("[role=group]")!;
-    expect(group.getAttribute("aria-label")).toBe("Ask in");
+    expect(group.getAttribute("aria-label")).toBe("Ask in…");
     const [sideChat, newSession] = group.querySelectorAll("button");
     expect(sideChat.getAttribute("aria-label")).toBe("Ask in side chat");
     newSession.click();

@@ -41,7 +41,7 @@ const enChatMessageMetadata = {
       currentMessage: "current message",
       actions: "Message actions",
       selectionActions: "Selection actions",
-      askIn: "Ask in",
+      askIn: "Ask in…",
       askInSideChat: "Ask in side chat",
       askInNewSession: "Ask in new session",
       sideChatOption: "Side chat",
