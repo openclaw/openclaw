@@ -5,8 +5,11 @@ import type { ModelSelectionScope } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { runOutsidePluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { runWithGatewayDetachedWorkContinuation } from "../process/gateway-work-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { setAgentEffectiveModelPrimary, type AgentModelPrimaryWriteTarget } from "./agent-scope.js";
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
 
 const log = createSubsystemLogger("agents/sticky-model-selection");
 let warnedImmutableConfig = false;
@@ -85,7 +88,17 @@ export function persistStickyModelSelectionBestEffort(params: {
     }
     return "skipped-immutable";
   }
-  void persistStickyModelSelection(params).catch((error: unknown) => {
+  // Config preparation outlives the selecting reply; re-admit on the current
+  // generation instead of retaining that reply's expiring plugin callbacks.
+  const write = runOutsidePreparedModelRuntimePluginGenerationScope(() =>
+    runOutsidePluginRuntimeGenerationScope(() =>
+      runWithGatewayDetachedWorkContinuation(
+        () => persistStickyModelSelection(params),
+        "model-default-write",
+      ),
+    ),
+  );
+  void write.catch((error: unknown) => {
     log.warn(
       `failed sticky model persistence agentId=${params.agentId} model=${params.model} reason=${formatErrorMessage(error)}`,
     );
