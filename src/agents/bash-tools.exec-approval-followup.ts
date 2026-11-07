@@ -246,15 +246,18 @@ async function waitForAgentFollowupRun(params: {
   | { status: "completed" }
   | { status: "observation_ended"; reason: "deadline"; transportErrors: number }
 > {
-  const observationDeadline = Date.now() + AGENT_FOLLOWUP_OBSERVATION_TIMEOUT_MS;
+  const observationDeadline = performance.now() + AGENT_FOLLOWUP_OBSERVATION_TIMEOUT_MS;
   let consecutiveTransportErrors = 0;
   let transportErrors = 0;
   for (;;) {
-    const remainingMs = observationDeadline - Date.now();
+    const remainingMs = observationDeadline - performance.now();
     if (remainingMs <= 0) {
       return { status: "observation_ended", reason: "deadline", transportErrors };
     }
-    const waitTimeoutMs = Math.max(1, Math.min(params.timeoutMs, remainingMs));
+    // performance.now() has fractional precision; the gateway `agent.wait`
+    // schema requires an integer timeout, so round up (never shrink the
+    // remaining budget) while retaining the positive minimum.
+    const waitTimeoutMs = Math.max(1, Math.min(params.timeoutMs, Math.ceil(remainingMs)));
     let wait: Record<string, unknown>;
     try {
       wait = await callExecApprovalFollowupGateway("agent.wait", waitTimeoutMs + 2_000, {
@@ -268,7 +271,7 @@ async function waitForAgentFollowupRun(params: {
       transportErrors += 1;
       const retryDelayMs = Math.min(
         AGENT_FOLLOWUP_WAIT_RETRY_DELAY_MS,
-        observationDeadline - Date.now(),
+        observationDeadline - performance.now(),
       );
       if (retryDelayMs <= 0) {
         return { status: "observation_ended", reason: "deadline", transportErrors };
