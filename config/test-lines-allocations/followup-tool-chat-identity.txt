@@ -1,0 +1,2 @@
+# Protect the queued chat identity that follow-up tool context must project.
+32

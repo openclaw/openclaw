@@ -5,6 +5,7 @@ import { markReplyOperationExecutionStarted } from "../../sessions/session-contr
 import { expectNoCalls } from "../../test-utils/mock-call-assertions.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { AgentTurnExecutionResult, AgentTurnParams } from "./agent-runner-execution.types.js";
+import { buildEmbeddedRunContext } from "./agent-runner-utils.js";
 import {
   createFollowupTurnTestTurn as createTurn,
   executeFollowupTurnForTest as executeFollowupTurn,
@@ -86,6 +87,37 @@ describe("executeFollowupTurn", () => {
     expect(state.execute.mock.calls[0]?.[0]?.followupRun.run.mediaNormalizationOwner).toBe(
       "gateway",
     );
+  });
+
+  it("carries the queued chat identity into the follow-up turn's tool context", async () => {
+    const turn = createTurn();
+    turn.queued.originatingChatId = "-1001234567890";
+    const result = await executeTestTurn({ turn });
+
+    expect(result.sessionCtx.ChatId).toBe("-1001234567890");
+    expect(result.sessionCtx.SenderId).toBe("user-1");
+    expect(
+      buildEmbeddedRunContext({
+        run: turn.queued.run,
+        sessionCtx: result.sessionCtx,
+        hasRepliedRef: undefined,
+      }).chatId,
+    ).toBe("-1001234567890");
+  });
+
+  it("leaves the follow-up tool chat identity unset when the queued turn has none", async () => {
+    const turn = createTurn();
+    expect(turn.queued.originatingChatId).toBeUndefined();
+    const result = await executeTestTurn({ turn });
+
+    expect(result.sessionCtx.ChatId).toBeUndefined();
+    expect(
+      buildEmbeddedRunContext({
+        run: turn.queued.run,
+        sessionCtx: result.sessionCtx,
+        hasRepliedRef: undefined,
+      }).chatId,
+    ).toBeUndefined();
   });
 
   it("notifies the queued observer when execution starts", async () => {
