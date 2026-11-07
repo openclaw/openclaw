@@ -310,7 +310,9 @@ so CJK characters, combining accents, and joined emoji keep progress lines align
 
 A fully qualified `--session-key` selects its agent only when `--agent`, `--store`,
 and `--all-agents` are absent. An explicitly empty or whitespace-only `--agent`
-is rejected instead of selecting an inferred agent.
+is rejected instead of selecting an inferred agent. Keys without an agent prefix,
+such as `main`, resolve against the configured default or sole agent, the same
+way `export-trajectory` resolves them.
 
 An explicit `--session-key` that matches no stored session exits non-zero with
 guidance for listing valid keys, and an empty or whitespace-only `--session-key`
