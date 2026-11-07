@@ -3,6 +3,7 @@ import {
   attachInternalToolExecutionPreparer,
   InternalToolLoopBlocked,
 } from "../../packages/agent-core/src/internal-hooks.js";
+import { getAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 /**
  * Owns tool preparation/finalization, adjusted-param replay state, terminal
  * results, diagnostics around execution, and wrapper metadata.
@@ -255,6 +256,12 @@ export function wrapToolWithBeforeToolCallHook(
   const wrappedTool: AnyAgentTool = {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate, ...executionArgs: unknown[]) => {
+      const executionContext = getAgentToolExecutionContext();
+      // Nested dispatchers retain their parent's async scope, but have their own call identity.
+      const toolBatch =
+        executionContext?.toolCall.id === toolCallId && executionContext.toolCall.name === toolName
+          ? executionContext.toolBatch
+          : undefined;
       const watchdogAttempt =
         inputContext?.watchdogAttempt ?? getGatewayToolCallerIdentity()?.watchdogAttempt;
       const ctx = watchdogAttempt ? { ...inputContext, watchdogAttempt } : inputContext;
@@ -391,6 +398,7 @@ export function wrapToolWithBeforeToolCallHook(
           params: hookParams,
           ...hookMetadata,
           toolCallId,
+          ...(toolBatch ? { toolBatch } : {}),
           ctx: ctx
             ? { ...ctx, toolOwnerPluginId }
             : toolOwnerPluginId
