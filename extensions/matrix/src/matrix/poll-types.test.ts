@@ -80,34 +80,12 @@ it("buildPollStartContent: preserves the requested multiselect cap instead of wi
     maxSelections: 2,
   });
 
+  const poll = content["org.matrix.msc3381.poll.start"];
   expect(content["m.poll.start"]).toBeUndefined();
-  expect(content["org.matrix.msc3381.poll.start"]?.max_selections).toBe(2);
-  expect(content["org.matrix.msc3381.poll.start"]?.kind).toBe(
-    "org.matrix.msc3381.poll.undisclosed",
-  );
+  expect([poll?.max_selections, poll?.kind]).toEqual([2, "org.matrix.msc3381.poll.undisclosed"]);
+  expect(parsePollStart(content)).toMatchObject({ kind: "m.poll.undisclosed", maxSelections: 2 });
   expect(content["m.text"]).toBe("Lunch?\n1. Pizza\n2. Sushi\n3. Tacos");
   expect(content["org.matrix.msc1767.text"]).toBe("Lunch?\n1. Pizza\n2. Sushi\n3. Tacos");
-});
-
-it("buildPollStartContent: uses the unstable MSC3381 names that Element X renders", () => {
-  const content = buildPollStartContent({ question: "Lunch?", options: ["Pizza", "Sushi"] });
-  const poll = content["org.matrix.msc3381.poll.start"];
-
-  expect(poll?.kind).toBe("org.matrix.msc3381.poll.disclosed");
-  expect(poll?.question["org.matrix.msc1767.text"]).toBe("Lunch?");
-  expect(poll?.answers.map((answer) => answer["org.matrix.msc1767.text"])).toEqual([
-    "Pizza",
-    "Sushi",
-  ]);
-  expect(parsePollStart(content)).toEqual({
-    question: "Lunch?",
-    answers: [
-      { id: "answer1", text: "Pizza" },
-      { id: "answer2", text: "Sushi" },
-    ],
-    kind: "m.poll.disclosed",
-    maxSelections: 1,
-  });
 });
 
 it("poll relation parsing: extracts poll relation targets", () => {

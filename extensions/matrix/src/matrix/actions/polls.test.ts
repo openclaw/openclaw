@@ -1,5 +1,6 @@
 // Matrix tests cover polls plugin behavior.
 import { describe, expect, it, vi } from "vitest";
+import { ORG_POLL_RESPONSE } from "../poll-types.js";
 import type { MatrixClient } from "../sdk.js";
 import { voteMatrixPoll } from "./polls.js";
 
@@ -40,18 +41,11 @@ describe("matrix poll actions", () => {
     });
 
     expect(getEvent).toHaveBeenCalledWith("!room:example.org", "$poll");
-    expect(sendEvent).toHaveBeenCalledWith(
-      "!room:example.org",
-      "org.matrix.msc3381.poll.response",
-      {
-        "m.poll.response": { answers: ["berry"] },
-        "m.relates_to": {
-          event_id: "$poll",
-          rel_type: "m.reference",
-        },
-        "org.matrix.msc3381.poll.response": { answers: ["berry"] },
-      },
-    );
+    expect(sendEvent).toHaveBeenCalledWith("!room:example.org", ORG_POLL_RESPONSE, {
+      "m.poll.response": { answers: ["berry"] },
+      "m.relates_to": { event_id: "$poll", rel_type: "m.reference" },
+      "org.matrix.msc3381.poll.response": { answers: ["berry"] },
+    });
     expect(result).toEqual({
       eventId: "$vote1",
       roomId: "!room:example.org",
