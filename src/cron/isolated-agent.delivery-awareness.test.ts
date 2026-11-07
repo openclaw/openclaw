@@ -5,6 +5,7 @@ import { beforeAll, beforeEach, expect, it } from "vitest";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   peekSystemEventEntries,
   peekSystemEvents,
@@ -26,13 +27,17 @@ async function announce(
   payloads: ReplyPayload[],
   options: {
     gateway?: NonNullable<Parameters<typeof makeCfg>[2]>["gateway"];
+    cron?: OpenClawConfig["cron"];
     entries?: Record<string, SessionEntry>;
     delivery?: { mode: "announce"; channel: "last" | "telegram"; to?: string };
   } = {},
 ) {
   return withTempCronHome(async (home) => {
     const storePath = path.join(home, ".openclaw", "sessions", "sessions.json");
-    const cfg = makeCfg(home, storePath, options.gateway ? { gateway: options.gateway } : {});
+    const cfg = makeCfg(home, storePath, {
+      ...(options.gateway ? { gateway: options.gateway } : {}),
+      ...(options.cron ? { cron: options.cron } : {}),
+    });
     setRuntimeConfigSnapshot(cfg);
     await writeSessionStoreEntries(home, options.entries ?? {});
     const deps = createCliDeps();
@@ -83,6 +88,19 @@ it("adds the exact run-session inspection link only to the final visible payload
   expect(peekSystemEvents("agent:main:main")).toEqual([]);
   expect(peekSystemEvents("agent:main:global")).toEqual([]);
   expect(peekSystemEventEntries("agent:other:global")).toEqual([]);
+});
+
+it("honors cron.announce.inspectLinks for isolated agent-run announcements", async () => {
+  const { result, deps } = await announce([{ text: "final cron summary" }], {
+    gateway: { publicOrigin: "https://control.example", controlUi: { basePath: "/console" } },
+    cron: { announce: { inspectLinks: "never" } },
+  });
+  expect(result).toMatchObject({ status: "ok", delivered: true });
+  expect(deps.telegram).toHaveBeenCalledExactlyOnceWith(
+    "123",
+    "final cron summary",
+    expect.any(Object),
+  );
 });
 
 it("does not turn a silent reply into an inspection-link announcement", async () => {
