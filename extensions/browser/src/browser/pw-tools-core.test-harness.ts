@@ -168,6 +168,7 @@ export function setPwToolsCoreCurrentPage(page: Record<string, unknown> | null) 
     page.context ??= vi.fn(() => context);
     page.mainFrame ??= vi.fn(() => mainFrame);
     page.isClosed ??= vi.fn(() => false);
+    page.bringToFront ??= vi.fn(async () => {});
     page.on ??= vi.fn();
     page.off ??= vi.fn();
     page.url ??= vi.fn(() => "about:blank");
