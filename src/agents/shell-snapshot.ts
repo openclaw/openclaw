@@ -12,7 +12,7 @@ import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { withChildProcessOperation } from "../process/spawn-diagnostics.js";
-import { spawnProcess } from "../process/spawn-utils.js";
+import { spawnPlacedAgentShell } from "../process/spawn-utils.js";
 import {
   captureShellSnapshotEnvironment,
   SAFE_ENV_NAMES,
@@ -359,13 +359,18 @@ async function runShell(opts: {
 }): Promise<number | null> {
   return await new Promise((resolve) => {
     const child = withChildProcessOperation("shell.snapshot", () =>
-      spawnProcess(opts.shell, [...opts.shellArgs, opts.command], {
-        cwd: opts.cwd,
-        detached: process.platform !== "win32",
-        env: opts.env,
-        stdio: "ignore",
-        windowsHide: true,
-      }),
+      spawnPlacedAgentShell(
+        opts.shell,
+        [...opts.shellArgs, opts.command],
+        {
+          cwd: opts.cwd,
+          detached: process.platform !== "win32",
+          env: opts.env,
+          stdio: "ignore",
+          windowsHide: true,
+        },
+        undefined,
+      ),
     );
     let settled = false;
     const finish = (status: number | null) => {

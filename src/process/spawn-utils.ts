@@ -44,6 +44,44 @@ export function spawnProcess(
   return child;
 }
 
+/**
+ * Spawn a shell that places itself in the agent exec cgroup before it runs the
+ * command. The broker does this from outside, but it exists only where its command
+ * transport is supported, and the Gateway also ships on runtimes that start none.
+ *
+ * The launcher reports its own startup, so this transport is opt-in at the caller
+ * that can live with it — a shell that cannot start makes the capture or validation
+ * fall back, which is what already happens when a snapshot cannot be produced.
+ * `spawnProcess` keeps the native launch path, and with it ENOENT, EACCES and
+ * missing-interpreter errors for every caller of the shared startup contract.
+ */
+export function spawnPlacedAgentShell(
+  command: string,
+  args: string[],
+  options: SpawnOptions,
+  initiateSpawn?: SpawnInitiation,
+): ChildProcess {
+  const broker = getSpawnBroker();
+  const agentExecCgroup = broker && brokerSpawnOptions(options) ? undefined : getAgentExecCgroup();
+  if (!agentExecCgroup || options.shell === true || options.argv0 !== undefined) {
+    return spawnProcess(command, args, options, initiateSpawn, "agent-tool");
+  }
+  const cgroupProcs = `${agentExecCgroup}/cgroup.procs`.replace(/'/g, `'\\''`);
+  const launcher = [
+    // Placement is best effort: an unwritable cgroup must not fail the capture.
+    // The append keeps the write from asking the cgroup file to be truncated.
+    `printf '%s\\n' "$$" >> '${cgroupProcs}' 2>/dev/null || true`,
+    'exec "$@"',
+  ].join("; ");
+  return spawnProcess(
+    "/bin/sh",
+    ["-c", launcher, "openclaw-agent-exec", command, ...args],
+    options,
+    initiateSpawn,
+    "agent-tool",
+  );
+}
+
 /** Launch once and surface native spawn failures without changing the process topology. */
 export async function spawnAndWait(params: {
   assertCurrent?: () => void;
