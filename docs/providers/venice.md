@@ -60,18 +60,18 @@ Anonymized models are not fully private. Venice strips metadata before forwardin
   </Step>
   <Step title="Verify setup">
     ```bash
-    openclaw agent --model venice/zai-org-glm-4.7 --message "Hello, are you working?"
+    openclaw agent --model venice/deepseek-v4-1-flash-1017-uncensored --message "Hello, are you working?"
     ```
   </Step>
 </Steps>
 
 ## Model selection
 
-- **Default**: `venice/zai-org-glm-4.7` (private reasoning).
+- **Default**: `venice/deepseek-v4-1-flash-1017-uncensored` (private, uncensored reasoning and vision).
 - **Strongest anonymized option**: `venice/claude-opus-5`.
 
 ```bash
-openclaw models set venice/zai-org-glm-4.7
+openclaw models set venice/deepseek-v4-1-flash-1017-uncensored
 openclaw models list --all --provider venice
 ```
 
@@ -80,7 +80,7 @@ You can also run `openclaw configure` and pick **Model/auth provider > Venice AI
 <Tip>
 | Use case              | Model                                        | Why                                    |
 | --------------------- | -------------------------------------------- | -------------------------------------- |
-| General chat (default) | `zai-org-glm-4.7`                             | Venice live default trait              |
+| General chat (default) | `deepseek-v4-1-flash-1017-uncensored`         | Venice live default trait              |
 | Best overall quality   | `claude-opus-5`                              | Current promoted anonymized Opus model |
 | Privacy + coding       | `qwen3-coder-480b-a35b-instruct-turbo`       | Private coding model with large context |
 | Fast + cheap           | `google-gemma-4-31b-it`                      | Low-cost promoted private vision model |
@@ -88,12 +88,13 @@ You can also run `openclaw configure` and pick **Model/auth provider > Venice AI
 | Uncensored             | `venice-uncensored-1-2`                      | Current uncensored Venice model        |
 </Tip>
 
-## Built-in catalog (16 visible models)
+## Built-in catalog (17 visible models)
 
 <AccordionGroup>
-  <Accordion title="Private models (10) — fully private, no logging">
+  <Accordion title="Private models (11) — fully private, no logging">
     | Model ID                               | Name                        | Context | Notes                       |
     | -------------------------------------- | --------------------------- | ------- | --------------------------- |
+    | `deepseek-v4-1-flash-1017-uncensored`  | DeepSeek V4.1 Flash 1017 Uncensored | 1M | Default, uncensored, vision |
     | `zai-org-glm-5-2`                      | GLM 5.2                     | 1M      | Recommended, coding         |
     | `zai-org-glm-4.7`                      | GLM 4.7                     | 198k    | Private reasoning           |
     | `venice-uncensored-1-2`                | Venice Uncensored 1.2       | 128k    | Most uncensored, vision     |
@@ -218,7 +219,7 @@ can persist inherited costs as explicit overrides. Historical recorded costs are
 
 ```bash
 # Default private model
-openclaw agent --model venice/zai-org-glm-4.7 --message "Quick health check"
+openclaw agent --model venice/deepseek-v4-1-flash-1017-uncensored --message "Quick health check"
 
 # Claude Opus via Venice (anonymized)
 openclaw agent --model venice/claude-opus-5 --message "Summarize this task"
@@ -267,7 +268,7 @@ More help: [Troubleshooting](/help/troubleshooting) and [FAQ](/help/faq).
     ```json5
     {
       env: { vars: { VENICE_API_KEY: "vapi_..." } },
-      agents: { defaults: { model: { primary: "venice/zai-org-glm-4.7" } } },
+      agents: { defaults: { model: { primary: "venice/deepseek-v4-1-flash-1017-uncensored" } } },
       models: {
         mode: "merge",
         providers: {
@@ -277,12 +278,12 @@ More help: [Troubleshooting](/help/troubleshooting) and [FAQ](/help/faq).
             api: "openai-completions",
             models: [
               {
-                id: "zai-org-glm-4.7",
-                name: "GLM 4.7",
+                id: "deepseek-v4-1-flash-1017-uncensored",
+                name: "DeepSeek V4.1 Flash 1017 Uncensored",
                 reasoning: true,
-                input: ["text"],
-                contextWindow: 198000,
-                maxTokens: 16384,
+                input: ["text", "image"],
+                contextWindow: 1000000,
+                maxTokens: 131072,
               },
             ],
           },
