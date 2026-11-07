@@ -26,6 +26,7 @@ import {
 } from "../../sessions/session-controller.stop.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveStateContentionPresentation } from "../../sessions/session-run-error-presentation.js";
+import { notifySessionRunStopped } from "../../sessions/session-run-stopped.js";
 import {
   waitForChatAbortAcknowledgment,
   waitForChatAbortTerminalPersistence,
@@ -473,47 +474,21 @@ export async function handleChatAbortRequestWithLifecycle(
               activeIdentity.agentId ?? abortAgentId,
             );
       const selectedEntry = selectedSession.ok ? selectedSession.value.entry : undefined;
-      let aborted = false;
-      let descendants: Awaited<ReturnType<typeof abortControlledSubagents>> | undefined;
-      const stopped = stopSession({
-        source: "client-run",
-        capture: captureSessionControllerStop({ inputs: [reserved] }),
+      const { aborted, descendants } = await exactRun.stopReservedClientRun({
+        cfg: abortCfg,
+        runId,
+        reserved,
+        identity: activeIdentity,
+        agentId: abortAgentId,
+        userInitiated: params.userInitiated,
+        lifecycleRevision:
+          selectedEntry?.sessionId === activeIdentity.sessionId
+            ? selectedEntry.lifecycleRevision
+            : undefined,
         assertCurrent: assertReserved,
-        reason: createChatAbortSignalReason("rpc", params.userInitiated),
-        hookContext: {
-          ...stopHookContext,
-          sessionKey: activeIdentity.sessionKey,
-          sessionId: activeIdentity.sessionId,
-        },
+        hookContext: stopHookContext,
         afterParent: cancelWorker,
-        onCancelled: (target) => {
-          if (target === reserved) {
-            aborted = true;
-          }
-        },
-        stopChildren: async (applyParentStop) => {
-          // The settle producer can still own the registry operation needed for
-          // descendant cleanup. Cancel its captured source before entering that owner.
-          await applyParentStop();
-          descendants = await abortControlledSubagents({
-            cfg: abortCfg,
-            sessionKey: activeIdentity.sessionKey,
-            agentId: activeIdentity.agentId,
-            requesterTurnRunId: runId,
-            sessionId: activeIdentity.sessionId,
-            lifecycleRevision:
-              selectedEntry?.sessionId === activeIdentity.sessionId
-                ? selectedEntry.lifecycleRevision
-                : undefined,
-            assertCurrent: assertReserved,
-          });
-          return {
-            stopped: descendants?.killed ?? 0,
-            failed: descendants?.status === "error" ? descendants.failed : 0,
-          };
-        },
       });
-      await stopped.completed;
       const descendantError = descendantAbortError(descendants, "Parent run");
       if (descendantError) {
         respond(false, undefined, descendantError);
@@ -561,6 +536,13 @@ export async function handleChatAbortRequestWithLifecycle(
           await stopWithoutCapturedRun("rpc", cancelWorker);
           return true;
         },
+        // The command:stop hooks above can await; announce only past the final guard.
+        onStopAccepted: () =>
+          notifySessionRunStopped({
+            source: "client-run",
+            sessions: [{ agentId: abortAgentId, sessionKey: canonicalAbortSessionKey }],
+            runIds: [runId],
+          }),
       });
       const error = descendantAbortError(descendants, "Parent run");
       if (error) {
@@ -582,6 +564,13 @@ export async function handleChatAbortRequestWithLifecycle(
       respondError(respond, ErrorCodes.INVALID_REQUEST, "unauthorized");
       return;
     }
+    // Recheck authority after session preparation before announcing the Stop.
+    assertCurrent();
+    notifySessionRunStopped({
+      source: "client-run",
+      sessions: [workerTarget ?? { agentId: abortAgentId, sessionKey: canonicalAbortSessionKey }],
+      runIds: workerCancellation.runIds,
+    });
     cancelWorker();
     await stopWithoutCapturedRun("rpc");
     await respondWithWorkerRuns([]);
