@@ -187,12 +187,12 @@ export function createNodeWorkspaceSkills(options: NodeWorkspaceWorkerOptions): 
           }
           try {
             await sleepWithAbort(1_000 * 2 ** connectionRetries, deadline.signal);
-          } catch (error) {
+          } catch (delayError) {
             // Preserve caller cancellation; only the read budget owns this timeout.
             if (!active.aborted) {
               deadline.signal?.throwIfAborted();
             }
-            throw error;
+            throw delayError;
           }
           connectionRetries += 1;
         }
