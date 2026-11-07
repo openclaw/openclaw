@@ -14,9 +14,11 @@ const requests = [];
 let questions = [];
 let approvals = [];
 let created;
+let workIsActive;
 
 function reset() {
   created = Date.now();
+  workIsActive = true;
   questions = ["Which draft should we review first?", "Should the summary include a timeline?"].map(
     (question, index) => ({
       id: `attention-question-${index + 1}`,
@@ -128,6 +130,7 @@ const events = [
   "plugin.approval.resolved",
   "openclaw.approval.resolved",
   "tick",
+  "sessions.changed",
 ];
 const staticReplies = {
   "config.get": {
@@ -213,12 +216,34 @@ function settleApprovals(status, id) {
     });
   }
 }
+function reviewSession() {
+  return {
+    key: reviewKey,
+    sessionId: "synthetic-review-session",
+    displayName: "Pending review",
+    label: "Pending review",
+    category: "Research",
+    kind: "direct",
+    updatedAt: created - 60000,
+    totalTokens: 84,
+    hasActiveRun: workIsActive,
+    status: workIsActive ? "running" : "done",
+  };
+}
 const server = createServer((req, res) => {
   res.setHeader("content-type", "application/json");
   const path = new URL(req.url, `http://127.0.0.1:${port}`).pathname;
   if (req.method === "POST") {
     if (path === "/reset") {
       reset();
+    } else if (path === "/work/finish") {
+      workIsActive = false;
+      broadcast("sessions.changed", {
+        sessionKey: reviewKey,
+        reason: "lifecycle",
+        agentId: "main",
+        session: reviewSession(),
+      });
     } else if (path === "/questions/answer") {
       settleQuestions("answered");
     } else if (path === "/questions/answer-oldest") {
@@ -385,15 +410,7 @@ wss.on("connection", (ws) => {
               updatedAt: created - 30000,
               totalTokens: 60,
             },
-            {
-              key: reviewKey,
-              displayName: "Pending review",
-              label: "Pending review",
-              category: "Research",
-              kind: "direct",
-              updatedAt: created - 60000,
-              totalTokens: 84,
-            },
+            reviewSession(),
           ],
         });
         break;

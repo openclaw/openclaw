@@ -92,6 +92,13 @@ struct OpenClawTypographyTests {
         #expect(support.contains(".font(OpenClawType.subheadSemiBold)"))
         #expect(!commandCenter.contains(".font(."))
         #expect(commandCenter.contains(".font(OpenClawType.captionMedium)"))
+        let activityFilters = try String(
+            contentsOf: Self.sourceURL("Design/CommandSessionActivityFilterBar.swift"),
+            encoding: .utf8)
+        #expect(Self.unbrandedTextCallOffenders(
+            in: activityFilters,
+            relativePath: "CommandSessionActivityFilterBar.swift")
+            .isEmpty)
     }
 
     @Test func `bundled fonts load from app bundle`() {

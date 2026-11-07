@@ -516,8 +516,12 @@ targets:
         group: Shared
       - path: Sources/Services/ExactOpaqueIdentifier.swift
         group: Sources/Services
+      - path: Sources/Design/CommandSessionActivity.swift
+        group: Sources/Design
     dependencies:
       - package: OpenClawKit
+      - package: OpenClawKit
+        product: OpenClawChatUI
     settings:
       base:
         CODE_SIGN_IDENTITY: "$(OPENCLAW_CODE_SIGN_IDENTITY)"

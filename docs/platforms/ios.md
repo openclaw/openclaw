@@ -206,6 +206,17 @@ to find their transcripts; sidebar search also includes matching automation sess
 Archived and snoozed chats stay out of the sidebar even when pinned or selected;
 their open conversations stay open. Saved pins are preserved.
 
+Within each scope, use **All**, **Needs you**, or **Working** to filter the current
+Gateway and agent. **Needs you** shows conversations with a pending question or
+approval. **Working** includes active or queued runs and active child work. A
+conversation can appear in both filters, and multiple requests count as one
+conversation. Tap its request badge to use the existing question or approval
+preview.
+
+Activity counts update from the connected Gateway. A **+** marks an incomplete
+roster. While disconnected, **All** keeps cached browsing available and the live
+activity filters are disabled. Archived sessions have no live activity counts.
+
 Long-press an eligible session and choose **Snooze**:
 **In 1 hour**, **In 3 hours**, **This evening** (18:00 local, only when more than
 one hour away), **Tomorrow** (09:00 on the next calendar day), or **Next week**
