@@ -17,7 +17,6 @@ import type { createPermitPool } from "../shared/permit-pool.js";
 import { assertOpenClawAgentCurrentRuntimeSchema } from "./openclaw-agent-db-schema-helpers.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 
-export type AgentDatabaseStartupIntegrity = { valid: SharedArrayBuffer };
 export type AgentDatabaseStartupVerifier = (input: {
   agentId: string;
   paths: readonly string[];
@@ -26,13 +25,10 @@ export type AgentDatabaseStartupVerifier = (input: {
   assertCurrent: () => void;
 }) => Promise<void>;
 
-const pending = new Map<
-  string,
-  { agentId: string; policy: AgentDatabaseStartupIntegrity; assertCurrent: () => void }
->();
+const pending = new Map<string, { assertCurrent: () => void }>();
 
-/** This Gateway lifetime permits recovery before the background full-file verdict. */
-function prepareAgentDatabaseStartupIntegrity(pathname: string, agentId: string) {
+/** Background verification retains its original physical file and startup lifetime. */
+function prepareAgentDatabaseStartupIntegrity(pathname: string) {
   const identity = readDatabasePathIdentitySync(pathname);
   if (!identity.key.startsWith("file:")) {
     throw new Error("Deferred agent integrity requires an existing database");
@@ -42,13 +38,9 @@ function prepareAgentDatabaseStartupIntegrity(pathname: string, agentId: string)
   if (previous) {
     throw new Error(`Agent database already has a startup integrity owner: ${pathname}`);
   }
-  const policy = { valid: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT) };
-  Atomics.store(new Int32Array(policy.valid), 0, 1);
   const owner = {
-    agentId,
-    policy,
     assertCurrent(this: void) {
-      if (pending.get(key) !== owner || Atomics.load(new Int32Array(policy.valid), 0) !== 1) {
+      if (pending.get(key) !== owner) {
         throw new Error(`Agent database startup integrity owner ended: ${pathname}`);
       }
       assertExistingDatabaseIdentity(pathname, identity.key, identity.birthtime);
@@ -58,7 +50,6 @@ function prepareAgentDatabaseStartupIntegrity(pathname: string, agentId: string)
   return {
     assertCurrent: owner.assertCurrent,
     revoke() {
-      Atomics.store(new Int32Array(policy.valid), 0, 0);
       if (pending.get(key) === owner) {
         pending.delete(key);
       }
@@ -66,21 +57,20 @@ function prepareAgentDatabaseStartupIntegrity(pathname: string, agentId: string)
   };
 }
 
-/** Bounded admission repairs derived indexes; migrations retain their full gate. */
-export function admitAgentDatabaseStartupStructure(
+/** Startup may defer verification only while its exact background owner remains live. */
+export function captureAgentDatabaseStartupVerification(pathname: string) {
+  const owner = pending.get(resolveDatabasePathKey(pathname));
+  owner?.assertCurrent();
+  return owner?.assertCurrent;
+}
+
+/** Lifecycle revocation is not corruption; migrations and explicit verification keep their gate. */
+export function admitAgentDatabaseRuntimeStructure(
   database: DatabaseSync,
   pathname: string,
   agentId: string,
-  policy: AgentDatabaseStartupIntegrity | undefined,
   diagnostics?: SqliteIntegrityDiagnostics,
-): boolean {
-  if (
-    diagnostics?.integrityGateReason !== "no-proof" &&
-    diagnostics?.integrityGateReason !== "schema-mismatch" &&
-    (!policy || Atomics.load(new Int32Array(policy.valid), 0) !== 1)
-  ) {
-    return false;
-  }
+): string[] | undefined {
   assertSqliteDatabaseHeader(database, pathname);
   try {
     const validateSchema = (readTable?: SqliteTableContractReader) =>
@@ -103,23 +93,16 @@ export function admitAgentDatabaseStartupStructure(
     if (diagnostics) {
       diagnostics.canonicalIndexMs = Math.floor(performance.now() - startedAt);
       diagnostics.repairedIndexCount = repaired.length;
+      diagnostics.integrityGateMode = "deferred";
+      diagnostics.integrityGateOutcome = "pending";
     }
-    if (repaired.length) {
-      createSubsystemLogger("state/agent-db").warn(
-        `Rebuilt canonical agent SQLite indexes for ${agentId} (${pathname}): ${repaired.join(", ")}`,
-      );
-    }
+    return repaired;
   } catch (error) {
     if (isSqliteSchemaMismatchError(error)) {
-      return false;
+      return undefined;
     }
     throw error;
   }
-  if (diagnostics) {
-    diagnostics.integrityGateMode = "deferred";
-    diagnostics.integrityGateOutcome = "pending";
-  }
-  return true;
 }
 
 /** The startup owner releases readiness before running this cancellable verification. */
@@ -136,7 +119,7 @@ export function prepareAgentDatabaseStartupVerification(
   const revoke = () => owners.forEach((owner) => owner.revoke());
   try {
     for (const pathname of input.paths) {
-      owners.push(prepareAgentDatabaseStartupIntegrity(pathname, input.agentId));
+      owners.push(prepareAgentDatabaseStartupIntegrity(pathname));
     }
   } catch (error) {
     revoke();
@@ -170,17 +153,4 @@ export function prepareAgentDatabaseStartupVerification(
       }
     },
   };
-}
-
-/** Only the native opener receives this private, physical-file-bound startup policy. */
-export function captureAgentDatabaseStartupIntegrity(
-  pathname: string,
-  agentId: string,
-): AgentDatabaseStartupIntegrity | undefined {
-  const owner = pending.get(resolveDatabasePathKey(pathname));
-  if (!owner || owner.agentId !== agentId) {
-    return undefined;
-  }
-  owner.assertCurrent();
-  return owner.policy;
 }

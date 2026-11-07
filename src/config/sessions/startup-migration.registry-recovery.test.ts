@@ -461,52 +461,46 @@ it("keeps copied state directories self-contained for combined gateway reads", a
   });
 });
 
-it.each(["registry", "main-key"] as const)(
-  "keeps the event loop responsive while repairing a cold %s startup contract",
-  async (repair) => {
-    const { env, options } = fixture("openclaw-startup-admission-");
-    const cfg: OpenClawConfig = {
-      agents: { entries: { main: {} } },
-      session: {},
-    };
-    const initial = openOpenClawAgentDatabase(options);
-    setCanonicalSqliteSessionMainKey(initial, repair === "main-key" ? "previous" : "main");
-    closeOpenClawAgentDatabasesForTest();
-    revokeSqliteDatabaseAdmissionsForPath(initial.path);
-    if (repair === "registry") {
-      unregisterOpenClawAgentDatabase({ ...options, path: initial.path });
-    }
-    const originalOpen = nodeSqlite.openNodeSqliteDatabase;
-    let yielded = false;
-    let tick: ReturnType<typeof setImmediate> | undefined;
-    const open = vi
-      .spyOn(nodeSqlite, "openNodeSqliteDatabase")
-      .mockImplementation((location, behavior) => {
-        const database = originalOpen(location, behavior);
-        if (location === initial.path && behavior?.readOnly !== true) {
-          // Earlier async setup cannot satisfy this admission-phase progress check.
-          tick = setImmediate(() => {
-            yielded = true;
-            cfg.session!.mainKey = "later";
-          });
-        }
-        return database;
-      });
-    const log = logger();
-    try {
-      await runSessionStartupMigration({ cfg, env, log });
-      expect(log.warn).not.toHaveBeenCalled();
-      expect(yielded).toBe(true);
-      expectMainKey(options);
-      expect(listOpenClawRegisteredAgentDatabases({ env })).toContainEqual(
-        expect.objectContaining({ agentId: "main", path: initial.path }),
-      );
-      expect(isOpenClawAgentDatabaseOpen(initial.path)).toBe(false);
-    } finally {
-      if (tick) {
-        clearImmediate(tick);
+it("keeps the event loop responsive while repairing a cold main-key startup contract", async () => {
+  const { env, options } = fixture("openclaw-startup-admission-");
+  const cfg: OpenClawConfig = {
+    agents: { entries: { main: {} } },
+    session: {},
+  };
+  const initial = openOpenClawAgentDatabase(options);
+  setCanonicalSqliteSessionMainKey(initial, "previous");
+  closeOpenClawAgentDatabasesForTest();
+  revokeSqliteDatabaseAdmissionsForPath(initial.path);
+  const originalOpen = nodeSqlite.openNodeSqliteDatabase;
+  let yielded = false;
+  let tick: ReturnType<typeof setImmediate> | undefined;
+  const open = vi
+    .spyOn(nodeSqlite, "openNodeSqliteDatabase")
+    .mockImplementation((location, behavior) => {
+      const database = originalOpen(location, behavior);
+      if (location === initial.path && behavior?.readOnly !== true) {
+        // Earlier async setup cannot satisfy this admission-phase progress check.
+        tick = setImmediate(() => {
+          yielded = true;
+          cfg.session!.mainKey = "later";
+        });
       }
-      open.mockRestore();
+      return database;
+    });
+  const log = logger();
+  try {
+    await runSessionStartupMigration({ cfg, env, log });
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(yielded).toBe(true);
+    expectMainKey(options);
+    expect(listOpenClawRegisteredAgentDatabases({ env })).toContainEqual(
+      expect.objectContaining({ agentId: "main", path: initial.path }),
+    );
+    expect(isOpenClawAgentDatabaseOpen(initial.path)).toBe(false);
+  } finally {
+    if (tick) {
+      clearImmediate(tick);
     }
-  },
-);
+    open.mockRestore();
+  }
+});

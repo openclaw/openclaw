@@ -26,6 +26,7 @@ import {
   runOpenClawAgentWriteTransaction,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
+import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -33,8 +34,18 @@ import {
 
 // Most cases inspect one returned handle after the scoped operation, without
 // competing opens. Retention tests keep their work inside the actual owner.
-function openOpenClawAgentDatabaseAsync(options: Parameters<typeof openOpenClawAgentDatabase>[0]) {
-  return withOpenClawAgentDatabaseAsync(options, (database) => database);
+function openOpenClawAgentDatabaseAsync(
+  options: Parameters<typeof openOpenClawAgentDatabase>[0],
+  integrityCheck?: "full",
+) {
+  const open = () => withOpenClawAgentDatabaseAsync(options, (database) => database);
+  return integrityCheck === "full" ? withFullIntegrity(open) : open();
+}
+
+let fullIntegrity: ReturnType<typeof createOpenClawDatabaseMaintenanceScope> | undefined;
+function withFullIntegrity<T>(operation: () => T): T {
+  fullIntegrity ??= createOpenClawDatabaseMaintenanceScope({ sqliteIntegrityCheck: "full" });
+  return fullIntegrity.run(operation);
 }
 
 const roots: string[] = [];
@@ -48,6 +59,8 @@ afterEach(async () => {
       db.close();
     }
   }
+  await fullIntegrity?.close();
+  fullIntegrity = undefined;
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
@@ -73,7 +86,7 @@ function seed(freshIdentity = false) {
   expect(database.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   const pathname = database.path;
   closeOpenClawAgentDatabasesForTest();
-  // Independent fixture writers model unclean state that requires physical admission checks.
+  // Independent fixture writers revoke prior facts; scan-dependent cases request full verification.
   if (freshIdentity) {
     fs.copyFileSync(pathname, `${pathname}.replacement`);
     fs.renameSync(`${pathname}.replacement`, pathname);
@@ -165,7 +178,7 @@ describe("physical-open admission ordering", () => {
   it("exposes and writes after an external FK violation committed after its table FK check", () => {
     const { options, pathname, writer } = seed();
     const trace = tracePhysicalChecks(pathname, () => corruptForeignKey(writer));
-    const database = openOpenClawAgentDatabase(options);
+    const database = withFullIntegrity(() => openOpenClawAgentDatabase(options));
     expect(trace.events).toEqual([
       "integrity-completed",
       "foreign-key-completed",
@@ -175,7 +188,7 @@ describe("physical-open admission ordering", () => {
     expect(ordinaryWrite(options)).toEqual({ n: 1 });
   });
 
-  it("trusts a live cached handle but rejects the same FK violation after disposal", async () => {
+  it("trusts a live cached handle but rejects the same FK violation during verification after disposal", async () => {
     const { options, pathname, writer } = seed();
     const first = openOpenClawAgentDatabase(options);
     corruptForeignKey(writer);
@@ -183,7 +196,9 @@ describe("physical-open admission ordering", () => {
     expect(ordinaryWrite(options)).toEqual({ n: 1 });
     expect(await disposeOpenClawAgentDatabaseByPath(pathname, { env: options.env })).toBe(true);
     agentLeases.invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname);
-    expect(() => openOpenClawAgentDatabase(options)).toThrow(/foreign_key_check failed/);
+    expect(() => withFullIntegrity(() => openOpenClawAgentDatabase(options))).toThrow(
+      /foreign_key_check failed/,
+    );
   });
 
   it.each(["agent-id", "role", "version"] as const)(
@@ -197,7 +212,7 @@ describe("physical-open admission ordering", () => {
         writer.exec("UPDATE schema_meta SET role='global' WHERE meta_key='primary'");
       }
       const trace = tracePhysicalChecks(pathname, () => writer.exec("PRAGMA user_version=9999;"));
-      expect(() => openOpenClawAgentDatabase(options)).toThrow(
+      expect(() => withFullIntegrity(() => openOpenClawAgentDatabase(options))).toThrow(
         /belongs to agent replacement|schema role global|schema version 9999/,
       );
       expect(trace.didCommit()).toBe(replacement === "version");
@@ -355,7 +370,7 @@ describe("asynchronous canonical admission", () => {
           identity.mockReturnValue(2);
         },
       );
-      const opening = openOpenClawAgentDatabaseAsync(options);
+      const opening = openOpenClawAgentDatabaseAsync(options, "full");
       if (initial === null) {
         await expect(opening).resolves.toMatchObject({ agentId: options.agentId });
       } else {
@@ -378,7 +393,9 @@ describe("asynchronous canonical admission", () => {
         releaseOpenClawAgentDatabaseLease(String(lease?.lease_id), { env: options.env });
       },
     );
-    await expect(openOpenClawAgentDatabaseAsync(options)).rejects.toThrow(/lost its runtime lease/);
+    await expect(openOpenClawAgentDatabaseAsync(options, "full")).rejects.toThrow(
+      /lost its runtime lease/,
+    );
     expect(state.db.prepare("SELECT lease_id FROM agent_database_leases").all()).toEqual([]);
   });
 
@@ -414,7 +431,7 @@ describe("asynchronous canonical admission", () => {
       const findings = writer.prepare("PRAGMA integrity_check").all();
       expect(findings).not.toEqual([{ integrity_check: "ok" }]);
       writer.close();
-      await expect(openOpenClawAgentDatabaseAsync(options)).rejects.toThrow(
+      await expect(openOpenClawAgentDatabaseAsync(options, "full")).rejects.toThrow(
         /integrity_check failed.*openclaw doctor --fix/,
       );
       const unchanged = realOpen(pathname, { readOnly: true });
@@ -438,21 +455,25 @@ describe("asynchronous canonical admission", () => {
     const leases = () => state.db.prepare("SELECT lease_id FROM agent_database_leases").all();
     vi.stubEnv("OPENCLAW_STATE_DIR", originalEnv.OPENCLAW_STATE_DIR);
     const check = integrityWorker.assertSqliteIntegrityInWorker;
-    vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker").mockImplementation(
-      async (...args) => {
+    const worker = vi
+      .spyOn(integrityWorker, "assertSqliteIntegrityInWorker")
+      .mockImplementation(async (...args) => {
         const work = check(...args);
         options.env.OPENCLAW_STATE_DIR = nextRoot;
         vi.stubEnv("OPENCLAW_STATE_DIR", nextRoot);
         await work;
-      },
-    );
-    try {
-      const opening = openOpenClawAgentDatabaseAsync({
-        agentId: options.agentId,
-        path: pathname,
-        ...(ambient ? {} : { env: options.env }),
       });
+    try {
+      const opening = openOpenClawAgentDatabaseAsync(
+        {
+          agentId: options.agentId,
+          path: pathname,
+          ...(ambient ? {} : { env: options.env }),
+        },
+        "full",
+      );
       await expect(opening).resolves.toMatchObject({ path: pathname });
+      expect(worker).toHaveBeenCalledOnce();
       expect(leases()).toHaveLength(1);
       closeOpenClawAgentDatabaseByPath(pathname);
       expect(leases()).toEqual([]);
@@ -540,7 +561,7 @@ describe("asynchronous canonical admission", () => {
         corruptForeignKey(writer);
       },
     );
-    const database = await openOpenClawAgentDatabaseAsync(options);
+    const database = await openOpenClawAgentDatabaseAsync(options, "full");
     expect(database.db.prepare("PRAGMA foreign_key_check").all()).toHaveLength(1);
     expect(ordinaryWrite(options)).toEqual({ n: 1 });
   });
@@ -561,7 +582,7 @@ describe("asynchronous canonical admission", () => {
           await check(...args);
           writer.exec("PRAGMA user_version=9999;");
         });
-      await expect(openOpenClawAgentDatabaseAsync(options)).rejects.toThrow(
+      await expect(openOpenClawAgentDatabaseAsync(options, "full")).rejects.toThrow(
         /belongs to agent replacement|schema role global|schema version 9999/,
       );
       expect(worker).toHaveBeenCalledTimes(replacement === "version" ? 1 : 0);
@@ -588,7 +609,7 @@ describe("asynchronous canonical admission", () => {
   it("rejects an existing FK violation before publishing a writable handle", async () => {
     const { options, writer } = seed();
     corruptForeignKey(writer);
-    await expect(openOpenClawAgentDatabaseAsync(options)).rejects.toThrow(
+    await expect(openOpenClawAgentDatabaseAsync(options, "full")).rejects.toThrow(
       /foreign_key_check failed/,
     );
     expect(() =>
@@ -605,7 +626,7 @@ describe("asynchronous canonical admission", () => {
     expect(await disposeOpenClawAgentDatabaseByPath(pathname, { env: options.env })).toBe(true);
     agentLeases.invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname);
     corruptForeignKey(writer);
-    await expect(openOpenClawAgentDatabaseAsync(options)).rejects.toThrow(
+    await expect(openOpenClawAgentDatabaseAsync(options, "full")).rejects.toThrow(
       /foreign_key_check failed/,
     );
   });
@@ -629,7 +650,7 @@ describe("asynchronous canonical admission", () => {
       ).toThrow(/still open/);
       return native;
     });
-    await expect(openOpenClawAgentDatabaseAsync(options)).rejects.toThrow(/revoked/);
+    await expect(openOpenClawAgentDatabaseAsync(options, "full")).rejects.toThrow(/revoked/);
     await drain;
     expect(completed).toBe(true);
     expect(() =>
@@ -671,7 +692,7 @@ describe("asynchronous canonical admission", () => {
         }
         return native;
       });
-      await expect(openOpenClawAgentDatabaseAsync(options)).rejects.toThrow(
+      await expect(openOpenClawAgentDatabaseAsync(options, "full")).rejects.toThrow(
         failClose ? /synthetic native close failure/ : /revoked/,
       );
       expect(replacement?.db.isOpen).toBe(true);
@@ -710,7 +731,7 @@ describe("failed-open cleanup ownership", () => {
           openOpenClawAgentDatabase({ ...options, agentId: "other-owner", path: pathname }),
         ).toThrow("synthetic lease release failure");
       } else {
-        const admission = openOpenClawAgentDatabaseAsync(options);
+        const admission = openOpenClawAgentDatabaseAsync(options, "full");
         await Promise.all([
           expect(admission).rejects.toThrow("synthetic lease release failure"),
           expect(closeOpenClawAgentDatabasesAsync()).rejects.toMatchObject(closeFailure),

@@ -5,14 +5,12 @@ import { expect, it } from "vitest";
 import { installSqliteFtsTokenizerMismatch } from "../infra/sqlite-index-corruption.test-support.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import { invalidateOpenClawAgentDatabaseIntegrityBeforeMutation } from "../state/openclaw-agent-db-lease.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
+import * as agentDb from "../state/openclaw-agent-db.js";
 import {
   readPersistedQuarantineRow,
   seedOpenClawDatabaseQuarantine,
 } from "../state/openclaw-quarantine-store.test-support.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import { useDoctorSessionSqliteTestFixture } from "./doctor-session-sqlite.test-support.js";
 
@@ -22,7 +20,7 @@ it.each(["fix", "recover"])(
   "Doctor %s repairs FTS-only quarantine in place, preserving sessions and external content",
   async (mode) => {
     const { sqlitePath, store } = await createImportedStoreForCompaction();
-    await closeOpenClawAgentDatabasesAsync();
+    await agentDb.closeOpenClawAgentDatabasesAsync();
     invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(sqlitePath);
     let transcriptRows: unknown[];
     {
@@ -35,9 +33,11 @@ it.each(["fix", "recover"])(
     }
     installSqliteFtsTokenizerMismatch(sqlitePath, "session_transcript_fts");
     installSqliteFtsTokenizerMismatch(sqlitePath, "standing_intents_fts");
-    expect(() => openOpenClawAgentDatabase({ agentId: "main", env: store.env })).toThrow(
-      /openclaw doctor --fix/,
-    );
+    const open = () => agentDb.openOpenClawAgentDatabase({ agentId: "main", env: store.env });
+    // Physical FTS corruption belongs to explicit verification, not runtime admission.
+    const maintenance = createOpenClawDatabaseMaintenanceScope({ sqliteIntegrityCheck: "full" });
+    expect(() => maintenance.run(open)).toThrow(/openclaw doctor --fix/);
+    await maintenance.close();
     // Released builds persisted this refusal; the current opener also latches it in memory.
     seedOpenClawDatabaseQuarantine({
       env: store.env,
@@ -70,6 +70,6 @@ it.each(["fix", "recover"])(
     expect(
       db.prepare("SELECT text FROM session_transcript_fts WHERE text=?").all("ab\ufffecd"),
     ).toEqual([{ text: "ab\ufffecd" }]);
-    expect(openOpenClawAgentDatabase({ agentId: "main", env: store.env }).db.isOpen).toBe(true);
+    expect(open().db.isOpen).toBe(true);
   },
 );

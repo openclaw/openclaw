@@ -27,7 +27,6 @@ import {
   createAgentDatabaseLeaseStaleReasonReader,
   mayShareAgentDatabaseFile,
   readAgentDatabaseLeaseProvenance,
-  agentDatabaseLeaseProcessDeathRefusal,
 } from "./openclaw-agent-db-lease-provenance.js";
 import { agentDatabaseMaintenanceAuthority as maintenanceAuthority } from "./openclaw-agent-db-maintenance-authority.js";
 import {
@@ -137,8 +136,6 @@ export function renewAgentDatabaseMaintenanceAuthorityIfPresent(): void {
 
 export type OpenClawAgentIntegrityVerificationReceiver = (
   canReuseRuntimeIntegrity: boolean,
-  invalidated: boolean,
-  because?: string,
   liveOwnerProvenance?: string,
 ) => void;
 
@@ -200,17 +197,13 @@ function claimAgentDatabaseLeaseInDatabase(
     );
   }
   assertAgentDeletionPathFence(database, deletionFence);
-  let invalidated = false;
   let hasOtherOwner = false;
   let liveOwnerProvenance: string | undefined;
-  let processDeathRefusal: string | undefined;
   const staleReasonFor = createAgentDatabaseLeaseStaleReasonReader();
   for (const held of readAgentDatabaseLeases(database.db)) {
     const sharesFile = mayShareAgentDatabaseFile(held.path, owner.path);
     const staleReason = sharesFile ? staleReasonFor(held) : undefined;
     if (staleReason) {
-      const because = agentDatabaseLeaseProcessDeathRefusal(held, owner.path, staleReason);
-      processDeathRefusal ??= because;
       log.info(`agent database stale lease: ${staleReason}; previous release not observed`, {
         agentId: held.agent_id,
         leaseId: held.lease_id,
@@ -218,10 +211,9 @@ function claimAgentDatabaseLeaseInDatabase(
         staleReason,
         ownerPid: held.owner_pid,
         ownerStartTime: held.owner_start_time,
-        because: because ?? "same-boot-dead-owner",
       });
-      clearAgentDatabaseLeaseVerifications(database.db, held.path);
-      invalidated = true;
+      // SQLite recovers interrupted WAL writes. A dead lease does not revoke this
+      // process's admitted physical file or establish corruption in a cold opener.
       executeSqliteQuerySync(
         database.db,
         db.deleteFrom("agent_database_leases").where("lease_id", "=", held.lease_id),
@@ -251,12 +243,7 @@ function claimAgentDatabaseLeaseInDatabase(
       }
     }
   }
-  onVerification?.(
-    !hasOtherOwner,
-    invalidated,
-    processDeathRefusal ?? (hasOtherOwner ? "live-or-unknown-owner" : undefined),
-    liveOwnerProvenance,
-  );
+  onVerification?.(!hasOtherOwner, liveOwnerProvenance);
   executeSqliteQuerySync(
     database.db,
     db.insertInto("agent_database_leases").values({
@@ -382,11 +369,10 @@ function hasAgentDatabasePathLease(database: EngineConnection, pathname: string)
   );
 }
 
-/** Preserve a known FULL requirement across death, then replace it on completed admission. */
+/** Only a completed admission may lend its file-bound proof to another process. */
 export function recordOpenClawAgentDatabaseAdmission(
   leaseId: string,
   params: { agentId: string; path: string; env?: NodeJS.ProcessEnv },
-  status: "full-required" | "complete" = "complete",
 ): void {
   runOpenClawStateWriteTransaction(
     (database) => {
@@ -395,7 +381,7 @@ export function recordOpenClawAgentDatabaseAdmission(
         database.db,
         getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database.db)
           .updateTable("agent_database_leases")
-          .set({ opened_at: status === "full-required" ? -1 : Date.now() })
+          .set({ opened_at: Date.now() })
           .where("lease_id", "=", leaseId)
           .where("agent_id", "=", params.agentId)
           .where("path", "=", params.path)
@@ -466,7 +452,7 @@ export function prepareOpenClawAgentDatabaseWorkerLease(
   provenance: string | null;
   validation?: OpenClawAgentDatabaseValidation;
   integrityRevoked?: boolean;
-  startupIntegrity?: import("./agent-database-startup-integrity.js").AgentDatabaseStartupIntegrity;
+  startupIntegrityRequired?: boolean;
   startupRepair?: (
     check: SqliteIntegrityCheck,
     error: unknown,

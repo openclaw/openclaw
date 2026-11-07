@@ -12,6 +12,7 @@ import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execu
 
 export function readAgentDatabaseRequestPreparation(): {
   startupJournal: boolean;
+  startupIntegrityRequired: boolean;
   startupCancellation?: Int32Array<SharedArrayBuffer>;
   deletion?: AgentDeletionWorkerGuard;
 } {
@@ -19,12 +20,14 @@ export function readAgentDatabaseRequestPreparation(): {
   if (
     !isRecord(attachment) ||
     attachment.kind !== "agent-execution" ||
-    typeof attachment.startupJournal !== "boolean"
+    typeof attachment.startupJournal !== "boolean" ||
+    typeof attachment.startupIntegrityRequired !== "boolean"
   ) {
     throw new Error("Agent execution requires its request-local preparation facts");
   }
   return {
     startupJournal: attachment.startupJournal,
+    startupIntegrityRequired: attachment.startupIntegrityRequired,
     // SAFETY: The private host admission owns this Gateway-lifetime cancellation cell.
     startupCancellation: attachment.startupCancellation as
       | Int32Array<SharedArrayBuffer>

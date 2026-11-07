@@ -1624,7 +1624,7 @@ it("keeps creation-claimed handles private and closes them when the claim settle
   revokeAdmissions(dbPath);
   {
     using editor = nodeSqlite.openNodeSqliteDatabase(dbPath);
-    editor.exec("DROP INDEX idx_agent_cache_expiry");
+    editor.exec("DROP INDEX idx_agent_conversations_identity");
   }
   const checked = createDeferred();
   const resume = createDeferred();
@@ -1682,7 +1682,10 @@ it("keeps creation-claimed handles private and closes them when the claim settle
   {
     using reader = nodeSqlite.openNodeSqliteDatabase(dbPath, { readOnly: true });
     expect(
-      queryOne(reader, "SELECT name FROM sqlite_schema WHERE name='idx_agent_cache_expiry'"),
+      queryOne(
+        reader,
+        "SELECT name FROM sqlite_schema WHERE name='idx_agent_conversations_identity'",
+      ),
     ).toBeUndefined();
   }
   expect(operationCalled).toBe(false);
@@ -2334,18 +2337,8 @@ it.each([
       );
       writer.exec("PRAGMA journal_mode = WAL; BEGIN IMMEDIATE;");
       const startedAt = performance.now();
-      let failure: unknown;
-      try {
-        openAgentDb(options);
-      } catch (error) {
-        failure = error;
-      }
+      expect(() => openAgentDb(options)).toThrow(expectedError);
       const elapsedMs = performance.now() - startedAt;
-      expect(failure).toBeInstanceOf(Error);
-      if (!(failure instanceof Error)) {
-        throw new Error("validated owner replacement reopen unexpectedly succeeded");
-      }
-      expect(failure.message).toMatch(expectedError);
       expect(elapsedMs).toBeLessThan(1_000);
     } finally {
       writer.exec("ROLLBACK;");
@@ -2371,9 +2364,14 @@ it.each([
     replaceDatabase(dbPath);
     nowSpy.mockReturnValue(2_000);
     try {
-      expect(() => openAgentDb(options)).toThrow(
-        /integrity_check failed.*idx_agent_cache_expiry.*openclaw doctor --fix/,
-      );
+      const verification = createMaintenanceScope({ sqliteIntegrityCheck: "full" });
+      try {
+        expect(() => verification.run(() => openAgentDb(options))).toThrow(
+          /integrity_check failed.*idx_agent_cache_expiry.*openclaw doctor --fix/,
+        );
+      } finally {
+        await verification.close();
+      }
       const repair = await migrateLegacyMediaPersistence({
         env,
         configuredAgentDatabaseTargets: [{ agentId: "worker-1", path: dbPath }],
