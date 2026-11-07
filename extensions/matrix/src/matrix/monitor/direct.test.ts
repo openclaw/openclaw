@@ -115,11 +115,26 @@ describe("createDirectRoomTracker", () => {
     expect(client.setAccountData).not.toHaveBeenCalled();
   });
 
-  it("keeps using the strict 2-member fallback until the dm cache seeds successfully", async () => {
+  it("does not treat an exact 2-member room as a DM before the dm cache seeds", async () => {
     const { client, tracker } = setup({ isDm: false, dmCacheAvailable: false });
-    await expect(checkDefaultRoom(tracker)).resolves.toBe(true);
-    await expect(checkDefaultRoom(tracker)).resolves.toBe(true);
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(false);
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(false);
     expect(client.dms.update).toHaveBeenCalledTimes(1);
+    expect(client.setAccountData).not.toHaveBeenCalled();
+  });
+
+  it("still trusts is_direct and m.direct before the dm cache seeds", async () => {
+    const directFlag = setup({
+      isDm: false,
+      dmCacheAvailable: false,
+      stateEvents: {
+        "!room:example.org|m.room.member|@bot:example.org": { is_direct: true },
+      },
+    });
+    await expect(checkDefaultRoom(directFlag.tracker)).resolves.toBe(true);
+
+    const knownDm = setup({ isDm: true, dmCacheAvailable: false });
+    await expect(checkDefaultRoom(knownDm.tracker)).resolves.toBe(true);
   });
 
   it.each([

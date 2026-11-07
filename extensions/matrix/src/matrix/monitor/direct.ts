@@ -32,9 +32,6 @@ const MAX_DM_MEMBER_FLAGS = 2048;
 export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTrackerOptions = {}) {
   const log = opts.log ?? (() => {});
   let lastDmUpdateMs = 0;
-  // Once m.direct has seeded successfully, prefer the explicit cache over
-  // re-enabling the broad 2-person fallback after a later transient failure.
-  let hasSeededDmCache = false;
   const joinedMembersCache = new Map<string, { members: string[]; ts: number }>();
   const directMemberFlagCache = new Map<string, { isDirect: boolean | null; ts: number }>();
   const recentInviteCandidates = new Map<string, { remoteUserId: string; ts: number }>();
@@ -46,7 +43,7 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
       return;
     }
     lastDmUpdateMs = now;
-    hasSeededDmCache = (await client.dms.update()) || hasSeededDmCache;
+    await client.dms.update();
   };
 
   const resolveJoinedMembers = async (roomId: string): Promise<string[] | null> => {
@@ -198,13 +195,9 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
           return false;
         }
 
-        if (!hasSeededDmCache) {
-          log(
-            `matrix: dm detected via exact 2-member fallback before dm cache seed room=${roomId}`,
-          );
-          return true;
-        }
-
+        // Two joined members are not a DM by themselves, even before the
+        // direct-room cache seeds. is_direct, m.direct, a promoted recent
+        // invite, and opted-in per-room recovery can still mark the room direct.
         if (hasLocallyPromotedDirectRoom(roomId, senderId)) {
           const shouldKeep = await checkRoomPolicy("shouldKeepLocallyPromotedDirectRoom", roomId);
           if (shouldKeep !== false) {
