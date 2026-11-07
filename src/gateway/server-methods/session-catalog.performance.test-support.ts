@@ -378,8 +378,9 @@ export async function createComposedCatalogFixture(
           host.error?.code === "APP_SERVER_UNAVAILABLE" &&
           host.error.message === "Codex session catalog is still loading. Retry shortly."
         ) {
-          // Foreground cold-list expiry does not stop index-owned hydration. Retry only
-          // fixture setup; measured list() calls retain the original single-request boundary.
+          // Foreground expiry does not stop index-owned hydration; await its committed
+          // setup receipt. Measured list() calls retain the single-request boundary.
+          await counters.catalogPersisted;
           await nextTurn();
           continue;
         }

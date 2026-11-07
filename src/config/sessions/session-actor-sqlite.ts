@@ -45,6 +45,11 @@ import {
   type SessionActorEntryReference,
 } from "./session-actor-receipt.js";
 import type { createSessionActorReplica } from "./session-actor-replica.js";
+import {
+  captureSessionSourceEffectAssertion,
+  retainPendingSessionSourceEffect,
+  publishSessionSourceEffects,
+} from "./session-source-effects.js";
 import { publishCommittedSessionTranscriptReceipts } from "./session-transcript-authority.js";
 
 type NativeAdmission = {
@@ -229,6 +234,13 @@ export function createSqliteSessionActorExecutor(
     authority: SessionActorAuthority,
     observer?: SessionActorCommitObserver<SessionActorPhaseResults[Phase]>,
   ): Promise<SessionActorOutcome<SessionActorPhaseResults[Phase]>> => {
+    const sourceAssertion = captureSessionSourceEffectAssertion(() => authority.assertCurrent());
+    const commandAuthority: SessionActorAuthority = {
+      assertCurrent: sourceAssertion,
+      authorize: (stage, facts, publication) => authority.authorize(stage, facts, publication),
+    };
+    const pendingSourceOwner = {};
+    let releasePendingSource: (() => void) | undefined;
     const captured = input;
     type Outcome = SessionActorOutcome<SessionActorPhaseResults[Phase]>;
     let native: NativeAdmission | undefined;
@@ -390,9 +402,17 @@ export function createSqliteSessionActorExecutor(
                     }
                   }
                   // Partial transcript publication precedes installation of the full actor replica.
-                  publishCommittedSessionTranscriptReceipts(
+                  const transcriptChanges = publishCommittedSessionTranscriptReceipts(
                     committed.receipt.transcript.authorityReceipts,
                   );
+                  if (target.database.kind === "file") {
+                    publishSessionSourceEffects(sourceAssertion, {
+                      agentId: params.transport.agentId,
+                      storePath: target.database.nativeLocation,
+                      databaseIdentity: target.database.physicalIdentity,
+                      changes: transcriptChanges,
+                    });
+                  }
                   try {
                     observer?.committed(committed);
                   } finally {
@@ -406,6 +426,7 @@ export function createSqliteSessionActorExecutor(
                         params.transport.agentId,
                       );
                       const publication = retainSessionEntryWorkerPublication({
+                        sourceAssertion,
                         agentId,
                         storePath: target.database.nativeLocation,
                         databaseIdentity,
@@ -499,7 +520,7 @@ export function createSqliteSessionActorExecutor(
           return running;
         },
         authorize(
-          authority,
+          commandAuthority,
           (admission, publication, stage, snapshot) => {
             native = admission;
             // Compound phases and transfer frames carry later snapshots of the same transaction.
@@ -517,6 +538,19 @@ export function createSqliteSessionActorExecutor(
               throw new Error("Session actor commit omitted its conversation publication");
             }
             conversation?.begin(receipts);
+            if (target.database.kind === "file") {
+              releasePendingSource?.();
+              releasePendingSource = retainPendingSessionSourceEffect(
+                {
+                  owner: pendingSourceOwner,
+                  agentId: params.transport.agentId,
+                  storePath: target.database.nativeLocation,
+                  databaseIdentity: target.database.physicalIdentity,
+                  keys: [target.sessionKey],
+                },
+                sourceAssertion,
+              );
+            }
           },
           () => entryReference,
         ),
@@ -555,6 +589,8 @@ export function createSqliteSessionActorExecutor(
         conversation?.settle(undefined, outcome.kind === "unknown");
       }
       params.replica.invalidate();
+    } finally {
+      releasePendingSource?.();
     }
     if (outcome.kind === "committed" && params.transport.afterCommitted) {
       try {

@@ -785,6 +785,8 @@ src/config/sessions/session-pending-input-operations.types.ts
 src/config/sessions/session-predicate-columns.ts
 src/config/sessions/session-transcript-writer-claim-error.ts
 src/config/sessions/session-source-authority.ts
+src/config/sessions/session-source-effects.ts
+src/config/sessions/session-source-publication.ts
 src/config/sessions/session-sqlite-target-paths.ts
 src/config/sessions/session-sqlite-target.ts
 src/config/sessions/session-store-config.ts
@@ -2051,6 +2053,7 @@ src/state/openclaw-agent-db-read-error.ts
 src/state/openclaw-agent-db-readonly-open.ts
 src/state/openclaw-agent-db-readonly-scope.ts
 src/state/openclaw-agent-db-readonly.ts
+src/state/openclaw-agent-db-registration-provenance.ts
 src/state/openclaw-agent-db-registry-listing.ts
 src/state/openclaw-agent-db-registry.read.ts
 src/state/openclaw-agent-db-registry.ts

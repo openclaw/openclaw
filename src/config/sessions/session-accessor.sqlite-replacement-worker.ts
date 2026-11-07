@@ -48,6 +48,11 @@ import {
   type SessionSourceAssertion,
   type SessionSourceValidation,
 } from "./session-source-authority.js";
+import { captureSessionSourceEffectAssertion } from "./session-source-effects.js";
+import {
+  bindSessionSourceInput,
+  captureSessionSourceEntryPublication,
+} from "./session-source-publication.js";
 import { parseSessionTranscriptAuthorityReceipts } from "./session-transcript-authority.js";
 import { throwSessionWorkerOutcomeUnknown } from "./session-worker-receipt.js";
 
@@ -351,18 +356,18 @@ export async function initializeSessionTranscriptInWorker(
   input: { sessionKey: string; sessionId: string; cwd?: string },
   assertCurrent: () => void,
 ): Promise<void> {
-  const publication = retainSessionEntryWorkerPublication({
-    agentId: options.agentId,
-    storePath: options.path,
+  const { assertCurrent: assertEffectCurrent, publication } = captureSessionSourceEntryPublication(
+    options,
     databaseIdentity,
-  });
+    assertCurrent,
+  );
   let admitted:
     | { admission: SqliteWorkerOperationAdmission; retained: RetainedWorkerTransactionAdmission }
     | undefined;
   await withSessionEntryWorker(
     options,
     databaseIdentity,
-    assertCurrent,
+    assertEffectCurrent,
     async (execution, source) => {
       const initialized = await execution.runExisting(source, async (worker) => {
         const outcome = await worker.execute({ type: "session.transcript.initialize", input }).then(
@@ -458,6 +463,7 @@ export async function runSessionEntryWorkerMutation<T>(
     errors?: { identity: string; unknown: string; missing: string; publication: string };
   } = {},
 ): Promise<T> {
+  const assertEffectCurrent = captureSessionSourceEffectAssertion(assertCurrent);
   const unknownMessage =
     executionOptions.errors?.unknown ??
     "Session entry mutation has no confirmed native completion and commit receipt";
@@ -525,7 +531,7 @@ export async function runSessionEntryWorkerMutation<T>(
   return await withSessionEntryWorker(
     options,
     databaseIdentity,
-    assertCurrent,
+    assertEffectCurrent,
     (execution, source, context) =>
       execution
         .runExisting(source, async (worker) => {
@@ -540,6 +546,7 @@ export async function runSessionEntryWorkerMutation<T>(
             agentId: lifecycle.identityAgentId,
             storePath: execution.path,
             databaseIdentity: identity,
+            sourceAssertion: assertEffectCurrent,
           });
           const outcome = await run(worker).then(ok, err<never, unknown>);
           if (outcome.ok) {
@@ -616,12 +623,7 @@ export async function commitSessionEntryReplacementsInWorker(
   nativeDeletion?: ReturnType<typeof captureNativeSessionWorkerDeletion>,
 ): Promise<SessionEntryReplacementCandidate["result"]> {
   const source = await prepareSessionSourceAuthority(assertCurrent);
-  const sameStore = source.checks.every(
-    ({ predicate }) => predicate.source.databaseIdentity === databaseIdentity,
-  );
-  const guardedInput = sameStore
-    ? { ...input, sources: source.checks.map(({ predicate }) => predicate) }
-    : input;
+  const guardedInput = bindSessionSourceInput(input, source, databaseIdentity);
   const acceptValidation = (facts: unknown) => {
     if (isRecord(facts) && facts.kind === "session-entry-replacements-validated") {
       // SAFETY: The paired replacement kernel supplies this transaction's source comparison.

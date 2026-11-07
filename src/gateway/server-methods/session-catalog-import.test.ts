@@ -55,6 +55,8 @@ const { importAuthorizedSessionCatalog } = await import("./session-catalog-impor
 const visibility: SessionCatalogThreadVisibility["visibility"] = {
   kind: "unrestricted",
   cacheKey: "original-grant",
+  isAdmin: true,
+  isCreator: () => false,
 };
 const denied: ErrorShape = { code: "FORBIDDEN", message: "Destination is not writable" };
 const source = { hostId: "node:fixture", threadId: "thread-one" };
@@ -66,6 +68,7 @@ function fixture(config: OpenClawConfig = {}) {
     visibility,
   }));
   const commitGuard = vi.fn();
+  const isCurrent = vi.fn(() => true);
   const run = () =>
     importAuthorizedSessionCatalog({
       request: { catalogId: "fixture", ...source },
@@ -75,9 +78,12 @@ function fixture(config: OpenClawConfig = {}) {
       client: null,
       context: createSessionMutationTestContext(config),
       reauthorize,
+      sourceVisibility: { visibility },
+      isCurrent,
+      isAuthorityCurrent: isCurrent,
       commitGuard,
     });
-  return { read, reauthorize, commitGuard, run };
+  return { read, reauthorize, commitGuard, isCurrent, run };
 }
 
 beforeEach(() => {
@@ -162,12 +168,23 @@ it.each([
   }
   mocks.create.mockImplementation(async ({ commitGuard }) => {
     if (authority === "source") {
-      mocks.visibility.mockReturnValue({ kind: "unrestricted", cacheKey: "replacement-grant" });
+      mocks.visibility.mockReturnValue({ ...visibility, cacheKey: "replacement-grant" });
     }
     commitGuard?.();
     throw new Error("Revoked authority reached creation");
   });
   await expect(fixture().run()).rejects.toThrow(error);
+  expect(mocks.preserve).not.toHaveBeenCalled();
+  expect(mocks.record).not.toHaveBeenCalled();
+});
+
+it("refuses an expired source lease before reading or importing content", async () => {
+  const subject = fixture();
+  subject.isCurrent.mockReturnValue(false);
+  await expect(subject.run()).rejects.toThrow("session catalog thread is not visible");
+  expect(subject.read).not.toHaveBeenCalled();
+  expect(subject.reauthorize).not.toHaveBeenCalled();
+  expect(mocks.create).not.toHaveBeenCalled();
   expect(mocks.preserve).not.toHaveBeenCalled();
   expect(mocks.record).not.toHaveBeenCalled();
 });

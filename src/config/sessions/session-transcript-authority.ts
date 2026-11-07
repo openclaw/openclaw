@@ -238,12 +238,12 @@ export function publishUnchangedSessionTranscriptReceipts(
 /** The native settlement owner publishes these while it still holds the writer FIFO. */
 export function publishCommittedSessionTranscriptReceipts(
   receipts: readonly SessionTranscriptAuthorityReceipt[] | undefined,
-): void {
-  sessionChanges.emitBatch(
-    (receipts ?? []).flatMap((receipt) =>
-      receiptChanges(receipt, undefined, receipt.source.canonicalPath ?? receipt.source.filename),
-    ),
+) {
+  const changes = (receipts ?? []).flatMap((receipt) =>
+    receiptChanges(receipt, undefined, receipt.source.canonicalPath ?? receipt.source.filename),
   );
+  sessionChanges.emitBatch(changes);
+  return changes;
 }
 
 function isTranscriptReceipt(value: unknown): value is SessionTranscriptAuthorityReceipt {

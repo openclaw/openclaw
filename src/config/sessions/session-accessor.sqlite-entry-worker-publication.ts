@@ -44,6 +44,7 @@ import {
 } from "./session-accessor.sqlite-sharing-acquisition.js";
 import type { SessionEntryMetadataReceipt } from "./session-entry-metadata-receipt.js";
 import { isSessionEntryPublicationSourceCurrent } from "./session-entry-publication-source.js";
+import * as sourceEffects from "./session-source-effects.js";
 import { retainSessionTranscriptWorkerPublication } from "./session-transcript-authority.js";
 import type { SessionTranscriptAuthorityReceipt } from "./session-transcript-authority.types.js";
 import type { SessionEntry } from "./types.js";
@@ -129,6 +130,7 @@ function retireSupersededSessionFacts(
 
 /** Final-grant custody fences old facts until native settlement, independently of result delivery. */
 export function retainSessionEntryWorkerPublication(params: {
+  sourceAssertion?: () => void;
   agentId: string;
   storePath: string;
   databaseIdentity: string;
@@ -152,6 +154,7 @@ export function retainSessionEntryWorkerPublication(params: {
   let publicationKeys: string[] = [];
   const identityKey = `file:${params.databaseIdentity}`;
   let pending = false;
+  let releaseSourceEffect: (() => void) | undefined;
   let sharingAuthorityChanged = true;
   const publication = {
     begin(
@@ -192,6 +195,16 @@ export function retainSessionEntryWorkerPublication(params: {
         owners.add(owner);
         pendingSessionEntryPublications.set(key, owners);
       }
+      releaseSourceEffect = sourceEffects.retainPendingSessionSourceEffect(
+        {
+          owner,
+          ...params,
+          keys: publicationKeys,
+          entries: entryPostimages,
+          fullEntries: fullEntryPostimages,
+        },
+        params.sourceAssertion,
+      );
     },
     /** Delta writers share the entry owner's pending custody and supersession. */
     beginChanges(
@@ -352,8 +365,9 @@ export function retainSessionEntryWorkerPublication(params: {
               : [captureSessionEntryMaintenanceAgeChange({ sessionKey, entry: value.entry })],
           ),
         );
+        const committedChanges = [...selected, ...invalidations, ...transcriptChanges];
         sessionChanges.emitBatch(
-          [...selected, ...invalidations, ...transcriptChanges],
+          committedChanges,
           undefined,
           identityRecords.length
             ? () => {
@@ -370,6 +384,12 @@ export function retainSessionEntryWorkerPublication(params: {
               }
             : undefined,
         );
+        if (!invalidations.length) {
+          sourceEffects.publishSessionSourceEffects(params.sourceAssertion, {
+            ...params,
+            changes: committedChanges,
+          });
+        }
       });
     },
     settle(
@@ -379,13 +399,21 @@ export function retainSessionEntryWorkerPublication(params: {
         | undefined,
       outcomeUnknown: boolean,
       transcriptChanges: readonly SessionRowChange[] = [],
+      acknowledged = receipt !== undefined,
     ) {
       if (!pending) {
         conversation.settle(receipt?.conversationPublication, outcomeUnknown);
-        sessionChanges.emitBatch([
+        const committedChanges = [
           ...transcriptChanges,
-          ...transcript.settle(Boolean(receipt), outcomeUnknown, receipt?.transcriptPublication),
-        ]);
+          ...transcript.settle(acknowledged, outcomeUnknown, receipt?.transcriptPublication),
+        ];
+        sessionChanges.emitBatch(committedChanges);
+        if (acknowledged && !outcomeUnknown) {
+          sourceEffects.publishSessionSourceEffects(params.sourceAssertion, {
+            ...params,
+            changes: committedChanges,
+          });
+        }
         return undefined;
       }
       let unknown = outcomeUnknown;
@@ -647,7 +675,14 @@ export function retainSessionEntryWorkerPublication(params: {
             replacement.ageChanges.filter(({ sessionKey }) => known && current(sessionKey)),
           );
         }
-        sessionChanges.emitBatch([...changes, ...committedTranscriptChanges]);
+        const committedChanges = [...changes, ...committedTranscriptChanges];
+        sessionChanges.emitBatch(committedChanges);
+        if (!unknown && receipt) {
+          sourceEffects.publishSessionSourceEffects(params.sourceAssertion, {
+            ...params,
+            changes: committedChanges,
+          });
+        }
         // Unknown settlement fences retained facts, not an acknowledged identity mutation.
         return replacement
           ? {
@@ -666,6 +701,8 @@ export function retainSessionEntryWorkerPublication(params: {
           }
         }
         pending = false;
+        releaseSourceEffect?.();
+        releaseSourceEffect = undefined;
         completion.resolve();
       }
     },

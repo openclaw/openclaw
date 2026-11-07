@@ -6,12 +6,14 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { canReadSessionAccess } from "../../config/sessions/session-access.js";
 import type { SessionEntrySummary } from "../../config/sessions/session-accessor.js";
 import {
   resolveSessionCreatorActor,
   sessionCreatorProfileId,
 } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { noteSessionCatalogEntryRead } from "../../plugins/session-catalog-source-scope.js";
 import type {
   SessionCatalogEntrySnapshot,
   SessionCatalogProvider,
@@ -40,7 +42,12 @@ type SessionCatalogRequestEntrySnapshot = {
   freeze: () => void;
   captureHostInstances: (host: SessionCatalogHost, instances: SessionCatalogInstances) => void;
   entryForSession: (sessionKey: string) => SessionEntry | undefined;
+  sourceKeyForSession: (session: SessionCatalogSession) => string | undefined;
   isMember: (sessionKey: string, profileId: string) => boolean;
+  canReadAccess: (
+    sessionKey: string,
+    profileMatches: Parameters<typeof canReadSessionAccess>[3],
+  ) => boolean;
   projectHostSessions: (
     host: SessionCatalogHost,
     instances: SessionCatalogInstances,
@@ -85,6 +92,8 @@ const projectedHosts = new WeakMap<
   >
 >();
 const adoptionRevisions = new WeakMap<SessionCatalogInstances, object>();
+// Neutral source facts survive redacted presentation; this cache never stores a caller grant.
+const catalogSourceKeys = new WeakMap<SessionCatalogSession, string>();
 
 export function createSessionCatalogRequestEntrySnapshot(params: {
   cfg: OpenClawConfig;
@@ -204,14 +213,17 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
     return index;
   };
 
+  const canonicalKeyForSession = (sessionKey: string) =>
+    resolveStoredSessionKeyForAgentStore({
+      cfg: params.cfg,
+      agentId: entryAgentId(sessionKey),
+      sessionKey,
+    });
+
   const entryForSession = (sessionKey: string): SessionEntry | undefined => {
     const agentId = entryAgentId(sessionKey);
     const index = entryIndexForAgent(agentId);
-    const canonicalKey = resolveStoredSessionKeyForAgentStore({
-      cfg: params.cfg,
-      agentId,
-      sessionKey,
-    });
+    const canonicalKey = canonicalKeyForSession(sessionKey);
     const requested = index.get(sessionKey);
     const canonical = index.get(canonicalKey);
     return canonical && (!requested || (canonical.updatedAt ?? 0) > (requested.updatedAt ?? 0))
@@ -234,7 +246,16 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
     return actor;
   };
 
-  const sessionEntries: SessionCatalogEntrySnapshot = { entriesForAgent, entriesForCatalog };
+  const sessionEntries: SessionCatalogEntrySnapshot = {
+    entriesForAgent: (agentId) => {
+      noteSessionCatalogEntryRead(sessionEntries);
+      return entriesForAgent(agentId);
+    },
+    entriesForCatalog: () => {
+      noteSessionCatalogEntryRead(sessionEntries);
+      return entriesForCatalog();
+    },
+  };
   return {
     sessionEntries,
     freeze: () => {
@@ -279,6 +300,14 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
       }
     },
     entryForSession,
+    sourceKeyForSession: (session) => catalogSourceKeys.get(session) ?? session.sessionKey,
+    canReadAccess: (sessionKey, profileMatches) => {
+      const entry = entryForSession(sessionKey);
+      return Boolean(
+        entry &&
+        canReadSessionAccess(params.cfg, canonicalKeyForSession(sessionKey), entry, profileMatches),
+      );
+    },
     isMember: (sessionKey, profileId) => {
       const target = params.projection.sharingTarget({
         key: sessionKey,
@@ -343,6 +372,12 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
         }
       }
       const projected = freezeJsonSnapshot(snapshot);
+      for (let index = 0; index < projected.sessions.length; index++) {
+        const sourceKey = host.sessions[index]?.sessionKey;
+        if (sourceKey) {
+          catalogSourceKeys.set(projected.sessions[index]!, sourceKey);
+        }
+      }
       if (!hosts) {
         hosts = new Map();
         projectedHosts.set(params.projection, hosts);

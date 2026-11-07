@@ -27,6 +27,7 @@ import {
   createSessionRowCreatorIndex,
   indexSessionRow,
 } from "./session-row-projection-identities.js";
+import * as projectionLifetime from "./session-row-projection-lifetime.js";
 import * as rowReads from "./session-row-projection-materialize.js";
 import {
   createSessionRowPublication,
@@ -708,7 +709,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       records.snapshot(describe(query), metadata.current, options),
     dispose,
   };
-  return projection;
+  return projectionLifetime.activateSessionRowProjection(projection);
 }
 
 export type SessionRowProjection = Awaited<ReturnType<typeof createSessionRowProjection>>;

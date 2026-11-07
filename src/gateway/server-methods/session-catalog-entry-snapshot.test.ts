@@ -61,6 +61,7 @@ describe("session catalog entry snapshots", () => {
       allowProcessHomeFallback: false,
       client: null,
       context: { getRuntimeConfig: () => ({}) },
+      isCurrent: () => true,
     });
     expect(result).toEqual({
       ok: true,

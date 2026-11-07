@@ -51,6 +51,7 @@ import type { SessionTranscriptWriteLockAccessorContext } from "./session-access
 import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
+import { withNativeSessionSourceEffects } from "./session-source-effects.js";
 import { readTranscriptAppendPostimage } from "./session-transcript-append-postimage.js";
 import { withTranscriptLockSettlement } from "./session-transcript-lock-settlement.js";
 import { assertLegacyTranscriptPreparation } from "./session-transcript-preparation.js";
@@ -301,32 +302,33 @@ async function runNativeTranscriptWriteLock<T>(
           const snapshotState = transcriptSnapshot;
           let nextSnapshotState = snapshotState;
           runOpenClawAgentWriteTransaction(
-            (writeDatabase) => {
-              assertLockedTranscriptWriteAllowed(writeDatabase, resolved, fencedScope);
-              const options = prepare?.(writeDatabase) ?? requested;
-              const snapshotStillCurrent =
-                snapshotState?.kind === "current"
-                  ? isSqliteTranscriptSnapshotUnchanged(
-                      writeDatabase,
-                      resolved.sessionId,
-                      snapshotState.rows,
-                    )
-                  : false;
-              result = appendTranscriptMessageInTransaction(
-                writeDatabase,
-                resolved,
-                options,
-              )?.result;
-              if (snapshotState?.kind === "current") {
-                nextSnapshotState = snapshotStillCurrent
-                  ? {
-                      kind: "current",
-                      rows: readTranscriptEventRows(writeDatabase, resolved.sessionId),
-                    }
-                  : { kind: "stale" };
-              }
-              assertLockedTranscriptWriteAllowed(writeDatabase, resolved, fencedScope);
-            },
+            (writeDatabase) =>
+              withNativeSessionSourceEffects(writeDatabase, () => {
+                assertLockedTranscriptWriteAllowed(writeDatabase, resolved, fencedScope);
+                const options = prepare?.(writeDatabase) ?? requested;
+                const snapshotStillCurrent =
+                  snapshotState?.kind === "current"
+                    ? isSqliteTranscriptSnapshotUnchanged(
+                        writeDatabase,
+                        resolved.sessionId,
+                        snapshotState.rows,
+                      )
+                    : false;
+                result = appendTranscriptMessageInTransaction(
+                  writeDatabase,
+                  resolved,
+                  options,
+                )?.result;
+                if (snapshotState?.kind === "current") {
+                  nextSnapshotState = snapshotStillCurrent
+                    ? {
+                        kind: "current",
+                        rows: readTranscriptEventRows(writeDatabase, resolved.sessionId),
+                      }
+                    : { kind: "stale" };
+                }
+                assertLockedTranscriptWriteAllowed(writeDatabase, resolved, fencedScope);
+              }),
             databaseOptions,
             { operationLabel: "session.transcript.locked-append" },
           );
@@ -344,30 +346,31 @@ async function runNativeTranscriptWriteLock<T>(
           let lifecycleRevision: string | undefined;
           let messageSeq: number | undefined;
           runOpenClawAgentWriteTransaction(
-            (writeDatabase) => {
-              lifecycleRevision = assertLockedTranscriptWriteAllowed(
-                writeDatabase,
-                resolved,
-                fencedScope,
-              )?.lifecycleRevision;
-              const options = prepare?.(writeDatabase) ?? requested;
-              const appended = appendTranscriptMessageInTransaction(
-                writeDatabase,
-                resolved,
-                options,
-              );
-              result = appended?.result;
-              if (result) {
-                rememberCommittedTranscriptMessageSequencesInTransaction(
+            (writeDatabase) =>
+              withNativeSessionSourceEffects(writeDatabase, () => {
+                lifecycleRevision = assertLockedTranscriptWriteAllowed(
                   writeDatabase,
-                  resolved.sessionId,
-                  [result],
-                  readTranscriptAppendPostimage(appended),
+                  resolved,
+                  fencedScope,
+                )?.lifecycleRevision;
+                const options = prepare?.(writeDatabase) ?? requested;
+                const appended = appendTranscriptMessageInTransaction(
+                  writeDatabase,
+                  resolved,
+                  options,
                 );
-                messageSeq = readCommittedTranscriptMessageSequence(result);
-              }
-              assertLockedTranscriptWriteAllowed(writeDatabase, resolved, fencedScope);
-            },
+                result = appended?.result;
+                if (result) {
+                  rememberCommittedTranscriptMessageSequencesInTransaction(
+                    writeDatabase,
+                    resolved.sessionId,
+                    [result],
+                    readTranscriptAppendPostimage(appended),
+                  );
+                  messageSeq = readCommittedTranscriptMessageSequence(result);
+                }
+                assertLockedTranscriptWriteAllowed(writeDatabase, resolved, fencedScope);
+              }),
             databaseOptions,
             { operationLabel: "session.transcript.locked-sequenced-append" },
           );

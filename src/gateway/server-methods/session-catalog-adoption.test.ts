@@ -4,7 +4,11 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
-import { catalogProvider as provider } from "./session-catalog.fixtures.test-support.js";
+import {
+  catalogProvider as provider,
+  catalogHost,
+  catalogSession,
+} from "./session-catalog.fixtures.test-support.js";
 import {
   hoisted,
   resetSessionCatalogTestState,
@@ -22,7 +26,14 @@ it("settles the upstream link and adopted event before responding", async ({ sig
       marker: { turnId: "turn-1" },
     },
   }));
-  hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("codex", { continueSession }) }];
+  hoisted.activeRegistry.sessionCatalogs = [
+    {
+      provider: provider("codex", {
+        continueSession,
+        list: async () => [catalogHost({ sessions: [catalogSession("thread-1")] })],
+      }),
+    },
+  ];
   const linking = createDeferred();
   const releaseLink = createDeferred();
   hoisted.upsertSessionUpstreamLink.mockImplementationOnce(async () => {

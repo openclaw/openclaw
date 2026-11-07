@@ -52,6 +52,7 @@ import {
   type PreparedSessionSourceAuthority,
   type SessionSourceValidation,
 } from "./session-source-authority.js";
+import { captureSessionSourceEffectAssertion } from "./session-source-effects.js";
 import { retainSessionTranscriptWorkerPublication } from "./session-transcript-authority.js";
 import type { SessionTranscriptAuthorityReceipt } from "./session-transcript-authority.types.js";
 import { collectSessionEntryLookupKeys, normalizeStoreSessionKey } from "./store-entry.js";
@@ -395,6 +396,7 @@ export async function runSessionEntryWorkerOperation<
     fileIdentity: AgentDatabaseExecutionFileIdentity,
   ): Result | Promise<Result>;
 }): Promise<Result> {
+  const assertEffectCurrent = captureSessionSourceEffectAssertion(params.assertCurrent);
   let publication: ReturnType<typeof retainSessionEntryWorkerPublication> | undefined;
   let transcriptPublication:
     | ReturnType<typeof retainSessionTranscriptWorkerPublication>
@@ -429,10 +431,10 @@ export async function runSessionEntryWorkerOperation<
   return withSessionEntryWorker(
     params.database,
     params.databaseIdentity,
-    params.assertCurrent,
+    assertEffectCurrent,
     async (execution, source, context) => {
       await execution.prepare(source);
-      params.assertCurrent();
+      assertEffectCurrent();
       params.assertPrepared?.();
       const identity = execution.fileIdentity;
       if (!identity) {
@@ -442,6 +444,7 @@ export async function runSessionEntryWorkerOperation<
         agentId: params.agentId,
         storePath: params.database.path,
         databaseIdentity: identity.physicalIdentity,
+        sourceAssertion: assertEffectCurrent,
       });
       transcriptPublication = retainSessionTranscriptWorkerPublication({
         agentId: params.agentId,
@@ -501,6 +504,7 @@ export async function runSessionEntryWorkerOperation<
                   committed?.publication,
                   unknown,
                   transcriptChanges,
+                  Boolean(committed),
                 );
                 if (committed) {
                   publishedResult = {

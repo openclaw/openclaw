@@ -20,6 +20,7 @@ import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { recordSessionStateEventAsync } from "../../sessions/session-state-events.js";
 import { upsertSessionUpstreamLinkAsync } from "../../sessions/session-upstream-links.js";
 import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
+import { requireSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { respondError } from "./response.js";
 import {
@@ -38,7 +39,10 @@ import {
 } from "./session-catalog-provider-access.js";
 import { readAuthorizedSessionCatalog } from "./session-catalog-read.js";
 import { catalogError } from "./session-catalog-result.js";
-import { resolveSessionCatalogThreadVisibility } from "./session-catalog-visibility.js";
+import {
+  resolveSessionCatalogThreadVisibility,
+  isSessionCatalogThreadVisibilityCurrent,
+} from "./session-catalog-visibility.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
@@ -92,7 +96,10 @@ function respondCatalogError(error: unknown, respond: RespondFn): void {
 async function authorizeSessionCatalogThread(
   access: "read" | "mutate",
   provider: SessionCatalogProvider,
-  options: Pick<GatewayRequestHandlerOptions, "client" | "context" | "respond"> & {
+  options: Pick<
+    GatewayRequestHandlerOptions,
+    "client" | "context" | "respond" | "hasCurrentClientAuthority" | "signal"
+  > & {
     params: SessionCatalogLocator & { agentId?: string };
   },
 ) {
@@ -121,7 +128,57 @@ async function authorizeSessionCatalogThread(
     threadId: request.threadId,
   });
   if (sourceVisibility) {
-    return { agentId, allowProcessHomeFallback: allowHomeFallback, sourceVisibility };
+    const captured = {
+      ...sourceVisibility,
+      ...(sourceVisibility.source
+        ? {
+            source: {
+              ...sourceVisibility.source,
+              entry: structuredClone(sourceVisibility.source.entry),
+            },
+          }
+        : {}),
+    };
+    const projection = requireSessionRowProjection(context);
+    const unboundSnapshot =
+      !sourceVisibility.source &&
+      !provider.audience &&
+      sourceVisibility.visibility.kind === "unrestricted" &&
+      !sourceVisibility.visibility.isAdmin
+        ? {
+            projection,
+            sharingRevision: projection.sharingRevision,
+            selectionRevision: projection.state.revision,
+          }
+        : undefined;
+    const isCurrent = () =>
+      !options.signal?.aborted &&
+      options.hasCurrentClientAuthority?.() !== false &&
+      isSessionCatalogThreadVisibilityCurrent({
+        captured,
+        unboundSnapshot,
+        audience: provider.audience,
+        client,
+        context,
+        fallbackAgentId: agentId,
+      });
+    const isAuthorityCurrent = () =>
+      !options.signal?.aborted &&
+      options.hasCurrentClientAuthority?.() !== false &&
+      isSessionCatalogThreadVisibilityCurrent({
+        captured,
+        audience: provider.audience,
+        client,
+        context,
+        fallbackAgentId: agentId,
+      });
+    return {
+      agentId,
+      allowProcessHomeFallback: allowHomeFallback,
+      sourceVisibility,
+      isCurrent,
+      isAuthorityCurrent,
+    };
   }
   respondError(
     respond,
@@ -160,6 +217,14 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
             }
           },
         });
+        if (!authorization.isCurrent()) {
+          respondError(
+            options.respond,
+            ErrorCodes.FORBIDDEN,
+            "session catalog thread is not visible to this caller",
+          );
+          return;
+        }
         if (result.ok) {
           options.respond(true, result.sessionKey ? { sessionKey: result.sessionKey } : null);
         } else {
@@ -192,6 +257,14 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
           client,
           context,
         });
+        if (!authorization.isCurrent()) {
+          respondError(
+            respond,
+            ErrorCodes.FORBIDDEN,
+            "session catalog thread is not visible to this caller",
+          );
+          return;
+        }
         if (!result.ok) {
           respond(false, undefined, result.error);
           return;
