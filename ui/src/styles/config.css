@@ -175,6 +175,11 @@
   padding-top: 0;
 }
 
+/* Keep Setup from painting above its final position while form sections append. */
+.config-content > .settings-page[aria-busy="true"] + .settings-page {
+  visibility: hidden;
+}
+
 .config-content-callout .callout {
   display: flex;
   align-items: center;
@@ -617,11 +622,6 @@
 .settings-accent-swatch__reset svg {
   width: 15px;
   height: 15px;
-}
-
-.config-accordion-group__icon svg {
-  width: 16px;
-  height: 16px;
 }
 
 @media (forced-colors: active) {

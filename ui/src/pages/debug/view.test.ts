@@ -349,10 +349,10 @@ it.each(["reconnecting", "offline"] as const)("disables refresh while %s", async
   expect(h.refreshButton().disabled).toBe(true);
   const text = normalizedText(h.query(".settings-section"));
   if (phase === "offline") {
-    expect(text).toContain("Offline");
-    expect(text).toContain("Connect to the Gateway to refresh diagnostics.");
+    expect(text).toContain("Disconnected");
+    expect(text).toContain("Reconnect to refresh diagnostics.");
   } else {
-    expect(text).not.toContain("Offline");
+    expect(text).not.toContain("Disconnected");
   }
 });
 

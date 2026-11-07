@@ -17,6 +17,10 @@ import {
   getRemoteControlUiIngressContext,
   assertRemoteControlUiIngressCurrent,
 } from "./ingress-attribution.js";
+import type { ControlUiRootState } from "./server-control-ui-root.js";
+
+const CONTROL_UI_ASSETS_MISSING_MESSAGE =
+  "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.";
 
 const CONTROL_UI_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
 const CONTROL_UI_HTML_COMPRESSION_CACHE_MAX_ENTRIES = 4;
@@ -296,6 +300,22 @@ function cachedCompressedControlUiHtml(
   );
   pruneMapToMaxSize(controlUiHtmlCompressionCache, CONTROL_UI_HTML_COMPRESSION_CACHE_MAX_ENTRIES);
   return compression;
+}
+
+export function respondControlUiAssetsUnavailable(res: ServerResponse, root?: ControlUiRootState) {
+  const message =
+    root?.kind === "preparing"
+      ? "Control UI assets are being prepared. Try again shortly."
+      : root?.kind === "failed"
+        ? "Control UI assets could not be prepared. Check the Gateway logs or run `openclaw doctor --fix`."
+        : root?.kind === "invalid" && root.path
+          ? `Control UI assets not found at ${root.path}. Build them with \`pnpm ui:build\` (auto-installs UI deps), or update gateway.controlUi.root.`
+          : CONTROL_UI_ASSETS_MISSING_MESSAGE;
+  if (root?.kind === "preparing") {
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Retry-After", "1");
+  }
+  respondPlainText(res, 503, message);
 }
 
 export function respondControlUiNotAcceptable(res: ServerResponse) {

@@ -295,7 +295,8 @@
   vertical-align: middle;
 }
 
-.chat-text :where(th:last-child, td:last-child) {
+.chat-text :where(th:last-child),
+.chat-text :where(td:last-child) {
   border-right: none;
 }
 
@@ -303,7 +304,8 @@
   border-bottom: none;
 }
 
-.chat-text :where(th:first-child, td:first-child) {
+.chat-text :where(th:first-child),
+.chat-text :where(td:first-child) {
   min-width: 8rem;
   overflow-wrap: normal;
   word-break: normal;
@@ -513,12 +515,14 @@
   }
 }
 
-:is(.chat-text, .chat-thinking) {
+.chat-text,
+.chat-thinking {
   --chat-markdown-indent: var(--space-6);
   --chat-markdown-marker-gap: var(--space-2);
 }
 
-:is(.chat-text, .chat-thinking) :where(ul, ol) {
+:is(.chat-text, .chat-thinking) :where(ul),
+:is(.chat-text, .chat-thinking) :where(ol) {
   padding-inline-start: var(--chat-markdown-indent);
 }
 
@@ -637,45 +641,14 @@
   }
 }
 
+/* Drawn by the shared checkbox (styles/checkbox.css); this only places it on
+   the item's first line. */
 :is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox) {
-  appearance: none;
   position: absolute;
   inset-block-start: calc((1lh - var(--space-4)) / 2);
   inset-inline-start: 0;
-  inline-size: var(--space-4);
-  block-size: var(--space-4);
   margin: 0;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--input);
   opacity: 1;
-}
-
-:is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox:checked) {
-  border-color: var(--primary);
-  background: var(--primary);
-  color: var(--primary-foreground);
-}
-
-:is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox:checked)::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: currentColor;
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m3 8 3 3 7-7'/%3E%3C/svg%3E")
-    center / 13px no-repeat;
-}
-
-@media (forced-colors: active) {
-  :is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox) {
-    appearance: auto;
-    background: none;
-    border: initial;
-  }
-
-  :is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox:checked)::after {
-    content: none;
-  }
 }
 
 :is(.chat-text, .chat-thinking) :where(details[open] > summary) {
@@ -725,6 +698,10 @@
 
 .chat-text :where(.markdown-link-favicon.is-loaded) {
   visibility: visible;
+}
+
+.chat-text :where(.markdown-link-favicon[data-link-favicon-state="failed"]) {
+  display: none;
 }
 
 .chat-text :where(a:has(> .markdown-link-favicon.is-loaded)) {
@@ -1404,33 +1381,31 @@
 }
 
 /* renderBody is shared by normal bubbles and expanded tool output. */
-:is(.chat-bubble, .chat-tool-msg-body, .chat-message-avatar-anchor) {
-  > :is(
-    .chat-message-images,
-    .chat-assistant-attachments,
-    .chat-assistant-attachment-card,
-    .chat-pairing-qr-notices,
-    .chat-thinking,
-    .chat-tool-card__widget-host,
-    .chat-text,
-    .chat-message-disclosure,
-    .chat-message-avatar-anchor,
-    .chat-tools-inline
-  ) {
+.chat-bubble,
+.chat-tool-msg-body,
+.chat-message-avatar-anchor {
+  > .chat-message-images,
+  > .chat-assistant-attachments,
+  > .chat-assistant-attachment-card,
+  > .chat-pairing-qr-notices,
+  > .chat-thinking,
+  > .chat-tool-card__widget-host,
+  > .chat-text,
+  > .chat-message-disclosure,
+  > .chat-message-avatar-anchor,
+  > .chat-tools-inline {
     margin-block: 0;
 
-    + :is(
-      .chat-message-images,
-      .chat-assistant-attachments,
-      .chat-assistant-attachment-card,
-      .chat-pairing-qr-notices,
-      .chat-thinking,
-      .chat-tool-card__widget-host,
-      .chat-text,
-      .chat-message-disclosure,
-      .chat-message-avatar-anchor,
-      .chat-tools-inline
-    ) {
+    + .chat-message-images,
+    + .chat-assistant-attachments,
+    + .chat-assistant-attachment-card,
+    + .chat-pairing-qr-notices,
+    + .chat-thinking,
+    + .chat-tool-card__widget-host,
+    + .chat-text,
+    + .chat-message-disclosure,
+    + .chat-message-avatar-anchor,
+    + .chat-tools-inline {
       margin-block-start: var(--chat-block-gap);
     }
   }
@@ -1466,4 +1441,25 @@
 /* Sticky insets start inside the transcript's top padding. */
 .chat-thread .code-block-wrapper--long :is(.code-block-copy, .code-block-wrap) {
   top: calc(4px - var(--chat-thread-padding-top));
+}
+
+.markdown-template-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--bg-accent);
+  color: var(--text-strong);
+  font-weight: 600;
+  text-decoration: none;
+  vertical-align: baseline;
+}
+.markdown-template-link::before {
+  content: "◇";
+  color: var(--accent);
+  font-size: 0.9em;
+}
+.markdown-template-link:hover {
+  background: var(--bg-hover);
 }

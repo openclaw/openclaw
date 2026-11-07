@@ -122,7 +122,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     } catch {
       if (isCurrentPanel(generation, scope)) {
         showToast({
-          message: `${t("lazyView.errorTitle")}. ${t("lazyView.staleSubtitle")}`,
+          message: `${t("lazyView.errorTitle")} ${t("lazyView.staleSubtitle")}`,
           severity: "error",
         });
       }

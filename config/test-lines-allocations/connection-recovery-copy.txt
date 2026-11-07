@@ -1,0 +1,2 @@
+# Preserve destination-origin confirmation assertions and existing status-copy coverage in the connection recovery pass.
+6

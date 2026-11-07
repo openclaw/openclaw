@@ -51,7 +51,7 @@ export async function admitLocalWorkspaceSourcePaths(params: {
 /** Ignore changes are source edits, not authority to enroll canonical-only bytes. */
 export async function selectLocalWorkspaceCanonicalPaths(params: {
   root: string;
-  admittedPaths: string;
+  admittedPaths?: readonly string[];
   // Reuse authoritative host inputs read earlier in this operation.
   preparedPaths?: ReadonlySet<string>;
   baselinePaths?: ReadonlySet<string>;
@@ -71,8 +71,10 @@ export async function selectLocalWorkspaceCanonicalPaths(params: {
     params.assertCurrent();
     // Only the host owns this index; the guest has independent Git metadata. A
     // host can deliberately admit a new path with git add, even if it is ignored.
-    const admitted = parseLocalWorkspaceSourcePaths(params.admittedPaths);
-    paths = new Set<string>([...admitted, ...decodeLocalWorkspaceGitPaths(listed)]);
+    paths = new Set(params.admittedPaths);
+    for (const entryPath of decodeLocalWorkspaceGitPaths(listed)) {
+      paths.add(entryPath);
+    }
   }
   if (params.baselinePaths) {
     for (const entryPath of params.baselinePaths) {
@@ -103,7 +105,7 @@ export async function prepareLocalWorkspaceBuildInputs(params: {
     worktree.removedAt === undefined
       ? await selectLocalWorkspaceCanonicalPaths({
           root: worktree.path,
-          admittedPaths: projection.source_paths_json,
+          admittedPaths: admitted,
           signal,
           assertCurrent,
         })
@@ -123,11 +125,18 @@ export async function prepareLocalWorkspaceBuildInputs(params: {
       paths.add(entryPath);
     }
   }
-  const known = new Set(admitted);
-  const added = [...retained].filter((entryPath) => !known.has(entryPath));
   // Keep acquired input custody when later recovery no longer has the checkout or archive.
-  if (added.length) {
-    await params.retainSourcePaths(JSON.stringify([...admitted, ...added]));
+  if (retained.size) {
+    const admittedCount = admitted.length;
+    const known = new Set(admitted);
+    for (const entryPath of retained) {
+      if (!known.has(entryPath)) {
+        admitted.push(entryPath);
+      }
+    }
+    if (admitted.length > admittedCount) {
+      await params.retainSourcePaths(JSON.stringify(admitted));
+    }
   }
   return {
     paths,

@@ -53,7 +53,7 @@ import { createRestartResumeSummary } from "./session-restart-resume-log.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 
 const GATEWAY_RESTART_RESUME_TEXT =
-  "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.";
+  "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue. Child runs do not resume independently. Inspect their saved work; send a fresh instruction to the same retained child session when appropriate. A stopped execution is not a yielded pause, and restarting it does not transfer workspace or publication ownership.";
 const BACKGROUND_EXEC_STOPPED_TEXT =
   "Background exec processes were stopped; rerun them if still needed.";
 // Old shutdown bumped updatedAt, but abandoned cycles can survive for weeks. Limit adoption
@@ -450,8 +450,7 @@ export async function resumeMarkedSessions(params: RestartResumeParams): Promise
       const agentIds = listConfiguredSessionStoreAgentIds(context.getRuntimeConfig());
       const prepared = await Promise.allSettled(
         agentIds.flatMap(
-          (agentId) =>
-            preparation.waitForAgentPreparation(agentId, { signal, forWrite: true }) ?? [],
+          (agentId) => preparation.waitForAgentPreparation(agentId, { signal }) ?? [],
         ),
       );
       if (
@@ -608,6 +607,7 @@ async function resumeRestartStore(
             agentId,
             sessionKey,
             sessionId: entry.sessionId,
+            preserveRecordedSource: true,
             assertCurrent: () => signal.throwIfAborted(),
           });
           admissionStage = "target";

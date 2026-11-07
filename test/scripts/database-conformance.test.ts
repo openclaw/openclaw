@@ -8,7 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 let runner: string;
-const engineFiles = ["unit.test.ts", "nested/integration.test.ts"];
+const engineFiles = ["unit.test.ts", "nested/integration.test.ts", "support.ts", "ignored.spec.ts"];
 
 beforeAll(() => {
   const scripts = path.join(tempDirs.make("database-conformance-"), "scripts");
@@ -21,10 +21,10 @@ beforeAll(() => {
   mkdirSync(path.join(scripts, "lib"), { recursive: true });
   runner = path.join(scripts, "test-database-conformance.mjs");
   copyFileSync("scripts/test-database-conformance.mjs", runner);
-  copyFileSync(
-    "scripts/lib/postgres-conformance-shards.mts",
-    path.join(scripts, "lib/postgres-conformance-shards.mts"),
-  );
+  for (const name of ["postgres-conformance-shards.mts", "changed-path-facts.mjs"]) {
+    copyFileSync(`scripts/lib/${name}`, path.join(scripts, "lib", name));
+  }
+  write("../package.json", JSON.stringify({ type: "module" }));
   write(
     "../config/postgres-conformance-timings.json",
     JSON.stringify({
@@ -85,10 +85,23 @@ describe("PostgreSQL conformance shards", () => {
 
   it("partitions the full target inventory without loss or overlap and forwards test options", () => {
     const full = targets([]);
-    expect(full).toContain("src/infra/update-managed-service-handoff-engine.test.ts");
+    expect(full).toEqual(
+      expect.arrayContaining([
+        "src/infra/exec-approvals-native.test.ts",
+        "src/infra/client-credential-update.test.ts",
+        "src/infra/update-managed-service-handoff-engine.test.ts",
+      ]),
+    );
+    expect(full.filter((file) => file.startsWith("src/infra/database-engine/"))).toEqual([
+      "src/infra/database-engine/nested/integration.test.ts",
+      "src/infra/database-engine/unit.test.ts",
+    ]);
     const shards = [1, 2, 3].map((index) => targets(["--shard", `${index}/3`]));
     expect(shards.flat().toSorted()).toEqual(full.toSorted());
     expect(new Set(shards.flat()).size).toBe(full.length);
+    for (const shard of shards) {
+      expect(shard).toEqual(full.filter((target) => shard.includes(target)));
+    }
     const firstShard = shards[0]!;
     const options = ["--maxWorkers=1"];
     expect(targets(["--shard", "1/3", "--", ...options])).toEqual([...firstShard, ...options]);

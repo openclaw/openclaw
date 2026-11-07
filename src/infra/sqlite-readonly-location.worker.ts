@@ -42,9 +42,11 @@ import {
   SQLITE_READONLY_WORKER_MAX_BUFFER,
   SQLITE_INSPECTION_CONTENTION_PREFIX,
   SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX,
+  SQLITE_SNAPSHOT_CAPACITY_PREFIX,
   isSqliteSnapshotStagingMode,
   type SqliteReadOnlyWorkerResult,
 } from "./sqlite-readonly-worker-protocol.js";
+import { isSqliteSnapshotCapacityError } from "./sqlite-snapshot-capacity-error.js";
 import { beginSqliteSnapshotRetirement } from "./sqlite-snapshot-retirement.js";
 import {
   createSqliteSnapshotStagingTokenSync,
@@ -77,6 +79,8 @@ async function inspect(
       mode !== "staged-sync" &&
       mode !== "staged-async" &&
       mode !== "metadata" &&
+      mode !== "backup-engine" &&
+      mode !== "backup-engine-preserving" &&
       mode !== "consolidated" &&
       mode !== "task-delivery-recovery" &&
       !isSqliteSnapshotStagingMode(mode)) ||
@@ -88,6 +92,13 @@ async function inspect(
     };
   }
   try {
+    if (mode === "backup-engine" || mode === "backup-engine-preserving") {
+      const { readBackupEngineInProcess } = await import("./database-engine/physical-store.js");
+      return {
+        ok: true,
+        engine: await readBackupEngineInProcess(pathname, mode === "backup-engine-preserving"),
+      };
+    }
     if (mode === "staging-sweep") {
       const { reclaimSqliteSnapshotsInProcess } = await import("./sqlite-snapshot-reclamation.js");
       return { ok: true, reclamation: await reclaimSqliteSnapshotsInProcess(pathname) };
@@ -228,6 +239,7 @@ async function inspect(
       (mode === "staging-create" || mode === "staging-create-legacy") &&
       isPrivateDirectoryCreationRefused(error);
     const prefix =
+      (isSqliteSnapshotCapacityError(error) ? SQLITE_SNAPSHOT_CAPACITY_PREFIX : "") +
       (contention ? SQLITE_INSPECTION_CONTENTION_PREFIX : "") +
       (allocationRefused ? SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX : "");
     return {

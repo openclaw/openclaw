@@ -75,7 +75,7 @@ export async function runSessionNavigationAction<TRouteId extends string>(
           }),
         );
       if (!handled) {
-        showToast({ message: t("sessionsView.splitUnavailable") });
+        showToast({ severity: "error", message: t("sessionsView.splitUnavailable") });
       }
       return;
     }
@@ -99,7 +99,7 @@ export async function runSessionNavigationAction<TRouteId extends string>(
         copied = await copyToClipboard(params.session.sessionId ?? "");
       }
       showToast({
-        severity: copied ? undefined : "error",
+        severity: copied ? "success" : "error",
         message: t(copied ? "common.copied" : "common.copyFailed"),
       });
       return;
@@ -134,7 +134,7 @@ export async function runSessionNavigationAction<TRouteId extends string>(
     if (copyLink) {
       const copied = await copyToClipboard(href);
       showToast({
-        severity: copied ? undefined : "error",
+        severity: copied ? "success" : "error",
         message: t(copied ? "common.copied" : "common.copyFailed"),
       });
       return;
@@ -147,7 +147,7 @@ export async function runSessionNavigationAction<TRouteId extends string>(
     if (opened) {
       opened.location.replace(href);
     } else {
-      showToast({ message: t("sessionsView.openWindowBlocked") });
+      showToast({ severity: "error", message: t("sessionsView.openWindowBlocked") });
     }
   } catch (error) {
     showToast({ severity: "error", message: formatUiError(error) });

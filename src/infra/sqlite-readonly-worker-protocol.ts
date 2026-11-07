@@ -3,12 +3,14 @@ import { toUSVString } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { PreservedOrphanTaskDelivery } from "../state/openclaw-state-db-task-delivery-recovery-preservation.js";
+import type { BackupEngine } from "./database-engine/types.js";
 import { markPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
 import type { SqlitePrivateSnapshotFamily } from "./sqlite-readonly-location.types.js";
 import type {
   SqliteReadOnlyOperationCommand,
   SqliteReadOnlyOperationResult,
 } from "./sqlite-readonly-operation-types.js";
+import { SqliteSnapshotCapacityError } from "./sqlite-snapshot-capacity-error.js";
 import type { SqliteSnapshotReclamation } from "./sqlite-snapshot-reclamation.js";
 import { readDatabaseFileIdentity, type DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 
@@ -17,6 +19,8 @@ export const SQLITE_READONLY_WORKER_MAX_BUFFER = 1024 * 1024;
 
 export type SqliteReadOnlyWorkerMode =
   | "sync"
+  | "backup-engine"
+  | "backup-engine-preserving"
   | "private-fork"
   | "content-version"
   | "file-generation"
@@ -45,6 +49,7 @@ export function isSqliteSnapshotStagingMode(mode: unknown): boolean {
 }
 
 export type SqliteReadOnlyWorkerResult =
+  | { ok: true; engine: BackupEngine }
   | { ok: true; reclamation: SqliteSnapshotReclamation }
   | { ok: true; location: string }
   | { ok: true; contentVersion: string }
@@ -59,6 +64,7 @@ export class SqliteReadOnlyInspectionContentionError extends Error {}
 export const SQLITE_INSPECTION_CONTENTION_PREFIX = "Retryable SQLite inspection contention: ";
 export const SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX =
   "SQLite snapshot directory creation refused: ";
+export const SQLITE_SNAPSHOT_CAPACITY_PREFIX = "SQLite snapshot capacity unavailable: ";
 
 export type SqliteAuthProfileRows = { store: unknown; state: unknown; cacheable: boolean };
 export type SqliteAuthProfileReadOptions = {
@@ -149,6 +155,7 @@ export type SqliteReadOnlyWorkerOutput =
     }
   | { kind: "launch-failed"; error: Error };
 export type SqliteReadOnlyWorkerValue =
+  | BackupEngine
   | SqliteSnapshotReclamation
   | string
   | SqliteAuthProfileRows
@@ -164,6 +171,13 @@ export function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteRea
     return false;
   }
   return (
+    (value.ok === true &&
+      "engine" in value &&
+      isRecord(value.engine) &&
+      (value.engine.engine === "sqlite" ||
+        (value.engine.engine === "postgres" &&
+          typeof value.engine.storeId === "string" &&
+          typeof value.engine.namespace === "string"))) ||
     (value.ok === true &&
       "reclamation" in value &&
       isRecord(value.reclamation) &&
@@ -223,6 +237,10 @@ function parseSqliteReadOnlyWorkerResult(
 
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
+  mode: "backup-engine" | "backup-engine-preserving",
+): BackupEngine;
+export function readSqliteReadOnlyWorkerValue(
+  params: SqliteReadOnlyWorkerOutput,
   mode: "task-delivery-recovery",
 ): PreservedOrphanTaskDelivery;
 export function readSqliteReadOnlyWorkerValue(
@@ -260,12 +278,19 @@ export function readSqliteReadOnlyWorkerValue(
     throw error;
   }
   if (params.status !== 0 || params.failure || !result.ok) {
-    const contention = !result.ok && result.message.startsWith(SQLITE_INSPECTION_CONTENTION_PREFIX);
-    const message = !result.ok
-      ? contention
-        ? result.message.slice(SQLITE_INSPECTION_CONTENTION_PREFIX.length)
+    const capacity =
+      !result.ok &&
+      (params.status === 0 || params.status === 1) &&
+      result.message.startsWith(SQLITE_SNAPSHOT_CAPACITY_PREFIX);
+    const failureMessage = !result.ok
+      ? capacity
+        ? result.message.slice(SQLITE_SNAPSHOT_CAPACITY_PREFIX.length)
         : result.message
       : (params.failure ?? `exited with code ${params.status}`);
+    const contention = !result.ok && failureMessage.startsWith(SQLITE_INSPECTION_CONTENTION_PREFIX);
+    const message = contention
+      ? failureMessage.slice(SQLITE_INSPECTION_CONTENTION_PREFIX.length)
+      : failureMessage;
     const allocationRefused =
       params.failure === undefined &&
       !result.ok &&
@@ -276,6 +301,9 @@ export function readSqliteReadOnlyWorkerValue(
       params.stderr,
       { cause: params.cause },
     );
+    if (capacity) {
+      throw new SqliteSnapshotCapacityError(error.message, { cause: params.cause });
+    }
     if (contention) {
       const failure = new SqliteReadOnlyInspectionContentionError(error.message);
       throw allocationRefused ? markPrivateDirectoryCreationRefused(failure) : failure;
@@ -297,6 +325,9 @@ export function readSqliteReadOnlyWorkerValue(
   }
   if (mode === "staging-sweep" && "reclamation" in result) {
     return result.reclamation;
+  }
+  if ((mode === "backup-engine" || mode === "backup-engine-preserving") && "engine" in result) {
+    return result.engine;
   }
   if (mode === "content-version" && "contentVersion" in result) {
     return result.contentVersion;

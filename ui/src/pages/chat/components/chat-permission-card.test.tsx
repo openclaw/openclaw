@@ -108,7 +108,7 @@ it("keeps a multi-permission request blocked until both the toggle and OS grants
     "screenRecording",
   ]);
   f.permissions(["accessibility", "notDetermined"], ["screenRecording", "notDetermined"]);
-  await f.resolve("Enable Computer Control", ["computerControl"]);
+  await f.resolve("Enable Computer control", ["computerControl"]);
   expect(
     f.view.getByText("Then grant the remaining permissions: Accessibility, Screen Recording."),
   ).toBeTruthy();
@@ -131,7 +131,7 @@ it("keeps a multi-permission request blocked until both the toggle and OS grants
   f.permissions(["accessibility", "granted"], ["screenRecording", "granted"]);
   f.view.getByRole("button", { name: "Try again" }).click();
   expect(f.retry).toHaveBeenCalledExactlyOnceWith(
-    "I granted Computer Control, Accessibility, Screen Recording, try again.",
+    "I granted Computer control, Accessibility, Screen Recording, try again.",
   );
 });
 

@@ -23,6 +23,32 @@ import { WebSocketServer, WebSocket } from "ws";
 // and OPENCLAW_IOS_CONNECTION_STATE_FIXTURE_URL via TEST_RUNNER_ to
 // OpenClawUITests/GatewayConnectionStateUITests/testIndependentConnectionAndDismissal.
 const connectionStateMode = process.argv.includes("--connection-state");
+// AgentWorkspacePaginationUITests uses --workspace-pagination and forwards
+// OPENCLAW_IOS_WORKSPACE_PAGINATION_URL plus OPENCLAW_IOS_LIVE_SETUP_CODE via TEST_RUNNER_.
+const workspacePaginationMode = process.argv.includes("--workspace-pagination");
+let workspacePageRejected = true;
+const workspacePageReads = [];
+const workspacePageWaiters = new Set();
+const workspaceEntries = Array.from({ length: 251 }, (_, i) => {
+  const name = i === 250 ? "Summary.md" : `File ${String(i + 1).padStart(3, "0")}.txt`;
+  return { name, path: name, kind: "file" };
+});
+function notifyWorkspacePageWaiters() {
+  for (const waiter of workspacePageWaiters) {
+    if (workspacePageReads.length >= waiter.count) {
+      waiter.res.end(JSON.stringify({ reads: workspacePageReads }));
+      workspacePageWaiters.delete(waiter);
+    }
+  }
+}
+// AgentWorkspaceFilesUITests uses --workspace-preview and forwards
+// OPENCLAW_IOS_WORKSPACE_FIXTURE_URL plus OPENCLAW_IOS_LIVE_SETUP_CODE via TEST_RUNNER_.
+const workspacePreviewMode = process.argv.includes("--workspace-preview");
+let workspacePreviewPhase = "missing";
+const workspacePreviewText = {
+  restored: "Restored project notes.",
+  updated: "Updated project notes.",
+};
 const port = Number(process.argv.find((arg) => arg.startsWith("--port="))?.slice(7) ?? 19876);
 if (!Number.isInteger(port) || port < 1024 || port > 65535) {
   throw new Error("Fixture port must be an unprivileged TCP port");
@@ -176,6 +202,10 @@ const methods = [
   "models.list",
   "sessions.preview",
   "chat.send",
+  ...(workspacePaginationMode ? ["agents.workspace.list", "agents.workspace.get"] : []),
+  ...(workspacePreviewMode && !workspacePaginationMode
+    ? ["agents.workspace.list", "agents.workspace.get"]
+    : []),
   ...(attachmentMode ? ["artifacts.download"] : []),
 ];
 
@@ -302,6 +332,34 @@ const server = createServer((req, res) => {
     return;
   }
   const url = new URL(req.url, "http://127.0.0.1");
+  if (workspacePreviewMode && url.pathname === "/workspace-preview") {
+    const phase = url.searchParams.get("phase");
+    if (req.method === "POST") {
+      if (
+        !["missing", "too-large", "unsupported", "unavailable", "restored", "updated"].includes(
+          phase,
+        )
+      ) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ error: "Unknown workspace preview phase" }));
+        return;
+      }
+      workspacePreviewPhase = phase;
+    }
+    res.end(JSON.stringify({ phase: workspacePreviewPhase, requests }));
+    return;
+  }
+
+  if (workspacePaginationMode && url.pathname === "/workspace-pagination") {
+    if (req.method === "POST") {
+      workspacePageRejected = url.searchParams.get("reject") !== "0";
+    }
+    const waiter = { res, count: Number(url.searchParams.get("reads") ?? 0) };
+    workspacePageWaiters.add(waiter);
+    res.once("close", () => workspacePageWaiters.delete(waiter));
+    notifyWorkspacePageWaiters();
+    return;
+  }
   if (attachmentMode && url.pathname === "/attachment-ready") {
     attachmentReadyWaiters.add(res);
     res.once("close", () => attachmentReadyWaiters.delete(res));
@@ -385,17 +443,18 @@ wss.on("connection", (ws) => {
       sessionKey: params.sessionKey,
       artifactId: params.artifactId,
       ...(guestModelPolicy ? { key: params.key } : {}),
+      ...(workspacePreviewMode ? { path: params.path, phase: workspacePreviewPhase } : {}),
     });
     notifyAttachmentReadyWaiters();
     const reply = (payload) =>
       ws.send(JSON.stringify({ type: "res", id: req.id, ok: true, payload }));
-    const fail = (message) =>
+    const fail = (message, details) =>
       ws.send(
         JSON.stringify({
           type: "res",
           id: req.id,
           ok: false,
-          error: { code: "INVALID_REQUEST", message },
+          error: { code: "INVALID_REQUEST", message, ...(details ? { details } : {}) },
         }),
       );
     console.log(JSON.stringify(requests.at(-1)));
@@ -413,6 +472,110 @@ wss.on("connection", (ws) => {
       return;
     }
     switch (req.method) {
+      case "agents.workspace.list": {
+        if (workspacePreviewMode) {
+          if (!workspacePreviewMode) {
+            fail(`Unsupported synthetic method: ${req.method}`);
+            break;
+          }
+          reply({
+            agentId: "main",
+            path: "",
+            totalEntries: 1,
+            offset: 0,
+            entries: [
+              { path: "Project notes.txt", name: "Project notes.txt", kind: "file", size: 24 },
+            ],
+          });
+          break;
+        }
+        if (!workspacePaginationMode) {
+          fail(`Unsupported synthetic method: ${req.method}`);
+          break;
+        }
+        const offset = params.offset ?? 0;
+        const rows = workspaceEntries.slice(offset, offset + (params.limit ?? 250));
+        const failed = offset > 0 && workspacePageRejected;
+        workspacePageReads.push({
+          offset,
+          limit: params.limit ?? null,
+          count: failed ? 0 : rows.length,
+          paths: failed ? [] : rows.map((entry) => entry.path),
+          failed,
+        });
+        if (failed) {
+          fail("Synthetic workspace page unavailable");
+        } else {
+          reply({
+            agentId: "main",
+            path: "",
+            offset,
+            entries: rows,
+            totalEntries: workspaceEntries.length,
+          });
+        }
+        notifyWorkspacePageWaiters();
+        break;
+      }
+      case "agents.workspace.get":
+        if (workspacePreviewMode) {
+          if (
+            !workspacePreviewMode ||
+            params.agentId !== "main" ||
+            params.path !== "Project notes.txt"
+          ) {
+            fail("Unexpected synthetic workspace read");
+            break;
+          }
+          const types = {
+            missing: "workspace_file_not_found",
+            "too-large": "workspace_file_too_large",
+            unsupported: "workspace_file_unsupported",
+          };
+          if (types[workspacePreviewPhase]) {
+            fail("Synthetic workspace diagnostic", {
+              type: types[workspacePreviewPhase],
+              path: params.path,
+            });
+          } else if (workspacePreviewPhase === "unavailable") {
+            fail("Private synthetic server diagnostic: /synthetic/internal/read-failure");
+          } else {
+            const content = workspacePreviewText[workspacePreviewPhase];
+            reply({
+              agentId: "main",
+              file: {
+                path: params.path,
+                name: params.path,
+                size: Buffer.byteLength(content),
+                updatedAtMs: created,
+                mimeType: "text/plain",
+                encoding: "utf8",
+                content,
+              },
+            });
+          }
+          break;
+        }
+        if (
+          !workspacePaginationMode ||
+          !workspaceEntries.some((entry) => entry.path === params.path)
+        ) {
+          fail(`Unsupported synthetic method: ${req.method}`);
+          break;
+        }
+        reply({
+          agentId: "main",
+          file: {
+            name: params.path,
+            path: params.path,
+            size: 26,
+            updatedAtMs: created,
+            mimeType: "text/plain",
+            encoding: "utf8",
+            content: "Synthetic directory file.",
+          },
+        });
+        break;
       case "connect": {
         ws.proofRole = params.role;
         ws.proofScopes = guestModelPolicy
@@ -727,6 +890,10 @@ server.listen(port, "127.0.0.1", () =>
 );
 function stop() {
   clearInterval(tick);
+  for (const waiter of workspacePageWaiters) {
+    waiter.res.destroy();
+  }
+  workspacePageWaiters.clear();
   for (const waiter of connectionWaiters) {
     waiter.res.destroy();
   }

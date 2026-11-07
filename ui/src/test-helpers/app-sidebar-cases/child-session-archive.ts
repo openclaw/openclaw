@@ -89,7 +89,7 @@ describe("AppSidebar child session archives", () => {
         query('[value="toggle-archived"]')!.dispatchEvent(new Event("click", { bubbles: true }));
       }
       const actions = await waitForConfirmDialogActions();
-      expect(document.body.textContent).toContain('"Parent task" has 1 directly nested session.');
+      expect(document.body.textContent).toContain("“Parent task” has 1 directly nested session.");
       expect(actions.textContent).toContain("Archive only this session");
       expect(actions.textContent).toContain("Archive all (2)");
       answerConfirmDialog(actions, "cancel");

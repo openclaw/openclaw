@@ -17,9 +17,9 @@ import { ProcessesPanelData } from "../processes-panel-data.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "../session-cache.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { ChatDetailsBackground } from "./chat-details-background.tsx";
-import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
 import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
+import "../../../styles/chat/details-desktop.css";
 import { ChatDetailsPeopleSummary } from "./chat-details-people.tsx";
 import { ChatDetailsProcesses } from "./chat-details-processes.tsx";
 import { ChatDetailsProgress } from "./chat-details-progress.tsx";
@@ -226,8 +226,8 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
           );
           const people = () => session()?.expandedParticipants ?? session()?.participants ?? [];
           const count = () => session()?.participantCount ?? people().length;
-          const partialPeople = () =>
-            session()?.participantCount === undefined || count() > people().length;
+          // The Gateway omits the count when the owner-excluded participant list is empty.
+          const partialPeople = () => count() > people().length;
           const desktopPeople = createMemo(() => {
             const union = new Map<string, SessionParticipant>();
             const actors = [owner(), session()?.createdActor];
@@ -575,6 +575,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                     showProcesses={false}
                   />
                   <ChatDetailsProcesses
+                    details={props.props!}
                     processes={processes}
                     presented={active()}
                     expanded={sectionExpanded("processes")}
@@ -645,18 +646,19 @@ export type ChatDetailsDesktopCompositionProps = Omit<Props, "desktop"> & {
   /** The native host keeps ownership of top-layer menus and Undo/focus behavior. */
   progressMenuRef?: (menu: MenuHandle) => void;
   onHideProgress?: () => void;
+  onReady?: () => void;
 };
 
 /** Desktop entry point: one scroll body and the native Progress owner after Outputs. */
 export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositionProps) {
-  const [scrollport, setScrollport] = createSignal<HTMLDivElement>();
+  onSettled(() => props.onReady?.());
   return (
-    <ChatDetailsDesktopBody presented={props.presented} onScrollPortRef={setScrollport}>
+    <>
       <ChatDetailsSession
         props={props.props}
         presented={props.presented}
         dismissed={props.dismissed}
-        scrollport={scrollport()}
+        scrollport={props.scrollport}
         desktop
       />
       <Show when={props.props?.progressCard}>
@@ -675,6 +677,6 @@ export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositi
       </Show>
       {/* Keep the automation slot after Progress while its inventory revalidates. */}
       <DetailsAutomations props={props.props} presented={props.presented} desktop />
-    </ChatDetailsDesktopBody>
+    </>
   );
 }

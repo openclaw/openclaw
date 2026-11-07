@@ -110,10 +110,12 @@ function detectWithProvider(
   options: {
     enablePluginInConfig?: typeof import("../plugins/enable.js").enablePluginInConfig;
     choices?: ProviderAuthChoiceMetadata[];
+    detectAvailability?: () => Promise<boolean>;
+    providerId?: string;
   } = {},
 ) {
   const provider: ProviderPlugin = {
-    id: "fixture",
+    id: options.providerId ?? "fixture",
     pluginId: "fixture",
     label: "Fixture service",
     auth: [
@@ -122,7 +124,11 @@ function detectWithProvider(
         label: "Local model",
         kind: "custom",
         run: async () => ({ profiles: [] }),
-        appGuidedSetup: { detect, prepare: async () => null },
+        appGuidedSetup: {
+          detect,
+          prepare: async () => null,
+          ...(options.detectAvailability ? { detectAvailability: options.detectAvailability } : {}),
+        },
       },
     ],
   };
@@ -196,6 +202,35 @@ describe("setup inference discovery concurrency", () => {
       "fixture/local-model",
     ]);
     expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
+  });
+
+  it("reports a running provider without an eligible model instead of recommending its install", async () => {
+    const detection = await detectWithProvider(async () => null, [], {
+      choices: [{ ...choice, providerId: "ollama", choiceLabel: "Ollama" }],
+      detectAvailability: async () => true,
+      providerId: "ollama",
+    });
+
+    expect(detection.candidates.map(({ modelRef }) => modelRef)).toEqual(["fixture/saved-model"]);
+    expect(detection.unavailableCandidates).toEqual([
+      expect.objectContaining({
+        label: "Ollama",
+        detail: "server is running",
+        reason: expect.stringContaining("No eligible model is loaded"),
+      }),
+    ]);
+    expect(detection.recommendedInstalls.map(({ id }) => id)).not.toContain("ollama");
+  });
+
+  it("keeps recommending a provider whose service is not running", async () => {
+    const detection = await detectWithProvider(async () => null, [], {
+      choices: [{ ...choice, providerId: "ollama", choiceLabel: "Ollama" }],
+      detectAvailability: async () => false,
+      providerId: "ollama",
+    });
+
+    expect(detection.unavailableCandidates).toEqual([]);
+    expect(detection.recommendedInstalls.map(({ id }) => id)).toContain("ollama");
   });
 
   it("reports a provider discovery failure without waiting for CLI detection", async () => {

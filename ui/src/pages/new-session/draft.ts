@@ -44,6 +44,7 @@ export class NewSessionDraft {
       );
     const showBlocked = (changed = false) =>
       showToast({
+        severity: "error",
         actionPrimary: true,
         message: t(changed ? "chat.privateDraftReload.changed" : "chat.privateDraftReload.blocked"),
         actionLabel: t("chat.privateDraftReload.review"),

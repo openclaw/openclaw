@@ -53,7 +53,12 @@ const outcomes = [
   ["not-due", "This automation is not due yet.", false, "cronNotice"],
   ["already-running", "This automation is already running.", false, "cronNotice"],
   ["stopped", "The scheduler is stopped.", false, "cronError"],
-  ["invalid-spec", "This automation has an invalid schedule or payload.", true, "cronError"],
+  [
+    "invalid-spec",
+    "Couldn’t start this automation. Check its schedule and instructions.",
+    true,
+    "cronError",
+  ],
 ] as const;
 it.each(outcomes)("reports %s with history refresh", async (reason, message, refresh, field) => {
   const request = vi.fn(async (method: string) => {

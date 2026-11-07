@@ -76,7 +76,7 @@ it("offloads ranked retrieval and session-only metadata together", async () => {
     minScore: 0,
   });
   // Reconcile before seeding synthetic rows, which have no source transcripts.
-  const manager = await fixture.getFreshManager(cfg, "cli");
+  const manager = await fixture.getFreshManager(cfg, "default");
   await manager.sync({ reason: "test" });
   expect(manager.status().fts?.available).toBe(true);
   const db = (manager as unknown as { db: DatabaseSync }).db;
