@@ -6,6 +6,7 @@ import { handleWhatsAppAction, whatsAppActionRuntime } from "./action-runtime.js
 
 const originalWhatsAppActionRuntime = { ...whatsAppActionRuntime };
 const sendReactionWhatsApp = vi.fn(async () => undefined);
+const editMessageWhatsApp = vi.fn(async () => undefined);
 
 const enabledConfig = {
   channels: { whatsapp: { actions: { reactions: true } } },
@@ -50,6 +51,7 @@ describe("handleWhatsAppAction", () => {
     vi.clearAllMocks();
     Object.assign(whatsAppActionRuntime, originalWhatsAppActionRuntime, {
       sendReactionWhatsApp,
+      editMessageWhatsApp,
     });
   });
 
@@ -209,6 +211,34 @@ describe("handleWhatsAppAction", () => {
       messageId: "msg1",
       emoji: "✅",
       accountId: "work",
+    });
+  });
+
+  describe("edit", () => {
+    const editCfg = { channels: { whatsapp: { allowFrom: ["*"] } } } as OpenClawConfig;
+    const edit = { action: "edit", chatJid: "+123", messageId: "sent-1", message: "updated" };
+
+    it.each([
+      ["chatJid", { chatJid: undefined }, "chatJid required"],
+      ["messageId", { messageId: undefined }, "messageId required"],
+      ["a blank messageId", { messageId: "   " }, "messageId required"],
+      ["text", { message: undefined }, "message required"],
+    ])("requires %s", async (_name, override, error) => {
+      await expect(handleWhatsAppAction({ ...edit, ...override }, editCfg)).rejects.toMatchObject({
+        name: "ToolInputError",
+        message: error,
+      });
+      expect(editMessageWhatsApp).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["gate off", { channels: { whatsapp: { actions: { editMessage: false } } } }],
+      ["WhatsApp unconfigured", {}],
+    ] as const)("is disabled with %s", async (_name, cfg) => {
+      await expect(handleWhatsAppAction(edit, cfg as OpenClawConfig)).rejects.toThrow(
+        "WhatsApp message editing is disabled.",
+      );
+      expect(editMessageWhatsApp).not.toHaveBeenCalled();
     });
   });
 });

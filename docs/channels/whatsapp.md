@@ -577,7 +577,8 @@ opt-in status surface described above.
 ## Tools, actions, and config writes
 
 - Agent tool support includes the WhatsApp reaction action (`react`).
-- Action gates: `channels.whatsapp.actions.reactions`, `channels.whatsapp.actions.polls` (existing actions default to `true`), `channels.whatsapp.actions.calls` (default `false`, see MeowCaller above).
+- Action gates: `channels.whatsapp.actions.reactions`, `channels.whatsapp.actions.polls`, `channels.whatsapp.actions.editMessage` (existing actions default to `true`), `channels.whatsapp.actions.calls` (default `false`, see MeowCaller above).
+- `edit` changes a message this account sent. WhatsApp allows this for about 15 minutes. The result reports `submitted: true, confirmed: false`, because WhatsApp can still refuse the edit after the call returns.
 - Channel-initiated config writes are enabled by default; disable via `channels.whatsapp.configWrites: false`.
 
 ## Troubleshooting

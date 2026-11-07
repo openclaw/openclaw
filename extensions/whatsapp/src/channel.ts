@@ -45,6 +45,12 @@ import { createWhatsAppPluginBase } from "./shared.js";
 import { collectWhatsAppStatusIssues } from "./status-issues.js";
 
 const loadWhatsAppDirectoryConfig = createLazyRuntimeModule(() => import("./directory-config.js"));
+const GATEWAY_ACTIONS: ReadonlySet<ChannelMessageActionName> = new Set([
+  "react",
+  "edit",
+  "upload-file",
+]);
+
 const loadWhatsAppChannelReactAction = createLazyRuntimeModule(
   () => import("./channel-react-action.js"),
 );
@@ -242,12 +248,15 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           if (gate("polls")) {
             actions.push("poll");
           }
+          if (gate("editMessage")) {
+            actions.push("edit");
+          }
           actions.push("upload-file");
           return { actions };
         },
-        supportsAction: ({ action }) => action === "react" || action === "upload-file",
-        resolveExecutionMode: ({ action }) =>
-          action === "react" || action === "upload-file" ? "gateway" : "local",
+        supportsAction: ({ action }) => GATEWAY_ACTIONS.has(action),
+        resolveExecutionMode: ({ action }) => (GATEWAY_ACTIONS.has(action) ? "gateway" : "local"),
+        writeAuthorityActions: ["edit"],
         handleAction: async (params) =>
           await (await loadWhatsAppChannelReactAction()).handleWhatsAppMessageAction(params),
       },

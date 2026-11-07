@@ -1,0 +1,2 @@
+# Covers the host-issued caller guard from message.action to the queued socket, allowFrom and account isolation, cache-key safety, and config compatibility for WhatsApp edit of own messages.
+1161
