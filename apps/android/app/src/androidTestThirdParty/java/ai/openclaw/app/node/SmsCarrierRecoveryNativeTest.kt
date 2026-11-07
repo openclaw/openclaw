@@ -43,15 +43,42 @@ class SmsCarrierRecoveryNativeTest {
   private fun messages(): List<String> {
     val marker = requireNotNull(args.getString("fixtureMarker"))
     require(marker.matches(Regex("[a-z0-9]{1,20}")))
-    return listOf("$marker short", "$marker " + "a".repeat(651), "$marker " + "日".repeat(134))
+    return if (args.getString("shortControl") == "true") {
+      listOf("$marker short")
+    } else {
+      listOf("$marker short", "$marker " + "a".repeat(651), "$marker " + "日".repeat(134))
+    }
   }
+
+  private suspend fun submitMessages() {
+    val recipient = requireNotNull(args.getString("recipientPort")).toInt()
+    // Emulator 37's modem simulator routes only these modem endpoints, not console ports.
+    require(recipient in 6520..6527)
+    val handler = SmsHandler(SmsManager(context))
+    for (message in messages()) {
+      val result =
+        handler.handleSmsSend(
+          buildJsonObject {
+            put("to", JsonPrimitive(recipient.toString()))
+            put("message", JsonPrimitive(message))
+          }.toString(),
+        )
+      assertTrue(result.error?.message, result.ok)
+    }
+  }
+
+  @Test
+  fun ordinaryShortMessageControl() =
+    runBlocking {
+      requireFixture()
+      require(args.getString("shortControl") == "true")
+      submitMessages()
+    }
 
   @Test
   fun deniedFrameworkDividerStillSubmitsCompleteMessages() =
     runBlocking {
       requireFixture()
-      val recipient = requireNotNull(args.getString("recipientPort")).toInt()
-      require(recipient in 5554..5682 && recipient % 2 == 0)
       assertEquals(PackageManager.PERMISSION_DENIED, context.checkSelfPermission(Manifest.permission.READ_PHONE_STATE))
       assertEquals(PackageManager.PERMISSION_GRANTED, context.checkSelfPermission(Manifest.permission.SEND_SMS))
 
@@ -80,17 +107,7 @@ class SmsCarrierRecoveryNativeTest {
         } catch (expected: SecurityException) {
           assertTrue(expected.message.orEmpty().contains("getGroupIdLevel1"))
         }
-        val handler = SmsHandler(SmsManager(context))
-        for (message in messages()) {
-          val result =
-            handler.handleSmsSend(
-              buildJsonObject {
-                put("to", JsonPrimitive(recipient.toString()))
-                put("message", JsonPrimitive(message))
-              }.toString(),
-            )
-          assertTrue(result.error?.message, result.ok)
-        }
+        submitMessages()
         instrumentation.sendStatus(
           0,
           Bundle().apply {
@@ -137,7 +154,7 @@ class SmsCarrierRecoveryNativeTest {
         instrumentation.sendStatus(
           0,
           Bundle().apply {
-            putString("smsProof", "recipient readback matched all three complete synthetic messages")
+            putString("smsProof", "recipient readback matched ${expected.size} complete synthetic messages")
           },
         )
       } finally {
