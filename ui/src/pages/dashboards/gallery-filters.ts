@@ -2,7 +2,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 
 export type DashboardGalleryFilters = {
   query: string;
-  ownerId: string;
+  ownerIds: string[];
   sort: "updated" | "title";
 };
 

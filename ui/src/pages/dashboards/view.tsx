@@ -39,8 +39,14 @@ import {
 } from "../../lib/sessions/route-navigation.ts";
 import { HoverMarquee } from "../../lib/solid/hover-marquee.tsx";
 import "../../styles/dashboards.css";
-import { DashboardFilterPopover } from "./dashboard-filter-popover.tsx";
 import { DashboardPreview } from "./dashboard-preview.tsx";
+import {
+  DashboardAuthorChip,
+  DashboardAuthorFilter,
+  DashboardSearch,
+  authorDisplayName,
+  type DashboardAuthorOption,
+} from "./dashboard-tools.tsx";
 import type { DashboardGalleryFilters, DashboardGalleryHandlers } from "./gallery-filters.ts";
 
 registerDashboardsEnglish();
@@ -67,12 +73,22 @@ function dashboardAuthor(row: DashboardRow, fallbackAgentId: string) {
   return { id, label, avatar };
 }
 
+function dashboardAuthors(data: DashboardsRouteData): DashboardAuthorOption[] {
+  const authors = new Map<string, DashboardAuthorOption>();
+  for (const row of data.result?.sessions ?? []) {
+    const author = dashboardAuthor(row, data.fallbackAgentId);
+    const known = authors.get(author.id);
+    authors.set(author.id, known ? { ...known, count: known.count + 1 } : { ...author, count: 1 });
+  }
+  return [...authors.values()];
+}
+
 function visibleDashboardRows(data: DashboardsRouteData, filters: DashboardGalleryFilters) {
   const query = filters.query.trim().toLocaleLowerCase().normalize("NFC");
   return (data.result?.sessions ?? [])
     .filter((row) => {
       const author = dashboardAuthor(row, data.fallbackAgentId);
-      if (filters.ownerId && author.id !== filters.ownerId) {
+      if (filters.ownerIds.length > 0 && !filters.ownerIds.includes(author.id)) {
         return false;
       }
       return (
@@ -135,10 +151,7 @@ function DashboardGrid(props: {
         : null,
     );
     const author = () => dashboardAuthor(childProps.row, props.data.fallbackAgentId);
-    const authorName = () =>
-      author().id === props.gatewaySnapshot?.selfUser?.id
-        ? t("dashboardsPage.you")
-        : author().label;
+    const authorName = () => authorDisplayName(author(), props.gatewaySnapshot?.selfUser?.id);
     const title = createMemo(() => resolveSessionDisplayName(childProps.row.key, childProps.row));
     let card!: HTMLElement;
     const Content = () => (
@@ -451,16 +464,7 @@ function DashboardList(props: {
   gatewaySnapshot?: ApplicationGatewaySnapshot;
 }) {
   const rows = createMemo(() => props.data.result?.sessions ?? []);
-  const owners = createMemo(() =>
-    Array.from(
-      new Map(
-        rows().map((row) => {
-          const author = dashboardAuthor(row, props.data.fallbackAgentId);
-          return [author.id, author] as const;
-        }),
-      ).values(),
-    ).toSorted((left, right) => left.label.localeCompare(right.label)),
-  );
+  const authors = createMemo(() => dashboardAuthors(props.data));
   const visibleRows = createMemo(() => visibleDashboardRows(props.data, props.filters));
   return (
     <Show when={!(props.data.error && !props.data.result)}>
@@ -474,61 +478,12 @@ function DashboardList(props: {
         }
       >
         <section class="dashboards-gallery" aria-label={t("tabs.dashboards")}>
-          <div class="dashboards-toolbar">
-            <label class="dashboards-search">
-              <span aria-hidden="true">
-                <Icon name="search" />
-              </span>
-              <span class="sr-only">{t("dashboardsPage.searchLabel")}</span>
-              <input
-                type="search"
-                value={props.filters.query}
-                placeholder={t("dashboardsPage.searchPlaceholder")}
-                onInput={(event) =>
-                  props.handlers.onFilterChange({ query: event.currentTarget.value })
-                }
-              />
-            </label>
-            <DashboardFilterPopover
-              owners={owners()}
-              filters={props.filters}
-              handlers={props.handlers}
-            />
-            <label class="dashboards-select">
-              <span>{t("dashboardsPage.authorFilter")}</span>
-              <select
-                class="settings-select"
-                value={props.filters.ownerId}
-                onChange={(event) =>
-                  props.handlers.onFilterChange({ ownerId: event.currentTarget.value })
-                }
-              >
-                <option value="">{t("dashboardsPage.allAuthors")}</option>
-                <For each={owners()} keyed={(owner) => owner.id}>
-                  {(owner) => <option value={owner().id}>{owner().label}</option>}
-                </For>
-              </select>
-            </label>
-            <label class="dashboards-select">
-              <span>{t("dashboardsPage.sortLabel")}</span>
-              <select
-                class="settings-select"
-                value={props.filters.sort}
-                onChange={(event) => {
-                  const sort = event.currentTarget.value;
-                  if (sort === "updated" || sort === "title") {
-                    props.handlers.onFilterChange({ sort });
-                  }
-                }}
-              >
-                <option value="updated">{t("dashboardsPage.sortUpdated")}</option>
-                <option value="title">{t("dashboardsPage.sortTitle")}</option>
-              </select>
-            </label>
-          </div>
-          <div class="dashboards-results" role="status">
-            {t("dashboardsPage.resultCount", { count: String(visibleRows().length) })}
-          </div>
+          <DashboardAuthorChip
+            authors={authors()}
+            selfId={props.gatewaySnapshot?.selfUser?.id}
+            filters={props.filters}
+            handlers={props.handlers}
+          />
           <Show
             when={visibleRows().length > 0}
             fallback={
@@ -561,21 +516,6 @@ function DashboardGallerySkeleton() {
         {t("common.loading")}
       </span>
       <div class="dashboards-loading" aria-hidden="true" inert>
-        <div class="dashboards-toolbar">
-          <div class="dashboards-search skeleton dashboards-loading__control" />
-          <div class="dashboards-filter skeleton dashboards-loading__filter" />
-          <For each={[0, 1]}>
-            {() => (
-              <div class="dashboards-select dashboards-loading__select">
-                <div class="skeleton skeleton-line dashboards-loading__label" />
-                <div class="skeleton dashboards-loading__control" />
-              </div>
-            )}
-          </For>
-        </div>
-        <div class="dashboards-results">
-          <div class="skeleton skeleton-line dashboards-loading__label" />
-        </div>
         <div class="dashboards-grid">
           <For each={[0, 1, 2, 3, 4, 5]}>
             {() => (
@@ -619,11 +559,37 @@ export function DashboardsView(props: {
         docsUrl="https://docs.openclaw.ai/web/dashboards"
         class="dashboards-header"
         actions={
-          <Show when={props.data?.result}>
-            <div class="dashboards-header__count">
-              <strong>{props.data?.result?.sessions.length}</strong>
-              <span>{t("dashboardsPage.totalLabel")}</span>
-            </div>
+          <Show when={props.data?.result?.sessions.length ? props.data : undefined}>
+            {(data) => (
+              <div class="dashboards-tools">
+                <DashboardSearch
+                  query={props.filters.query}
+                  onQueryChange={(query) => props.handlers.onFilterChange({ query })}
+                />
+                <DashboardAuthorFilter
+                  authors={dashboardAuthors(data())}
+                  selfId={props.gatewaySnapshot?.selfUser?.id}
+                  filters={props.filters}
+                  handlers={props.handlers}
+                />
+                <label class="dashboards-select">
+                  <span class="sr-only">{t("dashboardsPage.sortLabel")}</span>
+                  <select
+                    class="settings-select"
+                    value={props.filters.sort}
+                    onChange={(event) => {
+                      const sort = event.currentTarget.value;
+                      if (sort === "updated" || sort === "title") {
+                        props.handlers.onFilterChange({ sort });
+                      }
+                    }}
+                  >
+                    <option value="updated">{t("dashboardsPage.sortUpdated")}</option>
+                    <option value="title">{t("dashboardsPage.sortTitle")}</option>
+                  </select>
+                </label>
+              </div>
+            )}
           </Show>
         }
       />
