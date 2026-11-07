@@ -359,6 +359,8 @@ it("reveals late active ancestry once per navigation without changing other disc
     rows: SidebarRecentSession[],
     selectedSessionKey: string | null = leaf.key,
   ) => treeProjection.project(projectionInput(rows, { selectedSessionKey }));
+  projectTree([leaf, unrelated]);
+  expect(treeProjection.children.selectedRootKey).toBeNull();
   projectTree([sessionRow(root.key), unrelated]);
   expect(treeProjection.children.isExpanded(root.key)).toBe(false);
   projectTree([root, unrelated]);
