@@ -679,10 +679,37 @@ a.dashboard-row__main:hover {
   }
 }
 
+/* Phone: page actions share the subtitle's line; an open search takes the row below. */
+@media (max-width: 768px) {
+  .content-header.hub-page-header.dashboards-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "title actions";
+    align-items: center;
+    column-gap: var(--space-2);
+  }
+  .content-header.hub-page-header.dashboards-header:has(.dashboards-search) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "title"
+      "actions";
+  }
+  .dashboards-header:has(.dashboards-search) .hub-page-header__actions {
+    justify-self: stretch;
+  }
+  .dashboards-header .dashboards-search {
+    flex: 1;
+    width: auto;
+  }
+  .dashboards-gallery {
+    padding-top: var(--space-4);
+  }
+}
+
 @media (max-width: 560px) {
   .dashboards-grid {
     grid-template-columns: minmax(0, 1fr);
   }
+  /* Title and meta sit close; rows breathe between each other. */
   .dashboard-row__main {
     grid-template-columns: 64px minmax(0, 1fr) auto;
     grid-template-areas:
@@ -690,10 +717,12 @@ a.dashboard-row__main:hover {
       "thumb author updated";
     row-gap: 2px;
     column-gap: var(--space-3);
-    height: 64px;
+    height: auto;
+    padding-block: var(--space-3);
   }
   .dashboard-row__thumb {
     grid-area: thumb;
+    align-self: center;
     width: 64px;
     height: 44px;
     padding: 4px 5px 0;
