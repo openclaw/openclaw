@@ -7,7 +7,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { brotliCompress, constants as zlibConstants } from "node:zlib";
-import { transformSync } from "esbuild";
 import { gzip } from "libdeflate";
 import {
   runnerImport,
@@ -665,6 +664,8 @@ function controlUiPrecompressedAssetsPlugin(): Plugin {
 }
 
 function compactControlUiDocument(html: string): string {
+  // Dev and preview share this config; only production builds need the minifier.
+  const { transformSync }: typeof import("esbuild") = require("esbuild");
   // Keep recovery self-contained when every external request fails. Compact only
   // inline scripts: Vite already minifies CSS; DOM and fallback copy stay intact.
   return html.replace(
