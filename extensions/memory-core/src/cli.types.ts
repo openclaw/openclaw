@@ -16,6 +16,11 @@ export type MemorySearchCommandOptions = MemoryCommandOptions & {
 
 export type MemoryResetCommandOptions = { agent?: string; yes?: boolean };
 
+export type MemoryDuplicatesCommandOptions = MemoryCommandOptions & {
+  maxGroups?: number;
+  minChars?: number;
+};
+
 export type MemoryForgetCommandOptions = MemoryCommandOptions & {
   session?: string[];
   hookSource?: string[];
