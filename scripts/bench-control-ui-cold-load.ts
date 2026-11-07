@@ -375,6 +375,7 @@ const { values } = parseArgs({
     "boot-route": { type: "string", default: "chat" },
     "cold-http-cache": { type: "boolean", default: false },
     coverage: { type: "boolean", default: false },
+    "coverage-after-ready-ms": { type: "string", default: "0" },
     "network-latency-ms": { type: "string" },
     "download-kbps": { type: "string" },
     "cpu-throttle": { type: "string" },
@@ -724,6 +725,14 @@ if (values["chat-dashboard-route"] && face !== "dashboard") {
   throw new Error("chat-dashboard-route requires the dashboard face");
 }
 const captureMs = Number(values["capture-ms"]);
+const coverageAfterReadyMs = Number(values["coverage-after-ready-ms"]);
+if (
+  !Number.isFinite(coverageAfterReadyMs) ||
+  coverageAfterReadyMs < 0 ||
+  (coverageAfterReadyMs > 0 && !values.coverage)
+) {
+  throw new Error("coverage-after-ready-ms requires coverage and a nonnegative duration");
+}
 const transcriptMessages =
   values["transcript-messages"] === undefined
     ? values["long-session"]
@@ -2722,6 +2731,29 @@ try {
       // Seeds are qualified above; best-effort live link prefetch can skip a reload.
       await page.evaluate(() => new Promise(requestAnimationFrame));
     }
+    if (values.coverage && coverageAfterReadyMs > 0) {
+      await page.waitForTimeout(coverageAfterReadyMs);
+    }
+    const coverageResources = values.coverage
+      ? await page.evaluate(() =>
+          performance.getEntriesByType("resource").flatMap((entry) => {
+            if (
+              !(entry instanceof PerformanceResourceTiming) ||
+              !/\.m?js$/u.test(new URL(entry.name).pathname)
+            ) {
+              return [];
+            }
+            return [
+              {
+                url: entry.name,
+                decodedBytes: entry.decodedBodySize,
+                encodedBytes: entry.encodedBodySize,
+                transferBytes: entry.transferSize,
+              },
+            ];
+          }),
+        )
+      : undefined;
     const coverage = values.coverage
       ? (await page.coverage.stopJSCoverage())
           .filter((entry) => controlUiScriptAssetUrl(entry.url, new URL("assets/", baseUrl)))
@@ -4092,6 +4124,7 @@ try {
       ...metrics,
       threadCpu,
       coverage,
+      coverageResources,
       javaScriptResources: summarizeJavaScriptResources(metrics.http.waterfall, coverage),
       trace: bootTrace,
       selectorStats,

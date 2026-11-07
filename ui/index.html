@@ -160,7 +160,8 @@
             var buildId = document.documentElement.getAttribute(
               "data-openclaw-control-ui-build-id",
             );
-            var version = buildId ? "?v=" + encodeURIComponent(buildId) : "";
+            // Keep the first-paint URL identical to app/public-assets.ts.
+            var version = buildId ? "?v=" + encodeURIComponent(buildId.slice(-64)) : "";
             var palette = document.createElement("link");
             palette.rel = "stylesheet";
             palette.setAttribute("blocking", "render");

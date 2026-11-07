@@ -21,6 +21,7 @@ export type SqliteReadOnlyWorkerMode =
   | "sync"
   | "backup-engine"
   | "backup-engine-preserving"
+  | "state-sqlite-populated"
   | "private-fork"
   | "content-version"
   | "file-generation"
@@ -50,6 +51,7 @@ export function isSqliteSnapshotStagingMode(mode: unknown): boolean {
 
 export type SqliteReadOnlyWorkerResult =
   | { ok: true; engine: BackupEngine }
+  | { ok: true; hasExistingData: boolean }
   | { ok: true; reclamation: SqliteSnapshotReclamation }
   | { ok: true; location: string }
   | { ok: true; contentVersion: string }
@@ -156,6 +158,7 @@ export type SqliteReadOnlyWorkerOutput =
   | { kind: "launch-failed"; error: Error };
 export type SqliteReadOnlyWorkerValue =
   | BackupEngine
+  | boolean
   | SqliteSnapshotReclamation
   | string
   | SqliteAuthProfileRows
@@ -200,6 +203,9 @@ export function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteRea
       [value.reclamation.removed, value.reclamation.bytes, value.reclamation.skipped].every(
         (count) => typeof count === "number" && Number.isFinite(count) && count >= 0,
       )) ||
+    (value.ok === true &&
+      "hasExistingData" in value &&
+      typeof value.hasExistingData === "boolean") ||
     (value.ok === true && "location" in value && typeof value.location === "string") ||
     (value.ok === true &&
       "contentVersion" in value &&
@@ -250,6 +256,10 @@ function parseSqliteReadOnlyWorkerResult(
   return message;
 }
 
+export function readSqliteReadOnlyWorkerValue(
+  params: SqliteReadOnlyWorkerOutput,
+  mode: "state-sqlite-populated",
+): boolean;
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
   mode: "backup-engine" | "backup-engine-preserving",
@@ -319,7 +329,9 @@ export function readSqliteReadOnlyWorkerValue(
     if (
       !result.ok &&
       result.errcode !== undefined &&
-      (mode === "backup-engine" || mode === "backup-engine-preserving") &&
+      (mode === "backup-engine" ||
+        mode === "backup-engine-preserving" ||
+        mode === "state-sqlite-populated") &&
       (params.status === 0 || params.status === 1)
     ) {
       Object.assign(error, { errcode: result.errcode });
@@ -351,6 +363,9 @@ export function readSqliteReadOnlyWorkerValue(
   }
   if ((mode === "backup-engine" || mode === "backup-engine-preserving") && "engine" in result) {
     return result.engine;
+  }
+  if (mode === "state-sqlite-populated" && "hasExistingData" in result) {
+    return result.hasExistingData;
   }
   if (mode === "content-version" && "contentVersion" in result) {
     return result.contentVersion;

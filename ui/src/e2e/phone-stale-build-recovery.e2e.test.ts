@@ -368,7 +368,7 @@ suite.define(() => {
         });
       }
       const installedArtifact = await observeCurrentArtifact();
-      expect(installedArtifact.buildId).not.toBeNull();
+      expect(installedArtifact.buildId).toMatch(/-[a-f0-9]{64}$/u);
       expect(installedArtifact).toMatchObject({
         bodyDisplay: "block",
         icon: { pathname: "/favicon.svg" },
@@ -381,7 +381,7 @@ suite.define(() => {
         installedArtifact.theme,
       ]) {
         expect(asset.url).not.toBeNull();
-        expect(asset.version).toBe(installedArtifact.buildId);
+        expect(asset.version).toBe(installedArtifact.buildId?.slice(-64));
       }
       const actions = page.getByRole("button", { name: "Actions for Main" });
       await actions.tap();
