@@ -310,12 +310,7 @@ export async function ensureLlamaCppModel(params: {
   let load = modelPromises.get(destination);
   if (!load) {
     const shared = (async () => {
-      // The shared in-flight population is keyed by destination only, so it is
-      // joined by every concurrent caller. It must not be bound to any single
-      // caller's abort signal: doing so would let one caller's cancellation
-      // reject the work for unrelated callers, or be silently ignored when a
-      // later joiner aborts. Callers race the shared work against their own
-      // signal below instead.
+      // Shared work outlives any caller; only each caller's wait is cancellable.
       const exists = await fsp
         .stat(destination)
         .then((stat) => stat.isFile())
@@ -352,10 +347,7 @@ export async function ensureLlamaCppModel(params: {
       return destination;
     })();
     modelPromises.set(destination, shared);
-    // Only the shared population settles this entry. A caller that aborts leaves
-    // the work running for the remaining joiners, so evicting it with that
-    // caller's wait would let a later caller start a duplicate multi-GB verify
-    // or download.
+    // Evict only on settlement so a cancelled waiter cannot start duplicate work.
     const release = () => {
       if (modelPromises.get(destination) === shared) {
         modelPromises.delete(destination);
