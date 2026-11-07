@@ -146,6 +146,20 @@ function gatewayModels(...models: ModelChoice[]) {
 }
 
 describe("models list published transport", () => {
+  it("surfaces the manual-selection permission and requests policy visibility", async () => {
+    vi.mocked(gateway.callGateway).mockResolvedValue({
+      models: [{ ...model, manualSelectionAllowed: false }],
+    });
+    await list({ all: true, json: true });
+    expectModelRows([
+      { key: "catalog-provider/Reader", available: true, manualSelectionAllowed: false },
+    ]);
+    const call = vi.mocked(gateway.callGateway).mock.calls.at(-1)?.[0] as {
+      caps?: string[];
+    };
+    expect(call.caps).toContain("model-selection-policy");
+  });
+
   it.each(["ready", "unavailable"] as const)(
     "reports configured ids missing from a %s listing without changing availability",
     async (status) => {
