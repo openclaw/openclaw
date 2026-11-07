@@ -882,7 +882,11 @@ Compare the emitted files of two adjacent builds with
 `node scripts/compare-control-ui-update-cache.ts --base-dir <build-A>
 --head-dir <build-B> --output <report.json>`. The report separates identical
 files, renamed files with only generated-reference changes, payload changes,
-and public-asset URL changes. Gzip and Brotli columns use emitted sidecars only
+and public-asset URL changes. Its reference graph includes emitted JavaScript,
+CSS, and preload-table references, with strongly connected components and the
+direct and transitive referrers of payload-changing files. This distinguishes a
+shared filename cascade from several independent source changes; source-map
+comments do not add graph edges. Gzip and Brotli columns use emitted sidecars only
 where the Gateway serves them. Full-cache and offline-inventory totals describe
 potential downloads after those inventories have been cached; browser timing
 runs below record what a particular visit actually requests.

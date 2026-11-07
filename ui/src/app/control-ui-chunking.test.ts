@@ -55,6 +55,8 @@ function buildFixture(
 describe("Control UI build chunking", () => {
   it("consolidates lazy page helpers while keeping validation behind the editor", async () => {
     const page = modulePath("../pages/config/config-page.tsx");
+    const mcpSchema = modulePath("../pages/config/mcp-schema.ts");
+    const memorySchema = modulePath("../pages/config/memory-schema.ts");
     const chat = modulePath("../pages/chat/chat-pane.tsx");
     const editor = modulePath("../components/config-form.render.tsx");
     const lightConsumer = modulePath("../pages/plugins/credential-presentation.tsx");
@@ -89,8 +91,10 @@ describe("Control UI build chunking", () => {
         [chat, "export const chat = 'chat';"],
         [
           page,
-          `import { analyze } from ${JSON.stringify(analyze)}; import { items } from ${JSON.stringify(items)}; import { header } from ${JSON.stringify(header)}; import { disclosure } from ${JSON.stringify(disclosure)}; import { selectRow } from ${JSON.stringify(selectRow)}; import { focus } from ${JSON.stringify(focus)}; import { progressive } from ${JSON.stringify(progressive)}; import { floatingHeader } from ${JSON.stringify(floatingHeader)}; export const render = () => analyze + items + header + disclosure + selectRow + focus + progressive + floatingHeader; export const edit = () => import(${JSON.stringify(editor)});`,
+          `import { analyze } from ${JSON.stringify(analyze)}; import { items } from ${JSON.stringify(items)}; import { header } from ${JSON.stringify(header)}; import { disclosure } from ${JSON.stringify(disclosure)}; import { selectRow } from ${JSON.stringify(selectRow)}; import { focus } from ${JSON.stringify(focus)}; import { progressive } from ${JSON.stringify(progressive)}; import { floatingHeader } from ${JSON.stringify(floatingHeader)}; import { mcpSchema } from ${JSON.stringify(mcpSchema)}; import { memorySchema } from ${JSON.stringify(memorySchema)}; export const render = () => analyze + items + header + disclosure + selectRow + focus + progressive + floatingHeader + mcpSchema + memorySchema; export const edit = () => import(${JSON.stringify(editor)});`,
         ],
+        [mcpSchema, "export const mcpSchema = 'MCP schema';"],
+        [memorySchema, "export const memorySchema = 'Memory schema';"],
         [
           analyze,
           `import { items } from ${JSON.stringify(items)}; import { shared } from ${JSON.stringify(shared)}; export const analyze = items + shared + 'analysis';`,
@@ -175,6 +179,8 @@ describe("Control UI build chunking", () => {
       expect(modules.every((id) => id in chunk.modules)).toBe(true);
     }
     const pageChunk = chunkFor(page);
+    expect(chunkFor(mcpSchema)).toBe(pageChunk);
+    expect(chunkFor(memorySchema)).toBe(pageChunk);
     const pageImports = reachable(pageChunk.fileName);
     const startupImports = reachable(chunks.find((chunk) => chunk.isEntry)!.fileName);
     const chatImports = reachable(chunkFor(chat).fileName);

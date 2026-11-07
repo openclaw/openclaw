@@ -1,5 +1,4 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, isPending, latest, lazy, Loading, Show } from "solid-js";
 import type { SkillStatusEntry } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -22,6 +21,7 @@ import "../../styles/plugins.css";
 import { groupSkills, type SkillGroup } from "../../lib/skills-grouping.ts";
 import { isSkillAvailable } from "../../lib/skills-shared.ts";
 import { SkillDiscovery } from "./discovery-view.tsx";
+import { SkillDialogBoundary } from "./skill-dialog-boundary.tsx";
 import { SkillRowStatus, verdictForSkill, verdictStatus } from "./skill-status.tsx";
 import type { SkillsProps, SkillsStatusFilter } from "./view-types.ts";
 
@@ -332,36 +332,5 @@ function SkillRow(props: { skill: SkillStatusEntry; view: SkillsProps }) {
         </Show>
       </div>
     </div>
-  );
-}
-
-function SkillDialogBoundary(props: { onClose: () => void; children: JSX.Element }) {
-  return (
-    <Errored
-      fallback={(error, reset) => (
-        <InlineAlert tone="danger" role="alert">
-          {formatUiError(error())}{" "}
-          <button class="btn" onClick={() => props.onClose()}>
-            {t("common.close")}
-          </button>{" "}
-          <button class="btn" onClick={reset}>
-            {t("common.retry")}
-          </button>
-        </InlineAlert>
-      )}
-    >
-      <Loading
-        fallback={
-          <p class="muted" role="status">
-            {t("common.loading")}{" "}
-            <button class="btn" onClick={() => props.onClose()}>
-              {t("common.close")}
-            </button>
-          </p>
-        }
-      >
-        {props.children}
-      </Loading>
-    </Errored>
   );
 }

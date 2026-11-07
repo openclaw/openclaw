@@ -1,2 +1,2 @@
-# Pin real first-visit asset counts and the shared chunk boundaries; cover lazy Skills reader opening.
-171
+# Pin first-visit assets and shared chunks; cover lazy Skills dialogs and Custodian greeting retention.
+250

@@ -88,6 +88,17 @@ export function controlUiStableChunkName(id: string): string | undefined {
   }
 
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/pages/custodian/custodian-surface.tsx":
+    case "ui/src/styles/custodian.css":
+    case "ui/src/styles/custodian-setup-card.css":
+    case "ui/src/styles/option-card.css":
+      // Keep the surface's existing stylesheet together when its transcript becomes lazy.
+      return "custodian-surface";
+    case "ui/src/pages/config/config-page.tsx":
+    case "ui/src/pages/config/mcp-schema.ts":
+    case "ui/src/pages/config/memory-schema.ts":
+      // The Config route host already imports both schemas on every visit.
+      return "config-page";
     case "ui/src/pages/plugins/catalog-grid.tsx":
     case "ui/src/pages/plugins/plugin-card.tsx":
       // Catalogs already load both; a lazy skill reader must not split their first visit.
