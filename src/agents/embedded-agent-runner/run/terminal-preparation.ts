@@ -305,6 +305,7 @@ export function prepareEmbeddedRunTerminal(input: {
         text: sanitizeUserFacingText(copy, { errorContext: true }),
         isError: true,
       };
+      setReplyPayloadMetadata(failurePayload, { terminalProviderError: true });
       if (runParams.sourceReplyDeliveryMode === "message_tool_only") {
         markReplyPayloadForSourceSuppressionDelivery(failurePayload);
       }
