@@ -8,7 +8,6 @@ import { createApplicationGatewaySnapshot } from "../test-helpers/application-co
 import { createRouteLoaderOptions } from "../test-helpers/route-loader-options.ts";
 import { page as devicesPage } from "./devices/route.ts";
 import { page as modelProvidersPage } from "./model-providers/route.ts";
-import { pages as pluginPages } from "./plugins/route.tsx";
 import { pages as skillPages } from "./skills/route.ts";
 import type { SkillsRouteData } from "./skills/view-types.ts";
 import { page as usagePage } from "./usage/route.tsx";
@@ -120,15 +119,4 @@ it("keeps skills provenance from before its async preload", async () => {
   expect(requestMethod).toHaveBeenCalledWith("skills.status", { agentId: "research" });
   expect(data).toMatchObject({ selectedAgentId: "research", selectionIntentRevision: 7 });
   expect(data.agents).toBe(agents);
-});
-
-it("captures plugins provenance without waiting for its inventory", async () => {
-  const requestMethod = vi.fn(async () => ({}));
-  const source = provenance(requestMethod);
-  const request = source.load(pluginPages[0]);
-
-  source.replace();
-  await request;
-
-  expect(requestMethod).not.toHaveBeenCalled();
 });

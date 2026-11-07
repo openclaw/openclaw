@@ -8,11 +8,8 @@ import {
   pluginSettingsIdFromPath,
   restoreBridgedRouteLocation,
 } from "../../app-route-paths.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 
 export type PluginsRouteData = {
-  gateway: ApplicationContext["gateway"];
-  gatewaySnapshot: ApplicationGatewaySnapshot;
   location: RouteLocation;
 };
 

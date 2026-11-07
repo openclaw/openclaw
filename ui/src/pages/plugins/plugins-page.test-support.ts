@@ -212,7 +212,10 @@ export function createPluginsRouteLocation(url = "/settings/plugins"): RouteLoca
   };
 }
 
-const routeInventories = new WeakMap<PluginsRouteData, PluginListResult>();
+const routeInventories = new WeakMap<
+  PluginsRouteData,
+  { client: GatewayBrowserClient; result: PluginListResult }
+>();
 const nextInventories = new WeakMap<GatewayBrowserClient, PluginListResult>();
 
 export function createPluginsRouteData(
@@ -220,9 +223,10 @@ export function createPluginsRouteData(
   result: PluginListResult | null = createResult(),
   location = createPluginsRouteLocation(),
 ): PluginsRouteData {
-  const data = { gateway, gatewaySnapshot: gateway.snapshot, location };
-  if (result) {
-    routeInventories.set(data, result);
+  const data = { location };
+  const client = gateway.snapshot.client;
+  if (client && result) {
+    routeInventories.set(data, { client, result });
   }
   return data;
 }
@@ -484,12 +488,11 @@ export async function mountPage(
     : "discovery",
 ): Promise<{ page: TestPluginsPage }> {
   function supplyInventory(data: PluginsRouteData | undefined) {
-    const client = data?.gatewaySnapshot.client;
-    const inventory = data && routeInventories.get(data);
-    if (client && inventory) {
-      nextInventories.set(client, inventory);
+    const fixture = data && routeInventories.get(data);
+    if (fixture) {
+      nextInventories.set(fixture.client, fixture.result);
     }
-    return () => client && nextInventories.delete(client);
+    return () => fixture && nextInventories.delete(fixture.client);
   }
   const clearInitialInventory = supplyInventory(routeData);
   const provider = createSolidApplicationContextProvider(context);

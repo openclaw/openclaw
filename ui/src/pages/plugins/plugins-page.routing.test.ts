@@ -429,11 +429,18 @@ it.each([
       "plugins.catalog.categories": () => ({ categories: [] }),
       "plugins.catalog.get": () => offered,
     });
-    const { page } = await mountRoute(
-      harness,
-      null,
-      detail ? "/plugins/ch_Y2FsZW5kYXI" : "/plugins",
+    const context = createContext(harness.gateway);
+    const loader = pages[0].loader!;
+    const routeData = await loader(
+      context,
+      createRouteLoaderOptions(
+        createPluginsRouteLocation(detail ? "/plugins/ch_Y2FsZW5kYXI" : "/plugins"),
+      ),
     );
+    if ("type" in routeData) {
+      throw new Error("Expected the discovery route to load");
+    }
+    const { page } = await mountPage(context, routeData);
     const install = () =>
       page.querySelector<HTMLButtonElement>(
         detail ? ".plugin-catalog-detail__install" : '[aria-label="Install Calendar"]',

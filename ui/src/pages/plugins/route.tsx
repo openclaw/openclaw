@@ -39,10 +39,7 @@ function definePluginsPage(routeId: "plugins" | "plugin-settings", surface: Plug
           )
           .catch(() => undefined);
       }
-      const gateway = context.gateway;
       return {
-        gateway,
-        gatewaySnapshot: gateway.snapshot,
         location,
       } satisfies PluginsRouteData;
     },
