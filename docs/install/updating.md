@@ -45,6 +45,14 @@ backup.
 
 ## Update implementation contract
 
+Explicit repair also settles version-2 triage/repair leases left in `closing`
+after their owners die, even without recovery metadata. Native triage still
+requires proof that its systemd scope is closed. Repair warns when reclaiming a
+lease; if an owner, descendant, or scope remains live or unverified, it fails with
+the retained lease's owner, version, phase, last activity, and recovery guidance.
+The repairing CLI must contain this fix; a downloaded update candidate cannot
+repair an older updater's blocked admission.
+
 Pre-update config copies publish through a temporary file and same-directory
 rename. An interrupted write preserves the previous `.pre-update` copy, and a
 later snapshot attempt can retry. Post-update recovery refuses malformed copies

@@ -177,6 +177,11 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     validChannel
       ? await prepareHandoffRepair()
       : null;
+  if (handoff) {
+    defaultRuntime.error(
+      "Warning: Reclaiming a dead managed handoff lease under exclusive repair ownership.",
+    );
+  }
   if (validChannel) {
     // Repair's claim now owns the installation; fresh admission would be refused.
     const settlement = await settlePendingPackageActivation(
