@@ -283,26 +283,41 @@ describe("runNodeDaemonInstall", () => {
     expect(installedPlan().env.OPENCLAW_WRAPPER).toBe(selected);
   });
 
-  it("installed OpenClaw ID service resumes the saved target without localhost flags", async () => {
-    const target = { kind: "openclaw-id" as const };
-    const config = { version: 1 as const, nodeId: "node-test", gateway: target };
-    mocks.loadNodeHostConfig.mockResolvedValue(config);
-    await runNodeDaemonInstall({ force: true });
-    const command = installedCommand();
-    const args = command.slice(command.indexOf("run") + 1);
-    const parser = new Command()
-      .option("--host <host>")
-      .option("--port <port>")
-      .option("--tls")
-      .option("--no-tls")
-      .allowUnknownOption();
-    parser.parse(args, { from: "user" });
-    expect(args).not.toContain("--host");
-    expect(args).not.toContain("--no-tls");
-    expect(resolveNodeGatewayOptions(parser.opts(), config, undefined, {}).gatewayTarget).toBe(
-      target,
-    );
-  });
+  it.each([undefined, "fixture-secret"])(
+    "installed OpenClaw ID service ignores Cloudflare env (secret=%s)",
+    async (secret) => {
+      vi.stubEnv("CF_ACCESS_CLIENT_ID", "fixture-client");
+      vi.stubEnv("CF_ACCESS_CLIENT_SECRET", secret);
+      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "fixture-token");
+      vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "fixture-password");
+      const target = { kind: "openclaw-id" as const };
+      const config = { version: 1 as const, nodeId: "node-test", gateway: target };
+      mocks.loadNodeHostConfig.mockResolvedValue(config);
+      await runNodeDaemonInstall({ force: true });
+      const command = installedCommand();
+      const args = command.slice(command.indexOf("run") + 1);
+      const parser = new Command()
+        .option("--host <host>")
+        .option("--port <port>")
+        .option("--tls")
+        .option("--no-tls")
+        .allowUnknownOption();
+      parser.parse(args, { from: "user" });
+      expect(args).not.toContain("--host");
+      expect(args).not.toContain("--no-tls");
+      const resumed = resolveNodeGatewayOptions(parser.opts(), config);
+      expect(resumed.gatewayTarget).toBe(target);
+      expect(resumed.cloudflareAccess).toBeUndefined();
+      for (const key of [
+        "CF_ACCESS_CLIENT_ID",
+        "CF_ACCESS_CLIENT_SECRET",
+        "OPENCLAW_GATEWAY_TOKEN",
+        "OPENCLAW_GATEWAY_PASSWORD",
+      ]) {
+        expect(installedPlan().environment?.[key]).toBeUndefined();
+      }
+    },
+  );
 
   it.each([false, true])("forwards saved TLS and command selection (all=%s)", async (all) => {
     await runNodeDaemonInstall({

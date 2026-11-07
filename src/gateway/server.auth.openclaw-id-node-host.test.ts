@@ -3,10 +3,11 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { Duplex } from "node:stream";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { parseUnixGatewayUrl } from "../../packages/gateway-client/src/unix-target.js";
-import { WebSocketServer } from "../../packages/gateway-client/src/websocket.js";
+import { WebSocketServer, type WebSocket } from "../../packages/gateway-client/src/websocket.js";
 import {
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
@@ -27,6 +28,7 @@ import { listDevicePairing } from "../infra/device-pairing.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import { createNodeHostGatewayCandidateConnection } from "../node-host/gateway-candidate-connection.js";
+import { runNodeStreamTransport } from "../node-host/node-stream-transport.js";
 import { withNodeWorkerTransferHttpRequest } from "../node-host/node-worker-transfer-http.js";
 import { startNodeTunnelTransport, loadNodeTunnelKey } from "../node-host/openclaw-id-transport.js";
 import { createWorkerConnection } from "../worker/worker-connection.js";
@@ -70,6 +72,9 @@ describe.skipIf(!hasBinding)("native OpenClaw ID node transport", () => {
     },
   };
   const transferPaths: string[] = [];
+  const attachments: Array<{ path: string; metadata: string }> = [];
+  const finiteReady = Promise.withResolvers<WebSocket>();
+  const finiteClosed = Promise.withResolvers<Buffer>();
 
   beforeAll(async () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), "oc-node-proof-"));
@@ -105,6 +110,26 @@ describe.skipIf(!hasBinding)("native OpenClaw ID node transport", () => {
     });
     workerServer = new WebSocketServer({ noServer: true });
     upstream.on("upgrade", (req, socket, head) => {
+      if (
+        req.url?.startsWith("/node-desktop/attach?") ||
+        req.url?.startsWith("/node-portal/attach?")
+      ) {
+        workerServer.handleUpgrade(req, socket, head, (peer) =>
+          peer.once("message", (data) => {
+            if (rawDataToString(data) === '{"finite":true}') {
+              const chunks: Buffer[] = [];
+              peer.pause();
+              peer.on("message", (chunk) => chunks.push(Buffer.from(rawDataToString(chunk))));
+              peer.once("close", () => finiteClosed.resolve(Buffer.concat(chunks)));
+              finiteReady.resolve(peer);
+              return;
+            }
+            attachments.push({ path: req.url!, metadata: rawDataToString(data) });
+            peer.send(Buffer.from("attachment-response"));
+          }),
+        );
+        return;
+      }
       if (req.url !== WORKER_PUBLIC_INGRESS_PATH) {
         gatewayServer!.emit("upgrade", req, socket, head);
         return;
@@ -269,6 +294,82 @@ describe.skipIf(!hasBinding)("native OpenClaw ID node transport", () => {
       expect((await worker.start()).environmentId).toBe("tunnel-worker");
     } finally {
       await worker.stop();
+    }
+  });
+
+  test.each(["desktop", "portal"])(
+    "%s attachment streams use the authenticated tunnel",
+    async (kind) => {
+      const controller = new AbortController();
+      const received = Promise.withResolvers<Buffer>();
+      const target = new Duplex({
+        read() {},
+        write(chunk, _encoding, callback) {
+          received.resolve(Buffer.from(chunk));
+          callback();
+        },
+      });
+      const attachPath = `/node-${kind}/attach?ticket=${"1".repeat(48)}`;
+      const running = runNodeStreamTransport({
+        gatewayUrl: transport.url,
+        attachPath,
+        expectedAttachPath: `/node-${kind}/attach`,
+        target: { stream: target },
+        metadata: { ok: true },
+        streamName: kind,
+        signal: controller.signal,
+      });
+      try {
+        expect(await Promise.race([received.promise, running])).toEqual(
+          Buffer.from("attachment-response"),
+        );
+        expect(attachments.at(-1)).toEqual({ path: attachPath, metadata: '{"ok":true}' });
+      } finally {
+        controller.abort();
+        await running;
+      }
+    },
+  );
+
+  test("finite portal payload drains through the native tunnel before graceful close", async () => {
+    const controller = new AbortController();
+    const body = Buffer.alloc(2 * 1024 * 1024 + 17, 42);
+    let offset = 0;
+    const target = new Duplex({
+      read() {
+        if (offset === body.length) {
+          this.push(null);
+          this.end();
+        } else {
+          const next = body.subarray(offset, offset + 64 * 1024);
+          offset += next.length;
+          this.push(next);
+        }
+      },
+      write(_chunk, _encoding, callback) {
+        callback();
+      },
+    });
+    const running = runNodeStreamTransport({
+      gatewayUrl: transport.url,
+      attachPath: `/node-portal/attach?ticket=${"2".repeat(48)}`,
+      expectedAttachPath: "/node-portal/attach",
+      target: { stream: target },
+      metadata: { finite: true },
+      streamName: "portal",
+      signal: controller.signal,
+    });
+    const peer = await finiteReady.promise;
+    try {
+      await running;
+      peer.resume();
+      const received = await finiteClosed.promise;
+      expect(received.length).toBe(body.length);
+      expect(received.equals(body)).toBe(true);
+    } finally {
+      peer.resume();
+      controller.abort();
+      await running;
     }
   });
 

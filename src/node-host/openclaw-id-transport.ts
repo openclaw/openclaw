@@ -206,6 +206,9 @@ export async function startNodeTunnelTransport(options: {
         return;
       }
       wss.handleUpgrade(req, socket, upgradeHead, (ws) => {
+        // After upgrade, ws distinguishes graceful EOF from cancellation. A raw socket close
+        // must not reset data still queued behind tunnel backpressure.
+        socket.off("close", cancel);
         let tail = Promise.resolve();
         let queued = 0;
         ws.on("error", cancel);
@@ -231,6 +234,10 @@ export async function startNodeTunnelTransport(options: {
             });
         });
         ws.on("close", (code, reason) => {
+          if (code === 1006) {
+            cancel();
+            return;
+          }
           tail = tail
             .then(async () => {
               await writeFrame(
@@ -239,7 +246,7 @@ export async function startNodeTunnelTransport(options: {
               );
               await stream.send.finish();
             })
-            .catch(() => {});
+            .catch(cancel);
         });
         void (async () => {
           for (let data = await stream.next(); data !== null; data = await stream.next()) {
@@ -259,7 +266,8 @@ export async function startNodeTunnelTransport(options: {
               return;
             }
             if (ws.readyState !== WebSocket.OPEN) {
-              return;
+              // Drain the remote half through its close while our ordered FIN settles.
+              continue;
             }
             await new Promise<void>((resolve, reject) => {
               ws.send(message.data, { binary: message.op === "binary" }, (error) =>
