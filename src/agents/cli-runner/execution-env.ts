@@ -17,11 +17,7 @@ type ChildEnvBackend = Pick<
 >;
 
 // These exclusions reset ambient defaults before the backend applies the turn's settings.
-const CLI_RUNTIME_ENV_KEYS = new Set([
-  ...NODE_CLAUDE_FORWARD_ENV_KEYS,
-  "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING",
-  "MAX_THINKING_TOKENS",
-]);
+const CLI_RUNTIME_ENV_KEYS = new Set(NODE_CLAUDE_FORWARD_ENV_KEYS);
 
 /** Apply native-login policy after all overlays, using this execution host's inventory. */
 export function stripCliNativeAuthEnv(

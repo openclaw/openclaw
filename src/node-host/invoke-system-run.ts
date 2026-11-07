@@ -66,6 +66,7 @@ import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/syst
 import {
   APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
   captureApprovedCwdSnapshotSync,
+  captureOmittedApprovalCwd,
   revalidateApprovedCwdSnapshot,
 } from "../infra/system-run-cwd-binding.js";
 import { revalidateApprovedMutableFileOperand } from "../infra/system-run-file-snapshot.js";
@@ -183,11 +184,7 @@ async function sendSystemRunCompleted(
 }
 
 function argvArraysMatch(left: readonly string[] | undefined, right: readonly string[]): boolean {
-  return (
-    left !== undefined &&
-    left.length === right.length &&
-    left.every((entry, index) => entry === right[index])
-  );
+  return left?.length === right.length && left.every((entry, index) => entry === right[index]);
 }
 
 async function parseSystemRunPhase(opts: HandleSystemRunInvokeOptions) {
@@ -245,7 +242,7 @@ async function parseSystemRunPhase(opts: HandleSystemRunInvokeOptions) {
       approvalPlan !== null &&
       argvArraysMatch(approvalPlan.argv, command.argv) &&
       approvalPlan.commandText === commandText &&
-      approvalPlan.cwd === cwd &&
+      approvalPlan.cwd === (cwd || captureOmittedApprovalCwd()) &&
       normalizeOptionalString(approvalPlan.agentId) === agentId &&
       normalizeOptionalString(approvalPlan.sessionKey) === requestedSessionKey;
     if (!planMatchesRequest) {
