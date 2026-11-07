@@ -153,7 +153,6 @@ export function assertControlUiE2eOwnership(
     });
   }
   expect(projects[0]?.test.exclude).toEqual(expect.arrayContaining(uiE2eSerialTestFiles));
-
   const realGateway = new Set(uiE2eRealGatewayTestFiles);
   const ordinary = trackedUiE2eFiles.filter((file) => !realGateway.has(file));
   const serial = new Set(uiE2eSerialTestFiles);
