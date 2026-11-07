@@ -27,7 +27,6 @@ export const page = defineSolidPage<"devices", ApplicationContext, DevicesRouteD
         loadNodes(devices),
         Promise.allSettled([
           canPair && loadDevices(devices),
-          context.runtimeConfig.refresh(),
           canAdmin && loadExecApprovals(devices),
         ]),
       ]);
