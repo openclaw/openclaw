@@ -20,9 +20,13 @@ only. The remaining scenarios add 5, 20 or 100 active background sessions to the
 same inventory. `--event-load-tools` defaults to 200 and
 `--event-load-duration-ms` to 240000. Duration is a safety ceiling, not a trailing
 wait: measurement ends after the last action. Every loaded action must start and
-finish before that ceiling while background work remains active. The foreground calls are offered over six
-seconds after the first live output is verified; extending the background window
-does not reduce that foreground rate. The longer example keeps background work
+finish before that ceiling while background work remains active. After the first
+live output is verified, trusted typing admits the first half of the foreground
+calls. The browser-side scroll loop admits the remainder. One producer retains
+the six-second total offering rate, pausing at the first half if typing finishes
+later; it resumes without a catch-up burst. This prevents driver delivery delays
+from consuming the entire turn before an action starts. Extending the background
+window does not reduce that foreground rate. The longer example keeps background work
 active through navigation on slower baselines. A phase starting after the load
 drains fails rather than silently measuring an unloaded action. Terminal receipts
 and correctness checks follow outside the measured window. Chromium throttling is a separate run with
@@ -65,8 +69,8 @@ wire mix; it is not a real-provider performance result.
 
 Read per-phase application timing alongside action wall time. Native input
 delivery, browser-local settlement and driver round trips are different costs.
-Scroll frame gaps describe scripted scrollport movement, not touch or wheel
-delivery. The idle interval has no deliberate user action, while Gateway events
+Scroll frame gaps describe scripted scrollport movement after a trusted ArrowUp
+establishes reader intent, not touch or wheel delivery. The idle interval has no deliberate user action, while Gateway events
 continue; it has a separate measurement through the existing engine collector.
 Chromium's existing `threadTicks` collector measures main-thread CPU;
 WebKit application elapsed time and a separate traced diagnostic are available.
@@ -77,8 +81,10 @@ delivery delay or a maximum-frame stall. Native input-to-frame samples are not
 a complete INP measurement: inspect the action wall time as well. Only keys
 delivered during the typing phase enter those samples; setup disclosure keys
 are excluded. Each phase records foreground tools started and completed at its
-boundaries. A delayed action can overlap a different portion of the finite
-foreground burst, so inspect those counts alongside delivery delay and frames.
+boundaries. The scroll loop separately records its actual entry and exit counters,
+including received foreground/background events. A finite wave may drain during
+an action; inspect those counts alongside delivery delay and frames rather than
+inferring overlap from the run's active flag.
 
 The real capture also observes shared startup invalidations. Usage invalidation
 is coalesced by agent over 500 ms, but none occurred inside the captured short

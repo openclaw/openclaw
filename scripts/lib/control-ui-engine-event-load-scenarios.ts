@@ -135,6 +135,7 @@ function installEventLoadProbe() {
   let delivered = 0;
   let bytes = 0;
   let backgroundEvents = 0;
+  let foregroundEvents = 0;
   let backgroundBytes = 0;
   let mutations = 0;
   let addedRows = 0;
@@ -145,8 +146,10 @@ function installEventLoadProbe() {
   let backgroundReceipts = 0;
   let targetBackgroundReceipts = 0;
   let maxBackgroundSchedulerLagMs = 0;
-  let liveProven = false;
   let liveProvenAt = 0;
+  let typingStartedAt = 0;
+  let admitTypingTools = () => {};
+  let admitScrollTools = () => {};
   let foregroundCompletedAt = 0;
   let settle: (() => void) | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -209,6 +212,9 @@ function installEventLoadProbe() {
         delivered++;
         // Fixtures are ASCII, so UTF-16 length equals their UTF-8 wire bytes.
         bytes += event.data.length;
+        if (event.data.includes('"sessionKey":"agent:main:interaction-a"')) {
+          foregroundEvents++;
+        }
         if (
           event.data.includes('"sessionKey":') &&
           !event.data.includes('"sessionKey":"agent:main:interaction-a"')
@@ -254,6 +260,10 @@ function installEventLoadProbe() {
       phaseInput ||= performance.now();
       if (phaseKind !== "typing") {
         return;
+      }
+      if (!typingStartedAt) {
+        typingStartedAt = performance.now();
+        admitTypingTools();
       }
       delays.push(Math.max(0, performance.now() - event.timeStamp));
       requestAnimationFrame(() => inputs.push(performance.now() - event.timeStamp));
@@ -701,6 +711,22 @@ function installEventLoadProbe() {
           gateway.getSessionRow(options.foreground),
         );
       };
+      // Action-relative admission prevents driver delays from consuming the
+      // entire finite turn before typing or scrolling actually starts.
+      let toolLimit = Math.min(1, options.toolCount);
+      let nextToolAt = performance.now();
+      const toolInterval =
+        Math.min(options.duration / 2, 6_000) / Math.max(1, options.toolCount - 1);
+      admitTypingTools = () => {
+        toolLimit = Math.min(options.toolCount, Math.max(1, Math.ceil(options.toolCount / 2)));
+        nextToolAt = performance.now();
+      };
+      admitScrollTools = () => {
+        if (tools >= toolLimit) {
+          nextToolAt = performance.now();
+        }
+        toolLimit = options.toolCount;
+      };
       timer = setInterval(() => {
         const producerStarted = performance.now();
         const now = performance.now();
@@ -722,25 +748,16 @@ function installEventLoadProbe() {
         }
         // Prove the first live row before introducing later durable calls that
         // would legitimately replace the activity disclosure being exercised.
-        const due = liveProven
-          ? Math.min(
-              options.toolCount,
-              1 +
-                Math.floor(
-                  ((now - liveProvenAt) * (options.toolCount - 1)) /
-                    Math.min(options.duration / 2, 6_000),
-                ),
-            )
-          : Math.min(1, options.toolCount);
-        while (tools < due) {
+        while (tools < toolLimit && now >= nextToolAt) {
           const tool = ++tools;
+          nextToolAt += toolInterval;
           emitTool(tool, { phase: "start", args: { command: `verify-event-load-${tool}` } });
           commitForegroundToolMessage(tool, false);
           runningTools.push({ tool, at: now, stage: 0 });
         }
         for (const tool of runningTools) {
           while (tool.stage < 3 && now - tool.at >= (tool.stage + 1) * 40) {
-            if (tool.tool === 1 && tool.stage === 2 && !liveProven) {
+            if (tool.tool === 1 && tool.stage === 2 && !typingStartedAt) {
               break;
             }
             tool.stage++;
@@ -823,10 +840,12 @@ function installEventLoadProbe() {
         tools,
         completedTools,
         backgroundEvents,
+        foregroundEvents,
         backgroundReceipts,
         targetBackgroundReceipts,
         elapsed: performance.now() - started,
         phaseStartedAt: phaseStart,
+        phaseInputAt: phaseInput,
         latestText,
         displayedCheckpoint,
         socketGeneration,
@@ -838,8 +857,10 @@ function installEventLoadProbe() {
       return observedKeys.map((key) => gateway.getSessionRow(key));
     },
     liveProven() {
-      liveProven = true;
       liveProvenAt = performance.now();
+    },
+    beginScroll() {
+      admitScrollTools();
     },
     settle() {
       settle?.();
@@ -1044,11 +1065,18 @@ export function createEngineEventLoadScenarios(
             throw new Error("Event load lost native input");
           }
           const scrolling = await phase(page, "scroll", async () => {
+            // Reader input retires queued follow/reveal work before the synthetic sweep.
+            await page.locator(`${pane} .chat-thread`).press("ArrowUp");
             const scroll = await page.locator(`${pane} .chat-thread`).evaluate(
               async (thread) => {
                 const started = performance.now();
-                const deliveryMs =
-                  started - Reflect.get(window, "__eventLoad").ready().phaseStartedAt;
+                Reflect.get(window, "__eventLoad").beginScroll();
+                const atStart = Reflect.get(window, "__eventLoad").ready();
+                if (!atStart.phaseInputAt || document.activeElement !== thread) {
+                  throw new Error("Event-load scroll requires native input on the transcript");
+                }
+                const deliveryMs = started - atStart.phaseStartedAt;
+                performance.mark("engine:event-load:scroll:start");
                 const frameTimes: number[] = [];
                 let blank = 0;
                 let firstBlankFrame: string | undefined;
@@ -1130,6 +1158,8 @@ export function createEngineEventLoadScenarios(
                   }
                 }
                 const observedMs = performance.now() - started;
+                performance.mark("engine:event-load:scroll:end");
+                const atEnd = Reflect.get(window, "__eventLoad").ready();
                 const gaps = frameTimes
                   .slice(1)
                   .map((at, index) => at - frameTimes[index]!)
@@ -1141,6 +1171,13 @@ export function createEngineEventLoadScenarios(
                   scrollFirstFrameMs: firstFrameMs,
                   scrollObservedMs: observedMs,
                   scrollDeliveryMs: deliveryMs,
+                  scrollLoopStartedAfterMs: atStart.elapsed,
+                  scrollLoopToolsAtStart: atStart.tools,
+                  scrollLoopToolsAtEnd: atEnd.tools,
+                  scrollLoopCompletedToolsAtStart: atStart.completedTools,
+                  scrollLoopCompletedToolsAtEnd: atEnd.completedTools,
+                  scrollLoopForegroundReceived: atEnd.foregroundEvents - atStart.foregroundEvents,
+                  scrollLoopBackgroundReceived: atEnd.backgroundEvents - atStart.backgroundEvents,
                   blankScrollFrames: blank,
                   firstBlankFrame,
                 };
@@ -1150,6 +1187,13 @@ export function createEngineEventLoadScenarios(
             );
             const { firstBlankFrame, ...timings } = scroll;
             Object.assign(evidence, timings);
+            if (
+              count >= 0 &&
+              toolCount > 1 &&
+              scroll.scrollLoopToolsAtEnd <= scroll.scrollLoopToolsAtStart
+            ) {
+              throw new Error("Event-load scroll did not overlap foreground tool production");
+            }
             if (scroll.blankScrollFrames > 0) {
               throw new Error(
                 `Event load exposed ${scroll.blankScrollFrames} blank scroll frames: ${firstBlankFrame}`,
