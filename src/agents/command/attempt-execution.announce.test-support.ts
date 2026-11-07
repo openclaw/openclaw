@@ -8,6 +8,7 @@ const REQUESTER_TOOLS = ["read", "exec", "sessions_spawn", "message"];
 type HandoffTarget = Omit<NonNullable<AgentCommandOpts["trustedInternalHandoff"]>, "kind">;
 type AnnounceToolOptions = {
   sourceReplyDeliveryMode: "automatic" | "message_tool_only";
+  privateCompletion?: true;
   disableMessageTool?: boolean;
   requireExplicitMessageTarget?: boolean;
   modelRun?: boolean;
@@ -70,6 +71,7 @@ export function createSubagentAnnounceHandoffOptions(
   return {
     ...handoff,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    ...(params.privateCompletion ? { privateCompletion: true, deliver: false } : {}),
     ...(params.disableMessageTool ? { disableMessageTool: true } : {}),
     ...(params.requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
     ...(params.modelRun ? { modelRun: true } : {}),
@@ -81,6 +83,7 @@ export function createSubagentAnnounceHandoffOptions(
 
 export type SubagentAnnounceDeliveryCase = AnnounceToolOptions & {
   name: string;
+  provider?: "claude-cli" | "google-gemini-cli" | "openai";
   disableMessageTool: boolean;
   inheritedToolAllow?: readonly string[];
   inheritedToolDeny?: readonly string[];
@@ -88,6 +91,7 @@ export type SubagentAnnounceDeliveryCase = AnnounceToolOptions & {
   sandboxMode?: "off" | "non-main" | "all";
   expectedDisableTools: boolean;
   expectedToolsAllow?: readonly string[];
+  expectedSourceReplyOnly?: true;
 };
 
 function deliveryCase(
@@ -100,7 +104,9 @@ function deliveryCase(
     sourceReplyDeliveryMode: "message_tool_only",
     disableMessageTool: false,
     expectedDisableTools: !messageAllowed,
-    ...(messageAllowed ? { expectedToolsAllow: ["message"] } : {}),
+    ...(messageAllowed
+      ? { expectedToolsAllow: ["message"], expectedSourceReplyOnly: true as const }
+      : {}),
     ...overrides,
   };
 }
@@ -110,6 +116,29 @@ export const SUBAGENT_ANNOUNCE_CLAUDE_CLI_DELIVERY_CASES = [
     sourceReplyDeliveryMode: "automatic",
     expectedDisableTools: false,
     expectedToolsAllow: REQUESTER_TOOLS,
+  }),
+  deliveryCase("a private parent completion retaining requester message authority", {
+    sourceReplyDeliveryMode: "automatic",
+    privateCompletion: true,
+    expectedDisableTools: false,
+    expectedToolsAllow: REQUESTER_TOOLS,
+  }),
+  deliveryCase("a private parent completion under the coding profile", {
+    sourceReplyDeliveryMode: "automatic",
+    privateCompletion: true,
+    operatorTools: { profile: "coding" },
+    inheritedToolAllow: ["read", "exec", "sessions_spawn"],
+    expectedDisableTools: false,
+    expectedToolsAllow: REQUESTER_TOOLS,
+    expectedSourceReplyOnly: true,
+  }),
+  deliveryCase("a private parent completion on another CLI backend", {
+    provider: "google-gemini-cli",
+    sourceReplyDeliveryMode: "automatic",
+    privateCompletion: true,
+    expectedDisableTools: false,
+    expectedToolsAllow: ["message"],
+    expectedSourceReplyOnly: true,
   }),
   messageOnly,
   deliveryCase("an explicitly disabled message tool", { disableMessageTool: true }),

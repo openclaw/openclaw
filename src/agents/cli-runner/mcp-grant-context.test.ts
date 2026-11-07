@@ -33,6 +33,18 @@ function buildGrant(
 }
 
 describe("buildCliMcpGrantContext", () => {
+  it("retains private source authority through automatic delivery and tool projection", () => {
+    for (const openClaw of [[], ["message", "read", "sessions_spawn"]]) {
+      const grant = buildGrant({
+        sourceReplyDeliveryMode: "automatic",
+        sourceReplyOnly: true,
+        cliToolAvailability: { native: [], openClaw },
+      });
+      expect(grant.sourceReplyOnly).toBe(true);
+      expect(grant.sourceReplyDeliveryMode).toBe("automatic");
+    }
+  });
+
   it("snapshots policy and logical model fields without copying private metadata", () => {
     const elevated = {
       enabled: false,

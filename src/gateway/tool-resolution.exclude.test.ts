@@ -467,6 +467,26 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     }
   });
 
+  it.each([false, true])(
+    "does not transfer source-only=%s message authority to children or cron",
+    async (sourceReplyOnly) => {
+      mockTools("message", "sessions_spawn", "automations");
+      const result = await resolveTools({
+        cfg: { tools: { allow: ["message", "sessions_spawn", "automations"] } },
+        senderIsOwner: true,
+        sourceReplyOnly,
+      });
+      expect(toolNames(result)).toContain("message");
+      const options = readCreateToolsArgs();
+      expect(options.inheritedToolAllowlist?.includes("message")).toBe(!sourceReplyOnly);
+      expect(
+        options.cronCreatorToolAllowlist?.some(
+          (tool) => (typeof tool === "string" ? tool : tool.name) === "message",
+        ),
+      ).toBe(!sourceReplyOnly);
+    },
+  );
+
   it("does not inherit node-only exec as a generic child or cron capability", async () => {
     const result = await resolveNodeExecTools({
       cfg: { tools: { allow: ["exec", "sessions_spawn", "automations"] } },

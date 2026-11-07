@@ -175,11 +175,12 @@ export function buildCliMcpGrantContext(params: {
   // Trusted message-only completions stay restricted even when source routing
   // is missing; the message tool must fail closed instead of widening authority.
   const sourceReplyOnly =
-    params.run.inputProvenance?.kind === "inter_session" &&
-    params.run.inputProvenance.sourceTool === "subagent_announce" &&
-    params.run.sourceReplyDeliveryMode === "message_tool_only" &&
-    grantedToolsAllow?.length === 1 &&
-    grantedToolsAllow[0] === "message";
+    params.run.sourceReplyOnly === true ||
+    (params.run.inputProvenance?.kind === "inter_session" &&
+      params.run.inputProvenance.sourceTool === "subagent_announce" &&
+      params.run.sourceReplyDeliveryMode === "message_tool_only" &&
+      grantedToolsAllow?.length === 1 &&
+      grantedToolsAllow[0] === "message");
   return {
     sessionKey,
     ...(Object.keys(requester).length > 0 ? { requester } : {}),

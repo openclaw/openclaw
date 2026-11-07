@@ -13,6 +13,7 @@ import { isHostSystemTurn, resolveTurnToolSurface } from "../agents/agent-tools.
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { nodeExecSchema } from "../agents/bash-tools.schemas.js";
 import { resolveConversationQuestionInputMode } from "../agents/conversation-capability-profile.js";
+import { mergePolicyAllowlist } from "../agents/conversation-tool-policy-pipeline.js";
 import { applyDelegationCapability } from "../agents/delegation-capability.js";
 import { prepareExecDefaults, resolvePreparedExecDefaultsAsync } from "../agents/exec-defaults.js";
 import { applyGatewayToolPolicy } from "../agents/gateway-tool-policy.js";
@@ -219,6 +220,14 @@ export async function resolveGatewayScopedTools(
     accountId: gatewayCaller.accountId,
   });
   const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
+  // Source-bound completion delivery extends allowlists, but keeps explicit denies
+  // and frozen policies authoritative.
+  const completionMessageAllow =
+    surface === "loopback" &&
+    params.sourceReplyOnly === true &&
+    requesterPolicies.requesterPolicySource === "completion-handoff"
+      ? ["message"]
+      : undefined;
   const completionHandoff =
     stableSessionSurface && requesterPolicies.requesterPolicySource === "completion-handoff";
   const sessionPermissionPolicy =
@@ -650,7 +659,10 @@ export async function resolveGatewayScopedTools(
           policy: scope === "session" && completionHandoff ? undefined : inheritedToolPolicy,
           label: "inherited tools",
         },
-      ],
+      ].map((step) => {
+        step.policy = mergePolicyAllowlist(step.policy, completionMessageAllow);
+        return step;
+      }),
       declaredToolAllowlist,
       onFilter,
     });
@@ -693,11 +705,14 @@ export async function resolveGatewayScopedTools(
         hostSystemTurn: isHostSystemTurn(params),
       })
     : { tools: turnTools, exportedTools: turnTools };
-  // The loopback exec tool is node-only. Do not let a raw `exec` capability get
-  // reinterpreted as generic Gateway/sandbox exec by spawned sessions or cron jobs.
-  const inheritableTools = includeNodeExecTool
-    ? exportedTools.filter((tool) => tool.name.trim().toLowerCase() !== "exec")
-    : exportedTools;
+  // Node-only exec and source-bound completion delivery must not become general
+  // tool authority for spawned sessions or cron jobs.
+  const inheritableTools = exportedTools.filter((tool) => {
+    const name = tool.name.trim().toLowerCase();
+    return (
+      !(includeNodeExecTool && name === "exec") && !(params.sourceReplyOnly && name === "message")
+    );
+  });
   if (shouldInheritEffectiveToolAllowlist) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, inheritableTools);
   }

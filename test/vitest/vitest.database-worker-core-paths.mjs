@@ -1357,6 +1357,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/proxy-capture/store.async.test.ts",
   "src/state/openclaw-state-maintenance-resources.test.ts",
   "test/cli-message-authority.integration.test.ts",
+  "test/cli-private-completion-message.integration.test.ts",
   "test/cron-message-read.integration.test.ts",
   "test/cron-conversation-delivery.codex.integration.test.ts",
   "test/imessage-reply-alias.integration.test.ts",

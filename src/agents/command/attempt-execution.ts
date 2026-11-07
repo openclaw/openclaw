@@ -86,6 +86,22 @@ const log = createSubsystemLogger("agents/agent-command");
 export async function runAgentAttempt(params: AgentAttemptParams) {
   const selectedAuthProfile = resolveCommandAuthProfileSelection(params);
   const isRawModelRun = params.opts.modelRun === true || params.opts.promptMode === "none";
+  const requestedAgentHarnessId = isRawModelRun ? "openclaw" : undefined;
+  const sessionRuntimeOverride = isRawModelRun ? undefined : params.agentHarnessRuntimeOverride;
+  const { cliExecutionProvider, useCliExecution: isCliExecutionProvider } = isRawModelRun
+    ? {
+        cliExecutionProvider: params.providerOverride,
+        useCliExecution: isCliProvider(params.providerOverride, params.cfg),
+      }
+    : resolveRunEntryCliRuntime({
+        config: params.cfg,
+        provider: params.providerOverride,
+        model: params.modelOverride,
+        agentId: params.sessionAgentId,
+        authProfileId: selectedAuthProfile?.id,
+        sessionRuntimeOverride,
+        pinnedHarnessId: resolveSessionPinnedHarnessId(params.sessionEntry),
+      });
   // A completion handoff relays frozen child output, so only a verified private
   // capability plus persisted requester lineage may restore its tool surface.
   const isSubagentAnnounceHandoff = isSubagentAnnounceCompletionHandoff({
@@ -116,11 +132,16 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     ));
   const trustedSubagentAnnounceHandoff =
     isSubagentAnnounceHandoff && trustedSubagentCompletionHandoff;
+  const privateCliCompletion =
+    isCliExecutionProvider &&
+    params.opts.privateCompletion === true &&
+    params.sessionEntry?.execHost !== "node" &&
+    !params.opts.trustedInternalHandoff?.settleBatch;
   const completionRequestsMessageDelivery =
     trustedSubagentAnnounceHandoff &&
     !isRawModelRun &&
     params.opts.disableMessageTool !== true &&
-    messageToolOwnsVisibleReply(params.opts);
+    (messageToolOwnsVisibleReply(params.opts) || privateCliCompletion);
   const completionSandboxStatus = completionRequestsMessageDelivery
     ? resolveSandboxRuntimeStatus({
         cfg: params.cfg,
@@ -194,22 +215,6 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
   const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.sessionEntry?.systemPromptReport,
   );
-  const requestedAgentHarnessId = isRawModelRun ? "openclaw" : undefined;
-  const sessionRuntimeOverride = isRawModelRun ? undefined : params.agentHarnessRuntimeOverride;
-  const { cliExecutionProvider, useCliExecution: isCliExecutionProvider } = isRawModelRun
-    ? {
-        cliExecutionProvider: params.providerOverride,
-        useCliExecution: isCliProvider(params.providerOverride, params.cfg),
-      }
-    : resolveRunEntryCliRuntime({
-        config: params.cfg,
-        provider: params.providerOverride,
-        model: params.modelOverride,
-        agentId: params.sessionAgentId,
-        authProfileId: selectedAuthProfile?.id,
-        sessionRuntimeOverride,
-        pinnedHarnessId: resolveSessionPinnedHarnessId(params.sessionEntry),
-      });
   // Sandboxed delegated children never dispatch to host-executed CLI backends;
   // spawn admission checks once the child model is resolved, and this run-seam
   // guard owns the invariant for fallback candidates and post-spawn runtime
@@ -222,7 +227,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     sessionAgentId: params.sessionAgentId,
     sessionEntry: params.sessionEntry,
   });
-  const { completionRetainsRequesterTools, runtimeToolsAllow, disableTools } =
+  const { completionRetainsRequesterTools, runtimeToolsAllow, disableTools, sourceReplyOnly } =
     resolveCompletionToolPolicy({
       run: params,
       trustedSubagentAnnounceHandoff,
@@ -231,6 +236,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
       isCliExecutionProvider,
       cliExecutionProvider,
       completionNeedsMessageDelivery,
+      completionCapabilityProfile,
     });
   // Collector output is mandatory result transport, even on a narrowed tool
   // surface. The CLI grant is minted from this list and enforced exactly on the
@@ -493,9 +499,12 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
             modelProvider: params.providerOverride,
             requesterModel: { provider: params.providerOverride, model: params.modelOverride },
             provider: cliExecutionProvider,
-            trustedInternalHandoff: completionRetainsRequesterTools
-              ? params.opts.trustedInternalHandoff
-              : undefined,
+            trustedInternalHandoff:
+              completionRetainsRequesterTools ||
+              (privateCliCompletion && completionNeedsMessageDelivery)
+                ? params.opts.trustedInternalHandoff
+                : undefined,
+            sourceReplyOnly,
             abortSignal: params.deferredLifecycle?.signal ?? params.opts.abortSignal,
             onExecutionStarted: params.opts.onExecutionStarted,
             cronCreatorCallerOrigin: params.opts.cronCreatorAuthorityCapability?.callerOrigin,

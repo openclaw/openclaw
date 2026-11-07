@@ -35,6 +35,8 @@ import {
   isClaudeToolUseBlockType,
 } from "../cli-output-records.js";
 import { cliBackendLog } from "../cli-runner/log.js";
+import type { ResolvedConversationCapabilityProfile } from "../conversation-capability-profile.js";
+import { isConversationToolAllowed } from "../conversation-tool-policy-pipeline.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 import type { AgentCommandOpts } from "./types.js";
 
@@ -465,6 +467,7 @@ export function resolveCompletionToolPolicy(params: {
   isCliExecutionProvider: boolean;
   cliExecutionProvider: string;
   completionNeedsMessageDelivery: boolean;
+  completionCapabilityProfile?: ResolvedConversationCapabilityProfile;
 }) {
   const { run, completionNeedsMessageDelivery, isSubagentAnnounceHandoff } = params;
   const completionRetainsRequesterTools =
@@ -490,5 +493,13 @@ export function resolveCompletionToolPolicy(params: {
     (isSubagentAnnounceHandoff &&
       !completionRetainsRequesterTools &&
       !completionNeedsMessageDelivery);
-  return { completionRetainsRequesterTools, runtimeToolsAllow, disableTools };
+  // Restored requester authority keeps its existing message actions. Only the
+  // extra completion delivery capability is restricted to the source.
+  const completionRetainsMessageAuthority =
+    completionRetainsRequesterTools &&
+    params.completionCapabilityProfile !== undefined &&
+    isConversationToolAllowed(params.completionCapabilityProfile, "message");
+  const sourceReplyOnly: true | undefined =
+    completionNeedsMessageDelivery && !completionRetainsMessageAuthority ? true : undefined;
+  return { completionRetainsRequesterTools, runtimeToolsAllow, disableTools, sourceReplyOnly };
 }

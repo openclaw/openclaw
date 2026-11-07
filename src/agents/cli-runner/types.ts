@@ -71,6 +71,8 @@ export type RunCliAgentParams = Pick<
   sessionTarget?: SessionTranscriptRuntimeTarget;
   /** Session identity used only for sandbox and tool-policy resolution. */
   runtimePolicySessionKey?: string;
+  /** Restrict verified completion messaging independently of automatic final delivery. */
+  sourceReplyOnly?: true;
   sessionEntry?: SessionEntry;
   sessionFile: string;
   /** Start a fresh CLI process so per-turn MCP authority is reloaded from this run. */

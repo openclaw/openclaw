@@ -1791,7 +1791,7 @@ describe("CLI attempt execution", () => {
     ),
   ])("bounds $provider subagent completion handoff tools for $name", async (testCase) => {
     const { provider } = testCase;
-    const cli = provider === "claude-cli";
+    const cli = provider !== "openai";
     const model = cli ? "opus" : "gpt-5.4";
     const sessionKey = `agent:main:direct:${provider}-announce`;
     const sessionEntry = makeSessionEntry(`openclaw-session-${provider}-announce`);
@@ -1836,7 +1836,7 @@ describe("CLI attempt execution", () => {
             modelRun: testCase.modelRun || undefined,
             promptMode: testCase.promptMode,
           }
-        : {}),
+        : { sourceReplyOnly: testCase.expectedSourceReplyOnly }),
     });
     expect(cli ? runEmbeddedAgentMock : runCliAgentMock).not.toHaveBeenCalled();
   });

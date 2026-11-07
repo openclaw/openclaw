@@ -7,7 +7,7 @@ import {
 } from "./tool-policy-pipeline.js";
 import { mergeAlsoAllowPolicy, type ToolPolicyLike } from "./tool-policy.js";
 
-function mergePolicyAllowlist<TPolicy extends ToolPolicyLike>(
+export function mergePolicyAllowlist<TPolicy extends ToolPolicyLike>(
   policy: TPolicy | undefined,
   alsoAllow: readonly string[] | undefined,
 ): TPolicy | undefined {

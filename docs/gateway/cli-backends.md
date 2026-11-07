@@ -829,6 +829,13 @@ bridge retains the admitted sender, account, and conversation; channel access an
 write permissions still apply. That authority ends with the turn or its
 cancellation, including when a warm CLI process is reused for a later turn.
 
+Verified private subagent completions can use `message` to relay their result to
+the requesting conversation, including with the `coding` tool profile. Their
+final answer stays private. When the completion needs an additional `message`
+grant, it permits only sends to the original channel, account, conversation, and
+thread. Existing requester permissions, explicit tool denies, and normal
+attachment checks still apply.
+
 Automations created through the bridge without a finite `toolsAllow` list follow the
 owner session's tool policy at run time. A finite list is capped to the bridge's final
 permitted tools and supported native capabilities. When a run retains native `Bash` for `exec`,
