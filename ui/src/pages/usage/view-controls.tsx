@@ -13,6 +13,11 @@ import { formatIsoDate } from "./helpers.ts";
 import { applySuggestionToQuery, buildQuerySuggestions, removeQueryToken } from "./query.ts";
 import type { UsageProps } from "./types.ts";
 import { UsageCreatorFilter } from "./view-creators.tsx";
+import {
+  createUsageFilterFields,
+  UsageAppliedFilters,
+  UsageFilterMenu,
+} from "./view-filter-menu.tsx";
 import { UsageFilterSheet } from "./view-filter-sheet.tsx";
 import { UsageQueryFilter } from "./view-query-filter.tsx";
 
@@ -358,6 +363,29 @@ export function createUsageControls(
         </For>
       </div>
     ) : undefined;
+  const filterFields = createUsageFilterFields({
+    props,
+    queryTerms,
+    viewerId,
+    filterOptions,
+    counts: (key) =>
+      props.data.readChartSnapshot("filterOptions")?.overview?.filterOptionCounts?.[key],
+    suggestions: querySuggestions,
+  });
+  const matchCount = () =>
+    ctx.hasOverviewData() && hasQuery()
+      ? t("usage.query.ofTotal", {
+          shown: (
+            props.data.sessionPage?.total ??
+            props.data.overview?.total ??
+            props.data.sessions.length
+          ).toLocaleString(),
+          total: totalSessions().toLocaleString(),
+        })
+      : undefined;
+  // Applied filters sit in their own row under the toolbar, never inside it.
+  const appliedFilters = () =>
+    ctx.phone() ? undefined : <UsageAppliedFilters model={filterFields} count={matchCount} />;
   const queryWarningCallout = () =>
     queryWarnings().length > 0 ? (
       <InlineAlert tone="warning" class="usage-callout usage-callout--tight">
@@ -412,9 +440,9 @@ export function createUsageControls(
             {timeZoneSelect()}
           </div>
           <div class="usage-view-options">
-            {creatorFilter()}
             {scopeControl()}
             {metricControl()}
+            <UsageFilterMenu model={filterFields} loading={ctx.loading()} />
             <RefreshButton
               label={t("common.refresh")}
               onClick={() => void props.callbacks.filters.onRefresh()}
@@ -441,19 +469,9 @@ export function createUsageControls(
           </div>
         </Show>
       ) : (
-        <div class="usage-query-section">
-          {queryBar()}
-          <div class="usage-filter-row">
-            {facetFilters()}
-            <span class="usage-query-hint">{t("usage.query.tip")}</span>
-            {queryCount()}
-          </div>
-          {queryChips()}
-          {querySuggestionList()}
-          {queryWarningCallout()}
-        </div>
+        queryWarningCallout()
       )}
     </>
   );
-  return { toolbar, querySection, partialStatus, partialNotice };
+  return { toolbar, appliedFilters, querySection, partialStatus, partialNotice };
 }
