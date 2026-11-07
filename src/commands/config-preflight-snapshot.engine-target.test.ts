@@ -1,15 +1,108 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeFixtureJsonSync } from "../cli/cli-fixtures.test-support.js";
+import { createConfigIO } from "../config/io.factory.js";
 import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { createPathResolutionEnv } from "../test-utils/env.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { readConfigSnapshotForEngineSelection } from "./config-preflight-snapshot.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+
+function writePostgresAnchor(filename: string) {
+  fs.mkdirSync(path.dirname(filename), { recursive: true });
+  using anchor = new DatabaseSync(filename);
+  anchor.exec("CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT)");
+  anchor.exec("INSERT INTO openclaw_engine_anchor VALUES ('workboard', 'postgres', 'port_legacy')");
+}
+
+it("reads the published 2026.11.1 Workboard-only PostgreSQL config with populated SQLite state", async () => {
+  const home = dirs.make("openclaw-workboard-upgrade-");
+  const env = createPathResolutionEnv(home, { OPENCLAW_CONFIG_PATH: undefined });
+  resetDatabaseEngineSelectionForTest();
+  const statePath = openOpenClawStateDatabase({ env }).path;
+  await closeOpenClawStateDatabaseByPathAsync(statePath);
+  const anchorPath = path.join(home, ".openclaw/plugins/workboard/workboard.sqlite");
+  writePostgresAnchor(anchorPath);
+  const configPath = path.join(home, ".openclaw/openclaw.json");
+  writeFixtureJsonSync(configPath, {
+    database: { engine: "postgres", postgres: { connection: "postgresql://localhost/synthetic" } },
+    gateway: { mode: "local" },
+  });
+  const stateBefore = fs.readFileSync(statePath);
+  const anchorBefore = fs.readFileSync(anchorPath);
+  try {
+    const selected = await readConfigSnapshotForEngineSelection(env);
+    expect(selected.valid).toBe(true);
+    const snapshot = await createConfigIO({
+      env,
+      pluginValidation: "core-only",
+    }).readConfigFileSnapshot();
+    expect(snapshot.valid).toBe(true);
+    expect(getDatabaseEngineSelection()?.effectiveEngines).toMatchObject({
+      state: "sqlite",
+      agent: "sqlite",
+      workboard: "postgres",
+      logbook: "sqlite",
+      "team-reports": "sqlite",
+    });
+    expect(snapshot.config.database).toMatchObject({
+      engine: "sqlite",
+      families: { workboard: { engine: "postgres" } },
+    });
+    expect(fs.readFileSync(statePath)).toEqual(stateBefore);
+    expect(fs.readFileSync(anchorPath)).toEqual(anchorBefore);
+  } finally {
+    await closeOpenClawStateDatabaseByPathAsync(statePath);
+    resetDatabaseEngineSelectionForTest();
+  }
+});
+
+it.each([
+  { state: "postgres", families: undefined },
+  { state: "sqlite", families: { state: { engine: "postgres" as const } } },
+])(
+  "preserves global PostgreSQL intent with $state state and explicit families $families",
+  async ({ state, families }) => {
+    const home = dirs.make("openclaw-global-postgres-");
+    const env = createPathResolutionEnv(home, { OPENCLAW_CONFIG_PATH: undefined });
+    const statePath = path.join(home, ".openclaw/state/openclaw.sqlite");
+    writePostgresAnchor(statePath);
+    if (state === "sqlite") {
+      using db = new DatabaseSync(statePath);
+      db.exec("DROP TABLE openclaw_engine_anchor; CREATE TABLE fixture_state (value TEXT)");
+      db.exec("INSERT INTO fixture_state VALUES ('retained')");
+    }
+    writePostgresAnchor(path.join(home, ".openclaw/plugins/workboard/workboard.sqlite"));
+    writeFixtureJsonSync(path.join(home, ".openclaw/openclaw.json"), {
+      database: {
+        engine: "postgres",
+        families,
+        postgres: { connection: "postgresql://localhost/synthetic" },
+      },
+    });
+    try {
+      resetDatabaseEngineSelectionForTest();
+      const snapshot = await readConfigSnapshotForEngineSelection(env);
+      expect(snapshot.valid).toBe(true);
+      expect(snapshot.config.database?.engine).toBe("postgres");
+      expect(getDatabaseEngineSelection()?.effectiveEngines).toMatchObject({
+        state: "postgres",
+        agent: "postgres",
+      });
+    } finally {
+      resetDatabaseEngineSelectionForTest();
+    }
+  },
+);
 
 it.each([
   { mode: "default", isolated: false, options: undefined },

@@ -916,11 +916,24 @@ To recover these scopes:
 
 ## Published-stable upgrade qualification
 
-The published baseline is [OpenClaw 2026.10.5](https://www.npmjs.com/package/openclaw/v/2026.10.5).
+The qualification below used [OpenClaw 2026.10.5](https://www.npmjs.com/package/openclaw/v/2026.10.5).
 Its packaged configuration schema does not support `database.engine=postgres`,
-so a native stable-PostgreSQL → current upgrade is **not applicable**. Existing
-users adopt PostgreSQL by updating their SQLite installation first, then using
+so a native 2026.10.5-PostgreSQL → current upgrade is **not applicable**. Users on
+that version adopt PostgreSQL by updating their SQLite installation first, then using
 `openclaw database port --to postgres`.
+
+Published **2026.11.1** supports PostgreSQL for Workboard only. Its database port
+command writes `database.engine: "postgres"` while leaving shared state and agent
+data on SQLite. Current config reads preserve that meaning when no
+`database.families` overrides exist, shared state is physically SQLite, and
+Workboard has a PostgreSQL anchor. They expose the equivalent current config,
+`database.engine: "sqlite"` with
+`database.families.workboard.engine: "postgres"`, and log a warning. No database
+is moved and the source config remains readable without a manual edit. Saving
+that explicit family configuration avoids the compatibility inspection on later
+reads. PostgreSQL shared-state anchors and explicit family overrides retain their
+configured meaning. This compatibility behavior is separate from the 2026.10.5
+upgrade qualification below.
 
 The local `PGQUAL-MAJORS-UPGRADE` lane installed that published package in an
 isolated npm global prefix, onboarded on SQLite, created an agent and persisted
@@ -931,14 +944,14 @@ build identity was compared with the tarball, since both packages report version
 `2026.10.5`. The candidate archive SHA256 was
 `262bcd6929ded71c7066752438b7768deca990e1dddb6457905256158abd7491`.
 
-| Cell                                     | Result and evidence                                                                                                                                                                                                                                                                 |
-| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Published stable on PostgreSQL → current | Not applicable: the stable package has no PostgreSQL configuration schema.                                                                                                                                                                                                          |
-| Published stable SQLite → current        | Passed through the installed updater; run `d3b04126-11d3-4f28-9dd0-146f9fe914b5`.                                                                                                                                                                                                   |
-| Current SQLite → PostgreSQL 17           | Passed; port `aae1aaff-ec7e-4dac-afe6-7b46f8589867` moved the populated shared and agent stores and retained recoverable SQLite source captures.                                                                                                                                    |
-| Foreground Gateway and continuity        | Passed: Gateway readiness, Doctor/status, agent listing, the existing session and memory search. Doctor also returned exit 2 with `ok: false` for an unreachable DSN.                                                                                                               |
-| Rollback to published stable SQLite      | Passed: restored the verified pre-upgrade backup and matching stable package, then checked the exact build, foreground Gateway, Doctor/status, agent, session and memory. The direct downgrade dry run reported unsupported state/agent schemas; it was not a PostgreSQL downgrade. |
-| Live model turns                         | Skipped: no provider key was available.                                                                                                                                                                                                                                             |
+| Cell                                | Result and evidence                                                                                                                                                                                                                                                                 |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026.10.5 PostgreSQL → current      | Not applicable: 2026.10.5 has no PostgreSQL configuration schema.                                                                                                                                                                                                                   |
+| Published stable SQLite → current   | Passed through the installed updater; run `d3b04126-11d3-4f28-9dd0-146f9fe914b5`.                                                                                                                                                                                                   |
+| Current SQLite → PostgreSQL 17      | Passed; port `aae1aaff-ec7e-4dac-afe6-7b46f8589867` moved the populated shared and agent stores and retained recoverable SQLite source captures.                                                                                                                                    |
+| Foreground Gateway and continuity   | Passed: Gateway readiness, Doctor/status, agent listing, the existing session and memory search. Doctor also returned exit 2 with `ok: false` for an unreachable DSN.                                                                                                               |
+| Rollback to published stable SQLite | Passed: restored the verified pre-upgrade backup and matching stable package, then checked the exact build, foreground Gateway, Doctor/status, agent, session and memory. The direct downgrade dry run reported unsupported state/agent schemas; it was not a PostgreSQL downgrade. |
+| Live model turns                    | Skipped: no provider key was available.                                                                                                                                                                                                                                             |
 
 No provider key was available, so live model turns were skipped. Service
 activation was covered by the separate signed-Mac/Parallels proof, not by this
