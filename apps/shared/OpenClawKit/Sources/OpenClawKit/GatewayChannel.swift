@@ -636,6 +636,11 @@ public actor GatewayChannelActor {
                 task: task,
                 connectionGeneration: connectionGeneration)
             try self.requireCurrentConnection(connectionGeneration)
+            if selectedAuth.authDeviceToken != nil {
+                // The Gateway answered the device-token retry, so its outcome spends it. A transport
+                // failure before this point leaves it pending for the next attempt.
+                self.pendingDeviceTokenRetry = false
+            }
             let outcome = try await self.handleConnectResponse(
                 response,
                 identity: identity,
@@ -697,9 +702,9 @@ extension GatewayChannelActor {
         connectionGeneration: UInt64,
         to params: inout [String: ProtoAnyCodable])
     {
-        if self.pendingDeviceTokenRetry,
-           selectedAuth.authDeviceToken != nil || selectedAuth.suppressedDeviceTokenRetry
-        {
+        // An attached device token stays pending until the Gateway answers it (sendConnect);
+        // only a suppressed retry is settled before the request leaves.
+        if self.pendingDeviceTokenRetry, selectedAuth.suppressedDeviceTokenRetry {
             self.pendingDeviceTokenRetry = false
         }
         self.lastAuthSource = selectedAuth.authSource
