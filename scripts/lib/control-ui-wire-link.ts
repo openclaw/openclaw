@@ -168,8 +168,8 @@ export function createControlUiWireLink({
         dispose(true);
       }
       function targetClose() {
-        // After a clean half-close, the reverse link still owns response delivery.
-        dispose(!flow.ended);
+        // A normally closed upstream can leave delayed response bytes in the reverse link.
+        dispose(!flow.ended && !target.writableFinished);
       }
       function data(chunk: Buffer) {
         source.pause();

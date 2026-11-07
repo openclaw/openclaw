@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import { createServer as createHttpServer, get } from "node:http";
 import { connect as connectSocket, createServer, type Socket } from "node:net";
 import { performance } from "node:perf_hooks";
 import { PassThrough, Writable } from "node:stream";
@@ -224,6 +225,80 @@ it("delivers a real socket response after both peers half-close", async () => {
     await clientClosed;
     expect(Buffer.concat(requestChunks).toString()).toBe(request);
     expect(Buffer.concat(chunks).toString()).toBe(response);
+  } finally {
+    vi.useRealTimers();
+    sent.close();
+    received.close();
+    for (const socket of sockets) {
+      socket.destroy();
+    }
+    if (proxy) {
+      await proxy.releaseListener();
+      await proxy.claim.release();
+    }
+    await upstream.releaseListener();
+    await upstream.claim.release();
+  }
+});
+
+it("delivers an HTTP connection-close response before closing the client", async () => {
+  vi.useRealTimers();
+  const sent = createControlUiWireLink();
+  const received = createControlUiWireLink();
+  const sockets = new Set<Socket>();
+  const track = (socket: Socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+    return socket;
+  };
+  const body = "response from a closing upstream";
+  const observedRequest = Promise.withResolvers<void>();
+  const observedResponse = Promise.withResolvers<void>();
+  const upstreamClosed = Promise.withResolvers<void>();
+  const upstream = await reserveTestPortListener({
+    offsets: [0],
+    createListener: () =>
+      createHttpServer((_request, response) => {
+        response.writeHead(200, {
+          "Content-Length": Buffer.byteLength(body),
+          Connection: "close",
+        });
+        response.end(body);
+      }).on("connection", track),
+  });
+  let proxy: Awaited<ReturnType<typeof reserveTestPortListener>> | undefined;
+  try {
+    proxy = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () =>
+        createServer((client) => {
+          track(client);
+          const remote = track(connectSocket(upstream.claim.port, "127.0.0.1"));
+          remote.once("close", () => upstreamClosed.resolve());
+          sent.connect(client, remote, () => observedRequest.resolve());
+          received.connect(remote, client, () => observedResponse.resolve());
+        }),
+    });
+    const result = Promise.withResolvers<
+      { statusCode: number | undefined; body: string } | { error: string }
+    >();
+    vi.useFakeTimers();
+    get({ host: "127.0.0.1", port: proxy.claim.port, agent: false }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk: Buffer) => chunks.push(chunk));
+      response.on("end", () =>
+        result.resolve({ statusCode: response.statusCode, body: Buffer.concat(chunks).toString() }),
+      );
+      response.on("error", (error) => result.resolve({ error: error.message }));
+    })
+      .on("socket", track)
+      .on("error", (error) => result.resolve({ error: error.message }));
+    await observedRequest.promise;
+    await vi.advanceTimersByTimeAsync(60);
+    await observedResponse.promise;
+    await upstreamClosed.promise;
+    await vi.advanceTimersByTimeAsync(60);
+    expect(await result.promise).toEqual({ statusCode: 200, body });
   } finally {
     vi.useRealTimers();
     sent.close();

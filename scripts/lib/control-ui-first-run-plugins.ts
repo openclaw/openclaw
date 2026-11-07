@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import {
   evaluateControlUiContext,
   getControlUiContextHandle,
@@ -51,9 +51,9 @@ export async function runControlUiFirstRunPluginVisits(
     pluginId: string,
     pageId: string,
     navigation: NonNullable<FirstRunPluginVisit["navigation"]>,
-    selector: string,
+    selector: string | Locator,
   ) => {
-    const root = page.locator(selector).first();
+    const root = (typeof selector === "string" ? page.locator(selector) : selector).first();
     visits.push({
       pluginId,
       pageId,
@@ -149,7 +149,7 @@ export async function runControlUiFirstRunPluginVisits(
           definition.pluginId,
           definition.pageId,
           "application-route",
-          "openclaw-plugin-view",
+          page.locator("openclaw-plugin-view").filter({ has: page.locator(definition.ready) }),
         );
       },
       definition.ready,

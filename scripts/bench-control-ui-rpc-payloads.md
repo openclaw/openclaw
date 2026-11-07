@@ -159,6 +159,12 @@ finish before the measured navigation. It is outside the observation window.
 The local profile connects directly to the Gateway; only the remote profile uses
 the TCP link.
 
+First-run diagnostics record main-frame navigations, document response statuses,
+WebSocket open/close times, and a bounded failed-document snapshot. URL query
+values are omitted. The latency link preserves both packet order and pending
+response bytes when an upstream closes normally; connection-close responses
+must not become synthetic network failures.
+
 Artifacts contain synthetic data, but system metadata and build paths can still
 appear in screenshots. Inspect and sanitize before uploading. Remove superseded
 large output at closeout, retaining only reports and cited proof.

@@ -178,6 +178,8 @@ config.gateway = {
 config.diagnostics = { enabled: true };
 if (values["empty-plugin-installation"]) {
   values["first-run-plugins"] = true;
+  // Activate the on-demand X UI without credentials or a configured account.
+  config.channels = { x: { enabled: true } };
   config.plugins = {
     enabled: true,
     slots: { memory: "knowledge" },
@@ -775,6 +777,53 @@ try {
           console.error(`${engine} page error: ${error.message}`);
         });
         if (values["first-run"]) {
+          page.on("framenavigated", (frame) => {
+            if (frame !== page.mainFrame()) {
+              return;
+            }
+            const location = new URL(frame.url());
+            report.diagnostics.push({
+              engine,
+              sample,
+              phase: activePhase,
+              at: Date.now(),
+              type: "navigation",
+              path: location.pathname,
+              queryKeys: [...location.searchParams.keys()],
+            });
+          });
+          page.on("response", (response) => {
+            const location = new URL(response.url());
+            if (
+              response.request().resourceType() === "document" ||
+              location.pathname === "/index.html" ||
+              location.pathname === "/__openclaw__/session-entry"
+            ) {
+              report.diagnostics.push({
+                engine,
+                sample,
+                phase: activePhase,
+                at: Date.now(),
+                type: "document-response",
+                path: location.pathname,
+                status: response.status(),
+                contentType: response.headers()["content-type"],
+              });
+            }
+          });
+          page.on("websocket", (socket) => {
+            const record = (type: string) =>
+              report.diagnostics.push({
+                engine,
+                sample,
+                phase: activePhase,
+                at: Date.now(),
+                type,
+                path: new URL(socket.url()).pathname,
+              });
+            record("websocket-open");
+            socket.on("close", () => record("websocket-close"));
+          });
           page.on("console", (message) => {
             if (message.type() === "error") {
               report.diagnostics.push({
@@ -1071,6 +1120,24 @@ try {
           }
         } catch (cause) {
           report.errors.push({ engine, sample, stage: "sample", error: String(cause) });
+          if (values["first-run"]) {
+            const document = await page
+              .evaluate(() => ({
+                path: location.pathname,
+                title: window.document.title,
+                text: window.document.body?.innerText.slice(0, 1000),
+                timeOrigin: performance.timeOrigin,
+              }))
+              .catch(() => null);
+            report.diagnostics.push({
+              engine,
+              sample,
+              phase: activePhase,
+              at: Date.now(),
+              type: "failed-document",
+              document,
+            });
+          }
           await writeFile(path.join(output, "report.json"), JSON.stringify(report, null, 2));
           if (values.screenshots) {
             try {
