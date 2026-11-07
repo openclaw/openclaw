@@ -59,6 +59,7 @@ import {
   assertExistingDatabaseIdentity,
   readDatabaseFileIdentity,
 } from "./sqlite-worker-identity.js";
+import { writeSqliteWorkerResponse } from "./sqlite-worker-stdout.js";
 import { createSqliteWorkerTransferOwner } from "./sqlite-worker-transfer.js";
 
 const stagingTokens = new Map<string, SqliteStagingToken>();
@@ -562,9 +563,15 @@ async function runOneShot(args: string[]): Promise<void> {
     if (!result.ok) {
       process.exitCode = 1;
     }
-    await new Promise<void>((resolve, reject) => {
-      process.stdout.write(JSON.stringify(result), (error) => (error ? reject(error) : resolve()));
-    });
+    if (args[0] === "sync") {
+      await writeSqliteWorkerResponse(result);
+    } else {
+      await new Promise<void>((resolve, reject) => {
+        process.stdout.write(JSON.stringify(result), (error) =>
+          error ? reject(error) : resolve(),
+        );
+      });
+    }
     delivered = true;
     if (prepared) {
       releaseSnapshotTempDirectory(prepared.cleanupRoot ?? path.dirname(prepared.location));
