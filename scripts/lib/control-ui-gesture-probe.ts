@@ -202,16 +202,14 @@ export function installControlUiGestureProbe(options: GestureProbeOptions = {}) 
     };
     const wrapGetter = (prototype: object, name: string, api: string) => {
       const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
-      // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply below preserves the measured element's native accessor receiver.
-      const original = descriptor?.get;
-      if (!descriptor || !original) {
+      if (!descriptor?.get) {
         return;
       }
       Object.defineProperty(prototype, name, {
         ...descriptor,
         get(this: unknown) {
           recordRead(api);
-          return Reflect.apply(original, this, []);
+          return descriptor.get?.call(this);
         },
       });
     };
