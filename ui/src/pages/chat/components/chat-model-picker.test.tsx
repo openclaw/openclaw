@@ -291,14 +291,12 @@ it("keeps search live while targets load, then ranks model, target, and account 
   expect(selectAccount).not.toHaveBeenCalled();
 });
 
-it("persists keyboard rail order without moving the selected provider and opens setup from plus", async () => {
+it("persists keyboard rail order without moving the selected provider", async () => {
   localStorage.clear();
-  const setup = vi.fn();
   const params = pickerProps({
     open: true,
     modelOptions: [option("first", "a"), option("second", "b")],
     selectedModelValue: "second/b",
-    onModelSetup: setup,
   });
   const view = mountPicker(params);
   await waitForMenu(view.container);
@@ -312,8 +310,6 @@ it("persists keyboard rail order without moving the selected provider and opens 
   );
   flush();
   expect(rail().map((tab) => tab.dataset.chatModelProviderToggle)).toEqual(["second", "first"]);
-  view.container.querySelector<HTMLButtonElement>('[aria-label="Add provider"]')!.click();
-  expect(setup).toHaveBeenCalledOnce();
   view.unmount();
   const reopened = mountPicker(params);
   await waitForMenu(reopened.container);

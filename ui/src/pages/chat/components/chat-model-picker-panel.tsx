@@ -593,7 +593,6 @@ export function ChatModelPickerPanel(panel: {
                   )}
                   disabled={disabled()}
                   onSelect={(provider) => searchView?.toggleProvider(provider)}
-                  onSetup={onModelSetup()}
                 />
                 <div class="chat-controls__model-pane">
                   <div

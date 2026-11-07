@@ -74,7 +74,6 @@ const enModelControls = {
       dontAskAgain: "Don’t ask again",
       searchModels: "Search models",
       noMatchingModels: "No models match your search",
-      addProvider: "Add provider",
       configureModels: "Configure models",
       selectionScopeSessionLabel: "This session",
       selectionScopeAgentLabel: "Agent default",

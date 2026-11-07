@@ -1,6 +1,5 @@
 import { createMemo, createSignal, For } from "solid-js";
 import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
-import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { createTabList } from "../../../lib/tabs.ts";
 import { ChatModelProviderIcon, ChatModelTargetIcon } from "./chat-model-picker-options.tsx";
@@ -12,7 +11,6 @@ export function ChatModelProviderRail(props: {
   active?: string;
   disabled: boolean;
   onSelect: (provider: string) => void;
-  onSetup?: () => void;
 }) {
   const [order, setOrder] = createSignal(loadModelProviderOrder());
   const providers = createMemo(() => [
@@ -152,20 +150,6 @@ export function ChatModelProviderRail(props: {
             </button>
           )}
         </For>
-        {props.onSetup ? (
-          <button
-            class="chat-controls__provider-tab chat-controls__provider-add"
-            type="button"
-            aria-label={t("chat.modelControls.addProvider")}
-            disabled={props.disabled}
-            onClick={(event) => {
-              event.stopPropagation();
-              props.onSetup?.();
-            }}
-          >
-            <Icon name="plus" />
-          </button>
-        ) : undefined}
       </div>
       <span class="sr-only" aria-live="polite">
         {announcement()}
