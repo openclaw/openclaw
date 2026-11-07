@@ -17,6 +17,7 @@ import {
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import type { PortalPanelToggleDetail } from "../../components/panel-toggle-contract.ts";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
@@ -326,16 +327,13 @@ function PortalPreview(props: {
               <Icon name="externalLink" />
               <span class="sr-only">{t("portalsPage.openNewTab")}</span>
             </a>
-            <button
-              class="btn btn--icon btn--ghost portals-preview__close"
-              type="button"
-              title={t("portalsPage.closePortal", { title: props.portal.title })}
-              aria-label={t("portalsPage.closePortal", { title: props.portal.title })}
+            <IconButton
+              class="portals-preview__close"
+              icon="x"
+              label={t("portalsPage.closePortal", { title: props.portal.title })}
               disabled={!state().canClosePortal || props.closing === props.portal.id}
               onClick={() => props.closePortal(props.portal)}
-            >
-              <Icon name="x" />
-            </button>
+            />
           </header>
         </Show>
         <Show when={state().error}>
