@@ -394,6 +394,23 @@ must be labeled diagnostic, not a performance result.
 
 ## Compare two UI builds
 
+For pane critical-path attribution, first capture three to five warm reloads on
+each workload without profiling. Keep native archived chat, native active chat,
+native dashboard, and the Team benchmark's active/archived workloads separate.
+Use `--transcript-late-paint --details-session-facts` for native captures; active
+chat additionally uses `--active-targets --details-subagent-activity`.
+Then run one separate `--cpu-profile --reloads 1` capture per native route.
+`--init-script` can install diagnostic geometry wrappers in profiled captures;
+exclude those wrappers from unprofiled timing arms. Attribute enclosing tasks,
+component samples, forced layout, and idle waits separately: nested component
+times overlap, and an import continuation includes application rendering.
+
+For a scored comparison with an absolute delta gate, use twelve alternating
+AB/BA pairs and an identical-build A/A control on one fixed quiet instance.
+Report both the raw paired median and the mean of the AB-first and BA-first
+paired medians, alongside arm medians/IQRs and every pair's delta. Keep
+hello-handled, populated Details paint, and complete-page counts alongside rows.
+
 Run one command on a quiet, fixed-instance Crabbox lease:
 
 ```sh
