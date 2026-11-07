@@ -5,23 +5,35 @@ export function standaloneLookupExpression(record) {
     return encoded === undefined ? [] : [[JSON.stringify(key), encoded]];
   });
   rows.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
-  const data = rows.map(([key, value]) => key + "\t" + value + "\n").join("");
+  // Directory values can be large; search keys without traversing their payloads.
+  let offset = 0;
+  const index = rows
+    .map(([key, value]) => {
+      const start = offset;
+      offset += value.length;
+      return key + "\t" + start + "," + offset + "\n";
+    })
+    .join("");
+  const data = rows.map(([, value]) => value).join("");
   return `(() => {
     const data = ${JSON.stringify(data)};
+    const index = ${JSON.stringify(index)};
     const cache = new Map();
     return (key) => {
       if (typeof key !== "string") return undefined;
       if (cache.has(key)) return cache.get(key);
       const encoded = JSON.stringify(key);
-      let lo = 0, hi = data.length;
+      let lo = 0, hi = index.length;
       while (lo < hi) {
         const mid = Math.floor((lo + hi) / 2);
-        const start = data.lastIndexOf("\\n", mid - 1) + 1;
-        const tab = data.indexOf("\\t", start);
-        const end = data.indexOf("\\n", tab);
-        const candidate = data.slice(start, tab);
+        const start = index.lastIndexOf("\\n", mid - 1) + 1;
+        const tab = index.indexOf("\\t", start);
+        const end = index.indexOf("\\n", tab);
+        const candidate = index.slice(start, tab);
         if (candidate === encoded) {
-          const value = JSON.parse(data.slice(tab + 1, end));
+          const comma = index.indexOf(",", tab);
+          const value = JSON.parse(data.slice(
+            Number(index.slice(tab + 1, comma)), Number(index.slice(comma + 1, end))));
           cache.set(key, value);
           return value;
         }

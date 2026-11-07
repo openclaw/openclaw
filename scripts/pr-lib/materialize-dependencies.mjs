@@ -61,6 +61,7 @@ const dependencies = [
         "acorn",
         "chalk",
         "commander",
+        "croner",
         "dotenv",
         "execa",
         "hosted-git-info",
@@ -79,6 +80,7 @@ const dependencies = [
         "typebox",
         "typescript",
         "undici",
+        "ws",
       ]
     : []),
 ].map((dependency) => {

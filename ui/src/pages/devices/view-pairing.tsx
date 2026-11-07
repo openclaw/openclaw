@@ -4,6 +4,8 @@ import { handleCopyButton } from "../../components/copy-button-state.ts";
 import "../../components/modal-dialog.tsx";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { Radio } from "../../components/solid/radio.tsx";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import type {
   DevicePairSetupAccess,
@@ -196,18 +198,16 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                 <legend>{t("devices.pairing.accessTitle")}</legend>
                 <For each={PAIRING_ACCESS_OPTIONS}>
                   {(option) => (
-                    <label>
-                      <input
-                        type="radio"
-                        name="device-pair-access"
-                        checked={props.lifecycle.access === option[0]}
-                        onChange={() => props.onAccessChange(option[0])}
-                      />
+                    <Radio
+                      name="device-pair-access"
+                      checked={props.lifecycle.access === option[0]}
+                      onChange={() => props.onAccessChange(option[0])}
+                    >
                       <span>
                         <strong>{t(option[1])}</strong>
                         <small>{t(option[2])}</small>
                       </span>
-                    </label>
+                    </Radio>
                   )}
                 </For>
               </fieldset>
@@ -232,7 +232,7 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
             </Show>
             <Show when={error()}>
               {(failure) => (
-                <div class="callout danger device-pair-setup__error" role="alert">
+                <InlineAlert tone="danger" class="device-pair-setup__error" role="alert">
                   <strong>
                     {t(
                       failure().source === "status"
@@ -241,7 +241,7 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                     )}
                   </strong>
                   <span>{failure().message}</span>
-                </div>
+                </InlineAlert>
               )}
             </Show>
             <Show when={setup()}>
@@ -321,10 +321,14 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                       </For>
                     </div>
                     <Show when={current().accessDowngraded}>
-                      <div class="callout warn device-pair-setup__access-warning" role="status">
+                      <InlineAlert
+                        tone="warning"
+                        class="device-pair-setup__access-warning"
+                        role="status"
+                      >
                         <strong>{t("devices.pairing.transportLimitedTitle")}</strong>
                         <span>{t("devices.pairing.transportLimitedHint")}</span>
-                      </div>
+                      </InlineAlert>
                     </Show>
                     {/* Stays mounted while empty so the first request updates an existing live region. */}
                     <div

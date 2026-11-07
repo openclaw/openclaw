@@ -43,6 +43,7 @@ export function candidatePublicationFixture(
     runId?: string;
     purpose?: "publish" | "main-qualification" | "diagnostic";
     protectedTag?: boolean;
+    publicationRoute?: PublicationSelection["route"];
   } = {},
 ) {
   const fixture = trustedMainNpmFixture();
@@ -64,7 +65,7 @@ export function candidatePublicationFixture(
   const tooling = { fullRef: "refs/heads/" + branch, ref: branch, sha: q };
   const laneInputs = { qualification_baselines_json: qualificationBaselinesJson };
   const selection: PublicationSelection = {
-    route: "normal",
+    route: options.publicationRoute ?? "normal",
     npmDistTag: "beta",
     publishOpenclawNpm: true,
     pluginPublishScope: "all-publishable",

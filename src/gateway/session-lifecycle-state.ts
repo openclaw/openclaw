@@ -116,7 +116,7 @@ async function persistPreparedGatewaySessionLifecycleEvent(
     sessionEntry.entry.endedAt === undefined &&
     sessionEntry.entry.abortedLastRun !== true
   ) {
-    // Admission already committed the running marker. Live events carry backend
+    // Fresh plain-input admission already committed the marker. Live events carry backend
     // timing until settlement persists it; yielded runs still need a resume write.
     return;
   }
@@ -209,7 +209,7 @@ async function persistPreparedGatewaySessionLifecycleEvent(
   );
   const { failedRun } = effects ?? {};
   if (persisted && failedRun) {
-    const { runId, error, errorKind, suppressErrorNotice, notice } = failedRun;
+    const { runId, error, errorKind, suppressErrorNotice, notice, errorObservation } = failedRun;
     // Only accepted errors pay for branch navigation; assistant detection and
     // report deduplication share the appender's authoritative write snapshot.
     const receipt = {
@@ -226,6 +226,7 @@ async function persistPreparedGatewaySessionLifecycleEvent(
       errorKind,
       suppressErrorNotice,
       notice,
+      errorObservation,
       assertCommitAllowed: params.assertCommitAllowed,
     };
     // An accepted terminal owns its receipt, independently of an ambient requester turn.

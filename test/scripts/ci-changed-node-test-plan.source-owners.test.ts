@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -435,12 +435,7 @@ describe("CI changed Node test plan", () => {
     ]);
     // Local explicit selection still runs only the requested file.
     expect(buildVitestRunPlans([target])).toMatchObject([
-      {
-        config: "test/vitest/vitest.boundary.config.ts",
-        includePatterns: [target],
-        forwardedArgs: [],
-        watchMode: false,
-      },
+      runPlan("test/vitest/vitest.boundary.config.ts", target),
     ]);
   });
 
@@ -557,9 +552,7 @@ describe("CI changed Node test plan", () => {
 
     const sourceInventories = [
       "test/scripts/pr-wrapper-source-closure.test.ts",
-      "test/scripts/pr-worktree-provision.test.ts",
       "test/scripts/eager-import-closure.test.ts",
-      "test/scripts/update-restart-module-outcome.test.ts",
       "test/scripts/type-suppression-inventory.test.ts",
       "test/scripts/plugin-sdk-surface-report.test.ts",
       lintSuppressionInventory,
@@ -574,6 +567,36 @@ describe("CI changed Node test plan", () => {
       ...sourceInventories,
       gatewayCallsitesGuard,
     ]);
+
+    const restartRegression = "test/scripts/update-restart-module-outcome.test.ts";
+    const fixtureInputs = [
+      ["scripts/tests/update-restart-module-outcome.mjs", "realNames", "src/cli/update-cli"],
+      ["scripts/tests/update-restart-swap-fixture.mjs", "files", "src"],
+    ].flatMap(([file, list, root]) => {
+      const fixtureSource = readFileSync(new URL(`../../${file}`, import.meta.url), "utf8");
+      const names = expectDefined(
+        fixtureSource.match(new RegExp(`const ${list} = \\[([\\s\\S]*?)\\];`)),
+        `fixture input inventory: ${file}`,
+      )[1]!;
+      return [...names.matchAll(/"([^"]+)"/g)].map(([, name]) =>
+        path.posix.normalize(`${root}/${name}.ts`),
+      );
+    });
+    for (const input of [
+      ...fixtureInputs,
+      "src/infra/package-update-integrity-hasher.worker.ts",
+      "src/infra/runtime-process-url.ts",
+      "runtime-process-bootstrap.generated.mjs",
+      "package.json",
+    ]) {
+      expect(resolvePolicyTestTargets([input], { cwd }), input).toContain(restartRegression);
+    }
+    for (const input of [
+      "src/agents/example.ts",
+      "src/gateway/server-methods/chat-send-request.ts",
+    ]) {
+      expect(resolvePolicyTestTargets([input], { cwd }), input).not.toContain(restartRegression);
+    }
   });
 
   it.each([
@@ -694,76 +717,78 @@ describe("CI changed Node test plan", () => {
     }
   });
 
-  it.each([
-    ...[
-      "src/secrets/runtime-auth-store-admission.ts",
-      "src/agents/prepared-model-runtime.configured.ts",
-    ].map((changedPath) => ({
-      changedPath,
-      expected: ["src/gateway/server.agents.config-readiness.test.ts"],
-    })),
-    {
-      changedPath: "src/gateway/config-reload.ts",
-      expected: [
-        "src/gateway/server.config-patch.test.ts",
-        "src/gateway/server.agents.config-readiness.test.ts",
+  it.each(
+    Array.of<[string[], string[]]>(
+      [
+        [
+          "src/secrets/runtime-auth-store-admission.ts",
+          "src/agents/prepared-model-runtime.configured.ts",
+        ],
+        ["src/gateway/server.agents.config-readiness.test.ts"],
       ],
-    },
-    ...["src/gateway/server-close.ts", "src/gateway/server-run-shutdown.ts"].map((changedPath) => ({
-      changedPath,
-      expected: [
-        "src/gateway/server.agent-execution-shutdown.test.ts",
-        "src/gateway/server.agent-late-admission.test.ts",
-        "test/gateway-session-end-shutdown.e2e.test.ts",
+      [
+        ["src/gateway/config-reload.ts"],
+        [
+          "src/gateway/server.config-patch.test.ts",
+          "src/gateway/server.agents.config-readiness.test.ts",
+        ],
       ],
-    })),
-    // Child-process E2Es: the import graph reaches only the test-instance helper.
-    {
-      changedPath: "src/gateway/server-startup-observers.ts",
-      expected: ["test/gateway-restart-resume.e2e.test.ts"],
-    },
-    {
-      changedPath: "src/process/command-queue.capacity-groups.ts",
-      expected: ["test/gateway-hook-concurrency.e2e.test.ts"],
-    },
-    {
-      changedPath: "src/sessions/session-controller.steer.ts",
-      expected: [
-        "test/gateway-restart-resume.e2e.test.ts",
-        "test/e2e/qa-lab/runtime/gateway-session-steering.e2e.test.ts",
+      [
+        ["src/gateway/server-close.ts", "src/gateway/server-run-shutdown.ts"],
+        [
+          "src/gateway/server.agent-execution-shutdown.test.ts",
+          "src/gateway/server.agent-late-admission.test.ts",
+          "test/gateway-session-end-shutdown.e2e.test.ts",
+        ],
       ],
-    },
-    {
-      changedPath: "src/auto-reply/reply/queue/drain.ts",
-      expected: ["test/e2e/qa-lab/runtime/gateway-session-steering.e2e.test.ts"],
-    },
-    {
-      changedPath: "node-runtime-recovery.mjs",
-      expected: ["test/scripts/node-runtime-recovery.built-cli.e2e.test.ts"],
-    },
-    {
-      changedPath: "src/auto-reply/reply/abort.test.ts",
-      expected: ["test/scripts/tsgo-core-test-shards.test.ts"],
-    },
-    {
-      changedPath: "scripts/lib/ci-proof-test-inventory.mts",
-      expected: ["test/vitest-pr-exempt-retention.test.ts"],
-    },
-    {
-      changedPath: "src/plugins/plugin-instance.ts",
-      expected: [
-        "test/scripts/eager-import-closure.test.ts",
-        "test/scripts/pr-worktree-provision.test.ts",
+      // Child-process E2Es: the import graph reaches only the test-instance helper.
+      [["src/gateway/server-startup-observers.ts"], ["test/gateway-restart-resume.e2e.test.ts"]],
+      [
+        ["src/process/command-queue.capacity-groups.ts"],
+        ["test/gateway-hook-concurrency.e2e.test.ts"],
       ],
-    },
-    {
-      changedPath: "scripts/e2e/lib/upgrade-survivor/run.sh",
-      expected: [
-        "test/scripts/package-acceptance-workflow.test.ts",
-        "test/scripts/upgrade-survivor-missing-load-path.test.ts",
+      [
+        ["src/sessions/session-controller.steer.ts"],
+        [
+          "test/gateway-restart-resume.e2e.test.ts",
+          "test/e2e/qa-lab/runtime/gateway-session-steering.e2e.test.ts",
+        ],
       ],
-    },
-  ])(
+      [
+        ["src/auto-reply/reply/queue/drain.ts"],
+        ["test/e2e/qa-lab/runtime/gateway-session-steering.e2e.test.ts"],
+      ],
+      [["node-runtime-recovery.mjs"], ["test/scripts/node-runtime-recovery.built-cli.e2e.test.ts"]],
+      [["src/auto-reply/reply/abort.test.ts"], ["test/scripts/tsgo-core-test-shards.test.ts"]],
+      [["scripts/lib/ci-proof-test-inventory.mts"], ["test/vitest-pr-exempt-retention.test.ts"]],
+      [
+        ["src/plugins/plugin-instance.ts"],
+        ["test/scripts/eager-import-closure.test.ts", "test/scripts/pr-worktree-provision.test.ts"],
+      ],
+      [
+        ["scripts/e2e/lib/upgrade-survivor/run.sh"],
+        [
+          "test/scripts/package-acceptance-workflow.test.ts",
+          "test/scripts/upgrade-survivor-missing-load-path.test.ts",
+        ],
+      ],
+      [
+        [
+          "scripts/lib/check-limits.mts",
+          "scripts/lib/release-context.mjs",
+          "scripts/lib/release-version.mjs",
+        ],
+        [
+          "test/scripts/ocm-npm-workspace-deps.test.ts",
+          "test/scripts/control-ui-performance.test.ts",
+        ],
+      ],
+      [
+        ["src/plugins/official-runtime-plugins.ts"],
+        ["src/node-host/codex-node-plugin.integration.test.ts"],
+      ],
+    ).flatMap(([paths, expected]) => paths.map((changedPath) => ({ changedPath, expected }))),
+  )(
     "retains explicit policy guards for $changedPath in automatic CI",
     ({ changedPath, expected }) => {
       const importer = "src/agents/live-model-filter.test.ts";
@@ -783,16 +808,18 @@ describe("CI changed Node test plan", () => {
         const reasons: string[] = [];
         const shards = createChangedNodeTestShards([changedPath], {
           runnerBackend: "github",
-          // Gateway owner watches must survive the default aggressive PR selection.
-          selectionMode: changedPath.startsWith("src/gateway/") ? "aggressive" : "full",
+          // Explicit owner watches must survive the default aggressive PR selection.
+          selectionMode: "aggressive",
           includeReleaseOnlyRuntimeTests: false,
           includePrExemptRuntimeTests: false,
           onFallback: (reason) => reasons.push(reason),
         });
         expect(shards, reasons.join("\n")).not.toBeNull();
         const files = selectedFiles(shards);
+        const unrelated = resolvePolicyTestTargets(["unrelated/path.ts"]);
         for (const guard of expected) {
           expect(files.filter((file) => file === guard)).toHaveLength(1);
+          expect(unrelated).not.toContain(guard);
         }
         expect(files.includes("test/vitest-pr-exempt-retention.test.ts")).toBe(
           expected.includes("test/vitest-pr-exempt-retention.test.ts"),
