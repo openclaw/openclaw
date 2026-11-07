@@ -1555,8 +1555,8 @@ describe("Codex tool operator hints", () => {
       );
       const response = await bridge.handleToolCall(call, { onAgentToolResult });
       const hint = "workspace-contained by configuration";
-      // Host root escapes carry model-visible cwd rebinding guidance (#184901).
-      const message = `Path escapes sandbox root (${root}): ${outside}. Keep patch paths within the bound root. For an authorized task in another repository, ask the parent to respawn the worker with sessions_spawn and cwd set to that repository. Changing exec workdir does not rebind file tools.`;
+      // Host root escapes carry model-visible worker binding guidance (#184901).
+      const message = `Path escapes sandbox root (${root}): ${outside}. Keep file paths within the bound root. For an authorized task in another repository, use a worker bound to that repository; when starting one with sessions_spawn, set cwd to that repository. Changing exec workdir does not rebind file tools.`;
       expect(toCodexDynamicToolProtocolResponse(response)).toEqual({
         contentItems: inputText(message),
         success: false,
