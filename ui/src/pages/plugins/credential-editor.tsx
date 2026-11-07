@@ -34,6 +34,11 @@ import { REDACTED_SENTINEL } from "../../lib/config-form-utils.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
+import {
+  clearCompositionEnd,
+  isComposingKeyboardEvent,
+  recordCompositionEnd,
+} from "../../lib/ime.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import "./credential-editor.css";
 import "./custom-elements.ts";
@@ -474,6 +479,7 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
             <div
               class="plugin-credential__input settings-secret"
               onFocusOut={(event) => {
+                clearCompositionEnd(event);
                 if (
                   event.relatedTarget instanceof Element &&
                   event.relatedTarget.closest(".plugin-credential__input") === event.currentTarget
@@ -502,7 +508,12 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
                 }
                 disabled={disabled()}
                 onInput={(event) => setLiteral(event.currentTarget.value)}
+                onCompositionEnd={recordCompositionEnd}
+                onKeyUp={clearCompositionEnd}
                 onKeyDown={(event) => {
+                  if (isComposingKeyboardEvent(event)) {
+                    return;
+                  }
                   const value = enteredLiteral(event.currentTarget);
                   if (event.key === "Enter" && value) {
                     event.preventDefault();

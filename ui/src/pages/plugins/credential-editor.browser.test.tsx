@@ -498,3 +498,27 @@ it("lets an administrator inspect a read-only reference without changing it", as
   expect([...dialogInputs(editor)].every((input) => input.disabled)).toBe(true);
   expect(context.onCommit).not.toHaveBeenCalled();
 });
+
+it("does not commit the literal draft while IME composition is in progress", async () => {
+  const { context, input } = await mount();
+  editInput(input, "synthetic-ime-key");
+  // A composing Enter confirms an IME candidate; it must not save the draft.
+  input.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true }),
+  );
+  await Promise.resolve();
+  flush();
+  expect(context.onCommit).not.toHaveBeenCalled();
+});
+
+it("does not commit the literal draft from a WebKit composing Enter after compositionend", async () => {
+  const { context, input } = await mount();
+  editInput(input, "synthetic-ime-key");
+  input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+  // WebKit can deliver the committing Enter with both composition flags cleared
+  // shortly after compositionend; the grace window must still suppress it.
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await Promise.resolve();
+  flush();
+  expect(context.onCommit).not.toHaveBeenCalled();
+});
