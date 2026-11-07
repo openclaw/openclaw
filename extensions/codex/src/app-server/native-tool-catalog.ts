@@ -4,6 +4,8 @@ import { isCodexAppServerLiveThreadProtected, withCodexClientWorkspace } from ".
 import { readCodexWorkspaceSessionMeta } from "./client-workspace-state.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
+import { captureCodexNativeCompletionCatalog } from "./native-subagent-monitor-runtime.js";
+import type { NativeCompletionCatalogRequest } from "./native-subagent-monitor-types.js";
 import {
   buildCodexAppServerConnectionFingerprint,
   buildCodexAppServerRuntimeFingerprint,
@@ -23,22 +25,28 @@ export function hasCodexNativeToolCatalog(
   return binding?.connectionScope === "supervision" && !binding.pendingSupervisionBranch;
 }
 
-function hasProtectedManagedCatalog(
+function hasRetainedManagedCatalog(
   binding: CodexAppServerThreadBinding,
   client: CodexAppServerClient,
+  assertCompletionCurrent?: () => void,
 ): boolean {
   return (
     binding.connectionScope !== "supervision" &&
     !binding.pendingSupervisionBranch &&
     binding.clientId === client.getInstanceId() &&
-    isCodexAppServerLiveThreadProtected(client, binding.threadId)
+    (isCodexAppServerLiveThreadProtected(client, binding.threadId) ||
+      assertCompletionCurrent !== undefined)
   );
 }
 
-/** Native declarations outlive a caller's executors while its children still own the parent. */
+/** Native declarations outlive executors while child execution or completion owns the parent. */
 export async function loadCodexAttemptNativeToolCatalog(
-  params: Omit<Parameters<typeof loadCodexNativeToolCatalog>[0], "binding" | "client"> & {
+  params: Omit<
+    Parameters<typeof loadCodexNativeToolCatalog>[0],
+    "binding" | "client" | "assertCompletionCurrent"
+  > & {
     binding: CodexAppServerThreadBinding | undefined;
+    completion?: Omit<NativeCompletionCatalogRequest, "parentThreadId">;
     ephemeral?: boolean;
     signal: AbortSignal;
     acquireClient: () => Promise<CodexAppServerClient>;
@@ -78,10 +86,25 @@ export async function loadCodexAttemptNativeToolCatalog(
   try {
     params.signal.throwIfAborted();
     params.assertCurrent();
-    if (!retained || !hasProtectedManagedCatalog(binding, retained.client)) {
+    if (!retained) {
       return undefined;
     }
-    return await loadCodexNativeToolCatalog({ ...params, binding, client: retained.client });
+    const assertCompletionCurrent = params.completion
+      ? captureCodexNativeCompletionCatalog({
+          ...params.completion,
+          parentThreadId: binding.threadId,
+          client: retained.client,
+        })
+      : undefined;
+    if (!hasRetainedManagedCatalog(binding, retained.client, assertCompletionCurrent)) {
+      return undefined;
+    }
+    return await loadCodexNativeToolCatalog({
+      ...params,
+      binding,
+      client: retained.client,
+      assertCompletionCurrent,
+    });
   } finally {
     await retained?.release();
   }
@@ -169,6 +192,7 @@ export async function loadCodexNativeToolCatalog(params: {
   agentDir: string;
   assertCurrent: () => void;
   authority?: CodexBindingAuthority;
+  assertCompletionCurrent?: () => void;
 }): Promise<CodexDynamicToolSpec[]> {
   const { binding, client, appServer, agentDir, assertCurrent } = params;
   assertCurrent();
@@ -187,7 +211,8 @@ export async function loadCodexNativeToolCatalog(params: {
           runtimeIdentity,
         });
   if (
-    (!hasCodexNativeToolCatalog(binding) && !hasProtectedManagedCatalog(binding, client)) ||
+    (!hasCodexNativeToolCatalog(binding) &&
+      !hasRetainedManagedCatalog(binding, client, params.assertCompletionCurrent)) ||
     !binding.dynamicToolsFingerprint ||
     !home ||
     binding.appServerRuntimeFingerprint !== runtimeFingerprint
@@ -196,6 +221,7 @@ export async function loadCodexNativeToolCatalog(params: {
       "Saved Codex declarations require the original verified local binding and selected native connection; the thread is preserved.",
     );
   }
+  params.assertCompletionCurrent?.();
   const metadata = await withCodexClientWorkspace(client, (state, maxCachedSessions) =>
     readCodexWorkspaceSessionMeta(
       client,
@@ -208,6 +234,7 @@ export async function loadCodexNativeToolCatalog(params: {
   );
   const consume = () => {
     assertCurrent();
+    params.assertCompletionCurrent?.();
     return parseCodexNativeToolCatalog(metadata, binding.threadId, binding.dynamicToolsFingerprint);
   };
   return params.authority ? await params.authority.withCurrent(consume) : consume();
