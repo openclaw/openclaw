@@ -147,7 +147,7 @@ enum GatewayLaunchAgentManager {
                     at: marker.deletingLastPathComponent(),
                     withIntermediateDirectories: true)
                 if !FileManager().fileExists(atPath: marker.path) {
-                    FileManager().createFile(atPath: marker.path, contents: nil)
+                    try Data().write(to: marker)
                 }
             } else if FileManager().fileExists(atPath: marker.path) {
                 try FileManager().removeItem(at: marker)
