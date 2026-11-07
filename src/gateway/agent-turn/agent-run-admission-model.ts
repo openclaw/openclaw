@@ -7,6 +7,8 @@ export function resolveAgentRunAdmissionModel(params: PrepareAgentRunDispatchPar
   const effectiveProviderOverride =
     params.restoredCronContinuation?.provider ?? params.providerOverride;
   const effectiveModelOverride = params.restoredCronContinuation?.model ?? params.modelOverride;
+  const effectiveModelFallbacksOverride = params.modelFallbacksOverride;
+  const effectiveModelFallbacksOverrideSource = params.modelFallbacksOverrideSource;
   const effectiveThinking = params.restoredCronContinuation
     ? params.restoredCronContinuation.thinking
     : params.request.thinking;
@@ -43,6 +45,8 @@ export function resolveAgentRunAdmissionModel(params: PrepareAgentRunDispatchPar
   return {
     effectiveProviderOverride,
     effectiveModelOverride,
+    effectiveModelFallbacksOverride,
+    effectiveModelFallbacksOverrideSource,
     effectiveThinking,
     effectiveAllowModelOverride,
     resolvedRuntime,
