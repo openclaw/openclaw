@@ -456,7 +456,7 @@ export function SkillsPage(props: SkillsPageProps) {
       routeDataEnabled = false;
       return;
     }
-    routeDataEnabled = true;
+    routeDataEnabled = Boolean(route.report || route.error);
     retireSkillsReads(data);
     data.skillsLoading = false;
     data.skillsError = route.error;

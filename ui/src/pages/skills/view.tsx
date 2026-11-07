@@ -143,7 +143,15 @@ export function Skills(props: SkillsProps) {
               <Show when={props.showInventory !== false}>
                 <Show
                   when={acceptedFiltered().length > 0}
-                  fallback={<SettingsEmpty message={emptyMessage()} />}
+                  fallback={
+                    <SettingsEmpty
+                      message={
+                        props.loading && !props.state.skillsReport
+                          ? t("common.loading")
+                          : emptyMessage()
+                      }
+                    />
+                  }
                 >
                   <SkillsInventory groups={groups()} view={props} />
                 </Show>

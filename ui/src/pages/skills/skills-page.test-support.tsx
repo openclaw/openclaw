@@ -35,6 +35,7 @@ export const remoteSkill = {
 export function mountSkills(
   request: (method: string, params?: unknown) => Promise<unknown>,
   surface: "discovery" | "settings" = "discovery",
+  initialData: Partial<SkillsRouteData> = {},
 ) {
   const client = { request } as unknown as GatewayBrowserClient;
   const connection = createApplicationGateway(
@@ -95,6 +96,7 @@ export function mountSkills(
     selectionIntentRevision: selection.intentRevision,
     report: { workspaceDir: "/workspace", managedSkillsDir: "/managed", skills: [] },
     error: null,
+    ...initialData,
   };
   const [routeData, setRouteData] = createSignal(initialRouteData, { ownedWrite: true });
   const [currentSurface, setCurrentSurface] = createSignal(surface);

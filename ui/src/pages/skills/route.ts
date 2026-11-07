@@ -2,7 +2,6 @@ import { definePage, type RouteLoaderOptions } from "@openclaw/uirouter";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { loadSkillStatusReport } from "../../lib/skills/status-report.ts";
 import type { SkillsRouteData } from "./view-types.ts";
 
 function defineSkillsPage(routeId: "skills" | "skill-settings", surface: "discovery" | "settings") {
@@ -25,7 +24,6 @@ function defineSkillsPage(routeId: "skills" | "skill-settings", surface: "discov
       const client = gatewaySnapshot.client;
       let error: string | null = null;
       let selectedAgentId: string | null = null;
-      let report: SkillsRouteData["report"] = null;
       if (gatewaySnapshot.phase === "connected" && client) {
         try {
           const loadedAgentsList = await agents.ensureList();
@@ -37,13 +35,6 @@ function defineSkillsPage(routeId: "skills" | "skill-settings", surface: "discov
         } catch (err) {
           error = formatUiError(err);
         }
-        if (selectedAgentId) {
-          try {
-            report = (await loadSkillStatusReport(client, selectedAgentId)) ?? null;
-          } catch (err) {
-            error ??= formatUiError(err);
-          }
-        }
       }
       return {
         gateway,
@@ -51,7 +42,8 @@ function defineSkillsPage(routeId: "skills" | "skill-settings", surface: "discov
         agents,
         selectedAgentId,
         selectionIntentRevision,
-        report,
+        // The page owns inventory loading after the roster admits its agent scope.
+        report: null,
         error,
         clawhubRef,
       };

@@ -117,7 +117,8 @@ it("keeps skills provenance from before its async preload", async () => {
   agentsReady.resolve(agentsList);
   const data = await request;
 
-  expect(requestMethod).toHaveBeenCalledWith("skills.status", { agentId: "research" });
+  expect(requestMethod).not.toHaveBeenCalled();
+  expect(data.report).toBeNull();
   expect(data).toMatchObject({ selectedAgentId: "research", selectionIntentRevision: 7 });
   expect(data.agents).toBe(agents);
 });
