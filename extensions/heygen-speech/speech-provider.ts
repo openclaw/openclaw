@@ -27,7 +27,7 @@ import {
 
 const HEYGEN_BASE_URL = "https://api.heygen.com";
 const DEFAULT_MODEL: HeyGenModel = "heygen-voice-1-turbo";
-// Nadine, a public voice every workspace can use.
+// Public voice: Nadine.
 const DEFAULT_VOICE_ID = "83548de556df48ba8c09c42a57c51d85";
 const DEFAULT_TIMEOUT_MS = 120_000;
 
@@ -141,7 +141,7 @@ export function buildHeyGenSpeechProvider(): SpeechProviderPlugin {
         timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       });
     },
-    // Retained for synchronous SDK consumers through 2026-12-31.
+    // Synchronous SDK consumers need this through 2026-12-31.
     isConfigured,
     isConfiguredAsync: async (ctx) => isConfigured(ctx),
     synthesize: async (req) => {

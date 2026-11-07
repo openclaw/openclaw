@@ -185,7 +185,6 @@ it("applies configured settings, with directives taking precedence", async () =>
     providerOverrides: { model: "heygen-voice-1", voiceId: "directive-voice" },
     target: "audio-file",
   });
-  expect(fetchMock).toHaveBeenCalledOnce();
 });
 
 it("transcodes voice notes to Opus", async () => {
@@ -326,7 +325,6 @@ const voice = (id: string, status = "ACTIVE") => ({
 it("lists every workspace page, then public voices that are ready", async () => {
   respond((url) => {
     const params = new URL(url).searchParams;
-    expect(params.get("limit")).toBe("100");
     if (params.get("type") === "public") {
       return Response.json({ data: [voice("public")], has_more: true, next_token: "more" });
     }

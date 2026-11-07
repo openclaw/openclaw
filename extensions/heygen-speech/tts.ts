@@ -126,8 +126,7 @@ function toFetchResponse(response: IncomingMessage): Response {
   });
 }
 
-// One complete text per socket. `stream-input` synthesizes what it holds when the text ends,
-// whereas `multi-stream-input` adds per-context admission that one-shot speech has no use for.
+// Each socket carries one text. `multi-stream-input` costs one more admission per context.
 export async function heygenSocketTtsStream(params: HeyGenTtsRequest): Promise<HeyGenAudioStream> {
   const url = new URL(`${params.baseUrl}/v3/models/audio/tts/stream-input`);
   url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
@@ -150,8 +149,7 @@ export async function heygenSocketTtsStream(params: HeyGenTtsRequest): Promise<H
     url: url.toString(),
   });
 
-  // Resolving on the first audio keeps refusals sent after the handshake, such as Turbo Free
-  // capacity, on the path where core can still try the next provider.
+  // Resolve on the first audio. Until then, core can try the next provider.
   return await new Promise((resolve, reject) => {
     let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
     let settled = false;
@@ -343,7 +341,7 @@ export async function listHeyGenVoices(params: {
   try {
     voices.push(...parseVoices(await requestVoicePage("public")));
   } catch {
-    // Workspace voices remain useful when the public catalog is temporarily unavailable.
+    // Workspace voices stay usable when the public list fails.
   }
   return voices;
 }

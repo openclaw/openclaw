@@ -219,7 +219,6 @@ keeps the old id and points at the new one.
 - [ElevenLabs Text to Speech](https://elevenlabs.io/docs/api-reference/text-to-speech)
 - [Fish Audio provider](/providers/fish-audio)
 - [Gradium](/providers/gradium)
-- [HeyGen Voice](/providers/heygen)
 - [Inworld provider](/providers/inworld)
 - [Inworld TTS API](https://docs.inworld.ai/tts/tts)
 - [Microsoft Speech output formats](https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech#audio-outputs)

@@ -50,7 +50,6 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Google (Gemini)](/providers/google)
 - [Gradium](/providers/gradium)
 - [Groq (LPU inference)](/providers/groq)
-- [HeyGen Voice](/providers/heygen)
 - [Hugging Face (Inference)](/providers/huggingface)
 - [Kie AI](/providers/kie)
 - [Kilocode](/providers/kilocode)
