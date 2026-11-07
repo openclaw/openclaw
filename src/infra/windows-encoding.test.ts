@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
@@ -109,6 +110,8 @@ it("bounds and caches failed encoding probes", async () => {
   }
   expect(spawnSyncMock).toHaveBeenCalledTimes(2);
   for (const call of spawnSyncMock.mock.calls) {
+    // Both probes resolve under SystemRoot, so a reduced PATH cannot hide them.
+    expect(path.win32.isAbsolute(call[0])).toBe(true);
     expect(call[2]).toMatchObject({ timeout: 5_000, killSignal: "SIGKILL" });
   }
 });
