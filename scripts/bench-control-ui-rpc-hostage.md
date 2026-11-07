@@ -47,6 +47,8 @@ Activity also starts from New conversation: its 1,000-session fixture replaces
 the ordinary roster and does not contain the Chat origin session.
 For Chat-origin preparation the composer must be present, but need not be
 editable: the Portals fixture deliberately grants read-only access.
+Profile uses the engine fixture's valid missing personal file for the signed-in
+profile and main agent, so delayed reads expose loading rather than a malformed-response error.
 A baseline page error or rendered lazy-panel failure is a setup gap and
 prevents that flow's delayed-method sweep. `--methods` limits the census;
 otherwise it exercises every discovered method. `--rpc-rtt-ms 100` adds mock
