@@ -23,6 +23,7 @@ type Asset = {
   sizes: Bytes;
 };
 type ComparedAsset = Asset & { change: string; previousPath: string | null };
+type ReferenceGraph = Map<string, string[]>;
 
 function hash(bytes: Uint8Array | string): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -122,6 +123,12 @@ function readBuild(directory: string) {
       .map((file) => [path.posix.basename(file), path.posix.basename(logicalName(file))]),
   );
   const assets = new Map<string, Asset>();
+  const referenceGraph: ReferenceGraph = new Map();
+  const chunksByName = new Map(
+    files
+      .filter((file) => /^assets\/[^/]+-[\w-]{8}\.(?:js|css)$/u.test(file))
+      .map((file) => [path.posix.basename(file), file]),
+  );
   for (const file of files.toSorted()) {
     if (/\.(?:gz|br|map)$/u.test(file) || path.posix.basename(file).startsWith(".")) {
       continue;
@@ -131,6 +138,22 @@ function readBuild(directory: string) {
     const normalized = textAsset
       ? bytes.toString("utf8").replace(/[\w.-]+/gu, (name) => names.get(name) ?? name)
       : bytes;
+    if (chunksByName.get(path.posix.basename(file)) === file) {
+      const references = new Set<string>();
+      const source = bytes
+        .toString("utf8")
+        .replace(
+          /(?:\/\/[#@]\s*sourceMappingURL=[^\r\n]*|\/\*[#@]\s*sourceMappingURL=[\s\S]*?\*\/)/gu,
+          "",
+        );
+      for (const [name] of source.matchAll(/[\w.-]+/gu)) {
+        const target = chunksByName.get(name);
+        if (target) {
+          references.add(target);
+        }
+      }
+      referenceGraph.set(file, [...references].toSorted());
+    }
     assets.set(file, {
       path: file,
       logical: logicalName(file),
@@ -145,7 +168,86 @@ function readBuild(directory: string) {
       sizes: servedSizes(directory, file, bytes.byteLength),
     });
   }
-  return { assets, offline };
+  return { assets, offline, referenceGraph };
+}
+
+function summarizeReferenceGraph(graph: ReferenceGraph) {
+  const indices = new Map<string, number>();
+  const lowLinks = new Map<string, number>();
+  const pending = new Set<string>();
+  const stack: string[] = [];
+  const cycles: string[][] = [];
+  const visit = (file: string) => {
+    const index = indices.size;
+    indices.set(file, index);
+    lowLinks.set(file, index);
+    stack.push(file);
+    pending.add(file);
+    for (const target of graph.get(file) ?? []) {
+      if (!indices.has(target)) {
+        visit(target);
+        lowLinks.set(file, Math.min(lowLinks.get(file)!, lowLinks.get(target)!));
+      } else if (pending.has(target)) {
+        lowLinks.set(file, Math.min(lowLinks.get(file)!, indices.get(target)!));
+      }
+    }
+    if (lowLinks.get(file) === index) {
+      const component: string[] = [];
+      let member: string;
+      do {
+        member = stack.pop()!;
+        pending.delete(member);
+        component.push(member);
+      } while (member !== file);
+      if (component.length > 1 || graph.get(file)?.includes(file)) {
+        cycles.push(component.toSorted());
+      }
+    }
+  };
+  for (const file of graph.keys()) {
+    if (!indices.has(file)) {
+      visit(file);
+    }
+  }
+  return {
+    nodes: Object.fromEntries(graph),
+    edgeCount: [...graph.values()].reduce((count, references) => count + references.length, 0),
+    stronglyConnectedComponents: cycles.toSorted((left, right) => right.length - left.length),
+  };
+}
+
+function describePayloadRoots(graph: ReferenceGraph, assets: ComparedAsset[]) {
+  const importers = new Map<string, string[]>();
+  for (const [file, references] of graph) {
+    for (const target of references) {
+      const incoming = importers.get(target) ?? [];
+      incoming.push(file);
+      importers.set(target, incoming);
+    }
+  }
+  return assets
+    .filter(
+      (asset) =>
+        graph.has(asset.path) &&
+        ["renamed-payload-change", "changed-stable-path", "added-or-ambiguous"].includes(
+          asset.change,
+        ),
+    )
+    .map((asset) => {
+      const affected = new Set([asset.path]);
+      for (const file of affected) {
+        for (const importer of importers.get(file) ?? []) {
+          affected.add(importer);
+        }
+      }
+      return {
+        path: asset.path,
+        previousPath: asset.previousPath,
+        change: asset.change,
+        directReferrers: importers.get(asset.path) ?? [],
+        reachableReferrers: [...affected].filter((file) => file !== asset.path).toSorted(),
+      };
+    });
 }
 
 function total(rows: Iterable<{ sizes: Bytes }>): Bytes {
@@ -293,6 +395,13 @@ function compareControlUiUpdateCache(baseDirectory: string, headDirectory: strin
     publicVersions: {
       base: base.offline.publicAssetVersion,
       head: head.offline.publicAssetVersion,
+    },
+    referenceGraph: {
+      // Literal filename references include dynamic imports and Vite's preload tables.
+      // Cycles explain why independent payload changes invalidate the same chunk set.
+      base: summarizeReferenceGraph(base.referenceGraph),
+      head: summarizeReferenceGraph(head.referenceGraph),
+      payloadRoots: describePayloadRoots(head.referenceGraph, compared),
     },
     all: summarize(compared),
     hashedAssets: summarize(compared.filter((asset) => asset.path.startsWith("assets/"))),
